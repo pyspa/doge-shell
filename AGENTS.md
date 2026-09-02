@@ -15,6 +15,7 @@
 - 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
 - 検証選定: `doctor validate` が使える環境では提案を優先し、なければ `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ。
 - AI guidance / Skill 変更: `scripts/check-ai-guidance.sh` と runtime Skill の `--status` を使う。
+- 製品側の AI 機能修正: `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` を先に読む。
 - 失敗例の再発防止: 修正後に `task-map.md` か該当 Skill の `references/` へ短く戻す。
 
 ## 探索順
@@ -34,6 +35,8 @@
 - 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
 
 ## 設計境界
+- AI 機能の設計境界は `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に集約する。エージェントループを 3 つ目にしない。設定解決・レスポンス解釈・切り詰め・応答言語・config ディレクトリ・コマンド危険度判定・MCP マネージャを再実装しない。
+- `dirs::config_dir()` を直接呼ばない。macOS では `~/Library/Application Support` を指し、XDG を使う installer や config ローダと食い違う。`dsh-builtin/src/config_paths.rs`（`dsh` crate では `environment::get_config_file`）を通す。`scripts/check-portability.py` が検査する。
 - 動的補完 provider は `dsh/src/completion/dynamic/registry.rs` の `DynamicProviderId` へ一度だけ登録し、family collector と `CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。
 - `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
 - `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
@@ -47,12 +50,13 @@
 - `read-boundaries.md`: README や workspace 全体 test を開く条件を確認する。
 - `invariants.md`: cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、スケジューラを触る前に読む。
 - `platform-support.md`: 対応 OS、プラットフォーム分岐の書き方、macOS 側の腕を Linux ホストで確認する手順。
+- `ai-architecture.md`: AI 機能（`!` チャット、MCP、ツール、コマンドパレットの AI アクション、`ai-commit`、`safe-run`、ゴーストテキスト）の方針。再実装してはいけないものと、未解決の設計判断。
 
 ## Skill 運用
 - canonical source は `docs/ai/skills/` に置く。
-- runtime 配置先は `~/.codex/skills/` と `~/.config/dsh/skills/`。
+- runtime 配置先は `~/.codex/skills/`、`~/.config/dsh/skills/`、`~/.claude/skills/`、`<repo>/.claude/skills`（`docs/ai/skills` への symlink）の 4 つ。詳細は `docs/ai/README.md`。
 - 導入や更新は `scripts/install-runtime-skills.sh` を使う。
 - 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
 - Codex runtime へ常時入れる Skill は原則 `doge-shell-repo` のみにし、領域別 Skill は `docs/ai/skills/<skill>/SKILL.md` を必要時に読む。
 - Skill は frontmatter の `description` を短い要約兼トリガー文として書く。
-- `AGENTS.md` / `docs/ai/` / Skill を変更したら `scripts/check-ai-guidance.sh` を実行する。
+- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変更したら `scripts/check-ai-guidance.sh` を実行する。

@@ -279,3 +279,47 @@ fn test_unset_system_env_updates_z_exclude() {
 
     assert!(env.read().variable_state.z_exclude.is_empty());
 }
+
+/// Setting `AI_MESSAGE_LANG` has to reach the slot the AI service reads, not
+/// just the variable map: the two used to be independent, so the setting
+/// applied to the `!` runtime and to nothing else.
+#[test]
+fn setting_the_message_language_publishes_it_to_the_ai_service() {
+    init();
+    let env = Environment::new();
+
+    {
+        let mut guard = env.write();
+        assert!(guard.integration_state.response_language.read().is_none());
+
+        guard.set_shell_var("AI_MESSAGE_LANG".to_string(), "  Japanese  ".to_string());
+        assert_eq!(
+            guard.integration_state.response_language.read().clone(),
+            Some("Japanese".to_string())
+        );
+
+        guard.set_shell_var("AI_MESSAGE_LANG".to_string(), "   ".to_string());
+        assert!(guard.integration_state.response_language.read().is_none());
+    }
+}
+
+/// `SAFETY_LEVEL` is read from the policy state, and the policy state is what
+/// an inherited value has to reach: seeding the variable map with "normal"
+/// unconditionally shadowed the environment the shell was started from.
+#[test]
+fn the_shell_starts_at_the_level_it_inherited() {
+    init();
+    let env = Environment::new();
+    let guard = env.read();
+
+    // `Environment::new` snapshots the process environment, so this asserts the
+    // seeding path rather than a particular inherited value.
+    let inherited = guard.variable_state.system_env_vars.get("SAFETY_LEVEL");
+    let expected = crate::safety::SafetyLevel::from_env_value(inherited.cloned());
+
+    assert_eq!(*guard.policy_state.safety_level.read(), expected);
+    assert_eq!(
+        guard.variable_state.variables.get("SAFETY_LEVEL"),
+        Some(&expected.as_str().to_string())
+    );
+}

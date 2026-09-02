@@ -2,6 +2,7 @@ use crate::ShellProxy;
 use crate::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, ApprovalDecision};
 use anyhow::Result;
 use dsh_types::{Context, mcp::McpServerConfig};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
@@ -30,7 +31,13 @@ pub(crate) struct TestShellProxy {
     /// double: without an opt-in every command needs confirmation, and
     /// `confirm_result` then decides.
     pub agent_verdict: AgentCommandVerdict,
+    /// What `evaluate_agent_tool` answers. Separate from `agent_verdict` so a
+    /// test can pin the MCP policy without also unlocking `execute`.
+    pub agent_tool_verdict: AgentCommandVerdict,
     pub agent_session_allowlist: Vec<String>,
+    /// The MCP manager the chat runtime is handed. Shared, so a test can seed a
+    /// binding the way the shell would.
+    pub mcp_manager: Arc<RwLock<crate::chatgpt::McpManager>>,
     /// Overrides `confirm_result` so a test can exercise the "always" answer.
     pub approval_decision: Option<ApprovalDecision>,
     pub vars: HashMap<String, String>,
@@ -54,7 +61,11 @@ impl Default for TestShellProxy {
             agent_verdict: AgentCommandVerdict::Confirm(
                 "test policy requires confirmation".to_string(),
             ),
+            agent_tool_verdict: AgentCommandVerdict::Confirm(
+                "test policy requires confirmation".to_string(),
+            ),
             agent_session_allowlist: Vec::new(),
+            mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
             vars: HashMap::new(),
             aliases: HashMap::new(),
@@ -221,6 +232,18 @@ impl AgentCommandPolicy for TestShellProxy {
 
     fn agent_allowlist(&mut self) -> Vec<String> {
         self.execute_allowlist.clone()
+    }
+
+    fn evaluate_agent_tool(&mut self, _name: &str, _arguments: &str) -> AgentCommandVerdict {
+        self.agent_tool_verdict.clone()
+    }
+
+    fn agent_tool_approval_entry(&mut self, name: &str, _arguments: &str) -> String {
+        format!("mcp:{name}")
+    }
+
+    fn agent_mcp_manager(&mut self) -> Arc<RwLock<crate::chatgpt::McpManager>> {
+        Arc::clone(&self.mcp_manager)
     }
 }
 

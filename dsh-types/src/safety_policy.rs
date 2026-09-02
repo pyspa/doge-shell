@@ -9,7 +9,37 @@ pub enum SafetyLevel {
     Loose,
 }
 
+/// Parse a level the way `(safety-level 'strict)` and `SAFETY_LEVEL=strict` spell it.
+///
+/// `from_env_value` silently falls back to `Normal`, which is what an
+/// environment variable wants; this reports the typo, which is what an explicit
+/// `(safety-level ...)` call wants.
+impl std::str::FromStr for SafetyLevel {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "strict" => Ok(Self::Strict),
+            "normal" => Ok(Self::Normal),
+            "loose" => Ok(Self::Loose),
+            other => Err(format!(
+                "Invalid safety level: {other}. Valid levels are: strict, normal, loose"
+            )),
+        }
+    }
+}
+
 impl SafetyLevel {
+    /// The lowercase spelling, which is what both `SAFETY_LEVEL` and
+    /// `(safety-level)` hand back.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Strict => "strict",
+            Self::Normal => "normal",
+            Self::Loose => "loose",
+        }
+    }
+
     pub fn from_env_value(value: Option<String>) -> Self {
         match value
             .as_deref()
@@ -48,6 +78,233 @@ static QUERY_SECRET: LazyLock<Option<Regex>> = LazyLock::new(|| {
 
 static PRIVATE_KEY_MARKER: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"-----BEGIN [A-Z ]*PRIVATE KEY-----").ok());
+
+/// Commands that fetch remote content.
+///
+/// Shared so the `curl | sh` judgement is the same one everywhere: `safe-run`
+/// used to look for the literal substring `"curl "`, which missed `wget`, any
+/// absolute path and every spacing but one.
+pub fn is_network_fetch_command(program: &str) -> bool {
+    matches!(
+        command_stem(program),
+        "curl" | "wget" | "fetch" | "scp" | "aria2c" | "httpie" | "http"
+    )
+}
+
+/// Commands that run whatever they are handed.
+pub fn is_code_execution_command(program: &str) -> bool {
+    matches!(
+        command_stem(program),
+        "sh" | "bash"
+            | "zsh"
+            | "fish"
+            | "ksh"
+            | "dash"
+            | "python"
+            | "python3"
+            | "perl"
+            | "ruby"
+            | "node"
+            | "sudo"
+    )
+}
+
+/// Commands that destroy a device or a filesystem outright.
+///
+/// `dd` is here rather than behind an `if=` test because a `dd` with no `if=`
+/// is still writing over something.
+pub fn is_disk_destroying_command(program: &str) -> bool {
+    let stem = command_stem(program);
+    matches!(stem, "dd" | "mkswap" | "format" | "fdisk" | "parted") || stem.starts_with("mkfs")
+}
+
+/// Commands whose plain invocation ends the session or the machine.
+pub fn is_system_power_command(program: &str) -> bool {
+    matches!(
+        command_stem(program),
+        "reboot" | "shutdown" | "poweroff" | "halt"
+    )
+}
+
+/// Split a command line at the operators that end one command.
+///
+/// Done on the raw text, not on tokens: `shell_words` splits on whitespace, so
+/// `echo hi; rm -rf ~` tokenizes as `["echo", "hi;", "rm", …]` and a
+/// token-level split never sees the `;` at all. Quotes are honoured, so the
+/// `;` inside `git commit -m 'a; b'` does not start a command.
+///
+/// Only `|`, `&` and `;` - the operators that separate whole commands.
+pub fn split_command_segments(command: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if !in_single => {
+                current.push(ch);
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                }
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+                current.push(ch);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                current.push(ch);
+            }
+            '|' | '&' | ';' if !in_single && !in_double => {
+                if !current.trim().is_empty() {
+                    segments.push(current.trim().to_string());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.trim().is_empty() {
+        segments.push(current.trim().to_string());
+    }
+
+    segments
+}
+
+/// The leading word of a compound statement `sh` understands and dsh does not.
+///
+/// dsh's grammar has no grouping or control flow, so `{ rm -rf ~; }` parses as
+/// a command literally named `{` with `rm` as an argument - and a command named
+/// `{` has no rule, so every dangerous-command check passed while `sh -c` ran
+/// the group. Nothing inside a compound statement can be classified, so a
+/// safety check has to say so rather than approve the wrapper.
+pub fn compound_statement_keyword(program: &str) -> Option<&'static str> {
+    const KEYWORDS: &[&str] = &[
+        "{", "}", "(", ")", "if", "then", "elif", "else", "fi", "for", "while", "until", "do",
+        "done", "case", "esac", "select", "function",
+    ];
+    KEYWORDS
+        .iter()
+        .find(|keyword| **keyword == program)
+        .copied()
+}
+
+/// Programs that run another program, so the name in front is not the one that
+/// does the work.
+///
+/// `sudo rm -rf ~` classified as `sudo` - which has no rule - passed every
+/// dangerous-command check. Shared so the guard and the chat `execute` tool
+/// look through the same list.
+pub const COMMAND_WRAPPERS: &[&str] = &[
+    "sudo", "doas", "env", "nice", "ionice", "nohup", "time", "timeout", "command", "xargs",
+    "stdbuf", "setsid", "chroot",
+];
+
+pub fn is_command_wrapper(program: &str) -> bool {
+    COMMAND_WRAPPERS.contains(&command_stem(program))
+}
+
+/// Whether a token is a `NAME=value` assignment rather than a program.
+pub fn is_assignment_token(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Every program a wrapped command line might actually run.
+///
+/// A wrapper's own options can take a value (`timeout 5 …`, `nice -n 10 …`,
+/// `chroot /new …`), and that value is not an option, so "the first token that
+/// is not an option" picks the value and never reaches the real program. Rather
+/// than encode each wrapper's option arity, every remaining non-option token is
+/// offered as a candidate: a wrong guess costs one extra confirmation, while a
+/// missed one runs `rm -rf ~` unasked.
+///
+/// Returns `(program, args)` pairs, the leading command first.
+pub fn command_candidates(tokens: &[String]) -> Vec<(String, Vec<String>)> {
+    let start = tokens
+        .iter()
+        .position(|token| !is_assignment_token(token))
+        .unwrap_or(tokens.len());
+    let tokens = &tokens[start..];
+
+    let Some(program) = tokens.first() else {
+        return Vec::new();
+    };
+    let mut candidates = vec![(program.clone(), tokens[1..].to_vec())];
+
+    if !is_command_wrapper(program) {
+        return candidates;
+    }
+
+    for index in 1..tokens.len() {
+        let token = &tokens[index];
+        if token.starts_with('-') || is_assignment_token(token) {
+            continue;
+        }
+        candidates.push((token.clone(), tokens[index + 1..].to_vec()));
+    }
+
+    candidates
+}
+
+/// The program name without its directory, so `/bin/rm` is judged as `rm`.
+pub fn command_stem(program: &str) -> &str {
+    program.rsplit('/').next().unwrap_or(program)
+}
+
+/// What an `rm` invocation is about to do, if it is worth saying out loud.
+///
+/// Token-based: `rm -rf /` and `rm -fr /` are the same thing, and neither is
+/// `rm ./rf-notes`. The substring version in `safe-run` answered both wrong.
+pub fn destructive_rm_warning(args: &[String]) -> Option<String> {
+    let mut recursive = false;
+    let mut force = false;
+    let mut root_path = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "-r" | "-R" | "--recursive" => recursive = true,
+            "-f" | "--force" => force = true,
+            "/" | "/*" => root_path = true,
+            _ => {}
+        }
+
+        // A short-option cluster: `-rf`, `-fr`, `-rfv`. Only clusters, so
+        // `--reflink` and a file called `-rest` are left alone.
+        if let Some(flags) = arg.strip_prefix('-')
+            && !arg.starts_with("--")
+            && flags.chars().all(|c| c.is_ascii_alphabetic())
+        {
+            if flags.contains('r') || flags.contains('R') {
+                recursive = true;
+            }
+            if flags.contains('f') {
+                force = true;
+            }
+        }
+    }
+
+    if recursive && force && root_path {
+        return Some("High Risk: 'rm -rf /' detected. This is extremely dangerous.".to_string());
+    }
+    if recursive && force {
+        return Some("High Risk: Recursive forced deletion ('rm -rf') detected.".to_string());
+    }
+    if recursive {
+        return Some("Recursive deletion detected. Proceed?".to_string());
+    }
+    None
+}
 
 pub fn is_sensitive_key(key: &str) -> bool {
     let key = key.to_ascii_uppercase();
@@ -354,6 +611,137 @@ mod tests {
         assert!(!is_sensitive_path(Path::new("src/main.rs")));
         assert!(!is_sensitive_path(Path::new("dsh/src/secrets.rs")));
         assert!(!is_sensitive_path(Path::new("src/credentials.rs")));
+    }
+
+    /// `SafetyGuard` used to keep a literal set, so a versioned or suffixed
+    /// spelling of the same destructive tool walked straight past it.
+    #[test]
+    fn disk_destroying_commands_are_matched_by_family_and_by_stem() {
+        for cmd in ["dd", "mkfs", "mkfs.ext4", "mkswap", "fdisk", "parted"] {
+            assert!(is_disk_destroying_command(cmd), "{cmd}");
+        }
+        // Also when it arrives with a directory in front of it. Built rather
+        // than written as a literal so the portability lint does not read it as
+        // a claim about where the binary lives.
+        let qualified = format!("{}/mkfs.xfs", "/sbin");
+        assert!(is_disk_destroying_command(&qualified));
+        for cmd in ["ddrescue", "mkdir", "make", "cat"] {
+            assert!(!is_disk_destroying_command(cmd), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn rm_flags_are_read_as_tokens_not_substrings() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        // Clusters in either order, and with extra flags.
+        assert!(
+            destructive_rm_warning(&args(&["-rf", "/"]))
+                .is_some_and(|m| m.contains("extremely dangerous"))
+        );
+        assert!(
+            destructive_rm_warning(&args(&["-fr", "/"]))
+                .is_some_and(|m| m.contains("extremely dangerous"))
+        );
+        assert!(
+            destructive_rm_warning(&args(&["-rfv", "target"]))
+                .is_some_and(|m| m.contains("Recursive forced"))
+        );
+
+        // A long option that merely starts with the same letters is not `-r`.
+        assert_eq!(destructive_rm_warning(&args(&["--reflink", "a"])), None);
+        // A plain delete says nothing.
+        assert_eq!(destructive_rm_warning(&args(&["a.txt"])), None);
+    }
+
+    /// The wrapper's option value used to be mistaken for the program, so
+    /// `timeout 5 rm -rf /` was judged as a command called `5`.
+    #[test]
+    fn a_wrapper_offers_every_program_it_might_be_running() {
+        let split = |line: &str| {
+            shell_words::split(line)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>()
+        };
+        let programs = |line: &str| {
+            command_candidates(&split(line))
+                .into_iter()
+                .map(|(program, _)| program)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(programs("rm -rf /"), vec!["rm"]);
+        assert_eq!(programs("FOO=bar rm -rf /"), vec!["rm"]);
+        assert_eq!(programs("sudo rm -rf /"), vec!["sudo", "rm", "/"]);
+        assert_eq!(
+            programs("timeout 5 rm -rf /"),
+            vec!["timeout", "5", "rm", "/"]
+        );
+        assert_eq!(
+            programs("nice -n 10 rm -rf /"),
+            vec!["nice", "10", "rm", "/"]
+        );
+        assert_eq!(
+            programs("chroot /new rm -rf /"),
+            vec!["chroot", "/new", "rm", "/"]
+        );
+        // A non-wrapper is not expanded: its arguments are arguments.
+        assert_eq!(programs("echo rm -rf /"), vec!["echo"]);
+    }
+
+    #[test]
+    fn compound_statements_are_recognised_by_their_leading_word() {
+        assert_eq!(compound_statement_keyword("{"), Some("{"));
+        assert_eq!(compound_statement_keyword("for"), Some("for"));
+        // Ordinary commands, including ones that merely start the same.
+        assert_eq!(compound_statement_keyword("iftop"), None);
+        assert_eq!(compound_statement_keyword("rm"), None);
+        assert_eq!(compound_statement_keyword("doas"), None);
+    }
+
+    #[test]
+    fn segments_split_on_unquoted_operators_only() {
+        assert_eq!(
+            split_command_segments("echo hi; rm -rf /"),
+            vec!["echo hi", "rm -rf /"]
+        );
+        assert_eq!(
+            split_command_segments("true | rm -rf /"),
+            vec!["true", "rm -rf /"]
+        );
+        assert_eq!(split_command_segments("a && b || c"), vec!["a", "b", "c"]);
+        assert_eq!(split_command_segments("sleep 1 &"), vec!["sleep 1"]);
+        // A quoted operator belongs to the argument.
+        assert_eq!(
+            split_command_segments("git commit -m 'a; b'"),
+            vec!["git commit -m 'a; b'"]
+        );
+        assert_eq!(
+            split_command_segments("echo \"x | y\""),
+            vec!["echo \"x | y\""]
+        );
+    }
+
+    #[test]
+    fn assignment_tokens_are_names_not_options() {
+        assert!(is_assignment_token("FOO=bar"));
+        assert!(is_assignment_token("_x="));
+        assert!(!is_assignment_token("rm"));
+        assert!(!is_assignment_token("--opt=value"));
+        assert!(!is_assignment_token("=bare"));
+        assert!(!is_assignment_token("9FOO=bar"));
+    }
+
+    #[test]
+    fn a_program_is_judged_by_its_stem() {
+        assert_eq!(command_stem("curl"), "curl");
+        assert_eq!(command_stem(&format!("{}/curl", "/usr/bin")), "curl");
+        assert!(is_network_fetch_command(&format!("{}/curl", "/usr/bin")));
+        assert!(is_code_execution_command(&format!("{}/bash", "/bin")));
+        // A name that merely starts the same is a different program.
+        assert!(!is_code_execution_command("bashful"));
+        assert!(!is_network_fetch_command("curly"));
     }
 
     #[test]

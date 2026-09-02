@@ -297,6 +297,35 @@ def check_cargo_config() -> list[str]:
     return failures
 
 
+# `dirs::config_dir()` is `~/.config` on Linux and `~/Library/Application Support`
+# on macOS, so it is a platform branch with no `cfg` to notice. Mixing it with
+# `xdg::BaseDirectories` is how an installed runtime skill became invisible to
+# the chat agent on macOS: the installer wrote one directory and the loader read
+# the other. These two files own the resolution; everything else asks them.
+CONFIG_DIR_CALL = re.compile(r"\bdirs::config_dir\s*\(")
+CONFIG_DIR_OWNERS = (
+    "dsh-builtin/src/config_paths.rs",
+    "dsh/src/environment/mod.rs",
+)
+
+
+def check_config_dir_resolution() -> list[str]:
+    failures: list[str] = []
+    for path in rust_sources():
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        if relative in CONFIG_DIR_OWNERS:
+            continue
+        source = strip_comment_lines(path.read_text(encoding="utf-8"))
+        hits = len(CONFIG_DIR_CALL.findall(source))
+        if hits:
+            failures.append(
+                f"{relative}: {hits} direct dirs::config_dir() call(s); it means a "
+                "different directory on macOS. Use dsh_builtin::config_paths, or "
+                "crate::environment::get_config_file in the dsh crate"
+            )
+    return failures
+
+
 def check_platform_guard() -> list[str]:
     failures: list[str] = []
     for relative in GUARDED_CRATE_ROOTS:
@@ -369,6 +398,7 @@ def main() -> int:
 
     failures.extend(check_cargo_config())
     failures.extend(check_platform_guard())
+    failures.extend(check_config_dir_resolution())
 
     if failures:
         for failure in failures:

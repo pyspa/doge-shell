@@ -7,10 +7,12 @@ use dsh_openai::{
 };
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
+use parking_lot::RwLock;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Environment variable key for storing the chat prompt template
@@ -520,7 +522,9 @@ pub fn execute_chat_message(
             let prompt = proxy.get_var(PROMPT_KEY);
             let language = proxy.get_var(LANGUAGE_KEY);
             let model_override = model_override.map(|model| model.to_string());
-            let mcp_manager = session::load_mcp_manager(proxy.list_mcp_servers());
+            // The shell's own manager, so `mcp connect` / `mcp disconnect` /
+            // `mcp status` and the agent describe the same connections.
+            let mcp_manager = proxy.agent_mcp_manager();
 
             match chat_with_tools(
                 &client,
@@ -613,7 +617,7 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
 
 /// Built-in chat_reset command description
 pub fn chat_reset_description() -> &'static str {
-    "Forget the carried AI chat conversation and the cached MCP tool list"
+    "Forget the carried AI chat conversation"
 }
 
 /// Built-in chat_reset command implementation
@@ -627,7 +631,6 @@ pub fn chat_reset(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy)
 
     let detail = session::session_description();
     let cleared = session::session_reset();
-    session::invalidate_mcp_cache();
 
     let message = match (cleared, detail) {
         (true, Some(detail)) => format!("chat session cleared ({detail})"),
@@ -651,11 +654,11 @@ fn chat_with_tools(
     language: Option<String>,
     temperature: Option<f64>,
     model_override: Option<String>,
-    mcp_manager: &McpManager,
+    mcp_manager: &Arc<RwLock<McpManager>>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
     // Build System Prompt (fixed for the session)
-    let system_prompt_text = build_system_prompt(operator_prompt, language, mcp_manager);
+    let system_prompt_text = build_system_prompt(operator_prompt, language, &mcp_manager.read());
     let cwd = proxy.get_current_dir().ok();
 
     let session_ttl = session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY));
@@ -678,8 +681,11 @@ fn chat_with_tools(
     let turn_token_budget = resolve_turn_token_budget(proxy);
 
     let mut tools = build_tools();
-    if !mcp_manager.is_empty() {
-        tools.extend(mcp_manager.tool_definitions());
+    {
+        let mcp = mcp_manager.read();
+        if !mcp.is_empty() {
+            tools.extend(mcp.tool_definitions());
+        }
     }
     let mut iterations = 0;
     let mut dynamic_context = DynamicContext::default();
@@ -897,16 +903,18 @@ fn build_system_prompt(
         base.push_str(&extra);
     }
 
-    if let Some(lang) = language {
-        let trimmed = lang.trim();
-        if !trimmed.is_empty() {
-            base.push_str("\n\nIMPORTANT: You MUST respond in ");
-            base.push_str(trimmed);
-            base.push('.');
-        }
-    }
+    dsh_openai::apply_language(&base, language.as_deref())
+}
 
-    base
+/// The operator's response language, for any AI request the shell makes.
+///
+/// Public because `ai-commit`, `safe-run` and `blocks` need the same answer:
+/// `AI_MESSAGE_LANG` used to reach the `!` runtime and nothing else.
+pub fn response_language(proxy: &mut dyn ShellProxy) -> Option<String> {
+    proxy
+        .get_var(LANGUAGE_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// Environment snapshot for one agent run, rebuilt only when it changes.

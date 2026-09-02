@@ -881,41 +881,20 @@ fn sanitize_model_output(raw: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The ghost-text answer, or nothing.
+///
+/// Shared with the chat runtime so the array content shape and a reply the
+/// provider cut short are handled the same way here as everywhere else; this
+/// used to carry its own copy of the recursive text walker.
 fn extract_ai_message_content(response: &Value) -> Option<String> {
-    let choice = response.get("choices")?.get(0)?;
-    let message = choice.get("message")?;
-    collect_text_segments(message.get("content")?)
-}
-
-fn collect_text_segments(value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => Some(text.to_string()),
-        Value::Array(items) => {
-            let mut combined = String::new();
-            for item in items {
-                if let Some(fragment) = collect_text_segments(item) {
-                    combined.push_str(&fragment);
-                }
-            }
-            if combined.is_empty() {
-                None
-            } else {
-                Some(combined)
-            }
-        }
-        Value::Object(map) => {
-            if let Some(text) = map.get("text") {
-                return collect_text_segments(text);
-            }
-            if let Some(content) = map.get("content") {
-                return collect_text_segments(content);
-            }
-            if let Some(value_field) = map.get("value") {
-                return collect_text_segments(value_field);
-            }
+    match dsh_openai::turn::answer_text(response) {
+        Ok(content) => Some(content),
+        Err(err) => {
+            // A suggestion is speculative: report it in the log and show
+            // nothing, rather than interrupting the prompt.
+            debug!("ai suggestion produced no usable answer: {err}");
             None
         }
-        _ => None,
     }
 }
 

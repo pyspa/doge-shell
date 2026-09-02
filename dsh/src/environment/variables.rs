@@ -126,8 +126,22 @@ impl Environment {
         match key {
             "PATH" => self.reload_path(),
             "Z_EXCLUDE" => self.reload_z_exclude(),
+            "AI_MESSAGE_LANG" => self.reload_response_language(),
             _ => {}
         }
+    }
+
+    /// Republish `AI_MESSAGE_LANG` to the AI service.
+    ///
+    /// The service reads the slot, not the map, so setting the variable has to
+    /// push the new value across. Without this the setting reached the `!`
+    /// runtime alone and every shell-side AI answer stayed in English.
+    pub fn reload_response_language(&mut self) {
+        let value = self
+            .lookup_variable("AI_MESSAGE_LANG")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        *self.integration_state.response_language.write() = value;
     }
 
     /// The value a child process would be given for `name`.

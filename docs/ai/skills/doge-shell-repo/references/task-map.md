@@ -25,7 +25,8 @@
   - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
 - chatgpt / MCP / tool / runtime skill / OpenAI config
-  - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/doctor.rs`
+  - 先に読む: [ai-architecture.md](ai-architecture.md)（AI 機能の方針。再実装してはいけないものの一覧）
+  - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
 - serve / MCP server / shared MCP types
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
@@ -53,8 +54,11 @@
   - Read: `dsh-builtin/src/notebook_play.rs`, `dsh-builtin/src/markdown.rs`, `dsh-builtin/src/out.rs`, `dsh-builtin/src/tm.rs`, `dsh-types/src/notebook.rs`, `dsh-types/src/output_history.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared data shapes change
 - safety / guard / command policy
-  - Read: `dsh/src/safety/`
-  - Validate: `cargo test -p doge-shell`
+  - Read: `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `dsh/src/proxy/mod.rs` の `AgentCommandPolicy`
+  - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` and `cargo test -p dsh-builtin` when shared判定や tool 側の適用を触ったとき
+- safe-run / ai-watch / AI から実行するコマンドの承認
+  - Read: `dsh-builtin/src/safe_run.rs`, `dsh-builtin/src/ai_watch.rs`, `dsh/src/repl/ai_watch.rs`, `dsh-builtin/src/chatgpt/tool/execute.rs`
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when the REPL side changes
 - lisp / config loader / startup behavior
   - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`, `dsh-builtin/src/lisp.rs`, `dsh-builtin/src/include.rs`, `dsh-builtin/src/reload.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` when builtin include/reload/lisp changes
@@ -65,10 +69,11 @@
   - Read: `dsh/src/history/`, `dsh/src/db.rs`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`, `dsh-builtin/src/blocks.rs`
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
+  - 先に読む: [ai-architecture.md](ai-architecture.md)
   - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
-  - Read: `AGENTS.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`
+  - Read: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`, `.claude/`
   - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks
 - validation command selection / changed-file checks
   - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`

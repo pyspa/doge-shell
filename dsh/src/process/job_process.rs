@@ -261,7 +261,7 @@ impl JobProcess {
         let (level, allowlist) = {
             let env = shell.environment.read();
             (
-                env.policy_state.safety_level.read().clone(),
+                *env.policy_state.safety_level.read(),
                 env.policy_state.execute_allowlist.read().clone(),
             )
         };

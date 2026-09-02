@@ -54,7 +54,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         None
     };
 
-    let mut message = match generate_commit_message(&client, &diff, model_override) {
+    let language = crate::chatgpt::response_language(proxy);
+    let mut message = match generate_commit_message(&client, &diff, model_override, language) {
         Ok(m) => m,
         Err(e) => {
             ctx.write_stderr(&format!("ai-commit: failed to generate message: {}", e))
@@ -172,6 +173,7 @@ fn generate_commit_message(
     client: &ChatGptClient,
     diff: &str,
     model_override: Option<String>,
+    language: Option<String>,
 ) -> Result<String, String> {
     let system_prompt = r#"You are an AI assistant that writes git commit messages.
 Generate a commit message in the Conventional Commits format based on the provided git diff.
@@ -192,7 +194,7 @@ Rules:
     let messages = vec![
         json!({
             "role": "system",
-            "content": system_prompt
+            "content": dsh_openai::apply_language(system_prompt, language.as_deref())
         }),
         json!({
             "role": "user",
@@ -207,10 +209,10 @@ Rules:
         .send_chat(&messages, &options, None)
         .map_err(|e| format!("{e}"))?;
 
-    let content = response["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or("Invalid response from AI")?
-        .to_string();
+    // Shared with the chat runtime, so a reply the provider cut short is
+    // reported instead of committed as a finished message.
+    let content =
+        dsh_openai::turn::answer_text(&response).map_err(|err| format!("ai-commit: {err}"))?;
 
     Ok(content.trim().to_string())
 }

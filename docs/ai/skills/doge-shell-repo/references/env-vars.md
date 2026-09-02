@@ -17,4 +17,18 @@
 | `DSH_PERF_ITERS` | `dsh/benches/latency.rs` | `cargo bench` の反復回数 |
 | `DSH_CHECK_BASE_REF` | `scripts/check.sh` | 差分チェックの base ref。既定 `develop`、無ければ `origin/develop` |
 
-インストーラ側は `CODEX_HOME` / `XDG_CONFIG_HOME` / `CLAUDE_CONFIG_DIR` を見る（`scripts/install-runtime-skills.sh`）。
+インストーラ側は `CODEX_HOME` / `XDG_CONFIG_HOME` / `CLAUDE_CONFIG_DIR` を見る（`scripts/install-runtime-skills.sh`）。`doctor skills` も `CODEX_HOME` を見る（`dsh-builtin/src/doctor.rs` の `codex_skills_dir`）。
+
+## AI 機能の変数
+
+正典の表と既定値は [ai-architecture.md](ai-architecture.md) にある。ここには「探しに行く先」だけ置く。
+
+| 変数 | 定義位置 | 用途 |
+|---|---|---|
+| `AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` / `AI_CHAT_MODEL` / `AI_CHAT_TIMEOUT_SECS` / `AI_CHAT_ALLOW_INSECURE_HTTP` | `dsh-openai/src/config.rs` | プロバイダ設定。`OPENAI_*` は legacy alias |
+| `AI_SUMMARY_MODEL` / `AI_CHAT_CONTEXT_TOKEN_BUDGET` / `AI_CHAT_TURN_TOKEN_BUDGET` / `AI_MESSAGE_LANG` / `CHAT_PROMPT` | `dsh-builtin/src/chatgpt.rs` | `!` チャットの会話管理と応答言語 |
+| `AI_CHAT_SESSION_TTL_SECS` | `dsh-builtin/src/chatgpt/session.rs` | 連続する `!` が会話を共有する時間。`0` で無効 |
+| `AI_CHAT_EXECUTE_ALLOWLIST` / `DSH_EXECUTE_TOOL_CONFIG` | `dsh-builtin/src/chatgpt/tool/execute.rs` | `execute` ツールの allowlist と JSON 設定の置き場所 |
+| `SAFETY_LEVEL` | `dsh-types/src/safety_policy.rs` | 起動時に `policy_state.safety_level` へ seed される。**単一ソースは policy_state のほう**、変数は表示用 |
+
+これらは **シェル変数 → プロセス環境** の順に解決する（`chatgpt::load_openai_config`）。`std::env::var` だけを見る新しいキーを足さない。

@@ -633,6 +633,24 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
 /// Kept separate from [`get_jobs`] so the "what counts as leftover" rule is
 /// testable without a shell. A trailing separator or whitespace is consumed by
 /// the grammar, so anything reaching here is text the user typed and we ignored.
+/// What the grammar could not consume, for a caller that must fail closed.
+///
+/// `get_jobs` only warns about a leftover tail, which is right for a person at
+/// the prompt - they can see the warning. It is wrong for a safety check: the
+/// verdict would cover the prefix while the whole line runs.
+pub fn unconsumed_tail(shell: &mut Shell, input: &str) -> Option<String> {
+    let (input_cow, pairs_opt) =
+        parser::parse_with_expansion(input, Arc::clone(&shell.environment)).ok()?;
+
+    let mut pairs = match pairs_opt {
+        Some(pairs) => pairs,
+        None => ShellParser::parse(Rule::commands, &input_cow).ok()?,
+    };
+
+    let pair = pairs.next()?;
+    parser::unparsed_tail(&input_cow, pair.as_span().end()).map(str::to_string)
+}
+
 fn report_unparsed_tail(input: &str, consumed: usize) {
     if let Some(tail) = parser::unparsed_tail(input, consumed) {
         tracing::warn!("unparsed input tail: {:?}", tail);

@@ -96,6 +96,12 @@ pub(crate) struct PolicyState {
 pub(crate) struct IntegrationState {
     pub(crate) mcp_servers: Vec<McpServerConfig>,
     pub(crate) mcp_manager: Arc<RwLock<McpManager>>,
+    /// `AI_MESSAGE_LANG`, shared with `LiveAiService`.
+    ///
+    /// A slot rather than a lookup because the service outlives any one borrow
+    /// of the environment, and giving it the environment back would make a
+    /// reference cycle - the environment holds the service.
+    pub(crate) response_language: Arc<RwLock<Option<String>>>,
     pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
 }
 
@@ -212,6 +218,7 @@ impl Environment {
             integration_state: IntegrationState {
                 mcp_servers: Vec::new(),
                 mcp_manager: Arc::new(RwLock::new(McpManager::default())),
+                response_language: Arc::new(RwLock::new(None)),
                 ai_service: None,
             },
             session_output_state: SessionOutputState {
@@ -229,10 +236,25 @@ impl Environment {
         }));
 
         {
+            // Seed the level from the inherited environment before publishing the
+            // variable. Writing "normal" unconditionally shadowed an inherited
+            // `SAFETY_LEVEL=strict` in the shell variable map, so starting dsh
+            // from a hardened parent shell silently dropped back to normal.
             let mut env = env_arc.write();
+            let inherited = env
+                .variable_state
+                .system_env_vars
+                .get("SAFETY_LEVEL")
+                .cloned();
+            let level = crate::safety::SafetyLevel::from_env_value(inherited);
+            *env.policy_state.safety_level.write() = level;
             env.variable_state
                 .variables
-                .insert("SAFETY_LEVEL".to_string(), "normal".to_string());
+                .insert("SAFETY_LEVEL".to_string(), level.as_str().to_string());
+
+            // Publish the inherited `AI_MESSAGE_LANG` once; after this the
+            // variable setters keep the slot in step.
+            env.reload_response_language();
         }
 
         env_arc
@@ -263,6 +285,7 @@ impl Environment {
                 IntegrationState {
                     mcp_servers: parent.integration_state.mcp_servers.clone(),
                     mcp_manager: parent.integration_state.mcp_manager.clone(),
+                    response_language: parent.integration_state.response_language.clone(),
                     ai_service: parent.integration_state.ai_service.clone(),
                 },
                 PolicyState {

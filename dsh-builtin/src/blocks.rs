@@ -764,7 +764,7 @@ async fn export_blocks_ai(
     let messages = vec![
         json!({
             "role": "system",
-            "content": "You annotate shell runbooks. For each numbered step, describe its purpose in one short sentence. Reply with one line per step in the form `N. description`, nothing else. Use the user's language when the commands suggest one."
+            "content": "You annotate shell runbooks. For each numbered step, describe its purpose in one short sentence. Reply with one line per step in the form `N. description`, nothing else."
         }),
         json!({
             "role": "user",
@@ -888,7 +888,7 @@ async fn fix_block_ai(
     let messages = vec![
         json!({
             "role": "system",
-            "content": "Return one corrected shell command only. Never claim it has been executed."
+            "content": "Return one corrected shell command only, with no prose and no translation of the command itself. Never claim it has been executed."
         }),
         json!({
             "role": "user",
@@ -943,7 +943,7 @@ async fn explain_block_async(
     let messages = vec![
         json!({
             "role": "system",
-            "content": "You are a shell command analyst. Explain this command block concisely, focusing on result, errors, and the next useful action. Respond in the user's language when possible."
+            "content": "You are a shell command analyst. Explain this command block concisely, focusing on result, errors, and the next useful action."
         }),
         json!({
             "role": "user",

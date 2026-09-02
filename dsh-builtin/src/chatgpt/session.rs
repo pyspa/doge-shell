@@ -7,20 +7,15 @@
 //! `EnvironmentSnapshot` must not carry it.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use dsh_types::mcp::McpServerConfig;
-
 use super::ConversationManager;
-use super::mcp::McpManager;
 
 /// Environment key overriding how long a conversation is carried forward.
 /// `0` disables carrying it forward at all.
 pub(super) const SESSION_TTL_KEY: &str = "AI_CHAT_SESSION_TTL_SECS";
 const DEFAULT_SESSION_TTL_SECS: u64 = 1800;
-/// MCP server metadata is data only, so it can be reused between turns.
-const MCP_CACHE_TTL: Duration = Duration::from_secs(300);
 
 struct StoredSession {
     manager: ConversationManager,
@@ -112,47 +107,6 @@ pub fn session_reset() -> bool {
     match SESSION.lock() {
         Ok(mut slot) => slot.take().is_some(),
         Err(_) => false,
-    }
-}
-
-struct CachedMcp {
-    manager: Arc<McpManager>,
-    servers: Vec<McpServerConfig>,
-    loaded_at: Instant,
-}
-
-static MCP_CACHE: LazyLock<Mutex<Option<CachedMcp>>> = LazyLock::new(|| Mutex::new(None));
-
-/// Load the MCP manager, reusing the previous one when nothing changed.
-///
-/// This used to reconnect to every configured server on each `!`, which for a
-/// stdio server means spawning the process again.
-pub(super) fn load_mcp_manager(servers: Vec<McpServerConfig>) -> Arc<McpManager> {
-    if let Ok(cache) = MCP_CACHE.lock()
-        && let Some(cached) = cache.as_ref()
-        && cached.loaded_at.elapsed() < MCP_CACHE_TTL
-        && cached.servers == servers
-    {
-        return Arc::clone(&cached.manager);
-    }
-
-    let manager = Arc::new(McpManager::load_blocking(servers.clone()));
-
-    if let Ok(mut cache) = MCP_CACHE.lock() {
-        *cache = Some(CachedMcp {
-            manager: Arc::clone(&manager),
-            servers,
-            loaded_at: Instant::now(),
-        });
-    }
-
-    manager
-}
-
-/// Forget the cached MCP manager so the next turn reconnects.
-pub fn invalidate_mcp_cache() {
-    if let Ok(mut cache) = MCP_CACHE.lock() {
-        *cache = None;
     }
 }
 

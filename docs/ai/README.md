@@ -50,3 +50,11 @@ doctor skills
   symlink が使えない環境だけ `--target claude-project`（リポジトリ内へコピー）か `--target claude`（`~/.claude/skills/` へコピー）を使う。
   `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
+- Skill 自体を書き足すとき: `dsh-skill-authoring`
+
+## 製品側の AI 機能
+
+このディレクトリは「この repo を AI に編集させるときの運用ルール」で、doge-shell が製品として
+持つ AI 機能（`!` チャット、MCP、ツール、コマンドパレットの AI アクション、`ai-commit`、
+`safe-run`、ゴーストテキスト）の設計文書ではない。そちらの方針は
+`docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に置く。

@@ -71,6 +71,11 @@ impl Shell {
             .read()
             .clone()
     }
+
+    /// The one place the level is read from.
+    fn safety_level_snapshot(&self) -> dsh_types::safety_policy::SafetyLevel {
+        *self.environment.read().policy_state.safety_level.read()
+    }
 }
 
 impl AgentCommandPolicy for Shell {
@@ -83,6 +88,30 @@ impl AgentCommandPolicy for Shell {
         // command by asking whether it is safe.
         if let Some(construct) = dsh_types::safety_policy::substitution_construct(command) {
             return AgentCommandVerdict::Denied(format!("{construct} cannot be evaluated safely"));
+        }
+
+        // The guard judges what dsh's grammar can see; `sh -c` runs the whole
+        // line. A construct the grammar cannot consume - `{ rm -rf ~; }`, a
+        // heredoc - parses as a prefix and the rest is only *warned* about
+        // (`report_unparsed_tail`), so the verdict would describe a different
+        // command from the one that runs. Refuse instead.
+        if let Some(tail) = crate::shell::eval::unconsumed_tail(self, command) {
+            return AgentCommandVerdict::Denied(format!(
+                "the shell's parser cannot read all of it (`{tail}` is left over),                  so it cannot be judged before it runs"
+            ));
+        }
+
+        // A compound statement parses as a command named `{` / `for` / `if`,
+        // which has no rule, so everything inside it went unjudged while
+        // `sh -c` ran the whole thing.
+        for segment in dsh_types::safety_policy::split_command_segments(command) {
+            let leading = segment.split_whitespace().next().unwrap_or_default();
+            if let Some(keyword) = dsh_types::safety_policy::compound_statement_keyword(leading) {
+                return AgentCommandVerdict::Denied(format!(
+                    "`{keyword}` starts a compound statement, and the commands inside one \
+                     cannot be judged before it runs; write them as separate commands"
+                ));
+            }
         }
 
         // Parse the whole line, so a pipeline is judged as a pipeline. This is
@@ -98,9 +127,7 @@ impl AgentCommandPolicy for Shell {
         };
 
         let allowlist = self.agent_allowlist_snapshot();
-        let environment = self.environment.read();
-        let level = environment.policy_state.safety_level.read().clone();
-        drop(environment);
+        let level = self.safety_level_snapshot();
 
         match self.safety_guard.check_jobs(&jobs, &level, &allowlist) {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
@@ -137,6 +164,93 @@ impl AgentCommandPolicy for Shell {
 
     fn agent_allowlist(&mut self) -> Vec<String> {
         self.agent_allowlist_snapshot()
+    }
+
+    fn evaluate_agent_tool(&mut self, name: &str, arguments: &str) -> AgentCommandVerdict {
+        // The same judgement the shell-side AI service already applied to MCP
+        // calls. The `!` runtime used to ask about every one of them regardless
+        // of the level, so `loose` still prompted and a read-only tool was
+        // treated like a destructive one.
+        let mut allowlist = self.agent_allowlist_snapshot();
+        allowlist.extend(self.agent_session_approvals());
+        let level = self.safety_level_snapshot();
+
+        match self
+            .safety_guard
+            .check_mcp_tool(name, arguments, &level, &allowlist)
+        {
+            SafetyResult::Allowed => AgentCommandVerdict::Allowed,
+            SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
+            SafetyResult::Denied(reason) => AgentCommandVerdict::Denied(reason),
+        }
+    }
+
+    fn agent_tool_approval_entry(&mut self, name: &str, arguments: &str) -> String {
+        crate::safety::SafetyGuard::mcp_allowlist_entry(name, arguments)
+    }
+
+    fn agent_mcp_manager(
+        &mut self,
+    ) -> std::sync::Arc<parking_lot::RwLock<dsh_builtin::McpManager>> {
+        self.environment
+            .read()
+            .integration_state
+            .mcp_manager
+            .clone()
+    }
+}
+
+#[cfg(test)]
+mod agent_policy_tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+
+    fn shell() -> Shell {
+        Shell::new(Environment::new())
+    }
+
+    /// The guard reads what dsh's grammar can parse; `sh -c` runs the whole
+    /// line. A construct the grammar cannot consume used to be judged on its
+    /// prefix and only *warned* about, so `{ rm -rf ~; }` was classified as a
+    /// command called `{` - which has no rule - and ran unasked.
+    #[test]
+    fn a_line_the_parser_cannot_finish_is_refused() {
+        let mut shell = shell();
+
+        for command in [
+            "{ rm -rf /; }",
+            "for f in *; do rm -rf $f; done",
+            "echo a )",
+            "echo unterminated\"",
+        ] {
+            assert!(
+                matches!(
+                    shell.evaluate_agent_command(command),
+                    AgentCommandVerdict::Denied(_)
+                ),
+                "{command} should have been refused"
+            );
+        }
+    }
+
+    /// The refusal must not swallow ordinary lines.
+    #[test]
+    fn an_ordinary_line_is_still_judged_on_its_merits() {
+        let mut shell = shell();
+
+        assert_eq!(
+            shell.evaluate_agent_command("echo hello"),
+            AgentCommandVerdict::Allowed
+        );
+        assert!(matches!(
+            shell.evaluate_agent_command("sudo rm -rf /"),
+            AgentCommandVerdict::Confirm(_)
+        ));
+        assert!(matches!(
+            shell.evaluate_agent_command("true | rm -rf /"),
+            AgentCommandVerdict::Confirm(_)
+        ));
     }
 }
 
@@ -471,6 +585,16 @@ impl ShellProxy for Shell {
 
     fn list_execute_allowlist(&mut self) -> Vec<String> {
         self.environment.read().execute_allowlist().to_vec()
+    }
+
+    /// Read the level the policy actually runs at, not the readable copy.
+    ///
+    /// The default implementation parses the `SAFETY_LEVEL` variable, which is
+    /// only ever *written* by `(safety-level ...)`. That left the chat tools'
+    /// sensitive-access gate reading one value while `evaluate_agent_command`
+    /// and the MCP checks read another.
+    fn safety_level(&mut self) -> dsh_types::safety_policy::SafetyLevel {
+        self.safety_level_snapshot()
     }
 
     fn run_hook(&mut self, hook_name: &str, args: Vec<String>) -> Result<()> {

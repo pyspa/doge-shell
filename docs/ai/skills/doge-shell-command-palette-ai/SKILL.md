@@ -6,6 +6,7 @@ description: Use for doge-shell command palette, AI actions, diagnose, explain, 
 # Doge Shell Command Palette AI
 
 - Start with `rg -n "command_palette|ai_features|diagnose|explain|suggest|argument_explainer|OpenAI" dsh/src/command_palette dsh/src/ai_features dsh/src/argument_explainer.rs dsh-openai/src`.
+- Read [../doge-shell-repo/references/ai-architecture.md](../doge-shell-repo/references/ai-architecture.md) first: it is the canonical policy for the AI features and lists what must not be reimplemented.
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for command palette / AI action entries.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
 - Default read targets are `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, and `dsh-openai/src/` when client/config behavior is involved.

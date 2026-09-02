@@ -59,8 +59,20 @@
 - `/bin/true` と `/bin/false` は macOS に無い（`/usr/bin` にしかない）。テストからの絶対パス起動は `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `first_existing()` を通す。`/etc/hostname` も macOS に無いので `/etc/hosts` を使う。`/tmp` は macOS で `/private/tmp` に解決されるので `canonicalize` して比べる（`ae2f192`）。
 - macOS の `/etc/passwd` は**実在するのに実質空**。単一ユーザーモード用で、対話ユーザーは Open Directory にいる。ファイルの有無で分岐すると「読めたのに `root` しか出ない」になる（`f45fcc2`）。`/etc/group` は逆に macOS でも埋まっているが、Open Directory が足すグループは持たない。
 - シグナル番号は 1-15 しか共通でない。`SIGUSR1` は Linux 10 / macOS 30、`SIGCHLD` は 17 / 20。番号表を共有せず per-OS に持ち、`libc` と突き合わせるテストを付ける（`59855e1`、`generators/signal.rs`）。
+- `dirs::config_dir()` と `xdg::BaseDirectories` は Linux で同じ、macOS で**別のディレクトリ**（前者は `~/Library/Application Support`）。混ぜると installer が書いた場所を loader が読まない。実際に runtime skill が macOS でエージェントから見えなかった。config パスは `dsh-builtin/src/config_paths.rs`（`dsh` crate 内は `environment::get_config_file`）を通す。`scripts/check-portability.py` が直接呼び出しを禁止している。
 - 片肺の `#[cfg]` は**何も落とさない**。もう一方の OS でその項目が存在しなくなるだけで、コンパイルもテストも通る。`scripts/check-portability.py` がファイル単位で見るのが唯一の自動防波堤で、関数単位は CI の macos ジョブが担う。
+
+## 安全判定
+- `SafetyGuard::check_jobs` は `Job.cmd`（**行全体。パイプラインもまとめて 1 本の文字列**）を見る。先頭トークンだけを分類すると `true | rm -rf ~` は `true`、`sudo rm -rf ~` は `sudo` になり、どちらもルールが無いので**全チェックを素通りする**。オペレータで区切り、ラッパーを覗いてから分類すること（`dsh_types::safety_policy::{split_command_segments, command_candidates}`）。
+- 行の分割は**生文字列**に対してやる。`shell_words::split` は空白でしか切らないので `echo hi; rm -rf ~` は `["echo", "hi;", "rm", ...]` になり、トークン単位の分割では `;` が見えない。
+- ラッパーのオプションは値を取る（`timeout 5 ...`、`nice -n 10 ...`、`chroot /new ...`）。「最初の非オプション引数が中身のコマンド」は**その値を拾う**。`command_candidates` は残りの非オプショントークンを全部候補にして fail-safe に倒している。
+- **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するのに、dsh の文法は grouping・制御構文・heredoc を持たない。`get_jobs` は未消費の末尾を**警告するだけ**なので、安全判定側は `unconsumed_tail` と `compound_statement_keyword` で fail closed にする。`{ rm -rf ~; }` は `{` という名前のコマンドとして完全にパースされてしまう。
+- コマンド置換（`` ` ``、`$(...)`、`<(...)`、`(...)`）は**判定より前に拒否する**。`shell::parse::parse_command` が評価するので、「安全か」を尋ねること自体が実行になる。
+- 文字列をコードとして渡す経路は flag だけではない。stdin から読むシェル（`printf ... | sh`）と `eval` は flag を持たない（`execute.rs` の `hidden_code_source`）。
 
 ## 二重化しているもの（多数派が正解とは限らない）
 - builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。
+- **AI 機能の方針**は `ai-architecture.md` が正。エージェントループは 2 つだけ、共有方針は `dsh-openai/src/turn.rs`、安全ゲートは `SafetyGuard` 1 つ。新しい AI 経路を足す前にそこを読む。
+- `SafetyLevel` は `dsh-types/src/safety_policy.rs` が**正**。`dsh/src/safety/mod.rs` はそこを re-export しているだけ。以前は 2 つの enum があり、値の読み先も 2 つ（`SAFETY_LEVEL` 変数と `policy_state.safety_level`）だったので、`(safety-level ...)` の二重書きだけが同期を保っていた。**単一ソースは `policy_state.safety_level`**、変数は表示用のコピー。
+- `McpManager` の実体は `Environment.integration_state.mcp_manager` ただ 1 つ。以前 `!` チャットだけが自前の 2 個目を作って 300 秒キャッシュしていたので、`mcp connect` / `mcp disconnect` がチャットに効かず `mcp status` の表示と食い違った。builtin からは `AgentCommandPolicy::agent_mcp_manager` で受け取る。
 - `dsh` と `dsh-builtin` は互いに依存できないので、両方で要る純粋なテキスト処理は `dsh-types` に置く。ANSI ストリップは `dsh-types/src/ansi.rs`、`{{name:default}}` の走査は `dsh-types/src/placeholder.rs` が**正**。以前これを各クレートで書いていて、名前検証のある側と無い側に分かれ、`docker ps --format '{{json .}}'` が片方だけ壊れた。コピーを作らない。

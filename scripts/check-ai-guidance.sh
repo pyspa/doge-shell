@@ -112,7 +112,11 @@ EOF
 
 # Tracked AI guidance AND per-tool guidance (.serena memories), so drift cannot
 # hide in a tool config that agents load and act on.
-guidance_targets="$repo_root/AGENTS.md $repo_root/docs/ai"
+#
+# CLAUDE.md is included because it is guidance an agent loads and acts on, and
+# it tells the reader to run this script after changing it - which it could not
+# usefully do while its own contents went unchecked.
+guidance_targets="$repo_root/AGENTS.md $repo_root/CLAUDE.md $repo_root/docs/ai"
 if [ -d "$repo_root/.serena/memories" ]; then
     guidance_targets="$guidance_targets $repo_root/.serena/memories"
 fi
@@ -125,7 +129,7 @@ check_bad_guidance() {
         fail "use the doge-shell package name (e.g. cargo test -p doge-shell), not -p dsh"
     fi
 
-    bad_readme=$(grep -RInE '(Start with|start with|最初に).*(README\.md)|README\.md.*( first|から読む|を読む)' "$repo_root/AGENTS.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'do not|読まない|only when|only for|Open.*only|読む条件' || true)
+    bad_readme=$(grep -RInE '(Start with|start with|最初に).*(README\.md)|README\.md.*( first|から読む|を読む)' "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'do not|読まない|only when|only for|Open.*only|読む条件' || true)
     if [ -n "$bad_readme" ]; then
         echo "$bad_readme" >&2
         fail "README.md must not be the first exploration target"

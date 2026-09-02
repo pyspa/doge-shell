@@ -346,6 +346,11 @@ impl<'a> Repl<'a> {
             // ... (in Repl::new)
 
             let allowlist = envronment.read().policy_state.execute_allowlist.clone();
+            let response_language = envronment
+                .read()
+                .integration_state
+                .response_language
+                .clone();
             let service = Arc::new(LiveAiService::new(
                 client,
                 envronment.read().integration_state.mcp_manager.clone(),
@@ -353,6 +358,7 @@ impl<'a> Repl<'a> {
                 shell.safety_guard.clone(),
                 Some(confirmation::ReplConfirmationHandler::new()),
                 allowlist,
+                response_language,
             ));
 
             // Store in environment so ShellProxy can access it

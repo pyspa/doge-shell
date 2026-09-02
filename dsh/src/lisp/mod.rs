@@ -83,7 +83,7 @@ impl EnvironmentSnapshot {
             execute_allowlist: env.policy_state.execute_allowlist.read().clone(),
             system_env_vars: env.variable_state.system_env_vars.clone(),
             input_preferences: env.completion_state.input_preferences,
-            safety_level: env.policy_state.safety_level.read().clone(),
+            safety_level: *env.policy_state.safety_level.read(),
             command_cache: env.completion_state.command_cache.read().clone(),
             executable_names: env.completion_state.executable_names.read().clone(),
             z_exclude: env.variable_state.z_exclude.clone(),

@@ -4,14 +4,17 @@
 //! automatically implements these traits, while new builtin helpers and tests
 //! can depend on only the operations they actually need.
 
+use crate::chatgpt::McpManager;
 use crate::{CoreShellAction, ProxyFuture, ShellProxy};
 use anyhow::Result;
 use dsh_types::{
     Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
     safety_policy::SafetyLevel, schedule::SchedTaskSpec, schedule::SchedTaskView, snippet::Snippet,
 };
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Command execution, cancellation, confirmation, hooks, and interactive I/O.
 pub trait ShellExecution {
@@ -494,6 +497,28 @@ pub trait AgentCommandPolicy {
     /// the environment variable - because those are written by a person who
     /// meant the prefix.
     fn agent_allowlist(&mut self) -> Vec<String>;
+
+    /// Judge a non-command tool call - an MCP tool - against the same safety
+    /// level and allowlist that `evaluate_agent_command` uses.
+    ///
+    /// Without it the `!` runtime asked about every MCP call unconditionally
+    /// while the shell-side loop applied the policy, so the same tool behaved
+    /// differently depending on which entry point reached it.
+    fn evaluate_agent_tool(&mut self, name: &str, arguments: &str) -> AgentCommandVerdict;
+
+    /// The allowlist entry that an "always" answer about this tool call should
+    /// be remembered as. The host owns the spelling, because it is the host
+    /// that matches against it.
+    fn agent_tool_approval_entry(&mut self, name: &str, arguments: &str) -> String;
+
+    /// The shell's MCP manager - the same one `mcp status` and `mcp connect`
+    /// act on.
+    ///
+    /// The `!` runtime used to build a second manager of its own from the
+    /// server configs and cache it for five minutes, so `mcp disconnect` had no
+    /// effect on chat and `mcp status` described a different set of
+    /// connections from the one the agent was actually using.
+    fn agent_mcp_manager(&mut self) -> Arc<RwLock<McpManager>>;
 }
 
 /// Everything a chat tool needs from its host.

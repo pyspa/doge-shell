@@ -25,6 +25,7 @@ mod bg;
 mod blocks;
 pub mod cd;
 mod chatgpt;
+pub mod config_paths;
 mod dashboard;
 mod doctor;
 mod eproject;

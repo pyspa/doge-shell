@@ -97,6 +97,26 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
     })
 }
 
+/// The final text of a single-shot request, or why there is none.
+///
+/// A caller that offers no tools still has to face the same four outcomes, and
+/// the ones that read `choices[0].message.content` by hand missed two of them:
+/// a reply cut off by `finish_reason=length` came back as a complete answer, so
+/// a half-written commit message looked like a finished one.
+pub fn answer_text(response: &Value) -> Result<String, String> {
+    match interpret_response(response)?.outcome {
+        TurnOutcome::Answer(content) => Ok(content),
+        TurnOutcome::Cut {
+            finish_reason,
+            partial,
+        } => Err(describe_cut(&finish_reason, partial.as_deref())),
+        TurnOutcome::Stalled => Err("the model returned no answer".to_string()),
+        TurnOutcome::ToolCalls(_) => {
+            Err("the model asked for a tool, but this request offers none".to_string())
+        }
+    }
+}
+
 /// Read the text of a message, tolerating the array content shape.
 pub fn extract_message_content(message: &Value) -> Option<String> {
     let content = message.get("content")?;
@@ -300,6 +320,22 @@ mod tests {
 
         assert!(matches!(turn.outcome, TurnOutcome::Cut { .. }));
         assert!(describe_cut("content_filter", None).contains("content filter"));
+    }
+
+    #[test]
+    fn answer_text_reports_a_truncated_reply_instead_of_returning_it() {
+        let err = answer_text(&response(json!({"content": "half a commit mes"}), "length"))
+            .expect_err("a cut reply is not an answer");
+        assert!(err.contains("cut off"));
+    }
+
+    #[test]
+    fn answer_text_reads_the_array_content_shape() {
+        let message = json!({"content": [{"type": "text", "text": "feat: x"}]});
+        assert_eq!(
+            answer_text(&response(message, "stop")).unwrap(),
+            "feat: x".to_string()
+        );
     }
 
     #[test]

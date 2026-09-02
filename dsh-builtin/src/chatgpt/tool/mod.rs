@@ -1,10 +1,12 @@
+use parking_lot::RwLock;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::mcp::McpManager;
 use crate::ShellProxy;
 use crate::safety_policy::{self, SafetyLevel};
-use crate::shell_capabilities::ChatToolHost;
+use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 
 mod edit;
 mod execute;
@@ -39,7 +41,7 @@ pub fn build_tools() -> Vec<Value> {
 
 pub fn execute_tool_call(
     tool_call: &Value,
-    mcp: &McpManager,
+    mcp: &Arc<RwLock<McpManager>>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
     let function = tool_call
@@ -64,17 +66,17 @@ pub fn execute_tool_call(
         truncate_args(&logged_arguments)
     );
 
-    let result = if mcp.has_tool_binding(name) {
-        let confirm_msg = format!("AI wants to call MCP tool: `{name}`. \r\nProceed?");
-        if !proxy
-            .confirm_action(&confirm_msg)
-            .map_err(|e: anyhow::Error| e.to_string())?
-        {
+    // Take the lock for each short call rather than holding it across the
+    // confirmation prompt: the user can sit on that question for a long time,
+    // and `mcp connect` in another turn needs the write lock.
+    let is_mcp_tool = mcp.read().has_tool_binding(name);
+    let result = if is_mcp_tool {
+        if !authorize_mcp_tool(name, arguments, proxy)? {
             return Ok("MCP tool execution cancelled by user.".to_string());
         }
 
-        mcp.execute_tool(name, arguments)?
-            .ok_or_else(|| format!("chat: MCP tool binding `{name}` disappeared"))?
+        let executed = mcp.read().execute_tool(name, arguments)?;
+        executed.ok_or_else(|| format!("chat: MCP tool binding `{name}` disappeared"))?
     } else {
         match name {
             edit::NAME => edit::run(arguments, proxy)?,
@@ -90,6 +92,39 @@ pub fn execute_tool_call(
     };
 
     Ok(truncate_output(result))
+}
+
+/// Put an MCP call through the shell's own safety policy.
+///
+/// This used to prompt unconditionally, which meant `loose` still asked about a
+/// read-only tool and "always" was unreachable - the opposite of what the same
+/// call got through the shell-side AI service.
+fn authorize_mcp_tool(
+    name: &str,
+    arguments: &str,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<bool, String> {
+    match proxy.evaluate_agent_tool(name, arguments) {
+        AgentCommandVerdict::Allowed => Ok(true),
+        AgentCommandVerdict::Denied(reason) => {
+            Err(format!("chat: MCP tool `{name}` refused: {reason}"))
+        }
+        AgentCommandVerdict::Confirm(reason) => {
+            let message = format!("AI wants to call MCP tool: `{name}` ({reason}). \r\nProceed?");
+            match proxy
+                .request_agent_approval(&message)
+                .map_err(|err: anyhow::Error| err.to_string())?
+            {
+                ApprovalDecision::Allow => Ok(true),
+                ApprovalDecision::AllowAlways => {
+                    let entry = proxy.agent_tool_approval_entry(name, arguments);
+                    proxy.remember_agent_approval(&entry);
+                    Ok(true)
+                }
+                ApprovalDecision::Deny => Ok(false),
+            }
+        }
+    }
 }
 
 fn truncate_args(args: &str) -> String {
@@ -132,10 +167,7 @@ pub(crate) fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub(crate) fn tool_skills_dir() -> PathBuf {
-    xdg::BaseDirectories::with_prefix("dsh")
-        .get_config_home()
-        .map(|path| path.join("skills"))
-        .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"))
+    crate::config_paths::skills_dir()
 }
 
 fn canonicalize_or_normalize(path: &Path) -> PathBuf {
@@ -453,7 +485,7 @@ mod tests {
 
         let result = execute_tool_call(
             &tool_call,
-            &crate::chatgpt::McpManager::default(),
+            &Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             &mut proxy,
         )
         .unwrap();
@@ -477,7 +509,7 @@ mod tests {
     #[test]
     fn test_execute_tool_call_unknown_tool() {
         let mut proxy = NoopProxy::default();
-        let mcp = McpManager::load_blocking(vec![]);
+        let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
         let tool_call = serde_json::json!({
             "function": {
                 "name": "unknown_tool",
@@ -490,11 +522,70 @@ mod tests {
         assert_eq!(result.unwrap_err(), "chat: unsupported tool `unknown_tool`");
     }
 
+    /// The policy decides, not the call site. `!` used to prompt for every MCP
+    /// call at every safety level, which `loose` was supposed to switch off and
+    /// which made "always" unreachable.
+    #[test]
+    fn an_allowed_mcp_tool_runs_without_asking() {
+        let mut proxy = NoopProxy {
+            agent_tool_verdict: AgentCommandVerdict::Allowed,
+            ..NoopProxy::default()
+        };
+        let mut inner = McpManager::default();
+        inner.insert_test_tool_binding("mcp__test__tool");
+        let mcp = Arc::new(RwLock::new(inner));
+        let tool_call = serde_json::json!({
+            "function": {"name": "mcp__test__tool", "arguments": "{}"}
+        });
+
+        // No binding is actually connected, so the call fails after the gate -
+        // what matters is that the gate did not ask.
+        let _ = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        assert_eq!(proxy.confirm_calls, 0);
+    }
+
+    #[test]
+    fn a_denied_mcp_tool_is_refused_without_asking() {
+        let mut proxy = NoopProxy {
+            agent_tool_verdict: AgentCommandVerdict::Denied("policy says no".to_string()),
+            ..NoopProxy::default()
+        };
+        let mut inner = McpManager::default();
+        inner.insert_test_tool_binding("mcp__test__tool");
+        let mcp = Arc::new(RwLock::new(inner));
+        let tool_call = serde_json::json!({
+            "function": {"name": "mcp__test__tool", "arguments": "{}"}
+        });
+
+        let err = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap_err();
+        assert!(err.contains("policy says no"));
+        assert_eq!(proxy.confirm_calls, 0);
+    }
+
+    /// "always" was unreachable while this path used the bool `confirm_action`.
+    #[test]
+    fn an_always_answer_is_remembered_for_the_session() {
+        let mut proxy = NoopProxy {
+            approval_decision: Some(ApprovalDecision::AllowAlways),
+            ..NoopProxy::default()
+        };
+        let mut inner = McpManager::default();
+        inner.insert_test_tool_binding("mcp__test__tool");
+        let mcp = Arc::new(RwLock::new(inner));
+        let tool_call = serde_json::json!({
+            "function": {"name": "mcp__test__tool", "arguments": "{}"}
+        });
+
+        let _ = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        assert_eq!(proxy.agent_session_allowlist, vec!["mcp:mcp__test__tool"]);
+    }
+
     #[test]
     fn execute_tool_call_requires_confirmation_for_mcp_tool() {
         let mut proxy = NoopProxy::default();
-        let mut mcp = McpManager::default();
-        mcp.insert_test_tool_binding("mcp__test__tool");
+        let mut inner = McpManager::default();
+        inner.insert_test_tool_binding("mcp__test__tool");
+        let mcp = Arc::new(RwLock::new(inner));
         let tool_call = serde_json::json!({
             "function": {
                 "name": "mcp__test__tool",

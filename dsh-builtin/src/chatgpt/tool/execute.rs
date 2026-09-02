@@ -120,6 +120,14 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
                 stage.program
             ));
         }
+
+        if let Some(reason) = hidden_code_source(&stage.program, &stage.args) {
+            return Err(format!(
+                "chat: execute tool blocked `{}` because {reason}; \
+                 write the steps as separate commands instead",
+                stage.program
+            ));
+        }
     }
 
     let cwd = resolve_execution_dir(&parsed, proxy)?;
@@ -282,33 +290,39 @@ fn command_stages(command: &str) -> Result<Vec<CommandStage>, String> {
 /// used to be classified as `sudo` - which has no checker - and the `rm` rules
 /// never ran. Looking through the wrapper is what makes the guard see the
 /// command that will actually do the work.
-const COMMAND_WRAPPERS: &[&str] = &[
-    "sudo", "doas", "env", "nice", "ionice", "nohup", "time", "timeout", "command", "xargs",
-    "stdbuf", "setsid", "chroot",
-];
-
 fn push_stage(stages: &mut Vec<CommandStage>, tokens: Vec<String>) {
-    let mut tokens = tokens.into_iter();
-    // A leading `FOO=bar` is an assignment, not the program.
-    let Some(program) = tokens.find(|token| !is_assignment(token)) else {
-        return;
-    };
-    let args: Vec<String> = tokens.collect();
-
-    stages.push(CommandStage {
-        program: program.clone(),
-        args: args.clone(),
-    });
-
-    // The wrapped command is a stage in its own right, so it is inspected on
-    // the same terms as anything else.
-    if COMMAND_WRAPPERS.contains(&program_name(&program).as_str())
-        && let Some(inner) = args
-            .iter()
-            .position(|arg| !arg.starts_with('-') && !is_assignment(arg))
-    {
-        push_stage(stages, args[inner..].to_vec());
+    // Shared with `SafetyGuard`, so the guard's verdict and this tool's
+    // allowlist and skill-script checks look through a wrapper the same way.
+    // The local version took the first non-option token as the wrapped program,
+    // which for `timeout 5 rm -rf ~` is the timeout value, not `rm`.
+    for (program, args) in dsh_types::safety_policy::command_candidates(&tokens) {
+        stages.push(CommandStage { program, args });
     }
+}
+
+/// Ways of feeding an interpreter code that no check can read.
+///
+/// `string_eval_flag` covers `sh -c '…'`, but a shell reading its script from
+/// standard input (`printf '…' | sh`) carries no flag at all, and `eval` is not
+/// an interpreter invocation the flag table describes. Both end with the guard
+/// having classified `printf` or `eval` while `sh` runs something else - the
+/// same hole the flag refusal exists to close.
+fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
+    let name = program_name(program);
+
+    if name == "eval" {
+        return Some("`eval` runs a string that cannot be inspected first");
+    }
+
+    // A shell with no script operand reads its program from stdin.
+    if dsh_types::safety_policy::is_code_execution_command(&name)
+        && name != "sudo"
+        && args.iter().all(|arg| arg.starts_with('-'))
+    {
+        return Some("it reads the code to run from standard input");
+    }
+
+    None
 }
 
 /// Whether the line redirects output into a file.
@@ -323,7 +337,11 @@ fn writes_by_redirection(command: &str) -> bool {
 
     while let Some(ch) = chars.next() {
         match ch {
-            '\\' => {
+            // A backslash is literal inside single quotes, so treating it as an
+            // escape there ate the closing quote and left the scanner believing
+            // the rest of the line was quoted - `echo 'a\' > out` then looked
+            // like it had no redirection at all.
+            '\\' if !in_single => {
                 chars.next();
             }
             '\'' if !in_double => in_single = !in_single,
@@ -342,12 +360,6 @@ fn writes_by_redirection(command: &str) -> bool {
     }
 
     false
-}
-
-fn is_assignment(token: &str) -> bool {
-    token
-        .split_once('=')
-        .is_some_and(|(name, _)| !name.is_empty() && !name.contains('/'))
 }
 
 /// What the policy and the user together decided about a command.
@@ -386,7 +398,10 @@ fn authorize(
     // The shell's runtime list plus the JSON config and the environment
     // variable; dropping this merge would have quietly disabled
     // `~/.config/dsh/openai-execute-tool.json`.
-    let allowlist = load_allowed_commands(proxy.agent_allowlist())?;
+    let allowlist = load_allowed_commands(
+        proxy.agent_allowlist(),
+        proxy.get_var(EXECUTE_TOOL_ENV_ALLOWLIST),
+    )?;
 
     // Configured entries match by token prefix, because a person wrote
     // `cargo test` meaning "and its arguments". A session "always" answer is
@@ -769,10 +784,16 @@ fn is_skill_script_program(program: &str, proxy: &mut dyn ShellProxy) -> Result<
 /// The environment variable used to return early and win outright, so setting
 /// one entry silently discarded `config.lisp` and the JSON config - a trap,
 /// because nothing said the other two had stopped applying.
-fn load_allowed_commands(runtime_allowed: Vec<String>) -> Result<Vec<String>, String> {
+fn load_allowed_commands(
+    runtime_allowed: Vec<String>,
+    shell_value: Option<String>,
+) -> Result<Vec<String>, String> {
     let mut allowlist = runtime_allowed;
 
-    if let Some(mut from_env) = read_allowlist_from_env() {
+    // Shell variable first, process environment second - the order every other
+    // AI setting resolves in. Reading only `std::env` made this the one key
+    // that `config.lisp` could not set without an `export`.
+    if let Some(mut from_env) = read_allowlist_from_env(shell_value) {
         allowlist.append(&mut from_env);
     }
 
@@ -817,8 +838,8 @@ fn read_allowlist_from_file(path: &PathBuf) -> Result<Option<Vec<String>>, Strin
     ))
 }
 
-fn read_allowlist_from_env() -> Option<Vec<String>> {
-    let raw = env::var(EXECUTE_TOOL_ENV_ALLOWLIST).ok()?;
+fn read_allowlist_from_env(shell_value: Option<String>) -> Option<Vec<String>> {
+    let raw = shell_value.or_else(|| env::var(EXECUTE_TOOL_ENV_ALLOWLIST).ok())?;
     let entries: Vec<String> = raw
         .split([',', '\n'])
         .map(|item| item.trim().to_string())
@@ -866,12 +887,57 @@ pub(crate) mod tests {
     use crate::test_support::TestShellProxy;
     type TestProxy = TestShellProxy;
 
+    /// The shell variable is what `(vset ...)` and a plain `FOO=bar` write, so
+    /// it has to be consulted before the process environment.
+    /// The flag table only sees `sh -c '…'`. A shell reading stdin carries no
+    /// flag, and `eval` is not an interpreter invocation at all - both left the
+    /// guard classifying `printf` or `eval` while `sh` ran something else.
+    #[test]
+    fn code_the_guard_cannot_read_is_refused() {
+        let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+        assert!(hidden_code_source("eval", &args(&["rm -rf /"])).is_some());
+        assert!(hidden_code_source("sh", &[]).is_some());
+        // Built rather than written as a literal so the portability lint does
+        // not read it as a claim about where the binary lives.
+        assert!(hidden_code_source(&format!("{}/bash", "/bin"), &args(&["-s"])).is_some());
+
+        // A script operand is a file the tools can read; not this rule's business.
+        assert!(hidden_code_source("sh", &args(&["build.sh"])).is_none());
+        assert!(hidden_code_source("python3", &args(&["main.py"])).is_none());
+        // `sudo` is a wrapper; the stage for what it wraps is judged separately.
+        assert!(hidden_code_source("sudo", &args(&["-u", "nobody"])).is_none());
+        assert!(hidden_code_source("cargo", &args(&["test"])).is_none());
+    }
+
+    /// A backslash is literal inside single quotes, so treating it as an escape
+    /// swallowed the closing quote and hid the redirection behind it.
+    #[test]
+    fn a_backslash_in_single_quotes_does_not_hide_a_redirection() {
+        assert!(writes_by_redirection(r"echo 'a' > out"));
+        assert!(writes_by_redirection("echo hi > out"));
+        assert!(writes_by_redirection("echo hi >> out"));
+        // Still not a file write.
+        assert!(!writes_by_redirection("make 2>&1"));
+        assert!(!writes_by_redirection("echo 'a > b'"));
+    }
+
+    #[test]
+    fn load_allowlist_prefers_the_shell_variable_over_the_process_environment() {
+        let _lock = env_lock();
+        let _guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "from-process-env");
+        assert_eq!(
+            load_allowed_commands(vec![], Some("from-shell-var".to_string())).unwrap(),
+            vec!["from-shell-var"]
+        );
+    }
+
     #[test]
     fn load_allowlist_prefers_env() {
         let _lock = env_lock();
         let _guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "ls,git\ncat");
         assert_eq!(
-            load_allowed_commands(vec![]).unwrap(),
+            load_allowed_commands(vec![], None).unwrap(),
             vec!["cat", "git", "ls"]
         );
     }
@@ -889,7 +955,7 @@ pub(crate) mod tests {
             config_path.to_str().unwrap(),
         );
         let _allow_env = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
-        assert_eq!(load_allowed_commands(vec![]).unwrap(), vec!["cargo"]);
+        assert_eq!(load_allowed_commands(vec![], None).unwrap(), vec!["cargo"]);
     }
 
     #[test]
@@ -906,7 +972,8 @@ pub(crate) mod tests {
         );
         let _allow_env = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
 
-        let allowlist = load_allowed_commands(vec!["ls".to_string(), "cargo".to_string()]).unwrap();
+        let allowlist =
+            load_allowed_commands(vec!["ls".to_string(), "cargo".to_string()], None).unwrap();
         assert_eq!(allowlist, vec!["cargo", "ls"]);
     }
 

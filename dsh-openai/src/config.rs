@@ -40,7 +40,10 @@ impl OpenAiConfig {
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
         Self {
-            api_key,
+            // A blank key is not a key. Callers used to each re-check this and
+            // `doctor` disagreed with the chat runtime about whether
+            // `AI_CHAT_API_KEY=""` counted as configured.
+            api_key: api_key.filter(|key| !key.trim().is_empty()),
             base_url,
             default_model,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
@@ -172,6 +175,12 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn a_blank_api_key_is_no_key() {
+        let cfg = OpenAiConfig::new(Some("   ".to_string()), None, None);
+        assert!(cfg.api_key().is_none());
+    }
 
     #[test]
     fn sanitize_base_url_defaults_when_none() {

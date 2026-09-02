@@ -1,5 +1,5 @@
 use crate::process::Job;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SafetyResult {
@@ -8,49 +8,23 @@ pub enum SafetyResult {
     Confirm(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SafetyLevel {
-    Strict,
-    Normal,
-    Loose,
-}
-
-impl std::str::FromStr for SafetyLevel {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "strict" => Ok(SafetyLevel::Strict),
-            "normal" => Ok(SafetyLevel::Normal),
-            "loose" => Ok(SafetyLevel::Loose),
-            _ => Err(format!(
-                "Invalid safety level: {}. Valid levels are: strict, normal, loose",
-                s
-            )),
-        }
-    }
-}
+/// The level lives in `dsh-types` because `dsh-builtin` needs the same one:
+/// the chat tools ask the host for it through `ShellProxy::safety_level`, and a
+/// second enum here meant the two halves of one policy could disagree about
+/// what `loose` allows.
+pub use dsh_types::safety_policy::SafetyLevel;
 
 type SafetyCheckFn = Box<dyn Fn(&[String]) -> Option<String> + Send + Sync>;
 
 pub struct SafetyGuard {
     checkers: HashMap<String, SafetyCheckFn>,
-    always_warn_commands: HashSet<String>,
 }
 
 impl SafetyGuard {
     pub fn new() -> Self {
         let mut guard = Self {
             checkers: HashMap::new(),
-            always_warn_commands: HashSet::new(),
         };
-
-        // Always warn commands (destructive/system level)
-        for cmd in &[
-            "dd", "mkfs", "format", "reboot", "shutdown", "poweroff", "mkswap",
-        ] {
-            guard.always_warn_commands.insert(cmd.to_string());
-        }
 
         // Specific checkers
         guard.register_checker("rm", Self::check_rm);
@@ -181,36 +155,42 @@ impl SafetyGuard {
                 continue;
             }
 
-            let parts = match Self::parse_command_tokens(&job.cmd) {
-                Ok(parts) => parts,
-                Err(err) => {
-                    return SafetyResult::Confirm(format!(
-                        "Command '{}' could not be parsed for safety checks ({err}). Proceed?",
-                        job.cmd
-                    ));
-                }
-            };
-            // Classify the command, not the `NAME=value` prefix in front of it:
-            // otherwise `FOO=bar rm -rf /` looks like a command called
-            // `FOO=bar` and every dangerous-command check passes.
-            let parts = Self::skip_assignments(&parts);
-            if let Some(cmd) = parts.first() {
-                let args = if parts.len() > 1 { &parts[1..] } else { &[] };
-                let cmd_clean = Self::get_command_name(cmd);
+            // Every program this line runs, not just the first word of it.
+            //
+            // `job.cmd` is the whole line, pipeline included, so classifying
+            // its first token judged `true | rm -rf ~` as `true` and
+            // `sudo rm -rf ~` as `sudo` - neither of which has a rule, so both
+            // passed every dangerous-command check. Splitting at the operators
+            // and looking through wrappers is what puts `rm` in front of the
+            // `rm` checker.
+            for segment in dsh_types::safety_policy::split_command_segments(&job.cmd) {
+                let parts = match Self::parse_command_tokens(&segment) {
+                    Ok(parts) => parts,
+                    Err(err) => {
+                        return SafetyResult::Confirm(format!(
+                            "Command '{}' could not be parsed for safety checks ({err}). Proceed?",
+                            job.cmd
+                        ));
+                    }
+                };
 
-                // 1. Check always warn list
-                if self.always_warn_commands.contains(&cmd_clean) {
-                    return SafetyResult::Confirm(format!(
-                        "Potentially dangerous system command '{}' detected. Proceed?",
-                        cmd_clean
-                    ));
-                }
+                for (program, args) in dsh_types::safety_policy::command_candidates(&parts) {
+                    let cmd_clean = Self::get_command_name(&program);
 
-                // 2. Run specific checker if available
-                if let Some(checker) = self.checkers.get(&cmd_clean)
-                    && let Some(msg) = checker(args)
-                {
-                    return SafetyResult::Confirm(msg);
+                    // 1. Check always warn list
+                    if Self::always_warns(&cmd_clean) {
+                        return SafetyResult::Confirm(format!(
+                            "Potentially dangerous system command '{}' detected. Proceed?",
+                            cmd_clean
+                        ));
+                    }
+
+                    // 2. Run specific checker if available
+                    if let Some(checker) = self.checkers.get(&cmd_clean)
+                        && let Some(msg) = checker(&args)
+                    {
+                        return SafetyResult::Confirm(msg);
+                    }
                 }
             }
         }
@@ -253,7 +233,7 @@ impl SafetyGuard {
             SafetyLevel::Normal => {
                 let cmd_name = Self::get_command_name(cmd);
 
-                if self.always_warn_commands.contains(&cmd_name) {
+                if Self::always_warns(&cmd_name) {
                     return SafetyResult::Confirm(format!(
                         "Potentially dangerous command '{}' detected. Proceed?",
                         cmd
@@ -402,15 +382,11 @@ impl SafetyGuard {
     }
 
     /// Whether this token is a `NAME=value` assignment rather than a command.
+    ///
+    /// Shared with `command_candidates`, which applies the same rule when it
+    /// decides which token names the program.
     fn is_assignment_token(token: &str) -> bool {
-        match token.split_once('=') {
-            Some((name, _)) => {
-                !name.is_empty()
-                    && name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            }
-            None => false,
-        }
+        dsh_types::safety_policy::is_assignment_token(token)
     }
 
     /// The command a line actually runs, past any `NAME=value` prefix.
@@ -418,15 +394,6 @@ impl SafetyGuard {
         cmd.split_whitespace()
             .find(|token| !Self::is_assignment_token(token))
             .unwrap_or("")
-    }
-
-    /// Drop a leading `NAME=value` prefix from an already-tokenized command.
-    fn skip_assignments(tokens: &[String]) -> &[String] {
-        let start = tokens
-            .iter()
-            .position(|token| !Self::is_assignment_token(token))
-            .unwrap_or(tokens.len());
-        &tokens[start..]
     }
 
     fn get_command_name(cmd: &str) -> String {
@@ -441,58 +408,30 @@ impl SafetyGuard {
         shell_words::split(command).map_err(|err| err.to_string())
     }
 
+    /// Commands that are worth a question on their own, whatever the arguments.
+    ///
+    /// A predicate rather than a set, so `mkfs.ext4` is recognised as `mkfs`
+    /// and so both callers - a typed command line and an MCP tool that carries
+    /// one - reach the same answer.
+    fn always_warns(cmd: &str) -> bool {
+        dsh_types::safety_policy::is_disk_destroying_command(cmd)
+            || dsh_types::safety_policy::is_system_power_command(cmd)
+    }
+
     fn is_network_tool(cmd: &str) -> bool {
-        matches!(cmd, "curl" | "wget" | "fetch" | "scp")
+        dsh_types::safety_policy::is_network_fetch_command(cmd)
     }
 
     fn is_execution_tool(cmd: &str) -> bool {
-        matches!(
-            cmd,
-            "sh" | "bash" | "zsh" | "fish" | "python" | "perl" | "ruby" | "sudo"
-        )
+        dsh_types::safety_policy::is_code_execution_command(cmd)
     }
 
     // --- Checkers ---
 
     fn check_rm(args: &[String]) -> Option<String> {
-        let mut recursive = false;
-        let mut force = false;
-        let mut root_path = false;
-
-        for arg in args {
-            if arg == "-r" || arg == "-R" || arg == "--recursive" {
-                recursive = true;
-            }
-            if arg == "-f" || arg == "--force" {
-                force = true;
-            }
-            if arg.starts_with("-rx") || arg.starts_with("-rf") || arg.starts_with("-fr") {
-                recursive = true;
-                force = true;
-            }
-            if arg == "/" || arg == "/*" {
-                root_path = true;
-            }
-        }
-
-        if recursive && force && root_path {
-            return Some(
-                "High Risk: 'rm -rf /' detected. This is extremely dangerous.".to_string(),
-            );
-        }
-
-        if recursive && force {
-            return Some("High Risk: Recursive forced deletion ('rm -rf') detected.".to_string());
-        }
-
-        if recursive {
-            // In Normal mode, simple recursive delete might be common.
-            // But existing implementations often warn. Let's keep it safe.
-            // We can check if it looks like a build dir?
-            // For now, always warn on recursive delete to be safe.
-            return Some("Recursive deletion detected. Proceed?".to_string());
-        }
-        None
+        // Shared with `safe-run`, which used to answer this with substring
+        // matching and so disagreed with the guard about the same command line.
+        dsh_types::safety_policy::destructive_rm_warning(args)
     }
 
     fn check_git(args: &[String]) -> Option<String> {
@@ -936,6 +875,78 @@ mod tests {
         let jobs = vec![mock_job("curl http://example.com/x.sh"), mock_job("sh")];
 
         assert_eq!(guard.check_jobs(&jobs, &level, &[]), SafetyResult::Allowed);
+    }
+
+    /// `job.cmd` is the whole line, so classifying only its first word let
+    /// every stage after the first through. `execute` refused shell operators
+    /// when this was written; once it started running pipelines,
+    /// `true | rm -rf /` reached `sh -c` with no question asked.
+    #[test]
+    fn every_pipeline_stage_reaches_the_checkers() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        for line in [
+            "true | rm -rf /",
+            "echo hi && rm -rf /",
+            "echo hi; rm -rf /",
+        ] {
+            assert!(
+                matches!(
+                    guard.check_jobs(&[mock_job(line)], &level, &[]),
+                    SafetyResult::Confirm(msg) if msg.contains("High Risk")
+                ),
+                "{line} should have asked"
+            );
+        }
+
+        // The sensitive-file readers are per-command rules too.
+        assert!(matches!(
+            guard.check_jobs(&[mock_job("true | cat .env")], &level, &[]),
+            SafetyResult::Confirm(msg) if msg.contains("environment file")
+        ));
+    }
+
+    /// The README promises `sudo rm -rf ...` is judged as `rm`. It was judged
+    /// as `sudo`, which has no rule, so it ran unasked - and a wrapper whose
+    /// option takes a value hid the program behind the value as well.
+    #[test]
+    fn a_wrapper_does_not_hide_the_command_behind_it() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        for line in [
+            "sudo rm -rf /",
+            "timeout 5 rm -rf /",
+            "nice -n 10 rm -rf /",
+            "env FOO=bar rm -rf /",
+            "xargs rm -rf /",
+        ] {
+            assert!(
+                matches!(
+                    guard.check_jobs(&[mock_job(line)], &level, &[]),
+                    SafetyResult::Confirm(msg) if msg.contains("High Risk")
+                ),
+                "{line} should have asked"
+            );
+        }
+    }
+
+    /// Looking through wrappers must not turn every argument into a program:
+    /// `echo` is not a wrapper, so `rm` here is a word it prints.
+    #[test]
+    fn a_plain_command_keeps_its_arguments_as_arguments() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        assert_eq!(
+            guard.check_jobs(&[mock_job("echo rm -rf /")], &level, &[]),
+            SafetyResult::Allowed
+        );
+        assert_eq!(
+            guard.check_jobs(&[mock_job("git commit -m 'rm -rf /'")], &level, &[]),
+            SafetyResult::Allowed
+        );
     }
 
     #[test]

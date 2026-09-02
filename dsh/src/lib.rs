@@ -415,6 +415,7 @@ pub async fn handle_completion_command(
     let allowlist = env.read().policy_state.execute_allowlist.clone();
     let safety_guard = Arc::new(crate::safety::SafetyGuard::new());
 
+    let response_language = env.read().integration_state.response_language.clone();
     let service = crate::ai_features::LiveAiService::new(
         client,
         mcp_manager,
@@ -422,6 +423,7 @@ pub async fn handle_completion_command(
         safety_guard,
         None,
         allowlist,
+        response_language,
     );
 
     // Generate completion JSON using AI
@@ -772,6 +774,11 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
             let mcp_manager = env_handle.read().integration_state.mcp_manager.clone();
             let safety_level = env_handle.read().policy_state.safety_level.clone();
             let allowlist = env_handle.read().policy_state.execute_allowlist.clone();
+            let response_language = env_handle
+                .read()
+                .integration_state
+                .response_language
+                .clone();
             let service = Arc::new(crate::ai_features::LiveAiService::new(
                 client,
                 mcp_manager,
@@ -779,6 +786,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
                 shell.safety_guard.clone(),
                 None,
                 allowlist,
+                response_language,
             ));
             shell.environment.write().integration_state.ai_service = Some(service);
         }

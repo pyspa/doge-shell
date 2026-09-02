@@ -49,7 +49,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
 - **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
-- **AI-Powered Completion**: OpenAI integration for intelligent command completion suggestions
+- **AI-Powered Completion**: OpenAI-compatible integration for inline suggestions, error diagnosis and commit messages. Off by default — an API key alone sends nothing; see [AI Integration](#-ai-integration)
 - **Execution Status & Duration**: The prompt shows the exit status and elapsed time of the previous command
 - **Job Notifications**: Finished background jobs are reported as `[1]+  Done  <cmd>` above the prompt without disturbing what you are typing
 - **Inline Argument Explainer**: Displays real-time descriptions of command arguments and options below the prompt as you type
@@ -69,12 +69,12 @@ The Safety Guard protects against unintended execution of potentially destructiv
 - **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore` (nested files, `.git/info/exclude` and global excludes included), fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
 - **Lisp Configuration**: Dynamically change the safety level at any time.
   ```lisp
-  (safety-level "strict") ; Enable confirmation for everything
-  (safety-level "normal") ; Default safety
-  (safety-level "loose")  ; Disable safety checks
-  (safety-level)          ; Get current safety level
+  (safety-level 'strict) ; Enable confirmation for everything
+  (safety-level 'normal) ; Default safety
+  (safety-level 'loose)  ; Disable safety checks
+  (safety-level)         ; Get current safety level
   ```
-- **Environment Variable**: `SAFETY_LEVEL` reflects the current safety level (e.g., "normal", "strict").
+- **Environment Variable**: `SAFETY_LEVEL` reports the current level ("normal", "strict", "loose") and seeds it at startup, so `SAFETY_LEVEL=strict dsh` starts hardened. After startup it is a readable copy: change the level with `(safety-level ...)`.
 
 ### 🔒 Secret Management
 
@@ -626,7 +626,7 @@ Example:
 
 ### Security & Safety
 
-- **Execution Confirmation**: When `SafetyLevel` is set to `Normal` or `Strict`, the shell will ask for confirmation before executing any MCP tool that might have side affects.
+- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action. At `loose` they run unasked; at `normal` a tool that only reads runs unasked and anything else asks; at `strict` every MCP call asks. A tool whose arguments carry a command line is judged as that command. Answering "always" remembers that exact call for the session.
 
 ### MCP CLI Management
 
@@ -1056,6 +1056,7 @@ All of the above are defaults and can be changed — see [Custom Key Bindings](#
 
 - `Alt+Enter` - Execute command in background
 - `Alt+s` - Force AI suggestion
+- `Alt+e` - Explain the current command with AI
 - `Alt+[` / `Alt+]` - Rotate through suggestions
 - `Alt+w` - Wrap the current input with `ai-watch --`
 - `Alt+m` - Open Macro Recorder
@@ -1153,7 +1154,7 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
 - **Trigger**: Press `Alt+x` to open.
 - **Features**:
   - Run internal commands and setup helpers (Doctor Setup/Fix, Project Init/Status, Output History, etc.)
-  - Access AI features (Explain, Fix, etc.)
+  - Access AI features (Explain Command, Diagnose Last Error, Check Safety, Suggest Commands, Suggest Improvement, Describe Directory). Auto-fix is `Alt+f`, not a palette entry
   - Run `safe-run` against the current input or generate completion JSON for the current command name
   - Execute Git operations
   - Extensible via the `Action` trait and Lisp `register-action`
@@ -1211,6 +1212,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
    Optional settings:
 
+   `OPENAI_API_KEY` and `OPEN_AI_API_KEY` are accepted as fallbacks, as are
+   `OPENAI_BASE_URL` and `OPENAI_MODEL`. Every setting below is read as a shell
+   variable first and from the process environment second, so `config.lisp` can
+   set any of them without an `export`.
+
    | Variable | Default | Purpose |
    | --- | --- | --- |
    | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions |
@@ -1221,13 +1227,27 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
-   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and the JSON config |
-   | `AI_MESSAGE_LANG` | unset | Language for AI responses |
+   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dsh/openai-execute-tool.json` |
+   | `DSH_EXECUTE_TOOL_CONFIG` | `~/.config/dsh/openai-execute-tool.json` | Path of that JSON allowlist file |
+   | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
+   | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
    `Retry-After`.
 
-2. The shell will automatically provide command suggestions when available.
+2. **The AI features are off by default.** An API key on its own sends no
+   requests: inline suggestions, automatic fixes and inline explanations each
+   need enabling in `config.lisp`.
+
+   ```lisp
+   (set-suggestion-ai-enabled t) ; AI inline suggestions (ghost text)
+   (set-auto-fix-enabled t)      ; let Alt+f fall back to AI
+   (pref-ai-explanation t)       ; inline AI explanation of the current command
+   (vset "AI_MESSAGE_LANG" "Japanese") ; answer in this language
+   ```
+
+   `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run` and `ai-watch` are explicit
+   actions and work without any of these.
 
 3. Use `!` prefix to chat with the AI directly:
 
@@ -1322,10 +1342,16 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       creating a file or replacing one in full.
     - `execute` runs a shell command - pipes, redirection and `&&` included - and kills
       it after `timeout_ms` (120s by default), so a build or a dev server cannot wedge
-      the shell. Command substitution (`$(...)`, backticks, `<(...)`) and subshells are
-      refused, because evaluating them is what a safety check must not do.
+      the shell. What the guard cannot read before it runs is refused rather than
+      approved: command substitution (`$(...)`, backticks, `<(...)`) and subshells,
+      because evaluating them is what a safety check must not do; compound
+      statements (`{ ...; }`, `for`, `if`, `while`), because the commands inside one
+      cannot be classified; a line the parser cannot finish; and any way of handing
+      an interpreter code it cannot see (`sh -c`, `eval`, a shell reading stdin).
+      Write those as separate commands.
     - The command is checked by the same `SafetyGuard` that covers what you type, and
-      wrappers are looked through, so `sudo rm -rf ...` is judged as `rm`. At the
+      every stage of a pipeline is judged, and wrappers are looked through, so both
+      `true | rm -rf ...` and `sudo rm -rf ...` are judged as `rm`. At the
       default `normal` safety level that means the destructive commands the guard knows
       about ask first and everything else runs; set `(safety-level 'strict)` to be asked
       about every command the allowlist does not already cover. Anything that writes to
@@ -1364,11 +1390,15 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     ```
 
 13. **Runtime Skills**:
-   The chat runtime can load local skills from `~/.config/dsh/skills/`. This repository keeps canonical sample skills under `docs/ai/skills/`.
+   The chat runtime loads local skills from `~/.config/dsh/skills/` (`$XDG_CONFIG_HOME/dsh/skills` when that is set). This repository keeps canonical sample skills under `docs/ai/skills/`.
 
    ```bash
-   scripts/install-runtime-skills.sh dsh
+   scripts/install-runtime-skills.sh --target dsh --profile dsh-common
    ```
+
+   Install the skills you need rather than all of them: `doctor skills` warns once
+   the runtime directory holds more than eight, because every summary is carried
+   in the agent's system prompt on every turn.
 
    Keep each skill summary in the YAML frontmatter `description`, and move long details into `references/` so runtime prompts stay compact.
 
@@ -1394,7 +1424,7 @@ For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
    - `cargo test -p dsh-builtin` for built-in command, chat, MCP, doctor, task, or runtime Skill loading changes
    - `cargo test -p doge-shell` for parser, REPL, completion, prompt, or shell behavior changes
    - `cargo test -p dsh-openai`, `cargo test -p dsh-types`, or `cargo test -p dsh-frecency` for those crates
-   - `scripts/check-ai-guidance.sh` after changing `AGENTS.md`, `docs/ai/`, or runtime Skill installer guidance
+   - `scripts/check-ai-guidance.sh` after changing `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `.claude/`, or runtime Skill installer guidance
    - `doctor validate` can suggest the focused commands from your current `git status`
 6. Keep runtime Skill copies current when Skill guidance changes:
    `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`

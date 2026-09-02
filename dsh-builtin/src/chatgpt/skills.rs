@@ -9,6 +9,8 @@ use tracing::{debug, warn};
 pub struct Skill {
     pub name: String,
     summary: String,
+    /// The file the model should read to get the skill, ready to display.
+    instruction_path: String,
 }
 
 impl Skill {
@@ -29,7 +31,7 @@ impl Skill {
 
         debug!("Loaded folder skill: {}", name);
 
-        Ok(Self::from_content(name, content))
+        Ok(Self::from_content(name, content, &skill_md_path))
     }
 
     pub fn from_file(path: &Path) -> Result<Self> {
@@ -44,17 +46,26 @@ impl Skill {
 
         debug!("Loaded file skill: {}", name);
 
-        Ok(Self::from_content(name, content))
+        Ok(Self::from_content(name, content, path))
     }
 
-    fn from_content(name: String, instruction: String) -> Self {
+    fn from_content(name: String, instruction: String, path: &Path) -> Self {
         let summary = extract_skill_summary(&instruction);
 
-        Self { name, summary }
+        Self {
+            name,
+            summary,
+            instruction_path: crate::config_paths::display_path(path),
+        }
     }
 
     pub fn summary(&self) -> &str {
         &self.summary
+    }
+
+    /// Where to read this skill from, as the prompt should spell it.
+    pub fn instruction_path(&self) -> &str {
+        &self.instruction_path
     }
 }
 
@@ -178,13 +189,11 @@ pub struct SkillsManager {
 
 impl SkillsManager {
     pub fn new() -> Self {
-        // ~/.config/dsh/skills/
-        let config_dir = dirs::config_dir()
-            .map(|p| p.join("dsh/skills"))
-            .unwrap_or_else(|| PathBuf::from(".config/dsh/skills"));
-
+        // `dirs::config_dir()` is `~/Library/Application Support` on macOS,
+        // where the installer writes to `~/.config/dsh/skills`: reading it
+        // directly meant an installed skill was never listed there.
         Self {
-            skills_dir: config_dir,
+            skills_dir: crate::config_paths::skills_dir(),
         }
     }
 
@@ -239,16 +248,27 @@ impl SkillsManager {
         let fragment = if skills.is_empty() {
             String::new()
         } else {
-            let mut fragment = String::from(
-                "\n\n## Agent Skills\nAvailable runtime skills from `~/.config/dsh/skills/`:\n",
-            );
+            // The path is rendered from the directory actually read, never
+            // hard-coded: `XDG_CONFIG_HOME` moves it, and a `read_file` call
+            // against the wrong path is a wasted turn.
+            let root = crate::config_paths::display_path(&self.skills_dir);
+            let mut fragment =
+                format!("\n\n## Agent Skills\nAvailable runtime skills from `{root}/`:\n");
 
             for skill in &skills {
-                fragment.push_str(&format!("- `{}`: {}\n", skill.name, skill.summary()));
+                // A skill is either a directory holding SKILL.md or a bare
+                // `.md` file; telling the model to read `<name>/SKILL.md` for
+                // the second kind sent it after a file that does not exist.
+                fragment.push_str(&format!(
+                    "- `{}` (`{}`): {}\n",
+                    skill.name,
+                    skill.instruction_path(),
+                    skill.summary()
+                ));
             }
 
             fragment.push_str(
-                "\nRead a skill only when needed with `read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")`.\n",
+                "\nRead a skill only when needed, with `read_file` on the path shown beside it.\n",
             );
             fragment.push_str(
                 "Use files in that skill directory only after you know the skill is relevant.\n",
@@ -336,6 +356,7 @@ description: "Short runtime summary"
 Longer explanation.
 "#
             .to_string(),
+            Path::new("/tmp/skills/demo/SKILL.md"),
         );
 
         assert_eq!(skill.summary(), "Short runtime summary");
@@ -346,6 +367,7 @@ Longer explanation.
         let skill = Skill::from_content(
             "demo".to_string(),
             "# Demo\n\nUse this to inspect prompts.\n".to_string(),
+            Path::new("/tmp/skills/demo/SKILL.md"),
         );
 
         assert_eq!(skill.summary(), "Use this to inspect prompts.");
@@ -357,6 +379,7 @@ Longer explanation.
         let skill = Skill::from_content(
             "demo".to_string(),
             format!("---\ndescription: \"{repeated}\"\n---\n"),
+            Path::new("/tmp/skills/demo/SKILL.md"),
         );
 
         assert!(skill.summary().ends_with("..."));
@@ -376,12 +399,40 @@ Longer explanation.
         )
         .unwrap();
 
-        let manager = SkillsManager { skills_dir };
+        let manager = SkillsManager {
+            skills_dir: skills_dir.clone(),
+        };
         let fragment = manager.get_system_prompt_fragment();
 
-        assert!(fragment.contains("- `demo-skill`: compact summary"));
-        assert!(fragment.contains("read_file(path=\"~/.config/dsh/skills/<skill>/SKILL.md\")"));
+        assert!(fragment.contains("- `demo-skill`"));
+        assert!(fragment.contains("compact summary"));
+        // The path is the one actually read, not a hard-coded `~/.config`.
+        assert!(fragment.contains(&skills_dir.join("demo-skill/SKILL.md").display().to_string()));
+        assert!(fragment.contains(&skills_dir.display().to_string()));
         assert!(!fragment.contains("### Progressive Disclosure"));
+    }
+
+    /// A bare `*.md` skill has no `SKILL.md`, so pointing the model at
+    /// `<name>/SKILL.md` sent it after a file that does not exist.
+    #[test]
+    fn system_prompt_fragment_points_a_file_skill_at_the_file() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let skills_dir = dir.path().join("skills");
+        fs::create_dir_all(&skills_dir).unwrap();
+        fs::write(
+            skills_dir.join("loose-note.md"),
+            "---\ndescription: a bare file skill\n---\n",
+        )
+        .unwrap();
+
+        let manager = SkillsManager {
+            skills_dir: skills_dir.clone(),
+        };
+        let fragment = manager.get_system_prompt_fragment();
+
+        assert!(fragment.contains(&skills_dir.join("loose-note.md").display().to_string()));
+        assert!(!fragment.contains("loose-note/SKILL.md"));
     }
 
     #[test]

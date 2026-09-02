@@ -11,6 +11,18 @@ pub fn json_object_format() -> Value {
     json!({ "type": "json_object" })
 }
 
+/// Append the operator's response-language instruction to a system prompt.
+///
+/// `AI_MESSAGE_LANG` used to be read by the `!` chat runtime alone, so a user
+/// who set it got Japanese from `!` and English from `Alt+d`, `aic`, the
+/// command palette and `blocks`. One rendering, one place, every caller.
+pub fn apply_language(system_prompt: &str, language: Option<&str>) -> String {
+    match language.map(str::trim).filter(|lang| !lang.is_empty()) {
+        Some(lang) => format!("{system_prompt}\n\nIMPORTANT: You MUST respond in {lang}."),
+        None => system_prompt.to_string(),
+    }
+}
+
 /// Strip a markdown code fence from a model answer.
 ///
 /// Models add fences even when told not to. Every caller used to re-implement
@@ -46,6 +58,18 @@ pub fn strip_code_fence(content: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::apply_language;
+
+    #[test]
+    fn language_is_appended_once_and_only_when_set() {
+        assert_eq!(apply_language("base", None), "base");
+        assert_eq!(apply_language("base", Some("   ")), "base");
+        assert_eq!(
+            apply_language("base", Some("Japanese")),
+            "base\n\nIMPORTANT: You MUST respond in Japanese."
+        );
+    }
+
     use super::*;
 
     #[test]

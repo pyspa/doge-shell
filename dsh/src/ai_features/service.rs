@@ -167,6 +167,9 @@ pub struct LiveAiService {
     safety_guard: Arc<SafetyGuard>,
     confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
     execute_allowlist: Arc<RwLock<Vec<String>>>,
+    /// `AI_MESSAGE_LANG`. Applied here rather than at each of the twenty-odd
+    /// call sites, which is why the setting used to reach `!` and nothing else.
+    response_language: Arc<RwLock<Option<String>>>,
 }
 
 impl LiveAiService {
@@ -178,6 +181,7 @@ impl LiveAiService {
         safety_guard: Arc<SafetyGuard>,
         confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
         execute_allowlist: Arc<RwLock<Vec<String>>>,
+        response_language: Arc<RwLock<Option<String>>>,
     ) -> Self {
         Self {
             client: Arc::new(client),
@@ -186,6 +190,7 @@ impl LiveAiService {
             safety_guard,
             confirmation_handler,
             execute_allowlist,
+            response_language,
         }
     }
 }
@@ -197,7 +202,7 @@ impl AiService for LiveAiService {
     }
 
     fn get_safety_level(&self) -> Option<SafetyLevel> {
-        Some(self.safety_level.read().clone())
+        Some(*self.safety_level.read())
     }
 
     fn get_allowlist(&self) -> Option<Vec<String>> {
@@ -223,12 +228,44 @@ impl AiService for LiveAiService {
 }
 
 impl LiveAiService {
+    /// Add the operator's response language to the leading system message.
+    ///
+    /// Only the system message, and only when one is present: a request whose
+    /// answer is parsed rather than read - a JSON command, a completion
+    /// definition - carries no system prompt to attach it to, and telling the
+    /// model to answer in Japanese would break the parse.
+    fn with_response_language(&self, mut messages: Vec<Value>) -> Vec<Value> {
+        let Some(language) = self.response_language.read().clone() else {
+            return messages;
+        };
+
+        let Some(system) = messages
+            .iter_mut()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+        else {
+            return messages;
+        };
+        let Some(content) = system.get("content").and_then(Value::as_str) else {
+            return messages;
+        };
+
+        let updated = dsh_openai::apply_language(content, Some(&language));
+        system["content"] = Value::String(updated);
+        messages
+    }
+
     async fn run_tool_loop(
         &self,
         messages_in: Vec<Value>,
         options: AiRequestOptions,
     ) -> Result<String> {
-        let mut messages = messages_in;
+        // A request that asks for a JSON object is parsed, not read: a language
+        // instruction there risks the format, and nobody reads the field names.
+        let mut messages = if options.json_object {
+            messages_in
+        } else {
+            self.with_response_language(messages_in)
+        };
         let tools = self.mcp_manager.read().tool_definitions();
         let chat_options = options.to_chat_options((!tools.is_empty()).then(|| tools.clone()));
 
@@ -298,7 +335,7 @@ impl LiveAiService {
 
                     // Check safety
                     let allowlist = self.execute_allowlist.read().clone();
-                    let level = self.safety_level.read().clone();
+                    let level = *self.safety_level.read();
 
                     let result = self
                         .safety_guard
@@ -422,6 +459,7 @@ mod tests {
             Arc::new(SafetyGuard::new()),
             None,
             Arc::new(RwLock::new(Vec::new())),
+            Arc::new(RwLock::new(None)),
         )
     }
 
@@ -456,6 +494,76 @@ mod tests {
             .unwrap();
 
         assert_eq!(answer, "cap=Some(64) json=true");
+    }
+
+    fn service_speaking(client: impl ChatClient + 'static, language: &str) -> LiveAiService {
+        LiveAiService::new(
+            client,
+            Arc::new(RwLock::new(McpManager::default())),
+            Arc::new(RwLock::new(SafetyLevel::Normal)),
+            Arc::new(SafetyGuard::new()),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            Arc::new(RwLock::new(Some(language.to_string()))),
+        )
+    }
+
+    /// Echoes the system message back, so a test can see what was sent.
+    struct SystemEchoClient;
+
+    impl ChatClient for SystemEchoClient {
+        fn send_chat_request(
+            &self,
+            messages: &[Value],
+            _options: &ChatRequestOptions,
+        ) -> Result<Value> {
+            let system = messages
+                .iter()
+                .find(|m| m["role"] == "system")
+                .and_then(|m| m["content"].as_str())
+                .unwrap_or("<none>")
+                .to_string();
+            Ok(json!({
+                "choices": [{"message": {"role": "assistant", "content": system},
+                             "finish_reason": "stop"}]
+            }))
+        }
+    }
+
+    /// `AI_MESSAGE_LANG` used to reach the `!` runtime only, so every
+    /// shell-side answer stayed in English however it was set.
+    #[tokio::test]
+    async fn the_response_language_reaches_a_shell_side_request() {
+        let answer = service_speaking(SystemEchoClient, "Japanese")
+            .send_request(
+                vec![
+                    json!({"role": "system", "content": "You explain commands."}),
+                    json!({"role": "user", "content": "ls"}),
+                ],
+                Some(0.1),
+            )
+            .await
+            .unwrap();
+
+        assert!(answer.starts_with("You explain commands."));
+        assert!(answer.contains("You MUST respond in Japanese."));
+    }
+
+    /// A parsed answer keeps its shape: the caller reads fields, not prose.
+    #[tokio::test]
+    async fn a_json_request_is_left_in_its_own_language() {
+        let answer = service_speaking(SystemEchoClient, "Japanese")
+            .send_request_with(
+                vec![
+                    json!({"role": "system", "content": "Reply with JSON."}),
+                    json!({"role": "user", "content": "ls"}),
+                ],
+                AiRequestOptions::new(Some(0.1)).as_json_object(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(answer, "Reply with JSON.");
     }
 
     #[tokio::test]

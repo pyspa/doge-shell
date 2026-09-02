@@ -131,9 +131,9 @@ fn print_json_report(
         },
         "integrations": {
             "mcp_servers": proxy.list_mcp_servers().len(),
-            "ai_configured": proxy.get_var("AI_CHAT_API_KEY")
-                .or_else(|| proxy.get_var("OPENAI_API_KEY"))
-                .is_some_and(|value| !value.trim().is_empty())
+            // Through the same resolver as the `ai` section, which also knows
+            // about `OPEN_AI_API_KEY`; the two used to disagree.
+            "ai_configured": crate::chatgpt::load_openai_config(proxy).api_key().is_some()
         },
         "details": details
     });
@@ -149,6 +149,18 @@ fn print_json_report(
     }
 }
 
+/// Where the Codex runtime skills live.
+///
+/// `CODEX_HOME` moves the whole Codex directory, so the `--json` path used to
+/// report a directory nobody was using once it was set.
+fn codex_skills_dir(proxy: &mut dyn ShellProxy) -> Option<PathBuf> {
+    proxy
+        .get_var("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")))
+        .map(|path| path.join("skills"))
+}
+
 fn json_section_details(
     proxy: &mut dyn ShellProxy,
     current_dir: &Path,
@@ -156,33 +168,26 @@ fn json_section_details(
 ) -> serde_json::Value {
     match section {
         Some("config") => {
-            let config_root = dirs::config_dir().map(|path| path.join("dsh"));
-            let config = config_root.as_ref().map(|path| path.join("config.lisp"));
-            let skills = config_root.as_ref().map(|path| path.join("skills"));
+            let config = crate::config_paths::config_file("config.lisp");
+            let skills = crate::config_paths::skills_dir();
             json!({
-                "config": config.as_ref().map(|path| json!({"path": path, "exists": path.is_file()})),
-                "runtime_skills": skills.as_ref().map(|path| json!({
-                    "path": path,
-                    "exists": path.is_dir(),
-                    "entries": fs::read_dir(path).map(|entries| entries.count()).unwrap_or(0)
-                }))
+                "config": json!({"path": config, "exists": config.is_file()}),
+                "runtime_skills": json!({
+                    "path": skills,
+                    "exists": skills.is_dir(),
+                    "entries": fs::read_dir(&skills).map(|entries| entries.count()).unwrap_or(0)
+                })
             })
         }
         Some("ai") => {
             let usage = dsh_openai::usage::session_total();
+            let config = crate::chatgpt::load_openai_config(proxy);
             json!({
-            "configured": proxy.get_var("AI_CHAT_API_KEY")
-                .or_else(|| proxy.get_var("OPENAI_API_KEY"))
-                .or_else(|| proxy.get_var("OPEN_AI_API_KEY"))
-                .is_some_and(|value| !value.trim().is_empty()),
-            "model": proxy.get_var("AI_CHAT_MODEL")
-                .or_else(|| proxy.get_var("OPENAI_MODEL"))
-                .unwrap_or_else(|| "gpt-5-mini".to_string()),
-            "base_url": proxy.get_var("AI_CHAT_BASE_URL")
-                .or_else(|| proxy.get_var("OPENAI_BASE_URL"))
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            "configured": config.api_key().is_some(),
+            "model": config.default_model(),
+            "base_url": config.base_url(),
             "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string()),
-            "timeout_secs": ai_timeout_secs(proxy),
+            "timeout_secs": config.timeout().as_secs(),
             "usage": {
                 "requests": usage.requests,
                 "prompt_tokens": usage.prompt_tokens,
@@ -240,16 +245,16 @@ fn json_section_details(
         Some("safety") => json_safety_details(proxy, current_dir),
         Some("dev" | "validate") => json_dev_details(current_dir),
         Some("skills") => {
-            let dsh = dirs::config_dir().map(|path| path.join("dsh/skills"));
-            let codex = dirs::home_dir().map(|path| path.join(".codex/skills"));
+            let dsh = crate::config_paths::skills_dir();
+            let codex = codex_skills_dir(proxy);
             json!({
-                "dsh_runtime": dsh.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)})),
+                "dsh_runtime": json!({"path": dsh, "entries": count_skill_dirs(&dsh)}),
                 "codex_runtime": codex.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)}))
             })
         }
         Some("setup") => {
-            let root = dirs::config_dir().map(|path| path.join("dsh"));
-            json!({"config_root": root.as_ref().map(|path| json!({"path": path, "exists": path.is_dir()}))})
+            let root = crate::config_paths::config_home();
+            json!({"config_root": json!({"path": root, "exists": root.is_dir()})})
         }
         None => json!({"kind": "summary"}),
         Some(_) => serde_json::Value::Null,
@@ -375,15 +380,19 @@ fn print_header(ctx: &Context, title: &str) {
 }
 
 fn check_setup(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path, fix: bool) {
-    let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh")) else {
-        let _ = ctx.write_stdout("warn config-root unable-to-determine-config-dir");
-        return;
-    };
+    // `doctor fix` creates files here, so this must be the directory the shell
+    // actually loads from - `dirs::config_dir()` on macOS is not.
+    let config_root = crate::config_paths::config_home();
 
     ensure_setup_dir(ctx, &config_root, "config-root", fix);
-    ensure_setup_dir(ctx, &config_root.join("skills"), "runtime-skills", fix);
+    ensure_setup_dir(
+        ctx,
+        &crate::config_paths::skills_dir(),
+        "runtime-skills",
+        fix,
+    );
     ensure_setup_dir(ctx, &config_root.join("completions"), "completion-dir", fix);
-    ensure_config_file(ctx, &config_root.join("config.lisp"), fix);
+    ensure_config_file(ctx, &crate::config_paths::config_file("config.lisp"), fix);
 
     let api_key = proxy
         .get_var("AI_CHAT_API_KEY")
@@ -535,19 +544,14 @@ fn default_config_lisp() -> &'static str {
 }
 
 fn check_config(ctx: &Context) {
-    let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh")) else {
-        let _ = ctx.write_stdout("warn unable to determine config directory");
-        return;
-    };
-
-    let config_path = config_root.join("config.lisp");
+    let config_path = crate::config_paths::config_file("config.lisp");
     if config_path.exists() {
         let _ = ctx.write_stdout(&format!("ok config {}", config_path.display()));
     } else {
         let _ = ctx.write_stdout(&format!("warn missing {}", config_path.display()));
     }
 
-    let skills_dir = config_root.join("skills");
+    let skills_dir = crate::config_paths::skills_dir();
     if skills_dir.exists() {
         let count = fs::read_dir(&skills_dir)
             .map(|entries| entries.count())
@@ -569,33 +573,36 @@ fn ai_timeout_secs(proxy: &mut dyn ShellProxy) -> u64 {
 }
 
 fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
-    let api_key = proxy
-        .get_var("AI_CHAT_API_KEY")
-        .or_else(|| proxy.get_var("OPENAI_API_KEY"))
-        .or_else(|| proxy.get_var("OPEN_AI_API_KEY"));
-    let model = proxy
-        .get_var("AI_CHAT_MODEL")
-        .or_else(|| proxy.get_var("OPENAI_MODEL"))
-        .unwrap_or_else(|| "gpt-5-mini".to_string());
-    let base_url = proxy
+    // Report what the client will actually use. Re-deriving the model, the base
+    // URL and their defaults here meant `doctor` drifted from `OpenAiConfig`
+    // and, because it skipped `sanitize_base_url`, called an `http://` endpoint
+    // "ok" while every request went to api.openai.com instead.
+    let config = crate::chatgpt::load_openai_config(proxy);
+    let configured_base_url = proxy
         .get_var("AI_CHAT_BASE_URL")
-        .or_else(|| proxy.get_var("OPENAI_BASE_URL"))
-        .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        .or_else(|| proxy.get_var("OPENAI_BASE_URL"));
     let lang = proxy
         .get_var("AI_MESSAGE_LANG")
         .unwrap_or_else(|| "default".to_string());
 
-    let key_state = if api_key
-        .as_ref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
+    let key_state = if config.api_key().is_some() {
         "ok"
     } else {
         "warn"
     };
-    let _ = ctx.write_stdout(&format!("{key_state} api-key {}", mask_secret(api_key)));
-    let _ = ctx.write_stdout(&format!("ok model {model}"));
-    let _ = ctx.write_stdout(&format!("ok base-url {base_url}"));
+    let _ = ctx.write_stdout(&format!(
+        "{key_state} api-key {}",
+        mask_secret(config.api_key().map(str::to_string))
+    ));
+    let _ = ctx.write_stdout(&format!("ok model {}", config.default_model()));
+    let _ = ctx.write_stdout(&format!("ok base-url {}", config.base_url()));
+    if let Some(configured) = configured_base_url.as_deref()
+        && configured.trim_end_matches('/') != config.base_url()
+    {
+        let _ = ctx.write_stdout(&format!(
+            "warn base-url configured {configured} replaced; set AI_CHAT_ALLOW_INSECURE_HTTP=1 to keep it"
+        ));
+    }
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
 
     let _ = ctx.write_stdout(&format!("ok request-timeout {}s", ai_timeout_secs(proxy)));
@@ -616,7 +623,7 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
         let _ = ctx.write_stdout(&format!("ok token-usage {}", usage.summary_line()));
     }
 
-    let dsh_skills_dir = dirs::config_dir().map(|path| path.join("dsh").join("skills"));
+    let dsh_skills_dir = Some(crate::config_paths::skills_dir());
     let dsh_skill_count = match dsh_skills_dir.as_ref() {
         Some(path) if path.exists() => {
             let count = count_skill_dirs(path);
@@ -639,11 +646,7 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
         }
     };
 
-    let codex_root = proxy
-        .get_var("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")));
-    let codex_skills_dir = codex_root.map(|path| path.join("skills"));
+    let codex_skills_dir = codex_skills_dir(proxy);
     let codex_skill_count = match codex_skills_dir.as_ref() {
         Some(path) if path.exists() => {
             let count = count_skill_dirs(path);
@@ -895,12 +898,7 @@ fn check_performance(ctx: &Context, proxy: &mut dyn ShellProxy, args: &[String])
         }
     }
 
-    let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh")) else {
-        let _ = ctx.write_stdout("warn skills-scan unable-to-determine-config-dir");
-        return;
-    };
-
-    let skills_dir = config_root.join("skills");
+    let skills_dir = crate::config_paths::skills_dir();
     if skills_dir.exists() {
         let count = fs::read_dir(&skills_dir)
             .map(|entries| entries.count())
@@ -1026,11 +1024,7 @@ fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
         source_root.display()
     ));
 
-    let codex_root = proxy
-        .get_var("CODEX_HOME")
-        .map(PathBuf::from)
-        .or_else(|| dirs::home_dir().map(|path| path.join(".codex")));
-    if let Some(root) = codex_root {
+    if let Some(root) = codex_skills_dir(proxy) {
         check_skill_profile(
             ctx,
             "codex",
@@ -1043,18 +1037,14 @@ fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
         let _ = ctx.write_stdout("warn codex-runtime-skills unable-to-determine-home-dir");
     }
 
-    if let Some(root) = dirs::config_dir().map(|path| path.join("dsh").join("skills")) {
-        check_skill_profile(
-            ctx,
-            "dsh",
-            "dsh-common",
-            &source_root,
-            &root,
-            DSH_COMMON_SKILLS,
-        );
-    } else {
-        let _ = ctx.write_stdout("warn dsh-runtime-skills unable-to-determine-config-dir");
-    }
+    check_skill_profile(
+        ctx,
+        "dsh",
+        "dsh-common",
+        &source_root,
+        &crate::config_paths::skills_dir(),
+        DSH_COMMON_SKILLS,
+    );
 
     check_claude_project_skills(ctx, &repo_root, &source_root, canonical_count);
 }
@@ -1239,7 +1229,8 @@ fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
         let _ = ctx.write_stdout("ok envrc missing");
     }
 
-    if let Some(config_root) = dirs::config_dir().map(|path| path.join("dsh").join("skills")) {
+    {
+        let config_root = crate::config_paths::skills_dir();
         if config_root.exists() {
             let count = fs::read_dir(&config_root)
                 .map(|entries| entries.count())

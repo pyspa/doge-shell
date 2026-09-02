@@ -8,6 +8,8 @@ description: Use for doge-shell safety, guard, safe_run, command policy, approva
 - Start with `rg -n "safe|safety|guard|policy|approval|confirm|danger|execute" dsh/src/safety dsh-builtin/src/safe_run.rs dsh-builtin/src/chatgpt/tool/execute.rs`.
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for safety / guard / command policy entries.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
-- Default read targets are `dsh/src/safety/`, `dsh-builtin/src/safe_run.rs`, and `dsh-builtin/src/chatgpt/tool/execute.rs`.
+- Read [../doge-shell-repo/references/ai-architecture.md](../doge-shell-repo/references/ai-architecture.md) for where the safety gate applies to the AI features and how the three allowlists differ.
+- Default read targets are `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `dsh-builtin/src/safe_run.rs`, `dsh-builtin/src/chatgpt/tool/execute.rs`, and `AgentCommandPolicy` in `dsh/src/proxy/mod.rs`.
+- `SafetyLevel` and the shared command classifiers live in `dsh-types/src/safety_policy.rs`; the single source for the current level is `policy_state.safety_level`, not the `SAFETY_LEVEL` variable.
 - Keep policy and execution changes separated unless the task requires both.
-- Validate touched packages: `cargo test -p doge-shell` for shell policy changes; `cargo test -p dsh-builtin` for builtin or tool execution changes.
+- Validate touched packages: `cargo test -p doge-shell` for shell policy changes; `cargo test -p dsh-builtin` for builtin or tool execution changes; add `cargo test -p dsh-types` when the shared classifiers change.

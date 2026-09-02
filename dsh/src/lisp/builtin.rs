@@ -374,15 +374,14 @@ pub fn block_sh(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtim
 
 pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.is_empty() {
-        let level = env
+        let level = *env
             .borrow()
             .shell_env
             .read()
             .policy_state
             .safety_level
-            .read()
-            .clone();
-        return Ok(Value::String(format!("{:?}", level).to_lowercase()));
+            .read();
+        return Ok(Value::String(level.as_str().to_string()));
     }
 
     let level_str = args[0].to_string();
@@ -394,11 +393,14 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     {
         let env_ref = env.borrow();
         let mut shell_env = env_ref.shell_env.write();
-        *shell_env.policy_state.safety_level.write() = level.clone();
-        shell_env.variable_state.variables.insert(
-            "SAFETY_LEVEL".to_string(),
-            format!("{:?}", level).to_lowercase(),
-        );
+        *shell_env.policy_state.safety_level.write() = level;
+        // The variable is the readable copy, not the source of truth: every
+        // policy check reads `policy_state.safety_level` through
+        // `ShellProxy::safety_level`.
+        shell_env
+            .variable_state
+            .variables
+            .insert("SAFETY_LEVEL".to_string(), level.as_str().to_string());
     }
 
     Ok(Value::NIL)

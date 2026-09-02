@@ -112,6 +112,15 @@ Examples:
     ExitStatus::ExitedWith(0)
 }
 
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    if text.len() > 50 {
+        let prefix: String = text.chars().take(max_chars).collect();
+        format!("{prefix}...")
+    } else {
+        text.to_string()
+    }
+}
+
 fn list_all_bookmarks(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let bookmarks = proxy.list_bookmarks();
 
@@ -127,11 +136,7 @@ fn list_all_bookmarks(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
         .into_iter()
         .map(|b| BookmarkEntry {
             name: b.0,
-            command: if b.1.len() > 50 {
-                format!("{}...", &b.1[..47])
-            } else {
-                b.1
-            },
+            command: truncate_preview(&b.1, 47),
             use_count: b.2,
         })
         .collect();

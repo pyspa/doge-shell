@@ -124,9 +124,15 @@ fn read_env_config_file(file: &str) -> Result<Vec<Entry>> {
     let mut ret: Vec<Entry> = Vec::new();
     let contents = fs::read_to_string(file)?;
     for line in contents.lines() {
-        let parts: Vec<&str> = line.splitn(2, '=').collect();
-        let key = parts[0].trim().to_uppercase().to_string();
-        let value = parts[1].trim().to_string();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim().to_uppercase().to_string();
+        let value = raw_value.trim().to_string();
         ret.push(Entry::Env(EnvEntry { key, value }));
     }
     Ok(ret)
@@ -138,7 +144,14 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
     let current_path = std::env::var("PATH")?;
 
     for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
         let parts: Vec<&str> = line.splitn(2, ' ').collect();
+        if parts.len() < 2 {
+            continue;
+        }
         let cmd = parts[0].trim().to_uppercase().to_string();
         let value = parts[1].trim().to_string();
 
@@ -148,9 +161,11 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
                 old: current_path.clone(),
             })),
             "EXPORT" => {
-                let parts: Vec<&str> = value.splitn(2, '=').collect();
-                let key = parts[0].trim().to_uppercase().to_string();
-                let mut value = parts[1].trim().to_string();
+                let Some((raw_key, raw_value)) = value.split_once('=') else {
+                    continue;
+                };
+                let key = raw_key.trim().to_uppercase().to_string();
+                let mut value = raw_value.trim().to_string();
 
                 // Strip quotes if present
                 if ((value.starts_with('"') && value.ends_with('"'))
@@ -261,6 +276,46 @@ mod tests {
         }
         assert!(found_quoted);
         assert!(found_single);
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_env_config_file_skips_comments_and_blank_lines() -> Result<()> {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new()?;
+        writeln!(file, "# a comment")?;
+        writeln!(file)?;
+        writeln!(file, "FOO=bar")?;
+
+        let path = file.path().to_str().unwrap();
+        let entries = read_env_config_file(path)?;
+
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            Entry::Env(e) => {
+                assert_eq!(e.key, "FOO");
+                assert_eq!(e.value, "bar");
+            }
+            _ => panic!("expected env entry"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_envrc_config_file_skips_blank_and_malformed_lines() -> Result<()> {
+        use std::io::Write;
+        let mut file = tempfile::NamedTempFile::new()?;
+        writeln!(file)?;
+        writeln!(file, "# comment")?;
+        writeln!(file, "PATH_ADD /usr/local/bin")?;
+        writeln!(file, "NOT_A_DIRECTIVE")?;
+        writeln!(file, "export")?;
+
+        let path = file.path().to_str().unwrap();
+        let entries = read_envrc_config_file(path)?;
+
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(entries[0], Entry::PathAdd(_)));
         Ok(())
     }
 }

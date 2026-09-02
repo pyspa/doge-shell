@@ -123,6 +123,15 @@ Examples:
 }
 
 /// List all snippets in a formatted table
+fn truncate_preview(text: &str, max_chars: usize) -> String {
+    if text.len() > 50 {
+        let prefix: String = text.chars().take(max_chars).collect();
+        format!("{prefix}...")
+    } else {
+        text.to_string()
+    }
+}
+
 fn list_all_snippets(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let snippets = proxy.list_snippets();
 
@@ -136,11 +145,7 @@ fn list_all_snippets(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
         .into_iter()
         .map(|s| SnippetEntry {
             name: s.name,
-            command: if s.command.len() > 50 {
-                format!("{}...", &s.command[..47])
-            } else {
-                s.command
-            },
+            command: truncate_preview(&s.command, 47),
             description: s.description.unwrap_or_default(),
             use_count: s.use_count,
         })

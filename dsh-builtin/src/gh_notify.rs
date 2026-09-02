@@ -21,6 +21,7 @@ struct Notification {
     subject: Subject,
     repository: Repository,
     reason: String,
+    #[serde(default)]
     _updated_at: String,
     #[serde(default = "default_unread")]
     unread: bool,

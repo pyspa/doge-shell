@@ -392,6 +392,9 @@ fn pattern_match_impl(text: &str, pattern: &str) -> bool {
                 let remaining_pattern: String = pattern_chars.collect();
 
                 for i in 0..=remaining_text.len() {
+                    if !remaining_text.is_char_boundary(i) {
+                        continue;
+                    }
                     if pattern_match_impl(&remaining_text[i..], &remaining_pattern) {
                         return true;
                     }
@@ -553,6 +556,13 @@ mod tests {
             "prefix*middle*suffix"
         ));
         assert!(!pattern_match("prefix_suffix", "prefix*middle*suffix"));
+    }
+
+    #[test]
+    fn test_pattern_match_multibyte_after_wildcard() {
+        assert!(pattern_match("IMG_日本語.jpg", "IMG_*.jpg"));
+        assert!(!pattern_match("IMG_日本語.jpg", "IMG_*.png"));
+        assert!(pattern_match("日本語.md", "*.md"));
     }
 
     #[test]

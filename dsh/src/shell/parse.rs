@@ -628,6 +628,7 @@ fn parse_jobs(
                 }
 
                 if let Some(job) = jobs.last_mut() {
+                    let saved_foreground = ctx.foreground;
                     for inner_pair in inner_pair.into_inner() {
                         let _cmd = inner_pair.as_str();
                         if let Rule::simple_command = inner_pair.as_rule() {
@@ -640,6 +641,7 @@ fn parse_jobs(
                             // TODO check?
                         }
                     }
+                    ctx.foreground = saved_foreground;
                 }
             }
             Rule::capture_suffix => {

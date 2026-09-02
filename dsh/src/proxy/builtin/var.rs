@@ -53,13 +53,15 @@ pub fn execute_var(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Resu
 ///
 /// Reads input from stdin and assigns it to a variable.
 pub fn execute_read(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
-    let mut stdin = Vec::new();
-    unsafe {
-        File::from_raw_fd(ctx.infile)
-            .read_to_end(&mut stdin)
-            .context("read: failed to read input")?;
+    let Some(name) = argv.get(1) else {
+        return Err(anyhow::anyhow!("variable name required"));
     };
-    let key = format!("${}", argv[1]);
+    let mut stdin = Vec::new();
+    let mut infile = std::mem::ManuallyDrop::new(unsafe { File::from_raw_fd(ctx.infile) });
+    infile
+        .read_to_end(&mut stdin)
+        .context("read: failed to read input")?;
+    let key = format!("${name}");
     let output = match std::str::from_utf8(&stdin) {
         Ok(s) => s.trim_end_matches('\n').to_owned(),
         Err(err) => {

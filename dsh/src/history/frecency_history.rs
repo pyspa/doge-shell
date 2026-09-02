@@ -115,7 +115,7 @@ impl FrecencyHistory {
                 let half_life: f64 = row.get(4)?;
                 let context: Option<String> = row.get(5)?;
 
-                let mut item = ItemStats::new(&path, 0.0, half_life as f32, context);
+                let mut item = ItemStats::new(&path, store.reference_time, half_life as f32, context);
                 item.set_frecency(score as f32);
                 Ok(item)
             });
@@ -324,7 +324,8 @@ impl FrecencyHistory {
             match store.items.binary_search_by(|item| item.item.cmp(&path)) {
                 Ok(_) => {}
                 Err(index) => {
-                    let mut item = ItemStats::new(&path, 0.0, half_life as f32, context);
+                    let mut item =
+                        ItemStats::new(&path, store.reference_time, half_life as f32, context);
                     item.set_frecency(score as f32);
                     store.items.insert(index, item);
                 }

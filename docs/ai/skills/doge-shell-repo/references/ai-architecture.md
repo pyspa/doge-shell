@@ -135,6 +135,7 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs` |
 | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | 100000 | `dsh-builtin/src/chatgpt.rs` |
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
+| `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |
 | `AI_CHAT_EXECUTE_ALLOWLIST` | なし | `dsh-builtin/src/chatgpt/tool/execute.rs` |
 | `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt.rs`（`response_language`） |
 | `CHAT_PROMPT` | なし | 同上 |
@@ -160,9 +161,14 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `AiRequestOptions`（シェル側の意図） | `dsh/src/ai_features/service.rs`。**`dsh-openai` には無い** |
 | `AgentPolicyHandles`（レベル・ガード・2 つの allowlist） | 同上 |
 
-`dsh-openai` の公開 API は `send_chat` + `ChatRequestOptions` だけ。
+`dsh-openai` の公開 API は `send_chat` / `send_chat_streaming` + `ChatRequestOptions` だけ。
 `send_message` / `send_message_with_model` / 位置引数版 `send_chat_request` は削除した
 （呼び出し元が無く、repo 最後の `choices[0].message.content` 直読みを抱えていた）。
+
+`send_chat_streaming` は SSE chunk を `dsh_openai::stream::DeltaAggregator` で集約し、
+`send_chat` と同じ形の `Value` を返す。呼び出し元（経路 A のみ）は
+`turn::interpret_response` 以降を一切変えていない。互換サーバへのフォールバックは
+`stream` / `stream_options` を `DROPPABLE_FIELDS` に含めるだけで、新しい仕組みを増やしていない。
 
 ## 7. 未解決の設計判断
 
@@ -204,7 +210,13 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 - **構造化出力が `json_object` 止まり**。`json_schema` + `strict` にすれば
   `strip_code_fence` → `serde_json::from_str` → フォールバックの手作業が要らなくなる。
   対象は `safe_run` ×2、`ai_features/command.rs` ×3、comp-gen。
-- **ストリーミング非対応**。最大 100 反復の実行がスピナーとツール名のログだけで進む。
+- **ストリーミングは経路 A（`!` チャット）だけ**。`ChatGptClient::send_chat_streaming` +
+  `dsh_openai::stream` が SSE を非ストリーム同形の `Value` に集約し、`dsh-builtin/src/chatgpt.rs`
+  の `StreamSink` が確定 Markdown ブロックを `dsh-builtin/src/markdown/stream.rs` の
+  `MarkdownBlockSplitter` で切り出して逐次描画する。既定 ON、`AI_CHAT_STREAM=0` で無効化。
+  経路 B（`dsh/src/ai_features/service.rs` / `AiService`）は非対応のまま
+  （呼び出し元が 15 箇所以上あり、`-> Result<String>` を変える範囲が別作業になるため）。
+  `safe_run` / `ai-commit` / ゴーストテキストは JSON か 1 行の最終値なので対象外。
 - **リトライに jitter が無い**（`MAX_RETRIES=3`、500ms base、8s cap、`Retry-After` 尊重、
   タイムアウトは再試行しない）。
 - **トークン見積もりがバイト長**。tokenizer は入っていない（`usage` ブロックは正確）。

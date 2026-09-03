@@ -7,7 +7,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tracing::debug;
 
-use crate::config::OpenAiConfig;
+use crate::config::{self, OpenAiConfig};
+use crate::stream::{DeltaAggregator, SseFrameSplitter, is_done_marker};
 use crate::usage;
 
 /// Budget for establishing the connection, separate from the total budget.
@@ -22,6 +23,12 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
 /// Optional body fields that an OpenAI-compatible endpoint may reject outright.
 /// When a 400 names one of these we drop it and retry once, so a local server
 /// that only speaks the older schema still works.
+///
+/// Order matters: `unsupported_field` returns the first match, and
+/// `"stream_options"` contains `"stream"` as a substring, so the more
+/// specific name must come first. A 400 naming only `"stream"` still falls
+/// through to it correctly, since `"stream_options"` will not match text
+/// that never mentions it.
 const DROPPABLE_FIELDS: &[&str] = &[
     "max_completion_tokens",
     "response_format",
@@ -29,6 +36,8 @@ const DROPPABLE_FIELDS: &[&str] = &[
     // A fixed-temperature model that this build does not recognise still
     // rejects the field. Dropping it costs one retry instead of the whole turn.
     "temperature",
+    "stream_options",
+    "stream",
 ];
 
 #[derive(Debug)]
@@ -59,6 +68,18 @@ impl fmt::Display for ApiError {
     }
 }
 
+/// Failure from one streaming attempt.
+///
+/// Once at least one delta has reached the caller the reply is already
+/// partially on the screen, so `send_streaming_with_retry` only retries the
+/// `BeforeFirstDelta` case - retrying past that point would show the start
+/// of the answer twice.
+#[derive(Debug)]
+enum StreamError {
+    BeforeFirstDelta(Error),
+    AfterFirstDelta(Error),
+}
+
 impl std::error::Error for ApiError {}
 
 /// Returns true when the provided error represents a Ctrl+C cancellation
@@ -85,6 +106,9 @@ pub struct ChatRequestOptions {
     pub response_format: Option<Value>,
     /// Cache-routing hint for providers that support it.
     pub prompt_cache_key: Option<String>,
+    /// Ask the provider to deliver the reply as SSE chunks instead of one
+    /// JSON object. See [`ChatGptClient::send_chat_streaming`].
+    pub stream: bool,
 }
 
 impl ChatRequestOptions {
@@ -121,6 +145,11 @@ impl ChatRequestOptions {
         self.prompt_cache_key = key;
         self
     }
+
+    pub fn with_stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
 }
 
 /// One runtime for every blocking OpenAI call.
@@ -147,6 +176,13 @@ pub struct ChatGptClient {
     default_model: String,
     chat_endpoint: String,
     client: Client,
+    /// The operator's configured request budget (`AI_CHAT_TIMEOUT_SECS`).
+    ///
+    /// A streaming request repurposes this as the maximum silence between
+    /// chunks rather than a cap on the whole reply - a streamed answer can
+    /// legitimately run longer than one non-streaming turn's budget. See
+    /// `send_chat_streaming`.
+    request_timeout: Duration,
     /// Optional body fields this endpoint rejected with a 400.
     ///
     /// Remembered so a server that only speaks the older schema is probed once
@@ -182,6 +218,7 @@ impl ChatGptClient {
             default_model: config.default_model().to_string(),
             chat_endpoint: config.chat_endpoint(),
             client: Self::build_client(config.timeout())?,
+            request_timeout: config.timeout(),
             unsupported: Arc::new(Mutex::new(Vec::new())),
         };
         Ok(client)
@@ -192,7 +229,8 @@ impl ChatGptClient {
     // any of them, and `send_message_with_model` held the last
     // `choices[0]["message"]["content"]` in the repository - the exact read
     // `turn::answer_text` exists to replace, kept alive as an example to copy.
-    // `send_chat` plus `ChatRequestOptions` is the whole surface.
+    // `send_chat` / `send_chat_streaming` plus `ChatRequestOptions` is the
+    // whole surface.
 
     /// Send a chat completion request, retrying transient failures.
     pub fn send_chat(
@@ -203,6 +241,33 @@ impl ChatGptClient {
     ) -> Result<Value> {
         let body = self.build_body(messages, options);
         self.block_on(self.send_with_retry(body, cancel_check))?
+    }
+
+    /// Send a chat completion request with the reply delivered incrementally.
+    ///
+    /// `on_delta` is called with each piece of assistant text as it arrives.
+    /// A partial tool call cannot be run, so this still returns only once the
+    /// turn completes - the same aggregated `Value` shape [`Self::send_chat`]
+    /// returns, built by [`crate::stream::DeltaAggregator`]. Everything past
+    /// this call (`turn::interpret_response`, history compaction, usage
+    /// accounting) reads it exactly as it would a non-streaming response and
+    /// does not need to change.
+    ///
+    /// Falls back to a single non-streaming response when the endpoint
+    /// ignores `options.stream` (a `Content-Type` other than
+    /// `text/event-stream`) or rejects it outright - folded into the same
+    /// `DROPPABLE_FIELDS` mechanism `send_chat` uses for other optional
+    /// fields, so a server that does not understand `stream` costs one
+    /// retry instead of failing the turn.
+    pub fn send_chat_streaming(
+        &self,
+        messages: &[Value],
+        options: &ChatRequestOptions,
+        cancel_check: Option<&dyn Fn() -> bool>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<Value> {
+        let body = self.build_body(messages, options);
+        self.block_on(self.send_streaming_with_retry(body, cancel_check, on_delta))?
     }
 
     fn known_unsupported(&self) -> Vec<&'static str> {
@@ -333,6 +398,300 @@ impl ChatGptClient {
         Ok(data)
     }
 
+    async fn send_streaming_with_retry(
+        &self,
+        mut body: Value,
+        cancel_check: Option<&dyn Fn() -> bool>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<Value> {
+        let mut attempt = 0usize;
+        let mut dropped_fields: Vec<&'static str> = self.known_unsupported();
+
+        loop {
+            match self
+                .send_once_streaming(&body, cancel_check, on_delta)
+                .await
+            {
+                Ok(data) => return Ok(data),
+                // Some of the reply is already on the screen: retrying would
+                // show its start twice, so this is the end of the line.
+                Err(StreamError::AfterFirstDelta(err)) => return Err(err),
+                Err(StreamError::BeforeFirstDelta(err)) => {
+                    if is_ctrl_c_cancelled(&err) {
+                        return Err(err);
+                    }
+
+                    // An endpoint that rejects `stream` / `stream_options` /
+                    // any other optional field: drop it once and try again.
+                    // Dropping `stream` itself degrades this turn to a single
+                    // non-streaming response rather than failing it.
+                    if let Some(field) = unsupported_field(&err, &body, &dropped_fields) {
+                        debug!(
+                            chat_direction = "retry",
+                            reason = "unsupported field",
+                            field = field
+                        );
+                        if let Some(map) = body.as_object_mut() {
+                            map.remove(field);
+                        }
+                        dropped_fields.push(field);
+                        self.remember_unsupported(field);
+                        continue;
+                    }
+
+                    attempt += 1;
+                    let Some(delay) = retry_delay(&err, attempt) else {
+                        return Err(err);
+                    };
+
+                    debug!(
+                        chat_direction = "retry",
+                        attempt = attempt,
+                        delay_ms = delay.as_millis() as u64,
+                        error = %err
+                    );
+                    sleep_with_cancel(delay, cancel_check).await?;
+                }
+            }
+        }
+    }
+
+    async fn send_once_streaming(
+        &self,
+        body: &Value,
+        cancel_check: Option<&dyn Fn() -> bool>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<Value, StreamError> {
+        let builder = self
+            .client
+            .post(&self.chat_endpoint)
+            // The client's default timeout is a non-streaming turn's budget;
+            // a stream can legitimately run longer. `consume_event_stream`
+            // enforces its own no-data timeout instead.
+            .timeout(Duration::from_secs(config::MAX_TIMEOUT_SECS))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(body);
+
+        let response = Self::await_with_cancel(builder.send(), cancel_check)
+            .await
+            .map_err(StreamError::BeforeFirstDelta)?;
+
+        let status = response.status();
+        let retry_after = parse_retry_after(response.headers());
+        let is_event_stream = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+
+        if !status.is_success() {
+            let text = Self::await_with_cancel(response.text(), cancel_check)
+                .await
+                .map_err(StreamError::BeforeFirstDelta)?;
+            return Err(StreamError::BeforeFirstDelta(
+                ApiError {
+                    status: Some(status.as_u16()),
+                    retry_after,
+                    message: error_message_from_body(&text, status),
+                }
+                .into(),
+            ));
+        }
+
+        if !is_event_stream {
+            // The endpoint accepted the request but ignored `stream: true`
+            // and answered in one JSON object, as some OpenAI-compatible
+            // servers do. Read it the same way `send_once` would.
+            let text = Self::await_with_cancel(response.text(), cancel_check)
+                .await
+                .map_err(StreamError::BeforeFirstDelta)?;
+            let data: Value = serde_json::from_str(&text).map_err(|err| {
+                StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
+            })?;
+            if let Some(message) = error_message_from_value(&data) {
+                return Err(StreamError::BeforeFirstDelta(
+                    ApiError {
+                        status: None,
+                        retry_after,
+                        message,
+                    }
+                    .into(),
+                ));
+            }
+            usage::record_response(&data);
+            return Ok(data);
+        }
+
+        self.consume_event_stream(response, cancel_check, on_delta)
+            .await
+    }
+
+    /// Read one SSE response to completion, aggregating it into the same
+    /// shape `send_once` would return.
+    async fn consume_event_stream(
+        &self,
+        response: reqwest::Response,
+        cancel_check: Option<&dyn Fn() -> bool>,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<Value, StreamError> {
+        use futures::StreamExt;
+
+        let mut byte_stream = response.bytes_stream();
+        let mut splitter = SseFrameSplitter::new();
+        let mut aggregator = DeltaAggregator::new();
+        let mut delta_sent = false;
+
+        // Held for the whole stream, not recreated per chunk: a signal
+        // handler is only meaningful to register once.
+        let ctrl_c_future = async {
+            if cancel_check.is_some() {
+                std::future::pending::<bool>().await
+            } else {
+                match tokio::signal::ctrl_c().await {
+                    Ok(()) => true,
+                    Err(e) => {
+                        debug!("dsh-openai: Failed to listen for Ctrl+C via tokio: {}", e);
+                        std::future::pending::<bool>().await
+                    }
+                }
+            }
+        };
+        tokio::pin!(ctrl_c_future);
+
+        let mut poll_interval = tokio::time::interval(Duration::from_millis(50));
+        poll_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            // Freshly armed each iteration: the budget is silence *between*
+            // chunks, not a cap on the whole reply.
+            let idle_deadline = tokio::time::sleep(self.request_timeout);
+            tokio::pin!(idle_deadline);
+            let next_item = byte_stream.next();
+            tokio::pin!(next_item);
+
+            let poll_result = loop {
+                tokio::select! {
+                    item = &mut next_item => break Ok(item),
+                    true = &mut ctrl_c_future => break Err(RequestCancelled.into()),
+                    _ = &mut idle_deadline => break Err(anyhow!(
+                        "no data received from the OpenAI stream for {:?}",
+                        self.request_timeout
+                    )),
+                    _ = poll_interval.tick() => {
+                        if let Some(check) = cancel_check
+                            && check() {
+                                break Err(RequestCancelled.into());
+                            }
+                    }
+                }
+            };
+
+            let item = match poll_result {
+                Ok(item) => item,
+                Err(err) => return Err(Self::wrap_stream_error(err, delta_sent)),
+            };
+
+            let chunk = match item {
+                Some(Ok(chunk)) => chunk,
+                Some(Err(err)) => return Err(Self::wrap_stream_error(err.into(), delta_sent)),
+                None => {
+                    // The connection closed without a trailing blank line
+                    // after the last event - flush whatever is pending.
+                    for payload in splitter.finish() {
+                        Self::apply_stream_payload(
+                            &payload,
+                            &mut aggregator,
+                            &mut delta_sent,
+                            on_delta,
+                        )?;
+                    }
+                    // No `[DONE]` and no `finish_reason` means the
+                    // connection dropped mid-turn, not that the model
+                    // finished. Without this check the partial content
+                    // collected so far would be returned as a normal,
+                    // complete `Answer` - a truncated reply with no sign
+                    // anything went wrong.
+                    if !aggregator.has_finish_reason() {
+                        return Err(Self::wrap_stream_error(
+                            anyhow!(
+                                "the OpenAI stream closed before the reply finished \
+                                 (no finish_reason received)"
+                            ),
+                            delta_sent,
+                        ));
+                    }
+                    let value = aggregator.finish();
+                    usage::record_response(&value);
+                    return Ok(value);
+                }
+            };
+
+            for payload in splitter.push(&chunk) {
+                if is_done_marker(&payload) {
+                    let value = aggregator.finish();
+                    usage::record_response(&value);
+                    return Ok(value);
+                }
+                Self::apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
+            }
+        }
+    }
+
+    fn wrap_stream_error(err: Error, delta_sent: bool) -> StreamError {
+        if delta_sent {
+            StreamError::AfterFirstDelta(err)
+        } else {
+            StreamError::BeforeFirstDelta(err)
+        }
+    }
+
+    /// Decode one SSE frame payload and, if it carried a text delta, forward
+    /// it to the caller.
+    ///
+    /// A single malformed frame is not fatal to the turn - it is dropped
+    /// with a debug log, the way a client tolerates one corrupted keep-alive
+    /// rather than losing an otherwise complete answer.
+    fn apply_stream_payload(
+        payload: &str,
+        aggregator: &mut DeltaAggregator,
+        delta_sent: &mut bool,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<(), StreamError> {
+        let chunk: Value = match serde_json::from_str(payload) {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                debug!(
+                    chat_direction = "response",
+                    reason = "malformed SSE frame",
+                    error = %err
+                );
+                return Ok(());
+            }
+        };
+
+        // A provider can report a mid-stream failure as its own frame
+        // (`data: {"error": {...}}`) instead of a non-2xx status - the same
+        // shape `error_message_from_value` already handles for a plain JSON
+        // response. This frame has no `choices` array, so without this
+        // check `DeltaAggregator::apply`'s early return would treat it as
+        // an empty heartbeat, and the caller would see a stall or a
+        // truncated answer instead of the real failure.
+        if let Some(message) = error_message_from_value(&chunk) {
+            let err = ApiError {
+                status: None,
+                retry_after: None,
+                message,
+            };
+            return Err(Self::wrap_stream_error(err.into(), *delta_sent));
+        }
+
+        if let Some(text) = aggregator.apply(&chunk) {
+            *delta_sent = true;
+            on_delta(&text);
+        }
+        Ok(())
+    }
+
     async fn await_with_cancel<F, T, E>(
         future: F,
         cancel_check: Option<&dyn Fn() -> bool>,
@@ -437,6 +796,15 @@ impl ChatGptClient {
         {
             map.insert("prompt_cache_key".into(), json!(key));
         }
+        if options.stream && supported("stream") {
+            map.insert("stream".into(), json!(true));
+            // Without this the provider omits `usage` from the final chunk,
+            // which starves the turn-budget and summarization-trigger
+            // accounting that reads it (`chatgpt.rs::should_summarize`).
+            if supported("stream_options") {
+                map.insert("stream_options".into(), json!({ "include_usage": true }));
+            }
+        }
 
         debug!(
             chat_direction = "request",
@@ -444,7 +812,8 @@ impl ChatGptClient {
             message_count = messages.len(),
             tool_count = options.tools.as_ref().map(|t| t.len()).unwrap_or(0),
             temperature = ?final_temperature,
-            max_tokens = ?options.max_tokens
+            max_tokens = ?options.max_tokens,
+            stream = options.stream
         );
 
         body
@@ -737,6 +1106,95 @@ mod tests {
     }
 
     #[test]
+    fn build_body_adds_stream_and_stream_options_when_requested() {
+        let client = client();
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new().with_stream(true),
+        );
+
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn build_body_omits_stream_fields_by_default() {
+        let client = client();
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new(),
+        );
+
+        assert!(body.get("stream").is_none());
+        assert!(body.get("stream_options").is_none());
+    }
+
+    /// A server that answers `stream_options` with a 400 must keep streaming
+    /// the reply, just without usage - not fall all the way back to a single
+    /// non-streaming response.
+    #[test]
+    fn build_body_drops_only_stream_options_once_the_endpoint_rejects_it() {
+        let client = client();
+        client.remember_unsupported("stream_options");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new().with_stream(true),
+        );
+
+        assert_eq!(body["stream"], true);
+        assert!(body.get("stream_options").is_none());
+    }
+
+    /// A server that rejects `stream` itself degrades the whole turn to a
+    /// single non-streaming response.
+    #[test]
+    fn build_body_drops_stream_once_the_endpoint_rejects_it() {
+        let client = client();
+        client.remember_unsupported("stream");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new().with_stream(true),
+        );
+
+        assert!(body.get("stream").is_none());
+        // Dropping `stream` makes `stream_options` meaningless too, even
+        // though it was never itself rejected.
+        assert!(body.get("stream_options").is_none());
+    }
+
+    /// `"stream_options"` contains `"stream"` as a substring: an error
+    /// message naming the longer field must not be misread as naming the
+    /// shorter one, or a stream-capable server would be downgraded to a
+    /// single non-streaming response over a field it never rejected.
+    #[test]
+    fn unsupported_field_prefers_the_more_specific_stream_option_name() {
+        let body = json!({ "stream": true, "stream_options": { "include_usage": true } });
+        let err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Unrecognized request argument supplied: stream_options".into(),
+        }
+        .into();
+
+        assert_eq!(unsupported_field(&err, &body, &[]), Some("stream_options"));
+    }
+
+    #[test]
+    fn unsupported_field_matches_stream_when_only_stream_is_named() {
+        let body = json!({ "stream": true });
+        let err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "'stream' is not supported for this model".into(),
+        }
+        .into();
+
+        assert_eq!(unsupported_field(&err, &body, &[]), Some("stream"));
+    }
+
+    #[test]
     fn retry_delay_retries_429_and_5xx_but_not_401() {
         let too_many: Error = ApiError {
             status: Some(429),
@@ -910,6 +1368,69 @@ mod tests {
             error_message_from_body("upstream exploded", StatusCode::BAD_GATEWAY),
             "upstream exploded"
         );
+    }
+
+    /// A provider can report a mid-stream failure as its own SSE frame
+    /// (`data: {"error": {...}}`) rather than a non-2xx status. Without a
+    /// dedicated check this frame has no `choices` array, so
+    /// `DeltaAggregator::apply`'s early return would silently swallow it as
+    /// an empty heartbeat instead of surfacing the failure.
+    #[test]
+    fn apply_stream_payload_surfaces_an_in_band_error_frame() {
+        let mut aggregator = DeltaAggregator::new();
+        let mut delta_sent = false;
+        let mut deltas = Vec::new();
+
+        let result = ChatGptClient::apply_stream_payload(
+            r#"{"error":{"message":"content policy violation"}}"#,
+            &mut aggregator,
+            &mut delta_sent,
+            &mut |text| deltas.push(text.to_string()),
+        );
+
+        match result {
+            Err(StreamError::BeforeFirstDelta(err)) => {
+                assert!(err.to_string().contains("content policy violation"));
+            }
+            other => panic!("expected an in-band error to be surfaced, got {other:?}"),
+        }
+        assert!(deltas.is_empty());
+    }
+
+    /// The same error arriving after content has already streamed must not
+    /// be retried - some of the answer is already on the screen.
+    #[test]
+    fn apply_stream_payload_in_band_error_after_a_delta_is_not_retryable() {
+        let mut aggregator = DeltaAggregator::new();
+        let mut delta_sent = true;
+        let mut deltas = Vec::new();
+
+        let result = ChatGptClient::apply_stream_payload(
+            r#"{"error":{"message":"backend overloaded"}}"#,
+            &mut aggregator,
+            &mut delta_sent,
+            &mut |text| deltas.push(text.to_string()),
+        );
+
+        assert!(matches!(result, Err(StreamError::AfterFirstDelta(_))));
+    }
+
+    #[test]
+    fn apply_stream_payload_forwards_a_normal_delta() {
+        let mut aggregator = DeltaAggregator::new();
+        let mut delta_sent = false;
+        let mut deltas = Vec::new();
+
+        let result = ChatGptClient::apply_stream_payload(
+            r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}"#,
+            &mut aggregator,
+            &mut delta_sent,
+            &mut |text| deltas.push(text.to_string()),
+        );
+
+        assert!(result.is_ok());
+        assert!(delta_sent);
+        assert_eq!(deltas, vec!["hi".to_string()]);
     }
 
     #[test]

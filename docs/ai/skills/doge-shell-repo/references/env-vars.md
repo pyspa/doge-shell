@@ -26,7 +26,7 @@
 | 変数 | 定義位置 | 用途 |
 |---|---|---|
 | `AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` / `AI_CHAT_MODEL` / `AI_CHAT_TIMEOUT_SECS` / `AI_CHAT_ALLOW_INSECURE_HTTP` | `dsh-openai/src/config.rs` | プロバイダ設定。`OPENAI_*` は legacy alias |
-| `AI_SUMMARY_MODEL` / `AI_CHAT_CONTEXT_TOKEN_BUDGET` / `AI_CHAT_TURN_TOKEN_BUDGET` / `AI_MESSAGE_LANG` / `CHAT_PROMPT` | `dsh-builtin/src/chatgpt.rs` | `!` チャットの会話管理と応答言語 |
+| `AI_SUMMARY_MODEL` / `AI_CHAT_CONTEXT_TOKEN_BUDGET` / `AI_CHAT_TURN_TOKEN_BUDGET` / `AI_MESSAGE_LANG` / `CHAT_PROMPT` / `AI_CHAT_STREAM` | `dsh-builtin/src/chatgpt.rs` | `!` チャットの会話管理・応答言語・逐次表示の有効/無効（既定 on） |
 | `AI_CHAT_SESSION_TTL_SECS` | `dsh-builtin/src/chatgpt/session.rs` | 連続する `!` が会話を共有する時間。`0` で無効 |
 | `AI_CHAT_EXECUTE_ALLOWLIST` / `DSH_EXECUTE_TOOL_CONFIG` | `dsh-builtin/src/chatgpt/tool/execute.rs` | `execute` ツールの allowlist と JSON 設定の置き場所 |
 | `SAFETY_LEVEL` | `dsh-types/src/safety_policy.rs` | 起動時に `policy_state.safety_level` へ seed される。**単一ソースは policy_state のほう**、変数は表示用 |

@@ -1263,6 +1263,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
+   | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
    | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dsh/openai-execute-tool.json` |
    | `DSH_EXECUTE_TOOL_CONFIG` | `~/.config/dsh/openai-execute-tool.json` | Path of that JSON allowlist file |
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |

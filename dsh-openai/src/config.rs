@@ -18,7 +18,11 @@ const ALLOW_INSECURE_HTTP_ENV: &str = "AI_CHAT_ALLOW_INSECURE_HTTP";
 /// a minute, so the old fixed 60s cut long answers off mid-flight.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 180;
 const MIN_TIMEOUT_SECS: u64 = 5;
-const MAX_TIMEOUT_SECS: u64 = 1800;
+/// Ceiling `AI_CHAT_TIMEOUT_SECS` clamps to, and also the hard cap a
+/// streaming request's per-request timeout override uses in `client.rs`:
+/// a stream can legitimately outlast one non-streaming turn's budget, but
+/// still needs a bound.
+pub(crate) const MAX_TIMEOUT_SECS: u64 = 1800;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiConfig {

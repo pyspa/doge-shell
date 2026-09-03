@@ -1596,7 +1596,13 @@ impl<'a> Repl<'a> {
         );
 
         let ctx = Context::new_safe(getpid(), getpid(), true);
+        // Unlike the `!` prefix path in `eval_str`, nothing on this route
+        // disables raw mode before the chat call - streaming's incremental
+        // `write_stdout` calls need cooked mode for their newlines to land
+        // as real line breaks instead of a staircase.
+        let raw_mode_pause = terminal_state::RawModePause::new();
         execute_chat_message(&ctx, &mut *self.shell, &message, None);
+        drop(raw_mode_pause);
 
         self.state.last_status = exit_code;
         self.state.last_command_string = command;

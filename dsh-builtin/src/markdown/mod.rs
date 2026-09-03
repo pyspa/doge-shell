@@ -1,6 +1,8 @@
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use thiserror::Error;
 
+pub mod stream;
+
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_BOLD: &str = "\x1b[1m";
 const ANSI_ITALIC: &str = "\x1b[3m";
@@ -62,7 +64,6 @@ pub fn render_markdown_with_fallback(input: &str) -> String {
     }
 }
 
-#[derive(Default)]
 struct TerminalRenderer {
     buffer: String,
     style_stack: Vec<InlineStyle>,
@@ -70,6 +71,25 @@ struct TerminalRenderer {
     pending_newlines: usize,
     start_of_line: bool,
     wrote_anything: bool,
+}
+
+impl Default for TerminalRenderer {
+    fn default() -> Self {
+        Self {
+            buffer: String::new(),
+            style_stack: Vec::new(),
+            list_stack: Vec::new(),
+            pending_newlines: 0,
+            // Nothing has been written yet, so the (not yet started) line is
+            // empty - `#[derive(Default)]` would leave this `false`, and
+            // `start_list_item` reads "not at the start of a line" as "write
+            // a newline to end the previous one", pushing a spurious blank
+            // line before a document (or, once Markdown is rendered block by
+            // block for streaming, a block) that begins with a list.
+            start_of_line: true,
+            wrote_anything: false,
+        }
+    }
 }
 
 impl TerminalRenderer {
@@ -576,5 +596,21 @@ mod tests {
         let input = "broken\0markdown";
         let output = render_markdown_with_fallback(input);
         assert_eq!(output, input);
+    }
+
+    /// A document consisting only of a list has nothing before it to end a
+    /// line, so `start_of_line` must start `true`: `start_list_item` reads
+    /// "not at the start of a line" as "a previous line needs ending" and
+    /// pushes a `\n` for it. The bug this guards was reachable even without
+    /// streaming - any answer that opens with a bullet or numbered list hit
+    /// it - streaming (`markdown/stream.rs`) just made it common, once a
+    /// list-only block is rendered on its own after a preceding paragraph.
+    #[test]
+    fn a_document_starting_with_a_list_has_no_leading_blank_line() {
+        let unordered = render_markdown_with_fallback("- item one\n- item two");
+        assert!(!unordered.starts_with('\n'), "unordered: {unordered:?}");
+
+        let ordered = render_markdown_with_fallback("1. item one\n2. item two");
+        assert!(!ordered.starts_with('\n'), "ordered: {ordered:?}");
     }
 }

@@ -1194,6 +1194,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cfg-if",
+ "futures",
  "reqwest",
  "serde",
  "serde_json",

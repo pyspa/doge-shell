@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use crate::markdown::render_markdown_with_fallback;
+use crate::markdown::stream::MarkdownBlockSplitter;
 use crate::shell_capabilities::ChatToolHost;
 use dsh_openai::turn::{self, TurnOutcome, extract_message_content, interpret_response};
 use dsh_openai::{
@@ -49,6 +50,13 @@ const RECENT_BUFFER_MESSAGES_KEPT: usize = 8;
 const MIN_ELIDABLE_TOOL_CHARS: usize = 400;
 /// Cache-routing hint for providers that support it.
 const PROMPT_CACHE_KEY: &str = "dsh-chat-agent";
+/// Environment key toggling incremental Markdown rendering for `!` chat.
+///
+/// Streaming is opt-out, not opt-in: the escape hatch exists for a server
+/// whose SSE support is broken in a way `send_chat_streaming`'s own
+/// fallbacks do not catch, and for anyone who prefers the old
+/// print-once-at-the-end behavior.
+const STREAM_KEY: &str = "AI_CHAT_STREAM";
 
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
@@ -455,6 +463,19 @@ fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+/// Whether `!` chat should stream its answer as it is generated.
+///
+/// Default on: `0` / `false` / `off` / `no` (case-insensitive) opt out.
+fn resolve_stream_enabled(proxy: &mut dyn ShellProxy) -> bool {
+    match resolve_setting(proxy, STREAM_KEY) {
+        None => true,
+        Some(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
+    }
+}
+
 /// Ceiling on what one turn may spend, or `None` when unset.
 ///
 /// `MAX_TOOL_ITERATIONS` bounds the number of steps, not their cost: a hundred
@@ -515,6 +536,9 @@ pub fn execute_chat_message(
             // `mcp status` and the agent describe the same connections.
             let mcp_manager = proxy.agent_mcp_manager();
 
+            let stream_enabled = resolve_stream_enabled(proxy);
+            let mut sink = stream_enabled.then(|| StreamSink::new(ctx));
+
             match chat_with_tools(
                 &client,
                 message,
@@ -523,12 +547,26 @@ pub fn execute_chat_message(
                 Some(0.1),
                 model_override,
                 &mcp_manager,
+                sink.as_mut(),
                 proxy,
             ) {
                 Ok(res) => {
-                    let rendered = render_markdown_with_fallback(res.trim());
-                    let trimmed = rendered.trim_end_matches('\n');
-                    ctx.write_stdout(trimmed).ok();
+                    // Already on the screen: streaming rendered this same
+                    // text (the final iteration's content, unchanged) block
+                    // by block as it arrived. This must be the *last*
+                    // iteration's own flag, not "did any earlier iteration
+                    // stream something" - a per-request fallback can leave
+                    // an interim round streamed but the round that produced
+                    // `res` un-streamed, and `wrote_any` alone would then
+                    // skip printing the answer entirely.
+                    let already_shown = sink
+                        .as_ref()
+                        .is_some_and(StreamSink::streamed_this_iteration);
+                    if !already_shown {
+                        let rendered = render_markdown_with_fallback(res.trim());
+                        let trimmed = rendered.trim_end_matches('\n');
+                        ctx.write_stdout(trimmed).ok();
+                    }
                     ExitStatus::ExitedWith(0)
                 }
                 Err(err) if err == CANCELLED_MESSAGE => ExitStatus::ExitedWith(1),
@@ -644,6 +682,7 @@ fn chat_with_tools(
     temperature: Option<f64>,
     model_override: Option<String>,
     mcp_manager: &Arc<RwLock<McpManager>>,
+    mut stream_sink: Option<&mut StreamSink>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
     // Build System Prompt (fixed for the session)
@@ -730,9 +769,37 @@ fn chat_with_tools(
             .with_temperature(temperature)
             .with_model(model_override.clone())
             .with_tools(Some(tools.clone()))
-            .with_prompt_cache_key(Some(PROMPT_CACHE_KEY.to_string()));
+            .with_prompt_cache_key(Some(PROMPT_CACHE_KEY.to_string()))
+            .with_stream(stream_sink.is_some());
 
-        let response = {
+        let response = if let Some(sink) = stream_sink.as_deref_mut() {
+            sink.begin_iteration();
+            let spinner = SpinnerGuard::start("");
+            let result = client.send_chat_streaming(
+                &current_messages,
+                &options,
+                Some(&|| proxy.is_canceled()),
+                &mut |text| sink.on_delta(&spinner, text),
+            );
+            match result {
+                Ok(response) => {
+                    sink.finish_iteration(&spinner);
+                    response
+                }
+                Err(err) => {
+                    // Whatever streamed before the failure (a dropped
+                    // connection, a mid-stream error frame) is already
+                    // generated - flush it instead of losing the tail end
+                    // of a partial answer the user never gets to see.
+                    sink.finish_iteration(&spinner);
+                    break Err(if is_ctrl_c_cancelled(&err) {
+                        err.to_string()
+                    } else {
+                        format!("chat: {err}")
+                    });
+                }
+            }
+        } else {
             let _spinner = SpinnerGuard::start("");
             match client.send_chat(&current_messages, &options, Some(&|| proxy.is_canceled())) {
                 Ok(response) => response,
@@ -758,9 +825,16 @@ fn chat_with_tools(
             Err(err) => break Err(format!("chat: {err}")),
         };
 
+        // Streamed this round's text already appeared as rendered Markdown
+        // blocks; a response that fell back to non-streaming (or streaming
+        // is off) still owes the old dim interim-text line.
+        let streamed_this_round = stream_sink
+            .as_deref()
+            .is_some_and(StreamSink::streamed_this_iteration);
+
         // A run of up to MAX_TOOL_ITERATIONS steps is otherwise a black box:
         // show the plan the model states alongside its tool calls.
-        if let Some(text) = &turn.interim_text {
+        if !streamed_this_round && let Some(text) = &turn.interim_text {
             eprintln!("\x1b[2m{}\x1b[0m", text.trim());
         }
 
@@ -799,9 +873,16 @@ fn chat_with_tools(
                 finish_reason,
                 partial,
             } => {
+                // Already on the screen for this round; showing it again in
+                // the error would duplicate it.
+                let partial = if streamed_this_round {
+                    None
+                } else {
+                    partial.as_deref()
+                };
                 break Err(format!(
                     "chat: {}",
-                    turn::describe_cut(&finish_reason, partial.as_deref())
+                    turn::describe_cut(&finish_reason, partial)
                 ));
             }
             TurnOutcome::Stalled => {
@@ -845,7 +926,10 @@ struct SpinnerGuard {
 impl SpinnerGuard {
     fn start(message: &str) -> Self {
         let progress = ProgressBar::new_spinner();
-        let style = ProgressStyle::with_template("{spinner} {msg}")
+        // `wide_msg` (rather than `msg`) elides the message to fit the
+        // remaining terminal width, so a long in-progress preview
+        // (`set_tail`) cannot wrap the spinner onto a second line.
+        let style = ProgressStyle::with_template("{spinner} {wide_msg}")
             .unwrap_or_else(|_| ProgressStyle::default_spinner())
             .tick_chars("-\\|/");
         progress.set_style(style);
@@ -853,11 +937,111 @@ impl SpinnerGuard {
         progress.enable_steady_tick(Duration::from_millis(80));
         SpinnerGuard { progress }
     }
+
+    /// Hide the spinner line, run `f`, then let it resume drawing.
+    ///
+    /// `indicatif` owns the bottom line while ticking; writing to stdout
+    /// during that window without this would land the write in the middle
+    /// of the spinner's own redraw.
+    fn suspend<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.progress.suspend(f)
+    }
+
+    /// Show a single-line preview of text still generating.
+    fn set_tail(&self, text: &str) {
+        let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.progress.set_message(collapsed);
+    }
 }
 
 impl Drop for SpinnerGuard {
     fn drop(&mut self) {
         self.progress.finish_and_clear();
+    }
+}
+
+/// Streams one `!` chat turn's answer to the terminal as it arrives, instead
+/// of waiting for the whole turn to finish.
+///
+/// Confirmed Markdown blocks ([`MarkdownBlockSplitter`]) are rendered and
+/// written the moment they are safe to render (see that type's docs for why
+/// that moment is safe); the unconfirmed remainder is shown as a raw preview
+/// on the spinner's status line. This mirrors what `execute_chat_message`
+/// already does for a complete answer - `render_markdown_with_fallback`
+/// then `ctx.write_stdout` - just spread across many smaller calls instead
+/// of one, so the total bytes written for a turn are the same either way.
+struct StreamSink<'a> {
+    ctx: &'a Context,
+    splitter: MarkdownBlockSplitter,
+    /// Set once anything has been written this turn (any iteration).
+    wrote_any: bool,
+    /// Reset at the start of each iteration by [`Self::begin_iteration`];
+    /// tells the caller whether *this* iteration's response streamed
+    /// anything, since a per-round fallback to a non-streaming response can
+    /// happen even when the sink itself is active for the whole turn.
+    streamed_this_iteration: bool,
+}
+
+impl<'a> StreamSink<'a> {
+    fn new(ctx: &'a Context) -> Self {
+        Self {
+            ctx,
+            splitter: MarkdownBlockSplitter::new(),
+            wrote_any: false,
+            streamed_this_iteration: false,
+        }
+    }
+
+    fn streamed_this_iteration(&self) -> bool {
+        self.streamed_this_iteration
+    }
+
+    /// Call once before each `send_chat_streaming` attempt.
+    fn begin_iteration(&mut self) {
+        self.streamed_this_iteration = false;
+    }
+
+    /// Feed one text delta, writing any block it completes.
+    fn on_delta(&mut self, spinner: &SpinnerGuard, text: &str) {
+        if !text.is_empty() {
+            self.streamed_this_iteration = true;
+        }
+        for block in self.splitter.push(text) {
+            self.write_block(spinner, &block);
+        }
+        spinner.set_tail(&self.splitter.pending_tail());
+    }
+
+    /// Flush whatever is left at the end of one iteration's response, and
+    /// reset for the next - a tool-call round and the answer that follows it
+    /// are separate Markdown documents, and an open list or fence from one
+    /// must not bleed into the other.
+    fn finish_iteration(&mut self, spinner: &SpinnerGuard) {
+        for block in self.splitter.finish() {
+            self.write_block(spinner, &block);
+        }
+        spinner.set_tail("");
+    }
+
+    fn write_block(&mut self, spinner: &SpinnerGuard, block: &str) {
+        let rendered = render_markdown_with_fallback(block.trim());
+        if rendered.trim().is_empty() {
+            return;
+        }
+        // `Context::write_stdout` always appends exactly one `\n`, so
+        // prefixing every block but the first with one more reproduces the
+        // single blank line `TerminalRenderer` puts between any two
+        // top-level blocks when rendering the whole answer at once.
+        let text = if self.wrote_any {
+            format!("\n{rendered}")
+        } else {
+            rendered
+        };
+        let ctx = self.ctx;
+        spinner.suspend(|| {
+            ctx.write_stdout(&text).ok();
+        });
+        self.wrote_any = true;
     }
 }
 

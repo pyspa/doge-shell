@@ -243,6 +243,20 @@ mod tests {
         } else {
             panic!("Expected table from table-select");
         }
+
+        // (table-sum table "name") on a non-numeric column must error, the
+        // same way table-avg/table-min/table-max already do -- not silently
+        // return 0 as if the column summed to nothing.
+        let expr_sum = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("table-sum")),
+                result,
+                Value::String("name".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(eval(env.clone(), &expr_sum).is_err());
     }
 
     #[test]

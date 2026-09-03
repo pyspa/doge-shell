@@ -27,6 +27,7 @@ reqwest = { workspace = true, features = ["blocking"] }
 sysinfo.workspace = true
 crossterm.workspace = true
 tempfile = "3.8"
+rust-embed = "8.5"
 
 getopts = "0.2"
 regex = "1.11"

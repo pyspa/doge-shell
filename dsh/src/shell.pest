@@ -98,9 +98,18 @@ assignment_list     =  { assignment ~ (sp+ ~ assignment)* }
 simple_command      =  { sp* ~ (assignment_list ~ (sp+ ~ argv0 ~ args*)? | argv0 ~ args*) }
 simple_command_bg   =  { simple_command ~ sp* ~ background_op }
 pipe_command        =  { pipeline_op ~ sp* ~ (simple_command_bg | simple_command) ~ sp* }
-struct_pipe_command =  { struct_pipe_op ~ sp* ~ lisp_expr ~ sp* }
+struct_pipe_command =  { struct_pipe_op ~ sp* ~ (lisp_expr | struct_pipe_dsl) ~ sp* }
 lisp_expr           =  { "(" ~ lisp_inner* ~ ")" }
 lisp_inner          = _{ !(")" | "(") ~ ANY | lisp_expr }
+// The `|:` structured-pipe DSL (`where cpu > 5 | select pid`), tried only
+// after `lisp_expr` fails. Runs to the end of the statement so it can use a
+// bare `|` as its own stage separator; quoted spans are skipped whole so a
+// `;` or `|` inside a value doesn't end the DSL early. Desugared to Lisp in
+// `dsh/src/shell/struct_pipe.rs`, not interpreted by the grammar itself.
+struct_pipe_dsl_quoted = _{ ("\"" ~ (!"\"" ~ ANY)* ~ "\"") | ("\'" ~ (!"\'" ~ ANY)* ~ "\'") }
+struct_pipe_dsl        = @{
+    (struct_pipe_dsl_quoted | (!(NEWLINE | ";" | "&&" | "||" | "|>" | "|:") ~ ANY))+
+}
 capture_suffix      =  { sp* ~ capture_op }
 command             =  { (sp* ~ simple_command_bg | simple_command)* ~ sp* ~ (struct_pipe_command | pipe_command)* ~ capture_suffix? }
 commands            =  { (sp* ~ command) ~ (command_list_sep ~ sp* ~ command)* }

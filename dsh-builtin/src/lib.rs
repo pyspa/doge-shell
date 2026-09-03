@@ -39,6 +39,7 @@ mod safe_run;
 mod safety_policy;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
+mod atomic_write;
 mod bookmark;
 pub mod capability;
 pub mod command_timing;
@@ -62,6 +63,7 @@ pub mod lisp;
 mod mcp;
 mod notebook_play;
 mod out;
+pub mod output_gen;
 pub mod procs;
 pub mod project;
 pub mod project_context;
@@ -666,6 +668,14 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
             comp_gen::command,
             comp_gen::command_async,
             comp_gen::description(),
+        ),
+    );
+    builtin.insert(
+        "output-gen",
+        BuiltinSpec::new_async(
+            output_gen::command,
+            output_gen::command_async,
+            output_gen::description(),
         ),
     );
 

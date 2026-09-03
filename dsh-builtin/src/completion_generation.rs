@@ -1,7 +1,5 @@
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
-use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -90,44 +88,7 @@ impl CompletionGenerationService {
         let value = Self::validate_json(json, expected_command)?;
         let formatted = serde_json::to_string_pretty(&value)
             .context("Failed to format completion JSON for writing")?;
-        let parent = output_path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).with_context(|| {
-            format!(
-                "Failed to create completion directory '{}'",
-                parent.display()
-            )
-        })?;
-
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
-            format!(
-                "Failed to create a temporary completion file in '{}'",
-                parent.display()
-            )
-        })?;
-        temporary
-            .write_all(formatted.as_bytes())
-            .context("Failed to write temporary completion file")?;
-        temporary
-            .as_file()
-            .sync_all()
-            .context("Failed to flush temporary completion file")?;
-
-        if force {
-            temporary
-                .persist(output_path)
-                .map_err(|error| error.error)?;
-        } else {
-            temporary
-                .persist_noclobber(output_path)
-                .map_err(|error| error.error)
-                .with_context(|| {
-                    format!(
-                        "Completion file already exists: {}. Use --force to overwrite",
-                        output_path.display()
-                    )
-                })?;
-        }
-        Ok(())
+        crate::atomic_write::write_atomic(output_path, &formatted, force, "completion")
     }
 }
 

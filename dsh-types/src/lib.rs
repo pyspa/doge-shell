@@ -22,6 +22,7 @@ pub mod notebook;
 pub mod observed_output;
 pub mod output_history;
 pub mod output_schema;
+pub mod output_text;
 pub mod placeholder;
 pub mod project;
 pub mod quick_fix;

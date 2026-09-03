@@ -925,6 +925,26 @@ mod tests {
         );
     }
 
+    /// `output-gen` is the opposite of the plain-command case above: it
+    /// actually runs its `<command...>` argument as a real subprocess to
+    /// sample its output, so `rm` inside it must be judged like `rm` would
+    /// be judged if typed directly, not left as an inert argument to a
+    /// command with no rule of its own.
+    #[test]
+    fn output_gen_looks_through_to_the_command_it_will_actually_run() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        assert!(matches!(
+            guard.check_jobs(&[mock_job("output-gen rm -rf /")], &level, &[]),
+            SafetyResult::Confirm(msg) if msg.contains("High Risk")
+        ));
+        assert_eq!(
+            guard.check_jobs(&[mock_job("output-gen ps aux")], &level, &[]),
+            SafetyResult::Allowed
+        );
+    }
+
     #[test]
     fn test_pipeline_check_safe() {
         let guard = SafetyGuard::new();

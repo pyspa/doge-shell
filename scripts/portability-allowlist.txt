@@ -14,6 +14,8 @@ dsh-builtin/src/chatgpt/mcp/mod.rs	/usr/bin/node
 dsh-builtin/src/chatgpt/tool/execute.rs	/usr/bin/env
 dsh-builtin/src/chatgpt/tool/read.rs	/etc/passwd
 dsh-builtin/src/completion_generation.rs	/bin/git
+dsh-builtin/src/output_gen.rs	/sbin/init
+dsh-types/src/output_text.rs	/sbin/init
 dsh/src/command_timing.rs	/usr/bin/ls
 dsh/src/completion/commands.rs	/usr/bin/ls
 dsh/src/completion/dynamic.rs	/System/Library/Filesystems

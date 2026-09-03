@@ -1258,6 +1258,115 @@ fn parse_struct_pipe_mixed_with_regular_pipe() {
 }
 
 #[test]
+fn parse_struct_pipe_dsl_simple() {
+    init();
+    let pairs = ShellParser::parse(Rule::command, "ps aux |: where cpu > 5")
+        .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let mut found_dsl = false;
+        for inner_pair in pair.into_inner() {
+            if let Rule::struct_pipe_command = inner_pair.as_rule() {
+                for dsl_pair in inner_pair.into_inner() {
+                    if let Rule::struct_pipe_dsl = dsl_pair.as_rule() {
+                        found_dsl = true;
+                        assert_eq!("where cpu > 5", dsl_pair.as_str());
+                    }
+                }
+            }
+        }
+        assert!(found_dsl, "Expected struct_pipe_dsl");
+    }
+}
+
+#[test]
+fn parse_struct_pipe_dsl_uses_bare_pipe_as_stage_separator() {
+    init();
+    // The `|` inside the DSL is not a shell `pipe_command`: it's swallowed
+    // whole by `struct_pipe_dsl`, which only stops at `;`/`&&`/`||`/`|>`/`|:`.
+    let pairs = ShellParser::parse(
+        Rule::command,
+        "ps aux |: where cpu > 5 | select pid command | head 3",
+    )
+    .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        assert_eq!(Rule::command, pair.as_rule());
+        let count = pair.clone().into_inner().count();
+        assert_eq!(2, count, "expected simple_command + struct_pipe_command");
+        for inner_pair in pair.into_inner() {
+            match inner_pair.as_rule() {
+                Rule::pipe_command => panic!("bare '|' inside the DSL must not become a pipe"),
+                Rule::struct_pipe_command => {
+                    let text = inner_pair.as_str();
+                    assert!(text.contains("select pid command"));
+                    assert!(text.contains("head 3"));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn parse_struct_pipe_dsl_stops_at_statement_terminators() {
+    init();
+    for input in [
+        "ps aux |: where cpu > 5 ; echo done",
+        "ps aux |: where cpu > 5 && echo done",
+        "ps aux |: where cpu > 5 || echo done",
+    ] {
+        let pairs =
+            ShellParser::parse(Rule::commands, input).unwrap_or_else(|e| panic!("{input}: {e}"));
+        let mut command_count = 0;
+        for pair in pairs {
+            assert_eq!(Rule::commands, pair.as_rule());
+            for inner_pair in pair.into_inner() {
+                if let Rule::command = inner_pair.as_rule() {
+                    command_count += 1;
+                    if command_count == 1 {
+                        assert!(!inner_pair.as_str().contains("echo"));
+                    }
+                }
+            }
+        }
+        assert_eq!(2, command_count, "{input}: expected two commands");
+    }
+}
+
+#[test]
+fn parse_struct_pipe_dsl_chain() {
+    init();
+    let pairs = ShellParser::parse(Rule::command, "ps aux |: where cpu > 5 |: count")
+        .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        let count = pair.clone().into_inner().count();
+        assert_eq!(3, count); // simple_command + 2 struct_pipe_commands
+    }
+}
+
+#[test]
+fn parse_struct_pipe_malformed_lisp_falls_through_to_dsl() {
+    init();
+    // Unbalanced parens: `lisp_expr` fails, so this becomes `struct_pipe_dsl`
+    // text (and `struct_pipe::desugar` rejects it at eval time with a clear
+    // "starts with '(' but never balances" error instead of the previous
+    // silent "ignored unparsed input" warning).
+    let pairs = ShellParser::parse(Rule::command, "echo hi |: (table-head $_ 3")
+        .unwrap_or_else(|e| panic!("{}", e));
+    for pair in pairs {
+        for inner_pair in pair.into_inner() {
+            if let Rule::struct_pipe_command = inner_pair.as_rule() {
+                for dsl_pair in inner_pair.into_inner() {
+                    if let Rule::struct_pipe_dsl = dsl_pair.as_rule() {
+                        assert!(dsl_pair.as_str().starts_with('('));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_expand_braces() {
     use super::expansion::expand_braces;
 

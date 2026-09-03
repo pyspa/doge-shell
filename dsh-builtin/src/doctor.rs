@@ -392,6 +392,12 @@ fn check_setup(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path, fi
         fix,
     );
     ensure_setup_dir(ctx, &config_root.join("completions"), "completion-dir", fix);
+    ensure_setup_dir(
+        ctx,
+        &config_root.join("output-schemas"),
+        "output-schema-dir",
+        fix,
+    );
     ensure_config_file(ctx, &crate::config_paths::config_file("config.lisp"), fix);
 
     let api_key = proxy
@@ -1447,6 +1453,16 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
             packages.insert("dsh-types");
         }
 
+        // `output-schemas/` is embedded the same way (rust-embed), and
+        // `command-output-schema.json` mirrors it for `|:`'s output schemas.
+        if text.starts_with("output-schemas/") {
+            packages.insert("doge-shell");
+        }
+        if text == "command-output-schema.json" {
+            packages.insert("doge-shell");
+            packages.insert("dsh-types");
+        }
+
         if text.starts_with("dsh-builtin/") {
             packages.insert("dsh-builtin");
         } else if text.starts_with("dsh-openai/") {
@@ -1994,6 +2010,25 @@ mod tests {
 
         let commands =
             validation_commands_for_paths(&[PathBuf::from("command-completion-schema.json")]);
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"));
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p dsh-types"));
+    }
+
+    /// `output-schemas/*.json` is embedded the same way `completions/` is,
+    /// and `command-output-schema.json` mirrors `command-completion-schema.json`.
+    #[test]
+    fn output_schemas_map_to_the_embedding_package() {
+        let commands = validation_commands_for_paths(&[PathBuf::from("output-schemas/ps.json")]);
+        assert!(commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"));
+        assert!(
+            !commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-portability.py"),
+            "{commands:?}"
+        );
+
+        let commands =
+            validation_commands_for_paths(&[PathBuf::from("command-output-schema.json")]);
         assert!(commands.iter().any(|cmd| cmd == "cargo test -p doge-shell"));
         assert!(commands.iter().any(|cmd| cmd == "cargo test -p dsh-types"));
     }

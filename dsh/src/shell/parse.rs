@@ -652,22 +652,43 @@ fn parse_jobs(
                 }
             }
             Rule::struct_pipe_command => {
-                // Extract Lisp expression from struct_pipe_command
-                // The rule is: struct_pipe_command = { struct_pipe_op ~ sp* ~ lisp_expr ~ sp* }
+                // The rule is:
+                // struct_pipe_command = { struct_pipe_op ~ sp* ~ (lisp_expr | struct_pipe_dsl) ~ sp* }
+                // `lisp_expr` is the original `(...)` form and is used as-is;
+                // `struct_pipe_dsl` is the `where ... | select ...` shorthand
+                // and is desugared to an equivalent S-expression before it
+                // joins the same `struct_pipe_exprs` chain.
                 for inner_pair in inner_pair.into_inner() {
-                    if let Rule::lisp_expr = inner_pair.as_rule() {
-                        let lisp_expr = inner_pair.as_str().to_string();
-                        debug!("Found struct_pipe Lisp expression: {}", lisp_expr);
-
-                        // Add to last job's struct_pipe_exprs or create new job
-                        if let Some(job) = jobs.last_mut() {
-                            job.struct_pipe_exprs.push(lisp_expr);
-                        } else {
-                            let mut job = Job::new(job_str.clone(), shell.pgid);
-                            job.job_id = shell.get_next_job_id();
-                            job.struct_pipe_exprs.push(lisp_expr);
-                            jobs.push(job);
+                    let lisp_expr = match inner_pair.as_rule() {
+                        Rule::lisp_expr => {
+                            let expr = inner_pair.as_str().to_string();
+                            debug!("Found struct_pipe Lisp expression: {}", expr);
+                            expr
                         }
+                        Rule::struct_pipe_dsl => {
+                            // A desugar failure becomes a runtime-only error
+                            // (see `desugar_or_error_call`'s doc) rather than
+                            // a `?`-propagated `Result::Err` here: this loop
+                            // shares `jobs` with every other command already
+                            // parsed on the same `;`/`&&`/`||`-joined line,
+                            // and an early return would discard all of them
+                            // over a typo in just this one `|:` stage.
+                            let dsl = inner_pair.as_str();
+                            let expr = super::struct_pipe::desugar_or_error_call(dsl);
+                            debug!("Desugared struct_pipe DSL '{}' to: {}", dsl, expr);
+                            expr
+                        }
+                        _ => continue,
+                    };
+
+                    // Add to last job's struct_pipe_exprs or create new job
+                    if let Some(job) = jobs.last_mut() {
+                        job.struct_pipe_exprs.push(lisp_expr);
+                    } else {
+                        let mut job = Job::new(job_str.clone(), shell.pgid);
+                        job.job_id = shell.get_next_job_id();
+                        job.struct_pipe_exprs.push(lisp_expr);
+                        jobs.push(job);
                     }
                 }
             }

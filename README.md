@@ -122,13 +122,14 @@ Protection of sensitive information from history and display.
 
 ### 📊 Structured Data Pipeline
 
-Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
+Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline — turn `ps aux` or `docker ps` into a typed table without switching to a different command language.
 
-- **`|:` Operator**: The "Structured Pipe" operator allows you to process command output as structured data using Lisp expressions.
+- **`|:` Operator**: The "Structured Pipe" operator processes command output as structured data, either with a small pipeline DSL or with a raw Lisp expression.
   ```bash
+  command |: where <col> <op> <value> | select <col>... | sort [-]<col> | head [n]
   command |: (lisp-expression)
   ```
-  The command output is bound to the `$_` variable in the Lisp expression.
+  The command output is bound to the `$_` variable; the DSL desugars to the same `table-*` calls the Lisp form uses, so both are interchangeable, and `|` inside a `|:` stage is the DSL's own separator, not a shell pipe.
 
 - **Declarative Output Schemas**: For known commands (`ps`, `ls -l`, `df`,
   `free`, `docker ps`/`images`, `git log`/`status`, `kubectl get`), `|:`
@@ -137,12 +138,23 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
   `~/.config/dsh/output-schemas/` overrides, meta schema in
   `command-output-schema.json`), so `%CPU` is a number and `-h` sizes are
   bytes (unsuffixed `df`/`free` columns keep their native units and say so in
-  the column name, e.g. `avail_1k`, `total_kib`):
+  the column name, e.g. `avail_1k`, `total_kib`). `output-gen <command...>`
+  generates a new schema by running the command, sampling its real output,
+  and asking the AI to describe how to parse it — the result is always
+  re-parsed against that same sample before being saved, so a schema that
+  can't parse its own output is never trusted:
   ```bash
-  # $_ is already a table with typed columns
+  output-gen systemctl list-units          # generate + verify + save
+  output-gen --check systemctl list-units  # re-verify a saved schema, no AI call
+  output-gen --audit                       # validate every schema's shape
+  ```
+  ```bash
+  # DSL and S-expression are equivalent
+  ps aux |: where cpu > 50
   ps aux |: (table-where-cmp $_ "cpu" ">" 50)
-  ls -l |: (table-order-by $_ "size" :desc)
-  docker ps |: (table-where-contains $_ "Status" "Up")
+
+  ls -l |: sort -size
+  docker ps |: where status contains Up
   ```
   Where a machine-readable mode exists, the schema injects it (`docker ps`
   runs with `--format '{{json .}}'`, `kubectl get` with `-o json`) so parsing
@@ -155,17 +167,26 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline.
   - **CSV**: `csv-parse`, `csv-stringify`
   - **Table**: Powerful table manipulation functions
 
-- **Table Operations**:
-  - **Viewing**: `table-display` (rich terminal UI), `table-head`, `table-tail`
-  - **Filtering**: `table-where-eq`, `table-where-contains`, `table-where-cmp`
-  - **Sorting**: `table-order-by`
-  - **Transformation**: `table-select` (pick columns), `table-count`
+- **Table Operations** (Lisp function / DSL keyword):
+  - **Viewing**: `table-display` (rich terminal UI), `table-head`/`head`, `table-tail`/`tail`
+  - **Filtering**: `table-where-eq`/`is`, `table-where-ne`, `table-where-contains`/`contains`, `table-where-cmp`/`>` `>=` `<` `<=` `==` `!=` (all under `where`), `table-distinct`/`distinct`
+  - **Sorting**: `table-order-by`/`sort` (`sort -col` for descending)
+  - **Transformation**: `table-select`/`select` (pick columns), `table-rename`/`rename`, `table-count`/`count`
+  - **Aggregation**: `table-group-by`/`group-by`, `table-count-by`/`count-by`, `table-sum`/`sum`, `table-avg`/`avg`, `table-min`/`min`, `table-max`/`max`
   - **AI Integration**: `table-to-ai-context` creates an optimized context string for LLMs
+  - Column names in the DSL and in `table-where-*`/`table-order-by`/`table-select`/etc. resolve case-insensitively (`select PID` matches a `pid` column) and error with the available column names on a genuine typo, rather than silently returning nothing.
 
 - **Examples**:
   ```bash
   # View JSON as a table
   cat data.json |: (table-display (json-parse $_))
+
+  # Filter, sort, and pick columns with the DSL
+  ps aux |: where cpu > 5 | select pid user command | sort -cpu | head 10
+
+  # Who shows up most, and their total CPU
+  ps aux |: count-by user | head 5
+  ps aux |: sum cpu
 
   # Filter and Sort CSV
   cat users.csv |: (table-display \
@@ -291,6 +312,7 @@ The shell includes many built-in commands:
 | `pj`                | Jump to a project (alias for `pm jump`)                                                                                    |
 | `help`              | Show command details and search built-in commands                                                                          |
 | `comp-gen`          | Generate or audit command completion JSON (`--stdout`, `--check`, `--audit`, `--list-dynamic-providers`)                  |
+| `output-gen`        | Generate or audit `\|:` output-schemas (`--stdout`, `--force`, `--check`, `--audit`)                                       |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
 | `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state                                |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
@@ -340,6 +362,10 @@ The embedded Lisp interpreter includes many built-in functions:
 - `set-notify-config` - Configure notification behavior
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor
+
+### Table / Structured Data Functions
+
+`json-parse`, `json-stringify`, `csv-parse`, `csv-stringify`, `output-parse`, and the full `table-*` family (`table-select`, `table-head`, `table-tail`, `table-count`, `table-distinct`, `table-rename`, `table-where-eq`, `table-where-ne`, `table-where-contains`, `table-where-cmp`, `table-order-by`, `table-group-by`, `table-count-by`, `table-sum`, `table-avg`, `table-min`, `table-max`, `table-display`, `table-to-ai-context`) are the Lisp side of the `|:` structured pipe — see [Structured Data Pipeline](#-structured-data-pipeline) for usage, the DSL shorthand, and `output-gen`.
 
 ### Interactive UI Functions
 

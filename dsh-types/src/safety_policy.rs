@@ -198,9 +198,28 @@ pub fn compound_statement_keyword(program: &str) -> Option<&'static str> {
 /// `sudo rm -rf ~` classified as `sudo` - which has no rule - passed every
 /// dangerous-command check. Shared so the guard and the chat `execute` tool
 /// look through the same list.
+///
+/// `output-gen` belongs here for the same reason `env`/`xargs` do: unlike
+/// `comp-gen` (which only ever appends a fixed, harmless `--help` to its
+/// argument), `output-gen <command...>` runs the *entire* given command line
+/// as a real subprocess to sample its output. Without this, `output-gen rm
+/// -rf /` classified `output-gen` (no rule) instead of `rm`, so it ran with
+/// no confirmation at all while typing `rm -rf /` directly asks first.
 pub const COMMAND_WRAPPERS: &[&str] = &[
-    "sudo", "doas", "env", "nice", "ionice", "nohup", "time", "timeout", "command", "xargs",
-    "stdbuf", "setsid", "chroot",
+    "sudo",
+    "doas",
+    "env",
+    "nice",
+    "ionice",
+    "nohup",
+    "time",
+    "timeout",
+    "command",
+    "xargs",
+    "stdbuf",
+    "setsid",
+    "chroot",
+    "output-gen",
 ];
 
 pub fn is_command_wrapper(program: &str) -> bool {
@@ -688,6 +707,13 @@ mod tests {
         );
         // A non-wrapper is not expanded: its arguments are arguments.
         assert_eq!(programs("echo rm -rf /"), vec!["echo"]);
+        // `output-gen` actually executes its argument as a real command
+        // (unlike `comp-gen`, which only ever appends a fixed `--help`), so
+        // it must be looked through the same way `env`/`sudo` are.
+        assert_eq!(
+            programs("output-gen rm -rf /"),
+            vec!["output-gen", "rm", "/"]
+        );
     }
 
     #[test]
@@ -721,6 +747,37 @@ mod tests {
             split_command_segments("echo \"x | y\""),
             vec!["echo \"x | y\""]
         );
+    }
+
+    /// `|:` structured-pipe DSL text (`where command contains rm`) mentions
+    /// dangerous-looking words as *arguments*, never as the leading token of
+    /// a segment: splitting on the bare `|` in `|:` leaves a lone `:` in
+    /// front, and a bare `|` the DSL uses as its own stage separator (`... |
+    /// select pid`) starts the next segment with the stage keyword, not the
+    /// column value. Neither is `rm`/`sudo`/etc., so `command_candidates`
+    /// never proposes them as the program to run - this pipeline text is
+    /// never executed as a shell command at all, only fed to the Lisp
+    /// evaluator, so nothing here should read as a confirmation-worthy
+    /// program name.
+    #[test]
+    fn struct_pipe_dsl_text_never_supplies_the_checked_program() {
+        for line in [
+            "ps aux |: where command contains rm",
+            "ps aux |: where command contains rm | select pid",
+            "ps aux |: where name is sudo",
+        ] {
+            for segment in split_command_segments(line) {
+                let tokens = shell_words::split(&segment).unwrap();
+                let (program, _) = command_candidates(&tokens)
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default();
+                assert!(
+                    program != "rm" && program != "sudo",
+                    "{line:?} segment {segment:?} exposed {program:?} as the checked program"
+                );
+            }
+        }
     }
 
     #[test]

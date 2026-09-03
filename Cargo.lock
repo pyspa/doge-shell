@@ -1154,6 +1154,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rmcp",
+ "rust-embed",
  "serde",
  "serde_json",
  "shell-words",

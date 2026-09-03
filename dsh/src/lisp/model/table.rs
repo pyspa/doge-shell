@@ -500,11 +500,23 @@ impl Table {
             let a_val = a.get(column);
             let b_val = b.get(column);
 
+            // Int/Float mix (a `%CPU` column holding both `3` and `3.5`, say)
+            // used to fall through the catch-all as `Equal`, so two rows
+            // never swapped even when one was clearly bigger. Route it
+            // through the same cross-type comparison `where_cmp` uses.
             let cmp = match (a_val, b_val) {
                 (Some(Value::Int(a)), Some(Value::Int(b))) => a.cmp(b),
                 (Some(Value::Float(a)), Some(Value::Float(b))) => {
                     a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
                 }
+                (Some(Value::Int(a)), Some(Value::Float(b))) => {
+                    super::value::int_type_to_float_type(a)
+                        .partial_cmp(b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                }
+                (Some(Value::Float(a)), Some(Value::Int(b))) => a
+                    .partial_cmp(&super::value::int_type_to_float_type(b))
+                    .unwrap_or(std::cmp::Ordering::Equal),
                 (Some(Value::String(a)), Some(Value::String(b))) => a.cmp(b),
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (Some(_), None) => std::cmp::Ordering::Less,
@@ -515,6 +527,211 @@ impl Table {
         });
 
         new_table
+    }
+
+    /// Resolves a user-supplied column name against the schema: exact match
+    /// first, then case-insensitive. `None` if neither matches.
+    pub fn resolve_column(&self, name: &str) -> Option<&str> {
+        if let Some(exact) = self.columns.iter().find(|c| c.as_str() == name) {
+            return Some(exact.as_str());
+        }
+        self.columns
+            .iter()
+            .find(|c| c.eq_ignore_ascii_case(name))
+            .map(String::as_str)
+    }
+
+    /// Filters rows where the specified column does not equal the given
+    /// value. The complement of `where_eq`: a missing column also counts as
+    /// "not equal", matching `!=`'s everyday meaning.
+    pub fn where_ne(&self, column: &str, value: &Value) -> Self {
+        let mut new_table = Self::new(self.columns.clone());
+        for record in &self.rows {
+            if record.get(column) != Some(value) {
+                new_table.rows.push(record.clone());
+            }
+        }
+        new_table
+    }
+
+    /// Keeps only the first row for each distinct value of `column`, in
+    /// original order. Rows missing the column are dropped.
+    pub fn distinct(&self, column: &str) -> Self {
+        let mut seen: Vec<&Value> = Vec::new();
+        let mut new_table = Self::new(self.columns.clone());
+        for record in &self.rows {
+            let Some(value) = record.get(column) else {
+                continue;
+            };
+            if seen.contains(&value) {
+                continue;
+            }
+            seen.push(value);
+            new_table.rows.push(record.clone());
+        }
+        new_table
+    }
+
+    /// Renames a column, in the schema and in every row. A row with no
+    /// `old` field is left untouched.
+    /// Errors if `new` collides with a *different* existing column: an
+    /// unchecked rename onto an existing name would fold both columns'
+    /// values under one key in each row's `IndexMap`, discarding whichever
+    /// value was set second -- silently, since `Record::set` has no way to
+    /// report that its key already held something.
+    pub fn rename(&self, old: &str, new: &str) -> Result<Self, String> {
+        if new != old && self.columns.iter().any(|c| c == new) {
+            return Err(format!(
+                "cannot rename '{old}' to '{new}': a column named '{new}' already exists"
+            ));
+        }
+        let columns: Vec<String> = self
+            .columns
+            .iter()
+            .map(|c| if c == old { new.to_string() } else { c.clone() })
+            .collect();
+        let mut new_table = Self::new(columns);
+        for record in &self.rows {
+            let mut new_record = Record::new();
+            for (key, value) in &record.fields {
+                let key = if key == old {
+                    new.to_string()
+                } else {
+                    key.clone()
+                };
+                new_record.set(key, value.clone());
+            }
+            new_table.rows.push(new_record);
+        }
+        Ok(new_table)
+    }
+
+    /// Groups rows by the distinct values of `column`, returning a table
+    /// with columns `[column, <count column>]` -- one row per distinct
+    /// value, in first-seen order. The count column is named `"count"`
+    /// unless `column` is itself already called that, in which case a
+    /// unique variant (`"count_"`, `"count__"`, ...) is used instead --
+    /// otherwise grouping by a column literally named `count` would give
+    /// two columns the same name, and each row's `IndexMap` would silently
+    /// keep only the second `set` (the computed count, discarding the
+    /// original grouped value).
+    pub fn group_by(&self, column: &str) -> Self {
+        let mut order: Vec<Value> = Vec::new();
+        let mut counts: Vec<usize> = Vec::new();
+        for record in &self.rows {
+            let Some(value) = record.get(column) else {
+                continue;
+            };
+            match order.iter().position(|v| v == value) {
+                Some(pos) => counts[pos] += 1,
+                None => {
+                    order.push(value.clone());
+                    counts.push(1);
+                }
+            }
+        }
+
+        let mut count_column = "count".to_string();
+        while count_column == column {
+            count_column.push('_');
+        }
+
+        let mut new_table = Self::new(vec![column.to_string(), count_column.clone()]);
+        for (value, count) in order.into_iter().zip(counts) {
+            let mut record = Record::new();
+            record.set(column.to_string(), value);
+            record.set(count_column.clone(), usize_to_int_value(count));
+            new_table.rows.push(record);
+        }
+        new_table
+    }
+
+    /// `group_by` ordered by count, descending -- "what shows up most".
+    pub fn count_by(&self, column: &str) -> Self {
+        self.group_by(column).order_by("count", false)
+    }
+
+    /// Sums every numeric cell in `column` using `Value`'s own numeric `+`,
+    /// so the same `IntType`/`FloatType` promotion the rest of the language
+    /// uses applies here too (an all-integer column stays an integer sum).
+    /// Non-numeric cells are skipped; `None` if there were no numeric cells.
+    pub fn sum(&self, column: &str) -> Option<Value> {
+        let mut total: Option<Value> = None;
+        for record in &self.rows {
+            let Some(cell) = record.get(column) else {
+                continue;
+            };
+            if !matches!(cell, Value::Int(_) | Value::Float(_)) {
+                continue;
+            }
+            total = Some(match total {
+                None => cell.clone(),
+                Some(acc) => (&acc + cell).unwrap_or(acc),
+            });
+        }
+        total
+    }
+
+    /// Averages every numeric cell in `column`. `None` if there are none.
+    pub fn avg(&self, column: &str) -> Option<f64> {
+        let values: Vec<f64> = self
+            .rows
+            .iter()
+            .filter_map(|r| r.get(column))
+            .filter_map(numeric_as_f64)
+            .collect();
+        if values.is_empty() {
+            return None;
+        }
+        Some(values.iter().sum::<f64>() / values.len() as f64)
+    }
+
+    /// The row cell with the smallest numeric value in `column`, in its
+    /// original type (`min pid` stays an integer, not `42.0`).
+    pub fn min(&self, column: &str) -> Option<Value> {
+        self.numeric_extreme(column, std::cmp::Ordering::Less)
+    }
+
+    /// The row cell with the largest numeric value in `column`.
+    pub fn max(&self, column: &str) -> Option<Value> {
+        self.numeric_extreme(column, std::cmp::Ordering::Greater)
+    }
+
+    fn numeric_extreme(&self, column: &str, want: std::cmp::Ordering) -> Option<Value> {
+        let mut best: Option<(&Value, f64)> = None;
+        for record in &self.rows {
+            let Some(cell) = record.get(column) else {
+                continue;
+            };
+            let Some(n) = numeric_as_f64(cell) else {
+                continue;
+            };
+            best = match best {
+                None => Some((cell, n)),
+                Some((_, best_n)) if n.partial_cmp(&best_n) == Some(want) => Some((cell, n)),
+                some => some,
+            };
+        }
+        best.map(|(v, _)| v.clone())
+    }
+}
+
+/// A numeric cell as `f64`, for `avg`/`min`/`max` -- these don't need the
+/// exact-integer precision `where_cmp`/`order_by` preserve via `CmpValue`.
+fn numeric_as_f64(value: &Value) -> Option<f64> {
+    match CmpValue::from_value(value)? {
+        CmpValue::Int(n) => Some(super::value::int_type_to_float_type(&n)),
+        CmpValue::Float(f) => Some(f),
+    }
+}
+
+fn usize_to_int_value(n: usize) -> Value {
+    cfg_if! {
+        if #[cfg(feature = "bigint")] {
+            Value::Int(IntType::from(n))
+        } else {
+            Value::Int(n as IntType)
+        }
     }
 }
 
@@ -887,6 +1104,170 @@ mod tests {
         assert_eq!(desc.rows[0].get("n"), Some(&Value::Int(IntType::from(3))));
         assert_eq!(desc.rows[1].get("n"), Some(&Value::Int(IntType::from(2))));
         assert_eq!(desc.rows[2].get("n"), Some(&Value::Int(IntType::from(1))));
+    }
+
+    #[test]
+    fn test_table_order_by_mixed_int_and_float_cells() {
+        // Before the fix this fell into the catch-all `Equal` arm, so mixed
+        // Int/Float cells (a `%CPU` column holding both `3` and `3.5`, say)
+        // never swapped no matter how different the values were.
+        let json = r#"[{"n": 3}, {"n": 1.5}, {"n": 2}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let asc = table.order_by("n", true);
+        assert_eq!(asc.rows[0].get("n"), Some(&Value::Float(1.5)));
+        assert_eq!(asc.rows[1].get("n"), Some(&Value::Int(IntType::from(2))));
+        assert_eq!(asc.rows[2].get("n"), Some(&Value::Int(IntType::from(3))));
+    }
+
+    #[test]
+    fn test_resolve_column_is_case_insensitive() {
+        let json = r#"[{"cpu": 1}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        assert_eq!(table.resolve_column("cpu"), Some("cpu"));
+        assert_eq!(table.resolve_column("CPU"), Some("cpu"));
+        assert_eq!(table.resolve_column("missing"), None);
+    }
+
+    #[test]
+    fn test_table_where_ne() {
+        let json = r#"[{"status": "Up"}, {"status": "Down"}, {"status": "Up"}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let not_up = table.where_ne("status", &Value::String("Up".to_string()));
+        assert_eq!(not_up.len(), 1);
+        assert_eq!(
+            not_up.rows[0].get("status"),
+            Some(&Value::String("Down".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_table_distinct() {
+        let json = r#"[{"user": "a"}, {"user": "b"}, {"user": "a"}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let distinct = table.distinct("user");
+        assert_eq!(distinct.len(), 2);
+        assert_eq!(
+            distinct.rows[0].get("user"),
+            Some(&Value::String("a".to_string()))
+        );
+        assert_eq!(
+            distinct.rows[1].get("user"),
+            Some(&Value::String("b".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_table_rename() {
+        let json = r#"[{"cpu": 1}, {"cpu": 2}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let renamed = table.rename("cpu", "cpu_percent").unwrap();
+        assert_eq!(renamed.columns, vec!["cpu_percent"]);
+        assert_eq!(
+            renamed.rows[0].get("cpu_percent"),
+            Some(&Value::Int(IntType::from(1)))
+        );
+        assert_eq!(renamed.rows[0].get("cpu"), None);
+    }
+
+    #[test]
+    fn test_table_rename_onto_an_existing_column_errors_instead_of_merging() {
+        let json = r#"[{"user": "alice", "cpu": 5}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        // Without this guard, both columns would end up under one
+        // `IndexMap` key and "alice" would be lost.
+        assert!(table.rename("cpu", "user").is_err());
+
+        // Renaming a column to its own name is not a collision.
+        assert!(table.rename("cpu", "cpu").is_ok());
+    }
+
+    #[test]
+    fn test_table_group_by_and_count_by() {
+        let json = r#"[{"user": "a"}, {"user": "b"}, {"user": "a"}, {"user": "a"}, {"user": "b"}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let grouped = table.group_by("user");
+        assert_eq!(grouped.columns, vec!["user", "count"]);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(
+            grouped.rows[0].get("user"),
+            Some(&Value::String("a".to_string()))
+        );
+        assert_eq!(
+            grouped.rows[0].get("count"),
+            Some(&Value::Int(IntType::from(3)))
+        );
+
+        let counted = table.count_by("user");
+        // Descending by count: "a" (3) before "b" (2).
+        assert_eq!(
+            counted.rows[0].get("user"),
+            Some(&Value::String("a".to_string()))
+        );
+        assert_eq!(
+            counted.rows[0].get("count"),
+            Some(&Value::Int(IntType::from(3)))
+        );
+        assert_eq!(
+            counted.rows[1].get("count"),
+            Some(&Value::Int(IntType::from(2)))
+        );
+    }
+
+    #[test]
+    fn test_table_group_by_a_column_already_named_count_does_not_collide() {
+        // Without the collision guard, columns would be ["count", "count"]
+        // and each row's `set("count", computed_count)` would silently
+        // overwrite the original grouped value under the same key.
+        let json = r#"[{"count": "a"}, {"count": "b"}, {"count": "a"}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        let grouped = table.group_by("count");
+        assert_eq!(grouped.columns, vec!["count", "count_"]);
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(
+            grouped.rows[0].get("count"),
+            Some(&Value::String("a".to_string()))
+        );
+        assert_eq!(
+            grouped.rows[0].get("count_"),
+            Some(&Value::Int(IntType::from(2)))
+        );
+    }
+
+    #[test]
+    fn test_table_sum_avg_min_max() {
+        let json = r#"[{"cpu": 10}, {"cpu": 20.5}, {"cpu": 30}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        assert_eq!(table.sum("cpu"), Some(Value::Float(60.5)));
+        assert_eq!(table.avg("cpu"), Some(60.5 / 3.0));
+        assert_eq!(table.min("cpu"), Some(Value::Int(IntType::from(10))));
+        assert_eq!(table.max("cpu"), Some(Value::Int(IntType::from(30))));
+    }
+
+    #[test]
+    fn test_table_sum_all_integers_stays_integer() {
+        let json = r#"[{"n": 10}, {"n": 20}, {"n": 30}]"#;
+        let table = Table::from_json(json).unwrap();
+        assert_eq!(table.sum("n"), Some(Value::Int(IntType::from(60))));
+    }
+
+    #[test]
+    fn test_table_aggregates_on_missing_or_nonnumeric_column() {
+        let json = r#"[{"name": "a"}, {"name": "b"}]"#;
+        let table = Table::from_json(json).unwrap();
+
+        assert_eq!(table.sum("name"), None);
+        assert_eq!(table.avg("name"), None);
+        assert_eq!(table.min("name"), None);
+        assert_eq!(table.max("missing"), None);
     }
 
     #[test]

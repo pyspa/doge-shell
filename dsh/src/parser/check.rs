@@ -84,7 +84,11 @@ pub fn is_incomplete_input(input: &str) -> bool {
     // Let's implement trailing operator check carefully.
 
     let trimmed = input.trim_end();
-    if trimmed.ends_with('|') || trimmed.ends_with("&&") || trimmed.ends_with("||") {
+    if trimmed.ends_with('|')
+        || trimmed.ends_with("|:")
+        || trimmed.ends_with("&&")
+        || trimmed.ends_with("||")
+    {
         // Need to verify these are not inside comments or strings.
         // Since we already walked the string, we know if we ended in a quote.
         // But we didn't track "valid code" vs "comment".
@@ -136,5 +140,15 @@ mod tests {
         assert!(is_incomplete_input("hello &&"));
         assert!(is_incomplete_input("hello ||"));
         assert!(!is_incomplete_input("hello | world"));
+    }
+
+    #[test]
+    fn test_struct_pipe_operator() {
+        // `cmd |:` alone ends in `:`, not `|`, so it needs its own check.
+        assert!(is_incomplete_input("ps aux |:"));
+        assert!(!is_incomplete_input("ps aux |: where cpu > 5"));
+        // A trailing bare `|` inside a `|:` DSL is still a continuation, the
+        // same as an ordinary trailing pipe.
+        assert!(is_incomplete_input("ps aux |: where cpu > 5 |"));
     }
 }

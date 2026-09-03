@@ -155,6 +155,19 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["doctor", "help"],
     },
     HelpTopic {
+        name: "output-gen",
+        category: "ai",
+        summary: "Generate or check |: output-schemas (output-schemas/*.json).",
+        usage: "output-gen [--stdout] [--force] <command...> | output-gen --check <command...> | output-gen --audit [output-schema-dir]",
+        examples: &[
+            "output-gen ps aux",
+            "output-gen --check ps aux",
+            "output-gen --stdout docker ps",
+            "output-gen --audit output-schemas",
+        ],
+        related: &["comp-gen", "doctor", "help"],
+    },
+    HelpTopic {
         name: "chat_model",
         category: "ai",
         summary: "Show or set the AI chat model.",

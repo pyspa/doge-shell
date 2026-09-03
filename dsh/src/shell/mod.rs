@@ -2,6 +2,7 @@ pub mod eval;
 pub mod hooks;
 pub mod job;
 pub mod parse;
+pub mod struct_pipe;
 
 use crate::environment::Environment;
 use crate::history::{FrecencyHistory, HistoryMetadata};

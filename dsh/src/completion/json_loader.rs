@@ -925,6 +925,54 @@ mod tests {
         }
     }
 
+    /// Regression: `git push`'s subcommand entry had no `options` at all, so
+    /// `git push --<TAB>` only offered git's top-level `global_options`
+    /// (`--version`, `--bare`, ...) and never `--force-with-lease` /
+    /// `--force-if-includes`.
+    #[test]
+    fn git_push_offers_lease_protected_force_options() {
+        use crate::completion::generator::CompletionGenerator;
+        use crate::completion::parser::{CompletionContext, ParsedCommandLine};
+
+        let loader = JsonCompletionLoader::new();
+        let database = loader.load_database().expect("Failed to load database");
+        let generator = CompletionGenerator::new(&database);
+
+        let parsed = ParsedCommandLine {
+            command: "git".to_string(),
+            subcommand_path: vec!["push".to_string()],
+            raw_args: vec!["push".to_string(), "--force".to_string()],
+            args: vec![],
+            options: vec![],
+            current_token: "--force".to_string(),
+            current_arg: Some("--force".to_string()),
+            completion_context: CompletionContext::LongOption,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            cursor_index: 1,
+        };
+
+        let texts: Vec<String> = generator
+            .generate_candidates(&parsed)
+            .expect("candidate generation should succeed")
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+
+        assert!(
+            texts.contains(&"--force".to_string()),
+            "expected --force, got: {texts:?}"
+        );
+        assert!(
+            texts.contains(&"--force-with-lease".to_string()),
+            "expected --force-with-lease, got: {texts:?}"
+        );
+        assert!(
+            texts.contains(&"--force-if-includes".to_string()),
+            "expected --force-if-includes, got: {texts:?}"
+        );
+    }
+
     #[test]
     fn test_load_real_cargo_completion() {
         let loader = JsonCompletionLoader::new();

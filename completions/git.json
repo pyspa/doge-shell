@@ -263,6 +263,137 @@
             }
           }
         }
+      ],
+      "options": [
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force updates"
+        },
+        {
+          "long": "--force-with-lease",
+          "description": "Require old value of ref to be at this value"
+        },
+        {
+          "long": "--force-if-includes",
+          "description": "Require remote updates to be integrated locally"
+        },
+        {
+          "short": "-u",
+          "long": "--set-upstream",
+          "description": "Set upstream for git pull/status"
+        },
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Dry run"
+        },
+        {
+          "long": "--tags",
+          "description": "Push tags (can't be used with --all or --mirror)"
+        },
+        {
+          "long": "--follow-tags",
+          "description": "Push missing but relevant tags"
+        },
+        {
+          "long": "--all",
+          "description": "Push all branches"
+        },
+        {
+          "long": "--mirror",
+          "description": "Mirror all refs"
+        },
+        {
+          "short": "-d",
+          "long": "--delete",
+          "description": "Delete refs"
+        },
+        {
+          "long": "--prune",
+          "description": "Prune locally removed refs"
+        },
+        {
+          "long": "--atomic",
+          "description": "Request atomic transaction on remote side"
+        },
+        {
+          "long": "--verify",
+          "description": "Run the pre-push hook"
+        },
+        {
+          "long": "--no-verify",
+          "description": "Bypass the pre-push hook"
+        },
+        {
+          "long": "--porcelain",
+          "description": "Machine-readable output"
+        },
+        {
+          "long": "--progress",
+          "description": "Force progress reporting"
+        },
+        {
+          "long": "--signed",
+          "description": "GPG sign the push"
+        },
+        {
+          "long": "--thin",
+          "description": "Use thin pack"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Be more quiet"
+        },
+        {
+          "short": "-4",
+          "long": "--ipv4",
+          "description": "Use IPv4 addresses only"
+        },
+        {
+          "short": "-6",
+          "long": "--ipv6",
+          "description": "Use IPv6 addresses only"
+        },
+        {
+          "short": "-o",
+          "long": "--push-option",
+          "description": "Option to transmit",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--receive-pack",
+          "description": "Receive pack program",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--repo",
+          "description": "Repository to push to",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.remote",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "long": "--recurse-submodules",
+          "description": "Control recursive pushing of submodules",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": ["check", "on-demand", "only", "no"]
+          }
+        }
       ]
     },
     {
@@ -291,6 +422,125 @@
             }
           }
         }
+      ],
+      "options": [
+        {
+          "short": "-r",
+          "long": "--rebase",
+          "description": "Incorporate changes by rebasing rather than merging"
+        },
+        {
+          "long": "--no-rebase",
+          "description": "Incorporate changes by merging rather than rebasing"
+        },
+        {
+          "long": "--ff",
+          "description": "Allow fast-forward"
+        },
+        {
+          "long": "--no-ff",
+          "description": "Create a merge commit even for a fast-forward"
+        },
+        {
+          "long": "--ff-only",
+          "description": "Abort if fast-forward is not possible"
+        },
+        {
+          "long": "--squash",
+          "description": "Create a single commit instead of doing a merge"
+        },
+        {
+          "long": "--autostash",
+          "description": "Automatically stash/stash pop before and after"
+        },
+        {
+          "long": "--no-commit",
+          "description": "Don't commit automatically after a successful merge"
+        },
+        {
+          "long": "--no-edit",
+          "description": "Don't edit the merge commit message"
+        },
+        {
+          "long": "--all",
+          "description": "Fetch from all remotes"
+        },
+        {
+          "short": "-t",
+          "long": "--tags",
+          "description": "Fetch all tags and associated objects"
+        },
+        {
+          "short": "-p",
+          "long": "--prune",
+          "description": "Prune remote-tracking branches no longer on remote"
+        },
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force overwrite of local branch"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run"
+        },
+        {
+          "long": "--unshallow",
+          "description": "Convert to a complete repository"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Be more quiet"
+        },
+        {
+          "long": "--progress",
+          "description": "Force progress reporting"
+        },
+        {
+          "short": "-S",
+          "long": "--gpg-sign",
+          "description": "GPG sign commit"
+        },
+        {
+          "long": "--verify-signatures",
+          "description": "Verify that the named commit has a valid GPG signature"
+        },
+        {
+          "long": "--depth",
+          "description": "Deepen history of shallow clone",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "short": "-s",
+          "long": "--strategy",
+          "description": "Merge strategy to use",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "short": "-X",
+          "long": "--strategy-option",
+          "description": "Option for selected merge strategy",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--recurse-submodules",
+          "description": "Control recursive fetching of submodules",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": ["yes", "on-demand", "no"]
+          }
+        }
       ]
     },
     {
@@ -317,6 +567,115 @@
               "provider": "git.remote_branch",
               "scope": "project"
             }
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--all",
+          "description": "Fetch from all remotes"
+        },
+        {
+          "short": "-p",
+          "long": "--prune",
+          "description": "Prune remote-tracking branches no longer on remote"
+        },
+        {
+          "short": "-P",
+          "long": "--prune-tags",
+          "description": "Prune local tags no longer on remote and clobber changed tags"
+        },
+        {
+          "short": "-t",
+          "long": "--tags",
+          "description": "Fetch all tags and associated objects"
+        },
+        {
+          "long": "--no-tags",
+          "description": "Disable automatic tag following"
+        },
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force overwrite of local reference"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Dry run"
+        },
+        {
+          "long": "--atomic",
+          "description": "Use atomic transaction to update references"
+        },
+        {
+          "long": "--unshallow",
+          "description": "Convert to a complete repository"
+        },
+        {
+          "long": "--refetch",
+          "description": "Re-fetch without negotiating common commits"
+        },
+        {
+          "long": "--set-upstream",
+          "description": "Set upstream for git pull/fetch"
+        },
+        {
+          "long": "--multiple",
+          "description": "Fetch from multiple remotes"
+        },
+        {
+          "long": "--porcelain",
+          "description": "Machine-readable output"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Be more quiet"
+        },
+        {
+          "long": "--progress",
+          "description": "Force progress reporting"
+        },
+        {
+          "long": "--depth",
+          "description": "Deepen history of shallow clone",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--deepen",
+          "description": "Deepen history of shallow clone by <n> commits",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "short": "-j",
+          "long": "--jobs",
+          "description": "Number of submodules fetched in parallel",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--filter",
+          "description": "Object filtering",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--recurse-submodules",
+          "description": "Control recursive fetching of submodules",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": ["yes", "on-demand", "no"]
           }
         }
       ]

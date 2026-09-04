@@ -172,29 +172,35 @@ fn test_resolve_alias() {
 }
 
 #[test]
-fn auto_enables_ai_backfill_when_api_key_present() {
+fn api_key_presence_does_not_enable_ai_backfill() {
     init();
     let _guard = crate::test_env_lock();
 
-    let key = "AI_CHAT_API_KEY";
-    let previous = std::env::var(key).ok();
-    unsafe {
-        std::env::set_var(key, "test-key");
-    }
-
-    let prefs = super::default_input_preferences();
-    assert!(
-        prefs.ai_backfill,
-        "AI suggestions should auto-enable when key is set"
-    );
-
-    if let Some(value) = previous {
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    } else {
+    let keys = dsh_openai::API_KEY_ENV_VARS;
+    let previous = keys.map(|key| std::env::var(key).ok());
+    for key in keys {
         unsafe {
             std::env::remove_var(key);
+        }
+    }
+
+    for key in keys {
+        unsafe { std::env::set_var(key, "test-key") };
+        let env = Environment::new();
+        assert!(
+            !env.read().suggestion_ai_enabled(),
+            "{key} must not opt the user into background AI requests"
+        );
+        env.write().set_suggestion_ai_enabled(true);
+        assert!(env.read().suggestion_ai_enabled());
+        unsafe { std::env::remove_var(key) };
+    }
+
+    for (key, value) in keys.into_iter().zip(previous) {
+        if let Some(value) = value {
+            unsafe { std::env::set_var(key, value) };
+        } else {
+            unsafe { std::env::remove_var(key) };
         }
     }
 }

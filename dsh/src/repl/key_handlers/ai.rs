@@ -66,7 +66,14 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
 
     if repl.services.ai.is_none() {
-        queue!(renderer, Print("\r\n⚠️ AI service is not configured. Set OPENAI_API_KEY or configure dsh to use AI features.\r\n")).ok();
+        queue!(
+            renderer,
+            Print(format!(
+                "\r\n⚠️ AI service is not configured. {}\r\n",
+                dsh_openai::API_KEY_SETUP_HINT
+            ))
+        )
+        .ok();
         renderer.flush().ok();
         repl.print_prompt(&mut renderer);
         renderer.flush().ok();

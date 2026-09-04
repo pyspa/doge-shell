@@ -586,6 +586,18 @@ mod tests {
         let allowlist_after = env_lock.execute_allowlist();
         assert!(allowlist_after.is_empty());
     }
+
+    #[test]
+    fn suggestion_ai_can_only_be_enabled_explicitly() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        assert!(!env.read().suggestion_ai_enabled());
+        run(&engine, "(set-suggestion-ai-enabled t)");
+        assert!(env.read().suggestion_ai_enabled());
+        run(&engine, "(set-suggestion-ai-enabled nil)");
+        assert!(!env.read().suggestion_ai_enabled());
+    }
     #[test]
     fn chat_execute_add_multiple_commands_single_call() {
         let env = Environment::new();

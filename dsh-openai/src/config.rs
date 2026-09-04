@@ -4,6 +4,13 @@ use std::time::Duration;
 /// Environment key overriding the total per-request timeout, in seconds.
 pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
 
+/// API-key variables in resolution order.
+pub const API_KEY_ENV_VARS: [&str; 3] = ["AI_CHAT_API_KEY", "OPENAI_API_KEY", "OPEN_AI_API_KEY"];
+
+/// Shared user-facing guidance for configuring an API key.
+pub const API_KEY_SETUP_HINT: &str =
+    "Set AI_CHAT_API_KEY (preferred), OPENAI_API_KEY, or OPEN_AI_API_KEY.";
+
 /// Primary key for the chat endpoint path segment.
 const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
 
@@ -55,9 +62,7 @@ impl OpenAiConfig {
     }
 
     pub fn from_getter(mut getter: impl FnMut(&str) -> Option<String>) -> Self {
-        let api_key = getter("AI_CHAT_API_KEY")
-            .or_else(|| getter("OPENAI_API_KEY"))
-            .or_else(|| getter("OPEN_AI_API_KEY"));
+        let api_key = API_KEY_ENV_VARS.iter().find_map(|key| getter(key));
 
         let base_url = getter("AI_CHAT_BASE_URL").or_else(|| getter("OPENAI_BASE_URL"));
 
@@ -244,6 +249,17 @@ mod tests {
         assert_eq!(cfg.api_key(), Some("legacy"));
         assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
         assert_eq!(cfg.default_model(), DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn api_key_guidance_lists_every_supported_key_in_resolution_order() {
+        let positions = API_KEY_ENV_VARS.map(|key| {
+            API_KEY_SETUP_HINT
+                .find(key)
+                .unwrap_or_else(|| panic!("setup hint omitted {key}"))
+        });
+
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     struct EnvGuard {

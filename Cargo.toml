@@ -2,7 +2,7 @@
 authors = ["mopemope <yutaka.matsubara@gmail.com>"]
 description = "The simple shell"
 readme = "README.md"
-license = "MIT/Apache-2.0"
+license = "MIT"
 edition = "2024"
 version = "0.0.1"
 # The real floor: str::{floor,ceil}_char_boundary (dsh-openai) landed in 1.91,

@@ -544,14 +544,10 @@ impl McpManager {
         Some(lines.join("\n"))
     }
 
-    pub fn execute_tool(
-        &self,
-        function_name: &str,
-        arguments: &str,
-    ) -> Result<Option<String>, String> {
+    pub fn execute_tool(&self, function_name: &str, arguments: &str) -> Result<String, String> {
         let binding = match self.bindings.get(function_name) {
             Some(binding) => binding,
-            None => return Ok(None),
+            None => return Err(format!("MCP tool binding `{function_name}` was not found")),
         };
 
         if self.disabled_read().contains(&binding.server_label) {
@@ -596,7 +592,7 @@ impl McpManager {
         })
         .map_err(|err| format!("failed to call MCP tool: {err}"))?;
 
-        Ok(Some(render_tool_result(&result)?))
+        render_tool_result(&result)
     }
 
     pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {
@@ -1358,6 +1354,17 @@ mod tests {
 
         assert!(manager.is_disabled("alpha"));
         assert!(manager.is_disabled("beta"));
+    }
+
+    #[test]
+    fn execute_tool_rejects_an_unknown_binding() {
+        let manager = McpManager::default();
+        let err = manager
+            .execute_tool("mcp__ghost__missing", "{}")
+            .expect_err("an unknown binding must not look successful");
+
+        assert!(err.contains("mcp__ghost__missing"), "{err}");
+        assert!(err.contains("not found"), "{err}");
     }
 
     #[test]

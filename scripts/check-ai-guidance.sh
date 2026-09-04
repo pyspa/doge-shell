@@ -255,17 +255,44 @@ doge-shell-chat-tools"
         fail "runtime skill installer dry run failed"
     fi
 
-    if ! bash "$installer" --status --target codex --profile codex-core >/dev/null; then
-        fail "runtime skill installer status check failed"
-    fi
-
     if ! bash "$installer" --dry-run --target claude --profile claude-common >/dev/null; then
         fail "runtime skill installer claude dry run failed"
     fi
 
-    if ! bash "$installer" --status --target claude --profile claude-common >/dev/null; then
-        fail "runtime skill installer claude status check failed"
+    runtime_tmp=$(mktemp -d)
+    runtime_home="$runtime_tmp/codex"
+    if CODEX_HOME="$runtime_home" bash "$installer" --check-installed --target codex definitely-not-a-skill >/dev/null 2>&1; then
+        fail "runtime skill strict check accepted an unknown skill"
     fi
+    if CODEX_HOME="$runtime_home" bash "$installer" --check-installed --target codex --profile definitely-not-a-profile >/dev/null 2>&1; then
+        fail "runtime skill strict check accepted an unknown profile"
+    fi
+    if ! CODEX_HOME="$runtime_home" bash "$installer" --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill installer isolated install failed"
+    fi
+    if ! CODEX_HOME="$runtime_home" bash "$installer" --status --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill informational status failed for an exact copy"
+    fi
+    if ! CODEX_HOME="$runtime_home" bash "$installer" --check-installed --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill strict check rejected an exact copy"
+    fi
+
+    printf '\n# stale fixture\n' >>"$runtime_home/skills/doge-shell-repo/SKILL.md"
+    if CODEX_HOME="$runtime_home" bash "$installer" --check-installed --target codex --profile codex-core >/dev/null 2>&1; then
+        fail "runtime skill strict check accepted a stale copy"
+    fi
+    if ! CODEX_HOME="$runtime_home" bash "$installer" --status --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill informational status must tolerate a stale copy"
+    fi
+
+    rm -rf "$runtime_home/skills/doge-shell-repo"
+    if CODEX_HOME="$runtime_home" bash "$installer" --check-installed --target codex --profile codex-core >/dev/null 2>&1; then
+        fail "runtime skill strict check accepted a missing copy"
+    fi
+    if ! CODEX_HOME="$runtime_home" bash "$installer" --status --target codex --profile codex-core >/dev/null; then
+        fail "runtime skill informational status must tolerate a missing copy"
+    fi
+    rm -rf "$runtime_tmp"
 }
 
 check_claude_project_skills() {

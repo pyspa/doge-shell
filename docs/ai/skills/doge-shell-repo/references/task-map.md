@@ -74,7 +74,7 @@
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
   - Read: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`, `.claude/`
-  - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks
+  - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks (`--status` is informational)
 - validation command selection / changed-file checks
   - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
   - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available

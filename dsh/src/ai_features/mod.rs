@@ -42,6 +42,11 @@ pub use service::{
 };
 pub use suggestion::{generate_completion_json, suggest_next_commands};
 
+/// Drop read-only AI answers after a shell-side setting changes their meaning.
+pub(crate) fn invalidate_read_only_cache() {
+    cache::clear();
+}
+
 /// Sanitize code block markers from AI response.
 ///
 /// Removes markdown code block syntax from AI responses.

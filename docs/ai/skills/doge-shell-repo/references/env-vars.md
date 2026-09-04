@@ -17,7 +17,7 @@
 | `DSH_PERF_ITERS` | `dsh/benches/latency.rs` | `cargo bench` の反復回数 |
 | `DSH_CHECK_BASE_REF` | `scripts/check.sh` | 差分チェックの base ref。既定 `develop`、無ければ `origin/develop` |
 
-インストーラ側は `CODEX_HOME` / `XDG_CONFIG_HOME` / `CLAUDE_CONFIG_DIR` を見る（`scripts/install-runtime-skills.sh`）。`doctor skills` も `CODEX_HOME` を見る（`dsh-builtin/src/doctor.rs` の `codex_skills_dir`）。
+インストーラ側は `CODEX_HOME` / `XDG_CONFIG_HOME` / `CLAUDE_CONFIG_DIR` を見る（`scripts/install-runtime-skills.sh`）。`doctor skills` も `CODEX_HOME` を見る（`dsh-builtin/src/doctor.rs` の `codex_runtime_skills_dir`）。
 
 ## AI 機能の変数
 

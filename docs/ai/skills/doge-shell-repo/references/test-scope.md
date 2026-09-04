@@ -11,8 +11,10 @@
 - `cargo check --workspace`: broad compile check when behavior spans many crates
 - `scripts/check-portability.py`: `target_os` arms, OS-specific paths, absolute command paths in tests, or `.cargo/config.toml` changes
 - `scripts/check-ai-guidance.sh`: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, Skill, runtime skill installer, or `.claude/` changes
+- `scripts/check-project-consistency.py`: workspace `Cargo.toml`, crate manifests, `README.md`, or `LICENSE` changes
 - `scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core`: Codex runtime profile changes
-- `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`: canonical/runtime drift checks
+- `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`: canonical/runtime state display (always exits zero for valid arguments)
+- `scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core`: strict canonical/runtime drift gate
 
 The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package names from `package-map.md` when selecting commands.
 

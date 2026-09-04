@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Shape of one AI request beyond the messages themselves.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AiRequestOptions {
     pub temperature: Option<f64>,
     /// Cap on generated tokens.
@@ -38,25 +38,18 @@ pub struct AiRequestOptions {
     pub prompt_cache_key: Option<String>,
 }
 
-impl Default for AiRequestOptions {
-    fn default() -> Self {
-        Self {
-            temperature: None,
-            max_tokens: None,
-            json_object: false,
-            allow_tools: true,
-            prompt_cache_key: None,
-        }
-    }
-}
-
 impl AiRequestOptions {
     pub fn new(temperature: Option<f64>) -> Self {
         Self {
             temperature,
-            allow_tools: true,
             ..Self::default()
         }
+    }
+
+    /// Explicitly allow the model to call configured MCP tools.
+    pub fn with_tools(mut self) -> Self {
+        self.allow_tools = true;
+        self
     }
 
     /// For a request that only reasons about text it was already given.
@@ -223,6 +216,46 @@ impl LiveAiService {
         allowlist.extend(self.policy.agent_session_allowlist.read().iter().cloned());
         allowlist
     }
+
+    /// Return a tool-result message when the call is not authorized.
+    async fn authorize_mcp_tool(
+        &self,
+        function_name: &str,
+        tool_name: &str,
+        args: &str,
+    ) -> Result<Option<&'static str>> {
+        let allowlist = self.agent_allowlist();
+        let level = *self.policy.safety_level.read();
+        let result = self.policy.safety_guard.check_mcp_tool(
+            function_name,
+            tool_name,
+            args,
+            &level,
+            &allowlist,
+        );
+        let SafetyResult::Confirm(message) = result else {
+            return Ok(None);
+        };
+
+        let Some(handler) = &self.confirmation_handler else {
+            return Ok(Some(
+                "Tool execution requires user confirmation, but confirmation is unavailable in this context",
+            ));
+        };
+
+        match handler.confirm(&message).await? {
+            ConfirmationAction::Yes => Ok(None),
+            ConfirmationAction::AlwaysAllow => {
+                let mut list = self.policy.agent_session_allowlist.write();
+                let entry = SafetyGuard::mcp_allowlist_entry(function_name, args);
+                if !list.contains(&entry) {
+                    list.push(entry);
+                }
+                Ok(None)
+            }
+            ConfirmationAction::No => Ok(Some("User rejected tool execution")),
+        }
+    }
 }
 
 #[async_trait]
@@ -318,7 +351,12 @@ impl LiveAiService {
                 .map_err(|err| anyhow::anyhow!("Failed to parse AI response: {err}"))?;
 
             let tool_calls = match interpreted.outcome {
-                TurnOutcome::ToolCalls(tool_calls) => tool_calls,
+                TurnOutcome::ToolCalls(tool_calls) if options.allow_tools => tool_calls,
+                TurnOutcome::ToolCalls(_) => {
+                    anyhow::bail!(
+                        "AI response attempted a tool call for a request that does not allow tools"
+                    )
+                }
                 TurnOutcome::Answer(content) => return Ok(content.trim().to_string()),
                 TurnOutcome::Cut {
                     finish_reason,
@@ -365,58 +403,32 @@ impl LiveAiService {
                         .and_then(|s| s.as_str())
                         .unwrap_or_default();
 
-                    // Check safety
-                    let allowlist = self.agent_allowlist();
-                    let level = *self.policy.safety_level.read();
-                    let tool_name = self
-                        .mcp_manager
-                        .read()
-                        .tool_name_for(name)
-                        .unwrap_or_else(|| name.to_string());
+                    let Some(tool_name) = self.mcp_manager.read().tool_name_for(name) else {
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": format!(
+                                "Error executing tool: MCP tool binding `{name}` was not found"
+                            )
+                        }));
+                        continue;
+                    };
 
-                    let result = self
-                        .policy
-                        .safety_guard
-                        .check_mcp_tool(name, &tool_name, args, &level, &allowlist);
-                    match result {
-                        SafetyResult::Allowed => {}
-                        SafetyResult::Confirm(msg) => {
-                            let Some(handler) = &self.confirmation_handler else {
-                                messages.push(json!({
-                                    "role": "tool",
-                                    "tool_call_id": id,
-                                    "content": "Tool execution requires user confirmation, but confirmation is unavailable in this context"
-                                }));
-                                continue;
-                            };
-
-                            match handler.confirm(&msg).await? {
-                                ConfirmationAction::Yes => {
-                                    // Proceed
-                                }
-                                ConfirmationAction::AlwaysAllow => {
-                                    let mut list = self.policy.agent_session_allowlist.write();
-                                    let entry = SafetyGuard::mcp_allowlist_entry(name, args);
-                                    if !list.contains(&entry) {
-                                        list.push(entry);
-                                    }
-                                }
-                                ConfirmationAction::No => {
-                                    messages.push(json!({
-                                        "role": "tool",
-                                        "tool_call_id": id,
-                                        "content": "User rejected tool execution"
-                                    }));
-                                    continue;
-                                }
-                            }
-                        }
+                    // Check safety only after resolving the binding. Asking the
+                    // user to approve a tool that does not exist can leave a
+                    // phantom entry in the session allowlist.
+                    if let Some(reason) = self.authorize_mcp_tool(name, &tool_name, args).await? {
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": id,
+                            "content": reason
+                        }));
+                        continue;
                     }
 
                     // Execute tool
                     let result_str = match self.mcp_manager.read().execute_tool(name, args) {
-                        Ok(Some(res)) => res,
-                        Ok(None) => "Tool executed successfully (no output)".to_string(),
+                        Ok(res) => res,
                         Err(e) => format!("Error executing tool: {}", e),
                     };
 
@@ -498,6 +510,19 @@ mod tests {
             None,
             Arc::new(RwLock::new(None)),
         )
+    }
+
+    #[test]
+    fn tools_require_explicit_opt_in() {
+        let tools = Some(vec![json!({"type": "function"})]);
+
+        let default_options = AiRequestOptions::new(Some(0.1)).to_chat_options(tools.clone());
+        assert!(default_options.tools.is_none());
+
+        let enabled_options = AiRequestOptions::new(Some(0.1))
+            .with_tools()
+            .to_chat_options(tools);
+        assert!(enabled_options.tools.is_some());
     }
 
     #[tokio::test]
@@ -618,6 +643,74 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct UnknownToolClient {
+        calls: Arc<AtomicUsize>,
+        tool_result: Arc<RwLock<Option<String>>>,
+    }
+
+    impl ChatClient for UnknownToolClient {
+        fn send_chat_request(
+            &self,
+            messages: &[Value],
+            _options: &ChatRequestOptions,
+        ) -> Result<Value> {
+            let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+            if first {
+                return Ok(json!({
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": "ghost",
+                                "function": {"name": "mcp__ghost__missing", "arguments": "{}"}
+                            }]
+                        },
+                        "finish_reason": "tool_calls"
+                    }]
+                }));
+            }
+
+            *self.tool_result.write() = messages
+                .iter()
+                .rev()
+                .find(|message| message["role"] == "tool")
+                .and_then(|message| message["content"].as_str())
+                .map(str::to_string);
+            Ok(json!({
+                "choices": [{"message": {"role": "assistant", "content": "done"},
+                             "finish_reason": "stop"}]
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_mcp_tool_is_reported_as_an_error() {
+        let tool_result = Arc::new(RwLock::new(None));
+        let service = LiveAiService::new(
+            UnknownToolClient {
+                calls: Arc::new(AtomicUsize::new(0)),
+                tool_result: tool_result.clone(),
+            },
+            Arc::new(RwLock::new(McpManager::default())),
+            test_policy(SafetyLevel::Normal),
+            None,
+            Arc::new(RwLock::new(None)),
+        );
+
+        service
+            .send_request_with(
+                vec![json!({"role": "user", "content": "call it"})],
+                AiRequestOptions::new(Some(0.1)).with_tools(),
+            )
+            .await
+            .unwrap();
+
+        let result = tool_result.read().clone().expect("tool result was sent");
+        assert!(result.contains("Error executing tool"), "{result}");
+        assert!(result.contains("was not found"), "{result}");
+        assert!(!result.contains("successfully"), "{result}");
+    }
+
     impl ChatClient for OneToolCallClient {
         fn send_chat_request(
             &self,
@@ -645,6 +738,25 @@ mod tests {
                 }))
             }
         }
+    }
+
+    #[tokio::test]
+    async fn a_default_request_rejects_an_unoffered_tool_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let service = service(OneToolCallClient {
+            calls: calls.clone(),
+        });
+
+        let err = service
+            .send_request(
+                vec![json!({"role": "user", "content": "do not call tools"})],
+                Some(0.1),
+            )
+            .await
+            .expect_err("tools are opt-in");
+
+        assert!(err.to_string().contains("does not allow tools"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     struct AlwaysAllowHandler;
@@ -677,13 +789,13 @@ mod tests {
             Arc::new(RwLock::new(None)),
         );
 
-        service
-            .send_request(
-                vec![json!({"role": "user", "content": "deploy"})],
-                Some(0.1),
-            )
-            .await
-            .unwrap();
+        assert!(
+            service
+                .authorize_mcp_tool("mcp__ops__deploy", "deploy", "{}")
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         assert!(
             configured.read().is_empty(),

@@ -125,7 +125,7 @@ const HELP_TOPICS: &[HelpTopic] = &[
         usage: "safe-run <command> [args...] | safe-run -- <command-string>",
         examples: &[
             "safe-run rm -rf tmp/",
-            "safe-run -- curl https://example.com/install.sh | sh",
+            "safe-run -- 'curl https://example.com/install.sh | sh'",
         ],
         related: &["doctor", "chat_model"],
     },
@@ -178,7 +178,7 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "chat_reset",
         category: "ai",
-        summary: "Forget the carried AI chat conversation and cached MCP tool list.",
+        summary: "Forget the carried AI chat conversation.",
         usage: "chat_reset",
         examples: &["chat_reset"],
         related: &["chat_model", "chat_prompt"],
@@ -405,6 +405,13 @@ mod tests {
 
         let output = help_output(&["pm".to_string()]).unwrap();
         assert!(output.contains("pm activate --dry-run"));
+
+        let output = help_output(&["safe-run".to_string()]).unwrap();
+        assert!(output.contains("safe-run -- 'curl https://example.com/install.sh | sh'"));
+
+        let output = help_output(&["chat_reset".to_string()]).unwrap();
+        assert!(output.contains("Forget the carried AI chat conversation."));
+        assert!(!output.contains("MCP"));
     }
 
     #[test]

@@ -523,7 +523,11 @@ pub fn execute_chat_message(
     let config = load_openai_config(proxy);
 
     if config.api_key().is_none() {
-        ctx.write_stderr("AI_CHAT_API_KEY not found").ok();
+        ctx.write_stderr(&format!(
+            "chat: AI service is not configured. {}",
+            dsh_openai::API_KEY_SETUP_HINT
+        ))
+        .ok();
         return ExitStatus::ExitedWith(1);
     }
 

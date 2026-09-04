@@ -75,8 +75,7 @@ pub fn execute_tool_call(
             return Ok("MCP tool execution cancelled by user.".to_string());
         }
 
-        let executed = mcp.read().execute_tool(name, arguments)?;
-        executed.ok_or_else(|| format!("chat: MCP tool binding `{name}` disappeared"))?
+        mcp.read().execute_tool(name, arguments)?
     } else {
         match name {
             edit::NAME => edit::run(arguments, proxy)?,

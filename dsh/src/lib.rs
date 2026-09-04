@@ -393,9 +393,10 @@ pub async fn handle_completion_command(
     let _api_key = match config.api_key() {
         Some(key) => key,
         None => {
-            error!("OpenAI API key not configured. Set OPENAI_API_KEY environment variable.");
+            error!("OpenAI-compatible API key is not configured");
             eprintln!(
-                "Error: OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
+                "Error: OpenAI-compatible API key is not configured. {}",
+                dsh_openai::API_KEY_SETUP_HINT
             );
             return ExitCode::FAILURE;
         }

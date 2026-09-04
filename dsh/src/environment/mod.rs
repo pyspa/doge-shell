@@ -152,24 +152,6 @@ pub struct Environment {
     pub(crate) startup_mode: bool,
 }
 
-fn default_input_preferences() -> InputPreferences {
-    let mut prefs = InputPreferences::default();
-    if ai_credentials_available() {
-        prefs.ai_backfill = true;
-    }
-    prefs
-}
-
-fn ai_credentials_available() -> bool {
-    env_has_nonempty("AI_CHAT_API_KEY")
-        || env_has_nonempty("OPENAI_API_KEY")
-        || env_has_nonempty("OPEN_AI_API_KEY")
-}
-
-fn env_has_nonempty(key: &str) -> bool {
-    matches!(env::var(key), Ok(value) if !value.trim().is_empty())
-}
-
 fn parse_z_exclude_from_vars(vars: &HashMap<String, String>) -> Vec<String> {
     vars.get("Z_EXCLUDE")
         .map(|val| val.split(':').map(|s| s.to_string()).collect())
@@ -226,7 +208,7 @@ impl Environment {
                 command_blocks: CommandBlockHistory::new(),
             },
             completion_state: CompletionState {
-                input_preferences: default_input_preferences(),
+                input_preferences: InputPreferences::default(),
                 command_cache: RwLock::new(HashMap::new()),
                 executable_names: Arc::new(RwLock::new(Vec::new())),
             },

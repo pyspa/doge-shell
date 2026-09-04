@@ -209,9 +209,12 @@ impl ChatGptClient {
     }
 
     pub fn try_from_config(config: &OpenAiConfig) -> Result<Self> {
-        let api_key = config
-            .api_key()
-            .ok_or_else(|| anyhow!("OpenAI-compatible API key is not configured"))?;
+        let api_key = config.api_key().ok_or_else(|| {
+            anyhow!(
+                "OpenAI-compatible API key is not configured. {}",
+                crate::API_KEY_SETUP_HINT
+            )
+        })?;
 
         let client = Self {
             api_key: api_key.to_string(),

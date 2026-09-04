@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 /// How long an answer stays usable.
 ///
-/// Deliberately short: the key cannot see a model or language selected through
-/// a shell variable (those live in `Environment`, not the process env), so this
-/// bounds how long a configuration change can be served a stale answer.
+/// Deliberately short: process-environment changes outside the shell's variable
+/// setters are not observable here. Shell-side `AI_MESSAGE_LANG` changes clear
+/// the cache explicitly before another answer can be reused.
 const TTL: Duration = Duration::from_secs(60);
 /// Upper bound on retained answers, evicted oldest-first.
 const MAX_ENTRIES: usize = 64;
@@ -93,7 +93,6 @@ fn evict_oldest(cache: &mut HashMap<u64, Entry>) {
     }
 }
 
-#[cfg(test)]
 pub(crate) fn clear() {
     if let Ok(mut cache) = CACHE.lock() {
         cache.clear();

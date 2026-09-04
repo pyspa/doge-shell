@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -eu
+set -euo pipefail
 
 usage() {
     cat <<'EOF'
@@ -8,6 +8,7 @@ Usage: scripts/install-runtime-skills.sh [--target codex|dsh|claude|claude-proje
        scripts/install-runtime-skills.sh [codex|dsh|claude|claude-project|both]
        scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
        scripts/install-runtime-skills.sh --status [--target codex|dsh|claude|claude-project|both] [--profile name]
+       scripts/install-runtime-skills.sh --check-installed [--target codex|dsh|claude|claude-project|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex  -> ~/.codex/skills
@@ -28,6 +29,7 @@ Examples:
   scripts/install-runtime-skills.sh --list --profile codex-core
   scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core
   scripts/install-runtime-skills.sh --status --target codex --profile codex-core
+  scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core
   scripts/install-runtime-skills.sh --target claude --profile claude-common
   scripts/install-runtime-skills.sh
   scripts/install-runtime-skills.sh --target codex doge-shell-repo
@@ -39,6 +41,7 @@ mode="both"
 dry_run=0
 list_only=0
 status_only=0
+strict_status=0
 profile=""
 requested_skills=()
 
@@ -59,8 +62,12 @@ while [ "$#" -gt 0 ]; do
         --list)
             list_only=1
             ;;
-        --status|--check-installed)
+        --status)
             status_only=1
+            ;;
+        --check-installed)
+            status_only=1
+            strict_status=1
             ;;
         --profile)
             if [ "$#" -lt 2 ]; then
@@ -198,22 +205,30 @@ status_skill_dir() {
 
     if [ ! -d "$dest_dir" ]; then
         echo "missing $target_label $skill_name -> $dest_dir"
-        return
+        return 1
     fi
 
     if diff -qr "$src_dir" "$dest_dir" >/dev/null 2>&1; then
         echo "ok $target_label $skill_name -> $dest_dir"
     else
         echo "stale $target_label $skill_name -> $dest_dir"
+        return 1
     fi
 }
 
 status_selected() {
     dest_root="$1"
     target_label="$2"
+    status_failures=0
     while IFS= read -r skill_name; do
-        status_skill_dir "$skill_name" "$dest_root" "$target_label"
+        if ! status_skill_dir "$skill_name" "$dest_root" "$target_label"; then
+            status_failures=1
+        fi
     done
+    if [ "$strict_status" -eq 1 ]; then
+        return "$status_failures"
+    fi
+    return 0
 }
 
 if [ "$list_only" -eq 1 ]; then
@@ -222,22 +237,34 @@ if [ "$list_only" -eq 1 ]; then
 fi
 
 if [ "$status_only" -eq 1 ]; then
+    status_failures=0
     if [ "$mode" = "codex" ] || [ "$mode" = "both" ]; then
-        skill_list | status_selected "${CODEX_HOME:-$HOME/.codex}/skills" codex
+        if ! skill_list | status_selected "${CODEX_HOME:-$HOME/.codex}/skills" codex; then
+            status_failures=1
+        fi
     fi
 
     if [ "$mode" = "dsh" ] || [ "$mode" = "both" ]; then
-        skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills" dsh
+        if ! skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills" dsh; then
+            status_failures=1
+        fi
     fi
 
     if [ "$mode" = "claude" ]; then
-        skill_list | status_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" claude
+        if ! skill_list | status_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills" claude; then
+            status_failures=1
+        fi
     fi
 
     if [ "$mode" = "claude-project" ]; then
-        skill_list | status_selected "$repo_root/.claude/skills" claude-project
+        if ! skill_list | status_selected "$repo_root/.claude/skills" claude-project; then
+            status_failures=1
+        fi
     fi
 
+    if [ "$strict_status" -eq 1 ]; then
+        exit "$status_failures"
+    fi
     exit 0
 fi
 

@@ -86,9 +86,10 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         let mut renderer = TerminalRenderer::new();
         queue!(
             renderer,
-            Print(
-                "\r\nai-watch: AI service is not configured. Set AI_CHAT_API_KEY or OPENAI_API_KEY.\r\n"
-            )
+            Print(format!(
+                "\r\nai-watch: AI service is not configured. {}\r\n",
+                dsh_openai::API_KEY_SETUP_HINT
+            ))
         )
         .ok();
         repl.print_prompt(&mut renderer);

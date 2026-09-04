@@ -843,7 +843,12 @@ impl ShellProxy for Shell {
         let service = self.environment.read().integration_state.ai_service.clone();
         Box::pin(async move {
             let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
-            service.send_request(messages, Some(0.7)).await
+            service
+                .send_request_with(
+                    messages,
+                    crate::ai_features::AiRequestOptions::new(Some(0.7)).without_tools(),
+                )
+                .await
         })
     }
 

@@ -14,7 +14,7 @@
 ## 作業タイプ別の最初の一手
 - 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
 - 検証選定: `doctor validate` が使える環境では提案を優先し、なければ `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ。
-- AI guidance / Skill 変更: `scripts/check-ai-guidance.sh` と runtime Skill の `--status` を使う。
+- AI guidance / Skill 変更: `scripts/check-ai-guidance.sh` と runtime Skill の `--check-installed` を使う（`--status` は表示専用）。
 - 製品側の AI 機能修正: `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` を先に読む。
 - 失敗例の再発防止: 修正後に `task-map.md` か該当 Skill の `references/` へ短く戻す。
 
@@ -32,6 +32,7 @@
 - 複数クレートを跨いだときだけ: `cargo test`
 - 広いビルド確認が必要なら: `cargo check --workspace`
 - OS 依存のコード・テスト・ビルド設定を触ったとき: `scripts/check-portability.py`
+- `Cargo.toml` / `README.md` / `LICENSE` を触ったとき: `scripts/check-project-consistency.py`
 - 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
 
 ## 設計境界

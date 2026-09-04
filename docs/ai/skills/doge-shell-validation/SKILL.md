@@ -11,7 +11,8 @@ description: Use for doge-shell validation planning, smallest-test selection, æ¤
 - Default to `cargo test -p doge-shell` for `dsh/` changes and `cargo test -p dsh-builtin` for builtin/chat changes.
 - Never run `cargo test -p dsh`; the `dsh/` directory is the Cargo package `doge-shell`.
 - Use `cargo test -p doge-shell --lib` as a fallback only when package-level `doge-shell` tests are blocked by known macOS sandbox child-process tracing failures and the change is library-scoped.
-- For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--status` checks instead of Rust tests.
+- For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks instead of Rust tests. `--status` is informational only.
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.
 - Add `scripts/check-portability.py` when the change touches a `target_os` arm, an OS-specific source (`/proc`, `/etc/passwd`, `sysctl`), an absolute command path in a test, or `.cargo/config.toml`. `cargo clippy` only ever sees the host's arm.
-- Run `./scripts/check.sh` only at the end of a staged design change or before release; it integrates fmt, guidance, ShellProxy capability coverage, Clippy, workspace tests, and diff checks.
+- Run `scripts/check-project-consistency.py` for workspace manifest, `README.md`, or `LICENSE` changes.
+- Run `./scripts/check.sh` only at the end of a staged design change or before release; it integrates fmt, guidance, project metadata, ShellProxy capability coverage, Clippy, workspace tests, and diff checks.

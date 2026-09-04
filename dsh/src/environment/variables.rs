@@ -141,7 +141,11 @@ impl Environment {
             .lookup_variable("AI_MESSAGE_LANG")
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
+        let changed = self.integration_state.response_language.read().as_ref() != value.as_ref();
         *self.integration_state.response_language.write() = value;
+        if changed {
+            crate::ai_features::invalidate_read_only_cache();
+        }
     }
 
     /// The value a child process would be given for `name`.

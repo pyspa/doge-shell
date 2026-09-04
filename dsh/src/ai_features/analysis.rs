@@ -208,7 +208,9 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
         json!({"role": "user", "content": query}),
     ];
 
-    let answer = service.send_request(messages, Some(0.2)).await?;
+    let answer = service
+        .send_request_with(messages, read_only_options(0.2, "diagnose", None))
+        .await?;
     cache::store("diagnose", &[&query], &answer);
     Ok(answer)
 }
@@ -244,7 +246,12 @@ pub async fn diagnose_output_with_history<S: AiService + ?Sized>(
         json!({"role": "user", "content": query}),
     ];
 
-    let response = service.send_request(messages.clone(), Some(0.2)).await?;
+    let response = service
+        .send_request_with(
+            messages.clone(),
+            read_only_options(0.2, "diagnose-conversation", None),
+        )
+        .await?;
     messages.push(json!({"role": "assistant", "content": response}));
 
     Ok((response, messages))
@@ -267,7 +274,12 @@ pub async fn send_followup_question<S: AiService + ?Sized>(
 
     history.push(json!({"role": "user", "content": sanitized_query}));
 
-    let response = service.send_request(history.clone(), Some(0.2)).await?;
+    let response = service
+        .send_request_with(
+            history.clone(),
+            read_only_options(0.2, "diagnose-conversation", None),
+        )
+        .await?;
     history.push(json!({"role": "assistant", "content": response.clone()}));
 
     Ok(response)

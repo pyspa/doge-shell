@@ -329,3 +329,27 @@ async fn test_explain_command_inline_empty_input() {
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "");
 }
+
+#[tokio::test]
+async fn changing_shell_response_language_invalidates_read_only_cache() {
+    let _cache_guard = super::cache::TEST_LOCK.lock().await;
+    super::cache::clear();
+
+    let first = MockAiService::new("old language");
+    assert_eq!(
+        explain_command(&first, "pwd").await.unwrap(),
+        "old language"
+    );
+
+    let env = crate::environment::Environment::new();
+    env.write().set_shell_var(
+        "AI_MESSAGE_LANG".to_string(),
+        "__cache_invalidation_test_language__".to_string(),
+    );
+
+    let second = MockAiService::new("new language");
+    assert_eq!(
+        explain_command(&second, "pwd").await.unwrap(),
+        "new language"
+    );
+}

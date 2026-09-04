@@ -291,7 +291,7 @@ The shell includes many built-in commands:
 | `bookmark`          | Bookmark management command                                                                                                |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Set AI model                                                                                                               |
-| `chat_reset`        | Forget the carried AI chat conversation and cached MCP tool list                                                           |
+| `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
 | `gco`               | Git checkout with interactive branch selection                                                                             |
@@ -1342,7 +1342,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     safe-run rm -rf tmp/
 
     # Inspect content before piping (e.g., curl | sh)
-    safe-run curl https://example.com/install.sh | sh
+    safe-run -- 'curl https://example.com/install.sh | sh'
     ```
 
     - **Static Precheck**: Obvious dangerous patterns such as remote-script execution are flagged before AI analysis.
@@ -1465,16 +1465,17 @@ For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
    - `cargo test -p doge-shell` for parser, REPL, completion, prompt, or shell behavior changes
    - `cargo test -p dsh-openai`, `cargo test -p dsh-types`, or `cargo test -p dsh-frecency` for those crates
    - `scripts/check-ai-guidance.sh` after changing `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `.claude/`, or runtime Skill installer guidance
+   - `scripts/check-project-consistency.py` after changing workspace manifests, `README.md`, or `LICENSE`
    - `doctor validate` can suggest the focused commands from your current `git status`
 6. Keep runtime Skill copies current when Skill guidance changes:
-   `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`
+   `scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core`
 7. Commit your changes (`git commit -m 'Add amazing feature'`)
 8. Push to the branch (`git push origin feature/amazing-feature`)
 9. Open a Pull Request
 
 ## 📄 License
 
-This project is licensed under the MIT/Apache-2.0 license - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT license - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 

@@ -31,8 +31,11 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     ctx.write_stdout("Generating commit message...").ok();
     let config = load_openai_config(proxy);
     if config.api_key().is_none() {
-        ctx.write_stderr("ai-commit: AI_CHAT_API_KEY not found.")
-            .ok();
+        ctx.write_stderr(&format!(
+            "ai-commit: AI service is not configured. {}",
+            dsh_openai::API_KEY_SETUP_HINT
+        ))
+        .ok();
         return ExitStatus::ExitedWith(1);
     }
 

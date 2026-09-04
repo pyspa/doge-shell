@@ -37,7 +37,10 @@ impl Action for CheckSafetyAction {
         }
 
         let Some(service) = get_ai_service(shell) else {
-            println!("\r\nAI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n");
+            println!(
+                "\r\nAI service is not configured. {}\r\n",
+                dsh_openai::API_KEY_SETUP_HINT
+            );
             return Ok(());
         };
 

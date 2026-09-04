@@ -153,7 +153,7 @@ fn print_json_report(
 ///
 /// `CODEX_HOME` moves the whole Codex directory, so the `--json` path used to
 /// report a directory nobody was using once it was set.
-fn codex_skills_dir(proxy: &mut dyn ShellProxy) -> Option<PathBuf> {
+fn codex_runtime_skills_dir(proxy: &mut dyn ShellProxy) -> Option<PathBuf> {
     proxy
         .get_var("CODEX_HOME")
         .map(PathBuf::from)
@@ -246,7 +246,7 @@ fn json_section_details(
         Some("dev" | "validate") => json_dev_details(current_dir),
         Some("skills") => {
             let dsh = crate::config_paths::skills_dir();
-            let codex = codex_skills_dir(proxy);
+            let codex = codex_runtime_skills_dir(proxy);
             json!({
                 "dsh_runtime": json!({"path": dsh, "entries": count_skill_dirs(&dsh)}),
                 "codex_runtime": codex.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)}))
@@ -400,19 +400,17 @@ fn check_setup(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path, fi
     );
     ensure_config_file(ctx, &crate::config_paths::config_file("config.lisp"), fix);
 
-    let api_key = proxy
-        .get_var("AI_CHAT_API_KEY")
-        .or_else(|| proxy.get_var("OPENAI_API_KEY"))
-        .or_else(|| proxy.get_var("OPEN_AI_API_KEY"));
-    if api_key
-        .as_ref()
-        .is_some_and(|value| !value.trim().is_empty())
-    {
-        let _ = ctx.write_stdout(&format!("ok ai-key {}", mask_secret(api_key)));
+    let config = crate::chatgpt::load_openai_config(proxy);
+    if let Some(api_key) = config.api_key() {
+        let _ = ctx.write_stdout(&format!(
+            "ok ai-key {}",
+            mask_secret(Some(api_key.to_string()))
+        ));
     } else {
-        let _ = ctx.write_stdout(
-            "warn ai-key missing set AI_CHAT_API_KEY or OPENAI_API_KEY to enable AI features",
-        );
+        let _ = ctx.write_stdout(&format!(
+            "warn ai-key missing {}",
+            dsh_openai::API_KEY_SETUP_HINT
+        ));
     }
 
     let mcp_count = proxy.list_mcp_servers().len();
@@ -652,7 +650,7 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
         }
     };
 
-    let codex_skills_dir = codex_skills_dir(proxy);
+    let codex_skills_dir = codex_runtime_skills_dir(proxy);
     let codex_skill_count = match codex_skills_dir.as_ref() {
         Some(path) if path.exists() => {
             let count = count_skill_dirs(path);
@@ -1030,13 +1028,13 @@ fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
         source_root.display()
     ));
 
-    if let Some(root) = codex_skills_dir(proxy) {
+    if let Some(root) = codex_runtime_skills_dir(proxy) {
         check_skill_profile(
             ctx,
             "codex",
             "codex-core",
             &source_root,
-            &root.join("skills"),
+            &root,
             CODEX_CORE_SKILLS,
         );
     } else {
@@ -1417,6 +1415,7 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut packages = BTreeSet::new();
     let mut needs_workspace_check = false;
     let mut needs_ai_guidance = false;
+    let mut needs_project_consistency = false;
     let mut has_rust = false;
     let mut needs_portability = false;
 
@@ -1425,8 +1424,16 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         if text.ends_with(".rs") {
             has_rust = true;
         }
-        if text == "Cargo.toml" || text == "Cargo.lock" {
+        if text == "Cargo.toml" || text.ends_with("/Cargo.toml") || text == "Cargo.lock" {
             needs_workspace_check = true;
+        }
+        if text == "Cargo.toml"
+            || text.ends_with("/Cargo.toml")
+            || text == "README.md"
+            || text == "LICENSE"
+            || text == "scripts/check-project-consistency.py"
+        {
+            needs_project_consistency = true;
         }
         // Linker tuning has to stay scoped to the target that accepts it, and
         // the workflow is where the macOS side is actually proven.
@@ -1507,8 +1514,11 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         add_command(&mut commands, "scripts/install-runtime-skills.sh --list");
         add_command(
             &mut commands,
-            "scripts/install-runtime-skills.sh --status --target codex --profile codex-core",
+            "scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core",
         );
+    }
+    if needs_project_consistency {
+        add_command(&mut commands, "scripts/check-project-consistency.py");
     }
 
     commands
@@ -1914,6 +1924,41 @@ mod tests {
     }
 
     #[test]
+    fn skills_text_and_json_use_the_same_codex_runtime_root() {
+        let codex_home = tempfile::tempdir().unwrap();
+        let expected = codex_home.path().join("skills");
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let mut proxy = TestProxy {
+            cwd: repo_root.clone(),
+            vars: HashMap::from([(
+                "CODEX_HOME".to_string(),
+                codex_home.path().display().to_string(),
+            )]),
+            allowlist: Vec::new(),
+            servers: Vec::new(),
+            direnv_allowed: false,
+        };
+
+        let details = json_section_details(&mut proxy, &repo_root, Some("skills"));
+        assert_eq!(
+            details["codex_runtime"]["path"],
+            serde_json::Value::String(expected.display().to_string())
+        );
+
+        let (ctx, observer) = observed_context();
+        check_skills(&ctx, &mut proxy, &repo_root);
+        let output = observed_stdout(&observer);
+        assert!(
+            output.contains(&format!("root={}", expected.display())),
+            "{output}"
+        );
+        assert!(!output.contains("skills/skills"), "{output}");
+    }
+
+    #[test]
     fn skill_dirs_match_detects_stale_runtime_copy() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
@@ -1962,7 +2007,7 @@ mod tests {
                 .any(|cmd| cmd == "scripts/check-ai-guidance.sh")
         );
         assert!(commands.iter().any(|cmd| {
-            cmd == "scripts/install-runtime-skills.sh --status --target codex --profile codex-core"
+            cmd == "scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core"
         }));
         assert!(
             commands
@@ -1983,6 +2028,19 @@ mod tests {
                     .iter()
                     .any(|cmd| cmd == "scripts/check-portability.py"),
                 "{path} must propose the portability lint: {commands:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifests_and_license_docs_request_the_consistency_check() {
+        for path in ["Cargo.toml", "dsh/Cargo.toml", "README.md", "LICENSE"] {
+            let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+            assert!(
+                commands
+                    .iter()
+                    .any(|cmd| cmd == "scripts/check-project-consistency.py"),
+                "{path} must propose the project consistency check: {commands:?}"
             );
         }
     }

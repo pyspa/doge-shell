@@ -170,6 +170,11 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 `turn::interpret_response` 以降を一切変えていない。互換サーバへのフォールバックは
 `stream` / `stream_options` を `DROPPABLE_FIELDS` に含めるだけで、新しい仕組みを増やしていない。
 
+シェル側の `AiRequestOptions` は tools を既定で送らない。MCP が必要なリクエストだけ
+`with_tools()` で opt-in し、未知の MCP binding は成功ではなく tool error として返す。
+`AI_MESSAGE_LANG` の shell 変数が変わったときは read-only answer cache を破棄する。
+API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` が正典。
+
 ## 7. 未解決の設計判断
 
 いずれも調査済みで根拠がある。着手する前にここを更新すること。
@@ -179,26 +184,14 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 - **経路 B は cancel callback を渡さない**（`dsh/src/ai_features/service.rs`、
   `ChatClient for ChatGptClient` が `send_chat(.., None)`）。`!` チャットは
   `proxy.is_canceled()` を渡すので、Ctrl-C はチャットにだけ効く。
-- **経路 B は未登録のツール名を成功として返す**。`McpManager::execute_tool` の
-  `Ok(None)`（binding 無し）を `"Tool executed successfully (no output)"` に落とすので、
-  ハルシネーションした呼び出しが成功と伝わる。経路 A は
-  `has_tool_binding` を先に見て `unsupported tool` を返す。
-- **`AiRequestOptions::allow_tools` の既定が `true`**。ほとんどの呼び出しは
-  `without_tools()` を書いているが、`diagnose_output` / `diagnose_output_with_history` /
-  `send_followup_question` と `ShellProxy::ask_ai_async` は既定のままなので、
-  MCP スキーマ全部が毎回添付される。`prompt_cache_key` も同 3 経路だけ未設定。
 - **`ask_ai_async` は temperature 0.7 固定**。`blocks fix`（「修正コマンドを 1 行だけ」）にも
   同じ値が使われる。
 - **シェル側 client は起動時に固定**。`AI_CHAT_API_KEY` / `AI_CHAT_MODEL` /
   `AI_CHAT_BASE_URL` / `AI_CHAT_TIMEOUT_SECS` を後から変えても `!` チャットにしか届かない。
   起動時にキーが無いと `integration_state.ai_service` は `None` のままで、後から設定しても
   コマンドパレットと `Alt+d` は「未設定」と言い続ける。`AI_MESSAGE_LANG` だけは
-  `refresh_derived_state` が押し出す。
-- **API キー未設定メッセージが 10 通り以上**。`AI_CHAT_API_KEY` だけ挙げるもの、
-  `OPENAI_API_KEY` だけ挙げるもの、両方を逆順で挙げるものが混在している。
-- **`dsh/src/ai_features/cache.rs` が `std::env::var` 直読み**。キャッシュキーが
-  シェル変数のモデル/言語を見ないので、`(vset AI_CHAT_MODEL ...)` の直後 60 秒は
-  旧モデルの答えが返る（TTL がその緩和策）。
+  `refresh_derived_state` が押し出す。モデルを動的にしたときは read-only cache scope も
+  同じ解決済みモデルを受け取る形へ同時に変更する。
 
 ### プロバイダ API（調査済み・未着手）
 

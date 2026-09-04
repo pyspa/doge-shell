@@ -1572,7 +1572,10 @@ impl<'a> Repl<'a> {
         let Some(_service) = self.services.ai.clone() else {
             queue!(
                 renderer,
-                Print("❌ AI service not configured. Set OPENAI_API_KEY or AI_CHAT_API_KEY.\r\n")
+                Print(format!(
+                    "❌ AI service is not configured. {}\r\n",
+                    dsh_openai::API_KEY_SETUP_HINT
+                ))
             )
             .ok();
             renderer.flush().ok();

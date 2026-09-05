@@ -1,0 +1,39 @@
+{
+  "command": "colima",
+  "description": "Container runtime on macOS with minimal setup",
+  "global_options": [
+    { "long": "--profile", "short": "-p", "description": "Profile to use", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-h", "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Print version information" }
+  ],
+  "subcommands": [
+    {
+      "name": "start",
+      "description": "Start colima",
+      "options": [
+        { "long": "--cpu", "description": "Number of CPUs allocated to the VM", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "--memory", "description": "Memory in GiB allocated to the VM", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "--disk", "description": "Disk size in GiB allocated to the VM", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "--runtime", "description": "Container runtime", "takes_value": true, "value_type": { "type": "Choice", "data": ["docker", "containerd"] } },
+        { "long": "--arch", "description": "Architecture of the VM", "takes_value": true, "value_type": { "type": "Choice", "data": ["aarch64", "x86_64"] } },
+        { "long": "--vm-type", "description": "Virtual machine type", "takes_value": true, "value_type": { "type": "Choice", "data": ["qemu", "vz"] } },
+        { "long": "--dns", "description": "Nameservers for the VM (e.g. 1.1.1.1)", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--foreground", "description": "Keep colima in the foreground" }
+      ]
+    },
+    { "name": "stop", "description": "Stop colima", "options": [{ "long": "--force", "short": "-f", "description": "Force stop a VM instance" }] },
+    { "name": "restart", "description": "Restart colima" },
+    { "name": "delete", "description": "Delete colima instance", "options": [{ "long": "--force", "short": "-f", "description": "Do not ask for confirmation" }] },
+    { "name": "status", "description": "Show the status of colima" },
+    { "name": "list", "description": "List all colima profiles", "options": [{ "long": "--json", "description": "JSONify output" }, { "short": "-q", "long": "--quiet", "description": "Only show profile names" }] },
+    { "name": "ssh", "description": "SSH into the VM", "arguments": [{ "name": "command", "description": "Command to run", "required": false, "type": { "type": "CommandWithArgs" } }] },
+    { "name": "ssh-config", "description": "Generate SSH config for the colima profile" },
+    { "name": "nerdctl", "description": "Run nerdctl in the colima VM", "arguments": [{ "name": "command", "description": "nerdctl command", "type": { "type": "CommandWithArgs" } }] },
+    { "name": "kubectl", "description": "Run kubectl in the colima VM" },
+    { "name": "kubernetes", "description": "Manage Kubernetes cluster in colima" },
+    { "name": "version", "description": "Print the version of colima" },
+    { "name": "completion", "description": "Generate completion script" },
+    { "name": "template", "description": "Manage colima templates", "subcommands": [{ "name": "list", "description": "List templates" }, { "name": "delete", "description": "Delete a template" }] },
+    { "name": "prune", "description": "Prune unused cached images" }
+  ]
+}

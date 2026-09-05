@@ -32,6 +32,102 @@
     { "name": "check", "description": "Type-check source files", "arguments": [{ "name": "path", "description": "File or directory", "multiple": true, "type": { "type": "File", "data": {} } }] },
     { "name": "cache", "description": "Cache dependencies" },
     { "name": "info", "description": "Show information about cache or module graph" },
-    { "name": "upgrade", "description": "Upgrade Deno" }
+    { "name": "upgrade", "description": "Upgrade Deno" },
+    {
+      "name": "install",
+      "description": "Install dependencies or a module as an executable script",
+      "options": [
+        { "short": "-g", "long": "--global", "description": "Install a package or script globally" },
+        { "short": "-f", "long": "--force", "description": "Forcefully overwrite existing installation" }
+      ],
+      "arguments": [{ "name": "specifier", "description": "Module or package specifier", "multiple": true }]
+    },
+    {
+      "name": "uninstall",
+      "description": "Uninstall a dependency or an executable script",
+      "options": [
+        { "short": "-g", "long": "--global", "description": "Remove a globally installed package or script" }
+      ],
+      "arguments": [{ "name": "name", "description": "Name of package or script" }]
+    },
+    {
+      "name": "add",
+      "description": "Add dependencies to the configuration file",
+      "arguments": [{ "name": "dependency", "description": "Dependency specifier", "multiple": true }]
+    },
+    {
+      "name": "remove",
+      "description": "Remove dependencies from the configuration file",
+      "arguments": [{ "name": "dependency", "description": "Dependency name", "multiple": true }]
+    },
+    {
+      "name": "compile",
+      "description": "Compile the script into a self contained executable",
+      "arguments": [
+        { "name": "output", "description": "Output file" },
+        { "name": "script", "description": "Script file", "type": { "type": "File", "data": { "extensions": [".ts", ".js"] } } }
+      ]
+    },
+    {
+      "name": "repl",
+      "description": "Start an interactive Read-Eval-Print Loop"
+    },
+    {
+      "name": "eval",
+      "description": "Evaluate a script from the command line",
+      "arguments": [{ "name": "code", "description": "Code to evaluate" }]
+    },
+    {
+      "name": "serve",
+      "description": "Run a server",
+      "arguments": [{ "name": "script", "description": "Server script", "type": { "type": "File", "data": {} } }]
+    },
+    {
+      "name": "watch",
+      "description": "Run a program watching for file changes",
+      "arguments": [{ "name": "script", "description": "Script file", "type": { "type": "File", "data": {} } }]
+    },
+    {
+      "name": "bench",
+      "description": "Run benchmarks",
+      "arguments": [{ "name": "path", "description": "Benchmark file or directory", "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    {
+      "name": "coverage",
+      "description": "Print coverage reports from coverage profiles",
+      "arguments": [{ "name": "files", "description": "Coverage profile files", "multiple": true }]
+    },
+    {
+      "name": "doc",
+      "description": "Show documentation for a module",
+      "options": [
+        { "long": "--json", "description": "Output documentation in JSON format" }
+      ],
+      "arguments": [{ "name": "module", "description": "Module to document", "required": false }]
+    },
+    {
+      "name": "publish",
+      "description": "Publish the current package or workspace to JSR"
+    },
+    {
+      "name": "init",
+      "description": "Initialize a new project"
+    },
+    {
+      "name": "outdated",
+      "description": "Find outdated dependencies",
+      "arguments": [{ "name": "filter", "description": "Filter packages", "multiple": true, "required": false }]
+    },
+    {
+      "name": "clean",
+      "description": "Remove the cache directory"
+    },
+    {
+      "name": "completions",
+      "description": "Generate shell completions",
+      "arguments": [
+        { "name": "shell", "description": "Shell type", "type": { "type": "Choice", "data": ["bash", "fish", "powershell", "zsh"] } }
+      ]
+    }
   ]
 }

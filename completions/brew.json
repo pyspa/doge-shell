@@ -64,8 +64,43 @@
         { "name": "list", "description": "List services" },
         { "name": "start", "description": "Start a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
         { "name": "stop", "description": "Stop a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
-        { "name": "restart", "description": "Restart a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] }
+        { "name": "restart", "description": "Restart a service", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+        { "name": "run", "description": "Run a service without starting at login", "arguments": [{ "name": "formula", "description": "Formula service", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+        { "name": "cleanup", "description": "Remove all unused service files" }
       ]
-    }
+    },
+    { "name": "reinstall", "description": "Uninstall then reinstall a formula or cask", "arguments": [{ "name": "formula_or_cask", "description": "Formula or cask name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+    {
+      "name": "link",
+      "description": "Link a formula",
+      "options": [
+        { "long": "--overwrite", "description": "Overwrite existing files" },
+        { "long": "--force", "description": "Allow keg-only formulae to be linked" }
+      ],
+      "arguments": [{ "name": "formula", "description": "Installed formula", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }]
+    },
+    {
+      "name": "unlink",
+      "description": "Unlink a formula",
+      "arguments": [{ "name": "formula", "description": "Installed formula", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }]
+    },
+    { "name": "outdated", "description": "List installed formulae and casks with newer versions available" },
+    { "name": "cleanup", "description": "Remove stale lock files and outdated downloads", "options": [{ "long": "--prune", "description": "Remove all cache files older than specified days", "takes_value": true, "value_type": { "type": "Number" } }, { "short": "-s", "long": "--scrub", "description": "Scrub the cache, including downloads for even the latest versions" }, { "long": "--dry-run", "description": "Show what would be removed" }] },
+    { "name": "doctor", "description": "Check your system for potential problems" },
+    { "name": "config", "description": "Show Homebrew and system configuration" },
+    { "name": "tap", "description": "Tap a repository or list installed taps", "arguments": [{ "name": "user_repo", "description": "user/repo to tap", "required": false }] },
+    { "name": "untap", "description": "Remove a tapped repository", "arguments": [{ "name": "user_repo", "description": "user/repo to untap" }] },
+    { "name": "update-reset", "description": "Fetch and reset Homebrew and all tap repositories" },
+    { "name": "pin", "description": "Prevent a formula from being upgraded", "arguments": [{ "name": "formula", "description": "Installed formula", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+    { "name": "unpin", "description": "Allow a formula to be upgraded", "arguments": [{ "name": "formula", "description": "Installed formula", "type": { "type": "Dynamic", "data": { "provider": "brew.installed" } } }] },
+    { "name": "leaves", "description": "List installed formulae that are not dependencies of another" },
+    { "name": "deps", "description": "Show dependencies for a formula", "arguments": [{ "name": "formula", "description": "Formula name" }] },
+    { "name": "uses", "description": "Show formulae that depend on the given formula", "arguments": [{ "name": "formula", "description": "Formula name" }] },
+    { "name": "edit", "description": "Open a formula or cask in the editor", "arguments": [{ "name": "formula_or_cask", "description": "Formula or cask name" }] },
+    { "name": "cat", "description": "Display the source of a formula or cask", "arguments": [{ "name": "formula_or_cask", "description": "Formula or cask name" }] },
+    { "name": "fetch", "description": "Download formula or cask resources", "arguments": [{ "name": "formula_or_cask", "description": "Formula or cask name", "multiple": true }] },
+    { "name": "log", "description": "Show the git log for a formula or cask", "arguments": [{ "name": "formula_or_cask", "description": "Formula or cask name" }] },
+    { "name": "bundle", "description": "Install or upgrade all dependencies in a Brewfile" },
+    { "name": "autoremove", "description": "Uninstall formulae that were installed as dependencies and are no longer needed" }
   ]
 }

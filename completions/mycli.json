@@ -1,0 +1,20 @@
+{
+  "command": "mycli",
+  "description": "MySQL terminal client with auto-completion",
+  "global_options": [
+    { "short": "-h", "long": "--host", "description": "Host address of the database", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-P", "long": "--port", "description": "Port number to use", "takes_value": true, "value_type": { "type": "Number" } },
+    { "short": "-u", "long": "--user", "description": "User name to connect as", "takes_value": true, "value_type": { "type": "String" } },
+    { "short": "-p", "long": "--password", "description": "Password to connect to the database" },
+    { "short": "-S", "long": "--socket", "description": "The socket file to use", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "long": "--ssh-host", "description": "Host name of the SSH tunnel server", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--list-ssh-config", "description": "List SSH configurations" },
+    { "long": "--ssl-ca", "description": "CA file in PEM format", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+    { "short": "-D", "long": "--database", "description": "Database to use", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--help", "description": "Show help" },
+    { "long": "--version", "description": "Show version" }
+  ],
+  "arguments": [
+    { "name": "database", "description": "Database name or connection URL" }
+  ]
+}

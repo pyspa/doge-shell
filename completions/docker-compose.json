@@ -4,16 +4,198 @@
   "global_options": [
     { "short": "-f", "long": "--file", "description": "Compose file", "takes_value": true, "value_type": { "type": "File", "data": { "extensions": ["yml", "yaml"] } } },
     { "short": "-p", "long": "--project-name", "description": "Project name", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--profile", "description": "Enable the given profiles", "takes_value": true, "value_type": { "type": "String" } },
+    { "long": "--verbose", "description": "Show more output" },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],
   "subcommands": [
-    { "name": "up", "description": "Create and start containers", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
-    { "name": "down", "description": "Stop and remove containers" },
-    { "name": "logs", "description": "View service logs", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
-    { "name": "exec", "description": "Execute command in service container", "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
-    { "name": "build", "description": "Build services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
-    { "name": "ps", "description": "List containers" },
-    { "name": "restart", "description": "Restart services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] },
-    { "name": "stop", "description": "Stop services", "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }] }
+    {
+      "name": "up",
+      "description": "Create and start containers",
+      "options": [
+        { "short": "-d", "description": "Detached mode: Run containers in the background" },
+        { "long": "--build", "description": "Build images before starting containers" },
+        { "long": "--force-recreate", "description": "Recreate containers even if their configuration and image haven't changed" },
+        { "long": "--no-deps", "description": "Don't start linked services" },
+        { "long": "--no-recreate", "description": "If containers already exist, don't recreate them" },
+        { "long": "--wait", "description": "Wait for services to be running|healthy" }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "down",
+      "description": "Stop and remove containers",
+      "options": [
+        { "long": "--rmi", "description": "Remove images used by services", "takes_value": true, "value_type": { "type": "Choice", "data": ["all", "local"] } },
+        { "long": "--volumes", "short": "-v", "description": "Remove named volumes declared in the volumes section" },
+        { "long": "--remove-orphans", "description": "Remove containers for services not defined in the Compose file" }
+      ]
+    },
+    {
+      "name": "logs",
+      "description": "View service logs",
+      "options": [
+        { "long": "--follow", "description": "Follow log output" },
+        { "long": "--tail", "description": "Number of lines to show from the end", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--timestamps", "description": "Show timestamps" }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "exec",
+      "description": "Execute command in service container",
+      "options": [
+        { "long": "--user", "description": "Username or UID", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--workdir", "description": "Working directory inside the container", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--index", "description": "Index of the container if there are multiple instances", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }, { "name": "command", "description": "Command to execute" }]
+    },
+    {
+      "name": "run",
+      "description": "Run a one-off command on a service",
+      "options": [
+        { "long": "--rm", "description": "Remove container after run" },
+        { "short": "-e", "description": "Set an environment variable", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--entrypoint", "description": "Override the entrypoint", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--volume", "description": "Bind mount a volume", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }, { "name": "command", "description": "Command to run", "required": false }]
+    },
+    {
+      "name": "build",
+      "description": "Build services",
+      "options": [
+        { "long": "--no-cache", "description": "Do not use cache when building the image" },
+        { "long": "--pull", "description": "Always attempt to pull a newer version of the image" },
+        { "long": "--quiet", "description": "Don't print anything to STDOUT" }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "pull",
+      "description": "Pull service images",
+      "options": [
+        { "long": "--ignore-pull-failures", "description": "Pull what it can and ignores images with pull failures" },
+        { "long": "--quiet", "description": "Pull without printing progress information" }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "push",
+      "description": "Push service images",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "create",
+      "description": "Create containers for a service",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "start",
+      "description": "Start services",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "stop",
+      "description": "Stop services",
+      "options": [
+        { "long": "--timeout", "short": "-t", "description": "Specify a shutdown timeout in seconds", "takes_value": true, "value_type": { "type": "Number" } }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "restart",
+      "description": "Restart services",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "rm",
+      "description": "Remove stopped service containers",
+      "options": [
+        { "long": "--force", "short": "-f", "description": "Don't ask to confirm removal" },
+        { "long": "--stop", "short": "-s", "description": "Stop the containers, if required, before removing" },
+        { "long": "--volumes", "short": "-v", "description": "Remove any anonymous volumes attached to containers" }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "kill",
+      "description": "Force stop service containers",
+      "options": [
+        { "long": "--signal", "short": "-s", "description": "Signal to send to the container", "takes_value": true, "value_type": { "type": "Signal" } }
+      ],
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "pause",
+      "description": "Pause services",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "unpause",
+      "description": "Unpause services",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "scale",
+      "description": "Set the number of containers for a service",
+      "arguments": [{ "name": "service", "description": "Service=NUM", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "ps",
+      "description": "List containers",
+      "options": [
+        { "long": "--all", "short": "-a", "description": "Show all stopped containers" },
+        { "long": "--services", "description": "List services" },
+        { "long": "--volumes", "description": "List volumes" },
+        { "long": "--format", "description": "Format the output", "takes_value": true, "value_type": { "type": "Choice", "data": ["table", "json"] } }
+      ]
+    },
+    {
+      "name": "ls",
+      "description": "List running compose projects",
+      "options": [
+        { "long": "--all", "short": "-a", "description": "Show all stopped compose projects" }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Parse, resolve and render compose file in canonical format",
+      "options": [
+        { "long": "--services", "description": "Print the service names" },
+        { "long": "--volumes", "description": "Print the volume names" },
+        { "long": "--quiet", "short": "-q", "description": "Only validate the configuration" }
+      ]
+    },
+    {
+      "name": "top",
+      "description": "Display the running processes",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "events",
+      "description": "Receive real time events from containers",
+      "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "port",
+      "description": "Print the public port for a port binding",
+      "arguments": [{ "name": "service", "description": "Service", "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "images",
+      "description": "List images used by the created containers",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "wait",
+      "description": "Block until containers of all (or specified) services stop",
+      "arguments": [{ "name": "service", "description": "Service", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "docker.compose_service" } } }]
+    },
+    {
+      "name": "version",
+      "description": "Show the Docker Compose version information"
+    }
   ]
 }

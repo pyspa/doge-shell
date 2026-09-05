@@ -1,0 +1,47 @@
+{
+  "command": "limactl",
+  "description": "Lima Linux virtual machine manager",
+  "global_options": [
+    { "long": "--debug", "description": "Debug level logging" },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    {
+      "name": "create",
+      "description": "Create an instance of Lima",
+      "arguments": [{ "name": "instance", "description": "Instance name" }]
+    },
+    {
+      "name": "start",
+      "description": "Start an instance of Lima",
+      "options": [
+        { "long": "--foreground", "description": "Run the host agent in the foreground" }
+      ],
+      "arguments": [{ "name": "instance", "description": "Instance name or template" }]
+    },
+    { "name": "stop", "description": "Stop an instance", "arguments": [{ "name": "instance", "description": "Instance name" }] },
+    { "name": "restart", "description": "Restart an instance", "arguments": [{ "name": "instance", "description": "Instance name" }] },
+    { "name": "shell", "description": "Run shell commands in a guest", "arguments": [{ "name": "instance", "description": "Instance name" }, { "name": "command", "description": "Command to run", "type": { "type": "CommandWithArgs" } }] },
+    { "name": "list", "description": "List instances of Lima", "options": [{ "long": "--json", "description": "JSONify output" }, { "short": "-q", "long": "--quiet", "description": "Only show instance names" }] },
+    { "name": "delete", "description": "Delete an instance of Lima", "options": [{ "long": "--force", "short": "-f", "description": "forcibly kill the instance" }] },
+    { "name": "edit", "description": "Edit an instance of Lima or a template", "arguments": [{ "name": "instance", "description": "Instance name" }] },
+    { "name": "clone", "description": "Clone an instance of Lima" },
+    { "name": "copy", "description": "Copy files between host and guest", "arguments": [{ "name": "source", "description": "Source path or instance:path" }, { "name": "target", "description": "Target path or instance:path" }] },
+    { "name": "info", "description": "Show information about an instance", "arguments": [{ "name": "instance", "description": "Instance name" }] },
+    { "name": "prune", "description": "Prune garbage objects" },
+    { "name": "disk", "description": "Manage Lima disks", "subcommands": [{ "name": "create", "description": "Create a disk" }, { "name": "list", "description": "List disks" }, { "name": "delete", "description": "Delete a disk" }] },
+    { "name": "snapshot", "description": "Manage instance snapshots", "subcommands": [{ "name": "create", "description": "Create a snapshot" }, { "name": "apply", "description": "Apply a snapshot" }, { "name": "delete", "description": "Delete a snapshot" }, { "name": "list", "description": "List snapshots" }] },
+    { "name": "show-ssh", "description": "Show the ssh command line for an instance" },
+    { "name": "ssh", "description": "Run ssh in an instance" },
+    { "name": "screenshot", "description": "Screenshot the primary display of an instance" },
+    { "name": "template", "description": "Manage Lima templates", "subcommands": [{ "name": "list", "description": "List templates" }, { "name": "copy", "description": "Copy a template" }, { "name": "validate", "description": "Validate YAML templates" }] },
+    { "name": "validate", "description": "Validate YAML files" },
+    { "name": "protect", "description": "Protect an instance to prohibit removal" },
+    { "name": "unprotect", "description": "Unprotect an instance" },
+    { "name": "autostart", "description": "Manage autostart of instances" },
+    { "name": "tunnel", "description": "Tunnel a TCP port to an instance" },
+    { "name": "watch", "description": "Watch instances for events" },
+    { "name": "completion", "description": "Generate shell completion script" },
+    { "name": "help", "description": "Help about any command" }
+  ]
+}

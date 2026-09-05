@@ -78,11 +78,106 @@
         {
           "short": "-m",
           "long": "--message",
-          "description": "Use the given <msg> as the commit message"
+          "description": "Use the given <msg> as the commit message",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
         },
         {
           "long": "--amend",
           "description": "Amend the previous commit"
+        },
+        {
+          "short": "-p",
+          "long": "--patch",
+          "description": "Interactively select hunks to commit"
+        },
+        {
+          "short": "-n",
+          "long": "--no-verify",
+          "description": "Bypass pre-commit and commit-msg hooks"
+        },
+        {
+          "long": "--author",
+          "description": "Override the commit author",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--date",
+          "description": "Override the author date",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--fixup",
+          "description": "Create a commit for use with rebase --autosquash",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "long": "--squash",
+          "description": "Create a commit to squash into the given commit",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "short": "-s",
+          "long": "--signoff",
+          "description": "Add Signed-off-by trailer"
+        },
+        {
+          "short": "-S",
+          "long": "--gpg-sign",
+          "description": "GPG-sign the commit"
+        },
+        {
+          "short": "-v",
+          "long": "--verbose",
+          "description": "Show diff of what is about to be committed"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Suppress commit summary message"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show paths to be committed without committing"
+        },
+        {
+          "short": "-e",
+          "long": "--edit",
+          "description": "Force edit of the commit message"
+        },
+        {
+          "long": "--no-edit",
+          "description": "Use the selected message without editing"
+        },
+        {
+          "long": "--allow-empty",
+          "description": "Allow recording a commit with no changes"
+        },
+        {
+          "long": "--allow-empty-message",
+          "description": "Allow recording a commit with an empty message"
         }
       ]
     },
@@ -683,6 +778,51 @@
     {
       "name": "merge",
       "description": "Join two or more development histories together",
+      "options": [
+        {
+          "long": "--no-ff",
+          "description": "Create a merge commit even when a fast-forward is possible"
+        },
+        {
+          "long": "--ff-only",
+          "description": "Refuse to merge unless fast-forward is possible"
+        },
+        {
+          "long": "--squash",
+          "description": "Squash the changes as a single commit without merging"
+        },
+        {
+          "short": "-m",
+          "long": "--message",
+          "description": "Use the given merge commit message",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "short": "-n",
+          "long": "--no-commit",
+          "description": "Perform the merge but stop before creating a commit"
+        },
+        {
+          "long": "--abort",
+          "description": "Abort the current conflict resolution process"
+        },
+        {
+          "long": "--continue",
+          "description": "Conclude the current conflict resolution process"
+        },
+        {
+          "long": "--autostash",
+          "description": "Automatically stash and unstash before and after"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Operate quietly"
+        }
+      ],
       "arguments": [
         {
           "name": "branch",
@@ -700,6 +840,58 @@
     {
       "name": "rebase",
       "description": "Reapply commits on top of another base tip",
+      "options": [
+        {
+          "short": "-i",
+          "long": "--interactive",
+          "description": "Start an interactive rebase"
+        },
+        {
+          "long": "--onto",
+          "description": "Start a new base as given",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "long": "--autosquash",
+          "description": "Move commits that begin with fixup!/squash! automatically"
+        },
+        {
+          "long": "--autostash",
+          "description": "Automatically stash and unstash before and after"
+        },
+        {
+          "long": "--continue",
+          "description": "Continue an interactive rebase after resolving conflicts"
+        },
+        {
+          "long": "--skip",
+          "description": "Restart the rebase process by skipping the current patch"
+        },
+        {
+          "long": "--abort",
+          "description": "Abort the rebase operation"
+        },
+        {
+          "long": "--keep-empty",
+          "description": "Keep commits that become empty"
+        },
+        {
+          "long": "--committer-date-is-author-date",
+          "description": "Use the author date as the committer date"
+        },
+        {
+          "short": "-f",
+          "long": "--force-rebase",
+          "description": "Force the rebase even if the branch is up to date"
+        }
+      ],
       "arguments": [
         {
           "name": "branch",
@@ -789,6 +981,64 @@
     {
       "name": "branch",
       "description": "List, create, or delete branches",
+      "options": [
+        {
+          "short": "-d",
+          "long": "--delete",
+          "description": "Delete a fully merged branch"
+        },
+        {
+          "short": "-D",
+          "description": "Delete a branch even if not merged"
+        },
+        {
+          "short": "-m",
+          "long": "--move",
+          "description": "Move/rename a branch"
+        },
+        {
+          "short": "-a",
+          "long": "--all",
+          "description": "List both remote-tracking and local branches"
+        },
+        {
+          "short": "-r",
+          "long": "--remotes",
+          "description": "List the remote-tracking branches"
+        },
+        {
+          "long": "--list",
+          "description": "List branches matching optional pattern"
+        },
+        {
+          "long": "--contains",
+          "description": "Only list branches which contain the specified commit",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "long": "--merged",
+          "description": "Only list branches merged into the named commit",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "long": "--show-current",
+          "description": "Print the name of the current branch"
+        }
+      ],
       "arguments": [
         {
           "name": "branchname",
@@ -826,6 +1076,53 @@
       "name": "stash",
       "description": "Stash the changes in a dirty working directory away",
       "subcommands": [
+        {
+          "name": "push",
+          "description": "Save your local modifications to a new stash entry",
+          "options": [
+            {
+              "short": "-m",
+              "long": "--message",
+              "description": "Use the given message for the stash entry",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "short": "-u",
+              "long": "--include-untracked",
+              "description": "Include untracked files in the stash"
+            },
+            {
+              "short": "-k",
+              "long": "--keep-index",
+              "description": "Leave changes already added to the index intact"
+            }
+          ],
+          "arguments": []
+        },
+        {
+          "name": "branch",
+          "description": "Create and checkout a new branch from the stash",
+          "arguments": [
+            {
+              "name": "branchname",
+              "description": "Name of the new branch"
+            },
+            {
+              "name": "stash",
+              "description": "Stash to apply",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.stash",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
         {
           "name": "list",
           "description": "List the stash entries",
@@ -992,7 +1289,27 @@
       "subcommands": [
         {
           "name": "add",
-          "description": "Add a new remote"
+          "description": "Add a new remote",
+          "options": [
+            {
+              "short": "-t",
+              "description": "Track only the given branch"
+            },
+            {
+              "short": "-f",
+              "description": "Fetch the remote after adding"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Name of the remote"
+            },
+            {
+              "name": "url",
+              "description": "Repository URL"
+            }
+          ]
         },
         {
           "name": "remove",
@@ -1071,6 +1388,871 @@
           "type": {
             "type": "Directory"
           }
+        }
+      ]
+    },
+    {
+      "name": "mv",
+      "description": "Move or rename a file, a directory, or a symlink",
+      "options": [
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force rename/move even if the target exists"
+        },
+        {
+          "short": "-k",
+          "description": "Skip move/rename errors"
+        },
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Do nothing; only show what would happen"
+        },
+        {
+          "short": "-v",
+          "description": "Report the names of files as they are moved"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "File to move",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.changed_path",
+              "scope": "project"
+            }
+          }
+        },
+        {
+          "name": "destination",
+          "description": "Destination file or directory"
+        }
+      ]
+    },
+    {
+      "name": "rm",
+      "description": "Remove files from the working tree and from the index",
+      "options": [
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Override the up-to-date check"
+        },
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Dry run"
+        },
+        {
+          "short": "-r",
+          "description": "Allow recursive removal"
+        },
+        {
+          "long": "--cached",
+          "description": "Only remove from the index"
+        },
+        {
+          "long": "--ignore-unmatch",
+          "description": "Exit with zero status even if no files matched"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Files to remove",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.changed_path",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "clean",
+      "description": "Remove untracked files from the working tree",
+      "options": [
+        {
+          "short": "-n",
+          "long": "--dry-run",
+          "description": "Don't actually remove anything, just show what would be done"
+        },
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "If the Git configuration variable clean.requireForce is not false, refuse to delete files or directories unless -f is given"
+        },
+        {
+          "short": "-d",
+          "description": "Remove untracked directories in addition to untracked files"
+        },
+        {
+          "short": "-x",
+          "description": "Don't use the ignore rules"
+        },
+        {
+          "short": "-X",
+          "description": "Remove only files ignored by Git"
+        },
+        {
+          "short": "-i",
+          "long": "--interactive",
+          "description": "Show what would be done and clean files interactively"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "path",
+          "description": "Paths to clean",
+          "multiple": true
+        }
+      ]
+    },
+    {
+      "name": "blame",
+      "description": "Show what revision and author last modified each line of a file",
+      "options": [
+        {
+          "short": "-w",
+          "description": "Ignore whitespace when comparing the parent's version"
+        },
+        {
+          "short": "-s",
+          "description": "Suppress the author name and timestamp"
+        },
+        {
+          "short": "-e",
+          "long": "--show-email",
+          "description": "Show the author email instead of author name"
+        },
+        {
+          "short": "-l",
+          "long": "--long",
+          "description": "Show long rev (e.g. commit SHA)"
+        },
+        {
+          "short": "-L",
+          "description": "Annotate only the given line range",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "file",
+          "description": "File to annotate",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        },
+        {
+          "name": "revision",
+          "description": "Revision to blame",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cherry-pick",
+      "description": "Apply the changes introduced by some existing commits",
+      "options": [
+        {
+          "short": "-x",
+          "description": "Append a line that says which commit this change was cherry-picked from"
+        },
+        {
+          "short": "-n",
+          "long": "--no-commit",
+          "description": "Apply changes without making any commit"
+        },
+        {
+          "short": "-e",
+          "long": "--edit",
+          "description": "Edit the commit message prior to committing"
+        },
+        {
+          "long": "--continue",
+          "description": "Continue the operation in progress"
+        },
+        {
+          "long": "--skip",
+          "description": "Skip the current commit and continue with the rest"
+        },
+        {
+          "long": "--abort",
+          "description": "Cancel the operation and return to the pre-sequence state"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit(s) to cherry-pick",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "revert",
+      "description": "Revert some existing commits",
+      "options": [
+        {
+          "short": "-e",
+          "long": "--edit",
+          "description": "Edit the commit message prior to committing"
+        },
+        {
+          "short": "-n",
+          "long": "--no-commit",
+          "description": "Apply changes without making any commit"
+        },
+        {
+          "long": "--continue",
+          "description": "Continue the operation in progress"
+        },
+        {
+          "long": "--skip",
+          "description": "Skip the current commit and continue with the rest"
+        },
+        {
+          "long": "--abort",
+          "description": "Cancel the operation and return to the pre-sequence state"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit(s) to revert",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reflog",
+      "description": "Manage reflog information",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Show the log of a reference",
+          "arguments": [
+            {
+              "name": "ref",
+              "description": "Reference to show",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.checkout_target",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "expire",
+          "description": "Prune older reflog entries"
+        },
+        {
+          "name": "delete",
+          "description": "Delete entries from the reflog"
+        },
+        {
+          "name": "exists",
+          "description": "Check whether a ref has a reflog"
+        }
+      ]
+    },
+    {
+      "name": "grep",
+      "description": "Print lines matching a pattern in tracked files",
+      "options": [
+        {
+          "short": "-i",
+          "long": "--ignore-case",
+          "description": "Ignore case differences between the patterns and the files"
+        },
+        {
+          "short": "-n",
+          "long": "--line-number",
+          "description": "Prefix the line number to matching lines"
+        },
+        {
+          "short": "-v",
+          "long": "--invert-match",
+          "description": "Select non-matching lines"
+        },
+        {
+          "short": "-w",
+          "long": "--word-regexp",
+          "description": "Match the pattern only at word boundaries"
+        },
+        {
+          "short": "-e",
+          "description": "The next parameter is the pattern",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--untracked",
+          "description": "Search also in untracked files"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "pattern",
+          "description": "Pattern to search for"
+        },
+        {
+          "name": "path",
+          "description": "Path to limit search",
+          "multiple": true
+        }
+      ]
+    },
+    {
+      "name": "describe",
+      "description": "Give an object a human readable name based on an available ref",
+      "options": [
+        {
+          "long": "--tags",
+          "description": "Use any tag found in refs/tags namespace"
+        },
+        {
+          "long": "--all",
+          "description": "Use any ref found in refs/ namespace"
+        },
+        {
+          "long": "--abbrev",
+          "description": "Use at least <n> hex digits as abbreviated name",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--always",
+          "description": "Show uniquely abbreviated commit object as fallback"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "commit",
+          "description": "Commit-ish object to describe",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "gc",
+      "description": "Cleanup unnecessary files and optimize the local repository",
+      "options": [
+        {
+          "long": "--aggressive",
+          "description": "Spend more time to optimize the repository"
+        },
+        {
+          "long": "--auto",
+          "description": "Check whether any housekeeping is required"
+        },
+        {
+          "long": "--prune",
+          "description": "Prune loose objects older than date",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--quiet",
+          "description": "Be quiet"
+        }
+      ]
+    },
+    {
+      "name": "archive",
+      "description": "Create an archive of files from a named tree",
+      "options": [
+        {
+          "long": "--format",
+          "description": "Format of the resulting archive",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "tar",
+              "zip",
+              "tar.gz",
+              "tgz"
+            ]
+          }
+        },
+        {
+          "long": "--output",
+          "description": "Write the archive to this file",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {}
+          }
+        },
+        {
+          "long": "--prefix",
+          "description": "Prepend <prefix>/ to every filename in the archive",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tree",
+          "description": "Tree or commit to produce archive for",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "am",
+      "description": "Apply a series of patches from a mailbox",
+      "options": [
+        {
+          "short": "-3",
+          "long": "--3way",
+          "description": "Use 3-way merge if patch does not apply cleanly"
+        },
+        {
+          "short": "-i",
+          "long": "--interactive",
+          "description": "Run interactively"
+        },
+        {
+          "short": "-s",
+          "long": "--signoff",
+          "description": "Add Signed-off-by line to the commit message"
+        },
+        {
+          "long": "--abort",
+          "description": "Abort the patch operation"
+        },
+        {
+          "long": "--continue",
+          "description": "Continue applying the last mbox after resolution"
+        },
+        {
+          "long": "--skip",
+          "description": "Skip the current patch"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "mbox",
+          "description": "Mailbox file containing patches",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "apply",
+      "description": "Apply a patch to files and/or to the index",
+      "options": [
+        {
+          "long": "--stat",
+          "description": "Instead of applying the patch, output diffstat"
+        },
+        {
+          "long": "--check",
+          "description": "Instead of applying the patch, see if the patch is applicable"
+        },
+        {
+          "long": "--index",
+          "description": "Apply the patch to both the index and the working tree"
+        },
+        {
+          "long": "--cached",
+          "description": "Apply the patch to the index only"
+        },
+        {
+          "short": "-R",
+          "long": "--reverse",
+          "description": "Apply the patch in reverse"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "patch",
+          "description": "Patch file to apply",
+          "type": {
+            "type": "File",
+            "data": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "format-patch",
+      "description": "Prepare patches for e-mail submission",
+      "options": [
+        {
+          "long": "--stdout",
+          "description": "Print all mails to standard output"
+        },
+        {
+          "short": "-n",
+          "description": "Prepare <n> patches from the top commits",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--cover-letter",
+          "description": "Generate a cover letter before the patches"
+        },
+        {
+          "long": "--numbered",
+          "description": "Name output in [PATCH n/m] format"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "since",
+          "description": "Commits since this revision",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "git.revision",
+              "scope": "project"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "shortlog",
+      "description": "Summarize git log output",
+      "options": [
+        {
+          "short": "-n",
+          "long": "--numbered",
+          "description": "Sort output according to the number of commits per author"
+        },
+        {
+          "short": "-s",
+          "long": "--summary",
+          "description": "Suppress commit description"
+        },
+        {
+          "short": "-e",
+          "long": "--email",
+          "description": "Show the email address of each author"
+        }
+      ]
+    },
+    {
+      "name": "bisect",
+      "description": "Use binary search to find the commit that introduced a bug",
+      "subcommands": [
+        {
+          "name": "start",
+          "description": "Reset bisect state and start a new bisect session",
+          "arguments": []
+        },
+        {
+          "name": "bad",
+          "description": "Mark the current commit as bad"
+        },
+        {
+          "name": "good",
+          "description": "Mark the current commit as good"
+        },
+        {
+          "name": "skip",
+          "description": "Mark the current commit as untestable"
+        },
+        {
+          "name": "reset",
+          "description": "Finish the bisect session and return to the original branch"
+        },
+        {
+          "name": "log",
+          "description": "Show the bisect log"
+        },
+        {
+          "name": "run",
+          "description": "Run a script to automatically bisect"
+        },
+        {
+          "name": "visualize",
+          "description": "Visualize the bisect state"
+        }
+      ]
+    },
+    {
+      "name": "submodule",
+      "description": "Initialize, update or inspect submodules",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add the given repository as a submodule",
+          "arguments": [
+            {
+              "name": "repository",
+              "description": "Repository URL"
+            },
+            {
+              "name": "path",
+              "description": "Path in the working tree",
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "init",
+          "description": "Initialize the submodules recorded in the index"
+        },
+        {
+          "name": "update",
+          "description": "Clone missing submodules and checkout the commits"
+        },
+        {
+          "name": "status",
+          "description": "Show the status of the submodules"
+        },
+        {
+          "name": "sync",
+          "description": "Synchronize the submodule URL config with .gitmodules"
+        },
+        {
+          "name": "deinit",
+          "description": "Unregister the given submodules"
+        }
+      ]
+    },
+    {
+      "name": "sparse-checkout",
+      "description": "Reduce your working tree to a subset of tracked files",
+      "subcommands": [
+        {
+          "name": "init",
+          "description": "Enable the sparse-checkout feature"
+        },
+        {
+          "name": "set",
+          "description": "Write the patterns and update the working tree"
+        },
+        {
+          "name": "add",
+          "description": "Add patterns to the sparse-checkout file"
+        },
+        {
+          "name": "list",
+          "description": "List the patterns in the sparse-checkout file"
+        },
+        {
+          "name": "reapply",
+          "description": "Reapply the sparse patterns to the working tree"
+        },
+        {
+          "name": "disable",
+          "description": "Disable the sparse-checkout feature"
+        }
+      ]
+    },
+    {
+      "name": "bundle",
+      "description": "Move objects and refs by archive",
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Create a bundle",
+          "arguments": [
+            {
+              "name": "file",
+              "description": "Bundle file to create",
+              "type": {
+                "type": "File",
+                "data": {}
+              }
+            }
+          ]
+        },
+        {
+          "name": "verify",
+          "description": "Verify that a bundle file is valid",
+          "arguments": [
+            {
+              "name": "file",
+              "description": "Bundle file",
+              "type": {
+                "type": "File",
+                "data": {}
+              }
+            }
+          ]
+        },
+        {
+          "name": "list-heads",
+          "description": "List the references defined in the bundle",
+          "arguments": [
+            {
+              "name": "file",
+              "description": "Bundle file",
+              "type": {
+                "type": "File",
+                "data": {}
+              }
+            }
+          ]
+        },
+        {
+          "name": "unbundle",
+          "description": "Unbundle a bundle into the repository",
+          "arguments": [
+            {
+              "name": "file",
+              "description": "Bundle file",
+              "type": {
+                "type": "File",
+                "data": {}
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "notes",
+      "description": "Add or inspect object notes",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add notes for a given object",
+          "arguments": [
+            {
+              "name": "object",
+              "description": "Object to annotate",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.revision",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "description": "Show the notes for a given object",
+          "arguments": [
+            {
+              "name": "object",
+              "description": "Object to show notes for",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.revision",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "copy",
+          "description": "Copy notes from one object to another"
+        },
+        {
+          "name": "append",
+          "description": "Append to the notes of an object"
+        },
+        {
+          "name": "edit",
+          "description": "Edit the notes for an object"
+        },
+        {
+          "name": "remove",
+          "description": "Remove the notes for an object"
+        },
+        {
+          "name": "prune",
+          "description": "Remove all notes for non-existing/unreachable objects"
+        }
+      ]
+    },
+    {
+      "name": "maintenance",
+      "description": "Run tasks to optimize Git repository data",
+      "subcommands": [
+        {
+          "name": "run",
+          "description": "Run one or more maintenance tasks"
+        },
+        {
+          "name": "start",
+          "description": "Start background maintenance"
+        },
+        {
+          "name": "stop",
+          "description": "Stop background maintenance"
+        },
+        {
+          "name": "register",
+          "description": "Register a repository in background maintenance"
+        },
+        {
+          "name": "unregister",
+          "description": "Remove a repository from background maintenance"
         }
       ]
     },

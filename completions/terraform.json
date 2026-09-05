@@ -40,6 +40,18 @@
         { "name": "select", "description": "Select workspace", "arguments": [{ "name": "workspace", "description": "Workspace name", "type": { "type": "Dynamic", "data": { "provider": "terraform.workspace" } } }] },
         { "name": "delete", "description": "Delete workspace", "arguments": [{ "name": "workspace", "description": "Workspace name", "type": { "type": "Dynamic", "data": { "provider": "terraform.workspace" } } }] }
       ]
-    }
+    },
+    { "name": "output", "description": "Show output values from the root module" },
+    { "name": "show", "description": "Show the current state or a saved plan", "arguments": [{ "name": "plan_or_state", "description": "Plan or state file", "required": false, "type": { "type": "File", "data": {} } }] },
+    { "name": "refresh", "description": "Sync state with real infrastructure" },
+    { "name": "providers", "description": "Show providers required by the configuration" },
+    { "name": "console", "description": "Open an interactive console for evaluating expressions" },
+    { "name": "graph", "description": "Generate a Graphviz graph of the configuration" },
+    { "name": "force-unlock", "description": "Release a stuck lock on the state", "arguments": [{ "name": "lock_id", "description": "Lock ID" }] },
+    { "name": "login", "description": "Log in to a Terraform Cloud hostname" },
+    { "name": "logout", "description": "Log out from a Terraform Cloud hostname" },
+    { "name": "get", "description": "Download and update modules in the root module" },
+    { "name": "test", "description": "Execute integration tests for the configuration" },
+    { "name": "version", "description": "Show the current Terraform version" }
   ]
 }

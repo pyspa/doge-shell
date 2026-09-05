@@ -12,21 +12,151 @@
       "description": "Certificate request and generation",
       "options": [
         { "long": "-new", "description": "Create new certificate request" },
+        { "long": "-newkey", "description": "Create new request with key", "takes_value": true, "value_type": { "type": "String" } },
         { "long": "-x509", "description": "Output self-signed certificate" },
         { "long": "-key", "description": "Private key file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
         { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
-        { "long": "-config", "description": "Configuration file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+        { "long": "-config", "description": "Configuration file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-nodes", "description": "Do not encrypt the output key" },
+        { "long": "-days", "description": "Number of days to certify for", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "-subj", "description": "Subject to use in the request", "takes_value": true, "value_type": { "type": "String" } }
       ]
     },
-    { "name": "x509", "description": "Certificate display and signing" },
-    { "name": "genrsa", "description": "Generate RSA private key" },
-    { "name": "rsa", "description": "Process RSA keys" },
+    {
+      "name": "x509",
+      "description": "Certificate display and signing",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-text", "description": "Print the certificate in text form" },
+        { "long": "-noout", "description": "Do not output the certificate" },
+        { "long": "-dates", "description": "Print the validity dates" },
+        { "long": "-subject", "description": "Print the subject name" },
+        { "long": "-issuer", "description": "Print the issuer name" },
+        { "long": "-fingerprint", "description": "Print the fingerprint" },
+        { "long": "-pubkey", "description": "Output the public key" },
+        { "long": "-req", "description": "Input is a certificate request" }
+      ]
+    },
+    {
+      "name": "genrsa",
+      "description": "Generate RSA private key",
+      "options": [
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-aes256", "description": "Encrypt output with AES-256" }
+      ],
+      "arguments": [{ "name": "bits", "description": "Key size in bits", "required": false, "type": { "type": "Choice", "data": ["1024", "2048", "3072", "4096"] } }]
+    },
+    {
+      "name": "rsa",
+      "description": "Process RSA keys",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-pubin", "description": "Input is an RSA public key" },
+        { "long": "-pubout", "description": "Output an RSA public key" },
+        { "long": "-text", "description": "Print the key in text form" },
+        { "long": "-check", "description": "Verify the consistency of a private key" }
+      ]
+    },
+    {
+      "name": "ec",
+      "description": "Process EC keys",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-pubout", "description": "Output an EC public key" }
+      ]
+    },
     { "name": "ecparam", "description": "EC parameter manipulation" },
-    { "name": "pkey", "description": "Public or private key processing" },
-    { "name": "pkcs12", "description": "PKCS#12 file utility" },
-    { "name": "s_client", "description": "SSL/TLS client" },
-    { "name": "dgst", "description": "Message digests" },
-    { "name": "enc", "description": "Symmetric cipher routines" },
-    { "name": "rand", "description": "Generate pseudo-random bytes" }
+    {
+      "name": "pkey",
+      "description": "Public or private key processing",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-pubin", "description": "Input is a public key" },
+        { "long": "-pubout", "description": "Output a public key" },
+        { "long": "-text", "description": "Print the key in text form" }
+      ]
+    },
+    { "name": "genpkey", "description": "Generate a private key", "options": [{ "long": "-algorithm", "description": "Key algorithm", "takes_value": true, "value_type": { "type": "Choice", "data": ["RSA", "EC", "DSA", "ED25519", "X25519"] } }, { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } }] },
+    {
+      "name": "pkcs12",
+      "description": "PKCS#12 file utility",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-export", "description": "Output a PKCS#12 file" },
+        { "long": "-nodes", "description": "Do not encrypt private keys" },
+        { "long": "-info", "description": "Print details about the PKCS#12 structure" }
+      ]
+    },
+    { "name": "pkcs8", "description": "PKCS#8 private key processing" },
+    { "name": "pkcs7", "description": "PKCS#7 data processing" },
+    { "name": "crl", "description": "Certificate revocation list processing" },
+    {
+      "name": "s_client",
+      "description": "SSL/TLS client",
+      "options": [
+        { "long": "-connect", "description": "Host:port to connect", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "-showcerts", "description": "Show the full certificate chain" },
+        { "long": "-servername", "description": "SNI server name", "takes_value": true, "value_type": { "type": "String" } }
+      ]
+    },
+    { "name": "s_server", "description": "SSL/TLS server" },
+    {
+      "name": "dgst",
+      "description": "Message digests",
+      "options": [
+        { "long": "-sha256", "description": "SHA-256 digest" },
+        { "long": "-sha512", "description": "SHA-512 digest" },
+        { "long": "-md5", "description": "MD5 digest" },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-verify", "description": "Verify a signature", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-sign", "description": "Sign a digest", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+      ],
+      "arguments": [{ "name": "file", "description": "File to digest", "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    {
+      "name": "enc",
+      "description": "Symmetric cipher routines",
+      "options": [
+        { "long": "-in", "description": "Input file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "-aes-256-cbc", "description": "AES-256 CBC cipher" },
+        { "long": "-base64", "description": "Base64 encoding" },
+        { "long": "-d", "description": "Decrypt" },
+        { "long": "-salt", "description": "Use a salt" }
+      ]
+    },
+    {
+      "name": "passwd",
+      "description": "Compute password hashes",
+      "options": [
+        { "long": "-apr1", "description": "MD5-based password algorithm (Apache)" },
+        { "long": "-crypt", "description": "Standard Unix password algorithm" }
+      ]
+    },
+    {
+      "name": "rand",
+      "description": "Generate pseudo-random bytes",
+      "options": [
+        { "long": "-base64", "description": "Base64 encode the output" },
+        { "long": "-hex", "description": "Hex encode the output" },
+        { "long": "-out", "description": "Output file", "takes_value": true, "value_type": { "type": "File", "data": {} } }
+      ],
+      "arguments": [{ "name": "bytes", "description": "Number of bytes" }]
+    },
+    {
+      "name": "verify",
+      "description": "Verify certificate chains",
+      "arguments": [{ "name": "certificate", "description": "Certificate to verify", "multiple": true, "type": { "type": "File", "data": {} } }]
+    },
+    { "name": "ciphers", "description": "Show supported cipher suites" },
+    { "name": "asn1parse", "description": "Parse ASN.1 structures" },
+    { "name": "cms", "description": "CMS (PKCS#7) utility" },
+    { "name": "smime", "description": "S/MIME processing" },
+    { "name": "speed", "description": "Benchmark algorithm performance" }
   ]
 }

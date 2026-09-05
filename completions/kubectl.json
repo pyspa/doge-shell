@@ -449,6 +449,184 @@
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "config",
+      "description": "Modify kubeconfig files",
+      "subcommands": [
+        { "name": "view", "description": "Display merged kubeconfig settings" },
+        { "name": "get-contexts", "description": "Describe one or many contexts", "arguments": [{ "name": "context", "required": false, "type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } }] },
+        { "name": "current-context", "description": "Display the current-context" },
+        { "name": "use-context", "description": "Set the current-context in a kubeconfig file", "arguments": [{ "name": "context", "type": { "type": "Dynamic", "data": { "provider": "kubectl.context" } } }] },
+        { "name": "set-context", "description": "Set a context entry in kubeconfig" },
+        { "name": "delete-context", "description": "Delete the specified context from the kubeconfig" },
+        { "name": "set-credentials", "description": "Modify user entry in kubeconfig" },
+        { "name": "set-cluster", "description": "Set a cluster entry in kubeconfig" }
+      ]
+    },
+    {
+      "name": "rollout",
+      "description": "Manage the rollout of a resource",
+      "subcommands": [
+        { "name": "status", "description": "Show the status of the rollout", "arguments": [{ "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } }, { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }] },
+        { "name": "restart", "description": "Restart a resource", "arguments": [{ "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } }, { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }] },
+        { "name": "undo", "description": "Undo a previous rollout", "arguments": [{ "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } }, { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }] },
+        { "name": "history", "description": "View rollout history", "arguments": [{ "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } }, { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }] },
+        { "name": "pause", "description": "Mark the provided resource as paused" },
+        { "name": "resume", "description": "Resume a paused resource" }
+      ]
+    },
+    {
+      "name": "scale",
+      "description": "Set a new size for a deployment, replica set, or replication controller",
+      "options": [
+        { "long": "--replicas", "description": "The new desired number of replicas", "takes_value": true, "value_type": { "type": "Number" } }
+      ],
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } },
+        { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }
+      ]
+    },
+    {
+      "name": "port-forward",
+      "description": "Forward one or more local ports to a pod",
+      "arguments": [
+        { "name": "pod", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name", "scope": "pod" } } }
+      ]
+    },
+    {
+      "name": "top",
+      "description": "Display resource (CPU/memory) usage",
+      "subcommands": [
+        { "name": "pod", "description": "Display resource usage of pods" },
+        { "name": "node", "description": "Display resource usage of nodes" }
+      ]
+    },
+    {
+      "name": "edit",
+      "description": "Edit a resource on the server",
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } },
+        { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }
+      ]
+    },
+    {
+      "name": "patch",
+      "description": "Update fields of a resource",
+      "options": [
+        { "long": "--type", "description": "Type of patch", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "merge", "strategic"] } },
+        { "short": "-p", "long": "--patch", "description": "The patch to be applied", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } },
+        { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }
+      ]
+    },
+    {
+      "name": "label",
+      "description": "Update the labels on a resource",
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } },
+        { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }
+      ]
+    },
+    {
+      "name": "annotate",
+      "description": "Update the annotations on a resource",
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } },
+        { "name": "name", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name" } } }
+      ]
+    },
+    {
+      "name": "expose",
+      "description": "Take a replication controller, service, deployment or pod and expose it as a new Kubernetes service"
+    },
+    {
+      "name": "run",
+      "description": "Run a particular image in the container",
+      "arguments": [
+        { "name": "name", "description": "Name of the running container" }
+      ]
+    },
+    {
+      "name": "cp",
+      "description": "Copy files and directories to and from containers",
+      "arguments": [
+        { "name": "source", "description": "Source path or pod:path" },
+        { "name": "destination", "description": "Destination path or pod:path" }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Inspect authorization",
+      "subcommands": [
+        { "name": "can-i", "description": "Check whether an action is allowed" },
+        { "name": "whoami", "description": "Print the subject for the current context" }
+      ]
+    },
+    {
+      "name": "cluster-info",
+      "description": "Display cluster information"
+    },
+    {
+      "name": "api-resources",
+      "description": "Print the supported API resources on the server"
+    },
+    {
+      "name": "api-versions",
+      "description": "Print the supported API versions on the server"
+    },
+    {
+      "name": "explain",
+      "description": "Get documentation for a resource",
+      "arguments": [
+        { "name": "resource", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_type" } } }
+      ]
+    },
+    {
+      "name": "cordon",
+      "description": "Mark a node as unschedulable",
+      "arguments": [
+        { "name": "node", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name", "scope": "node" } } }
+      ]
+    },
+    {
+      "name": "uncordon",
+      "description": "Mark node as schedulable",
+      "arguments": [
+        { "name": "node", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name", "scope": "node" } } }
+      ]
+    },
+    {
+      "name": "drain",
+      "description": "Drain node in preparation for maintenance",
+      "arguments": [
+        { "name": "node", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name", "scope": "node" } } }
+      ]
+    },
+    {
+      "name": "taint",
+      "description": "Update the taints on one or more nodes",
+      "arguments": [
+        { "name": "node", "type": { "type": "Dynamic", "data": { "provider": "kubectl.resource_name", "scope": "node" } } }
+      ]
+    },
+    {
+      "name": "autoscale",
+      "description": "Auto-scale a deployment, replica set, stateful set, or replication controller"
+    },
+    {
+      "name": "wait",
+      "description": "Wait for a specific condition on one or many resources"
+    },
+    {
+      "name": "events",
+      "description": "List events"
+    },
+    {
+      "name": "version",
+      "description": "Print the client and server version information"
     }
   ]
 }

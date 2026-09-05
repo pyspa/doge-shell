@@ -164,6 +164,162 @@
         { "name": "edit", "description": "Edit a gist" },
         { "name": "delete", "description": "Delete a gist" }
       ]
+    },
+    {
+      "name": "release",
+      "description": "Manage releases",
+      "subcommands": [
+        { "name": "create", "description": "Create a new release" },
+        { "name": "list", "description": "List releases in a repository" },
+        { "name": "view", "description": "View information about a release" },
+        { "name": "edit", "description": "Edit a release" },
+        { "name": "delete", "description": "Delete a release" },
+        { "name": "download", "description": "Download release assets" },
+        { "name": "upload", "description": "Upload assets to a release" }
+      ]
+    },
+    {
+      "name": "api",
+      "description": "Make an authenticated GitHub API request",
+      "options": [
+        { "long": "--method", "short": "-X", "description": "HTTP method", "takes_value": true, "value_type": { "type": "Choice", "data": ["GET", "POST", "PUT", "PATCH", "DELETE"] } },
+        { "long": "--input", "description": "Read the request body from a file", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "--header", "short": "-H", "description": "Add an HTTP request header", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [
+        { "name": "endpoint", "description": "API endpoint path" }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search for repositories, issues, and pull requests",
+      "subcommands": [
+        { "name": "repos", "description": "Search for repositories" },
+        { "name": "issues", "description": "Search for issues" },
+        { "name": "prs", "description": "Search for pull requests" },
+        { "name": "commits", "description": "Search for commits" },
+        { "name": "code", "description": "Search for code" }
+      ]
+    },
+    {
+      "name": "label",
+      "description": "Manage labels",
+      "subcommands": [
+        { "name": "list", "description": "List labels in a repository" },
+        { "name": "create", "description": "Create a new label" },
+        { "name": "edit", "description": "Edit a label" },
+        { "name": "delete", "description": "Delete a label" }
+      ]
+    },
+    {
+      "name": "secret",
+      "description": "Manage GitHub secrets",
+      "subcommands": [
+        { "name": "set", "description": "Set a secret" },
+        { "name": "list", "description": "List secrets" },
+        { "name": "delete", "description": "Delete secrets" }
+      ]
+    },
+    {
+      "name": "variable",
+      "description": "Manage GitHub Actions variables",
+      "subcommands": [
+        { "name": "set", "description": "Set a variable" },
+        { "name": "list", "description": "List variables" },
+        { "name": "get", "description": "Get a variable" },
+        { "name": "delete", "description": "Delete variables" }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Print information about relevant issues, pull requests, and notifications across repositories"
+    },
+    {
+      "name": "config",
+      "description": "Manage configuration for gh",
+      "subcommands": [
+        { "name": "get", "description": "Print the value of a given configuration key" },
+        { "name": "set", "description": "Update configuration with a value for the given key" },
+        { "name": "list", "description": "Print a list of set configuration keys" }
+      ]
+    },
+    {
+      "name": "alias",
+      "description": "Create command shortcuts",
+      "subcommands": [
+        { "name": "set", "description": "Create a shorthand for a gh command" },
+        { "name": "list", "description": "List your aliases" },
+        { "name": "delete", "description": "Delete set aliases" },
+        { "name": "import", "description": "Import aliases from a YAML file" }
+      ]
+    },
+    {
+      "name": "extension",
+      "description": "Manage gh extensions",
+      "subcommands": [
+        { "name": "install", "description": "Install a gh extension from a repository" },
+        { "name": "list", "description": "List installed extension commands" },
+        { "name": "upgrade", "description": "Upgrade installed extensions" },
+        { "name": "remove", "description": "Remove an installed extension" }
+      ]
+    },
+    {
+      "name": "codespace",
+      "description": "Connect to and manage codespaces",
+      "subcommands": [
+        { "name": "list", "description": "List codespaces" },
+        { "name": "create", "description": "Create a codespace" },
+        { "name": "delete", "description": "Delete codespaces" },
+        { "name": "code", "description": "Open a codespace in Visual Studio Code" },
+        { "name": "ssh", "description": "SSH into a codespace" },
+        { "name": "stop", "description": "Stop a running codespace" }
+      ]
+    },
+    {
+      "name": "project",
+      "description": "Work with GitHub Projects",
+      "subcommands": [
+        { "name": "list", "description": "List the projects for an owner" },
+        { "name": "create", "description": "Create a project" },
+        { "name": "view", "description": "View a project" },
+        { "name": "close", "description": "Close a project" },
+        { "name": "delete", "description": "Delete a project" }
+      ]
+    },
+    {
+      "name": "org",
+      "description": "Manage organizations",
+      "subcommands": [
+        { "name": "list", "description": "List organizations for the authenticated user" }
+      ]
+    },
+    {
+      "name": "discussion",
+      "description": "Work with GitHub Discussions",
+      "subcommands": [
+        { "name": "list", "description": "List discussions in a repository" },
+        { "name": "create", "description": "Create a new discussion" },
+        { "name": "view", "description": "View a discussion" },
+        { "name": "close", "description": "Close a discussion" }
+      ]
+    },
+    {
+      "name": "gpg-key",
+      "description": "Manage GPG keys",
+      "subcommands": [
+        { "name": "add", "description": "Add a GPG key to your GitHub account" },
+        { "name": "list", "description": "Lists GPG keys in your GitHub account" },
+        { "name": "delete", "description": "Delete a GPG key from your GitHub account" }
+      ]
+    },
+    {
+      "name": "ssh-key",
+      "description": "Manage SSH keys",
+      "subcommands": [
+        { "name": "add", "description": "Add an SSH key to your GitHub account" },
+        { "name": "list", "description": "Lists SSH keys in your GitHub account" },
+        { "name": "delete", "description": "Delete an SSH key from your GitHub account" }
+      ]
     }
   ]
 }

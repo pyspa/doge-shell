@@ -1,0 +1,29 @@
+{
+  "command": "opencode",
+  "description": "AI coding agent for the terminal",
+  "global_options": [
+    { "long": "--version", "description": "Print version information" },
+    { "long": "--print-logs", "description": "Print logs to stderr" },
+    { "long": "--log-level", "description": "Log level", "takes_value": true, "value_type": { "type": "Choice", "data": ["debug", "info", "warn", "error"] } },
+    { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "run", "description": "Run opencode with a message", "options": [{ "long": "--model", "description": "Model to use", "takes_value": true, "value_type": { "type": "String" } }, { "long": "--agent", "description": "Agent to use", "takes_value": true, "value_type": { "type": "String" } }, { "long": "--continue", "description": "Continue the last session" }, { "long": "--session", "description": "Session to continue", "takes_value": true, "value_type": { "type": "String" } }], "arguments": [{ "name": "message", "description": "Message to send", "multiple": true }] },
+    { "name": "serve", "description": "Start a headless opencode server", "options": [{ "long": "--port", "description": "Port to listen on", "takes_value": true, "value_type": { "type": "Number" } }, { "long": "--hostname", "description": "Hostname to listen on", "takes_value": true, "value_type": { "type": "String" } }] },
+    { "name": "attach", "description": "Attach to a running opencode server", "arguments": [{ "name": "url", "description": "Server URL", "type": { "type": "Url" } }] },
+    { "name": "web", "description": "Start opencode server and open web interface" },
+    { "name": "acp", "description": "Start ACP (Agent Client Protocol) server" },
+    { "name": "mcp", "description": "Manage MCP servers", "subcommands": [{ "name": "add", "description": "Add an MCP server" }, { "name": "list", "description": "List MCP servers" }, { "name": "auth", "description": "Authenticate with an MCP server" }] },
+    { "name": "providers", "description": "Manage AI providers and credentials", "subcommands": [{ "name": "login", "description": "Log in to a provider" }, { "name": "logout", "description": "Log out of a provider" }, { "name": "list", "description": "List configured providers" }] },
+    { "name": "models", "description": "List all available models", "arguments": [{ "name": "provider", "description": "Filter by provider", "required": false }] },
+    { "name": "agent", "description": "Manage agents", "subcommands": [{ "name": "create", "description": "Create a new agent" }] },
+    { "name": "stats", "description": "Show token usage and cost statistics" },
+    { "name": "export", "description": "Export session data as JSON", "arguments": [{ "name": "session", "description": "Session ID", "required": false }] },
+    { "name": "import", "description": "Import session data from JSON file or URL", "arguments": [{ "name": "file", "description": "JSON file or URL", "type": { "type": "File", "data": {} } }] },
+    { "name": "upgrade", "description": "Upgrade opencode", "arguments": [{ "name": "target", "description": "Specific version to upgrade to", "required": false }] },
+    { "name": "uninstall", "description": "Uninstall opencode and remove all related files" },
+    { "name": "github", "description": "Manage GitHub agent" },
+    { "name": "debug", "description": "Debugging and troubleshooting tools" },
+    { "name": "completion", "description": "Generate shell completion script", "arguments": [{ "name": "shell", "description": "Shell type", "type": { "type": "Choice", "data": ["bash", "zsh", "fish"] } }] }
+  ]
+}

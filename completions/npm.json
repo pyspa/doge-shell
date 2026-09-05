@@ -287,6 +287,193 @@
         }
       ],
       "subcommands": []
+    },
+    {
+      "name": "publish",
+      "description": "Publish a package to the registry",
+      "options": [
+        { "long": "--access", "description": "Set access level", "takes_value": true, "value_type": { "type": "Choice", "data": ["public", "restricted"] } },
+        { "long": "--tag", "description": "Register the published package with the given tag", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--dry-run", "description": "Report what would have been published" },
+        { "long": "--otp", "description": "One-time password for 2FA", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--registry", "description": "Registry URL", "takes_value": true, "value_type": { "type": "Url" } }
+      ]
+    },
+    {
+      "name": "link",
+      "description": "Symlink a package folder",
+      "arguments": [
+        { "name": "package", "description": "Package to link (optional)", "required": false }
+      ]
+    },
+    {
+      "name": "outdated",
+      "description": "Check for outdated packages",
+      "options": [
+        { "long": "--global", "short": "-g", "description": "Check global packages" },
+        { "long": "--json", "description": "Output in JSON format" },
+        { "long": "--long", "short": "-l", "description": "Show extended information" }
+      ],
+      "arguments": [
+        { "name": "package", "description": "Specific package (optional)", "type": { "type": "Dynamic", "data": { "provider": "js.dependency" } } }
+      ]
+    },
+    {
+      "name": "ls",
+      "description": "List installed packages",
+      "options": [
+        { "long": "--global", "short": "-g", "description": "List global packages" },
+        { "long": "--depth", "description": "Max depth of dependency tree", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "--json", "description": "Output in JSON format" },
+        { "long": "--long", "short": "-l", "description": "Show extended information" }
+      ]
+    },
+    {
+      "name": "view",
+      "description": "View registry info",
+      "arguments": [
+        { "name": "package", "description": "Package[@version]" }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Manage the npm configuration",
+      "subcommands": [
+        { "name": "set", "description": "Set a config value" },
+        { "name": "get", "description": "Get a config value" },
+        { "name": "list", "description": "List all config settings" },
+        { "name": "delete", "description": "Delete a config value" }
+      ]
+    },
+    {
+      "name": "cache",
+      "description": "Manipulates packages cache",
+      "subcommands": [
+        { "name": "add", "description": "Add the specified packages to the local cache" },
+        { "name": "verify", "description": "Verify the contents of the cache folder" },
+        { "name": "clean", "description": "Delete all data out of the cache folder" }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Log in to the registry"
+    },
+    {
+      "name": "logout",
+      "description": "Log out of the registry"
+    },
+    {
+      "name": "search",
+      "description": "Search for packages",
+      "arguments": [
+        { "name": "terms", "description": "Search terms", "multiple": true }
+      ]
+    },
+    {
+      "name": "token",
+      "description": "Manage your authentication tokens",
+      "subcommands": [
+        { "name": "list", "description": "Show a list of active authentication tokens" },
+        { "name": "create", "description": "Create a new authentication token" },
+        { "name": "revoke", "description": "Revoke an authentication token" }
+      ]
+    },
+    {
+      "name": "dedupe",
+      "description": "Reduce duplication in the package tree"
+    },
+    {
+      "name": "pkg",
+      "description": "Manipulate your package.json",
+      "arguments": [
+        { "name": "command", "description": "get|set|delete to modify a field" }
+      ]
+    },
+    {
+      "name": "docs",
+      "description": "Open documentation for a package",
+      "arguments": [
+        { "name": "package", "description": "Package to open docs for", "required": false }
+      ]
+    },
+    {
+      "name": "explain",
+      "description": "Explain installed packages",
+      "arguments": [
+        { "name": "package", "description": "Package specifier", "multiple": true }
+      ]
+    },
+    {
+      "name": "prune",
+      "description": "Remove extraneous packages",
+      "options": [
+        { "long": "--dry-run", "description": "Report what would be removed without removing" }
+      ]
+    },
+    {
+      "name": "ping",
+      "description": "Ping the npm registry"
+    },
+    {
+      "name": "prefix",
+      "description": "Display npm prefix",
+      "options": [
+        { "long": "--global", "short": "-g", "description": "Print the global prefix" }
+      ]
+    },
+    {
+      "name": "root",
+      "description": "Display npm root",
+      "options": [
+        { "long": "--global", "short": "-g", "description": "Print the global root" }
+      ]
+    },
+    {
+      "name": "version",
+      "description": "Bump a package version",
+      "arguments": [
+        { "name": "newversion", "description": "New version or increment type", "required": false, "type": { "type": "Choice", "data": ["major", "minor", "patch", "premajor", "preminor", "prepatch", "prerelease"] } }
+      ]
+    },
+    {
+      "name": "whoami",
+      "description": "Display registry username"
+    },
+    {
+      "name": "pack",
+      "description": "Create a tarball from a package",
+      "options": [
+        { "long": "--dry-run", "description": "Report what would be packed without packing" }
+      ]
+    },
+    {
+      "name": "dist-tag",
+      "description": "Modify package distribution tags",
+      "subcommands": [
+        { "name": "add", "description": "Add a tag to a package version" },
+        { "name": "rm", "description": "Remove a tag from a package" },
+        { "name": "ls", "description": "List all dist-tags of a package" }
+      ]
+    },
+    {
+      "name": "org",
+      "description": "Manage orgs and org members",
+      "subcommands": [
+        { "name": "add", "description": "Add a user to an org" },
+        { "name": "rm", "description": "Remove a user from an org" },
+        { "name": "ls", "description": "List users in an org" }
+      ]
+    },
+    {
+      "name": "team",
+      "description": "Manage organization teams and team memberships",
+      "subcommands": [
+        { "name": "create", "description": "Create a team" },
+        { "name": "destroy", "description": "Destroy a team" },
+        { "name": "add", "description": "Add a user to a team" },
+        { "name": "rm", "description": "Remove a user from a team" },
+        { "name": "ls", "description": "List teams or team members" }
+      ]
     }
   ]
 }

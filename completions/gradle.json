@@ -10,7 +10,32 @@
     { "short": "-i", "long": "--info", "description": "Info output" },
     { "long": "--debug", "description": "Debug output" },
     { "long": "--scan", "description": "Create build scan" },
+    { "long": "--continuous", "description": "Rebuild automatically on file changes" },
+    { "long": "--offline", "description": "Execute the build without accessing network resources" },
+    { "long": "--refresh-dependencies", "description": "Refresh the state of remote dependencies" },
+    { "long": "--dry-run", "description": "Run the build with all task actions disabled" },
     { "short": "-h", "long": "--help", "description": "Show help" }
+  ],
+  "subcommands": [
+    { "name": "init", "description": "Initialize a new Gradle build" },
+    { "name": "build", "description": "Assemble and test the project" },
+    { "name": "test", "description": "Run the unit tests" },
+    { "name": "check", "description": "Run all checks including tests" },
+    { "name": "clean", "description": "Delete the build directory" },
+    { "name": "assemble", "description": "Assemble the outputs of the project" },
+    { "name": "run", "description": "Run the application" },
+    { "name": "jar", "description": "Assemble a jar archive" },
+    { "name": "war", "description": "Assemble a war archive" },
+    { "name": "bootRun", "description": "Run a Spring Boot application" },
+    { "name": "bootJar", "description": "Assemble an executable jar for Spring Boot" },
+    { "name": "publish", "description": "Publish artifacts to a repository" },
+    { "name": "publishToMavenLocal", "description": "Publish to the local Maven repository" },
+    { "name": "tasks", "description": "List the tasks available in the project" },
+    { "name": "projects", "description": "List the projects in the build" },
+    { "name": "dependencies", "description": "List the dependencies of the project" },
+    { "name": "properties", "description": "List the properties of the project" },
+    { "name": "wrapper", "description": "Generate Gradle wrapper files" },
+    { "name": "help", "description": "Display help information" }
   ],
   "arguments": [{ "name": "task", "description": "Task name", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "gradle" } } }]
 }

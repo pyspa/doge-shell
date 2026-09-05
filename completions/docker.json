@@ -638,6 +638,197 @@
               }
             }
           ]
+        },
+        {
+          "name": "pull",
+          "description": "Pull service images",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "push",
+          "description": "Push service images",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "create",
+          "description": "Create containers for a service",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "rm",
+          "description": "Remove stopped service containers",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "kill",
+          "description": "Force stop service containers",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "pause",
+          "description": "Pause services",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "unpause",
+          "description": "Unpause services",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "run",
+          "description": "Run a one-off command on a service",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            },
+            {
+              "name": "command",
+              "description": "Command to run",
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "config",
+          "description": "Parse, resolve and render compose file in canonical format"
+        },
+        {
+          "name": "ls",
+          "description": "List running compose projects"
+        },
+        {
+          "name": "top",
+          "description": "Display the running processes",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "images",
+          "description": "List images used by the created containers",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "port",
+          "description": "Print the public port for a port binding",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service name",
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "scale",
+          "description": "Set the number of containers for a service",
+          "arguments": [
+            {
+              "name": "service",
+              "description": "Service=NUM",
+              "multiple": true,
+              "type": {
+                "type": "Dynamic",
+                "data": { "provider": "docker.compose_service" }
+              }
+            }
+          ]
         }
       ]
     },
@@ -821,6 +1012,409 @@
     {
       "name": "logout",
       "description": "Log out from a Docker registry"
+    },
+    {
+      "name": "create",
+      "description": "Create a new container without starting it",
+      "options": [
+        {
+          "long": "--name",
+          "description": "Assign a name to the container",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        },
+        {
+          "long": "--publish",
+          "short": "-p",
+          "description": "Publish a container's port(s) to the host",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        },
+        {
+          "long": "--volume",
+          "description": "Bind mount a volume",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        },
+        {
+          "long": "--env",
+          "short": "-e",
+          "description": "Set environment variables",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image to create the container from",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
+        },
+        {
+          "name": "command",
+          "description": "Command to run",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "stats",
+      "description": "Display a live stream of container(s) resource usage statistics",
+      "options": [
+        {
+          "long": "--all",
+          "short": "-a",
+          "description": "Show all containers (default shows just running)"
+        },
+        {
+          "long": "--no-stream",
+          "description": "Disable streaming stats and only pull the first result"
+        }
+      ]
+    },
+    {
+      "name": "top",
+      "description": "Display the running processes of a container",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to inspect",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "port",
+      "description": "List port mappings or a specific mapping for the container",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to inspect",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "rename",
+      "description": "Rename a container",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to rename",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        },
+        {
+          "name": "new_name",
+          "description": "New container name"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "description": "Pause all processes within one or more containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container(s) to pause",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "unpause",
+      "description": "Unpause all processes within one or more containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container(s) to unpause",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "diff",
+      "description": "Inspect changes to files or directories on a container's filesystem",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to diff",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "events",
+      "description": "Get real time events from the server",
+      "options": [
+        {
+          "long": "--since",
+          "description": "Show all events created since this timestamp",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        },
+        {
+          "long": "--until",
+          "description": "Stream events until this timestamp",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        }
+      ]
+    },
+    {
+      "name": "export",
+      "description": "Export a container's filesystem as a tar archive",
+      "options": [
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Write to a file, instead of STDOUT",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to export",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "import",
+      "description": "Import the contents from a tarball to create a filesystem image",
+      "arguments": [
+        {
+          "name": "file",
+          "description": "Tarball to import",
+          "type": { "type": "File", "data": {} }
+        }
+      ]
+    },
+    {
+      "name": "load",
+      "description": "Load an image from a tar archive or STDIN",
+      "options": [
+        {
+          "long": "--input",
+          "short": "-i",
+          "description": "Read from tar archive file",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
+        }
+      ]
+    },
+    {
+      "name": "save",
+      "description": "Save one or more images to a tar archive",
+      "options": [
+        {
+          "long": "--output",
+          "short": "-o",
+          "description": "Write to a file, instead of STDOUT",
+          "takes_value": true,
+          "value_type": { "type": "File", "data": {} }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image(s) to save",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search Docker Hub for images",
+      "arguments": [
+        {
+          "name": "term",
+          "description": "Search term"
+        }
+      ]
+    },
+    {
+      "name": "commit",
+      "description": "Create a new image from a container's changes",
+      "options": [
+        {
+          "long": "--message",
+          "short": "-m",
+          "description": "Commit message",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        },
+        {
+          "long": "--author",
+          "short": "-a",
+          "description": "Author",
+          "takes_value": true,
+          "value_type": { "type": "String" }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container to commit",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        },
+        {
+          "name": "image",
+          "description": "New image name"
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Update configuration of one or more containers",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container(s) to update",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wait",
+      "description": "Block until one or more containers stop",
+      "arguments": [
+        {
+          "name": "container",
+          "description": "Container(s) to wait for",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.container" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "description": "Show the history of an image",
+      "arguments": [
+        {
+          "name": "image",
+          "description": "Image to show history for",
+          "type": {
+            "type": "Dynamic",
+            "data": { "provider": "docker.image" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "builder",
+      "description": "Manage builds",
+      "subcommands": [
+        {
+          "name": "build",
+          "description": "Build an image using BuildKit"
+        },
+        {
+          "name": "prune",
+          "description": "Remove build cache"
+        },
+        {
+          "name": "ls",
+          "description": "List builder instances"
+        }
+      ]
+    },
+    {
+      "name": "context",
+      "description": "Manage contexts",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List contexts"
+        },
+        {
+          "name": "create",
+          "description": "Create a new context"
+        },
+        {
+          "name": "use",
+          "description": "Set the current context"
+        },
+        {
+          "name": "rm",
+          "description": "Remove one or more contexts"
+        },
+        {
+          "name": "show",
+          "description": "Print detailed information about one or more contexts"
+        }
+      ]
+    },
+    {
+      "name": "manifest",
+      "description": "Manage Docker image manifests and manifest lists",
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Create a manifest list"
+        },
+        {
+          "name": "annotate",
+          "description": "Add additional information to a local image manifest"
+        },
+        {
+          "name": "inspect",
+          "description": "Display an image manifest, or manifest list"
+        },
+        {
+          "name": "push",
+          "description": "Push a manifest list to a repository"
+        },
+        {
+          "name": "rm",
+          "description": "Delete one or more manifest lists from local storage"
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "description": "Show the Docker version information"
     }
   ]
 }

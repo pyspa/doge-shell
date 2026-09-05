@@ -4,8 +4,11 @@
   "global_options": [
     { "short": "-q", "long": "--quiet", "description": "Do not print output" },
     { "short": "-v", "long": "--verbose", "description": "Use verbose output" },
+    { "long": "--no-cache", "short": "-n", "description": "Avoid reading from or writing to the cache" },
+    { "long": "--cache-dir", "description": "Path to the cache directory", "takes_value": true, "value_type": { "type": "Directory" } },
     { "long": "--directory", "description": "Change to directory before running", "takes_value": true, "value_type": { "type": "Directory" } },
     { "long": "--project", "description": "Run within project directory", "takes_value": true, "value_type": { "type": "Directory" } },
+    { "long": "--color", "description": "Control the use of color in output", "takes_value": true, "value_type": { "type": "Choice", "data": ["auto", "always", "never"] } },
     { "short": "-h", "long": "--help", "description": "Show help" }
   ],
   "subcommands": [
@@ -37,13 +40,115 @@
       ]
     },
     {
+      "name": "init",
+      "description": "Create a new project",
+      "options": [
+        { "long": "--name", "description": "The name of the project", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--lib", "description": "Create a project for a Python library" },
+        { "long": "--app", "description": "Create a project for a Python application" },
+        { "long": "--bare", "description": "Create only a pyproject.toml" }
+      ]
+    },
+    {
+      "name": "build",
+      "description": "Build Python packages into source distributions and wheels",
+      "options": [
+        { "long": "--sdist", "description": "Build an sdist" },
+        { "long": "--wheel", "description": "Build a wheel" },
+        { "long": "--out-dir", "description": "Output directory", "takes_value": true, "value_type": { "type": "Directory" } }
+      ]
+    },
+    {
+      "name": "publish",
+      "description": "Upload distributions to an index",
+      "options": [
+        { "long": "--repository", "description": "The repository to publish to", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--dry-run", "description": "Perform a trial run without uploading" }
+      ]
+    },
+    {
+      "name": "tree",
+      "description": "Display the project's dependency tree"
+    },
+    {
+      "name": "version",
+      "description": "Read or update the project's version",
+      "arguments": [
+        { "name": "bump", "description": "New version or increment type", "required": false, "type": { "type": "Choice", "data": ["major", "minor", "patch"] } }
+      ]
+    },
+    {
+      "name": "python",
+      "description": "Manage Python versions and installations",
+      "subcommands": [
+        { "name": "install", "description": "Download and install Python versions" },
+        { "name": "list", "description": "List the available Python versions" },
+        { "name": "pin", "description": "Pin to a specific Python version" },
+        { "name": "uninstall", "description": "Uninstall Python versions" },
+        { "name": "find", "description": "Search for a Python installation" }
+      ]
+    },
+    {
+      "name": "venv",
+      "description": "Create a virtual environment",
+      "options": [
+        { "long": "--python", "description": "Python interpreter to use", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--system-site-packages", "description": "Give the virtual environment access to the system site packages" }
+      ],
+      "arguments": [
+        { "name": "path", "description": "Environment path", "required": false, "type": { "type": "Directory" } }
+      ]
+    },
+    {
+      "name": "export",
+      "description": "Export the project's lockfile to an alternate format",
+      "options": [
+        { "long": "--format", "description": "Export format", "takes_value": true, "value_type": { "type": "Choice", "data": ["requirements-txt", "pylock"] } }
+      ]
+    },
+    {
+      "name": "format",
+      "description": "Format Python code in the project",
+      "arguments": [
+        { "name": "paths", "description": "Paths to format", "multiple": true, "required": false }
+      ]
+    },
+    {
+      "name": "cache",
+      "description": "Manage uv's cache",
+      "subcommands": [
+        { "name": "clean", "description": "Clear the cache" },
+        { "name": "prune", "description": "Prune all unused objects from the cache" },
+        { "name": "dir", "description": "Show the cache directory" }
+      ]
+    },
+    {
+      "name": "self",
+      "description": "Manage the uv executable",
+      "subcommands": [
+        { "name": "update", "description": "Update uv" },
+        { "name": "version", "description": "Display uv's version" }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Manage authentication",
+      "subcommands": [
+        { "name": "login", "description": "Login to a service" },
+        { "name": "logout", "description": "Logout from a service" },
+        { "name": "token", "description": "Print an access token" }
+      ]
+    },
+    {
       "name": "pip",
       "description": "Manage Python packages with a pip-compatible interface",
       "subcommands": [
         { "name": "install", "description": "Install packages", "arguments": [{ "name": "package", "description": "Package requirement", "multiple": true }] },
         { "name": "uninstall", "description": "Uninstall packages", "arguments": [{ "name": "package", "description": "Installed package", "multiple": true, "type": { "type": "Dynamic", "data": { "provider": "python.project_dependency" } } }] },
         { "name": "list", "description": "List installed packages" },
+        { "name": "show", "description": "Show information about one or more installed packages" },
         { "name": "freeze", "description": "Output installed packages" },
+        { "name": "outdated", "description": "List outdated packages" },
         { "name": "compile", "description": "Compile requirements", "arguments": [{ "name": "file", "description": "Input requirements file", "type": { "type": "File", "data": {} } }] },
         { "name": "sync", "description": "Sync environment from requirements", "arguments": [{ "name": "file", "description": "Requirements file", "type": { "type": "File", "data": {} } }] }
       ]
@@ -55,7 +160,9 @@
         { "name": "run", "description": "Run a tool" },
         { "name": "install", "description": "Install a tool" },
         { "name": "list", "description": "List installed tools" },
-        { "name": "upgrade", "description": "Upgrade installed tools" }
+        { "name": "upgrade", "description": "Upgrade installed tools" },
+        { "name": "uninstall", "description": "Uninstall a tool" },
+        { "name": "dir", "description": "Show the tools directory" }
       ]
     }
   ]

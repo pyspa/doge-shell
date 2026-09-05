@@ -201,6 +201,10 @@
           "description": "Test only the specified bench target",
           "takes_value": true,
           "value_type": { "type": "Dynamic", "data": { "provider": "cargo.bench" } }
+        },
+        {
+          "long": "--no-run",
+          "description": "Compile, but don't run tests"
         }
       ],
       "arguments": [
@@ -641,6 +645,158 @@
         { "short": "-x", "long": "--exec", "description": "Cargo command to execute", "takes_value": true, "value_type": { "type": "String" } },
         { "short": "-s", "long": "--shell", "description": "Shell command to execute", "takes_value": true, "value_type": { "type": "CommandWithArgs" } },
         { "short": "-c", "long": "--clear", "description": "Clear screen before each run" }
+      ]
+    },
+    {
+      "name": "init",
+      "description": "Create a new cargo package in an existing directory",
+      "options": [
+        { "long": "--bin", "description": "Use a binary (application) template" },
+        { "long": "--lib", "description": "Use a library template" },
+        { "long": "--name", "description": "Set the resulting package name", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--vcs", "description": "Specify the VCS to use", "takes_value": true, "value_type": { "type": "Choice", "data": ["git", "hg", "pijul", "fossil", "none"] } }
+      ]
+    },
+    {
+      "name": "fetch",
+      "description": "Fetch dependencies of a package from the network",
+      "options": [
+        { "long": "--locked", "description": "Require Cargo.lock to be up to date" }
+      ]
+    },
+    {
+      "name": "fix",
+      "description": "Automatically fix lint warnings reported by rustc",
+      "options": [
+        { "long": "--allow-dirty", "description": "Fix code even if the working directory is dirty" },
+        { "long": "--allow-no-vcs", "description": "Fix code even if a VCS is not detected" },
+        { "long": "--broken-code", "description": "Fix code even if it already has compiler errors" },
+        { "long": "--edition", "description": "Fix in preparation for the given edition", "takes_value": true, "value_type": { "type": "String" } }
+      ]
+    },
+    {
+      "name": "info",
+      "description": "Display information about a package",
+      "arguments": [
+        {
+          "name": "crate",
+          "description": "Crate to inspect"
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Log in to a registry",
+      "options": [
+        { "long": "--registry", "description": "Registry to use", "takes_value": true, "value_type": { "type": "String" } }
+      ],
+      "arguments": [
+        { "name": "token", "description": "API token", "required": false }
+      ]
+    },
+    {
+      "name": "logout",
+      "description": "Remove an API token from the registry locally",
+      "options": [
+        { "long": "--registry", "description": "Registry to use", "takes_value": true, "value_type": { "type": "String" } }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search packages in the registry",
+      "options": [
+        { "long": "--limit", "description": "Number of results to show", "takes_value": true, "value_type": { "type": "Number" } }
+      ],
+      "arguments": [
+        { "name": "query", "description": "Search query" }
+      ]
+    },
+    {
+      "name": "tree",
+      "description": "Display a tree visualization of a dependency graph",
+      "options": [
+        { "long": "--invert", "short": "-i", "description": "Show the reverse dependencies", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--duplicates", "short": "-d", "description": "Show multiple versions of the same package" },
+        { "long": "--charset", "description": "Character set to use", "takes_value": true, "value_type": { "type": "Choice", "data": ["utf8", "ascii"] } }
+      ]
+    },
+    {
+      "name": "yank",
+      "description": "Remove a pushed crate from the index",
+      "arguments": [
+        { "name": "crate", "description": "Crate to yank" },
+        { "name": "version", "description": "Version to yank" }
+      ]
+    },
+    {
+      "name": "owner",
+      "description": "Manage the owners of a crate on the registry",
+      "subcommands": [
+        { "name": "add", "description": "Add an owner to a crate" },
+        { "name": "remove", "description": "Remove an owner from a crate" },
+        { "name": "list", "description": "List the owners of a crate" }
+      ]
+    },
+    {
+      "name": "package",
+      "description": "Assemble the local package into a distributable tarball",
+      "options": [
+        { "long": "--list", "description": "Print files included in a package without making one" },
+        { "long": "--allow-dirty", "description": "Allow dirty working directories to be packaged" },
+        { "long": "--no-verify", "description": "Don't verify the contents by building them" }
+      ]
+    },
+    {
+      "name": "rustc",
+      "description": "Compile a package, and pass extra options to the compiler",
+      "options": [
+        { "long": "--release", "description": "Build artifacts in release mode" },
+        { "long": "--profile", "description": "Build with the specified profile", "takes_value": true, "value_type": { "type": "String" } },
+        { "long": "--package", "short": "-p", "description": "Package to build", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "cargo.package" } } }
+      ]
+    },
+    {
+      "name": "locate-project",
+      "description": "Print a JSON representation of a Cargo.toml file's location",
+      "options": [
+        { "long": "--workspace", "description": "Locate the workspace root" },
+        { "long": "--message-format", "description": "Output format", "takes_value": true, "value_type": { "type": "Choice", "data": ["json", "plain"] } }
+      ]
+    },
+    {
+      "name": "metadata",
+      "description": "Output the resolved dependencies of a package in machine-readable format",
+      "options": [
+        { "long": "--format-version", "description": "Format version", "takes_value": true, "value_type": { "type": "Number" } },
+        { "long": "--no-deps", "description": "Output information only about the workspace members" }
+      ]
+    },
+    {
+      "name": "generate-lockfile",
+      "description": "Generate the lockfile for a package"
+    },
+    {
+      "name": "vendor",
+      "description": "Vendor all dependencies for a project locally",
+      "options": [
+        { "long": "--sync", "description": "Sync with a lockfile", "takes_value": true, "value_type": { "type": "File", "data": {} } },
+        { "long": "--no-delete", "description": "Don't delete older crates in the vendor directory" }
+      ]
+    },
+    {
+      "name": "report",
+      "description": "Generate and display various kinds of reports",
+      "subcommands": [
+        { "name": "future-incompat", "description": "Display a future-incompat report" }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Inspect configuration values",
+      "subcommands": [
+        { "name": "get", "description": "Get a configuration value" },
+        { "name": "set", "description": "Set a configuration value" },
+        { "name": "unset", "description": "Unset a configuration value" }
       ]
     }
   ]

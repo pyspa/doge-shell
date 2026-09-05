@@ -93,6 +93,91 @@
       ]
     },
     { "name": "tasks", "description": "List project tasks" },
-    { "name": "plugins", "description": "Manage plugins" }
+    { "name": "plugins", "description": "Manage plugins" },
+    {
+      "name": "env",
+      "description": "Exports env vars to activate mise a single time",
+      "arguments": [
+        { "name": "tool", "description": "Tool to get env for", "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+      ]
+    },
+    {
+      "name": "ls-remote",
+      "description": "List runtime versions available for install",
+      "arguments": [
+        { "name": "tool", "description": "Tool to list versions for", "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+      ]
+    },
+    {
+      "name": "outdated",
+      "description": "Shows outdated tool versions",
+      "arguments": [
+        { "name": "tool", "description": "Tool to check", "multiple": true, "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+      ]
+    },
+    {
+      "name": "upgrade",
+      "description": "Upgrades outdated tool versions",
+      "arguments": [
+        { "name": "tool", "description": "Tool(s) to upgrade", "multiple": true, "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Manage config files",
+      "subcommands": [
+        { "name": "ls", "description": "List config files currently in use" },
+        { "name": "generate", "description": "Generate an mise.toml file" }
+      ]
+    },
+    {
+      "name": "cache",
+      "description": "Manage the mise cache",
+      "subcommands": [
+        { "name": "clear", "description": "Delete all cache data" },
+        { "name": "dir", "description": "Show the cache directory" }
+      ]
+    },
+    {
+      "name": "search",
+      "description": "Search for tools in the registry",
+      "arguments": [
+        { "name": "query", "description": "Search term", "required": false }
+      ]
+    },
+    {
+      "name": "set",
+      "description": "Set environment variables in mise.toml"
+    },
+    {
+      "name": "unset",
+      "description": "Remove environment variables in mise.toml",
+      "arguments": [
+        { "name": "keys", "description": "Environment variable keys", "multiple": true, "required": false }
+      ]
+    },
+    {
+      "name": "activate",
+      "description": "Initializes mise in the current shell session"
+    },
+    {
+      "name": "deactivate",
+      "description": "Disable mise for current shell session"
+    },
+    {
+      "name": "reshim",
+      "description": "Creates new shims based on bin paths from currently installed tools"
+    },
+    {
+      "name": "which",
+      "description": "Shows the path that a tool's binary is run from",
+      "arguments": [
+        { "name": "command", "description": "Command to look up", "required": false, "type": { "type": "Command" } }
+      ]
+    },
+    {
+      "name": "doctor",
+      "description": "Check mise installation for possible problems"
+    }
   ]
 }

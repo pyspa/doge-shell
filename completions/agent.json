@@ -1,0 +1,132 @@
+{
+  "command": "agent",
+  "description": "Run and resume persistent AI tasks",
+  "subcommands": [
+    {
+      "name": "run",
+      "description": "Start a task",
+      "options": [
+        {
+          "long": "--tokens",
+          "description": "Cumulative token budget",
+          "takes_value": true
+        },
+        {
+          "long": "--timeout",
+          "description": "Cumulative time budget in seconds",
+          "takes_value": true
+        },
+        {
+          "long": "--read",
+          "description": "Readable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--write",
+          "description": "Writable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-command",
+          "description": "Exact allowed command",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-mcp",
+          "description": "Exact MCP approval key",
+          "takes_value": true
+        },
+        {
+          "long": "--network",
+          "description": "Allowed sandbox host",
+          "takes_value": true
+        },
+        {
+          "long": "--env",
+          "description": "Inherited environment variable",
+          "takes_value": true
+        },
+        {
+          "long": "--sandbox",
+          "description": "Require pinned SRT isolation"
+        },
+        {
+          "long": "--check",
+          "description": "Completion criterion",
+          "takes_value": true
+        }
+      ]
+    },
+    {
+      "name": "resume",
+      "description": "Resume a saved task",
+      "options": [
+        {
+          "long": "--tokens",
+          "description": "Cumulative token budget",
+          "takes_value": true
+        },
+        {
+          "long": "--timeout",
+          "description": "Cumulative time budget in seconds",
+          "takes_value": true
+        },
+        {
+          "long": "--read",
+          "description": "Readable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--write",
+          "description": "Writable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-command",
+          "description": "Exact allowed command",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-mcp",
+          "description": "Exact MCP approval key",
+          "takes_value": true
+        },
+        {
+          "long": "--network",
+          "description": "Allowed sandbox host",
+          "takes_value": true
+        },
+        {
+          "long": "--env",
+          "description": "Inherited environment variable",
+          "takes_value": true
+        },
+        {
+          "long": "--reconcile",
+          "description": "Observed result of interrupted operation",
+          "takes_value": true
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List tasks"
+    },
+    {
+      "name": "show",
+      "description": "Show task and events"
+    },
+    {
+      "name": "cancel",
+      "description": "Request cancellation"
+    },
+    {
+      "name": "delete",
+      "description": "Delete task records"
+    },
+    {
+      "name": "respond",
+      "description": "Provide remote task input"
+    }
+  ]
+}

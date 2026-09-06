@@ -95,8 +95,12 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         ));
     }
 
-    let contents = fs::read_to_string(&normalized_abs_path)
-        .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
+    let contents = if proxy.agent_runtime().is_some() {
+        crate::agent::files::read(&normalized_abs_path)
+    } else {
+        fs::read_to_string(&normalized_abs_path)
+    }
+    .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
     // Report the mismatch back to the model instead of guessing: the loop feeds
     // tool errors to the assistant so it can retry with a corrected match.
@@ -142,8 +146,12 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         contents.replacen(old_string, new_string, 1)
     };
 
-    fs::write(&normalized_abs_path, &updated)
-        .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
+    if proxy.agent_runtime().is_some() {
+        crate::agent::files::write(&normalized_abs_path, &updated)
+    } else {
+        fs::write(&normalized_abs_path, &updated)
+    }
+    .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
 
     Ok(format!(
         "str_replace completed: {matches} replacement(s) in {path_value} ({} -> {} bytes)",

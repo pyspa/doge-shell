@@ -230,3 +230,11 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   `openai-execute-tool.json`。実体は OpenAI 互換 API 全般。改名は互換を壊す。
 - **builtin 名の表記ゆれ**。`chat_prompt` / `chat_model` / `chat_reset`（snake）と
   `ai-commit` / `ai-watch` / `safe-run`（kebab）。
+
+## 永続タスク (`agent`)
+
+`dsh/src/agent.rs` がSQLiteとCLIを所有し、`AgentTaskStore` と `AgentCommandPolicy::agent_runtime` を通してループAへ渡す。`dsh-types/src/agent.rs` が状態型、`dsh-builtin/src/agent/` が記録・検証・ジョブ・任意のSRTアダプターを所有する。ループは追加しない。詳細と利用例は [../../../../agent.md](../../../../agent.md)。
+
+結果のない変更操作を再送しない。チェックポイントに残るtool callは永続イベントの結果で補い、結果不明ならユーザーの実状態確認を要求する。予算は再開でリセットしない。モデルの最終回答だけで完了にしない。認証情報の保存、権限の外部コンテンツからの拡大、隔離失敗時の通常実行へのフォールバックは禁止。
+
+再発防止の焦点: 対話用セッションTTLをタスクへ適用しない。互換APIのusage欠落をゼロ使用扱いしない。ジョブ結果のJSONを文字列途中で切らない。SRTがPATHで別のbashを選んでもシステム外への読み取り権限を自動で追加しない。

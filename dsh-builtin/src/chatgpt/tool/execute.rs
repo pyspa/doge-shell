@@ -13,7 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use xdg::BaseDirectories;
 
-use crate::ShellProxy;
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 use anyhow::Result;
 use dsh_types::safety_policy::{string_eval_flag, substitution_construct};
@@ -66,6 +65,7 @@ pub(crate) fn definition() -> Value {
                         "type": "string",
                         "description": "Directory to run in, relative to the current directory. Defaults to the current directory."
                     },
+                    "yield_time_ms": {"type":"integer","minimum":0,"maximum":1000,"description":"Agent tasks: return a managed job handle after this wait."},
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1000,
@@ -145,8 +145,52 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         .unwrap_or(DEFAULT_TIMEOUT_MS)
         .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
 
-    let run_result = run_with_timeout(command, cwd.as_deref(), Duration::from_millis(timeout_ms))
-        .map_err(|err| format!("chat: failed to execute `{command}`: {err}"))?;
+    if let Some(runtime) = proxy.agent_runtime() {
+        let (mut builder, config) = {
+            let runtime = runtime.lock();
+            crate::agent::sandbox::command(
+                command,
+                cwd.as_deref().unwrap_or(&runtime.task.root),
+                &runtime.task.grant,
+                &crate::config_paths::agent_state_dir(),
+            )
+            .map_err(|e| e.to_string())?
+        };
+        let env_names = runtime.lock().task.grant.environment.clone();
+        for name in env_names {
+            if let Some(value) = proxy.get_var(&name) {
+                builder.env(name, value);
+            }
+        }
+        let id = runtime
+            .lock()
+            .jobs
+            .start(builder, Duration::from_millis(timeout_ms), config)
+            .map_err(|e| e.to_string())?;
+        let wait_ms = parsed["yield_time_ms"].as_u64().unwrap_or(1000).min(1000);
+        let start = std::time::Instant::now();
+        loop {
+            if super::super::task_cancelled(proxy) {
+                runtime.lock().jobs.cancel(&id).map_err(|e| e.to_string())?;
+            }
+            let result = runtime
+                .lock()
+                .jobs
+                .snapshot(&id, 0, 4096)
+                .map_err(|e| e.to_string())?;
+            if result["status"] != "running" || start.elapsed().as_millis() >= wait_ms as u128 {
+                return Ok(result.to_string());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    let run_result = run_with_timeout_cancel(
+        command,
+        cwd.as_deref(),
+        Duration::from_millis(timeout_ms),
+        &|| proxy.is_canceled(),
+    )
+    .map_err(|err| format!("chat: failed to execute `{command}`: {err}"))?;
 
     let stdout_text = String::from_utf8_lossy(&run_result.stdout).to_string();
     let stderr_text = String::from_utf8_lossy(&run_result.stderr).to_string();
@@ -170,18 +214,22 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         .and_then(|status| status.code())
         .unwrap_or(-1);
 
-    let note = match (run_result.timed_out, run_result.drain_incomplete) {
-        (true, _) => Some(format!(
-            "command exceeded timeout_ms={timeout_ms} and was killed; output below is partial"
-        )),
-        // Saying nothing here would present a truncated capture as the whole
-        // output, which is exactly the mistake the timeout note exists to avoid.
-        (false, true) => Some(
-            "output capture stopped early; a background process still holds the pipe, so the \
+    let note = if run_result.cancelled {
+        Some("command cancelled; output may be partial".into())
+    } else {
+        match (run_result.timed_out, run_result.drain_incomplete) {
+            (true, _) => Some(format!(
+                "command exceeded timeout_ms={timeout_ms} and was killed; output below is partial"
+            )),
+            // Saying nothing here would present a truncated capture as the whole
+            // output, which is exactly the mistake the timeout note exists to avoid.
+            (false, true) => Some(
+                "output capture stopped early; a background process still holds the pipe, so the \
              output below may be incomplete"
-                .to_string(),
-        ),
-        (false, false) => None,
+                    .to_string(),
+            ),
+            (false, false) => None,
+        }
     };
 
     Ok(render_result(exit_code, &stdout_text, &stderr_text, note))
@@ -429,6 +477,18 @@ fn authorize(
     // `cargo test` meaning "and its arguments". A session "always" answer is
     // matched against the exact line the user was shown instead: approving
     // `rm -rf target` must not go on to approve `rm -rf target ~/documents`.
+    if proxy.agent_runtime().is_some() {
+        return match proxy.evaluate_agent_command(command) {
+            AgentCommandVerdict::Allowed => Ok(Authorization::Run),
+            AgentCommandVerdict::Denied(reason) => Err(reason),
+            AgentCommandVerdict::Confirm(reason) => {
+                proxy
+                    .request_agent_approval(&format!("{command}: {reason}"))
+                    .map_err(|e| e.to_string())?;
+                Err(format!("agent: command permission required: {command}"))
+            }
+        };
+    }
     let approved_exactly = proxy
         .agent_session_approvals()
         .iter()
@@ -508,6 +568,7 @@ struct CapturedRun {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     timed_out: bool,
+    cancelled: bool,
     /// The readers never reached end of stream, so what follows is whatever had
     /// arrived when the grace period ran out.
     drain_incomplete: bool,
@@ -643,10 +704,11 @@ impl DrainedPipe {
 /// what makes the command line real; what makes it safe is `authorize`, which
 /// has already put the whole line through the shell's own parser and safety
 /// guard.
-fn run_with_timeout(
+fn run_with_timeout_cancel(
     command: &str,
     cwd: Option<&Path>,
     timeout: Duration,
+    cancel: &dyn Fn() -> bool,
 ) -> Result<CapturedRun, String> {
     let mut builder = Command::new("sh");
     builder
@@ -670,6 +732,7 @@ fn run_with_timeout(
 
     let deadline = Instant::now() + timeout;
     let mut timed_out = false;
+    let mut cancelled = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
@@ -677,11 +740,12 @@ fn run_with_timeout(
             Err(err) => return Err(err.to_string()),
         }
 
-        if Instant::now() >= deadline {
+        cancelled = cancel();
+        if cancelled || Instant::now() >= deadline {
             kill_process_group(&child);
             let _ = child.kill();
             let _ = child.wait();
-            timed_out = true;
+            timed_out = !cancelled;
             break None;
         }
 
@@ -700,6 +764,7 @@ fn run_with_timeout(
         stdout,
         stderr,
         timed_out,
+        cancelled,
         drain_incomplete: !drained,
     })
 }
@@ -785,7 +850,7 @@ fn command_is_allowlisted(program: &str, args: &[String], allowlist: &[String]) 
         .any(|entry| allowlist_entry_matches(entry, program, args))
 }
 
-fn is_skill_script_program(program: &str, proxy: &mut dyn ShellProxy) -> Result<bool, String> {
+fn is_skill_script_program(program: &str, proxy: &mut dyn ChatToolHost) -> Result<bool, String> {
     if !program.contains('/') && !Path::new(program).is_absolute() {
         return Ok(false);
     }

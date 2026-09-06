@@ -20,6 +20,7 @@ mod abbr;
 mod add_path;
 mod ai_watch;
 
+pub mod agent;
 mod alias;
 mod bg;
 mod blocks;
@@ -92,6 +93,7 @@ mod z;
 /// the shell core is exhaustive and typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreShellAction {
+    Agent,
     Exit,
     History,
     Reload,
@@ -111,6 +113,7 @@ pub enum CoreShellAction {
 impl CoreShellAction {
     pub const fn command_name(self) -> &'static str {
         match self {
+            Self::Agent => "agent",
             Self::Exit => "exit",
             Self::History => "history",
             Self::Reload => "reload",
@@ -130,6 +133,7 @@ impl CoreShellAction {
 
     pub fn from_command_name(command: &str) -> Option<Self> {
         Some(match command {
+            "agent" => Self::Agent,
             "exit" => Self::Exit,
             "history" => Self::History,
             "reload" => Self::Reload,
@@ -637,6 +641,14 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
         BuiltinSpec::new(export::command, export::description()),
     );
 
+    builtin.insert(
+        "agent",
+        BuiltinSpec::new(
+            agent::command,
+            "Run, resume, inspect or cancel a durable agent task",
+        ),
+    );
+
     // AI integration commands
 
     builtin.insert(
@@ -890,6 +902,7 @@ mod shell_proxy_tests {
     #[test]
     fn core_shell_actions_round_trip_through_compatibility_names() {
         let actions = [
+            CoreShellAction::Agent,
             CoreShellAction::Exit,
             CoreShellAction::History,
             CoreShellAction::Reload,

@@ -29,6 +29,7 @@ pub const APP_NAME: &str = "dsh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 pub struct Shell {
+    pub agent_runtime: Option<Arc<ParkingMutex<dsh_builtin::agent::AgentRuntime>>>,
     pub environment: Arc<RwLock<Environment>>,
     pub exited: Option<ExitStatus>,
     pub pid: Pid,
@@ -86,6 +87,7 @@ impl Shell {
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
 
         Shell {
+            agent_runtime: None,
             environment,
             exited: None,
             pid,

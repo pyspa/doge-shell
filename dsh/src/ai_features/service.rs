@@ -102,6 +102,8 @@ pub struct AiCommandResponse {
 /// Core AI service trait for sending requests to AI backends.
 #[async_trait]
 pub trait AiService: Send + Sync {
+    /// Cancel requests already in flight; future requests use a new generation.
+    fn cancel_requests(&self) {}
     /// Send a request to the AI service with the given messages and temperature.
     async fn send_request(&self, messages: Vec<Value>, temperature: Option<f64>) -> Result<String>;
 
@@ -142,11 +144,30 @@ pub trait ConfirmationHandler: Send + Sync {
 
 /// Chat client trait for sending requests to chat APIs.
 pub trait ChatClient: Send + Sync {
+    fn send_chat_cancellable(
+        &self,
+        messages: &[Value],
+        options: &ChatRequestOptions,
+        cancel: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Value> {
+        if cancel() {
+            anyhow::bail!("AI request cancelled");
+        }
+        self.send_chat_request(messages, options)
+    }
     /// Send a chat request.
     fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value>;
 }
 
 impl ChatClient for ChatGptClient {
+    fn send_chat_cancellable(
+        &self,
+        messages: &[Value],
+        options: &ChatRequestOptions,
+        cancel: &(dyn Fn() -> bool + Sync),
+    ) -> Result<Value> {
+        self.send_chat(messages, options, Some(cancel))
+    }
     fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value> {
         self.send_chat(messages, options, None)
     }
@@ -178,6 +199,7 @@ pub struct AgentPolicyHandles {
 
 /// Live implementation of AiService using OpenAI API and MCP tools.
 pub struct LiveAiService {
+    cancellation_generation: std::sync::atomic::AtomicU64,
     client: Arc<dyn ChatClient>,
     mcp_manager: Arc<RwLock<McpManager>>,
     policy: AgentPolicyHandles,
@@ -198,6 +220,7 @@ impl LiveAiService {
     ) -> Self {
         Self {
             client: Arc::new(client),
+            cancellation_generation: std::sync::atomic::AtomicU64::new(0),
             mcp_manager,
             policy,
             confirmation_handler,
@@ -260,6 +283,10 @@ impl LiveAiService {
 
 #[async_trait]
 impl AiService for LiveAiService {
+    fn cancel_requests(&self) {
+        self.cancellation_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
     fn get_safety_guard(&self) -> Option<Arc<SafetyGuard>> {
         Some(self.policy.safety_guard.clone())
     }
@@ -324,6 +351,14 @@ impl LiveAiService {
         messages_in: Vec<Value>,
         options: AiRequestOptions,
     ) -> Result<String> {
+        let generation = self
+            .cancellation_generation
+            .load(std::sync::atomic::Ordering::SeqCst);
+        let cancelled = || {
+            self.cancellation_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != generation
+        };
         // A request that asks for a JSON object is parsed, not read: a language
         // instruction there risks the format, and nobody reads the field names.
         let mut messages = if options.json_object {
@@ -344,7 +379,9 @@ impl LiveAiService {
                 anyhow::bail!("AI request exceeded maximum number of tool interactions");
             }
 
-            let response = self.client.send_chat_request(&messages, &chat_options)?;
+            let response =
+                self.client
+                    .send_chat_cancellable(&messages, &chat_options, &cancelled)?;
 
             // Shared with the `!` chat runtime so the two loops cannot drift.
             let interpreted = turn::interpret_response(&response)
@@ -427,7 +464,11 @@ impl LiveAiService {
                     }
 
                     // Execute tool
-                    let result_str = match self.mcp_manager.read().execute_tool(name, args) {
+                    let result_str = match self
+                        .mcp_manager
+                        .read()
+                        .execute_tool_cancellable(name, args, &cancelled, false)
+                    {
                         Ok(res) => res,
                         Err(e) => format!("Error executing tool: {}", e),
                     };

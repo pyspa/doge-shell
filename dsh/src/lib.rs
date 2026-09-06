@@ -20,6 +20,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use tracing::debug;
 
+pub mod agent;
 pub mod ai_features;
 pub mod argument_explainer;
 pub mod blocks_ui;

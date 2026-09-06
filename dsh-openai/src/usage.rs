@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Token counts for one or more chat completion responses.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     pub requests: u64,
     pub prompt_tokens: u64,

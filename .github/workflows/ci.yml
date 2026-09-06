@@ -53,6 +53,20 @@ jobs:
       # dsh/tests/ launch the shell as a child process, and a test binary
       # inherits fd 0. There is no tty on a runner, but closing it keeps the
       # suite honest about never reading one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pinned agent sandbox
+        run: npm install --global --ignore-scripts @anthropic-ai/sandbox-runtime@0.0.75
+
+      - name: Install Linux sandbox dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get install --no-install-recommends -y bubblewrap socat
+
+      - name: Agent OS sandbox boundary
+        run: cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored
+
       - name: Test
         run: cargo test --workspace < /dev/null
 

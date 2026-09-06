@@ -14,6 +14,7 @@ use tracing::warn;
 
 pub mod terminal;
 pub use terminal::{ShellMode, TerminalState};
+pub mod agent;
 pub mod ansi;
 pub mod command_block;
 pub mod completion;

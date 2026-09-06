@@ -1,8 +1,9 @@
+mod connection;
 use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
 use rmcp::{
     ServiceExt,
-    model::{CallToolRequestParams, CallToolResult, ListToolsResult, Tool},
+    model::{CallToolRequestParams, Tool},
     transport::{
         child_process::TokioChildProcess,
         streamable_http_client::{
@@ -10,7 +11,7 @@ use rmcp::{
         },
     },
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::OpenOptions;
@@ -170,6 +171,8 @@ pub struct McpRuntimeStateSnapshot {
 
 /// MCP Manager with session caching support
 pub struct McpManager {
+    connections: parking_lot::Mutex<HashMap<String, Arc<connection::Connection>>>,
+    tools_refreshed: Instant,
     servers: Vec<McpServer>,
     /// A `BTreeMap`, not a `HashMap`: `tool_definitions` walks it to build the
     /// `tools` array, and a hash order that changes between processes means the
@@ -199,6 +202,8 @@ impl Default for McpManager {
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
             disabled: RwLock::new(HashSet::new()),
+            connections: parking_lot::Mutex::new(HashMap::new()),
+            tools_refreshed: Instant::now(),
         }
     }
 }
@@ -425,6 +430,7 @@ impl McpManager {
     /// disconnect landed. Clearing the session metadata alone left `mcp status`
     /// saying "disconnected" while the agent kept calling the same tools.
     pub fn disconnect(&self, label: &str) -> Result<(), String> {
+        self.connections.lock().remove(label);
         if !self.servers.iter().any(|server| server.label == label) {
             return Err(format!("MCP server '{label}' not found"));
         }
@@ -436,6 +442,7 @@ impl McpManager {
 
     /// Disconnect from all MCP servers
     pub fn disconnect_all(&self) {
+        self.connections.lock().clear();
         self.session_meta_write().clear();
         let mut disabled = self.disabled_write();
         let mut count = 0usize;
@@ -447,6 +454,79 @@ impl McpManager {
         if count > 0 {
             info!(count, "disconnected from all MCP servers");
         }
+    }
+
+    pub fn refresh_tools_if_expired(&mut self, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+        if cancelled() {
+            return Err("MCP discovery cancelled".into());
+        }
+        if self.tools_refreshed.elapsed() < Duration::from_secs(300)
+            && !self
+                .connections
+                .lock()
+                .values()
+                .any(|connection| connection.tools_changed())
+        {
+            return Ok(());
+        }
+        for index in 0..self.servers.len() {
+            if cancelled() {
+                return Err("MCP discovery cancelled".into());
+            }
+            let label = self.servers[index].label.clone();
+            if self.is_disabled(&label) {
+                continue;
+            }
+            let transport = self.servers[index].transport.clone();
+            let connection = self
+                .connections
+                .lock()
+                .entry(label.clone())
+                .or_insert_with(|| Arc::new(connection::Connection::new(transport)))
+                .clone();
+            let fetched = connection
+                .request(json!({"kind":"list"}), cancelled)
+                .and_then(|value| serde_json::from_value::<Vec<Tool>>(value).map_err(Into::into));
+            if cancelled() {
+                return Err("MCP discovery cancelled".into());
+            }
+            let tools = match fetched {
+                Ok(tools) => {
+                    self.connection_errors_write().remove(&label);
+                    tools
+                }
+                Err(error) => {
+                    self.connection_errors_write()
+                        .insert(label.clone(), error.to_string());
+                    // Keep this server's cached definitions; a failed refresh
+                    // must not hide healthy servers from discovery.
+                    connection.mark_refreshed();
+                    continue;
+                }
+            };
+            self.bindings
+                .retain(|_, binding| binding.server_label != label);
+            for tool in &tools {
+                let base = format!(
+                    "mcp__{}__{}",
+                    sanitize_identifier(&label),
+                    sanitize_identifier(&tool.name)
+                );
+                let name = stable_name(&base, &label, &tool.name);
+                self.bindings.insert(
+                    name.clone(),
+                    ToolBinding {
+                        server_label: label.clone(),
+                        tool_name: tool.name.to_string(),
+                        function_name: name,
+                    },
+                );
+            }
+            self.servers[index].tools = tools;
+            connection.mark_refreshed();
+        }
+        self.tools_refreshed = Instant::now();
+        Ok(())
     }
 
     pub fn tool_definitions(&self) -> Vec<Value> {
@@ -545,6 +625,15 @@ impl McpManager {
     }
 
     pub fn execute_tool(&self, function_name: &str, arguments: &str) -> Result<String, String> {
+        self.execute_tool_cancellable(function_name, arguments, &|| false, false)
+    }
+    pub fn execute_tool_cancellable(
+        &self,
+        function_name: &str,
+        arguments: &str,
+        cancel: &dyn Fn() -> bool,
+        tasks: bool,
+    ) -> Result<String, String> {
         let binding = match self.bindings.get(function_name) {
             Some(binding) => binding,
             None => return Err(format!("MCP tool binding `{function_name}` was not found")),
@@ -582,17 +671,53 @@ impl McpManager {
             .ok_or_else(|| "MCP server missing for tool invocation".to_string())?;
         let tool_name = binding.tool_name.clone();
 
-        let result = Self::execute_async_with_loader(move || async move {
-            timeout(
-                DEFAULT_TOOL_TIMEOUT,
-                call_tool_via_transport(transport, &tool_name, map),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("MCP tool call timed out after 30 seconds"))?
-        })
-        .map_err(|err| format!("failed to call MCP tool: {err}"))?;
-
+        let connection = {
+            let mut pool = self.connections.lock();
+            pool.entry(binding.server_label.clone())
+                .or_insert_with(|| Arc::new(connection::Connection::new(transport)))
+                .clone()
+        };
+        let mut params = json!({"name":tool_name,"arguments":map});
+        if tasks {
+            params["_meta"] = json!({"io.modelcontextprotocol/clientCapabilities":{"extensions":{"io.modelcontextprotocol/tasks":{}}}});
+        }
+        let value = connection
+            .request(json!({"kind":"call","params":params,"tasks":tasks}), cancel)
+            .map_err(|e| format!("failed to call MCP tool; outcome unknown: {e}"))?;
+        if value["resultType"] == "task" || value["resultType"] == "input_required" {
+            return Ok(json!({"server":binding.server_label,"response":value}).to_string());
+        }
+        let result =
+            serde_json::from_value(value).map_err(|e| format!("invalid MCP result: {e}"))?;
         render_tool_result(&result)
+    }
+
+    pub fn task_operation(
+        &self,
+        server: &str,
+        kind: &str,
+        params: Value,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Value, String> {
+        if self.is_disabled(server) {
+            return Err("MCP server is disconnected".into());
+        }
+        let transport = self
+            .servers
+            .iter()
+            .find(|s| s.label == server)
+            .ok_or("unknown MCP server")?
+            .transport
+            .clone();
+        let connection = self
+            .connections
+            .lock()
+            .entry(server.to_string())
+            .or_insert_with(|| Arc::new(connection::Connection::new(transport)))
+            .clone();
+        connection
+            .request(json!({"kind":kind,"params":params}), cancel)
+            .map_err(|e| e.to_string())
     }
 
     pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {
@@ -673,7 +798,12 @@ impl McpManager {
             let hash = hash_server_config(&config);
             let cached_tools: Option<Vec<Tool>> =
                 if let Some(entry) = cache.entries.get(&config.label) {
-                    if entry.config_hash == hash {
+                    if entry.config_hash == hash
+                        && chrono::Utc::now()
+                            .timestamp()
+                            .saturating_sub(entry.timestamp)
+                            < 300
+                    {
                         debug!("Loaded tools for {} from cache", config.label);
                         Some(entry.tools.clone())
                     } else {
@@ -756,7 +886,8 @@ impl McpManager {
                     sanitize_identifier(&server.label),
                     sanitize_identifier(tool.name.as_ref())
                 );
-                let function_name = unique_name(&base_name, &mut used_names);
+                let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
+                used_names.insert(function_name.clone());
                 bindings.insert(
                     function_name.clone(),
                     ToolBinding {
@@ -775,6 +906,8 @@ impl McpManager {
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
             disabled: RwLock::new(HashSet::new()),
+            connections: parking_lot::Mutex::new(HashMap::new()),
+            tools_refreshed: Instant::now(),
         })
     }
 
@@ -795,6 +928,7 @@ impl McpManager {
 
     /// Remove a registered MCP server and its associated metadata.
     pub fn remove_server(&mut self, label: &str) -> bool {
+        self.connections.lock().remove(label);
         let before = self.servers.len();
         self.servers.retain(|server| server.label != label);
         let removed = self.servers.len() != before;
@@ -935,7 +1069,8 @@ impl McpManager {
                 sanitize_identifier(&server.label),
                 sanitize_identifier(tool.name.as_ref())
             );
-            let function_name = unique_name(&base_name, &mut used_names);
+            let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
+            used_names.insert(function_name.clone());
             self.bindings.insert(
                 function_name.clone(),
                 ToolBinding {
@@ -989,105 +1124,14 @@ async fn test_connection(transport: McpTransport) -> Result<()> {
 }
 
 async fn list_tools_via_transport(transport: McpTransport) -> Result<Vec<Tool>> {
-    match transport {
-        McpTransport::Stdio {
-            command,
-            args,
-            env,
-            cwd,
-        } => {
-            let mut cmd = Command::new(&command);
-            cmd.args(&args);
-
-            if let Some(dir) = cwd {
-                cmd.current_dir(dir);
-            }
-            for (key, value) in &env {
-                cmd.env(key, value);
-            }
-
-            let service = ().serve(spawn_mcp_stdio_transport(cmd, &command)?).await?;
-            let ListToolsResult { tools, .. } = service.list_tools(None).await?;
-            let _ = service.cancel().await;
-            Ok(tools)
-        }
-        McpTransport::Sse { .. } => anyhow::bail!(LEGACY_SSE_UNSUPPORTED_MESSAGE),
-        McpTransport::Http {
-            url,
-            auth_header,
-            allow_stateless,
-        } => {
-            let mut config = StreamableHttpClientTransportConfig::with_uri(Arc::from(url.as_str()));
-            if let Some(header) = auth_header {
-                config = config.auth_header(header.clone());
-            }
-            if let Some(allow) = allow_stateless {
-                config.allow_stateless = allow;
-            }
-
-            let transport = StreamableHttpClientTransport::from_config(config);
-            let service = ().serve(transport).await?;
-            let ListToolsResult { tools, .. } = service.list_tools(None).await?;
-            let _ = service.cancel().await;
-            Ok(tools)
-        }
-    }
-}
-
-async fn call_tool_via_transport(
-    transport: McpTransport,
-    tool_name: &str,
-    arguments: Option<Map<String, Value>>,
-) -> Result<CallToolResult> {
-    match transport {
-        McpTransport::Stdio {
-            command,
-            args,
-            env,
-            cwd,
-        } => {
-            let mut cmd = Command::new(&command);
-            cmd.args(&args);
-
-            if let Some(dir) = cwd {
-                cmd.current_dir(dir);
-            }
-            for (key, value) in &env {
-                cmd.env(key, value);
-            }
-
-            let service = ().serve(spawn_mcp_stdio_transport(cmd, &command)?).await?;
-            let mut params = CallToolRequestParams::new(tool_name.to_string());
-            params.arguments = arguments;
-            let response = service.call_tool(params).await?;
-            let _ = service.cancel().await;
-
-            Ok(response)
-        }
-        McpTransport::Sse { .. } => anyhow::bail!(LEGACY_SSE_UNSUPPORTED_MESSAGE),
-        McpTransport::Http {
-            url,
-            auth_header,
-            allow_stateless,
-        } => {
-            let mut config = StreamableHttpClientTransportConfig::with_uri(Arc::from(url.as_str()));
-            if let Some(header) = auth_header {
-                config = config.auth_header(header.clone());
-            }
-            if let Some(allow) = allow_stateless {
-                config.allow_stateless = allow;
-            }
-
-            let transport = StreamableHttpClientTransport::from_config(config);
-            let service = ().serve(transport).await?;
-            let mut params = CallToolRequestParams::new(tool_name.to_string());
-            params.arguments = arguments;
-            let response = service.call_tool(params).await?;
-            let _ = service.cancel().await;
-
-            Ok(response)
-        }
-    }
+    timeout(DEFAULT_TOOL_TIMEOUT, async {
+        let service = connection::open(transport).await?;
+        let result = service.list_all_tools().await;
+        let _ = timeout(Duration::from_secs(1), service.cancel()).await;
+        result.map_err(anyhow::Error::from)
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("MCP discovery timed out"))?
 }
 
 fn sanitize_identifier(input: &str) -> String {
@@ -1118,20 +1162,23 @@ fn sanitize_identifier(input: &str) -> String {
     }
 }
 
-fn unique_name(base: &str, set: &mut HashSet<String>) -> String {
-    if !set.contains(base) {
-        set.insert(base.to_string());
-        return base.to_string();
+fn stable_name(base: &str, label: &str, tool: &str) -> String {
+    if sanitize_identifier(label) == label
+        && sanitize_identifier(tool) == tool
+        && !label.contains("__")
+        && !tool.contains("__")
+        && base.len() <= 64
+    {
+        return base.to_owned();
     }
-
-    let mut counter = 2;
-    loop {
-        let candidate = format!("{base}_{counter}");
-        if set.insert(candidate.clone()) {
-            return candidate;
-        }
-        counter += 1;
+    // FNV-1a is deterministic across builds and processes (DefaultHasher isn't a storage format).
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in label.bytes().chain([0]).chain(tool.bytes()) {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
     }
+    let prefix = &base[..base.floor_char_boundary(base.len().min(44))];
+    format!("{prefix}__h_{hash:016x}")
 }
 
 fn spawn_mcp_stdio_transport(cmd: Command, command: &str) -> std::io::Result<TokioChildProcess> {
@@ -1237,6 +1284,19 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     #[test]
+    fn tool_names_are_stable_bounded_and_preserve_unambiguous_names() {
+        assert_eq!(
+            stable_name("mcp__server__read", "server", "read"),
+            "mcp__server__read"
+        );
+        let first = stable_name("mcp__a_b__read", "a-b", "read");
+        let second = stable_name("mcp__a_b__read", "a_b", "read");
+        assert_ne!(first, second);
+        assert_eq!(first, stable_name("mcp__a_b__read", "a-b", "read"));
+        assert!(stable_name(&"x".repeat(100), "label", "tool").len() <= 64);
+    }
+
+    #[test]
     fn mcp_log_names_are_sanitized() {
         assert_eq!(sanitized_command_name("/usr/bin/node"), "node");
         assert_eq!(
@@ -1273,6 +1333,81 @@ mod tests {
             },
             tools: Vec::new(),
         }
+    }
+
+    fn discovery_fixture(dir: &Path, label: &str, slow: bool) -> McpServer {
+        let script = dir.join(format!("{label}.py"));
+        let marker = dir.join(format!("{label}.started"));
+        std::fs::write(&script, r#"
+import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    if request['method'] == 'initialize':
+        result = {'protocolVersion':request['params']['protocolVersion'], 'capabilities':{'tools':{}}, 'serverInfo':{'name':'fixture','version':'1'}}
+    else:
+        open(sys.argv[1], 'w').close()
+        if sys.argv[2] == 'slow': time.sleep(10)
+        result = {'tools':[{'name':'discovered','inputSchema':{'type':'object'}}]}
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
+"#).unwrap();
+        McpServer {
+            label: label.into(),
+            description: None,
+            tools: vec![],
+            transport: McpTransport::Stdio {
+                command: "python3".into(),
+                args: vec![
+                    script.to_string_lossy().into(),
+                    marker.to_string_lossy().into(),
+                    if slow { "slow" } else { "fast" }.into(),
+                ],
+                env: Default::default(),
+                cwd: None,
+            },
+        }
+    }
+
+    #[test]
+    fn discovery_keeps_cached_tools_and_refreshes_healthy_servers_after_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = McpManager::default();
+        let cached: Tool =
+            serde_json::from_value(json!({"name":"cached","inputSchema":{"type":"object"}}))
+                .unwrap();
+        let mut offline = mock_server("offline");
+        offline.tools = vec![cached.clone()];
+        manager.register_server(offline, vec![cached]).unwrap();
+        manager
+            .register_server(discovery_fixture(dir.path(), "healthy", false), vec![])
+            .unwrap();
+        manager.tools_refreshed = Instant::now() - Duration::from_secs(301);
+        manager.refresh_tools_if_expired(&|| false).unwrap();
+        assert!(manager.has_tool_binding("mcp__offline__cached"));
+        assert!(manager.has_tool_binding("mcp__healthy__discovered"));
+        assert!(manager.connection_errors_read().contains_key("offline"));
+    }
+
+    #[test]
+    fn discovery_cancellation_interrupts_wait_and_skips_remaining_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut manager = McpManager::default();
+        manager
+            .register_server(discovery_fixture(dir.path(), "slow", true), vec![])
+            .unwrap();
+        manager
+            .register_server(discovery_fixture(dir.path(), "untouched", false), vec![])
+            .unwrap();
+        manager.tools_refreshed = Instant::now() - Duration::from_secs(301);
+        let started = Instant::now();
+        assert!(
+            manager
+                .refresh_tools_if_expired(&|| started.elapsed() >= Duration::from_millis(250))
+                .is_err()
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!dir.path().join("untouched.started").exists());
+        assert!(manager.tools_refreshed.elapsed() > Duration::from_secs(300));
     }
 
     fn mock_config(label: &str) -> McpServerConfig {
@@ -1506,7 +1641,7 @@ mod tests {
         );
 
         // Test call_tool_via_transport
-        let result = call_tool_via_transport(transport, "test_tool", None).await;
+        let result = connection::open(transport).await;
         // Verify the specific error message
         match result {
             Err(e) => assert_eq!(e.to_string(), LEGACY_SSE_UNSUPPORTED_MESSAGE),

@@ -93,6 +93,21 @@ impl Shell {
 }
 
 impl AgentCommandPolicy for Shell {
+    fn agent_runtime(
+        &self,
+    ) -> Option<std::sync::Arc<parking_lot::Mutex<dsh_builtin::agent::AgentRuntime>>> {
+        self.agent_runtime.clone()
+    }
+    fn evaluate_agent_file(&mut self, path: &std::path::Path, write: bool) -> AgentCommandVerdict {
+        if let Some(runtime) = &self.agent_runtime
+            && self
+                .safety_guard
+                .task_file_allowed(&runtime.lock().task.grant, path, write)
+        {
+            return AgentCommandVerdict::Allowed;
+        }
+        AgentCommandVerdict::Confirm("outside task file grants".into())
+    }
     fn evaluate_agent_command(&mut self, command: &str) -> AgentCommandVerdict {
         // `get_jobs` parses *and evaluates*: `shell::parse::parse_command` calls
         // `capture_subshell_stdout` for `$(...)`, `(...)` and `<(...)`, so
@@ -143,6 +158,18 @@ impl AgentCommandPolicy for Shell {
         let allowlist = self.agent_allowlist_snapshot();
         let level = self.safety_level_snapshot();
 
+        if let Some(runtime) = &self.agent_runtime {
+            let runtime = runtime.lock();
+            if self
+                .safety_guard
+                .task_command_allowed(&runtime.task.grant, command)
+            {
+                return AgentCommandVerdict::Allowed;
+            }
+            return AgentCommandVerdict::Confirm(
+                "command is not in the task's exact command grants".into(),
+            );
+        }
         match self.safety_guard.check_jobs(&jobs, &level, &allowlist) {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
             SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
@@ -150,6 +177,13 @@ impl AgentCommandPolicy for Shell {
     }
 
     fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
+        if let Some(runtime) = &self.agent_runtime {
+            let mut runtime = runtime.lock();
+            runtime.task.status = dsh_types::agent::TaskStatus::InputRequired;
+            runtime.task.stop_reason = Some(message.to_string());
+            runtime.save(None)?;
+            return Ok(ApprovalDecision::Deny);
+        }
         Ok(match crate::repl::confirmation::confirm_action(message)? {
             ConfirmationAction::Yes => ApprovalDecision::Allow,
             ConfirmationAction::AlwaysAllow => ApprovalDecision::AllowAlways,
@@ -184,6 +218,18 @@ impl AgentCommandPolicy for Shell {
         // calls. The `!` runtime used to ask about every one of them regardless
         // of the level, so `loose` still prompted and a read-only tool was
         // treated like a destructive one.
+        if let Some(runtime) = &self.agent_runtime {
+            let entry = crate::safety::SafetyGuard::mcp_allowlist_entry(name, arguments);
+            if self
+                .safety_guard
+                .task_mcp_allowed(&runtime.lock().task.grant, &entry)
+            {
+                return AgentCommandVerdict::Allowed;
+            }
+            return AgentCommandVerdict::Confirm(format!(
+                "external operation needs an exact task grant: {entry}"
+            ));
+        }
         let mut allowlist = self.agent_allowlist_snapshot();
         allowlist.extend(self.agent_session_approvals());
         let level = self.safety_level_snapshot();
@@ -461,6 +507,7 @@ impl ShellProxy for Shell {
         argv: Vec<String>,
     ) -> Result<()> {
         match action {
+            CoreShellAction::Agent => crate::agent::command(self, ctx, argv),
             CoreShellAction::Exit => builtin::exit::execute(self, ctx, argv),
             CoreShellAction::History => builtin::history::execute(self, ctx, argv),
             CoreShellAction::Reload => builtin::reload::execute(self, ctx, argv),

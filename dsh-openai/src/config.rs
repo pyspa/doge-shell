@@ -45,7 +45,21 @@ impl OpenAiConfig {
         base_url: Option<String>,
         default_model: Option<String>,
     ) -> Self {
-        let base_url = sanitize_base_url(base_url);
+        Self::new_with_http_policy(
+            api_key,
+            base_url,
+            default_model,
+            std::env::var(ALLOW_INSECURE_HTTP_ENV).ok(),
+        )
+    }
+
+    fn new_with_http_policy(
+        api_key: Option<String>,
+        base_url: Option<String>,
+        default_model: Option<String>,
+        allow_http: Option<String>,
+    ) -> Self {
+        let base_url = sanitize_base_url(base_url, allow_http);
         let default_model = default_model
             .filter(|model| !model.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
@@ -73,7 +87,12 @@ impl OpenAiConfig {
             .map(|secs| secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS))
             .map(Duration::from_secs);
 
-        let config = OpenAiConfig::new(api_key, base_url, default_model);
+        let config = OpenAiConfig::new_with_http_policy(
+            api_key,
+            base_url,
+            default_model,
+            getter(ALLOW_INSECURE_HTTP_ENV),
+        );
         match timeout {
             Some(timeout) => config.with_timeout(timeout),
             None => config,
@@ -111,9 +130,8 @@ impl OpenAiConfig {
     }
 }
 
-fn sanitize_base_url(base_url: Option<String>) -> String {
-    let allow_insecure_http = std::env::var(ALLOW_INSECURE_HTTP_ENV)
-        .ok()
+fn sanitize_base_url(base_url: Option<String>, allow_http: Option<String>) -> String {
+    let allow_insecure_http = allow_http
         .map(|v| {
             matches!(
                 v.trim().to_ascii_lowercase().as_str(),
@@ -307,6 +325,16 @@ mod tests {
 
         let default = OpenAiConfig::from_getter(|_| None);
         assert_eq!(default.timeout(), Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+    }
+
+    #[test]
+    fn insecure_http_policy_comes_from_the_supplied_getter() {
+        let cfg = OpenAiConfig::from_getter(|key| match key {
+            "AI_CHAT_BASE_URL" => Some("http://127.0.0.1:8888/v1".into()),
+            ALLOW_INSECURE_HTTP_ENV => Some("1".into()),
+            _ => None,
+        });
+        assert_eq!(cfg.base_url(), "http://127.0.0.1:8888/v1");
     }
 
     #[test]

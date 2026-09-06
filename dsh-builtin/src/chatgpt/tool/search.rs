@@ -209,11 +209,16 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
 
                 // Reading a binary file line by line produced no matches and
                 // cost the whole file; the previous code left this as a to-do.
-                if looks_binary(entry.path()) {
+                if _proxy.agent_runtime().is_none() && looks_binary(entry.path()) {
                     continue;
                 }
 
-                if let Ok(file) = fs::File::open(entry.path()) {
+                let file = if _proxy.agent_runtime().is_some() {
+                    crate::agent::files::open(entry.path(), false)
+                } else {
+                    fs::File::open(entry.path())
+                };
+                if let Ok(file) = file {
                     let reader = BufReader::new(file);
                     let mut matches_in_file = 0usize;
                     for (line_idx, line) in reader.lines().enumerate() {

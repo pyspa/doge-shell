@@ -262,6 +262,34 @@ impl SafetyGuard {
     /// of being judged as the command it was about to run. Pass
     /// `function_name` for both when the binding cannot be resolved, which
     /// only loses the classification the old code never had.
+    /// Task grants are explicit host input; sensitive/state paths cannot be granted.
+    pub fn task_command_allowed(&self, grant: &dsh_types::agent::TaskGrant, command: &str) -> bool {
+        grant.commands.iter().any(|entry| entry == command)
+    }
+
+    pub fn task_mcp_allowed(&self, grant: &dsh_types::agent::TaskGrant, entry: &str) -> bool {
+        grant.mcp_calls.iter().any(|allowed| allowed == entry)
+    }
+
+    pub fn task_file_allowed(
+        &self,
+        grant: &dsh_types::agent::TaskGrant,
+        path: &std::path::Path,
+        write: bool,
+    ) -> bool {
+        if dsh_types::safety_policy::is_sensitive_path(path)
+            || path.starts_with(dsh_builtin::config_paths::agent_state_dir())
+        {
+            return false;
+        }
+        let roots = if write {
+            &grant.write_roots
+        } else {
+            &grant.read_roots
+        };
+        roots.iter().any(|root| path.starts_with(root))
+    }
+
     pub fn check_mcp_tool(
         &self,
         function_name: &str,

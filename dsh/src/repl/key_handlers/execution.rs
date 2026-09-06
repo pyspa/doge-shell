@@ -553,6 +553,9 @@ pub(crate) fn handle_resume_last_job(repl: &mut Repl<'_>) -> Result<()> {
 }
 
 pub(crate) fn handle_interrupt(repl: &mut Repl<'_>) -> Result<()> {
+    if let Some(service) = &repl.shell.environment.read().integration_state.ai_service {
+        service.cancel_requests();
+    }
     debug!("CTRL_C_HANDLER: Ctrl+C pressed, processing...");
     let mut renderer = TerminalRenderer::new();
 

@@ -471,6 +471,13 @@ pub enum ApprovalDecision {
 /// unreachable), and a permission set that is the agent's own rather than the
 /// user's.
 pub trait AgentCommandPolicy {
+    /// Optional durable task context. Ordinary `!` hosts remain unchanged.
+    fn agent_runtime(&self) -> Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>> {
+        None
+    }
+    fn evaluate_agent_file(&mut self, _path: &Path, _write: bool) -> AgentCommandVerdict {
+        AgentCommandVerdict::Confirm("file access requires approval".into())
+    }
     /// Judge a whole command line - pipelines included - against the shell's
     /// safety guard at the current safety level.
     fn evaluate_agent_command(&mut self, command: &str) -> AgentCommandVerdict;
@@ -519,6 +526,21 @@ pub trait AgentCommandPolicy {
     /// effect on chat and `mcp status` described a different set of
     /// connections from the one the agent was actually using.
     fn agent_mcp_manager(&mut self) -> Arc<RwLock<McpManager>>;
+}
+
+/// Persistence is owned by the shell, not by the chat loop or provider.
+pub trait AgentTaskStore: Send + Sync {
+    fn save(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> Result<u64>;
+    fn load(&self, id: &str) -> Result<dsh_types::agent::AgentTask>;
+    fn list(&self) -> Result<Vec<dsh_types::agent::AgentTask>>;
+    fn events(&self, id: &str) -> Result<Vec<dsh_types::agent::TaskEvent>>;
+    fn delete(&self, id: &str) -> Result<()>;
+    fn save_artifact(&self, id: &str, name: &str, content: &serde_json::Value) -> Result<()>;
+    fn load_artifact(&self, id: &str, name: &str) -> Result<serde_json::Value>;
 }
 
 /// Everything a chat tool needs from its host.

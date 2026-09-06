@@ -82,6 +82,7 @@ Tools:
 Respond in Markdown. Be concise and avoid unnecessary repetition.
 "#;
 
+#[derive(serde::Serialize, serde::Deserialize)]
 struct ConversationManager {
     summary: Option<String>,
     buffer: Vec<Value>,
@@ -218,7 +219,7 @@ impl ConversationManager {
     fn perform_summary(
         &mut self,
         client: &ChatGptClient,
-        proxy: &mut dyn ShellProxy,
+        proxy: &mut dyn ChatToolHost,
         model_override: Option<String>,
     ) -> Result<(), String> {
         let _spinner = SpinnerGuard::start("Summarizing conversation history...");
@@ -309,9 +310,24 @@ impl ConversationManager {
             .with_temperature(Some(0.3)) // Lower temperature for consistent summarization
             .with_model(summary_model);
         let response = client
-            .send_chat(&summary_messages, &options, Some(&|| proxy.is_canceled()))
+            .send_chat(&summary_messages, &options, Some(&|| task_cancelled(proxy)))
             .map_err(|e| format!("Summarization failed: {e}"))?;
         self.turn_usage.add_response(&response);
+        if let Some(runtime) = proxy.agent_runtime() {
+            let mut runtime = runtime.lock();
+            runtime
+                .checkpoint(
+                    serde_json::to_value(&*self).map_err(|e| e.to_string())?,
+                    self.turn_usage.total_tokens(),
+                )
+                .map_err(|e| e.to_string())?;
+            if usage::TokenUsage::from_response(&response).is_none() {
+                return Err("agent: summary provider omitted token usage".into());
+            }
+            if runtime.stopped() {
+                return Err("agent: task stopped or budget exhausted during summary".into());
+            }
+        }
 
         let new_summary = summary_from_response(&response)?;
 
@@ -693,7 +709,12 @@ fn chat_with_tools(
     let system_prompt_text = build_system_prompt(operator_prompt, language, &mcp_manager.read());
     let cwd = proxy.get_current_dir().ok();
 
-    let session_ttl = session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY));
+    let runtime = proxy.agent_runtime();
+    let session_ttl = if runtime.is_some() {
+        None
+    } else {
+        session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY))
+    };
 
     // Continue the previous conversation when it still applies, so a follow-up
     // question does not re-explore the repository from scratch.
@@ -708,23 +729,62 @@ fn chat_with_tools(
             json!({ "role": "user", "content": user_input }),
         ),
     };
+    if let Some(runtime) = &runtime {
+        let saved = runtime.lock().task.clone();
+        if let Some(checkpoint) = &saved.checkpoint {
+            manager = serde_json::from_value(checkpoint.clone())
+                .map_err(|e| format!("invalid task checkpoint: {e}"))?;
+            // Restore protocol balance without re-executing any tool call.
+            repair_interrupted_tool_calls(
+                &mut manager,
+                &runtime
+                    .lock()
+                    .store
+                    .events(&saved.id)
+                    .map_err(|e| e.to_string())?,
+            );
+            manager.pinned_messages[0] = json!({"role":"system","content":system_prompt_text});
+        }
+    }
     manager.set_prompt_token_budget(resolve_prompt_token_budget(proxy));
-    manager.begin_turn();
+    if runtime.is_none() {
+        manager.begin_turn();
+    }
     let turn_token_budget = resolve_turn_token_budget(proxy);
 
     let mut tools = build_tools();
     {
         let mcp = mcp_manager.read();
-        if !mcp.is_empty() {
+        if runtime.is_none() && !mcp.is_empty() {
             tools.extend(mcp.tool_definitions());
         }
     }
+    if runtime.is_some() {
+        tools.extend(crate::agent::definitions());
+        tools.extend(tool::agent_definitions());
+    }
     let mut iterations = 0;
+    let mut unverified_answers = 0;
     let mut dynamic_context = DynamicContext::default();
     // Rounds where the model produced neither a tool call nor an answer.
     let mut stalled_rounds = 0usize;
 
-    let outcome = loop {
+    let outcome = 'agent: loop {
+        if let Some(runtime) = &runtime {
+            let mut runtime = runtime.lock();
+            runtime
+                .checkpoint(
+                    serde_json::to_value(&manager).map_err(|e| e.to_string())?,
+                    manager.turn_usage.total_tokens(),
+                )
+                .map_err(|e| e.to_string())?;
+            if runtime.stopped() {
+                break Err("agent: task stopped or budget exhausted".into());
+            }
+        }
+        if proxy.is_canceled() {
+            break Err(CANCELLED_MESSAGE.to_string());
+        }
         iterations += 1;
         if iterations > MAX_TOOL_ITERATIONS {
             break Err("chat: exceeded maximum number of tool interactions".to_string());
@@ -762,12 +822,18 @@ fn chat_with_tools(
             summary_rounds += 1;
             // Graceful fallback on summary failure
             if let Err(e) = manager.perform_summary(client, proxy, model_override.clone()) {
+                if runtime.is_some() {
+                    break 'agent Err(e);
+                }
                 tracing::warn!("Context summarization failed: {e}, continuing without summary");
                 break; // Continue with current buffer, don't fail the whole conversation
             }
         }
 
-        let current_messages = manager.build_messages_for_chat(dynamic_context.message(proxy));
+        let mut current_messages = manager.build_messages_for_chat(dynamic_context.message(proxy));
+        if let Some(runtime) = &runtime {
+            current_messages.push(json!({"role":"system","content":runtime.lock().context()}));
+        }
 
         let options = ChatRequestOptions::new()
             .with_temperature(temperature)
@@ -782,7 +848,7 @@ fn chat_with_tools(
             let result = client.send_chat_streaming(
                 &current_messages,
                 &options,
-                Some(&|| proxy.is_canceled()),
+                Some(&|| task_cancelled(proxy)),
                 &mut |text| sink.on_delta(&spinner, text),
             );
             match result {
@@ -805,7 +871,7 @@ fn chat_with_tools(
             }
         } else {
             let _spinner = SpinnerGuard::start("");
-            match client.send_chat(&current_messages, &options, Some(&|| proxy.is_canceled())) {
+            match client.send_chat(&current_messages, &options, Some(&|| task_cancelled(proxy))) {
                 Ok(response) => response,
                 Err(err) => {
                     break Err(if is_ctrl_c_cancelled(&err) {
@@ -822,6 +888,10 @@ fn chat_with_tools(
         manager.turn_usage.add_response(&response);
         if let Some(reported) = usage::TokenUsage::from_response(&response) {
             manager.note_prompt_tokens(reported.prompt_tokens);
+        } else if runtime.is_some() {
+            break Err(
+                "agent: provider omitted token usage; cannot enforce the task budget".into(),
+            );
         }
 
         let turn = match interpret_response(&response) {
@@ -857,13 +927,42 @@ fn chat_with_tools(
                         .unwrap_or_default()
                         .to_string();
 
-                    let tool_result = match execute_tool_call(tool_call, mcp_manager, proxy) {
+                    if let Some(runtime) = &runtime {
+                        runtime
+                            .lock()
+                            .before_tool(
+                                tool_call,
+                                serde_json::to_value(&manager).map_err(|e| e.to_string())?,
+                            )
+                            .map_err(|e| e.to_string())?;
+                    }
+                    let mut tool_result = match execute_tool_call(tool_call, mcp_manager, proxy) {
                         Ok(res) => res,
                         Err(err) => format!(
                             "Error: {err}\nPlease analyze the error and retry with corrected arguments."
                         ),
                     };
 
+                    if let Some(runtime) = &runtime {
+                        let failed = tool::result_failed(&tool_result);
+                        let sequence = runtime
+                            .lock()
+                            .after_tool(tool_call, &tool_result, failed)
+                            .map_err(|e| e.to_string())?;
+                        if tool_call["function"]["name"] == "tool_search"
+                            && let Ok(result) = serde_json::from_str::<Value>(&tool_result)
+                            && let Some(found) = result["tools"].as_array()
+                        {
+                            for definition in found {
+                                if !tools.iter().any(|d| {
+                                    d["function"]["name"] == definition["function"]["name"]
+                                }) {
+                                    tools.push(definition.clone());
+                                }
+                            }
+                        }
+                        tool_result.push_str(&format!("\n[task event {sequence}]"));
+                    }
                     // Add tool result to history buffer
                     manager.add_message(json!({
                         "role": "tool",
@@ -872,7 +971,29 @@ fn chat_with_tools(
                     }));
                 }
             }
-            TurnOutcome::Answer(content) => break Ok(content),
+            TurnOutcome::Answer(content) => {
+                if let Some(runtime) = &runtime
+                    && {
+                        let runtime = runtime.lock();
+                        !runtime.task.verified()
+                            || runtime.jobs.has_running()
+                            || crate::agent::pending_remote_tasks(
+                                &runtime
+                                    .store
+                                    .events(&runtime.task.id)
+                                    .map_err(|e| e.to_string())?,
+                            )
+                    }
+                {
+                    unverified_answers += 1;
+                    if unverified_answers >= 2 {
+                        break Err("agent: cannot complete with unverified criteria".into());
+                    }
+                    manager.add_message(json!({"role":"user","content":"The task still has unverified criteria. Perform the checks and use task_verify with tool-result evidence, or explain the blocker. Do not claim completion."}));
+                    continue;
+                }
+                break Ok(content);
+            }
             TurnOutcome::Cut {
                 finish_reason,
                 partial,
@@ -903,6 +1024,18 @@ fn chat_with_tools(
         }
     };
 
+    if let Some(runtime) = &runtime {
+        let mut runtime = runtime.lock();
+        runtime
+            .checkpoint(
+                serde_json::to_value(&manager).map_err(|e| e.to_string())?,
+                manager.turn_usage.total_tokens(),
+            )
+            .map_err(|e| e.to_string())?;
+        runtime
+            .finish(outcome.is_ok(), outcome.as_ref().err().cloned())
+            .map_err(|e| e.to_string())?;
+    }
     report_turn_usage(&manager.turn_usage);
 
     // Only a completed turn is worth resuming. Carrying a cancelled or failed
@@ -1285,6 +1418,40 @@ fn git_state_details() -> Option<(Option<String>, String)> {
     };
 
     Some((root, branch_description))
+}
+
+fn task_cancelled(proxy: &dyn ChatToolHost) -> bool {
+    proxy.is_canceled()
+        || proxy
+            .agent_runtime()
+            .is_some_and(|runtime| runtime.lock().stopped())
+}
+fn repair_interrupted_tool_calls(
+    manager: &mut ConversationManager,
+    events: &[dsh_types::agent::TaskEvent],
+) {
+    let mut pending = Vec::new();
+    for message in &manager.buffer {
+        if let Some(calls) = message["tool_calls"].as_array() {
+            for call in calls {
+                if let Some(id) = call["id"].as_str() {
+                    pending.push(id.to_string());
+                }
+            }
+        }
+        if let Some(id) = message["tool_call_id"].as_str() {
+            pending.retain(|value| value != id);
+        }
+    }
+    for id in pending {
+        let recorded = events
+            .iter()
+            .rev()
+            .find(|event| event.kind == "tool_result" && event.data["call"]["id"] == id);
+        let content = recorded.map(|event| format!("{}\n[task event {}]", event.data["result"].as_str().unwrap_or_default(), event.sequence))
+            .unwrap_or_else(|| "Interrupted before the result was recorded. Do not replay. Inspect actual state; the user's reconciliation is recorded in task progress.".into());
+        manager.add_message(json!({"role":"tool","tool_call_id":id,"content":content}));
+    }
 }
 
 #[cfg(test)]

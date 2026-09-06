@@ -70,12 +70,134 @@ pub fn execute_tool_call(
     // confirmation prompt: the user can sit on that question for a long time,
     // and `mcp connect` in another turn needs the write lock.
     let is_mcp_tool = mcp.read().has_tool_binding(name);
-    let result = if is_mcp_tool {
+    let result = if matches!(
+        name,
+        "task_plan"
+            | "task_verify"
+            | "job_status"
+            | "job_output"
+            | "job_cancel"
+            | "tool_search"
+            | "mcp_task_status"
+            | "mcp_task_cancel"
+    ) {
+        let runtime = proxy.agent_runtime().ok_or("tool requires an agent task")?;
+        let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
+        match name {
+            "tool_search" => {
+                let query = args["query"]
+                    .as_str()
+                    .ok_or("query required")?
+                    .to_lowercase();
+                if query.trim().is_empty() {
+                    return Err("nonempty query required".into());
+                }
+                let words: Vec<_> = query.split_whitespace().collect();
+                mcp.write()
+                    .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
+                let definitions: Vec<_> = mcp
+                    .read()
+                    .tool_definitions()
+                    .into_iter()
+                    .filter(|d| {
+                        let description =
+                            format!("{} {}", d["function"]["name"], d["function"]["description"])
+                                .to_lowercase();
+                        words.iter().all(|word| description.contains(word))
+                    })
+                    .take(8)
+                    .collect();
+                serde_json::json!({"tools":definitions}).to_string()
+            }
+            "mcp_task_status" | "mcp_task_cancel" => {
+                let server = args["server"].as_str().ok_or("server required")?;
+                let id = args["task_id"].as_str().ok_or("task_id required")?;
+                let events = {
+                    let runtime = runtime.lock();
+                    runtime
+                        .store
+                        .events(&runtime.task.id)
+                        .map_err(|e| e.to_string())?
+                };
+                if !crate::agent::has_remote_task(&events, server, id) {
+                    return Err("task handle was not created by this agent task".into());
+                }
+                let kind = if name == "mcp_task_status" {
+                    "task_get"
+                } else {
+                    "task_cancel"
+                };
+                let result = mcp.read().task_operation(
+                    server,
+                    kind,
+                    serde_json::json!({"taskId":id}),
+                    &|| super::task_cancelled(proxy),
+                )?;
+                if result["status"] == "input_required" {
+                    let mut runtime = runtime.lock();
+                    runtime.task.status = dsh_types::agent::TaskStatus::InputRequired;
+                    runtime.task.stop_reason = Some(
+                        "MCP task needs user input; inspect agent show and use agent respond"
+                            .into(),
+                    );
+                    runtime.save(None).map_err(|e| e.to_string())?;
+                }
+                result.to_string()
+            }
+            "job_status" | "job_output" | "job_cancel" => {
+                let id = args["job_id"].as_str().ok_or("job_id required")?;
+                let mut runtime = runtime.lock();
+                if name == "job_cancel" {
+                    runtime.jobs.cancel(id).map_err(|e| e.to_string())?;
+                }
+                runtime
+                    .jobs
+                    .snapshot(
+                        id,
+                        args["offset"].as_u64().unwrap_or(0) as usize,
+                        args["limit"].as_u64().unwrap_or(4096) as usize,
+                    )
+                    .or_else(|error| {
+                        if name == "job_cancel" {
+                            return Err(error);
+                        }
+                        let mut archived = runtime.store.load_artifact(&runtime.task.id, id)?;
+                        archived["archived"] = serde_json::json!(true);
+                        archived["job_id"] = serde_json::json!(id);
+                        for stream in ["stdout", "stderr"] {
+                            let text = archived[stream].as_str().unwrap_or_default();
+                            let start = text.ceil_char_boundary(
+                                (args["offset"].as_u64().unwrap_or(0) as usize).min(text.len()),
+                            );
+                            let end = text.floor_char_boundary(
+                                start
+                                    .saturating_add(
+                                        (args["limit"].as_u64().unwrap_or(4096) as usize)
+                                            .min(65536),
+                                    )
+                                    .min(text.len()),
+                            );
+                            archived[stream] = serde_json::json!(&text[start..end]);
+                        }
+                        Ok(archived)
+                    })
+                    .map_err(|e| e.to_string())?
+                    .to_string()
+            }
+            _ => crate::agent::task_tool(&mut runtime.lock(), name, &args)
+                .map_err(|e| e.to_string())?,
+        }
+    } else if is_mcp_tool {
         if !authorize_mcp_tool(name, arguments, proxy)? {
             return Ok("MCP tool execution cancelled by user.".to_string());
         }
 
-        mcp.read().execute_tool(name, arguments)?
+        mcp.read().execute_tool_cancellable(
+            name,
+            arguments,
+            &|| super::task_cancelled(proxy),
+            proxy.agent_runtime().is_some(),
+        )?
     } else {
         match name {
             edit::NAME => edit::run(arguments, proxy)?,
@@ -90,7 +212,12 @@ pub fn execute_tool_call(
         }
     };
 
-    Ok(truncate_output(result))
+    // Schemas must reach the host unchanged when registering discovered tools.
+    Ok(if name == "tool_search" {
+        result
+    } else {
+        truncate_output(result)
+    })
 }
 
 /// Put an MCP call through the shell's own safety policy.
@@ -143,6 +270,25 @@ fn redact_tool_arguments(args: &str) -> String {
 fn truncate_output(output: String) -> String {
     if output.len() <= MAX_OUTPUT_LENGTH {
         return output;
+    }
+    if let Ok(mut value) = serde_json::from_str::<Value>(&output) {
+        // Preserve handles and status fields; cutting serialized JSON makes
+        // successful long-running commands impossible to poll reliably.
+        fn trim(value: &mut Value) {
+            match value {
+                Value::String(text) if text.len() > 2048 => {
+                    *text = dsh_openai::turn::truncate_middle(text, 2048);
+                }
+                Value::Object(values) => values.values_mut().for_each(trim),
+                Value::Array(values) => values.iter_mut().for_each(trim),
+                _ => {}
+            }
+        }
+        trim(&mut value);
+        if value.to_string().len() <= MAX_OUTPUT_LENGTH {
+            return value.to_string();
+        }
+        return serde_json::json!({"output_truncated":true,"preview":dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH / 2)}).to_string();
     }
     dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH)
 }
@@ -278,7 +424,7 @@ pub(crate) fn is_path_within_tool_roots(path: &Path, current_dir: &Path) -> bool
 
 pub(crate) fn resolve_tool_path(
     path_str: &str,
-    proxy: &mut dyn ShellProxy,
+    proxy: &mut dyn ChatToolHost,
 ) -> Result<std::path::PathBuf, String> {
     // Use shellexpand to handle ~
     let expanded = shellexpand::full(path_str)
@@ -304,6 +450,29 @@ pub(crate) fn resolve_tool_path(
         resolve_with_existing_ancestor(&absolute_path)?
     };
 
+    if let Some(runtime) = proxy.agent_runtime() {
+        let runtime = runtime.lock();
+        let grant = &runtime.task.grant;
+        let state = crate::config_paths::agent_state_dir();
+        if resolved_path.starts_with(&state)
+            || crate::safety_policy::is_sensitive_path(&resolved_path)
+        {
+            return Err("agent: protected path cannot be read through task tools".into());
+        }
+        if grant
+            .read_roots
+            .iter()
+            .chain(&grant.write_roots)
+            .any(|root| resolved_path.starts_with(root))
+            || resolved_path.starts_with(crate::config_paths::skills_dir())
+        {
+            return Ok(resolved_path);
+        }
+        return Err(
+            "agent: path is outside task grants; resume with an explicit --read or --write grant"
+                .into(),
+        );
+    }
     if is_path_within_tool_roots(&resolved_path, &current_dir) {
         return Ok(resolved_path);
     }
@@ -366,6 +535,19 @@ pub(crate) fn confirm_agent_action(
     approval_key: &str,
     message: &str,
 ) -> Result<bool, String> {
+    if let Some(runtime) = proxy.agent_runtime() {
+        if let Some(path) = approval_key.strip_prefix("write:")
+            && proxy.evaluate_agent_file(Path::new(path), true)
+                == crate::shell_capabilities::AgentCommandVerdict::Allowed
+        {
+            return Ok(true);
+        }
+        let mut runtime = runtime.lock();
+        runtime.task.status = dsh_types::agent::TaskStatus::InputRequired;
+        runtime.task.stop_reason = Some(message.to_string());
+        runtime.save(None).map_err(|e| e.to_string())?;
+        return Err(format!("agent: permission required: {message}"));
+    }
     if proxy
         .agent_session_approvals()
         .iter()
@@ -401,6 +583,46 @@ fn sensitive_approval_key(action: &str, resolved: &Path) -> String {
 
 pub(crate) fn sensitive_path_reason(path: &Path) -> Option<&'static str> {
     safety_policy::is_sensitive_path(path).then_some("sensitive path")
+}
+
+pub(crate) fn agent_definitions() -> Vec<Value> {
+    use crate::agent::definition;
+    let mut tools = vec![definition(
+        "tool_search",
+        "Find MCP tools by words in their name or description. Discovery does not authorize execution.",
+        serde_json::json!({"query":{"type":"string"}}),
+        &["query"],
+    )];
+    for name in ["job_status", "job_output", "job_cancel"] {
+        tools.push(definition(name,"Inspect output/status or cancel an existing managed job. Never relaunch it to poll.", serde_json::json!({"job_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}), &["job_id"]));
+    }
+    for name in ["mcp_task_status", "mcp_task_cancel"] {
+        tools.push(definition(name,"Poll or request cancellation of a remote task created by this agent. Cancellation does not guarantee the remote action stopped.",serde_json::json!({"server":{"type":"string"},"task_id":{"type":"string"}}), &["server","task_id"]));
+    }
+    tools
+}
+pub(crate) fn result_failed(text: &str) -> bool {
+    if text.starts_with("Error:")
+        || text.starts_with("The tool reported an error:")
+        || text.contains("cancelled by user")
+    {
+        return true;
+    }
+    if let Ok(result) = serde_json::from_str::<Value>(text) {
+        if let Some(code) = result.get("exit_code")
+            && code != &serde_json::json!(0)
+            && result["status"] != "running"
+        {
+            return true;
+        }
+        if matches!(
+            result["status"].as_str(),
+            Some("failed" | "timed_out" | "cancelled")
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

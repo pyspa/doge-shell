@@ -59,13 +59,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 
     super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
-    if let Some(parent) = normalized_abs_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("chat: failed to create parent directories: {err}"))?;
-    }
-
     // Safety Guard: Request confirmation from user
     let sensitive_note = if safety_policy::is_sensitive_path(&normalized_abs_path)
         || safety_policy::contains_sensitive_text(contents)
@@ -86,8 +79,15 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Ok("File modification cancelled by user.".to_string());
     }
 
-    fs::write(&normalized_abs_path, contents)
-        .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
+    if proxy.agent_runtime().is_some() {
+        crate::agent::files::write(&normalized_abs_path, contents)
+    } else {
+        if let Some(parent) = normalized_abs_path.parent() {
+            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        fs::write(&normalized_abs_path, contents)
+    }
+    .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
 
     Ok(format!(
         "edit completed: wrote {} bytes to {}",

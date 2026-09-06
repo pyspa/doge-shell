@@ -89,6 +89,14 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
+/// Private durable agent state, resolved consistently on both supported OSes.
+pub fn agent_state_dir() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("agent")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

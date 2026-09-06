@@ -28,6 +28,10 @@
   - 先に読む: [ai-architecture.md](ai-architecture.md)（AI 機能の方針。再実装してはいけないものの一覧）
   - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
+- agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
+  - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`
+  - Regression: 要約後にも予算を保存・判定する。取消は最新レコードの状態だけを原子的に更新する。MCP一覧更新はサーバー障害を分離し、各待機とサーバー間に取消を伝播する。
+  - Validate: `cargo test -p doge-shell --lib agent::tests`; `cargo test -p dsh-builtin --lib discovery_`
 - serve / MCP server / shared MCP types
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change

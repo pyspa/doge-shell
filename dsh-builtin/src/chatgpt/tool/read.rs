@@ -138,8 +138,12 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("read_file cancelled by user.".to_string());
     }
 
-    let contents = fs::read_to_string(&normalized_abs_path)
-        .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
+    let contents = if _proxy.agent_runtime().is_some() {
+        crate::agent::files::read(&normalized_abs_path)
+    } else {
+        fs::read_to_string(&normalized_abs_path)
+    }
+    .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
     if safety_policy::contains_sensitive_text(&contents)
         && !super::confirm_sensitive_access(

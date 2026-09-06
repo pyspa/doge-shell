@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::mcp::McpManager;
 use crate::ShellProxy;
+use crate::agent::ToolOutcome;
 use crate::safety_policy::{self, SafetyLevel};
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 
@@ -26,6 +27,53 @@ mod shell_history;
 /// tool a different amount of room depending on the entry point.
 pub(crate) const MAX_OUTPUT_LENGTH: usize = dsh_openai::turn::limits::MAX_TOOL_OUTPUT_CHARS;
 
+#[derive(Debug)]
+pub struct ToolExecution {
+    pub content: String,
+    pub outcome: ToolOutcome,
+}
+
+#[derive(Debug)]
+pub struct ToolCallError {
+    message: String,
+    pub outcome: ToolOutcome,
+}
+
+impl From<String> for ToolCallError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            outcome: ToolOutcome::Failure,
+        }
+    }
+}
+
+impl From<&str> for ToolCallError {
+    fn from(message: &str) -> Self {
+        message.to_string().into()
+    }
+}
+
+impl From<super::mcp::McpCallError> for ToolCallError {
+    fn from(error: super::mcp::McpCallError) -> Self {
+        let outcome = if error.outcome_unknown() {
+            ToolOutcome::OutcomeUnknown
+        } else {
+            ToolOutcome::Failure
+        };
+        Self {
+            message: error.to_string(),
+            outcome,
+        }
+    }
+}
+
+impl std::fmt::Display for ToolCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
 pub fn build_tools() -> Vec<Value> {
     vec![
         edit::definition(),
@@ -43,7 +91,7 @@ pub fn execute_tool_call(
     tool_call: &Value,
     mcp: &Arc<RwLock<McpManager>>,
     proxy: &mut dyn ChatToolHost,
-) -> Result<String, String> {
+) -> Result<ToolExecution, ToolCallError> {
     let function = tool_call
         .get("function")
         .ok_or_else(|| "chat: tool call missing function".to_string())?;
@@ -189,7 +237,10 @@ pub fn execute_tool_call(
         }
     } else if is_mcp_tool {
         if !authorize_mcp_tool(name, arguments, proxy)? {
-            return Ok("MCP tool execution cancelled by user.".to_string());
+            return Ok(ToolExecution {
+                content: "MCP tool execution cancelled by user.".to_string(),
+                outcome: ToolOutcome::Failure,
+            });
         }
 
         mcp.read().execute_tool_cancellable(
@@ -208,16 +259,22 @@ pub fn execute_tool_call(
             search::NAME => search::run(arguments, proxy)?,
             shell_context::NAME => shell_context::run(arguments, proxy)?,
             shell_history::NAME => shell_history::run(arguments, proxy)?,
-            other => return Err(format!("chat: unsupported tool `{other}`")),
+            other => return Err(format!("chat: unsupported tool `{other}`").into()),
         }
     };
 
     // Schemas must reach the host unchanged when registering discovered tools.
-    Ok(if name == "tool_search" {
+    let content = if name == "tool_search" {
         result
     } else {
         truncate_output(result)
-    })
+    };
+    let outcome = if result_failed(&content) {
+        ToolOutcome::Failure
+    } else {
+        ToolOutcome::Success
+    };
+    Ok(ToolExecution { content, outcome })
 }
 
 /// Put an MCP call through the shell's own safety policy.
@@ -770,8 +827,9 @@ mod tests {
         )
         .unwrap();
 
-        assert!(result.len() <= MAX_OUTPUT_LENGTH + 128);
-        serde_json::from_str::<Value>(&result).expect("tool result must stay valid JSON");
+        assert!(result.content.len() <= MAX_OUTPUT_LENGTH + 128);
+        serde_json::from_str::<Value>(&result.content).expect("tool result must stay valid JSON");
+        assert_eq!(result.outcome, ToolOutcome::Success);
     }
 
     #[test]
@@ -799,7 +857,10 @@ mod tests {
 
         let result = execute_tool_call(&tool_call, &mcp, &mut proxy);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "chat: unsupported tool `unknown_tool`");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "chat: unsupported tool `unknown_tool`"
+        );
     }
 
     /// The policy decides, not the call site. `!` used to prompt for every MCP
@@ -820,7 +881,8 @@ mod tests {
 
         // No binding is actually connected, so the call fails after the gate -
         // what matters is that the gate did not ask.
-        let _ = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        let error = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap_err();
+        assert_eq!(error.outcome, ToolOutcome::Failure);
         assert_eq!(proxy.confirm_calls, 0);
     }
 
@@ -838,7 +900,7 @@ mod tests {
         });
 
         let err = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap_err();
-        assert!(err.contains("policy says no"));
+        assert!(err.to_string().contains("policy says no"));
         assert_eq!(proxy.confirm_calls, 0);
     }
 
@@ -875,7 +937,8 @@ mod tests {
 
         let result = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap();
 
-        assert_eq!(result, "MCP tool execution cancelled by user.");
+        assert_eq!(result.content, "MCP tool execution cancelled by user.");
+        assert_eq!(result.outcome, ToolOutcome::Failure);
     }
 
     type CwdProxy = TestShellProxy;

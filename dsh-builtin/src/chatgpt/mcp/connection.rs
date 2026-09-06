@@ -1,8 +1,42 @@
 //! One async owner per MCP server, shared by all shell entry points.
 use super::*;
-use anyhow::bail;
 use rmcp::{RoleClient, service::RunningService};
+use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Debug)]
+pub(super) struct McpRequestError {
+    message: String,
+    outcome_unknown: bool,
+}
+
+impl McpRequestError {
+    fn failure(error: impl fmt::Display) -> Self {
+        Self {
+            message: error.to_string(),
+            outcome_unknown: false,
+        }
+    }
+
+    fn unknown(error: impl fmt::Display) -> Self {
+        Self {
+            message: error.to_string(),
+            outcome_unknown: true,
+        }
+    }
+
+    pub(super) fn outcome_unknown(&self) -> bool {
+        self.outcome_unknown
+    }
+}
+
+impl fmt::Display for McpRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for McpRequestError {}
 
 #[derive(Clone, Default)]
 pub(super) struct Notifications(Arc<AtomicBool>);
@@ -14,7 +48,7 @@ impl rmcp::ClientHandler for Notifications {
 type Service = RunningService<RoleClient, Notifications>;
 struct Request {
     operation: Value,
-    result: std::sync::mpsc::Sender<Result<Value>>,
+    result: std::sync::mpsc::Sender<std::result::Result<Value, McpRequestError>>,
     cancel: Arc<AtomicBool>,
 }
 pub(super) struct Connection {
@@ -39,32 +73,45 @@ impl Connection {
                     if request.cancel.load(Ordering::Relaxed) {continue;}
                     let operation=async {
                         if service.as_ref().is_some_and(Service::is_closed) {service=None;}
-                        if service.is_none() {service=Some(open_with_notifications(transport.clone(), notifications.clone()).await?);}
+                        if service.is_none() {service=Some(open_with_notifications(transport.clone(), notifications.clone()).await.map_err(McpRequestError::failure)?);}
                         let connected=service.as_ref().expect("connected");
                         match request.operation["kind"].as_str() {
-                            Some("list") => Ok(serde_json::to_value(connected.list_all_tools().await?)?),
-                            Some("task_get")=>Ok(serde_json::to_value(connected.get_task(serde_json::from_value(request.operation["params"].clone())?).await?)?),
-                            Some("task_cancel")=>{connected.cancel_task(serde_json::from_value(request.operation["params"].clone())?).await?;Ok(json!({"cancellation_requested":true}))},
-                            Some("task_update")=>{connected.update_task(serde_json::from_value(request.operation["params"].clone())?).await?;Ok(json!({"input_delivered":true}))},
+                            Some("list") => serde_json::to_value(connected.list_all_tools().await.map_err(McpRequestError::failure)?).map_err(McpRequestError::failure),
+                            Some("task_get")=>{
+                                let params=serde_json::from_value(request.operation["params"].clone()).map_err(McpRequestError::failure)?;
+                                serde_json::to_value(connected.get_task(params).await.map_err(McpRequestError::failure)?).map_err(McpRequestError::failure)
+                            },
+                            Some("task_cancel")=>{
+                                let params=serde_json::from_value(request.operation["params"].clone()).map_err(McpRequestError::failure)?;
+                                connected.cancel_task(params).await.map_err(McpRequestError::unknown)?;
+                                Ok(json!({"cancellation_requested":true}))
+                            },
+                            Some("task_update")=>{
+                                let params=serde_json::from_value(request.operation["params"].clone()).map_err(McpRequestError::failure)?;
+                                connected.update_task(params).await.map_err(McpRequestError::unknown)?;
+                                Ok(json!({"input_delivered":true}))
+                            },
                             _=>{
-                                let params:CallToolRequestParams=serde_json::from_value(request.operation["params"].clone())?;
+                                let params:CallToolRequestParams=serde_json::from_value(request.operation["params"].clone()).map_err(McpRequestError::failure)?;
                                 if request.operation["tasks"]==true {
-                                    match connected.call_tool_once(params).await? {
-                                        rmcp::model::CallToolResponse::Complete(result)=>Ok(serde_json::to_value(result)?),
-                                        rmcp::model::CallToolResponse::Task(task)=>Ok(serde_json::to_value(task)?),
-                                        rmcp::model::CallToolResponse::InputRequired(input)=>Ok(serde_json::to_value(input)?),
-                                        _=>bail!("unsupported MCP result; outcome unknown"),
+                                    match connected.call_tool_once(params).await.map_err(McpRequestError::unknown)? {
+                                        rmcp::model::CallToolResponse::Complete(result)=>serde_json::to_value(result).map_err(McpRequestError::failure),
+                                        rmcp::model::CallToolResponse::Task(task)=>serde_json::to_value(task).map_err(McpRequestError::failure),
+                                        rmcp::model::CallToolResponse::InputRequired(input)=>serde_json::to_value(input).map_err(McpRequestError::failure),
+                                        _=>Err(McpRequestError::unknown("unsupported MCP result")),
                                     }
-                                } else {Ok(serde_json::to_value(connected.call_tool(params).await?)?)}
+                                } else {
+                                    serde_json::to_value(connected.call_tool(params).await.map_err(McpRequestError::unknown)?).map_err(McpRequestError::failure)
+                                }
                             }
                         }
                     };
                     let result=tokio::select! {
-                        result=tokio::time::timeout(DEFAULT_TOOL_TIMEOUT,operation)=>result.map_err(|_|anyhow::anyhow!("MCP operation timed out; outcome unknown")).and_then(|r|r),
-                        _=async {while !request.cancel.load(Ordering::Relaxed){tokio::time::sleep(Duration::from_millis(20)).await;}}=>Err(anyhow::anyhow!("MCP wait cancelled; outcome unknown")),
+                        result=tokio::time::timeout(DEFAULT_TOOL_TIMEOUT,operation)=>result.map_err(|_|McpRequestError::unknown("MCP operation timed out")).and_then(|r|r),
+                        _=async {while !request.cancel.load(Ordering::Relaxed){tokio::time::sleep(Duration::from_millis(20)).await;}}=>Err(McpRequestError::unknown("MCP wait cancelled")),
                     };
                     if result.is_err() && let Some(service)=service.take(){let _=tokio::time::timeout(Duration::from_secs(1),service.cancel()).await;}
-                    let _=request.result.send(result.map_err(|error| error.context("MCP operation failed; outcome unknown")));
+                    let _=request.result.send(result);
                 }
                 if let Some(service)=service {let _=tokio::time::timeout(Duration::from_secs(1),service.cancel()).await;}
             });
@@ -77,7 +124,11 @@ impl Connection {
     pub fn mark_refreshed(&self) {
         self.changed.store(false, Ordering::Relaxed);
     }
-    pub fn request(&self, operation: Value, cancelled: &dyn Fn() -> bool) -> Result<Value> {
+    pub fn request(
+        &self,
+        operation: Value,
+        cancelled: &dyn Fn() -> bool,
+    ) -> std::result::Result<Value, McpRequestError> {
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let started = std::time::Instant::now();
@@ -87,17 +138,19 @@ impl Connection {
                 result: tx,
                 cancel: cancel.clone(),
             })
-            .map_err(|_| anyhow::anyhow!("MCP worker closed"))?;
+            .map_err(|_| McpRequestError::failure("MCP worker closed before dispatch"))?;
         loop {
             match rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(result) => return result,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    bail!("MCP worker closed; outcome unknown")
+                    return Err(McpRequestError::unknown("MCP worker closed after dispatch"));
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if cancelled() || started.elapsed() >= DEFAULT_TOOL_TIMEOUT {
                         cancel.store(true, Ordering::Relaxed);
-                        bail!("MCP wait cancelled or deadline exceeded; outcome unknown");
+                        return Err(McpRequestError::unknown(
+                            "MCP wait cancelled or deadline exceeded",
+                        ));
                     }
                 }
             }
@@ -200,7 +253,7 @@ for line in sys.stdin:
                 &|| started.elapsed() > Duration::from_millis(200),
             )
             .unwrap_err();
-        assert!(error.to_string().contains("outcome unknown"));
+        assert!(error.outcome_unknown());
         assert_eq!(std::fs::read_to_string(counter).unwrap().lines().count(), 3);
     }
 }

@@ -529,12 +529,24 @@ pub trait AgentCommandPolicy {
 }
 
 /// Persistence is owned by the shell, not by the chat loop or provider.
+pub struct AgentTaskSave {
+    pub sequence: u64,
+    pub task: dsh_types::agent::AgentTask,
+}
+
 pub trait AgentTaskStore: Send + Sync {
     fn save(
         &self,
         task: &dsh_types::agent::AgentTask,
         event: Option<(&str, &serde_json::Value)>,
-    ) -> Result<u64>;
+    ) -> Result<AgentTaskSave>;
+    /// Explicit user-driven resume is the only operation allowed to clear a
+    /// persisted cancellation.
+    fn resume(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> Result<AgentTaskSave>;
     fn load(&self, id: &str) -> Result<dsh_types::agent::AgentTask>;
     fn list(&self) -> Result<Vec<dsh_types::agent::AgentTask>>;
     fn events(&self, id: &str) -> Result<Vec<dsh_types::agent::TaskEvent>>;

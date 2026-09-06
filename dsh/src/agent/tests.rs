@@ -1,5 +1,8 @@
 use super::*;
-use dsh_builtin::{ShellProxy, agent::task_tool};
+use dsh_builtin::{
+    ShellProxy,
+    agent::{ToolOutcome, task_tool},
+};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -83,7 +86,8 @@ fn cancellation_wins_and_execution_lock_is_exclusive() {
     let mut cancelled = task.clone();
     cancelled.status = TaskStatus::Cancelled;
     second.save(&cancelled, None).unwrap();
-    assert!(first.save(&task, None).is_err());
+    let late = first.save(&task, None).unwrap();
+    assert_eq!(late.task.status, TaskStatus::Cancelled);
     assert_eq!(first.load(&task.id).unwrap().status, TaskStatus::Cancelled);
 }
 #[test]
@@ -102,7 +106,9 @@ fn verification_rejects_failed_fabricated_stale_and_running_evidence() {
         .is_err()
     );
     let call = json!({"function":{"name":"execute","arguments":"{}"}});
-    let failed = runtime.after_tool(&call, "test failed", true).unwrap();
+    let failed = runtime
+        .after_tool(&call, "test failed", ToolOutcome::Failure)
+        .unwrap();
     assert!(
         task_tool(
             &mut runtime,
@@ -112,7 +118,7 @@ fn verification_rejects_failed_fabricated_stale_and_running_evidence() {
         .is_err()
     );
     let pending = runtime
-        .after_tool(&call, "{\"status\":\"running\"}", false)
+        .after_tool(&call, "{\"status\":\"running\"}", ToolOutcome::Success)
         .unwrap();
     assert!(
         task_tool(
@@ -123,7 +129,7 @@ fn verification_rejects_failed_fabricated_stale_and_running_evidence() {
         .is_err()
     );
     let success = runtime
-        .after_tool(&call, "{\"exit_code\":0}", false)
+        .after_tool(&call, "{\"exit_code\":0}", ToolOutcome::Success)
         .unwrap();
     task_tool(
         &mut runtime,
@@ -152,14 +158,75 @@ fn unknown_outcome_and_budget_never_complete() {
     let mut runtime = AgentRuntime::new(task, store);
     let call = json!({"function":{"name":"mcp__service__write","arguments":"{}"}});
     runtime.before_tool(&call, Value::Null).unwrap();
-    runtime
-        .after_tool(&call, "Error: connection lost; outcome unknown", true)
+    let known_failure = runtime
+        .after_tool(
+            &call,
+            "Error: document literally says outcome unknown",
+            ToolOutcome::Failure,
+        )
+        .unwrap();
+    assert_eq!(runtime.task.status, TaskStatus::Running);
+    assert!(runtime.task.pending_operation.is_none());
+    let event = runtime
+        .store
+        .events(&runtime.task.id)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.sequence == known_failure)
+        .unwrap();
+    assert_eq!(event.data["outcome"], "failure");
+
+    runtime.before_tool(&call, Value::Null).unwrap();
+    let unknown = runtime
+        .after_tool(
+            &call,
+            "Error: connection lost; outcome unknown",
+            ToolOutcome::OutcomeUnknown,
+        )
         .unwrap();
     assert!(runtime.stopped());
     assert!(runtime.task.pending_operation.is_some());
     assert_eq!(runtime.task.status, TaskStatus::InputRequired);
+    let event = runtime
+        .store
+        .events(&runtime.task.id)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.sequence == unknown)
+        .unwrap();
+    assert_eq!(event.data["outcome"], "unknown");
     runtime.finish(false, None).unwrap();
     assert_ne!(runtime.task.status, TaskStatus::Completed);
+}
+
+#[test]
+fn successful_content_cannot_trigger_unknown_outcome() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SqliteTaskStore::open(&dir.path().join("state")).unwrap());
+    let saved = task(dir.path());
+    store.save(&saved, None).unwrap();
+    let mut runtime = AgentRuntime::new(saved, store);
+    let call = json!({"function":{"name":"read_file","arguments":"{}"}});
+    runtime.before_tool(&call, Value::Null).unwrap();
+    let sequence = runtime
+        .after_tool(
+            &call,
+            "The source text contains outcome unknown.",
+            ToolOutcome::Success,
+        )
+        .unwrap();
+
+    assert_eq!(runtime.task.status, TaskStatus::Running);
+    assert!(runtime.task.pending_operation.is_none());
+    let event = runtime
+        .store
+        .events(&runtime.task.id)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.sequence == sequence)
+        .unwrap();
+    assert_eq!(event.data["outcome"], "success");
+    assert_eq!(event.data["failed"], false);
 }
 
 fn request(stream: &mut TcpStream) -> Value {
@@ -352,7 +419,7 @@ fn remote_handles_use_flattened_mcp_wire_format_and_require_terminal_status() {
     store.save(&saved, None).unwrap();
     let mut runtime = AgentRuntime::new(saved, store);
     let call = json!({"function":{"name":"mcp__server__build","arguments":"{}"}});
-    runtime.after_tool(&call, &json!({"server":"server","response":{"resultType":"task","taskId":"remote-1","status":"working"}}).to_string(), false).unwrap();
+    runtime.after_tool(&call, &json!({"server":"server","response":{"resultType":"task","taskId":"remote-1","status":"working"}}).to_string(), ToolOutcome::Success).unwrap();
     let events = runtime.store.events(&runtime.task.id).unwrap();
     assert!(dsh_builtin::agent::has_remote_task(
         &events, "server", "remote-1"
@@ -367,7 +434,7 @@ fn remote_handles_use_flattened_mcp_wire_format_and_require_terminal_status() {
             &poll,
             &json!({"taskId":"remote-1","status":"completed","result":{"isError":false}})
                 .to_string(),
-            false,
+            ToolOutcome::Success,
         )
         .unwrap();
     assert!(!dsh_builtin::agent::pending_remote_tasks(
@@ -460,7 +527,66 @@ fn cancellation_preserves_checkpoint_published_after_the_read() {
     assert_eq!(saved.elapsed_ms, 3000);
     assert_eq!(saved.pending_operation, latest.pending_operation);
     assert_eq!(saved.checkpoint, latest.checkpoint);
-    assert!(writer.save(&latest, None).is_err());
+    latest.status = TaskStatus::Completed;
+    latest.pending_operation = None;
+    let late = writer.save(&latest, None).unwrap();
+    assert_eq!(late.task.status, TaskStatus::Cancelled);
+    assert_eq!(late.task.tokens_used, 900);
+    assert!(late.task.pending_operation.is_none());
+    assert_eq!(
+        writer.load(&latest.id).unwrap().status,
+        TaskStatus::Cancelled
+    );
+
+    let mut resumed = late.task;
+    resumed.status = TaskStatus::Running;
+    resumed.stop_reason = None;
+    let normal = writer.save(&resumed, None).unwrap();
+    assert_eq!(normal.task.status, TaskStatus::Cancelled);
+    let explicit = writer
+        .resume(&resumed, Some(("started", &Value::Null)))
+        .unwrap();
+    assert_eq!(explicit.task.status, TaskStatus::Running);
+    assert_eq!(writer.load(&latest.id).unwrap().status, TaskStatus::Running);
+}
+
+#[test]
+fn cancellation_wins_over_late_result_and_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = Arc::new(SqliteTaskStore::open(&dir.path().join("state")).unwrap());
+    let canceller = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let mut saved = task(dir.path());
+    saved.criteria[0].passed = true;
+    saved.criteria[0].evidence_event = Some(1);
+    writer.save(&saved, None).unwrap();
+    let mut runtime = AgentRuntime::new(saved, writer.clone());
+    let call = json!({"function":{"name":"read_file","arguments":"{}"}});
+    runtime
+        .before_tool(&call, json!({"checkpoint":"latest"}))
+        .unwrap();
+
+    canceller.cancel(&runtime.task.id).unwrap();
+    runtime
+        .after_tool(&call, "finished reading", ToolOutcome::Success)
+        .unwrap();
+    assert_eq!(runtime.task.status, TaskStatus::Cancelled);
+    assert!(runtime.task.pending_operation.is_none());
+
+    runtime.finish(true, Some("work finished".into())).unwrap();
+    let persisted = writer.load(&runtime.task.id).unwrap();
+    assert_eq!(runtime.task.status, TaskStatus::Cancelled);
+    assert_eq!(persisted.status, TaskStatus::Cancelled);
+    assert_eq!(persisted.stop_reason.as_deref(), Some("cancelled by user"));
+    assert_eq!(persisted.checkpoint, Some(json!({"checkpoint":"latest"})));
+    let stopped = writer
+        .events(&persisted.id)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|event| event.kind == "stopped")
+        .unwrap();
+    assert_eq!(stopped.data["status"], "cancelled");
+    assert_eq!(stopped.data["reason"], "cancelled by user");
 }
 
 #[test]

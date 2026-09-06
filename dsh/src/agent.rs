@@ -1,6 +1,9 @@
 //! Shell-owned SQLite task store and explicit `agent` entry point.
 use anyhow::{Context as _, Result, bail};
-use dsh_builtin::{agent::AgentRuntime, shell_capabilities::AgentTaskStore};
+use dsh_builtin::{
+    agent::AgentRuntime,
+    shell_capabilities::{AgentTaskSave, AgentTaskStore},
+};
 use dsh_types::{
     Context,
     agent::{AgentTask, TaskEvent, TaskGrant, TaskStatus, Verification},
@@ -111,6 +114,66 @@ impl SqliteTaskStore {
         }
         Ok(())
     }
+
+    fn persist(
+        &self,
+        task: &AgentTask,
+        event: Option<(&str, &Value)>,
+        explicit_resume: bool,
+    ) -> Result<AgentTaskSave> {
+        if explicit_resume && task.status != TaskStatus::Running {
+            bail!("an explicit resume must transition the task to running");
+        }
+
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let previous: Option<AgentTask> = tx
+            .query_row("SELECT body FROM tasks WHERE id=?1", [&task.id], |row| {
+                row.get::<_, String>(0)
+            })
+            .optional()?
+            .map(|body| serde_json::from_str(&body))
+            .transpose()?;
+
+        let mut effective = task.clone();
+        if !explicit_resume
+            && let Some(previous) = previous
+            && previous.status == TaskStatus::Cancelled
+        {
+            // A late checkpoint/result is still useful, but cancellation is a
+            // monotonic host-owned state until the user explicitly resumes.
+            effective.status = TaskStatus::Cancelled;
+            effective.stop_reason = previous.stop_reason;
+        }
+
+        let mut body = serde_json::to_value(&effective)?;
+        redact(&mut body, &self.secrets.lock());
+        tx.execute(
+            "INSERT INTO tasks(id,body) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+            params![effective.id, body.to_string()],
+        )?;
+
+        let sequence = if let Some((kind, data)) = event {
+            let mut data = if kind == "stopped" {
+                json!({"status":effective.status,"reason":effective.stop_reason})
+            } else {
+                data.clone()
+            };
+            redact(&mut data, &self.secrets.lock());
+            tx.execute(
+                "INSERT INTO events(task_id,kind,data) VALUES(?1,?2,?3)",
+                params![effective.id, kind, data.to_string()],
+            )?;
+            tx.last_insert_rowid() as u64
+        } else {
+            0
+        };
+        tx.commit()?;
+        Ok(AgentTaskSave {
+            sequence,
+            task: effective,
+        })
+    }
 }
 fn redact(value: &mut Value, secrets: &[String]) {
     match value {
@@ -126,38 +189,12 @@ fn redact(value: &mut Value, secrets: &[String]) {
     }
 }
 impl AgentTaskStore for SqliteTaskStore {
-    fn save(&self, task: &AgentTask, event: Option<(&str, &Value)>) -> Result<u64> {
-        let mut body = serde_json::to_value(task)?;
-        redact(&mut body, &self.secrets.lock());
-        let mut connection = self.connection.lock();
-        let tx = connection.transaction()?;
-        // Do not overwrite a cancellation published by another shell.
-        let previous: Option<String> = tx
-            .query_row("SELECT body FROM tasks WHERE id=?1", [&task.id], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        if previous
-            .and_then(|s| serde_json::from_str::<AgentTask>(&s).ok())
-            .is_some_and(|t| t.status == TaskStatus::Cancelled)
-            && task.status == TaskStatus::Running
-        {
-            bail!("task was cancelled; resume explicitly");
-        }
-        tx.execute("INSERT INTO tasks(id,body) VALUES(?1,?2) ON CONFLICT(id) DO UPDATE SET body=excluded.body",params![task.id,body.to_string()])?;
-        let sequence = if let Some((kind, data)) = event {
-            let mut data = data.clone();
-            redact(&mut data, &self.secrets.lock());
-            tx.execute(
-                "INSERT INTO events(task_id,kind,data) VALUES(?1,?2,?3)",
-                params![task.id, kind, data.to_string()],
-            )?;
-            tx.last_insert_rowid() as u64
-        } else {
-            0
-        };
-        tx.commit()?;
-        Ok(sequence)
+    fn save(&self, task: &AgentTask, event: Option<(&str, &Value)>) -> Result<AgentTaskSave> {
+        self.persist(task, event, false)
+    }
+
+    fn resume(&self, task: &AgentTask, event: Option<(&str, &Value)>) -> Result<AgentTaskSave> {
+        self.persist(task, event, true)
     }
     fn load(&self, id: &str) -> Result<AgentTask> {
         let body: String = self
@@ -463,11 +500,9 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         store.save(&task, Some(("reconciled", &json!(note))))?;
     }
     // Explicit resume is the only path that may clear a cancellation.
-    task.status = TaskStatus::Interrupted;
-    store.save(&task, None)?;
     task.status = TaskStatus::Running;
     task.stop_reason = None;
-    store.save(&task, Some(("started", &Value::Null)))?;
+    task = store.resume(&task, Some(("started", &Value::Null)))?.task;
     let old_cwd = shell.get_current_dir()?;
     ctx.write_stdout(&format!("Task {}\n", task.id))?;
     if let Err(error) = shell.changepwd(&task.root.to_string_lossy()) {

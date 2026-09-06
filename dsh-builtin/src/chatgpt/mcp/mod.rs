@@ -30,6 +30,46 @@ use xdg::BaseDirectories;
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LEGACY_SSE_UNSUPPORTED_MESSAGE: &str = "Legacy SSE MCP transport is configuration-only; rmcp 1.7 removed the legacy SSE client transport. Use streamable HTTP via mcp-add-http instead.";
 
+#[derive(Debug)]
+pub struct McpCallError {
+    message: String,
+    outcome_unknown: bool,
+}
+
+impl McpCallError {
+    fn failure(message: impl ToString) -> Self {
+        Self {
+            message: message.to_string(),
+            outcome_unknown: false,
+        }
+    }
+
+    fn from_request(error: connection::McpRequestError, context: &str) -> Self {
+        let outcome_unknown = error.outcome_unknown();
+        let message = if outcome_unknown {
+            format!("{context}; outcome unknown: {error}")
+        } else {
+            format!("{context}: {error}")
+        };
+        Self {
+            outcome_unknown,
+            message,
+        }
+    }
+
+    pub fn outcome_unknown(&self) -> bool {
+        self.outcome_unknown
+    }
+}
+
+impl std::fmt::Display for McpCallError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for McpCallError {}
+
 /// Status of a MCP server connection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum McpConnectionStatus {
@@ -486,7 +526,10 @@ impl McpManager {
                 .clone();
             let fetched = connection
                 .request(json!({"kind":"list"}), cancelled)
-                .and_then(|value| serde_json::from_value::<Vec<Tool>>(value).map_err(Into::into));
+                .map_err(|error| error.to_string())
+                .and_then(|value| {
+                    serde_json::from_value::<Vec<Tool>>(value).map_err(|error| error.to_string())
+                });
             if cancelled() {
                 return Err("MCP discovery cancelled".into());
             }
@@ -626,6 +669,7 @@ impl McpManager {
 
     pub fn execute_tool(&self, function_name: &str, arguments: &str) -> Result<String, String> {
         self.execute_tool_cancellable(function_name, arguments, &|| false, false)
+            .map_err(|error| error.to_string())
     }
     pub fn execute_tool_cancellable(
         &self,
@@ -633,33 +677,38 @@ impl McpManager {
         arguments: &str,
         cancel: &dyn Fn() -> bool,
         tasks: bool,
-    ) -> Result<String, String> {
+    ) -> std::result::Result<String, McpCallError> {
         let binding = match self.bindings.get(function_name) {
             Some(binding) => binding,
-            None => return Err(format!("MCP tool binding `{function_name}` was not found")),
+            None => {
+                return Err(McpCallError::failure(format!(
+                    "MCP tool binding `{function_name}` was not found"
+                )));
+            }
         };
 
         if self.disabled_read().contains(&binding.server_label) {
-            return Err(format!(
+            return Err(McpCallError::failure(format!(
                 "MCP server '{}' is disconnected; run `mcp connect {}` to use its tools",
                 binding.server_label, binding.server_label
-            ));
+            )));
         }
 
         let args_value: Value = if arguments.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(arguments)
-                .map_err(|err| format!("failed to parse MCP tool arguments: {err}"))?
+            serde_json::from_str(arguments).map_err(|err| {
+                McpCallError::failure(format!("failed to parse MCP tool arguments: {err}"))
+            })?
         };
 
         let map = match args_value {
             Value::Null => None,
             Value::Object(map) => Some(map),
             other => {
-                return Err(format!(
+                return Err(McpCallError::failure(format!(
                     "expected MCP tool arguments to be an object, got {other}"
-                ));
+                )));
             }
         };
 
@@ -668,7 +717,7 @@ impl McpManager {
             .iter()
             .find(|srv| srv.label == binding.server_label)
             .map(|srv| srv.transport.clone())
-            .ok_or_else(|| "MCP server missing for tool invocation".to_string())?;
+            .ok_or_else(|| McpCallError::failure("MCP server missing for tool invocation"))?;
         let tool_name = binding.tool_name.clone();
 
         let connection = {
@@ -683,13 +732,13 @@ impl McpManager {
         }
         let value = connection
             .request(json!({"kind":"call","params":params,"tasks":tasks}), cancel)
-            .map_err(|e| format!("failed to call MCP tool; outcome unknown: {e}"))?;
+            .map_err(|error| McpCallError::from_request(error, "failed to call MCP tool"))?;
         if value["resultType"] == "task" || value["resultType"] == "input_required" {
             return Ok(json!({"server":binding.server_label,"response":value}).to_string());
         }
-        let result =
-            serde_json::from_value(value).map_err(|e| format!("invalid MCP result: {e}"))?;
-        render_tool_result(&result)
+        let result = serde_json::from_value(value)
+            .map_err(|e| McpCallError::failure(format!("invalid MCP result: {e}")))?;
+        render_tool_result(&result).map_err(McpCallError::failure)
     }
 
     pub fn task_operation(
@@ -698,15 +747,15 @@ impl McpManager {
         kind: &str,
         params: Value,
         cancel: &dyn Fn() -> bool,
-    ) -> Result<Value, String> {
+    ) -> std::result::Result<Value, McpCallError> {
         if self.is_disabled(server) {
-            return Err("MCP server is disconnected".into());
+            return Err(McpCallError::failure("MCP server is disconnected"));
         }
         let transport = self
             .servers
             .iter()
             .find(|s| s.label == server)
-            .ok_or("unknown MCP server")?
+            .ok_or_else(|| McpCallError::failure("unknown MCP server"))?
             .transport
             .clone();
         let connection = self
@@ -717,7 +766,7 @@ impl McpManager {
             .clone();
         connection
             .request(json!({"kind":kind,"params":params}), cancel)
-            .map_err(|e| e.to_string())
+            .map_err(|error| McpCallError::from_request(error, "MCP operation failed"))
     }
 
     pub(crate) fn has_tool_binding(&self, function_name: &str) -> bool {

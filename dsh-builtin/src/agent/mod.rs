@@ -9,6 +9,21 @@ pub mod files;
 pub mod jobs;
 pub mod sandbox;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolOutcome {
+    Success,
+    Failure,
+    #[serde(rename = "unknown")]
+    OutcomeUnknown,
+}
+
+impl ToolOutcome {
+    pub fn failed(self) -> bool {
+        self != Self::Success
+    }
+}
+
 pub struct AgentRuntime {
     pub task: AgentTask,
     pub store: Arc<dyn AgentTaskStore>,
@@ -35,15 +50,9 @@ impl AgentRuntime {
             .elapsed_ms
             .saturating_add(self.tick.elapsed().as_millis() as u64);
         self.tick = Instant::now();
-        // Cancellation from another shell must win over a stale checkpoint.
-        if self
-            .store
-            .load(&self.task.id)
-            .is_ok_and(|t| t.status == TaskStatus::Cancelled)
-        {
-            self.task.status = TaskStatus::Cancelled;
-        }
-        self.store.save(&self.task, event)
+        let saved = self.store.save(&self.task, event)?;
+        self.task = saved.task;
+        Ok(saved.sequence)
     }
     pub fn stopped(&self) -> bool {
         self.task.status != TaskStatus::Running
@@ -92,16 +101,16 @@ impl AgentRuntime {
         self.save(Some(("tool_intent", call)))?;
         Ok(())
     }
-    pub fn after_tool(&mut self, call: &Value, result: &str, failed: bool) -> Result<u64> {
+    pub fn after_tool(&mut self, call: &Value, result: &str, outcome: ToolOutcome) -> Result<u64> {
         self.task.pending_operation = None;
-        if result.contains("outcome unknown") {
+        if outcome == ToolOutcome::OutcomeUnknown {
             self.task.pending_operation = Some(call.clone());
             self.task.status = TaskStatus::InputRequired;
             self.task.stop_reason =
                 Some("operation outcome is unknown; reconcile before resuming".into());
         }
         let signature = format!("{}:{result}", call.get("function").unwrap_or(&Value::Null));
-        if failed {
+        if outcome.failed() {
             self.repeats = if self.previous_failure.as_ref() == Some(&signature) {
                 self.repeats + 1
             } else {
@@ -120,7 +129,7 @@ impl AgentRuntime {
         }
         self.save(Some((
             "tool_result",
-            &json!({"call":call,"result":result,"failed":failed}),
+            &json!({"call":call,"result":result,"failed":outcome.failed(),"outcome":outcome}),
         )))
     }
     pub fn checkpoint(&mut self, checkpoint: Value, tokens: u64) -> Result<()> {
@@ -167,7 +176,10 @@ impl AgentRuntime {
                     (self.task.status != TaskStatus::Completed).then(|| "task stopped before completion (budget or interruption)".into())
                 });
         }
-        self.save(Some(("stopped", &json!({"reason":self.task.stop_reason}))))?;
+        self.save(Some((
+            "stopped",
+            &json!({"status":self.task.status,"reason":self.task.stop_reason}),
+        )))?;
         Ok(())
     }
 }

@@ -936,18 +936,21 @@ fn chat_with_tools(
                             )
                             .map_err(|e| e.to_string())?;
                     }
-                    let mut tool_result = match execute_tool_call(tool_call, mcp_manager, proxy) {
-                        Ok(res) => res,
-                        Err(err) => format!(
-                            "Error: {err}\nPlease analyze the error and retry with corrected arguments."
-                        ),
+                    let execution = match execute_tool_call(tool_call, mcp_manager, proxy) {
+                        Ok(execution) => execution,
+                        Err(error) => tool::ToolExecution {
+                            content: format!(
+                                "Error: {error}\nPlease analyze the error and retry with corrected arguments."
+                            ),
+                            outcome: error.outcome,
+                        },
                     };
+                    let mut tool_result = execution.content;
 
                     if let Some(runtime) = &runtime {
-                        let failed = tool::result_failed(&tool_result);
                         let sequence = runtime
                             .lock()
-                            .after_tool(tool_call, &tool_result, failed)
+                            .after_tool(tool_call, &tool_result, execution.outcome)
                             .map_err(|e| e.to_string())?;
                         if tool_call["function"]["name"] == "tool_search"
                             && let Ok(result) = serde_json::from_str::<Value>(&tool_result)

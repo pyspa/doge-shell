@@ -645,13 +645,6 @@ impl AiSuggestionBackend {
             .flatten()
     }
 
-    pub fn prefetch(&self, request: SuggestionRequest) {
-        if !request.input.is_empty() {
-            return;
-        }
-        self.enqueue(request);
-    }
-
     fn try_cached(&self, request: &SuggestionRequest) -> Option<String> {
         let state = self.inner.state.lock();
 
@@ -797,6 +790,18 @@ impl SuggestionBackend for AiSuggestionBackend {
         None
     }
 
+    // `SuggestionEngine::prefetch` (below) calls this through
+    // `Arc<dyn SuggestionBackend>`, so this override - not an inherent method
+    // of the same name - is what actually runs. An inherent `prefetch` here
+    // used to shadow nothing: the trait object dispatch always found the
+    // default no-op instead, so a cwd change never warmed the cache.
+    fn prefetch(&self, request: SuggestionRequest) {
+        if !request.input.is_empty() {
+            return;
+        }
+        self.enqueue(request);
+    }
+
     fn is_pending(&self) -> bool {
         let state = self.inner.state.lock();
         state.inflight || state.pending.is_some()
@@ -933,6 +938,37 @@ mod tests {
     fn test_input_preferences_default() {
         let prefs = InputPreferences::default();
         assert!(!prefs.ai_explanation);
+    }
+
+    /// `AiSuggestionBackend` used to have an inherent `prefetch` method beside
+    /// the trait one instead of overriding it. Everyone who holds the backend
+    /// as `Arc<dyn SuggestionBackend>` (as `SuggestionEngine` does) dispatches
+    /// virtually and always found the trait's default no-op, so a cwd change
+    /// never actually warmed the cache. Only a call through the trait object
+    /// - not a direct call on the concrete type - can catch that regression.
+    #[test]
+    fn ai_backend_prefetch_reaches_the_override_through_dyn_dispatch() {
+        let client = ChatGptClient::new("test-key".to_string()).unwrap();
+        let backend: Arc<dyn SuggestionBackend + Send + Sync> =
+            Arc::new(AiSuggestionBackend::new(client));
+
+        assert!(!backend.is_pending());
+
+        backend.prefetch(SuggestionRequest::new(
+            String::new(),
+            0,
+            InputPreferences::default(),
+            Vec::new(),
+            None,
+            Arc::new(Vec::new()),
+            None,
+        ));
+
+        assert!(
+            backend.is_pending(),
+            "prefetch through the trait object must reach AiSuggestionBackend's own \
+             logic, not the default no-op"
+        );
     }
 
     #[test]

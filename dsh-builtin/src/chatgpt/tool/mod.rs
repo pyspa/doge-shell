@@ -324,6 +324,20 @@ fn redact_tool_arguments(args: &str) -> String {
     safety_policy::redact_sensitive_text(args)
 }
 
+/// Fields `truncate_output`'s final fallback keeps whole (up to
+/// `MAX_PRESERVED_FIELD_CHARS` each) instead of dropping along with the rest
+/// of a too-big result: kept in sync with what `result_failed` (below) reads
+/// plus the job handle a caller polls with.
+const PRESERVED_STATUS_FIELDS: &[&str] = &["exit_code", "status", "job_id"];
+/// These fields are meant to be short (an exit code, an enum-like status, a
+/// UUID-shaped handle); this bounds them defensively so a malformed value
+/// cannot reopen the "result no longer fits" problem the fallback exists to
+/// solve.
+const MAX_PRESERVED_FIELD_CHARS: usize = 256;
+/// However little room the preserved fields leave, the preview must still say
+/// something.
+const MIN_PREVIEW_CHARS: usize = 64;
+
 fn truncate_output(output: String) -> String {
     if output.len() <= MAX_OUTPUT_LENGTH {
         return output;
@@ -345,7 +359,50 @@ fn truncate_output(output: String) -> String {
         if value.to_string().len() <= MAX_OUTPUT_LENGTH {
             return value.to_string();
         }
-        return serde_json::json!({"output_truncated":true,"preview":dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH / 2)}).to_string();
+        // The trimmed value is still too big to fit; fall back to a preview.
+        // `PRESERVED_STATUS_FIELDS` decide whether `result_failed` sees a
+        // failure and whether a job can still be polled, so they are carried
+        // over rather than dropped with the rest of the body - losing them
+        // here made a failed command that produced a huge log look like a
+        // Success to the model.
+        let mut fallback = serde_json::json!({ "output_truncated": true });
+        if let (Value::Object(source), Value::Object(target)) = (&value, &mut fallback) {
+            for key in PRESERVED_STATUS_FIELDS {
+                if let Some(field) = source.get(*key) {
+                    // These are meant to be a short exit code, an enum-like
+                    // status, or a UUID-shaped job handle - never free text.
+                    // Cap defensively anyway so a malformed or hostile tool
+                    // response cannot smuggle enough text through them to
+                    // push the whole fallback back over MAX_OUTPUT_LENGTH,
+                    // which is the exact problem this function exists to
+                    // prevent.
+                    let capped = match field {
+                        Value::String(text) if text.len() > MAX_PRESERVED_FIELD_CHARS => {
+                            Value::String(dsh_openai::turn::truncate_middle(
+                                text,
+                                MAX_PRESERVED_FIELD_CHARS,
+                            ))
+                        }
+                        other => other.clone(),
+                    };
+                    target.insert((*key).to_string(), capped);
+                }
+            }
+        }
+        // Give the preview whatever room is left after the fields above, so
+        // the total stays bounded near MAX_OUTPUT_LENGTH instead of the two
+        // budgets being sized independently and simply added together.
+        let scaffold_len = fallback.to_string().len();
+        let preview_budget = (MAX_OUTPUT_LENGTH / 2)
+            .min(MAX_OUTPUT_LENGTH.saturating_sub(scaffold_len))
+            .max(MIN_PREVIEW_CHARS);
+        if let Value::Object(target) = &mut fallback {
+            target.insert(
+                "preview".to_string(),
+                Value::String(dsh_openai::turn::truncate_middle(&output, preview_budget)),
+            );
+        }
+        return fallback.to_string();
     }
     dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH)
 }
@@ -658,6 +715,9 @@ pub(crate) fn agent_definitions() -> Vec<Value> {
     }
     tools
 }
+/// Reads a subset of `PRESERVED_STATUS_FIELDS` (`exit_code`, `status`); a
+/// field this comes to depend on must be added there too, or a truncated
+/// result silently loses the one thing this function looks for.
 pub(crate) fn result_failed(text: &str) -> bool {
     if text.starts_with("Error:")
         || text.starts_with("The tool reported an error:")
@@ -787,6 +847,74 @@ mod tests {
         assert!(truncated.ends_with("TAIL-MARKER"));
         assert!(truncated.contains("truncated"));
         assert!(truncated.len() < MAX_OUTPUT_LENGTH + 64);
+    }
+
+    /// The trimmed JSON can still be too big for a chatty command (five 2048
+    /// char streams comfortably clear the 8192 char cap on their own), and the
+    /// final fallback used to drop `exit_code`/`status` along with everything
+    /// else - `result_failed` then had nothing to read and reported a failed
+    /// command as a Success.
+    #[test]
+    fn truncate_output_final_fallback_keeps_exit_code_and_status() {
+        // Each field over 2048 chars is capped to ~2048 by `trim`, so enough
+        // large fields (not larger fields) are what pushes the *trimmed*
+        // value itself past `MAX_OUTPUT_LENGTH` and into the final fallback.
+        let huge = "E".repeat(4096);
+        let output = serde_json::json!({
+            "exit_code": 1,
+            "status": "failed",
+            "job_id": "job-1",
+            "stdout": huge.clone(),
+            "stderr": huge.clone(),
+            "note": huge.clone(),
+            "extra_a": huge.clone(),
+            "extra_b": huge,
+        })
+        .to_string();
+        assert!(output.len() > MAX_OUTPUT_LENGTH);
+
+        let truncated = truncate_output(output);
+        assert!(truncated.len() <= MAX_OUTPUT_LENGTH + 512);
+
+        let value: Value = serde_json::from_str(&truncated).expect("still valid JSON");
+        assert_eq!(value["exit_code"], Value::from(1));
+        assert_eq!(value["status"], Value::from("failed"));
+        assert_eq!(value["job_id"], Value::from("job-1"));
+        assert_eq!(value["output_truncated"], Value::from(true));
+        assert!(
+            result_failed(&truncated),
+            "a truncated failing result must still read as a failure"
+        );
+    }
+
+    /// A malformed or hostile tool response could set `status`/`job_id` to
+    /// something far longer than the short control values they are meant to
+    /// hold. Carrying those fields over verbatim (as an earlier version of
+    /// this fallback did) could push the whole fallback back over
+    /// `MAX_OUTPUT_LENGTH` on top of the fixed preview budget - reopening the
+    /// exact "result no longer fits" problem the fallback exists to solve.
+    #[test]
+    fn truncate_output_final_fallback_stays_bounded_even_with_oversized_status_fields() {
+        let huge = "E".repeat(4096);
+        let output = serde_json::json!({
+            "exit_code": 1,
+            "status": "failed ".repeat(1000),
+            "job_id": "job-".repeat(1000),
+            "stdout": huge,
+        })
+        .to_string();
+        assert!(output.len() > MAX_OUTPUT_LENGTH);
+
+        let truncated = truncate_output(output);
+        assert!(
+            truncated.len() <= MAX_OUTPUT_LENGTH + 512,
+            "fallback grew unbounded: {} chars",
+            truncated.len()
+        );
+
+        let value: Value = serde_json::from_str(&truncated).expect("still valid JSON");
+        assert_eq!(value["exit_code"], Value::from(1));
+        assert!(result_failed(&truncated));
     }
 
     #[test]

@@ -23,7 +23,7 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 |---|---|---|
 | 入口 | `dsh/src/shell/eval.rs` → `dsh-builtin/src/chatgpt.rs` | `dsh/src/ai_features/service.rs` |
 | 実行 | 同期 | 非同期 |
-| ツール | builtin 8 種 + MCP | MCP のみ |
+| ツール | builtin 8 種 + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は
@@ -181,9 +181,11 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 
 ### 経路 A / B の非対称（調査済み・未着手）
 
-- **経路 B は cancel callback を渡さない**（`dsh/src/ai_features/service.rs`、
-  `ChatClient for ChatGptClient` が `send_chat(.., None)`）。`!` チャットは
-  `proxy.is_canceled()` を渡すので、Ctrl-C はチャットにだけ効く。
+- **経路 B は `with_tools()` を本番で一度も呼ばない**（`AiRequestOptions::with_tools`
+  `dsh/src/ai_features/service.rs:50`）。コマンドパレットの各アクション・ゴーストテキスト等は
+  すべて `without_tools()` を使うため、`LiveAiService::run_tool_loop` の MCP 実行ブロック・
+  `authorize_mcp_tool`・`ReplConfirmationHandler` はコンパイルはされるが到達しない。
+  「使う」方向に配線するか、使わないと決めて周辺コードを削るかは未決定。
 - **`ask_ai_async` は temperature 0.7 固定**。`blocks fix`（「修正コマンドを 1 行だけ」）にも
   同じ値が使われる。
 - **シェル側 client は起動時に固定**。`AI_CHAT_API_KEY` / `AI_CHAT_MODEL` /

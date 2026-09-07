@@ -94,6 +94,15 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
     let normalized_current_dir =
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
+    // A search rooted outside cwd (`path: ".."`, a widened workspace root)
+    // is still reported relative to *something* readable when possible,
+    // rather than spelling out the user's home directory in an absolute path.
+    let normalized_workspace_root =
+        super::canonicalize_or_normalize(&super::workspace_root(&current_dir));
+    let display_bases = [
+        normalized_current_dir.as_path(),
+        normalized_workspace_root.as_path(),
+    ];
 
     if !normalized_abs_path.exists() {
         return Err(format!("chat: path `{path_value}` does not exist"));
@@ -159,10 +168,14 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
                             .map(|s| glob.matches(s))
                             .unwrap_or(false)
                     {
-                        // Get path relative to CWD for output
-                        if let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir) {
-                            results.push(cwd_rel.display().to_string());
-                        }
+                        // Get path relative to CWD for output. When the
+                        // search root sits outside cwd (e.g. `path` points at
+                        // a workspace root or a symlinked ancestor),
+                        // `strip_prefix` fails and used to drop the hit
+                        // silently - a real match with no marker that it was
+                        // ever found. Fall back through the workspace root,
+                        // then the absolute path.
+                        results.push(display_relative_to(entry.path(), &display_bases));
                     }
                 }
             }
@@ -227,13 +240,12 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
                         }
                         if let Ok(line_content) = line
                             && matcher.is_match(&line_content)
-                            && let Ok(cwd_rel) = entry.path().strip_prefix(&normalized_current_dir)
                         {
                             let line_content =
                                 safety_policy::redact_sensitive_text(line_content.trim());
                             results.push(format!(
                                 "{}:{}: {}",
-                                cwd_rel.display(),
+                                display_relative_to(entry.path(), &display_bases),
                                 line_idx + 1,
                                 trim_line(&line_content)
                             ));
@@ -288,6 +300,24 @@ fn cap_output(output: String) -> String {
     format!(
         "{kept}\n... (output truncated after ~{shown} lines; narrow the query, pass `glob`, or lower max_results)"
     )
+}
+
+/// Render `path` relative to the first of `bases` it sits under, or as an
+/// absolute path if it sits under none of them.
+///
+/// `strip_prefix` fails when `path` is not under a given base - a search
+/// rooted outside cwd (`path: ".."`, a widened workspace root, a symlinked
+/// ancestor) - and silently dropping those hits made real matches vanish with
+/// no marker that anything was cut. Trying the workspace root before falling
+/// back to an absolute path keeps the common case (a hit just outside cwd,
+/// still inside the project) from spelling out the user's home directory.
+fn display_relative_to(path: &std::path::Path, bases: &[&std::path::Path]) -> String {
+    for base in bases {
+        if let Ok(rel) = path.strip_prefix(base) {
+            return rel.display().to_string();
+        }
+    }
+    path.display().to_string()
 }
 
 // Helper function to normalize a path by resolving all relative components
@@ -407,6 +437,47 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("outside allowed directories"));
+    }
+
+    /// A search root outside cwd but still inside the widened workspace root
+    /// (e.g. `path: ".."` from a workspace member) used to silently drop
+    /// every hit: `strip_prefix(cwd)` failed for a path that is not under
+    /// cwd, and the code discarded the match instead of falling back to an
+    /// absolute path.
+    #[test]
+    fn search_reports_hits_outside_cwd_but_inside_the_workspace_root() {
+        let base = tempdir().unwrap();
+        // A project marker widens the allowed roots from cwd out to `base`
+        // (see `workspace_root` in `tool/mod.rs`).
+        fs::write(base.path().join("Cargo.toml"), "[package]\n").unwrap();
+        let cwd = base.path().join("sub");
+        fs::create_dir_all(&cwd).unwrap();
+        let sibling = base.path().join("other");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(sibling.join("needle.txt"), "the needle is here").unwrap();
+
+        let mut proxy = proxy(&cwd);
+
+        let filename_result = run(
+            r#"{"query": "needle.txt", "type": "filename", "path": ".."}"#,
+            &mut proxy,
+        )
+        .unwrap();
+        assert!(
+            filename_result.contains("other/needle.txt"),
+            "filename search dropped a hit outside cwd, or leaked an absolute path instead of a workspace-root-relative one: {filename_result}"
+        );
+
+        let content_result = run(
+            r#"{"query": "needle is here", "type": "content", "path": ".."}"#,
+            &mut proxy,
+        )
+        .unwrap();
+        assert!(
+            content_result.contains("other/needle.txt")
+                && content_result.contains("needle is here"),
+            "content search dropped a hit outside cwd, or leaked an absolute path instead of a workspace-root-relative one: {content_result}"
+        );
     }
 
     #[cfg(unix)]

@@ -154,51 +154,96 @@ impl SafetyGuard {
                 continue;
             }
 
-            // Every program this line runs, not just the first word of it.
-            //
-            // `job.cmd` is the whole line, pipeline included, so classifying
-            // its first token judged `true | rm -rf ~` as `true` and
-            // `sudo rm -rf ~` as `sudo` - neither of which has a rule, so both
-            // passed every dangerous-command check. Splitting at the operators
-            // and looking through wrappers is what puts `rm` in front of the
-            // `rm` checker.
-            for segment in dsh_types::safety_policy::split_command_segments(&job.cmd) {
-                let parts = match Self::parse_command_tokens(&segment) {
-                    Ok(parts) => parts,
-                    Err(err) => {
-                        return SafetyResult::Confirm(format!(
-                            "Command '{}' could not be parsed for safety checks ({err}). Proceed?",
-                            job.cmd
-                        ));
-                    }
-                };
-
-                for (program, args) in dsh_types::safety_policy::command_candidates(&parts) {
-                    let cmd_clean = Self::get_command_name(&program);
-
-                    // 1. Check always warn list
-                    if Self::always_warns(&cmd_clean) {
-                        return SafetyResult::Confirm(format!(
-                            "Potentially dangerous system command '{}' detected. Proceed?",
-                            cmd_clean
-                        ));
-                    }
-
-                    // 2. Run specific checker if available
-                    if let Some(checker) = self.checkers.get(&cmd_clean)
-                        && let Some(msg) = checker(&args)
-                    {
-                        return SafetyResult::Confirm(msg);
-                    }
-                }
+            if let Some(reason) = self.classify_command_line(&job.cmd) {
+                return SafetyResult::Confirm(reason);
             }
         }
 
         SafetyResult::Allowed
     }
 
-    /// Check a single command (legacy or simpler use cases)
-    /// This is now mostly a wrapper or for simple checks.
+    /// Judge a whole command line the way `check_jobs` does: split it at
+    /// shell operators, look through wrappers (`sudo`, `env`, `timeout`, ...)
+    /// on each segment, and classify what is actually run.
+    ///
+    /// `line` must be real, not-yet-tokenized shell text (`job.cmd`, or the
+    /// raw string an MCP tool's `command` argument carried) - never tokens
+    /// rejoined with spaces. Rejoining already-split tokens and re-parsing
+    /// them here would corrupt a quote or a literal `;`/`|` that was part of
+    /// one argument's value (`check_command` used to do exactly that; see its
+    /// doc comment).
+    ///
+    /// Classifying only the line's first token judged `true | rm -rf ~` as
+    /// `true` and `sudo rm -rf ~` as `sudo` - neither of which has a rule, so
+    /// both passed every dangerous-command check. Splitting at the operators
+    /// and looking through wrappers is what puts `rm` in front of the `rm`
+    /// checker. An MCP tool that executes `sudo rm -rf /` or `true; rm -rf /`
+    /// used to pass through unconfirmed at the default safety level this way.
+    fn classify_command_line(&self, line: &str) -> Option<String> {
+        for segment in dsh_types::safety_policy::split_command_segments(line) {
+            let parts = match Self::parse_command_tokens(&segment) {
+                Ok(parts) => parts,
+                Err(err) => {
+                    return Some(format!(
+                        "Command '{line}' could not be parsed for safety checks ({err}). Proceed?"
+                    ));
+                }
+            };
+            if let Some(reason) = Self::classify_tokens_static(&parts, &self.checkers) {
+                return Some(reason);
+            }
+        }
+        None
+    }
+
+    /// Judge an already-tokenized `[program, args...]` list: look through
+    /// wrappers and classify what is actually run, without assuming there was
+    /// ever a single string behind the tokens to re-derive.
+    ///
+    /// `check_command`'s callers (the Lisp `(command ...)` builtin, the
+    /// AI-generated single-command path) hand over a program name and a
+    /// `Vec<String>` of arguments that were never shell text - joining them
+    /// with spaces and feeding the result back through a shell tokenizer, as
+    /// an earlier version of this function did, can turn a literal `;` or an
+    /// unmatched `'` inside one argument's value into a fabricated operator
+    /// or a spurious parse failure. There is no shell operator to split on
+    /// here for the same reason: nothing downstream of these two callers ever
+    /// interprets the tokens as shell text (the Lisp builtin execs them
+    /// directly with no shell in between).
+    fn classify_tokens(&self, program: &str, args: &[String]) -> Option<String> {
+        let mut parts = Vec::with_capacity(args.len() + 1);
+        parts.push(program.to_string());
+        parts.extend_from_slice(args);
+        Self::classify_tokens_static(&parts, &self.checkers)
+    }
+
+    fn classify_tokens_static(
+        parts: &[String],
+        checkers: &HashMap<String, SafetyCheckFn>,
+    ) -> Option<String> {
+        for (program, args) in dsh_types::safety_policy::command_candidates(parts) {
+            let cmd_clean = Self::get_command_name(&program);
+
+            // 1. Check always warn list
+            if Self::always_warns(&cmd_clean) {
+                return Some(format!(
+                    "Potentially dangerous system command '{cmd_clean}' detected. Proceed?"
+                ));
+            }
+
+            // 2. Run specific checker if available
+            if let Some(checker) = checkers.get(&cmd_clean)
+                && let Some(msg) = checker(&args)
+            {
+                return Some(msg);
+            }
+        }
+        None
+    }
+
+    /// Check a single, already-tokenized command (legacy or simpler use
+    /// cases: the Lisp `(command ...)` builtin, the AI-generated
+    /// single-command path).
     pub fn check_command(
         &self,
         level: &SafetyLevel,
@@ -222,30 +267,20 @@ impl SafetyGuard {
             return SafetyResult::Allowed;
         }
 
-        // Construct a dummy job for check_jobs logic reuse is hard due to type mismatch.
-        // Reimplements simpler logic consistent with check_jobs.
         match level {
             SafetyLevel::Loose => SafetyResult::Allowed,
             SafetyLevel::Strict => {
                 SafetyResult::Confirm(format!("Command '{}' will be executed. Proceed?", cmd))
             }
             SafetyLevel::Normal => {
-                let cmd_name = Self::get_command_name(cmd);
-
-                if Self::always_warns(&cmd_name) {
-                    return SafetyResult::Confirm(format!(
-                        "Potentially dangerous command '{}' detected. Proceed?",
-                        cmd
-                    ));
+                // Look through wrappers so `sudo rm -rf /` is classified as
+                // `rm` instead of the unregistered `sudo`, without treating
+                // `cmd`/`args` as if they were one shell line (see
+                // `classify_tokens`'s doc comment for why not).
+                match self.classify_tokens(cmd, args) {
+                    Some(reason) => SafetyResult::Confirm(reason),
+                    None => SafetyResult::Allowed,
                 }
-
-                if let Some(checker) = self.checkers.get(&cmd_name)
-                    && let Some(msg) = checker(args)
-                {
-                    return SafetyResult::Confirm(msg);
-                }
-
-                SafetyResult::Allowed
             }
         }
     }
@@ -306,27 +341,42 @@ impl SafetyGuard {
             return SafetyResult::Allowed;
         }
 
-        // If it is a command execution tool, recursively apply command-level checks.
+        // If it is a command execution tool, judge the raw command line
+        // itself - the same way a typed command is judged, not through
+        // `check_command`. `check_command` exists for callers that were
+        // already handed separate tokens with no shell text behind them;
+        // this `cmd_str` *is* shell text (an MCP tool's `command` argument
+        // works exactly like the `execute` tool's), so tokenizing it here
+        // and reassembling `(cmd, args)` only to have `check_command`
+        // rejoin them with spaces and tokenize *again* would risk turning a
+        // quote or a `;`/`|` that was legitimately part of one argument's
+        // value into a fabricated command boundary.
         if Self::is_mcp_command_execution_tool(tool_name) {
-            if let Some(cmd_str) = Self::extract_mcp_command(args_json) {
-                let parts = match Self::parse_command_tokens(&cmd_str) {
-                    Ok(parts) => parts,
-                    Err(_) => {
-                        return SafetyResult::Confirm(format!(
-                            "MCP tool '{}' requested command execution, but arguments could not be parsed safely. Proceed?",
-                            function_name
-                        ));
-                    }
-                };
-                if let Some(c) = parts.first() {
-                    let a = if parts.len() > 1 { &parts[1..] } else { &[] };
-                    return self.check_command(level, c, a, allowlist);
-                }
+            let Some(cmd_str) = Self::extract_mcp_command(args_json) else {
+                return SafetyResult::Confirm(format!(
+                    "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
+                    function_name
+                ));
+            };
+            if cmd_str.trim().is_empty() {
+                return SafetyResult::Confirm(format!(
+                    "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
+                    function_name
+                ));
             }
-            return SafetyResult::Confirm(format!(
-                "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
-                function_name
-            ));
+            if allowlist.contains(&cmd_str) {
+                return SafetyResult::Allowed;
+            }
+            if matches!(level, SafetyLevel::Strict) {
+                return SafetyResult::Confirm(format!(
+                    "Command '{}' will be executed. Proceed?",
+                    cmd_str
+                ));
+            }
+            return match self.classify_command_line(&cmd_str) {
+                Some(reason) => SafetyResult::Confirm(reason),
+                None => SafetyResult::Allowed,
+            };
         }
 
         if matches!(level, SafetyLevel::Strict) {
@@ -1081,6 +1131,93 @@ mod tests {
             }
             other => panic!("expected a command-level verdict, got {other:?}"),
         }
+    }
+
+    /// `check_command` used to classify only the bare leading word, so an MCP
+    /// tool that ran `sudo rm -rf /` (or chained a harmless command in front
+    /// of a destructive one) passed unconfirmed at the default safety level -
+    /// the same command typed at the prompt is caught by `check_jobs`, which
+    /// looks through wrappers and splits on shell operators. `check_command`
+    /// must see the same thing.
+    #[test]
+    fn an_mcp_command_execution_tool_cannot_hide_behind_a_wrapper() {
+        let guard = SafetyGuard::new();
+
+        let args = serde_json::json!({ "command": "sudo rm -rf /" }).to_string();
+        match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+            SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
+            other => panic!("sudo-wrapped rm -rf / should have been confirmed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_mcp_command_execution_tool_cannot_hide_behind_a_separator() {
+        let guard = SafetyGuard::new();
+
+        let args = serde_json::json!({ "command": "true; rm -rf /" }).to_string();
+        match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+            SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
+            other => panic!("`true; rm -rf /` should have been confirmed, got {other:?}"),
+        }
+    }
+
+    /// Same wrapper bypass, reached through the Lisp `(command ...)` builtin
+    /// instead of an MCP tool: `sudo` must not hide `rm` there either.
+    ///
+    /// Unlike the MCP path, `(command ...)` execs `cmd`/`args` directly with
+    /// no shell in between (`Command::new(cmd).args(args)`), so there is no
+    /// operator for a literal `;`/`|` inside one argument to mean anything -
+    /// only wrapper transparency applies here.
+    #[test]
+    fn check_command_cannot_hide_a_destructive_command_behind_a_wrapper() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        assert!(matches!(
+            guard.check_command(
+                &level,
+                "sudo",
+                &["rm".to_string(), "-rf".to_string(), "/".to_string()],
+                &[]
+            ),
+            SafetyResult::Confirm(msg) if msg.contains("High Risk")
+        ));
+    }
+
+    /// `check_command`'s callers hand over arguments that were never one
+    /// shell string - joining them with spaces and re-parsing them as shell
+    /// text (an earlier version of this function did exactly that) could
+    /// turn a literal `;` or an unmatched `'` that is legitimately part of
+    /// one argument's *value* into a fabricated command boundary or a
+    /// spurious parse failure. Classification must work on the tokens as
+    /// given, not on a re-derived string.
+    #[test]
+    fn check_command_does_not_reinterpret_argument_values_as_shell_text() {
+        let guard = SafetyGuard::new();
+        let level = SafetyLevel::Normal;
+
+        // A commit message containing an apostrophe must not look like an
+        // unterminated quote once `cmd`/`args` are rejoined and re-tokenized.
+        assert_eq!(
+            guard.check_command(
+                &level,
+                "git",
+                &[
+                    "commit".to_string(),
+                    "-m".to_string(),
+                    "didn't work".to_string()
+                ],
+                &[]
+            ),
+            SafetyResult::Allowed
+        );
+
+        // A literal `;` inside one argument's value must not be treated as a
+        // command separator and misclassify the rest of the line as `rm`.
+        assert_eq!(
+            guard.check_command(&level, "echo", &["a;rm -rf /".to_string()], &[]),
+            SafetyResult::Allowed
+        );
     }
 
     /// Read-only classification reads the tool, not the server nickname.

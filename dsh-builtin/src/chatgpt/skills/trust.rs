@@ -54,9 +54,13 @@ impl Default for TrustFile {
 /// a repository the user has already trusted, and at that point the attacker
 /// can simply reword a skill they know is trusted.
 pub(crate) fn digest(skills: &[Skill]) -> String {
+    // The untruncated summary, not `summary()`: keying on the prompt's
+    // display budget would re-ask about every trusted project the next time
+    // `MAX_SKILL_SUMMARY_CHARS` changes, for a reason that has nothing to do
+    // with what changed in that project.
     let mut pairs: Vec<String> = skills
         .iter()
-        .map(|skill| format!("{}\u{1f}{}", skill.name, skill.summary()))
+        .map(|skill| format!("{}\u{1f}{}", skill.name, skill.raw_summary()))
         .collect();
     pairs.sort();
 

@@ -46,8 +46,9 @@ doctor skills
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
 - 失敗しやすい実装パターンを見つけたら、`task-map.md` か該当 Skill の `references/` へ短く戻す。
-- `description` は dsh のプロンプトでは 140 字で切られる。trigger を先頭に置く。
+- `description` は dsh のプロンプトでは 240 字で切られる（`skill_manage` が書き込める上限は 300 字）。trigger を先頭に置く。
 - `allowed-tools` などの他ツール向け frontmatter キーは dsh では無視される（強制しない）。
+- `skill_manage` は書く内容を検査する。frontmatter が無い / `name`/`description` が読めない / `description` が空、のいずれかは確認を出す前に拒否される。既存の canonical skill はこの検査の corpus テストを兼ねる（`cargo test -p dsh-builtin the_repositorys_own_skills_pass_the_lint`）。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill

@@ -143,7 +143,7 @@ fn list(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
             reads,
             describe_age(now, last),
             author,
-            skill.summary()
+            display_summary(&skill.summary())
         ));
     }
 
@@ -295,6 +295,15 @@ fn instruction_file(skill: &Skill) -> PathBuf {
     }
 }
 
+/// The prompt's display budget and a terminal's column budget are different
+/// constraints; this is the second one, independent of
+/// `MAX_SKILL_SUMMARY_CHARS`.
+const MAX_LIST_SUMMARY_CHARS: usize = 100;
+
+fn display_summary(summary: &str) -> String {
+    skills::truncate_chars(summary, MAX_LIST_SUMMARY_CHARS)
+}
+
 fn describe_age(now_ms: u64, then_ms: u64) -> String {
     match usage::days_since(now_ms, then_ms) {
         None => "never".to_string(),
@@ -325,5 +334,20 @@ mod tests {
     #[test]
     fn a_timestamp_in_the_future_reads_as_today() {
         assert_eq!(describe_age(100, 200), "today");
+    }
+
+    #[test]
+    fn a_summary_within_the_column_budget_is_unchanged() {
+        assert_eq!(display_summary("short trigger"), "short trigger");
+    }
+
+    #[test]
+    fn a_summary_at_the_prompt_budget_is_still_cut_for_the_terminal() {
+        // The prompt's own budget (240) is wider than a terminal column
+        // budget should be; `skill list` has its own, smaller limit.
+        let long = "a".repeat(MAX_LIST_SUMMARY_CHARS + 40);
+        let shown = display_summary(&long);
+        assert!(shown.ends_with("..."));
+        assert!(shown.chars().count() <= MAX_LIST_SUMMARY_CHARS + 3);
     }
 }

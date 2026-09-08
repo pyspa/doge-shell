@@ -118,7 +118,7 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 - `loose` は「コマンド・MCP・機微読み取りを素通りさせる」であって「全部素通り」ではない。
   **ファイル書き込み（`edit` / `str_replace` / `skill_manage`）と skill script はレベルに関係なく必ず確認する。**
   skill script の判定は user scope だけでなく **project scope（`<project>/.dsh/skills`）も含む**
-  （`execute.rs` の `is_skill_script_program`）。project skill は `git clone` で降ってくるので、
+  （`execute.rs` の `touches_skill_file`）。project skill は `git clone` で降ってくるので、
   そこだけ通常のコマンドポリシーに落ちると `loose` で無確認実行になる。
   判定は `resolve_tool_path` を**通さない**。あれはアクセス判定で、タスクでは grant 外のパスを
   拒むため、grant 外の skill script が「skill script ではない」と分類されてしまう。
@@ -251,6 +251,23 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 - **プロンプトに載るのは name / path / `description` の 1 行だけ**。本文はモデルが `read_file` で読む。
   frontmatter は自前パーサで、読むのは `description` のみ。YAML crate は入れない
   — 書き手（`skill_manage`）が読み手の分かる平坦な部分集合だけを出すことで整合を保証している。
+  プロンプトの表示予算は `MAX_SKILL_SUMMARY_CHARS`(240) で、`skill_manage` が書き込める上限
+  `MAX_DESCRIPTION_CHARS`(300) より狭い。両者は別の役割の別の値で、混同しない。
+- **書き込みは読み手そのものを呼んで検査する**（`skills/lint.rs`、`confirm_agent_action` より前）。
+  `validate()` は名前・scope・パスしか見ないので、以前は `patch` が `description:` 行を消しても
+  通っていた — その skill は `summary()` のフォールバックで本文先頭行を拾い「description 欠落」
+  診断に落ち、**モデルが自分で書いた直後にプロンプトから実質的に消えていた**。`lint::lint_skill_md`
+  は `split_frontmatter` / `frontmatter_field`（プロンプトの組み立てが実際に使う関数）を自分でも
+  呼び、`create` / `write_file` / `patch` の**最終内容**（`patch` は差分適用後）を検査する。
+  frontmatter 不在・`name` 不一致・`description` 欠落・`MAX_DESCRIPTION_CHARS` 超過は
+  **確認を出す前に** `Err` で拒否、`MAX_SKILL_SUMMARY_CHARS` 超過や空の本文は書き込みを通した上で
+  結果 JSON の `warnings` に載る。`references/` など SKILL.md 以外は `lint_bundled` で軽い検査のみ
+  （frontmatter を持たないので name/description は見ない）。同じ関数は `doctor skills` の deep
+  検査（`lint::lint_path`、相対リンクの実在まで見る）と、repo 自身の `docs/ai/skills` を対象にした
+  corpus テスト（`the_repositorys_own_skills_pass_the_lint`）から再利用する。
+  **`load_reporting`（毎ターン経路）には入れない** — 手書き skill や他ツール由来の frontmatter を
+  ロード時に弾いてはいけないため。ツールの JSON schema は増やさない
+  （`the_schema_stays_small_enough_to_carry_every_turn` が 1400 バイト上限を強制）。
 - **skill が 0 個でも fragment を出す**。1 つも持たないユーザーのモデルが「作れる」ことを
   知らないままになるため。
 - **skill 一覧は会話の identity に含めない**（`build_system_prompt` が返す
@@ -283,6 +300,10 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   ユーザーが何も決める前に system prompt へ入り、その prompt を読むエージェントは `execute`
   を持つ。信頼の単位は **root + (name, description) 集合の digest**。body は `read_file`
   としてユーザーの目に触れるので digest に含めない。skill を足す / 文言を変えると再確認する。
+  digest が食う description は `Skill::raw_summary()`（`MAX_SKILL_SUMMARY_CHARS` で切る前の
+  生の値）で、`render_fragment` が使う `summary()`（切った後、プロンプト表示用）とは別物。
+  表示予算 `MAX_SKILL_SUMMARY_CHARS` を変えても digest は動かない — `summary()` を食わせていた
+  頃は、表示予算を上げるだけで無関係な全プロジェクトの trust が同時に無効化されていた。
   対話は 1 度聞く（`y` = セッション、`a` = 永続）。**永続タスクでは聞かず、未信頼なら読まない**
   — 無人実行を承認待ちで止めないため、かつ人が見ていない入口の既定を対話より厳しくするため。
   digest は FNV-1a。`DefaultHasher` は Rust のリリース間で安定しないので、toolchain 更新の
@@ -490,16 +511,6 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 
 ### Skill / hooks（調査済み・未着手）
 
-- **`skill_manage` は書き込む内容を検証しない**。`validate()` は名前・scope・パスを見るが
-  contents を見ないので、`patch` が `description:` 行を消すと通る。その skill は
-  `summary()` のフォールバックで本文先頭行を拾い「`description` 欠落」診断に落ちる —
-  **モデルが自分で書いた直後にプロンプトから実質的に消える**。ユーザーには `doctor skills` を
-  見るまで分からない。直すなら `skills/lint.rs` を新設し、`SKILL.md` を書く 3 アクション
-  （`create` / `write_file` / `patch`）で最終内容を検査して frontmatter 欠落・`description`
-  欠落・`name` 不一致は**聞く前に**拒否する。同じ lint を `doctor skills` の deep 検査
-  （参照リンクの存在・本文長・内部 symlink の root 逸脱）に再利用でき、repo 自身の
-  `docs/ai/skills` を corpus テストにできる。deep 検査は `load_reporting`（毎ターン経路）に
-  入れず、別 API にすること。
 - **skill のライフサイクル自動遷移が無い**。`reads` / `last_read_ms` と `is_stale`(90 日) は
   あるが active → stale → archived の遷移は無い。archive を「ファイルを動かす」で実装すると
   `install-runtime-skills.sh --check-installed` と `doctor skills` の drift 検査が永久に赤くなる
@@ -507,10 +518,6 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   上げると旧シェルの `read_state` が `None` を返してカウンタ記録自体が止まる）。CLI 限定にし、
   `skill_manage` には archive を足さない（モデルが自分をプロンプトから隠せる操作を持つべきでない）。
   `skill_manage delete` / `skill remove` は即削除で、復元も監査記録も無い。
-- **`MAX_SKILL_SUMMARY_CHARS` は 140 字**で、repo の canonical skill の多くがそれを超える
-  （`doge-shell-completion-spec` は 234 字）。**dsh 自身のプロンプトで trigger 文が切られている。**
-  上げるなら `trust::digest` の入力も生 description に切り替える変更と**同一リリースに**まとめる
-  こと。別々に出すと既存の trust が 2 回無効化されて 2 回聞かれる。
 - **`skill_manage` の `description` 上限は 300 字**（仕様は 1024 字）。プロンプトコストを
   理由に意図的に狭めている。
 - **`search` は gitignore された project skill を見つけない**（`ignore::WalkBuilder` の内部挙動）。

@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::chatgpt::skills::lint::{self, LintLevel};
 use crate::chatgpt::skills::usage;
 use crate::project_context;
 use crate::safety_policy;
@@ -1329,6 +1330,31 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
             problem.problem
         ));
     }
+    // The deep pass: read what each loaded skill actually holds. Cheap enough
+    // for a `doctor` run (which reads files anyway); too slow to run on every
+    // turn, which is why `chat_with_tools` never calls this.
+    for skill in &skills {
+        let label = roots
+            .iter()
+            .find(|root| skill.dir().starts_with(&root.path))
+            .map(|root| root.label())
+            .unwrap_or_else(|| skill.scope.as_str());
+        for finding in lint::lint_path(skill.dir(), &skill.name) {
+            let severity = match finding.level {
+                // A rejection here means `skill_manage` would have refused
+                // this exact content; it reached disk some other way (a
+                // human edit, or a skill this shell did not write).
+                LintLevel::Reject => "error",
+                LintLevel::Warn => "warn",
+            };
+            let _ = ctx.write_stdout(&format!(
+                "{severity} {label}-skill {} {}",
+                crate::config_paths::display_path(skill.dir()),
+                finding.message
+            ));
+        }
+    }
+
     let records = usage::load();
     let now = usage::now_ms();
 
@@ -2555,6 +2581,30 @@ mod tests {
         assert_eq!(
             output.matches("project-skills-trust").count(),
             2,
+            "{output}"
+        );
+    }
+
+    /// The deep lint pass runs from `doctor skills`, not from the load path,
+    /// so a skill missing its `description` shows up as an `error` line in
+    /// addition to the existing load-time `SkillDiagnostic` warning.
+    #[test]
+    fn doctor_skills_reports_a_lint_rejection_as_an_error() {
+        let project = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let skill = root.join(".dsh/skills/broken");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "---\nname: broken\n---\n\nbody\n").unwrap();
+
+        let (ctx, observer) = observed_context();
+        let mut proxy = hooks_proxy(&root, &[]);
+        crate::chatgpt::skills::clear_skills_fragment_cache();
+        report_runtime_skills(&ctx, &mut proxy, &root);
+        let output = observed_stdout(&observer);
+
+        assert!(
+            output.contains("error project-skill") && output.contains("description"),
             "{output}"
         );
     }

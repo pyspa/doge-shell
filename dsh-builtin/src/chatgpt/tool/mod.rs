@@ -823,6 +823,56 @@ pub(crate) fn reject_gitignored_read_path(
     }
 }
 
+/// The same content check `skill_manage` runs, applied to the other two
+/// tools that can reach the exact same file.
+///
+/// `skill_manage` validates the name, the path, the symlinks *and* (since the
+/// content lint) the shape of what it writes - but `edit` and `str_replace`
+/// advertise "absolute for skills" in their own schemas and were never routed
+/// through any of that. Without this, deleting a skill's `description:` line
+/// through `str_replace` reopened exactly the bug the content lint closed,
+/// just through a different tool.
+///
+/// Only ever inspects the file the loader actually parses for frontmatter -
+/// a folder skill's `SKILL.md`, or a bare `*.md` file that is the whole
+/// skill. A bundled `references/*` file is unaffected: `lint_bundled` is
+/// advisory even from `skill_manage` itself, so there is nothing to gate here.
+/// Structural, not existence-based, so creating a brand-new skill this way is
+/// caught the same as editing one that is already on disk.
+pub(crate) fn reject_broken_skill_md(
+    path: &Path,
+    current_dir: &Path,
+    contents: &str,
+) -> Result<(), String> {
+    let Some((skill_dir, _scope)) = crate::chatgpt::skills::containing_skill(path, current_dir)
+    else {
+        return Ok(());
+    };
+
+    let is_folder_skill_md = path.parent() == Some(skill_dir.as_path())
+        && path.file_name().and_then(|name| name.to_str()) == Some("SKILL.md");
+    let is_bare_md_skill =
+        path == skill_dir && path.extension().and_then(|ext| ext.to_str()) == Some("md");
+    if !is_folder_skill_md && !is_bare_md_skill {
+        return Ok(());
+    }
+
+    let name = if is_folder_skill_md {
+        skill_dir.file_name()
+    } else {
+        skill_dir.file_stem()
+    };
+    let Some(name) = name.and_then(|name| name.to_str()) else {
+        return Ok(());
+    };
+
+    let findings = crate::chatgpt::skills::lint::lint_skill_md(name, contents);
+    if let Some(reason) = crate::chatgpt::skills::lint::has_rejection(&findings) {
+        return Err(format!("chat: {reason}"));
+    }
+    Ok(())
+}
+
 pub(crate) fn confirm_sensitive_access(
     proxy: &mut dyn ChatToolHost,
     action: &str,

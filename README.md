@@ -1483,6 +1483,9 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     **The assistant writes them too.** After a task that took many steps, or after you
     correct it, it may offer to record the lesson with its `skill_manage` tool. Every
     write asks first, and the answer is remembered per file for the rest of the session.
+    A write that would leave the skill without a usable `name` or `description` - the
+    two things the prompt actually shows - is refused before you are asked about it,
+    rather than silently dropping out of the prompt on the next turn.
     `skill list` shows which skills are actually being read, so the ones that are not
     can be removed - every summary costs tokens on every turn, and `doctor skills`
     warns once there are more than eight.
@@ -1491,7 +1494,9 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     descriptions would otherwise be in every prompt before you had decided anything,
     and the assistant on the other side of that prompt can run commands. Answer `y`
     for this shell session or `a` to remember the repository; adding a skill, or
-    rewording one, asks again. You are asked once per directory, so a checkout
+    rewording one, asks again - as does dsh itself widening how much of a
+    description it keeps, which happens rarely and re-asks every trusted
+    repository once. You are asked once per directory, so a checkout
     carrying both `.dsh/skills/` and `.agents/skills/` asks twice and refusing one
     leaves the other alone. `skill trust` shows the current answers and
     `skill untrust` takes them back. Under `agent run` nothing is asked and an

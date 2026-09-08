@@ -75,8 +75,11 @@ Rules:
 5. Verify every change. After editing, read the file back. After `execute`, check exit code, stdout, and stderr.
 6. If a tool fails, analyze the error before asking the user.
 7. When a task took many tool calls, or you recovered from a mistake the user corrected, save the
-   lesson with `skill_manage` so the next run is shorter. Use `project` scope for knowledge tied to
-   this repository, `user` scope otherwise. Record a generalizable procedure, never a transcript.
+   lesson with `skill_manage` so the next run is shorter. If an existing skill already covers close
+   to this ground, `patch` it instead of creating a near-duplicate. Use `project` scope for knowledge
+   tied to this repository, `user` scope otherwise. Record the reproducible steps, the assumptions,
+   and the pitfall - never a transcript or a copy of file contents. Write `description` as a one-line
+   "Use when ..." trigger; it is the only thing shown until the skill is read.
 
 Tools:
 - `shell_history`: what the user recently ran, with exit codes and output

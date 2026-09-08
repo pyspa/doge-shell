@@ -120,6 +120,16 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         _ => {}
     }
 
+    let updated = if replace_all {
+        contents.replace(old_string, new_string)
+    } else {
+        contents.replacen(old_string, new_string, 1)
+    };
+
+    // The lint sees the result of the edit, not the input to it - the same
+    // rule `skill_manage`'s `patch` follows.
+    super::reject_broken_skill_md(&normalized_abs_path, &normalized_current_dir, &updated)?;
+
     // Safety Guard: same confirmation contract as the edit tool.
     let sensitive_note = if safety_policy::is_sensitive_path(&normalized_abs_path)
         || safety_policy::contains_sensitive_text(new_string)
@@ -140,12 +150,6 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Ok("File modification cancelled by user.".to_string());
     }
 
-    let updated = if replace_all {
-        contents.replace(old_string, new_string)
-    } else {
-        contents.replacen(old_string, new_string, 1)
-    };
-
     if proxy.agent_runtime().is_some() {
         crate::agent::files::write(&normalized_abs_path, &updated)
     } else {
@@ -163,6 +167,10 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
     use tempfile::tempdir;
 
     use crate::test_support::TestShellProxy;
@@ -295,5 +303,41 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("outside allowed directories"), "{err}");
+    }
+
+    /// The lint sees the result of the patch, not the input to it - deleting
+    /// the `description:` line must be refused even though the line being
+    /// removed, by itself, is a perfectly normal `str_replace` edit.
+    #[test]
+    fn str_replace_refuses_to_delete_a_skills_description_before_confirmation() {
+        let dir = tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let skill_dir = root.join(".dsh/skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
+        fs::write(skill_dir.join("SKILL.md"), original).unwrap();
+
+        let confirm_calls = Arc::new(AtomicUsize::new(0));
+        let mut p = TestShellProxy {
+            current_dir: root,
+            confirm_counter: Some(confirm_calls.clone()),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+
+        let args = serde_json::json!({
+            "path": ".dsh/skills/demo/SKILL.md",
+            "old_string": "description: Use when demoing\n",
+            "new_string": "",
+        });
+        let err = run(&args.to_string(), &mut p).unwrap_err();
+
+        assert!(err.contains("description"), "{err}");
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),
+            original
+        );
     }
 }

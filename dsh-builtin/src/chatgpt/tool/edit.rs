@@ -58,6 +58,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
     super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+    super::reject_broken_skill_md(&normalized_abs_path, &normalized_current_dir, contents)?;
 
     // Safety Guard: Request confirmation from user
     let sensitive_note = if safety_policy::is_sensitive_path(&normalized_abs_path)
@@ -219,5 +220,69 @@ mod tests {
         // The approval is remembered per file, so a different one still asks.
         run(r#"{"path":"other.txt","contents":"three"}"#, &mut proxy).unwrap();
         assert_eq!(confirm_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// `skill_manage` is not the only tool that can reach a `SKILL.md` - its
+    /// own schema says "absolute for skills". This is the same content check,
+    /// applied here so `edit` cannot corrupt a skill that `skill_manage`
+    /// would have refused to.
+    #[test]
+    fn edit_refuses_to_corrupt_an_existing_skills_frontmatter_before_confirmation() {
+        let dir = tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let skill_dir = root.join(".dsh/skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
+        fs::write(skill_dir.join("SKILL.md"), original).unwrap();
+
+        let confirm_calls = Arc::new(AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            current_dir: root,
+            confirm_counter: Some(confirm_calls.clone()),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        let result = run(
+            r#"{"path":".dsh/skills/demo/SKILL.md","contents":"no frontmatter here"}"#,
+            &mut proxy,
+        );
+
+        let err = result.unwrap_err();
+        assert!(err.contains("frontmatter"), "{err}");
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),
+            original
+        );
+    }
+
+    /// A bundled file beside the skill (not `SKILL.md` itself) is not the
+    /// file the loader parses for frontmatter, so it is not second-guessed.
+    #[test]
+    fn edit_does_not_lint_a_bundled_reference_file() {
+        let dir = tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let skill_dir = root.join(".dsh/skills/demo");
+        fs::create_dir_all(skill_dir.join("references")).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n",
+        )
+        .unwrap();
+        let mut proxy = proxy(root);
+
+        run(
+            r#"{"path":".dsh/skills/demo/references/notes.md","contents":"anything at all"}"#,
+            &mut proxy,
+        )
+        .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("references/notes.md")).unwrap(),
+            "anything at all"
+        );
     }
 }

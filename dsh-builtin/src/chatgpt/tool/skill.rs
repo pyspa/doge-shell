@@ -14,7 +14,7 @@
 //! will follow, so writing one is closer to editing configuration than to
 //! editing a working file.
 
-use crate::chatgpt::skills::{self, SkillScope};
+use crate::chatgpt::skills::{self, MAX_DESCRIPTION_CHARS, SkillScope};
 use crate::shell_capabilities::ChatToolHost;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -27,7 +27,6 @@ pub(crate) const NAME: &str = "skill_manage";
 static SKILL_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$").expect("static regex"));
 
-const MAX_DESCRIPTION_CHARS: usize = 300;
 /// Ceilings on what one `delete` may remove without a second look.
 const MAX_DELETE_ENTRIES: usize = 64;
 const MAX_DELETE_BYTES: u64 = 1024 * 1024;
@@ -379,7 +378,7 @@ fn delete(request: &Request, proxy: &mut dyn ChatToolHost) -> Result<String, Str
         std::fs::remove_file(&request.target)
             .map_err(|err| format!("chat: failed to delete `{}`: {err}", request.relative_file))?;
         skills::clear_skills_fragment_cache();
-        return Ok(report(request, "delete", 0));
+        return Ok(report(request, "delete", 0, &[]));
     }
 
     if !request.skill_dir.is_dir() {
@@ -407,7 +406,7 @@ fn delete(request: &Request, proxy: &mut dyn ChatToolHost) -> Result<String, Str
     skills::usage::forget(&request.skill_dir);
     skills::clear_skills_fragment_cache();
 
-    Ok(report(request, "delete", 0))
+    Ok(report(request, "delete", 0, &[]))
 }
 
 /// Refuse to remove a tree that is not plainly a skill.
@@ -469,6 +468,21 @@ fn confirm_and_write(
     created: bool,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
+    // Content that would not reach the model, or would reach it broken,
+    // is refused before anyone is asked about it - a question about a change
+    // that was going to be rejected anyway trains people to answer without
+    // reading (the same ordering `validate` already follows for the request
+    // shape).
+    let findings = if request.relative_file == "SKILL.md" {
+        skills::lint::lint_skill_md(&request.name, contents)
+    } else {
+        skills::lint::lint_bundled(&request.relative_file, contents)
+    };
+    if let Some(reason) = skills::lint::has_rejection(&findings) {
+        return Err(format!("chat: {reason}"));
+    }
+    let warnings = skills::lint::warnings(findings);
+
     // The same key `edit` and `str_replace` use: the user is deciding about a
     // file, not about which tool happens to write it.
     if !super::confirm_agent_action(proxy, &super::write_approval_key(&request.target), message)? {
@@ -508,7 +522,7 @@ fn confirm_and_write(
     // would otherwise keep serving the previous list.
     skills::clear_skills_fragment_cache();
 
-    Ok(report(request, &request.action, contents.len()))
+    Ok(report(request, &request.action, contents.len(), &warnings))
 }
 
 /// The user just approved a change to this project's skills, so a trusted root
@@ -538,16 +552,19 @@ fn ensure_parent(target: &Path) -> Result<(), String> {
         .map_err(|err| format!("cannot create `{}`: {err}", parent.display()))
 }
 
-fn report(request: &Request, action: &str, bytes: usize) -> String {
-    json!({
+fn report(request: &Request, action: &str, bytes: usize, warnings: &[String]) -> String {
+    let mut value = json!({
         "action": action,
         "scope": request.scope.as_str(),
         "skill": request.name,
         "path": crate::config_paths::display_path(&request.target),
         "bytes": bytes,
         "note": "The skill list in the system prompt refreshes on the next turn; the path above works now.",
-    })
-    .to_string()
+    });
+    if !warnings.is_empty() {
+        value["warnings"] = json!(warnings);
+    }
+    value.to_string()
 }
 
 /// What "always" remembers for a removal.
@@ -868,6 +885,143 @@ mod tests {
         )
         .expect_err("an ambiguous patch is a different edit than intended");
         assert!(err.contains("appears 2 times"), "{err}");
+    }
+
+    /// A `patch` is applied before it is linted, so this proves the lint sees
+    /// the result of the edit, not the input to it.
+    #[test]
+    fn a_patch_that_removes_the_description_is_refused() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        run(
+            r#"{"action":"create","name":"demo","scope":"project","description":"Use when demoing","body":"step one\n"}"#,
+            &mut p,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap();
+        let calls_before = p.confirm_calls;
+
+        let err = run(
+            r#"{"action":"patch","name":"demo","scope":"project","old_string":"description: Use when demoing\n","new_string":""}"#,
+            &mut p,
+        )
+        .expect_err("a skill with no description falls out of the prompt");
+        assert!(err.contains("description"), "{err}");
+
+        // Refused before anyone was asked, and before anything on disk moved.
+        assert_eq!(p.confirm_calls, calls_before);
+        let after = std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_patch_that_renames_the_frontmatter_name_is_refused() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        run(
+            r#"{"action":"create","name":"demo","scope":"project","description":"Use when demoing","body":"step\n"}"#,
+            &mut p,
+        )
+        .unwrap();
+
+        let err = run(
+            r#"{"action":"patch","name":"demo","scope":"project","old_string":"name: demo","new_string":"name: renamed"}"#,
+            &mut p,
+        )
+        .expect_err("a frontmatter name that no longer matches its directory is reported broken, not shown");
+        assert!(err.contains("does not match"), "{err}");
+    }
+
+    #[test]
+    fn a_write_file_of_skill_md_without_frontmatter_is_refused() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        run(
+            r#"{"action":"create","name":"demo","scope":"project","description":"Use when demoing","body":"step\n"}"#,
+            &mut p,
+        )
+        .unwrap();
+
+        let err = run(
+            r#"{"action":"write_file","name":"demo","scope":"project","contents":"just some text, no frontmatter"}"#,
+            &mut p,
+        )
+        .expect_err("SKILL.md without frontmatter has no description to trigger on");
+        assert!(err.contains("frontmatter"), "{err}");
+    }
+
+    #[test]
+    fn an_indented_description_is_refused_because_the_reader_cannot_see_it() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        let contents =
+            "---\nname: demo\nmetadata:\n  description: nested under metadata\n---\n\nbody\n";
+        let args = json!({
+            "action": "write_file",
+            "name": "demo",
+            "scope": "project",
+            "contents": contents,
+        });
+        let err = run(&args.to_string(), &mut p)
+            .expect_err("a nested description is invisible to the flat reader");
+        assert!(err.contains("indented under another key"), "{err}");
+    }
+
+    /// Long enough to blow the prompt budget but short of the hard limit: the
+    /// write goes through, and the model is told why the trigger may not fire.
+    #[test]
+    fn a_long_description_is_written_but_warned_about() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        // Longer than the prompt's display budget (240) but within the hard
+        // write limit (300): the write goes through, with a warning.
+        let description = "Use when ".to_string() + &"x".repeat(260);
+        let args = json!({
+            "action": "create",
+            "name": "demo",
+            "scope": "project",
+            "description": description,
+            "body": "step",
+        });
+        let result = run(&args.to_string(), &mut p).unwrap();
+        assert!(result.contains("warnings"), "{result}");
+        assert!(root.join(".dsh/skills/demo/SKILL.md").exists());
+    }
+
+    /// `references/`, `scripts/` and `assets/` are never parsed for
+    /// frontmatter, so the same content that would fail as `SKILL.md` is fine
+    /// here.
+    #[test]
+    fn a_bundled_reference_file_is_not_linted_as_a_skill() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let mut p = proxy(root.clone());
+
+        run(
+            r#"{"action":"create","name":"demo","scope":"project","description":"Use when demoing","body":"step\n"}"#,
+            &mut p,
+        )
+        .unwrap();
+
+        let args = json!({
+            "action": "write_file",
+            "name": "demo",
+            "scope": "project",
+            "file": "references/notes.md",
+            "contents": "just some notes, no frontmatter here",
+        });
+        run(&args.to_string(), &mut p).unwrap();
+        assert!(root.join(".dsh/skills/demo/references/notes.md").exists());
     }
 
     #[test]

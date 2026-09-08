@@ -27,8 +27,16 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
+pub(crate) mod lint;
 pub(crate) mod trust;
 pub(crate) mod usage;
+
+/// The most `skill_manage` will ever write into `description:`.
+///
+/// Shared with `lint`, which enforces it on the final content before a write
+/// is asked about, and with `tool/skill.rs`, which enforces it on `create`'s
+/// input before `render_skill_md` ever runs.
+pub(crate) const MAX_DESCRIPTION_CHARS: usize = 300;
 
 /// Where a skill came from. Declaration order is precedence order.
 ///
@@ -284,7 +292,11 @@ pub(crate) struct SkillDiagnostic {
 pub(crate) struct Skill {
     pub name: String,
     pub scope: SkillScope,
-    summary: String,
+    /// Collapsed to one line, not yet truncated for the prompt. `summary()`
+    /// computes the truncated form on demand rather than caching a second
+    /// copy - see `raw_summary()` for why the untruncated form is what the
+    /// trust digest keys on.
+    raw_summary: String,
     /// The file the model should read to get the skill, ready to display.
     instruction_path: String,
     /// The directory (or bare file) that is the unit of bookkeeping.
@@ -359,12 +371,12 @@ impl Skill {
         let (frontmatter, _) = split_frontmatter(&instruction);
         let declared_name = frontmatter_field(frontmatter, "name");
         let declared_description = frontmatter_field(frontmatter, "description");
-        let summary = extract_skill_summary(&instruction);
+        let raw_summary = extract_skill_summary(&instruction);
 
         Self {
             name,
             scope: root.scope,
-            summary,
+            raw_summary,
             instruction_path: crate::config_paths::display_path(path),
             dir,
             root: root.path.clone(),
@@ -373,8 +385,22 @@ impl Skill {
         }
     }
 
-    pub(crate) fn summary(&self) -> &str {
-        &self.summary
+    /// What the prompt shows: collapsed to one line, truncated to
+    /// `MAX_SKILL_SUMMARY_CHARS`.
+    pub(crate) fn summary(&self) -> String {
+        truncate_chars(&self.raw_summary, MAX_SKILL_SUMMARY_CHARS)
+    }
+
+    /// The same summary before the prompt's display budget truncates it.
+    ///
+    /// Trust is about *what a root would put in the prompt if the budget were
+    /// unbounded* - the pair the user is agreeing to - not about how much of
+    /// it fits on a given day. Keying the digest on `summary()` instead would
+    /// mean every future change to `MAX_SKILL_SUMMARY_CHARS` re-asks every
+    /// trusted project once, for a reason that has nothing to do with what
+    /// changed in that project.
+    pub(crate) fn raw_summary(&self) -> &str {
+        &self.raw_summary
     }
 
     /// Where to read this skill from, as the prompt should spell it.
@@ -402,7 +428,10 @@ impl Skill {
     }
 }
 
-const MAX_SKILL_SUMMARY_CHARS: usize = 140;
+/// The longest canonical skill in this repository (`doge-shell-completion-spec`)
+/// runs to 234 characters; 140 cut its trigger mid-sentence. Chosen with room
+/// to spare rather than tuned to that one file.
+const MAX_SKILL_SUMMARY_CHARS: usize = 240;
 static SKILLS_FRAGMENT_CACHE: LazyLock<Mutex<Option<CachedSkillsFragment>>> =
     LazyLock::new(|| Mutex::new(None));
 
@@ -425,10 +454,14 @@ struct CachedSkillsFragment {
     fragment: String,
 }
 
+/// Returns `(raw, truncated_for_prompt)`. The raw half is what the trust
+/// digest hashes; the truncated half is what the prompt fragment shows.
+/// Collapsed to one line; not yet truncated for the prompt - `Skill::summary`
+/// does that on demand.
 fn extract_skill_summary(instruction: &str) -> String {
     let (frontmatter, body) = split_frontmatter(instruction);
     if let Some(description) = frontmatter_field(frontmatter, "description") {
-        return truncate_chars(&collapse_whitespace(&description), MAX_SKILL_SUMMARY_CHARS);
+        return collapse_whitespace(&description);
     }
 
     let body_summary = body
@@ -436,8 +469,7 @@ fn extract_skill_summary(instruction: &str) -> String {
         .map(str::trim)
         .find(|line| !line.is_empty() && !line.starts_with('#'))
         .unwrap_or("No description available.");
-
-    truncate_chars(&collapse_whitespace(body_summary), MAX_SKILL_SUMMARY_CHARS)
+    collapse_whitespace(body_summary)
 }
 
 fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
@@ -465,6 +497,15 @@ fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     (None, content)
 }
 
+/// Whether `line` is indented and therefore not a top-level frontmatter key.
+///
+/// Shared between `frontmatter_field` (which skips such a line) and
+/// `lint::nested_key` (which explains to a writer why it was skipped), so the
+/// two can never disagree about what counts as nested.
+fn is_indented(line: &str) -> bool {
+    line.starts_with([' ', '\t'])
+}
+
 /// Read one top-level scalar out of the frontmatter.
 ///
 /// Deliberately not a YAML parser. The only writer that has to round-trip
@@ -485,7 +526,7 @@ fn frontmatter_field(frontmatter: Option<&str>, key: &str) -> Option<String> {
 
         // Only top-level keys. Without this a `description:` nested under
         // `metadata:` was read as if it were the skill's own summary.
-        if line.starts_with([' ', '\t']) {
+        if is_indented(line) {
             continue;
         }
 
@@ -542,7 +583,12 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
+/// Cut `text` to `max_chars`, appending `...` if it did not already fit.
+///
+/// Shared with `skill list` (`crate::skill`), which truncates to a narrower,
+/// terminal-column budget than the prompt's own - two different constraints
+/// on the same description, not two different truncation rules.
+pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
     let char_count = text.chars().count();
     if char_count <= max_chars {
         return text.to_string();
@@ -1108,6 +1154,49 @@ Longer explanation.
 
         assert!(skill.summary().ends_with("..."));
         assert!(skill.summary().chars().count() <= MAX_SKILL_SUMMARY_CHARS + 3);
+    }
+
+    #[test]
+    fn a_description_up_to_the_new_budget_survives_into_the_prompt() {
+        let at_budget = "b".repeat(MAX_SKILL_SUMMARY_CHARS);
+        let skill = Skill::from_content(
+            "demo".to_string(),
+            format!("---\ndescription: \"{at_budget}\"\n---\n"),
+            Path::new("/tmp/skills/demo/SKILL.md"),
+            PathBuf::from("/tmp/skills/demo"),
+            &user_root(Path::new("/tmp/skills")),
+        );
+
+        assert_eq!(skill.summary(), at_budget);
+        assert!(!skill.summary().ends_with("..."));
+    }
+
+    /// The trust digest has to tell these two skills apart even though the
+    /// prompt shows them identically - it is what the user is agreeing to,
+    /// not what happened to fit on screen.
+    #[test]
+    fn the_trust_digest_does_not_change_when_only_the_summary_budget_changes() {
+        let shared_prefix = "d".repeat(MAX_SKILL_SUMMARY_CHARS + 10);
+        let a = Skill::from_content(
+            "demo".to_string(),
+            format!("---\ndescription: \"{shared_prefix}AAAA\"\n---\n"),
+            Path::new("/tmp/skills/demo/SKILL.md"),
+            PathBuf::from("/tmp/skills/demo"),
+            &user_root(Path::new("/tmp/skills")),
+        );
+        let b = Skill::from_content(
+            "demo".to_string(),
+            format!("---\ndescription: \"{shared_prefix}BBBB\"\n---\n"),
+            Path::new("/tmp/skills/demo/SKILL.md"),
+            PathBuf::from("/tmp/skills/demo"),
+            &user_root(Path::new("/tmp/skills")),
+        );
+
+        // Same prompt line: both descriptions agree up to the display budget.
+        assert_eq!(a.summary(), b.summary());
+        // Different descriptions: the digest must not agree too.
+        assert_ne!(a.raw_summary(), b.raw_summary());
+        assert_ne!(trust::digest(&[a]), trust::digest(&[b]));
     }
 
     /// A block scalar used to fall through to the body, so the model saw the

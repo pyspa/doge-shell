@@ -30,7 +30,7 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
     1. `reasoning_effort_conflict`: `tools` 付きリクエストが「`reasoning_effort` が `tools` と
        両立しない」400 を受けたら `reasoning_effort: "none"` を**足して**再送し、
        以後そのクライアントの `tools` 付きリクエストには常に `"none"` を強制する
-       （`force_reasoning_none` / `reasoning_none_forced`。`tools` を送らないリクエストは影響を受けない）。
+       （`remember_reasoning_none_forced` / `reasoning_none_forced`。`tools` を送らないリクエストは影響を受けない）。
     2. `unsupported_field`（`DROPPABLE_FIELDS`）: 400 で拒否された optional フィールドを 1 回落として
        再送し、以後そのクライアントでは送らない。
     両者は同じ `RecoveryState` を共有し、**1 の判定を 2 より先に評価する**。逆にすると
@@ -507,9 +507,9 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   `OPENAI_REASONING_MODEL_PREFIXES`（`gpt-5` / `o1` / `o3` / `o4`）に当たると 1.0 を強制する。
   既定は `gpt-5-mini` なので、ゴーストテキストの 0.0 も JSON 生成の 0.1 も**すべて 1.0**。
   `reasoning_effort` を送る口（`AI_CHAT_REASONING_EFFORT`）は入ったが、temperature の代わりには
-  ならない（両方ともプロバイダ側の解釈次第で、決定性を保証しない）。同じ prefix リストを
-  `model_defaults_reasoning_effort_to_none_for_tools` も読むが、2 つは別の制約を表す別関数
-  （§1 参照）。
+  ならない（両方ともプロバイダ側の解釈次第で、決定性を保証しない）。同じ判定関数
+  `is_openai_reasoning_model` を `resolve_reasoning_effort` も読むが、2 つは別の制約を表す
+  別関数（§1 参照）。
 - **`verbosity` を送る口が無い**（`reasoning_effort` は入った）。
 - **`reasoning_effort` の 400 リカバリはクライアント寿命の学習で、プロセス全体キャッシュは
   入れない**。`!` チャットは 1 メッセージごとに `ChatGptClient` を作り直す

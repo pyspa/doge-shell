@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::hooks::{self, HookContext};
 use super::mcp::McpManager;
 use crate::ShellProxy;
 use crate::agent::ToolOutcome;
@@ -10,7 +11,7 @@ use crate::safety_policy::{self, SafetyLevel};
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 
 mod edit;
-mod execute;
+pub(crate) mod execute;
 mod gitignore;
 mod ls;
 mod read;
@@ -18,6 +19,7 @@ mod replace;
 mod search;
 mod shell_context;
 mod shell_history;
+mod skill;
 
 /// Global backstop for the size of a single tool result. Individual tools apply
 /// their own tighter limits first so that the important part of their output
@@ -84,12 +86,14 @@ pub fn build_tools() -> Vec<Value> {
         search::definition(),
         shell_context::definition(),
         shell_history::definition(),
+        skill::definition(),
     ]
 }
 
 pub fn execute_tool_call(
     tool_call: &Value,
     mcp: &Arc<RwLock<McpManager>>,
+    hooks: &HookContext,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<ToolExecution, ToolCallError> {
     let function = tool_call
@@ -118,6 +122,116 @@ pub fn execute_tool_call(
     // confirmation prompt: the user can sit on that question for a long time,
     // and `mcp connect` in another turn needs the write lock.
     let is_mcp_tool = mcp.read().has_tool_binding(name);
+
+    // One seam for builtin, MCP and task tools alike. Putting this in each tool
+    // instead would mean the next tool someone adds quietly has no hooks.
+    //
+    // Hooks run before the safety policy: a hook that refuses saves the user a
+    // question, and a hook that says nothing changes nothing about what the
+    // guard does next.
+    let tool_call_id = tool_call.get("id").and_then(Value::as_str);
+    let kind = tool_kind(name, is_mcp_tool);
+    let pre = hooks.fire(hooks::HookEvent::PreToolUse, Some(name), || {
+        hooks::tool_detail(name, tool_call_id, kind, arguments)
+    });
+    if let Some((hook, reason)) = pre.denied() {
+        return Ok(ToolExecution {
+            content: format!("Blocked by hook `{hook}`: {reason}"),
+            outcome: ToolOutcome::Failure,
+        });
+    }
+    if let Some((hook, reason)) = pre.asked()
+        && !confirm_agent_action(
+            proxy,
+            &hooks::approval_key(hook, name),
+            &format!("hook `{hook}` flagged `{name}`: {reason}"),
+        )?
+    {
+        return Ok(ToolExecution {
+            content: format!("Blocked by hook `{hook}`: {reason}"),
+            outcome: ToolOutcome::Failure,
+        });
+    }
+
+    // After the hook and after any approval: this is how long the tool took,
+    // not how long someone took to answer a question about it.
+    let started = std::time::Instant::now();
+    let dispatched = dispatch_tool(name, arguments, is_mcp_tool, mcp, proxy);
+    let elapsed = started.elapsed();
+
+    let failed = dispatched.is_err();
+    let raw = match &dispatched {
+        Ok(result) => result.clone(),
+        Err(err) => err.message.clone(),
+    };
+
+    // Schemas must reach the host unchanged when registering discovered tools.
+    let mut content = if name == "tool_search" && !failed {
+        raw
+    } else {
+        truncate_output(raw)
+    };
+    let mut outcome = match &dispatched {
+        Ok(_) => {
+            if result_failed(&content) {
+                ToolOutcome::Failure
+            } else {
+                ToolOutcome::Success
+            }
+        }
+        Err(err) => err.outcome,
+    };
+
+    // A hook may add text to what the model reads before the result, so a
+    // policy reminder arrives with the thing it is about.
+    if let Some(note) = pre.context_note() {
+        content = format!("{note}\n\n{content}");
+    }
+
+    // Fired for a failed call too. An audit hook that pairs pre with post was
+    // otherwise left with an unmatched open event for exactly the calls it most
+    // wants to see.
+    let post = hooks.fire(hooks::HookEvent::PostToolUse, Some(name), || {
+        post_tool_detail(
+            name,
+            tool_call_id,
+            kind,
+            arguments,
+            &content,
+            outcome,
+            elapsed,
+        )
+    });
+    // The tool has already run: a `deny` here cannot undo it, but it can stop
+    // the model from reading the result as a success.
+    if let Some((hook, reason)) = post.denied() {
+        content = format!("Rejected by hook `{hook}` after the tool ran: {reason}\n{content}");
+        outcome = ToolOutcome::Failure;
+    }
+    if let Some(note) = post.context_note() {
+        content.push_str("\n\n");
+        content.push_str(&note);
+    }
+
+    if failed {
+        return Err(ToolCallError {
+            message: content,
+            outcome,
+        });
+    }
+
+    Ok(ToolExecution { content, outcome })
+}
+
+/// Run the tool itself. Everything around it - hooks, truncation, outcome - is
+/// the caller's, so both the success and the failure path get all of it.
+fn dispatch_tool(
+    name: &str,
+    arguments: &str,
+    is_mcp_tool: bool,
+    mcp: &Arc<RwLock<McpManager>>,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<String, ToolCallError> {
     let result = if matches!(
         name,
         "task_plan"
@@ -237,10 +351,9 @@ pub fn execute_tool_call(
         }
     } else if is_mcp_tool {
         if !authorize_mcp_tool(name, arguments, proxy)? {
-            return Ok(ToolExecution {
-                content: "MCP tool execution cancelled by user.".to_string(),
-                outcome: ToolOutcome::Failure,
-            });
+            // A cancellation is a result, not a dispatch error: `result_failed`
+            // recognises the wording and the caller reports it as a failure.
+            return Ok("MCP tool execution cancelled by user.".to_string());
         }
 
         mcp.read().execute_tool_cancellable(
@@ -259,23 +372,85 @@ pub fn execute_tool_call(
             search::NAME => search::run(arguments, proxy)?,
             shell_context::NAME => shell_context::run(arguments, proxy)?,
             shell_history::NAME => shell_history::run(arguments, proxy)?,
+            skill::NAME => skill::run(arguments, proxy)?,
             other => return Err(format!("chat: unsupported tool `{other}`").into()),
         }
     };
 
-    // Schemas must reach the host unchanged when registering discovered tools.
-    let content = if name == "tool_search" {
-        result
-    } else {
-        truncate_output(result)
-    };
-    let outcome = if result_failed(&content) {
-        ToolOutcome::Failure
-    } else {
-        ToolOutcome::Success
-    };
-    Ok(ToolExecution { content, outcome })
+    Ok(result)
 }
+
+/// Which family a tool belongs to, for a hook that wants to treat them
+/// differently without pattern-matching on names.
+fn tool_kind(name: &str, is_mcp_tool: bool) -> &'static str {
+    if is_agent_task_tool(name) {
+        "agent"
+    } else if is_mcp_tool {
+        "mcp"
+    } else {
+        "builtin"
+    }
+}
+
+fn is_agent_task_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "task_plan"
+            | "task_verify"
+            | "job_status"
+            | "job_output"
+            | "job_cancel"
+            | "tool_search"
+            | "mcp_task_status"
+            | "mcp_task_cancel"
+    )
+}
+
+fn post_tool_detail(
+    name: &str,
+    tool_call_id: Option<&str>,
+    kind: &str,
+    arguments: &str,
+    content: &str,
+    outcome: ToolOutcome,
+    elapsed: std::time::Duration,
+) -> Value {
+    let mut detail = hooks::tool_detail(name, tool_call_id, kind, arguments);
+    // What the model is about to read, masked the same way: a hook watching for
+    // a leak should see what would have leaked, not the pre-truncation text.
+    let redacted = hooks::redact(content);
+    let truncated = redacted.len() > HOOK_RESULT_LIMIT;
+    let result = if truncated {
+        dsh_openai::turn::truncate_middle(&redacted, HOOK_RESULT_LIMIT)
+    } else {
+        redacted
+    };
+
+    if let Value::Object(fields) = &mut detail {
+        fields.insert("result".to_string(), Value::String(result));
+        fields.insert("result_truncated".to_string(), Value::Bool(truncated));
+        fields.insert(
+            "outcome".to_string(),
+            Value::String(
+                match outcome {
+                    ToolOutcome::Success => "success",
+                    ToolOutcome::Failure => "failure",
+                    ToolOutcome::OutcomeUnknown => "outcome_unknown",
+                }
+                .to_string(),
+            ),
+        );
+        fields.insert(
+            "duration_ms".to_string(),
+            Value::from(elapsed.as_millis() as u64),
+        );
+    }
+
+    detail
+}
+
+/// Ceiling on the tool result handed to a hook.
+const HOOK_RESULT_LIMIT: usize = 64 * 1024;
 
 /// Put an MCP call through the shell's own safety policy.
 ///
@@ -320,7 +495,7 @@ fn truncate_args(args: &str) -> String {
     }
 }
 
-fn redact_tool_arguments(args: &str) -> String {
+pub(crate) fn redact_tool_arguments(args: &str) -> String {
     safety_policy::redact_sensitive_text(args)
 }
 
@@ -433,7 +608,7 @@ fn canonicalize_or_normalize(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path))
 }
 
-fn resolve_with_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn resolve_with_existing_ancestor(path: &Path) -> Result<PathBuf, String> {
     let mut current = path.to_path_buf();
     let mut suffix = PathBuf::new();
 
@@ -505,7 +680,7 @@ fn allowed_tool_roots(current_dir: &Path) -> Vec<PathBuf> {
 ///
 /// Never expands to the home directory itself, which a dotfiles repository
 /// would otherwise qualify by way of its `.git`.
-fn workspace_root(current_dir: &Path) -> PathBuf {
+pub(crate) fn workspace_root(current_dir: &Path) -> PathBuf {
     let current_dir = canonicalize_or_normalize(current_dir);
     let home = dirs::home_dir().map(|home| canonicalize_or_normalize(&home));
     let too_far = |candidate: &Path| home.as_deref().is_some_and(|home| candidate == home);
@@ -607,6 +782,32 @@ pub(crate) fn reject_gitignored_path(
 ) -> Result<(), String> {
     match gitignore::is_gitignored(path, base_dir) {
         Ok(false) => Ok(()),
+        Ok(true) => Err(format!(
+            "chat: tool path `{user_path}` is ignored by .gitignore"
+        )),
+        Err(err) => Err(format!("chat: failed to apply .gitignore policy: {err}")),
+    }
+}
+
+/// The same rule for the tools that only read, with skills exempted.
+///
+/// A repository that ignores `.dsh/` would otherwise have its project skills
+/// advertised in the prompt and then refused by every `read_file`. The
+/// exemption is read-only on purpose: the justification is "the prompt already
+/// pointed the model here", which says nothing about writing. `skill_manage` is
+/// the way to change a skill, and it validates the name, the path and the
+/// symlinks that plain `edit` would not.
+///
+/// The skill roots are resolved only on the branch that would reject, because
+/// `ls` calls this once per directory entry and the resolution walks ancestors.
+pub(crate) fn reject_gitignored_read_path(
+    path: &Path,
+    base_dir: &Path,
+    user_path: &str,
+) -> Result<(), String> {
+    match gitignore::is_gitignored(path, base_dir) {
+        Ok(false) => Ok(()),
+        Ok(true) if crate::chatgpt::skills::is_within_skill_root(path, base_dir) => Ok(()),
         Ok(true) => Err(format!(
             "chat: tool path `{user_path}` is ignored by .gitignore"
         )),
@@ -951,6 +1152,7 @@ mod tests {
         let result = execute_tool_call(
             &tool_call,
             &Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
+            &HookContext::disabled(),
             &mut proxy,
         )
         .unwrap();
@@ -983,7 +1185,7 @@ mod tests {
             }
         });
 
-        let result = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy);
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
@@ -1009,7 +1211,8 @@ mod tests {
 
         // No binding is actually connected, so the call fails after the gate -
         // what matters is that the gate did not ask.
-        let error = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap_err();
+        let error =
+            execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
         assert_eq!(error.outcome, ToolOutcome::Failure);
         assert_eq!(proxy.confirm_calls, 0);
     }
@@ -1027,7 +1230,8 @@ mod tests {
             "function": {"name": "mcp__test__tool", "arguments": "{}"}
         });
 
-        let err = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap_err();
+        let err =
+            execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
         assert!(err.to_string().contains("policy says no"));
         assert_eq!(proxy.confirm_calls, 0);
     }
@@ -1046,7 +1250,7 @@ mod tests {
             "function": {"name": "mcp__test__tool", "arguments": "{}"}
         });
 
-        let _ = execute_tool_call(&tool_call, &mcp, &mut proxy);
+        let _ = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy);
         assert_eq!(proxy.agent_session_allowlist, vec!["mcp:mcp__test__tool"]);
     }
 
@@ -1063,10 +1267,268 @@ mod tests {
             }
         });
 
-        let result = execute_tool_call(&tool_call, &mcp, &mut proxy).unwrap();
+        let result =
+            execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
 
         assert_eq!(result.content, "MCP tool execution cancelled by user.");
         assert_eq!(result.outcome, ToolOutcome::Failure);
+    }
+
+    /// A hook context whose single hook prints `body` on every tool call.
+    fn hook_context(dir: &tempfile::TempDir, body: &str) -> HookContext {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.path().join("hook.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let config = format!(
+            r#"{{"version":1,"hooks":[{{"id":"gatekeeper","events":["pre-tool-use","post-tool-use"],"command":["{}"]}}]}}"#,
+            path.display()
+        );
+        HookContext::with_hooks(
+            hooks::config::parse(&config).expect("test hook config"),
+            dir.path().to_path_buf(),
+        )
+    }
+
+    fn ls_call() -> Value {
+        serde_json::json!({
+            "id": "call_1",
+            "function": {"name": "ls", "arguments": "{\"path\":\".\"}"}
+        })
+    }
+
+    #[test]
+    fn pre_tool_use_deny_skips_execution() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(&dir, r#"echo '{"decision":"deny","reason":"not here"}'"#);
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert_eq!(result.outcome, ToolOutcome::Failure);
+        assert!(
+            result.content.contains("Blocked by hook `gatekeeper`"),
+            "{}",
+            result.content
+        );
+        assert!(result.content.contains("not here"), "{}", result.content);
+    }
+
+    /// A hook's `ask` has to reach the user even where the safety policy would
+    /// have said nothing at all.
+    #[test]
+    fn pre_tool_use_ask_requires_approval_even_when_the_policy_allows() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(&dir, r#"echo '{"decision":"ask","reason":"double-check"}'"#);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            confirm_counter: Some(calls.clone()),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(result.outcome, ToolOutcome::Success);
+    }
+
+    #[test]
+    fn pre_tool_use_ask_denied_by_user_does_not_run_the_tool() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(&dir, r#"echo '{"decision":"ask","reason":"double-check"}'"#);
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            confirm_result: false,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert_eq!(result.outcome, ToolOutcome::Failure);
+        assert!(
+            result.content.contains("Blocked by hook"),
+            "{}",
+            result.content
+        );
+    }
+
+    /// The `hook:` prefix keeps this out of the box `execute` and MCP calls use,
+    /// so an "always" on one never answers the other's question.
+    #[test]
+    fn pre_tool_use_ask_uses_its_own_approval_key() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(&dir, r#"echo '{"decision":"ask","reason":"double-check"}'"#);
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            approval_decision: Some(ApprovalDecision::AllowAlways),
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert!(
+            proxy
+                .agent_session_allowlist
+                .contains(&"hook:gatekeeper:ls".to_string()),
+            "{:?}",
+            proxy.agent_session_allowlist
+        );
+        // Not the plain tool name, which is what `execute` remembers.
+        assert!(!proxy.agent_session_allowlist.contains(&"ls".to_string()));
+    }
+
+    /// The tool has already run, so this cannot undo it - but the model must not
+    /// read the result as a success.
+    #[test]
+    fn post_tool_use_deny_marks_the_result_failed() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(
+            &dir,
+            r#"[ "$DSH_HOOK_EVENT" = post-tool-use ] && echo '{"decision":"deny","reason":"leaked a path"}'
+exit 0"#,
+        );
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert_eq!(result.outcome, ToolOutcome::Failure);
+        assert!(
+            result.content.contains("Rejected by hook"),
+            "{}",
+            result.content
+        );
+        assert!(
+            result.content.contains("leaked a path"),
+            "{}",
+            result.content
+        );
+    }
+
+    #[test]
+    fn post_tool_use_additional_context_reaches_the_model() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(
+            &dir,
+            r#"[ "$DSH_HOOK_EVENT" = post-tool-use ] && echo '{"additional_context":"repo policy applies"}'
+exit 0"#,
+        );
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert_eq!(result.outcome, ToolOutcome::Success);
+        assert!(
+            result.content.ends_with("repo policy applies"),
+            "{}",
+            result.content
+        );
+    }
+
+    /// A hook that adds context on `pre-tool-use` was advertised as reaching the
+    /// model, and reached nothing.
+    #[test]
+    fn pre_tool_use_additional_context_reaches_the_model() {
+        let dir = tempdir().unwrap();
+        let hooks = hook_context(
+            &dir,
+            r#"[ "$DSH_HOOK_EVENT" = pre-tool-use ] && echo '{"additional_context":"read-only day"}'
+exit 0"#,
+        );
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+
+        assert!(
+            result.content.starts_with("read-only day"),
+            "{}",
+            result.content
+        );
+        assert_eq!(result.outcome, ToolOutcome::Success);
+    }
+
+    /// An audit hook that pairs pre with post was left holding an unmatched open
+    /// event for exactly the calls it most wants to see.
+    #[test]
+    fn post_tool_use_fires_for_a_failing_tool() {
+        let dir = tempdir().unwrap();
+        let log = dir.path().join("seen.log");
+        let hooks = hook_context(
+            &dir,
+            &format!("printf '%s\\n' \"$DSH_HOOK_EVENT\" >> {}", log.display()),
+        );
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            confirm_result: true,
+            ..TestShellProxy::default()
+        };
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+        let failing = serde_json::json!({
+            "id": "call_1",
+            "function": {"name": "ls", "arguments": "{\"path\":\"../outside\"}"}
+        });
+
+        let error = execute_tool_call(&failing, &mcp, &hooks, &mut proxy)
+            .expect_err("the path is outside the allowed roots");
+
+        assert_eq!(error.outcome, ToolOutcome::Failure);
+        let seen = std::fs::read_to_string(&log).unwrap();
+        assert!(seen.contains("pre-tool-use"), "{seen}");
+        assert!(seen.contains("post-tool-use"), "{seen}");
+    }
+
+    /// The exemption exists so a repository that ignores `.dsh/` can still have
+    /// its project skills read. It stops there: writing one goes through
+    /// `skill_manage`, which validates what plain `edit` would not.
+    #[test]
+    fn a_gitignored_skill_directory_is_readable_but_not_writable() {
+        let dir = tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(
+            root.join(".gitignore"),
+            ".dsh/
+",
+        )
+        .unwrap();
+        let skill = root.join(".dsh/skills/demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let file = skill.join("SKILL.md");
+        std::fs::write(&file, "---\ndescription: d\n---\n").unwrap();
+
+        assert!(reject_gitignored_read_path(&file, &root, "SKILL.md").is_ok());
+        let refused = reject_gitignored_path(&file, &root, "SKILL.md")
+            .expect_err("writing into an ignored directory stays refused");
+        assert!(refused.contains("ignored by .gitignore"), "{refused}");
     }
 
     type CwdProxy = TestShellProxy;

@@ -19,6 +19,12 @@ agent delete TASK_ID
 
 ツール実行前の意図と結果を別々に保存します。プロセス終了後、結果が残っていない操作を自動的に再実行しません。ファイルや外部サービスの状態を確認したうえで `agent resume TASK_ID --reconcile '実際に確認した結果'` を実行します。完了条件は開始後に差し替えられず、成功したツール結果を根拠に各条件を検証します。検証はモデルの判断を含むため、重要な条件は `--check` で具体的に指定してください。
 
+タスク中の `skill_manage` は `edit` などと同じ変更操作として扱います。`task_plan` の記録前には実行できず、実行後は完了条件の検証済み判定をやり直します。`<project>/.dsh/skills` への書き込みはそのリポジトリの `--write` に従い、`~/.config/dsh/skills` は許可の外なので入力待ちになります。
+
+skill ディレクトリ配下のスクリプトは `--allow-command` では許可できません。許可はあなたが読んだコマンド行を指しますが、skill script はエージェント自身が書けるファイルでもあるためです。実行のたびに入力待ちになります。
+
+AI chat hooks はタスク実行中も発火します。`ask` は対話プロンプトではなく入力待ちになり、その承認キー `hook:HOOK_ID:対象` は `--allow-command` や `--allow-mcp` では満たせません。`user-prompt-submit` と `pre-tool-use` の hook は失敗やタイムアウトで拒否側に倒れます。壊れた hook でタスクが止まるときは `AI_CHAT_HOOKS=off` を使ってください。
+
 ## 隔離と長時間処理
 
 任意の隔離バックエンドは `@anthropic-ai/sandbox-runtime@0.0.75` の `srt` です。利用者が別途インストールし、PATHから発見できる状態で `--sandbox` を指定してください。Linuxではbubblewrap、socatなどSRTのOS依存も必要です。固定バージョン不一致や起動失敗時に通常実行へ切り替えません。

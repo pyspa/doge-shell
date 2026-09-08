@@ -13,6 +13,7 @@
 - doge-shell runtime skills: `~/.config/dsh/skills/`
 - Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
 - Claude Code project skills: `<repo>/.claude/skills/` (`../docs/ai/skills` への symlink。全 Skill がそのまま見える)
+- doge-shell project skills: `<project>/.dsh/skills/` (dsh の `!` チャットだけが読む。installer の対象外で、リポジトリが自分で持つ)
 
 ## 使い分け
 - `AGENTS.md`: この repo で最初に守る短いルールだけを書く。`CLAUDE.md` は `@AGENTS.md` を import するだけの薄いアダプタにし、内容は複製しない。

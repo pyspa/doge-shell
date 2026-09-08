@@ -108,7 +108,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Err(format!("chat: path `{path_value}` does not exist"));
     }
 
-    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+    super::reject_gitignored_read_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
     if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
         && !super::confirm_sensitive_access(

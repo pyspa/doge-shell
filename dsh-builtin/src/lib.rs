@@ -38,6 +38,7 @@ mod magit;
 mod markdown;
 mod safe_run;
 mod safety_policy;
+mod skill;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
 mod atomic_write;
@@ -662,6 +663,10 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
     builtin.insert(
         "chat_reset",
         BuiltinSpec::new(chatgpt::chat_reset, chatgpt::chat_reset_description()),
+    );
+    builtin.insert(
+        "skill",
+        BuiltinSpec::new(skill::command, skill::description()),
     );
 
     // Safety commands

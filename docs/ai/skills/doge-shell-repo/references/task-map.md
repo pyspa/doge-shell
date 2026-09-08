@@ -28,6 +28,16 @@
   - 先に読む: [ai-architecture.md](ai-architecture.md)（AI 機能の方針。再実装してはいけないものの一覧）
   - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
+- skill / SKILL.md / skill_manage / project skill / 使用統計
+  - 先に読む: [ai-architecture.md](ai-architecture.md) の「Skill」節
+  - Read: `dsh-builtin/src/chatgpt/skills/`, `dsh-builtin/src/chatgpt/tool/skill.rs`, `dsh-builtin/src/skill.rs`
+  - Regression: skill 一覧は system prompt の identity に**含めない**（含めると skill を書いた瞬間に会話が消える）。skill script は全 root で必ず確認する。
+  - Validate: `cargo test -p dsh-builtin --lib chatgpt::skills`; `cargo test -p dsh-builtin --lib chatgpt::tool::skill`
+- AI chat hooks / ai-hooks.json / pre-tool-use / 外部コマンド
+  - 先に読む: [ai-architecture.md](ai-architecture.md) の §4（hook は許可を与えられない）
+  - Read: `dsh-builtin/src/chatgpt/hooks/`
+  - Regression: `HookDecision` に `Allow` を足さない。gate イベントは fail-closed、観測イベントは fail-open。payload は必ず stdin。
+  - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
 - agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
   - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`
   - Regression: 要約後にも予算を保存・判定する。取消は最新レコードの状態だけを原子的に更新する。MCP一覧更新はサーバー障害を分離し、各待機とサーバー間に取消を伝播する。

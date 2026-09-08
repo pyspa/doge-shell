@@ -124,7 +124,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     let normalized_current_dir =
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
-    super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+    super::reject_gitignored_read_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
 
     if let Some(reason) = super::sensitive_path_reason(&normalized_abs_path)
         && !super::confirm_sensitive_access(
@@ -167,6 +167,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         .and_then(|v| v.as_u64())
         .map(|v| (v.max(1) as usize).min(MAX_LINE_LIMIT))
         .unwrap_or(DEFAULT_LINE_LIMIT);
+
+    // Attribute the read before returning, so `skill list` can tell a skill that
+    // earns its place in every prompt from one nobody has opened since it was
+    // written. A no-op for every path outside a skill root.
+    crate::chatgpt::skills::note_skill_read(&normalized_abs_path, &normalized_current_dir);
 
     Ok(render_window(path_value, &contents, offset, limit))
 }

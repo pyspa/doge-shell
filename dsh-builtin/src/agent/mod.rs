@@ -83,8 +83,11 @@ impl AgentRuntime {
             bail!("agent: task stopped or budget exhausted");
         }
         let name = call["function"]["name"].as_str().unwrap_or_default();
-        let mutation =
-            matches!(name, "edit" | "str_replace" | "execute") || name.starts_with("mcp__");
+        // `skill_manage` writes files the next run will follow as instructions,
+        // so it belongs with the other mutations: a plan and fixed criteria
+        // first, and the verified flag reset afterwards.
+        let mutation = matches!(name, "edit" | "str_replace" | "execute" | "skill_manage")
+            || name.starts_with("mcp__");
         if mutation {
             if self.task.criteria.is_empty() || self.task.plan.is_empty() {
                 bail!(

@@ -192,6 +192,18 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["chat_model"],
     },
     HelpTopic {
+        name: "skill",
+        category: "ai",
+        summary: "List, show and remove the skills the AI chat runtime reads.",
+        usage: "skill <list|show|path|remove> [name]",
+        examples: &[
+            "skill list",
+            "skill show rust-bisect",
+            "skill remove old-notes",
+        ],
+        related: &["doctor", "chat_model"],
+    },
+    HelpTopic {
         name: "mcp",
         category: "ai",
         summary: "Manage configured MCP servers and tools.",

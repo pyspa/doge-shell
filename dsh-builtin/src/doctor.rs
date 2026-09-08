@@ -1,4 +1,5 @@
 use crate::ShellProxy;
+use crate::chatgpt::skills::usage;
 use crate::project_context;
 use crate::safety_policy;
 use crate::task;
@@ -59,6 +60,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     if show_section(section, "ai") {
         print_header(ctx, "ai");
         check_ai(ctx, proxy);
+    }
+    if show_section(section, "hooks") {
+        print_header(ctx, "hooks");
+        check_hooks(ctx, proxy);
     }
     if show_section(section, "mcp") {
         print_header(ctx, "mcp");
@@ -244,11 +249,14 @@ fn json_section_details(
         }),
         Some("safety") => json_safety_details(proxy, current_dir),
         Some("dev" | "validate") => json_dev_details(current_dir),
+        Some("hooks") => json_hooks_details(proxy),
         Some("skills") => {
             let dsh = crate::config_paths::skills_dir();
             let codex = codex_runtime_skills_dir(proxy);
+            let project = crate::chatgpt::skills::project_skills_root(current_dir);
             json!({
                 "dsh_runtime": json!({"path": dsh, "entries": count_skill_dirs(&dsh)}),
+                "project_runtime": project.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)})),
                 "codex_runtime": codex.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)}))
             })
         }
@@ -312,18 +320,19 @@ fn print_help(ctx: &Context) -> ExitStatus {
 
 fn help_text() -> &'static str {
     concat!(
-        "Usage: doctor [config|ai|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate] [OPTIONS]\n",
+        "Usage: doctor [config|ai|hooks|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate] [OPTIONS]\n",
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
         "Sections:\n",
         "  config   Check config.lisp and runtime skills directory\n",
         "  ai       Check AI-related environment and defaults\n",
+        "  hooks    Inspect AI chat hook configuration without running any hook\n",
         "  mcp      Check configured MCP servers and connection counters\n",
         "  project  Detect project marker files in the current directory\n",
         "  runtime  Check common developer tools in PATH\n",
         "  performance  Show command timing and runtime skill scan state\n",
-        "  skills   Compare repo-local skills with expected runtime skills\n",
+        "  skills   Show loaded skills and compare repo-local skills with runtime skills\n",
         "  safety   Check AI tool, MCP, direnv, log, and allowlist safety posture\n",
         "  setup    Show first-run setup state and recommended next steps\n",
         "  fix      Create safe missing setup directories/files, then show setup state\n",
@@ -335,6 +344,7 @@ fn help_text() -> &'static str {
         "  doctor ai\n",
         "  doctor project\n",
         "  doctor performance --top 5 --latency --latency-iters 1000\n",
+        "  doctor hooks\n",
         "  doctor skills\n",
         "  doctor safety\n",
         "  doctor setup\n",
@@ -350,6 +360,7 @@ fn is_known_section(value: &str) -> bool {
         value,
         "config"
             | "ai"
+            | "hooks"
             | "mcp"
             | "project"
             | "runtime"
@@ -1009,6 +1020,10 @@ const DSH_COMMON_SKILLS: &[&str] = &[
 ];
 
 fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
+    // What the chat runtime will actually load, reported first: the drift check
+    // below needs this repository, and most shells are not in it.
+    report_runtime_skills(ctx, proxy, current_dir);
+
     let Some(repo_root) = find_repo_root(current_dir) else {
         let _ = ctx.write_stdout("warn repo-root not-found for skill diagnostics");
         return;
@@ -1051,6 +1066,197 @@ fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     );
 
     check_claude_project_skills(ctx, &repo_root, &source_root, canonical_count);
+}
+
+/// What `ai-hooks.json` says, without running a single hook.
+///
+/// A diagnostic that executes the user's configured commands would be a
+/// surprise, so this stops at "does the program exist".
+fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
+    use crate::chatgpt::hooks::config;
+
+    if config::nested_in_a_hook() {
+        let _ = ctx.write_stdout("skip depth this shell runs inside a hook, so hooks are off");
+        return;
+    }
+    if !config::enabled(proxy) {
+        // Say so before listing anything: a report that shows configured hooks
+        // while none of them can fire reads as "these are running".
+        let _ = ctx.write_stdout(&format!(
+            "skip enabled {}=off, so no hook runs in this shell",
+            config::HOOKS_ENABLED_KEY
+        ));
+        return;
+    }
+
+    let Some(path) = config::config_path(proxy) else {
+        let _ = ctx.write_stdout(&format!(
+            "skip config none at {}",
+            crate::config_paths::config_home()
+                .join(config::HOOKS_CONFIG_FILE)
+                .display()
+        ));
+        return;
+    };
+    if !path.is_file() {
+        let _ = ctx.write_stdout(&format!("skip config none at {}", path.display()));
+        return;
+    }
+
+    let hooks = match config::read(&path) {
+        Ok(hooks) => hooks,
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("error config {}: {err}", path.display()));
+            return;
+        }
+    };
+
+    let _ = ctx.write_stdout(&format!("ok config {}", path.display()));
+    if hooks.is_empty() {
+        let _ = ctx.write_stdout("ok hooks 0");
+        return;
+    }
+
+    for hook in hooks.all() {
+        let events = hook
+            .events
+            .iter()
+            .map(|event| event.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let tools = hook
+            .matcher
+            .as_ref()
+            .map(|matcher| matcher.tools.join(","))
+            .filter(|tools| !tools.is_empty())
+            .unwrap_or_else(|| "*".to_string());
+        let state = if hook.enabled { "ok" } else { "skip" };
+        let _ = ctx.write_stdout(&format!(
+            "{state} hook {} events={events} tools={tools} timeout={}ms",
+            hook.id,
+            hook.timeout_ms()
+        ));
+
+        if !program_is_runnable(&hook.command[0]) {
+            let _ = ctx.write_stdout(&format!(
+                "warn hook {} command not found: {}",
+                hook.id, hook.command[0]
+            ));
+        }
+    }
+}
+
+/// Can this program be started at all? Existence only - never execution.
+fn program_is_runnable(program: &str) -> bool {
+    let path = Path::new(program);
+    if path.is_absolute() || program.contains('/') {
+        return path.is_file();
+    }
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
+}
+
+fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Value {
+    use crate::chatgpt::hooks::config;
+
+    // The same gates the text report applies. Emitting the hook list while none
+    // of them can fire told a script the checks were running.
+    if config::nested_in_a_hook() {
+        return json!({"config": null, "hooks": [], "disabled_by": config::HOOK_DEPTH_ENV});
+    }
+    if !config::enabled(proxy) {
+        return json!({"config": null, "hooks": [], "disabled_by": config::HOOKS_ENABLED_KEY});
+    }
+
+    let Some(path) = config::config_path(proxy) else {
+        return json!({"config": null, "hooks": []});
+    };
+    match config::read(&path) {
+        Ok(hooks) => json!({
+            "config": path,
+            "hooks": hooks.all().iter().map(|hook| json!({
+                "id": hook.id,
+                "events": hook.events.iter().map(|event| event.as_str()).collect::<Vec<_>>(),
+                "enabled": hook.enabled,
+                "timeout_ms": hook.timeout_ms(),
+                "command_found": program_is_runnable(&hook.command[0]),
+            })).collect::<Vec<_>>()
+        }),
+        Err(err) => json!({"config": path, "error": err}),
+    }
+}
+
+/// The skills the `!` runtime would load here, and what they have cost.
+///
+/// Every summary is in the system prompt on every turn, so a skill nobody reads
+/// is a recurring bill rather than a dormant file.
+///
+/// Reports the project root even when `AI_CHAT_PROJECT_SKILLS` is off, but says
+/// so: claiming the runtime loads skills it will never see is worse than not
+/// mentioning them.
+fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
+    let project_enabled = crate::chatgpt::resolve_project_skills_enabled(proxy);
+    let manager = crate::chatgpt::skills::SkillsManager::new(Some(current_dir), true);
+    let roots: Vec<(crate::chatgpt::skills::SkillScope, PathBuf)> = manager
+        .roots()
+        .iter()
+        .map(|root| (root.scope, root.path.clone()))
+        .collect();
+
+    for (scope, path) in &roots {
+        let is_project = *scope == crate::chatgpt::skills::SkillScope::Project;
+        let label = if is_project {
+            "project-skills"
+        } else {
+            "user-skills"
+        };
+        if !path.is_dir() {
+            let _ = ctx.write_stdout(&format!("skip {label} missing {}", path.display()));
+        } else if is_project && !project_enabled {
+            let _ = ctx.write_stdout(&format!(
+                "skip {label} {} entries={} AI_CHAT_PROJECT_SKILLS=off",
+                path.display(),
+                count_skill_dirs(path)
+            ));
+        } else {
+            let _ = ctx.write_stdout(&format!(
+                "ok {label} {} entries={}",
+                path.display(),
+                count_skill_dirs(path)
+            ));
+        }
+    }
+
+    let skills = manager.load_skills();
+    let records = usage::load();
+    let now = usage::now_ms();
+
+    let mut authored = 0usize;
+    let mut unused = Vec::new();
+    for skill in &skills {
+        let record = records.get(&usage::key(skill.dir()));
+        if record.is_some_and(|r| r.created_by == "agent") {
+            authored += 1;
+        }
+        // The same rule `skill list` uses. Two copies disagreed at the boundary,
+        // so one command called a skill dead while the other called it healthy.
+        if usage::is_stale(record, now) {
+            unused.push(skill.name.clone());
+        }
+    }
+
+    let _ = ctx.write_stdout(&format!("ok ai-authored-skills {authored}"));
+    if unused.is_empty() {
+        let _ = ctx.write_stdout("ok unused-skills 0");
+    } else {
+        let _ = ctx.write_stdout(&format!(
+            "warn unused-skills {} not read recently: {}",
+            unused.len(),
+            unused.join(",")
+        ));
+    }
 }
 
 /// `<repo>/.claude/skills` is what Claude Code reads. It is normally a symlink
@@ -2123,6 +2329,111 @@ mod tests {
         assert!(!is_https_or_local_http_url("http://example.com/v1"));
         assert!(!is_https_or_local_http_url("http://localhost.evil.com/v1"));
         assert!(!is_https_or_local_http_url("http://127.0.0.1.evil.com/v1"));
+    }
+
+    fn hooks_proxy(cwd: &Path, vars: &[(&str, &str)]) -> TestProxy {
+        TestProxy {
+            cwd: cwd.to_path_buf(),
+            vars: vars
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+            allowlist: Vec::new(),
+            servers: Vec::new(),
+            direnv_allowed: false,
+        }
+    }
+
+    fn run_doctor_hooks(proxy: &mut TestProxy) -> String {
+        let (ctx, observer) = observed_context();
+        let status = command(&ctx, vec!["doctor".to_string(), "hooks".to_string()], proxy);
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        observed_stdout(&observer)
+    }
+
+    #[test]
+    fn doctor_hooks_reports_a_missing_config_as_skip() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("ai-hooks.json");
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[("DSH_AI_HOOKS_CONFIG", missing.to_str().unwrap())],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(output.contains("[hooks]"), "{output}");
+        assert!(output.contains("skip config none"), "{output}");
+    }
+
+    #[test]
+    fn doctor_hooks_flags_an_unresolvable_command() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(
+            &config,
+            r#"{"version":1,"hooks":[{"id":"gone","events":["pre-tool-use"],"command":["/definitely/not/here"]}]}"#,
+        )
+        .unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(output.contains("ok hook gone"), "{output}");
+        assert!(
+            output.contains("warn hook gone command not found"),
+            "{output}"
+        );
+    }
+
+    /// A report that lists hooks while none of them can fire reads as "these
+    /// are running".
+    #[test]
+    fn doctor_hooks_says_nothing_runs_when_the_switch_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(
+            &config,
+            r#"{"version":1,"hooks":[{"id":"guard","events":["pre-tool-use"],"command":["/bin/sh"]}]}"#,
+        )
+        .unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[
+                ("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
+                ("AI_CHAT_HOOKS", "off"),
+            ],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(
+            output.contains("skip enabled AI_CHAT_HOOKS=off"),
+            "{output}"
+        );
+        assert!(!output.contains("hook guard"), "{output}");
+    }
+
+    #[test]
+    fn doctor_hooks_flags_a_group_writable_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(&config, r#"{"version":1,"hooks":[]}"#).unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(output.contains("error config"), "{output}");
+        assert!(output.contains("writable by other users"), "{output}");
     }
 
     #[test]

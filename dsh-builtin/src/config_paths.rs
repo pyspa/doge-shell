@@ -89,6 +89,19 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
+/// Where the shell records how the agent used each skill.
+///
+/// Deliberately outside `skills_dir()`. The installer replaces a runtime skill
+/// with `rm -rf <skill>`, which would take a per-skill counter with it, and
+/// `doctor` counts every entry under the skills root to warn about prompt
+/// footprint - a bookkeeping file there would eat one of those slots.
+pub fn skills_state_file() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("skills.json")
+}
+
 /// Private durable agent state, resolved consistently on both supported OSes.
 pub fn agent_state_dir() -> PathBuf {
     xdg::BaseDirectories::with_prefix(APP)
@@ -156,6 +169,17 @@ mod tests {
         std::fs::create_dir_all(&expected).unwrap();
 
         assert_eq!(skills_dir(), expected);
+    }
+
+    #[test]
+    fn skills_state_file_lives_outside_the_skills_directory() {
+        let _lock = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = XdgGuard::set(dir.path());
+
+        let state = skills_state_file();
+        assert_eq!(state.file_name().unwrap(), "skills.json");
+        assert!(!state.starts_with(skills_dir()));
     }
 
     /// A path that does not exist anywhere still resolves to the XDG location,

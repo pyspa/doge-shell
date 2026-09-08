@@ -2,7 +2,7 @@ use crate::ShellProxy;
 use crate::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, ApprovalDecision};
 use anyhow::Result;
 use dsh_types::{Context, mcp::McpServerConfig};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{
@@ -16,7 +16,6 @@ use std::sync::{
 /// corresponding `allow_*` switch is enabled. Individual tests can opt in and
 /// inspect the recorded operation without reimplementing the entire legacy
 /// proxy surface.
-#[derive(Debug)]
 pub(crate) struct TestShellProxy {
     pub current_dir: PathBuf,
     pub changed_to: Option<String>,
@@ -40,6 +39,9 @@ pub(crate) struct TestShellProxy {
     pub mcp_manager: Arc<RwLock<crate::chatgpt::McpManager>>,
     /// Overrides `confirm_result` so a test can exercise the "always" answer.
     pub approval_decision: Option<ApprovalDecision>,
+    /// Present when the test is exercising the persistent-task path, where
+    /// nothing may prompt and every refusal has to be an error.
+    pub agent_runtime: Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
     pub vars: HashMap<String, String>,
     pub aliases: HashMap<String, String>,
     pub abbrs: HashMap<String, String>,
@@ -67,6 +69,7 @@ impl Default for TestShellProxy {
             agent_session_allowlist: Vec::new(),
             mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
+            agent_runtime: None,
             vars: HashMap::new(),
             aliases: HashMap::new(),
             abbrs: HashMap::new(),
@@ -204,6 +207,10 @@ impl ShellProxy for TestShellProxy {
 }
 
 impl AgentCommandPolicy for TestShellProxy {
+    fn agent_runtime(&self) -> Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>> {
+        self.agent_runtime.clone()
+    }
+
     fn evaluate_agent_command(&mut self, _command: &str) -> AgentCommandVerdict {
         self.agent_verdict.clone()
     }
@@ -262,4 +269,135 @@ mod tests {
         assert!(proxy.changed_to.is_none());
         assert!(proxy.dispatched.is_empty());
     }
+}
+
+/// A task store that keeps everything in memory.
+///
+/// Enough to build an `AgentRuntime`, which is the only way to exercise the
+/// persistent-task branches: those must never prompt, so a test that leaves
+/// `agent_runtime` at `None` silently checks the interactive path instead.
+#[derive(Default)]
+pub(crate) struct MemoryTaskStore {
+    tasks: Mutex<HashMap<String, dsh_types::agent::AgentTask>>,
+    events: Mutex<Vec<(String, dsh_types::agent::TaskEvent)>>,
+    artifacts: Mutex<HashMap<(String, String), serde_json::Value>>,
+}
+
+impl MemoryTaskStore {
+    fn persist(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> Result<crate::shell_capabilities::AgentTaskSave> {
+        self.tasks.lock().insert(task.id.clone(), task.clone());
+        let mut events = self.events.lock();
+        if let Some((kind, data)) = event {
+            let sequence = events.len() as u64 + 1;
+            events.push((
+                task.id.clone(),
+                dsh_types::agent::TaskEvent {
+                    sequence,
+                    kind: kind.to_string(),
+                    data: data.clone(),
+                },
+            ));
+        }
+        Ok(crate::shell_capabilities::AgentTaskSave {
+            sequence: events.len() as u64,
+            task: task.clone(),
+        })
+    }
+}
+
+impl crate::shell_capabilities::AgentTaskStore for MemoryTaskStore {
+    fn save(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> Result<crate::shell_capabilities::AgentTaskSave> {
+        self.persist(task, event)
+    }
+
+    fn resume(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> Result<crate::shell_capabilities::AgentTaskSave> {
+        self.persist(task, event)
+    }
+
+    fn load(&self, id: &str) -> Result<dsh_types::agent::AgentTask> {
+        self.tasks
+            .lock()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no such task"))
+    }
+
+    fn list(&self) -> Result<Vec<dsh_types::agent::AgentTask>> {
+        Ok(self.tasks.lock().values().cloned().collect())
+    }
+
+    fn events(&self, id: &str) -> Result<Vec<dsh_types::agent::TaskEvent>> {
+        Ok(self
+            .events
+            .lock()
+            .iter()
+            .filter(|(task_id, _)| task_id == id)
+            .map(|(_, event)| event.clone())
+            .collect())
+    }
+
+    fn delete(&self, id: &str) -> Result<()> {
+        self.tasks.lock().remove(id);
+        Ok(())
+    }
+
+    fn save_artifact(&self, id: &str, name: &str, content: &serde_json::Value) -> Result<()> {
+        self.artifacts
+            .lock()
+            .insert((id.to_string(), name.to_string()), content.clone());
+        Ok(())
+    }
+
+    fn load_artifact(&self, id: &str, name: &str) -> Result<serde_json::Value> {
+        self.artifacts
+            .lock()
+            .get(&(id.to_string(), name.to_string()))
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no such artifact"))
+    }
+}
+
+/// A task that is running, has a plan and has room in every budget, so a test
+/// reaches the branch it is aiming at rather than an exhausted-budget refusal.
+pub(crate) fn running_task(root: &std::path::Path) -> dsh_types::agent::AgentTask {
+    dsh_types::agent::AgentTask {
+        id: "test-task".to_string(),
+        goal: "test".to_string(),
+        root: root.to_path_buf(),
+        status: dsh_types::agent::TaskStatus::Running,
+        grant: dsh_types::agent::TaskGrant::default(),
+        criteria: Vec::new(),
+        plan: vec!["step".to_string()],
+        progress: String::new(),
+        token_budget: 1_000_000,
+        tokens_used: 0,
+        time_budget_ms: 600_000,
+        elapsed_ms: 0,
+        stop_reason: None,
+        checkpoint: None,
+        pending_operation: None,
+        created_at: 0,
+    }
+}
+
+/// An `AgentRuntime` backed by [`MemoryTaskStore`], ready to hand to a proxy.
+pub(crate) fn test_runtime(
+    root: &std::path::Path,
+) -> Arc<parking_lot::Mutex<crate::agent::AgentRuntime>> {
+    Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
+        running_task(root),
+        Arc::new(MemoryTaskStore::default()),
+    )))
 }

@@ -292,6 +292,7 @@ The shell includes many built-in commands:
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Set AI model                                                                                                               |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
+| `skill`             | List, show and remove the skills the AI chat runtime reads                                                                 |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
 | `gco`               | Git checkout with interactive branch selection                                                                             |
@@ -398,6 +399,9 @@ See [Scheduled Tasks](#scheduled-tasks) for intervals and notify policies.
 See [Custom Key Bindings](#custom-key-bindings) for the key syntax and precedence rules.
 
 ### Hook System Functions
+
+These are the shell's Lisp hooks, which fire around ordinary command execution. The AI
+assistant has a separate mechanism - see [AI chat hooks](#-ai-integration).
 
 - `add-hook` - Add a function to a hook list
 - `bound?` - Check if a symbol is bound
@@ -1398,20 +1402,25 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       the AI to run unattended. Entries match by token prefix (`cargo test` covers
       `cargo test -p foo`); an "always" answer given at a prompt matches only that exact
       command line.
-    - Tools can read and write within the project root and the runtime skills directory.
-      `.gitignore` is honoured the way git honours it, nested files included.
+    - Tools can read and write within the project root and the skills directories.
+      `.gitignore` is honoured the way git honours it, nested files included. Reading a
+      skill is the one exception, so a repository that ignores `.dsh/` can still carry
+      project skills the assistant reads; writing one still goes through `skill_manage`.
     - Long tool output is truncated in the middle, so the end of a build or test log -
       where the error is - still reaches the model.
-    - `edit`, `str_replace` and skill scripts always ask for confirmation, at every
-      safety level. Answering "always" applies to that file for the rest of the
+    - `edit`, `str_replace`, `skill_manage` and skill scripts always ask for
+      confirmation, at every safety level. That includes scripts under a project's
+      `.dsh/skills/`. Answering "always" applies to that file for the rest of the
       session, so a long editing run is one question per file rather than one per
-      edit.
+      edit. Deleting a skill is asked separately: an "always" given for writing a
+      file does not authorise removing it.
 
 10. **Conversation continuity**:
     Consecutive `!` turns continue the same conversation, so follow-up questions work and
     the assistant does not re-explore the project every time. It restarts when the
     directory changes, when the model/prompt/language changes, after
-    `AI_CHAT_SESSION_TTL_SECS` (default 1800), or on `chat_reset`.
+    `AI_CHAT_SESSION_TTL_SECS` (default 1800), or on `chat_reset`. Installing a skill -
+    or having the assistant write one - does not restart it.
 
 11. **Token usage**:
     Each `!` turn prints what it cost (`tokens: N req / in X (cached Y) / out Z`), and
@@ -1429,18 +1438,103 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     export AI_MESSAGE_LANG="Japanese"
     ```
 
-13. **Runtime Skills**:
-   The chat runtime loads local skills from `~/.config/dsh/skills/` (`$XDG_CONFIG_HOME/dsh/skills` when that is set). This repository keeps canonical sample skills under `docs/ai/skills/`.
+13. **Skills**:
+    A skill is a short `SKILL.md` the assistant reads when it is relevant - and can
+    write for itself, so a procedure worked out once is not worked out again.
 
-   ```bash
-   scripts/install-runtime-skills.sh --target dsh --profile dsh-common
-   ```
+    The chat runtime loads them from two places, most specific first:
 
-   Install the skills you need rather than all of them: `doctor skills` warns once
-   the runtime directory holds more than eight, because every summary is carried
-   in the agent's system prompt on every turn.
+    | Scope | Directory | What belongs there |
+    |---|---|---|
+    | Project | `<project>/.dsh/skills/` | procedures tied to this repository |
+    | Personal | `~/.config/dsh/skills/` (`$XDG_CONFIG_HOME/dsh/skills` when set) | anything portable |
 
-   Keep each skill summary in the YAML frontmatter `description`, and move long details into `references/` so runtime prompts stay compact.
+    A project skill shadows a personal one of the same name. Only the name, the path
+    and the frontmatter `description` reach the system prompt; the body is read on
+    demand, so keep the description a trigger ("Use when …") and move long detail into
+    `references/`.
+
+    ```bash
+    skill list                 # scope, read count, last use
+    skill show rust-bisect     # render its SKILL.md
+    $EDITOR $(skill path rust-bisect)
+    skill remove old-notes
+    ```
+
+    **The assistant writes them too.** After a task that took many steps, or after you
+    correct it, it may offer to record the lesson with its `skill_manage` tool. Every
+    write asks first, and the answer is remembered per file for the rest of the session.
+    `skill list` shows which skills are actually being read, so the ones that are not
+    can be removed - every summary costs tokens on every turn, and `doctor skills`
+    warns once there are more than eight.
+
+    A project's skills arrive with a `git clone`, so treat them as you would any other
+    file in that repository. They are notes, never permission: a skill cannot authorise
+    skipping a confirmation, and a script bundled with one always asks before it runs -
+    including under `agent run`, where `--allow-command` does not cover it.
+    `AI_CHAT_PROJECT_SKILLS=0` turns project skills off entirely.
+
+    This repository keeps canonical sample skills under `docs/ai/skills/`; install the
+    ones you want with `scripts/install-runtime-skills.sh --target dsh --profile dsh-common`.
+
+14. **AI chat hooks**:
+    Your own checks, run around the `!` agent loop. Distinct from the Lisp
+    [hook system](#hook-system-functions), which fires around ordinary command execution.
+
+    Put them in `~/.config/dsh/ai-hooks.json` (`DSH_AI_HOOKS_CONFIG` points elsewhere):
+
+    ```json
+    {
+      "version": 1,
+      "hooks": [
+        {
+          "id": "block-etc-writes",
+          "events": ["pre-tool-use"],
+          "match": { "tools": ["edit", "str_replace", "execute"] },
+          "command": ["python3", "/home/me/.config/dsh/hooks/block-etc.py"],
+          "timeout_ms": 3000
+        }
+      ]
+    }
+    ```
+
+    | Event | When | Can it stop anything? |
+    |---|---|---|
+    | `session-start` | a new conversation begins | no |
+    | `user-prompt-submit` | before your message is sent | yes |
+    | `pre-tool-use` | before any tool runs, MCP included | yes |
+    | `post-tool-use` | after a tool returns | it can mark the result failed |
+    | `response-complete` | after the answer | no |
+
+    The event arrives as JSON on the hook's **stdin**; the hook answers with JSON on
+    stdout, or just exits:
+
+    ```json
+    { "decision": "deny", "reason": "writes outside the repo are not allowed here",
+      "message": "shown to you, not to the model",
+      "additional_context": "added to what the model reads" }
+    ```
+
+    `additional_context` lands next to the thing it is about, on the three events
+    that have somewhere to put it: `user-prompt-submit` (beside your message),
+    `pre-tool-use` (before the tool result) and `post-tool-use` (after it). The other
+    two say so in a warning rather than dropping it silently.
+
+    `decision` is `"deny"`, `"ask"` or absent. **There is no `"allow"`**: a hook can stop
+    something or insist you are asked about it, never permit it - the safety guard stays
+    the only thing that grants anything. Exiting `2` is shorthand for `deny` with the
+    first line of stderr as the reason; exiting `0` with no JSON means "carry on".
+
+    `command` is an argument vector, not a shell line: the hook is executed directly, so
+    put any pipeline in a script file. Hooks run as you, with your environment - read one
+    before installing it, the way you would read a `config.lisp`. A hook that fails or
+    times out on `user-prompt-submit` or `pre-tool-use` **blocks**, because a check that
+    can be got past by crashing is not a check; failures on the other three events are
+    reported once and ignored. `AI_CHAT_HOOKS=off` disables the lot, and `doctor hooks`
+    shows what was loaded without running anything.
+
+    Project-local `.dsh/hooks.json` is deliberately **not** read: cloning a repository
+    should not be enough to run its commands.
 
 For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
 

@@ -456,7 +456,8 @@ fn authorize(
     proxy: &mut dyn ChatToolHost,
 ) -> Result<Authorization, String> {
     // A skill script is arbitrary code that the agent can also write to, so it
-    // is confirmed even when the rest of the policy would wave it through.
+    // is confirmed even when the rest of the policy would wave it through -
+    // including under `agent run`, where `--allow-command` does not cover it.
     let mut skill_script = false;
     for stage in stages {
         if is_skill_script_program(&stage.program, proxy)? {
@@ -478,6 +479,22 @@ fn authorize(
     // matched against the exact line the user was shown instead: approving
     // `rm -rf target` must not go on to approve `rm -rf target ~/documents`.
     if proxy.agent_runtime().is_some() {
+        // A skill script is not covered by `--allow-command`. The grant names a
+        // command line the person read; a skill script is a file the agent can
+        // also write, and one that arrives with a `git clone`. Leaving this to
+        // `evaluate_agent_command` was how the rule below - "confirmed even
+        // when the rest of the policy would wave it through" - stopped being
+        // true the moment the same line ran under `agent run`.
+        if skill_script {
+            proxy
+                .request_agent_approval(&format!(
+                    "{command}: running a skill script needs its own approval"
+                ))
+                .map_err(|e| e.to_string())?;
+            return Err(format!(
+                "agent: skill script permission required: {command}"
+            ));
+        }
         return match proxy.evaluate_agent_command(command) {
             AgentCommandVerdict::Allowed => Ok(Authorization::Run),
             AgentCommandVerdict::Denied(reason) => Err(reason),
@@ -789,7 +806,7 @@ fn wait_for_drain(readers: &[&DrainedPipe], grace: Duration) -> bool {
 }
 
 /// Signal the whole group the child leads, so background grandchildren die too.
-fn kill_process_group(child: &std::process::Child) {
+pub(crate) fn kill_process_group(child: &std::process::Child) {
     let Ok(pid) = i32::try_from(child.id()) else {
         return;
     };
@@ -850,20 +867,50 @@ fn command_is_allowlisted(program: &str, args: &[String], allowlist: &[String]) 
         .any(|entry| allowlist_entry_matches(entry, program, args))
 }
 
+/// Is this program a script that ships with a skill?
+///
+/// Every skill root counts, the project one included. A skill arrives with a
+/// `git clone` and the prompt actively points the model at it, so a script
+/// under `<project>/.dsh/skills` is exactly the case that must not fall through
+/// to the ordinary command policy and run unasked under `loose`.
+///
+/// `AI_CHAT_PROJECT_SKILLS=0` hides project skills from the prompt; it does not
+/// make running one of their scripts safe, so this always considers both roots.
 fn is_skill_script_program(program: &str, proxy: &mut dyn ChatToolHost) -> Result<bool, String> {
     if !program.contains('/') && !Path::new(program).is_absolute() {
         return Ok(false);
     }
 
-    let resolved_program = match super::resolve_tool_path(program, proxy) {
-        Ok(path) => path,
-        Err(_) => return Ok(false),
+    let current_dir = proxy
+        .get_current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+
+    // Resolved here rather than through `resolve_tool_path`, which is an access
+    // decision: under a task it refuses any path outside the grants, so every
+    // ungranted skill script came back as "not a skill script" and fell through
+    // to the ordinary command policy - the exact opposite of what this is for.
+    let Ok(expanded) = shellexpand::full(program) else {
+        return Ok(false);
+    };
+    let path = Path::new(expanded.as_ref());
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+    let Ok(resolved_program) = super::resolve_with_existing_ancestor(&absolute) else {
+        return Ok(false);
     };
 
-    let skills_root = std::fs::canonicalize(super::tool_skills_dir())
-        .unwrap_or_else(|_| super::normalize_path(&super::tool_skills_dir()));
-
-    Ok(resolved_program.starts_with(skills_root))
+    Ok(
+        crate::chatgpt::skills::skill_roots(Some(&current_dir), true)
+            .iter()
+            .any(|root| {
+                let resolved_root = std::fs::canonicalize(&root.path)
+                    .unwrap_or_else(|_| super::normalize_path(&root.path));
+                resolved_program.starts_with(resolved_root)
+            }),
+    )
 }
 
 /// Every source of "the agent may run this without asking", merged.
@@ -1464,6 +1511,93 @@ pub(crate) mod tests {
 
         assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(result.contains("cancelled by user"), "{result}");
+    }
+
+    /// A project skill arrives with a `git clone` and the prompt points the
+    /// model straight at it. Judging only the personal skills root let a script
+    /// under `<project>/.dsh/skills` fall through to the ordinary command
+    /// policy and run unasked wherever that policy said yes.
+    #[test]
+    fn a_script_under_the_project_skills_directory_always_asks() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let script_path = skills_dir.join("run.sh");
+        std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
+
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            // The policy would wave this through; the skill-script rule must
+            // still win.
+            agent_verdict: AgentCommandVerdict::Allowed,
+            current_dir: project_dir,
+            confirm_counter: Some(confirm_calls.clone()),
+            confirm_result: false,
+            ..TestProxy::default()
+        };
+
+        let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());
+        let result = run(&command, &mut proxy);
+
+        assert_eq!(result.unwrap(), "Execution cancelled by user.".to_string());
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// `--allow-command` names a line the person read. A skill script is a file
+    /// the agent can also write, and one a `git clone` can deliver, so the grant
+    /// must not cover it. The rule was stated in a comment and enforced only on
+    /// the interactive path.
+    #[test]
+    fn a_skill_script_is_not_covered_by_an_agent_grant() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let script_path = skills_dir.join("run.sh");
+        std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
+
+        let mut proxy = TestProxy {
+            // The grant says yes to everything; the skill-script rule still wins.
+            agent_verdict: AgentCommandVerdict::Allowed,
+            agent_runtime: Some(crate::test_support::test_runtime(&project_dir)),
+            current_dir: project_dir,
+            ..TestProxy::default()
+        };
+
+        let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());
+        let err = run(&command, &mut proxy).expect_err("a task must stop for approval");
+
+        assert!(err.contains("skill script permission required"), "{err}");
+    }
+
+    /// The same task path still honours an ordinary grant, so the check above is
+    /// about skill scripts and not about tasks in general.
+    #[test]
+    fn an_ordinary_command_still_runs_under_an_agent_grant() {
+        let _lock = env_lock();
+        let dir = tempdir().unwrap();
+        let dir_path = std::fs::canonicalize(dir.path()).unwrap();
+        let mut proxy = TestProxy {
+            agent_verdict: AgentCommandVerdict::Allowed,
+            agent_runtime: Some(crate::test_support::test_runtime(&dir_path)),
+            current_dir: dir_path,
+            ..TestProxy::default()
+        };
+
+        let result = run("{\"command\":\"echo hi\"}", &mut proxy).unwrap();
+
+        assert!(result.contains("hi"), "{result}");
     }
 
     #[test]

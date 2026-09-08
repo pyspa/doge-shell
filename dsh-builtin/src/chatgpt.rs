@@ -57,6 +57,12 @@ const PROMPT_CACHE_KEY: &str = "dsh-chat-agent";
 /// fallbacks do not catch, and for anyone who prefers the old
 /// print-once-at-the-end behavior.
 const STREAM_KEY: &str = "AI_CHAT_STREAM";
+/// Environment key turning off skills carried by the current repository.
+///
+/// A `.dsh/skills` directory arrives with a `git clone`, so its summaries reach
+/// the model the first time `!` is used in that checkout. Personal skills stay
+/// available when this is off.
+const PROJECT_SKILLS_KEY: &str = "AI_CHAT_PROJECT_SKILLS";
 
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
@@ -68,6 +74,9 @@ Rules:
 4. Ask `shell_context` for the project's build and test commands rather than guessing them.
 5. Verify every change. After editing, read the file back. After `execute`, check exit code, stdout, and stderr.
 6. If a tool fails, analyze the error before asking the user.
+7. When a task took many tool calls, or you recovered from a mistake the user corrected, save the
+   lesson with `skill_manage` so the next run is shorter. Use `project` scope for knowledge tied to
+   this repository, `user` scope otherwise. Record a generalizable procedure, never a transcript.
 
 Tools:
 - `shell_history`: what the user recently ran, with exit codes and output
@@ -78,6 +87,7 @@ Tools:
 - `str_replace`: change part of a file by exact match; use this for edits
 - `edit`: create a file, or replace an existing one in full
 - `execute`: run a shell command; pipes, redirection and `&&` all work
+- `skill_manage`: create, update or delete a reusable skill in the directories listed below
 
 Respond in Markdown. Be concise and avoid unnecessary repetition.
 "#;
@@ -379,14 +389,15 @@ impl ConversationManager {
 
 mod mcp;
 pub use mcp::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
-mod tool;
+pub(crate) mod tool;
 
 use tool::{build_tools, execute_tool_call};
 
 mod session;
 
-mod skills;
-use skills::SkillsManager;
+pub(crate) mod hooks;
+pub(crate) mod skills;
+use skills::{SkillRoot, SkillsManager};
 
 /// Where to cut the buffer so that `retain` messages survive a summary.
 ///
@@ -705,9 +716,11 @@ fn chat_with_tools(
     mut stream_sink: Option<&mut StreamSink>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    // Build System Prompt (fixed for the session)
-    let system_prompt_text = build_system_prompt(operator_prompt, language, &mcp_manager.read());
     let cwd = proxy.get_current_dir().ok();
+    let skill_roots = skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
+
+    // Build System Prompt (fixed for the session)
+    let prompt = build_system_prompt(operator_prompt, language, &mcp_manager.read(), &skill_roots);
 
     let runtime = proxy.agent_runtime();
     let session_ttl = if runtime.is_some() {
@@ -716,18 +729,63 @@ fn chat_with_tools(
         session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY))
     };
 
+    // A configuration that cannot be read stops the turn. Continuing without
+    // the hooks would silently drop checks the user believes are running.
+    let mut hook_ctx = hooks::HookContext::load(proxy)?;
+    // Learned without consuming the conversation: `take` is destructive, and a
+    // hook that refuses this prompt must leave the previous turn intact.
+    let carried_session = session::peek_id(session_ttl, &prompt.identity, cwd.as_deref());
+    hook_ctx.set_session_id(
+        carried_session
+            .clone()
+            .unwrap_or_else(|| hook_ctx.new_session_id()),
+    );
+
+    let submitted = hook_ctx.fire(hooks::HookEvent::UserPromptSubmit, None, || {
+        json!({
+            "prompt": hooks::redact(user_input),
+            "prompt_chars": user_input.chars().count(),
+        })
+    });
+    if let Some((hook, reason)) = submitted.denied() {
+        return Err(format!("chat: blocked by hook `{hook}`: {reason}"));
+    }
+    if let Some((hook, reason)) = submitted.asked()
+        && !tool::confirm_agent_action(
+            proxy,
+            &hooks::approval_key(hook, "user-prompt-submit"),
+            &format!("hook `{hook}` flagged this request: {reason}"),
+        )?
+    {
+        return Err(format!("chat: blocked by hook `{hook}`: {reason}"));
+    }
+
     // Continue the previous conversation when it still applies, so a follow-up
     // question does not re-explore the repository from scratch.
-    let mut manager = match session::take(session_ttl, &system_prompt_text, cwd.as_deref()) {
-        Some(mut manager) => {
+    let mut manager = match session::take(session_ttl, &prompt.identity, cwd.as_deref()) {
+        Some((mut manager, _id)) => {
+            // The carried conversation was pinned with the skills list as it
+            // stood then. Re-render it so a skill written last turn is visible
+            // this turn without discarding the conversation.
+            set_system_prompt(&mut manager, &prompt.text);
             manager.add_message(json!({ "role": "user", "content": user_input }));
             manager
         }
-        None => ConversationManager::new(
-            json!({ "role": "system", "content": system_prompt_text.clone() }),
-            // First User Input (Pinned - the original goal)
-            json!({ "role": "user", "content": user_input }),
-        ),
+        None => {
+            // A new conversation starts exactly here, which is what
+            // `session-start` means. Observation only: its answer is ignored.
+            hook_ctx.fire(hooks::HookEvent::SessionStart, None, || {
+                json!({
+                    "source": if runtime.is_some() { "agent" } else { "chat" },
+                    "streaming": stream_sink.is_some(),
+                })
+            });
+            ConversationManager::new(
+                json!({ "role": "system", "content": prompt.text.clone() }),
+                // First User Input (Pinned - the original goal)
+                json!({ "role": "user", "content": user_input }),
+            )
+        }
     };
     if let Some(runtime) = &runtime {
         let saved = runtime.lock().task.clone();
@@ -743,8 +801,13 @@ fn chat_with_tools(
                     .events(&saved.id)
                     .map_err(|e| e.to_string())?,
             );
-            manager.pinned_messages[0] = json!({"role":"system","content":system_prompt_text});
+            set_system_prompt(&mut manager, &prompt.text);
         }
+    }
+    // A hook that answered `user-prompt-submit` with `additional_context` is
+    // telling the model something about this request, so it lands next to it.
+    if let Some(note) = submitted.context_note() {
+        manager.add_message(json!({ "role": "system", "content": note }));
     }
     manager.set_prompt_token_budget(resolve_prompt_token_budget(proxy));
     if runtime.is_none() {
@@ -936,7 +999,12 @@ fn chat_with_tools(
                             )
                             .map_err(|e| e.to_string())?;
                     }
-                    let execution = match execute_tool_call(tool_call, mcp_manager, proxy) {
+                    let execution = match execute_tool_call(
+                        tool_call,
+                        mcp_manager,
+                        &hook_ctx,
+                        proxy,
+                    ) {
                         Ok(execution) => execution,
                         Err(error) => tool::ToolExecution {
                             content: format!(
@@ -1040,13 +1108,45 @@ fn chat_with_tools(
             .map_err(|e| e.to_string())?;
     }
     report_turn_usage(&manager.turn_usage);
+    // Read before `manager` is handed to the session store below.
+    let turn_tokens = (
+        manager.turn_usage.prompt_tokens,
+        manager.turn_usage.completion_tokens,
+        manager.turn_usage.total_tokens(),
+    );
+    // One write per turn, not one per `read_file`: the loop can run a hundred
+    // iterations and these are counters, not state anything depends on.
+    skills::usage::flush();
 
     // Only a completed turn is worth resuming. Carrying a cancelled or failed
     // one forward would replay its dead end - including the synthetic nudge -
     // as the starting context of the next question.
     if outcome.is_ok() {
-        session::store(session_ttl, manager, &system_prompt_text, cwd);
+        session::store(
+            session_ttl,
+            manager,
+            hook_ctx.session_id(),
+            &prompt.identity,
+            cwd,
+        );
     }
+
+    // Observation only. "Keep going" is a request to spend more of the user's
+    // money and touch more of their machine, which is the one thing a hook is
+    // not allowed to ask for.
+    hook_ctx.fire(hooks::HookEvent::ResponseComplete, None, || {
+        json!({
+        "status": if outcome.is_ok() { "ok" } else { "error" },
+        "answer": outcome.as_ref().ok().map(|answer| hooks::redact(answer)),
+        "error": outcome.as_ref().err().map(|err| hooks::redact(err)),
+        "iterations": iterations,
+        "tokens": {
+            "prompt": turn_tokens.0,
+            "completion": turn_tokens.1,
+            "total": turn_tokens.2,
+        },
+        })
+    });
 
     outcome
 }
@@ -1185,17 +1285,58 @@ impl<'a> StreamSink<'a> {
     }
 }
 
+/// The system prompt, split into what identifies the conversation and what is
+/// actually sent.
+///
+/// The two differ by the skills list. A carried-over conversation is discarded
+/// when the system prompt changes, and the list changes whenever a skill is
+/// installed - or written by the agent itself. Keying continuity on the list
+/// meant the model lost its context at the exact moment it had just learned
+/// something, so the list is excluded from `identity` and re-rendered into
+/// `text` on every turn.
+pub(super) struct SystemPrompt {
+    identity: String,
+    text: String,
+}
+
 fn build_system_prompt(
     operator_prompt: Option<String>,
     language: Option<String>,
     mcp_manager: &McpManager,
+    skill_roots: &[SkillRoot],
+) -> SystemPrompt {
+    let skills_fragment = if skill_roots.is_empty() {
+        String::new()
+    } else {
+        SkillsManager::with_roots(skill_roots.to_vec()).get_system_prompt_fragment()
+    };
+
+    SystemPrompt {
+        identity: assemble_system_prompt(
+            "",
+            operator_prompt.as_deref(),
+            language.as_deref(),
+            mcp_manager,
+        ),
+        text: assemble_system_prompt(
+            &skills_fragment,
+            operator_prompt.as_deref(),
+            language.as_deref(),
+            mcp_manager,
+        ),
+    }
+}
+
+fn assemble_system_prompt(
+    skills_fragment: &str,
+    operator_prompt: Option<&str>,
+    language: Option<&str>,
+    mcp_manager: &McpManager,
 ) -> String {
     let mut base = TOOL_SYSTEM_PROMPT.to_string();
 
-    let skills_manager = SkillsManager::new();
-    let skills_fragment = skills_manager.get_system_prompt_fragment();
     if !skills_fragment.is_empty() {
-        base.push_str(&skills_fragment);
+        base.push_str(skills_fragment);
     }
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment() {
@@ -1216,7 +1357,33 @@ fn build_system_prompt(
         base.push_str(&extra);
     }
 
-    dsh_openai::apply_language(&base, language.as_deref())
+    dsh_openai::apply_language(&base, language)
+}
+
+/// Keep `pinned_messages[0]` - the system message - in one place.
+///
+/// Both the persistent-task checkpoint and a carried-over interactive session
+/// restore a `ConversationManager` that was serialized with an older prompt.
+/// Indexing directly also panicked on a checkpoint whose pinned list was empty.
+fn set_system_prompt(manager: &mut ConversationManager, text: &str) {
+    if let Some(slot) = manager.pinned_messages.first_mut() {
+        *slot = json!({ "role": "system", "content": text });
+    }
+}
+
+/// Whether skills carried by the current repository may reach the prompt.
+///
+/// On by default. A cloned repository can put text in front of the model just
+/// by existing, so there has to be a way to turn that off without also giving
+/// up personal skills.
+pub(crate) fn resolve_project_skills_enabled(proxy: &mut dyn ShellProxy) -> bool {
+    match resolve_setting(proxy, PROJECT_SKILLS_KEY) {
+        None => true,
+        Some(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ),
+    }
 }
 
 /// The operator's response language, for any AI request the shell makes.
@@ -1663,21 +1830,96 @@ mod tests {
         let mcp_manager = McpManager::load_blocking(vec![]);
 
         // Case 1: No language
-        let prompt_no_lang = build_system_prompt(None, None, &mcp_manager);
-        assert!(!prompt_no_lang.contains("MUST respond in"));
+        let prompt_no_lang = build_system_prompt(None, None, &mcp_manager, &[]);
+        assert!(!prompt_no_lang.text.contains("MUST respond in"));
 
         // Case 2: With language
-        let prompt_lang = build_system_prompt(None, Some("Japanese".to_string()), &mcp_manager);
-        assert!(prompt_lang.contains("IMPORTANT: You MUST respond in Japanese."));
+        let prompt_lang =
+            build_system_prompt(None, Some("Japanese".to_string()), &mcp_manager, &[]);
+        assert!(
+            prompt_lang
+                .text
+                .contains("IMPORTANT: You MUST respond in Japanese.")
+        );
 
         // Case 3: With language and operator prompt
         let prompt_mixed = build_system_prompt(
             Some("Be polite".to_string()),
             Some("French".to_string()),
             &mcp_manager,
+            &[],
         );
-        assert!(prompt_mixed.contains("Additional operator instructions:\nBe polite"));
-        assert!(prompt_mixed.contains("IMPORTANT: You MUST respond in French."));
+        assert!(
+            prompt_mixed
+                .text
+                .contains("Additional operator instructions:\nBe polite")
+        );
+        assert!(
+            prompt_mixed
+                .text
+                .contains("IMPORTANT: You MUST respond in French.")
+        );
+    }
+
+    /// Continuity must not depend on which skills happen to be installed: a
+    /// skill written during a turn would otherwise wipe the conversation that
+    /// produced it.
+    #[test]
+    fn system_prompt_identity_ignores_the_skills_list() {
+        use skills::{SkillRoot, SkillScope};
+
+        let mcp_manager = McpManager::load_blocking(vec![]);
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("skills");
+        let skill = root.join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\ndescription: a fresh lesson\n---\n",
+        )
+        .unwrap();
+        let roots = vec![SkillRoot {
+            scope: SkillScope::User,
+            path: root,
+        }];
+
+        skills::clear_skills_fragment_cache();
+        let without = build_system_prompt(None, None, &mcp_manager, &[]);
+        skills::clear_skills_fragment_cache();
+        let with = build_system_prompt(None, None, &mcp_manager, &roots);
+
+        assert_eq!(without.identity, with.identity);
+        assert!(with.text.contains("a fresh lesson"));
+        assert!(!with.identity.contains("a fresh lesson"));
+    }
+
+    /// Resuming replaces the pinned system message rather than leaving the
+    /// stale one that was serialized with the conversation.
+    #[test]
+    fn a_resumed_conversation_gets_the_freshly_rendered_system_prompt() {
+        let mut manager = ConversationManager::new(
+            json!({"role": "system", "content": "old"}),
+            json!({"role": "user", "content": "hi"}),
+        );
+
+        set_system_prompt(&mut manager, "new");
+
+        assert_eq!(manager.pinned_messages[0]["content"], "new");
+    }
+
+    /// A checkpoint restored from JSON may not carry a pinned system message at
+    /// all; indexing it used to panic.
+    #[test]
+    fn set_system_prompt_on_an_empty_pin_list_does_nothing() {
+        let mut manager = ConversationManager::new(
+            json!({"role": "system", "content": "old"}),
+            json!({"role": "user", "content": "hi"}),
+        );
+        manager.pinned_messages.clear();
+
+        set_system_prompt(&mut manager, "new");
+
+        assert!(manager.pinned_messages.is_empty());
     }
 
     #[test]
@@ -1686,6 +1928,7 @@ mod tests {
         assert!(TOOL_SYSTEM_PROMPT.contains("use `read_file` only after locating"));
         assert!(TOOL_SYSTEM_PROMPT.contains("- `read_file`: read a line-numbered window"));
         assert!(TOOL_SYSTEM_PROMPT.contains("- `str_replace`:"));
+        assert!(TOOL_SYSTEM_PROMPT.contains("- `skill_manage`:"));
         assert!(!TOOL_SYSTEM_PROMPT.contains("- `read`:"));
     }
 

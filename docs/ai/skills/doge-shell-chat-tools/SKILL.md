@@ -10,4 +10,5 @@ description: Use for doge-shell chatgpt, MCP, serve, tool, runtime skill, doctor
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for the default files.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
 - Default read targets are `dsh-builtin/src/chatgpt/`, `dsh-builtin/src/serve/`, `dsh-builtin/src/doctor.rs`, `dsh-openai/src/`, and `dsh-types/src/mcp.rs`.
+- Skills live in `dsh-builtin/src/chatgpt/skills/` (loading, usage counters) and `dsh-builtin/src/chatgpt/tool/skill.rs` (the `skill_manage` tool); AI chat hooks live in `dsh-builtin/src/chatgpt/hooks/`.
 - Validate with `cargo test -p dsh-builtin`; add `cargo test -p dsh-openai` or `cargo test -p dsh-types` only when those crates change.

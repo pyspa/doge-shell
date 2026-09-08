@@ -7,6 +7,7 @@ pub mod usage;
 
 pub use crate::client::{
     ApiError, CANCELLED_MESSAGE, ChatGptClient, ChatRequestOptions, is_ctrl_c_cancelled,
+    is_openai_reasoning_model,
 };
 pub use crate::config::{
     API_KEY_ENV_VARS, API_KEY_SETUP_HINT, DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS,

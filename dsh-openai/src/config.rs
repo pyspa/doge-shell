@@ -81,6 +81,14 @@ impl OpenAiConfig {
             base_url,
             default_model,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            // Like `default_model` and `timeout` above: `new`/`new_with_http_policy`
+            // take their value as an explicit argument or not at all, and never
+            // reach into the process environment for it - only `from_getter`
+            // does (via `REASONING_EFFORT_ENV`). `allow_http` above is the one
+            // exception, because `sanitize_base_url` needs a same-call answer
+            // to decide whether to silently replace an `http://` URL - a
+            // security-relevant transform this constructor can't defer to a
+            // caller who might not call `with_reasoning_effort` at all.
             reasoning_effort: None,
         }
     }

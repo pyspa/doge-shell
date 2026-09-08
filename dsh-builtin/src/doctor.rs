@@ -195,6 +195,8 @@ fn json_section_details(
             "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string()),
             "timeout_secs": config.timeout().as_secs(),
             "reasoning_effort": config.reasoning_effort().unwrap_or("default"),
+            "reasoning_effort_auto_none_for_tools": config.reasoning_effort().is_none()
+                && dsh_openai::is_openai_reasoning_model(config.default_model()),
             "usage": {
                 "requests": usage.requests,
                 "prompt_tokens": usage.prompt_tokens,
@@ -627,10 +629,20 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
 
     let _ = ctx.write_stdout(&format!("ok request-timeout {}s", ai_timeout_secs(proxy)));
-    let _ = ctx.write_stdout(&format!(
-        "ok reasoning-effort {}",
-        config.reasoning_effort().unwrap_or("default")
-    ));
+    // Unset does not mean "nothing is ever sent": `build_body` still defaults
+    // `tools` requests to `reasoning_effort: none` for a known OpenAI
+    // reasoning model, including the shell's own default `gpt-5-mini`. Ask
+    // `is_openai_reasoning_model` rather than naming the family here, so this
+    // (a) only shows the caveat for a model it actually applies to and
+    // (b) can't drift from the prefix list `dsh-openai` matches against.
+    let reasoning_effort_line = match config.reasoning_effort() {
+        Some(value) => value.to_string(),
+        None if dsh_openai::is_openai_reasoning_model(config.default_model()) => {
+            "default (auto \"none\" on tools requests to this model)".to_string()
+        }
+        None => "default".to_string(),
+    };
+    let _ = ctx.write_stdout(&format!("ok reasoning-effort {reasoning_effort_line}"));
 
     match crate::chatgpt::chat_session_description() {
         Some(detail) => {

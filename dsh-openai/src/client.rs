@@ -312,8 +312,13 @@ impl ChatGptClient {
         // SeqCst, not Relaxed: this flag changes what a concurrent `build_body`
         // call on a cloned client (e.g. the command-palette `LiveAiService`
         // shares a clone with the suggestion backend, `dsh/src/repl/mod.rs`)
-        // puts on the wire, not just a debug print, so a stale read must not
-        // linger past the store that set it.
+        // puts on the wire, not just a debug print, so a store should become
+        // visible to another thread's load promptly. This does not make the
+        // read-then-maybe-write sequence atomic: two concurrent requests can
+        // still both read `false` before either stores `true`, sending one
+        // request without the correction it needed. That race is harmless -
+        // the losing request just hits the same 400 and self-heals on its
+        // own next attempt - not a data race to prevent at all costs.
         self.force_reasoning_none.load(Ordering::SeqCst)
     }
 
@@ -343,9 +348,15 @@ impl ChatGptClient {
             return;
         }
 
+        // Deliberately says "its current" rather than "its default" reasoning
+        // effort: `build_body` skips the proactive model-gated default
+        // whenever the operator set `AI_CHAT_REASONING_EFFORT` explicitly, so
+        // this path also fires when *that* value is what conflicted with
+        // `tools` - not the model's own default - and blaming the model then
+        // would send an operator checking model docs instead of their own env.
         eprintln!(
-            "dsh: model `{model}` does not allow function tools together with its default \
-             reasoning effort, so `!` chat resent this turn with reasoning_effort: none. \
+            "dsh: model `{model}` does not allow function tools together with its current \
+             reasoning effort setting, so `!` chat resent this turn with reasoning_effort: none. \
              Set AI_CHAT_REASONING_EFFORT=none to skip the extra round-trip, or pick a \
              different model if tool-using answers need full reasoning."
         );
@@ -809,11 +820,30 @@ impl ChatGptClient {
                 reason = "unsupported field",
                 field = field
             );
+            // `remember_unsupported` is a persistent, client-wide memo, but
+            // this client can carry more than one model over its life
+            // (`AI_SUMMARY_MODEL`, the session-scoped client shared between
+            // ghost text and the command palette). For every other droppable
+            // field that memo is harmless: the field is purely optional and
+            // dropping it for a model that never asked to receive it changes
+            // nothing. `reasoning_effort` is different - it is sometimes the
+            // *fix* for a `tools` conflict, not just an optional extra - so
+            // letting an unrelated, `tools`-less model's rejection disable it
+            // client-wide would permanently block `reasoning_effort_conflict`
+            // (its `already_dropped` guard) from correcting the model that
+            // actually needs `tools` to work, for the rest of this client's
+            // life. Only a `tools`-bearing request - the one the field
+            // protects - earns the persistent memo for `reasoning_effort`;
+            // a `tools`-less request still gets the field dropped for this
+            // one retry (`state.dropped`) without poisoning later requests.
+            let has_tools = body.get("tools").is_some();
             if let Some(map) = body.as_object_mut() {
                 map.remove(field);
             }
             state.dropped.push(field);
-            self.remember_unsupported(field);
+            if field != "reasoning_effort" || has_tools {
+                self.remember_unsupported(field);
+            }
             return true;
         }
 
@@ -828,13 +858,43 @@ impl ChatGptClient {
         Ok(client)
     }
 
+    /// The `reasoning_effort` value `build_body` should send, or `None` to
+    /// omit the field. `has_tools` reflects the *outgoing* body (after
+    /// `options.tools` has been filtered for emptiness), not `options.tools`
+    /// directly.
+    ///
+    /// Forces `"none"` when either:
+    /// - this client already learned the endpoint rejects the configured
+    ///   value over `reasoning_effort` (a previous 400 asked for it), or
+    /// - the operator set no preference at all and `model` is a known member
+    ///   of the reasoning lineup that needs it up front - avoiding that 400
+    ///   instead of paying and then correcting it once per `!` message
+    ///   (`is_openai_reasoning_model`).
+    ///
+    /// An explicit `AI_CHAT_REASONING_EFFORT` is tried as configured first
+    /// even on that lineup, so `recover`'s correction still applies if it
+    /// turns out to conflict. Without `tools` this always returns the
+    /// configured value (or `None`) untouched, so a request that never uses
+    /// function calling (summarization, `safe_run`'s JSON generation) keeps
+    /// the configured - or model's own default - reasoning quality.
+    fn resolve_reasoning_effort(&self, has_tools: bool, model: &str) -> Option<&str> {
+        let forces_none = has_tools
+            && (self.reasoning_none_forced()
+                || (self.default_reasoning_effort.is_none() && is_openai_reasoning_model(model)));
+        if forces_none {
+            Some("none")
+        } else {
+            self.default_reasoning_effort.as_deref()
+        }
+    }
+
     fn build_body(&self, messages: &[Value], options: &ChatRequestOptions) -> Value {
         let selected_model = options
             .model
             .clone()
             .unwrap_or_else(|| self.default_model.clone());
 
-        let final_temperature = if model_requires_default_temperature(&selected_model) {
+        let final_temperature = if is_openai_reasoning_model(&selected_model) {
             Some(1.0)
         } else {
             options.temperature
@@ -862,18 +922,8 @@ impl ChatGptClient {
         {
             map.insert("tools".into(), json!(tools));
         }
-        // A `tools` request this client already learned the endpoint rejects
-        // over `reasoning_effort` always forces `"none"`, regardless of the
-        // configured value - that is what the previous 400 asked for. A
-        // request without `tools` is untouched, so a request that never uses
-        // function calling (summarization, `safe_run`'s JSON generation) keeps
-        // the configured reasoning quality.
-        let reasoning_effort: Option<&str> =
-            if map.contains_key("tools") && self.reasoning_none_forced() {
-                Some("none")
-            } else {
-                self.default_reasoning_effort.as_deref()
-            };
+        let has_tools = map.contains_key("tools");
+        let reasoning_effort = self.resolve_reasoning_effort(has_tools, &selected_model);
         if let Some(reasoning_effort) = reasoning_effort
             && supported("reasoning_effort")
         {
@@ -919,20 +969,40 @@ impl ChatGptClient {
     }
 }
 
-/// Model families that reject any temperature other than the default.
+/// Model families in OpenAI's current reasoning lineup (GPT-5.x and the
+/// o-series). Matching on a prefix rather than one exact id is what keeps a
+/// new point release - `gpt-5.1`, `gpt-5.6-luna`, `o3-mini` - from missing a
+/// fixup this whole family needs the moment it becomes the configured model.
 ///
-/// The reasoning models sample at a fixed temperature and answer a request that
-/// sets one with a 400. Matching on a prefix rather than one exact id is what
-/// keeps a new point release - `gpt-5.1`, `o3-mini` - from failing every turn
-/// the moment it becomes the configured model.
-const FIXED_TEMPERATURE_MODEL_PREFIXES: &[&str] = &["gpt-5", "o1", "o3", "o4"];
+/// Two independent constraints happen to apply to the whole family today:
+/// it samples at a fixed temperature and 400s on any other value
+/// (`build_body`'s `final_temperature`), and it 400s a `tools` request unless
+/// `reasoning_effort` is `"none"` (`build_body`'s `reasoning_effort`; see
+/// `reasoning_effort_conflict` for the self-healing correction that still
+/// covers a model not in this list, or a family member whose newer point
+/// release drops the restriction). Both read [`is_openai_reasoning_model`],
+/// so a future model picking up one constraint without the other needs a
+/// second prefix list, not just a second function.
+const OPENAI_REASONING_MODEL_PREFIXES: &[&str] = &["gpt-5", "o1", "o3", "o4"];
 
-fn model_requires_default_temperature(model: &str) -> bool {
-    // A provider route (`openai/gpt-5-mini`) names the same model.
-    let model = model.rsplit('/').next().unwrap_or(model);
-    FIXED_TEMPERATURE_MODEL_PREFIXES
+/// Whether `model` is a known member of [`OPENAI_REASONING_MODEL_PREFIXES`].
+///
+/// `pub` so `doctor` (`dsh-builtin`) can show its own auto-`"none"` caveat
+/// only for a model this actually applies to, instead of re-deriving the
+/// prefix list as a second, driftable copy.
+pub fn is_openai_reasoning_model(model: &str) -> bool {
+    // A provider route (`openai/gpt-5-mini`) names the same model. Lowercase
+    // first: `AI_CHAT_MODEL=GPT-5-Mini` is the same model as `gpt-5-mini`,
+    // and a case-sensitive miss here would silently fall back to the slower,
+    // reactive 400-then-correct path for a plausible casing choice.
+    let model = model
+        .rsplit('/')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
+    OPENAI_REASONING_MODEL_PREFIXES
         .iter()
-        .any(|prefix| family_matches(model, prefix))
+        .any(|prefix| family_matches(&model, prefix))
 }
 
 /// Whether `model` is `prefix` or a variant of it.
@@ -1023,19 +1093,37 @@ fn bad_request_message(err: &Error) -> Option<String> {
         .then(|| api_error.message.to_ascii_lowercase())
 }
 
+/// Whether `haystack` contains `word` as a whole word - split on anything
+/// that is not alphanumeric or `_` - rather than as a raw substring.
+///
+/// Guards `reasoning_effort_conflict` against a coincidental embedded match
+/// ("dysfunctional" contains "function"; "toolchain" contains "tool") being
+/// misread as a `tools` conflict. It does not catch every false positive - a
+/// gateway that echoes the request body verbatim, or a domain name like
+/// "tool.example.com", still splits into a bare "tool" token - but a
+/// misdiagnosis here costs at most one wasted round-trip before
+/// `reasoning_effort_conflict`'s own `already_dropped` / `already_none`
+/// guards stop it from repeating, so perfect precision is not worth chasing.
+fn contains_word(haystack: &str, word: &str) -> bool {
+    haystack
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .any(|token| token == word)
+}
+
 /// Whether `err` is a 400 naming a `reasoning_effort` / `tools` conflict that
 /// forcing `reasoning_effort: "none"` into the body can fix, and if so the
 /// model that reported it (for the one-time warning).
 ///
-/// Requires the message to mention both `reasoning_effort` and `tool` or
-/// `function` - not the exact phrase, so a gateway wording the same conflict
-/// differently (e.g. "function calling" instead of "tool") still matches -
-/// but not `reasoning_effort` alone. An operator typo in
-/// `AI_CHAT_REASONING_EFFORT` produces a 400 that names the field too (e.g.
-/// "Invalid value for reasoning_effort: must be one of ..."); without the
-/// second word that error would be misread as a `tools` conflict, forced to
-/// `"none"` and latched for the rest of the client's life over what was
-/// actually a config typo.
+/// Requires the message to mention both `reasoning_effort` and a whole word
+/// naming tools or function calling (`contains_word`) - not the exact
+/// phrase, so a gateway wording the same conflict differently (e.g.
+/// "function calling" instead of "tools") still matches - but not
+/// `reasoning_effort` alone. An operator typo in `AI_CHAT_REASONING_EFFORT`
+/// produces a 400 that names the field too (e.g. "Invalid value for
+/// reasoning_effort: must be one of ..."); without the second word that
+/// error would be misread as a `tools` conflict, forced to `"none"` and
+/// latched for the rest of the client's life over what was actually a
+/// config typo.
 fn reasoning_effort_conflict(
     err: &Error,
     body: &Value,
@@ -1046,9 +1134,12 @@ fn reasoning_effort_conflict(
     }
 
     let message = bad_request_message(err)?;
-    if !message.contains("reasoning_effort")
-        || !(message.contains("tool") || message.contains("function"))
-    {
+    // Real messages say "tools" (plural) and "function", not the bare
+    // singular "tool" - check every inflection actually seen, not just one.
+    let mentions_tools_or_function = ["tool", "tools", "function", "functions"]
+        .iter()
+        .any(|word| contains_word(&message, word));
+    if !message.contains("reasoning_effort") || !mentions_tools_or_function {
         return None;
     }
 
@@ -1143,24 +1234,32 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::time::{Duration, sleep};
 
+    const TEST_API_KEY: &str = "test-key";
+    const TEST_BASE_URL: &str = "https://example.invalid";
+
     fn client() -> ChatGptClient {
         ChatGptClient::new_with_settings(
-            "test-key".to_string(),
+            TEST_API_KEY.to_string(),
             Some("gpt-5-mini".to_string()),
-            Some("https://example.invalid".to_string()),
+            Some(TEST_BASE_URL.to_string()),
         )
         .expect("client should initialize")
     }
 
-    /// Like [`client`], but with `AI_CHAT_REASONING_EFFORT` set - through
-    /// `OpenAiConfig::from_getter`'s closure, never real process env, so
-    /// parallel tests cannot race each other over it.
+    /// Like [`client`], but with `AI_CHAT_REASONING_EFFORT` set. Goes through
+    /// `OpenAiConfig::from_getter` rather than `client()`'s `new_with_settings`
+    /// because only `from_getter` reads it (see `new_with_http_policy`'s
+    /// doc comment in `config.rs`) - and the getter is a closure, never real
+    /// process env, so parallel tests cannot race each other over it. Uses
+    /// `gpt-5.6-luna` rather than `client()`'s `gpt-5-mini` so the reported
+    /// model stays covered by at least one test independently of the shared
+    /// reasoning-lineup prefix match.
     fn client_with_reasoning_effort(effort: &str) -> ChatGptClient {
         let effort = effort.to_string();
         let config = OpenAiConfig::from_getter(move |key| match key {
-            "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+            "AI_CHAT_API_KEY" => Some(TEST_API_KEY.to_string()),
             "AI_CHAT_MODEL" => Some("gpt-5.6-luna".to_string()),
-            "AI_CHAT_BASE_URL" => Some("https://example.invalid".to_string()),
+            "AI_CHAT_BASE_URL" => Some(TEST_BASE_URL.to_string()),
             "AI_CHAT_REASONING_EFFORT" => Some(effort.clone()),
             _ => None,
         });
@@ -1250,29 +1349,34 @@ mod tests {
     }
 
     /// The exact-match version of this check let every reasoning model other
-    /// than `gpt-5-mini` receive a temperature it answers with a 400.
+    /// than `gpt-5-mini` receive a temperature it answers with a 400. Shared
+    /// by `final_temperature` and `resolve_reasoning_effort`
+    /// (`is_openai_reasoning_model`), so this doubles as the family-matching
+    /// coverage for both.
     #[test]
-    fn fixed_temperature_models_are_matched_by_family() {
+    fn openai_reasoning_models_are_matched_by_family() {
         for model in [
             "gpt-5",
             "gpt-5-mini",
             "gpt-5.1-codex",
+            "gpt-5.6-luna",
             "o1-preview",
             "o3",
             "o3-mini",
             "o4-mini",
             "openai/gpt-5-mini",
+            "GPT-5-Mini",
         ] {
             assert!(
-                model_requires_default_temperature(model),
-                "{model} should use the default temperature"
+                is_openai_reasoning_model(model),
+                "{model} should be recognised as a member of the reasoning lineup"
             );
         }
 
         for model in ["gpt-4.1-mini", "gpt-4o", "o1x-turbo", "gpt-51", "llama3"] {
             assert!(
-                !model_requires_default_temperature(model),
-                "{model} should keep the caller's temperature"
+                !is_openai_reasoning_model(model),
+                "{model} should not be recognised as a member of the reasoning lineup"
             );
         }
     }
@@ -1389,6 +1493,109 @@ mod tests {
         assert!(body.get("reasoning_effort").is_none());
     }
 
+    /// A `tools`-less request (summarization, `safe_run`'s JSON generation)
+    /// telling us the endpoint has never heard of `reasoning_effort` at all
+    /// must not poison every other model sharing this client: the field is
+    /// dropped for this one retry, but not remembered client-wide, so a
+    /// later `tools` request to the model that actually needs the field can
+    /// still be corrected by `reasoning_effort_conflict`.
+    #[test]
+    fn a_non_tools_requests_unsupported_reasoning_effort_is_not_remembered_client_wide() {
+        let client = client_with_reasoning_effort("high");
+        let err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Unrecognized request argument supplied: reasoning_effort".into(),
+        }
+        .into();
+        let mut body = json!({ "model": "gpt-5-mini", "reasoning_effort": "high" });
+        let mut state = RecoveryState::seed(client.known_unsupported());
+
+        assert!(client.recover(&err, &mut body, &mut state));
+
+        assert!(
+            body.get("reasoning_effort").is_none(),
+            "dropped for this retry"
+        );
+        assert!(
+            !client.known_unsupported().contains(&"reasoning_effort"),
+            "must not be remembered client-wide from a tools-less request"
+        );
+    }
+
+    /// The mirror case: a `tools` request itself telling us the endpoint
+    /// never heard of `reasoning_effort` at all is a genuine, endpoint-wide
+    /// incompatibility - remembering it client-wide is correct and safe
+    /// (unlike forcing `"none"`, dropping the field entirely is never wrong
+    /// for a server that rejects it outright).
+    #[test]
+    fn a_tools_requests_unsupported_reasoning_effort_is_remembered_client_wide() {
+        let client = client_with_reasoning_effort("high");
+        let err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Unrecognized request argument supplied: reasoning_effort".into(),
+        }
+        .into();
+        let mut body = json!({
+            "model": "gpt-5-mini",
+            "reasoning_effort": "high",
+            "tools": [{ "type": "function" }],
+        });
+        let mut state = RecoveryState::seed(client.known_unsupported());
+
+        assert!(client.recover(&err, &mut body, &mut state));
+
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(client.known_unsupported().contains(&"reasoning_effort"));
+    }
+
+    /// End-to-end regression for the cross-model poisoning this client-wide
+    /// memo used to allow: a `tools`-less request's rejection must not block
+    /// the *reactive* `tools`/`reasoning_effort` correction for a later
+    /// request on the same client.
+    #[test]
+    fn a_non_tools_rejection_does_not_block_a_later_tools_conflict_correction() {
+        let client = client_with_reasoning_effort("high");
+        let mut state = RecoveryState::seed(client.known_unsupported());
+
+        let unsupported_err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Unrecognized request argument supplied: reasoning_effort".into(),
+        }
+        .into();
+        let mut summary_body = json!({ "model": "gpt-4o-mini", "reasoning_effort": "high" });
+        assert!(client.recover(&unsupported_err, &mut summary_body, &mut state));
+
+        // A fresh request/state, as a later `!` turn iteration would build -
+        // only the client's persistent memory carries over.
+        let mut state = RecoveryState::seed(client.known_unsupported());
+        let mut tools_body = json!({
+            "model": "gpt-5-mini",
+            "reasoning_effort": "high",
+            "tools": [{ "type": "function", "function": { "name": "execute" } }],
+        });
+        let conflict_err = gpt_5_6_luna_reasoning_conflict();
+
+        assert!(
+            client.recover(&conflict_err, &mut tools_body, &mut state),
+            "the earlier tools-less rejection must not have disabled this correction"
+        );
+        assert_eq!(tools_body["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn contains_word_matches_whole_words_only() {
+        assert!(contains_word(
+            "function tools are not supported",
+            "function"
+        ));
+        assert!(contains_word("reasoning_effort with tools", "tools"));
+        assert!(!contains_word("dysfunctional output", "function"));
+        assert!(!contains_word("toolchain misconfigured", "tool"));
+    }
+
     /// Once a `tools` request has been corrected, every later `tools` request
     /// on the same client must send `"none"` too - `build_body` runs on every
     /// iteration of a `!` chat turn, so without this the shell would pay the
@@ -1421,6 +1628,44 @@ mod tests {
         );
 
         assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    /// No `AI_CHAT_REASONING_EFFORT` at all, but the model is a known member
+    /// of the reasoning lineup and the request carries `tools`: `build_body`
+    /// must send `"none"` on the very first attempt rather than waiting for
+    /// the server to 400 and correcting reactively - the whole point of the
+    /// model-gated default is to make `gpt-5.6-luna` (and the shell's own
+    /// default `gpt-5-mini`) work with zero configuration and zero wasted
+    /// round-trips.
+    #[test]
+    fn build_body_defaults_reasoning_effort_to_none_for_tools_on_a_known_reasoning_model() {
+        let client = client(); // model "gpt-5-mini", no reasoning_effort configured
+
+        let tools = vec![json!({ "type": "function", "function": { "name": "execute" } })];
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new().with_tools(Some(tools)),
+        );
+
+        assert_eq!(body["reasoning_effort"], "none");
+    }
+
+    /// The same default must not reach a model outside the known reasoning
+    /// lineup - a local/compatible server or a plain chat model that has
+    /// never heard of `reasoning_effort` would otherwise pay one wasted 400
+    /// on every `!` message for a field nobody asked to send.
+    #[test]
+    fn build_body_does_not_default_reasoning_effort_for_an_unknown_model() {
+        let client = client(); // no reasoning_effort configured
+        let tools = vec![json!({ "type": "function", "function": { "name": "execute" } })];
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new()
+                .with_model(Some("llama3".to_string()))
+                .with_tools(Some(tools)),
+        );
+
+        assert!(body.get("reasoning_effort").is_none());
     }
 
     /// `"stream_options"` contains `"stream"` as a substring: an error
@@ -1778,6 +2023,12 @@ mod tests {
     /// corrected retry - covering the full path (`build_body` ->
     /// `send_with_retry` -> `recover` -> `build_body`'s forced-none branch)
     /// that the unit tests above exercise piecewise.
+    /// An operator who explicitly overrode `AI_CHAT_REASONING_EFFORT` to a
+    /// value that conflicts with `tools` still gets the reactive correction:
+    /// the override is tried as configured first (it might not conflict on a
+    /// different endpoint), and only corrected once the server actually says
+    /// so. The model-gated proactive default below covers the common case of
+    /// no override at all, so this exercises the fallback path it does not.
     #[test]
     fn a_reasoning_effort_conflict_is_corrected_over_the_wire() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1787,7 +2038,7 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let first = read_request(&mut stream);
             assert!(first.get("tools").is_some());
-            assert!(first.get("reasoning_effort").is_none());
+            assert_eq!(first["reasoning_effort"], "medium");
             reply(
                 &mut stream,
                 "400 Bad Request",
@@ -1823,6 +2074,7 @@ mod tests {
         let config = OpenAiConfig::from_getter(move |key| match key {
             "AI_CHAT_API_KEY" => Some("test-key".to_string()),
             "AI_CHAT_MODEL" => Some("gpt-5.6-luna".to_string()),
+            "AI_CHAT_REASONING_EFFORT" => Some("medium".to_string()),
             "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
             "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
             "AI_CHAT_TIMEOUT_SECS" => Some("5".to_string()),

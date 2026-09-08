@@ -15,6 +15,25 @@ use crate::config_paths::display_path;
 use dsh_types::{Context, ExitStatus};
 use std::path::PathBuf;
 
+/// Every skill this shell would load here, as `(name, summary)`.
+///
+/// Exported for completion. A skill name is chosen by the model, so until this
+/// existed the only way to learn one was to run `skill list` and read it back -
+/// worse than the snippet and bookmark names a person picked themselves.
+///
+/// Both roots regardless of `AI_CHAT_PROJECT_SKILLS`: completing a name is not
+/// the same as putting it in a prompt, and `skill show` reaches either way.
+pub fn installed_names(current_dir: Option<&std::path::Path>) -> Vec<(String, String)> {
+    SkillsManager::new(current_dir, true)
+        .load_skills()
+        .into_iter()
+        .map(|skill| {
+            let summary = skill.summary().to_string();
+            (skill.name, summary)
+        })
+        .collect()
+}
+
 pub fn description() -> &'static str {
     "List, show and remove the skills the AI chat runtime reads"
 }
@@ -28,6 +47,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         Some((&"show", [name])) => show(ctx, proxy, name),
         Some((&"path", [name])) => path(ctx, proxy, name),
         Some((&"remove", [name])) | Some((&"rm", [name])) => remove(ctx, proxy, name),
+        Some((&"trust", [])) => trust_status(ctx, proxy),
+        Some((&"trust", _)) => usage_error(ctx, "Usage: skill trust"),
+        Some((&"untrust", [])) => untrust(ctx, proxy),
+        Some((&"untrust", _)) => usage_error(ctx, "Usage: skill untrust"),
         Some((&"help", _)) | Some((&"-h", _)) | Some((&"--help", _)) => {
             print_help(ctx);
             ExitStatus::ExitedWith(0)
@@ -46,10 +69,13 @@ fn print_help(ctx: &Context) {
            list             Every skill, with scope, read count and last use\n  \
            show <name>      Render a skill's SKILL.md\n  \
            path <name>      Print its path, for `$EDITOR $(skill path <name>)`\n  \
-           remove <name>    Delete a skill, after confirmation\n\
+           remove <name>    Delete a skill, after confirmation\n  \
+           trust            Show whether this repository's skills are trusted\n  \
+           untrust          Forget that decision for this repository\n\
          \n\
          Project skills come from `.dsh/skills` in the enclosing project and take\n\
-         precedence over personal ones of the same name.",
+         precedence over personal ones of the same name. They are only read once\n\
+         you have agreed to them, because their descriptions go into every prompt.",
     );
 }
 
@@ -196,6 +222,48 @@ fn remove(ctx: &Context, proxy: &mut dyn ShellProxy, name: &str) -> ExitStatus {
             &format!("skill: failed to remove {}: {err}", display_path(&target)),
         ),
     }
+}
+
+/// The project root this shell would ask about, if there is one.
+fn project_decision(proxy: &mut dyn ShellProxy) -> Option<skills::ProjectSkillDecision> {
+    let cwd = proxy.get_current_dir().ok()?;
+    skills::describe_project_root(&skills::skill_roots(Some(&cwd), true))
+}
+
+fn trust_status(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let Some(decision) = project_decision(proxy) else {
+        let _ = ctx.write_stdout("No project skills here.");
+        return ExitStatus::ExitedWith(0);
+    };
+
+    let remembered = skills::trust::is_remembered(&decision.root, &decision.digest);
+    let _ = ctx.write_stdout(&format!(
+        "{} {} ({} skill(s): {})",
+        if remembered { "trusted" } else { "untrusted" },
+        display_path(&decision.root),
+        decision.names.len(),
+        decision.names.join(", ")
+    ));
+    if !remembered {
+        let _ = ctx.write_stdout(
+            "The next `!` here asks before reading them. Answer `a` to remember this repository.",
+        );
+    }
+    ExitStatus::ExitedWith(0)
+}
+
+fn untrust(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let Some(decision) = project_decision(proxy) else {
+        let _ = ctx.write_stdout("No project skills here.");
+        return ExitStatus::ExitedWith(0);
+    };
+
+    if skills::trust::forget(&decision.root) {
+        let _ = ctx.write_stdout(&format!("Forgot {}", display_path(&decision.root)));
+    } else {
+        let _ = ctx.write_stdout(&format!("{} was not trusted", display_path(&decision.root)));
+    }
+    ExitStatus::ExitedWith(0)
 }
 
 fn not_found(ctx: &Context, name: &str) -> ExitStatus {

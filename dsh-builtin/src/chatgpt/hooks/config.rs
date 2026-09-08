@@ -138,6 +138,41 @@ fn enabled_by_default() -> bool {
     true
 }
 
+/// Pin `command[0]` to something a later `chdir` cannot reinterpret.
+///
+/// The runner sets `current_dir` to the chat's working directory, and on Unix a
+/// relative program is resolved *after* that. `["/opt/dsh-hooks/hook.sh"]` therefore ran
+/// whatever `./hook.sh` happened to sit in the repository the user had cd'd
+/// into - which is exactly the "cloning a repository should not be enough to
+/// run its commands" case that keeps `.dsh/hooks.json` unread.
+///
+/// - absolute path: kept as is
+/// - bare name (no `/`): resolved against `PATH` **now**, so the lookup cannot
+///   be steered by the directory the hook later runs in. Left alone when it is
+///   not on `PATH`; the spawn fails with a clear error and `doctor hooks`
+///   already reports it, which beats refusing every chat over a typo.
+/// - anything else (`./x`, `../x`, `a/b`): refused
+fn normalize_program(program: &str) -> Result<String, String> {
+    let path = Path::new(program);
+    if path.is_absolute() {
+        return Ok(program.to_string());
+    }
+    if program.contains('/') {
+        return Err(format!(
+            "`{program}` is a relative path; write an absolute path, or a bare name to look up on PATH. A relative one resolves against whatever directory the chat is in when the hook runs"
+        ));
+    }
+
+    let Some(paths) = std::env::var_os("PATH") else {
+        return Ok(program.to_string());
+    };
+    Ok(std::env::split_paths(&paths)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+        .map(|candidate| candidate.display().to_string())
+        .unwrap_or_else(|| program.to_string()))
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct HooksFile {
@@ -315,22 +350,46 @@ pub(crate) fn read(path: &Path) -> Result<LoadedHooks, String> {
 
 /// A world-writable list of commands to run is a way in.
 ///
-/// Both supported platforms are Unix, so this needs no `cfg` pair. The rule is
-/// stricter than the one on `config.lisp` because every line here names a
-/// program that the shell will execute on the user's behalf.
+/// **World-writable only.** Group-writable was refused too at first, which
+/// looked stricter but was a trap: a `umask` of 002 - the default for
+/// per-user-group distributions - creates every new file as 664, so writing an
+/// `ai-hooks.json` the ordinary way made the whole `!` chat refuse to start.
+/// On those systems the group is the user's own, so 664 grants nobody anything.
+/// Being stricter than `config.lisp` (which has no check at all) by an amount
+/// that breaks the feature on common systems is the wrong trade.
+///
+/// The containing directory counts as well: a world-writable directory lets
+/// anyone replace the file whatever its own mode says.
+///
+/// Both supported platforms are Unix, so this needs no `cfg` pair.
 fn check_permissions(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
+
+    let refuse = |what: &Path, mode: u32| {
+        format!(
+            "chat: {} is world-writable (mode {:o}); run `chmod o-w {}` before hooks will load",
+            what.display(),
+            mode & 0o777,
+            what.display()
+        )
+    };
 
     let metadata = std::fs::metadata(path)
         .map_err(|err| format!("chat: cannot read {}: {err}", path.display()))?;
     let mode = metadata.permissions().mode();
-    if mode & 0o022 != 0 {
-        return Err(format!(
-            "chat: {} is writable by other users (mode {:o}); run `chmod go-w {}` before hooks will load",
-            path.display(),
-            mode & 0o777,
-            path.display()
-        ));
+    if mode & 0o002 != 0 {
+        return Err(refuse(path, mode));
+    }
+
+    if let Some(parent) = path.parent()
+        && let Ok(parent_metadata) = std::fs::metadata(parent)
+    {
+        let parent_mode = parent_metadata.permissions().mode();
+        // A sticky directory (`/tmp`) only lets the owner replace their own
+        // file, so it is not the hole this is looking for.
+        if parent_mode & 0o002 != 0 && parent_mode & 0o1000 == 0 {
+            return Err(refuse(parent, parent_mode));
+        }
     }
 
     Ok(())
@@ -413,7 +472,13 @@ pub(crate) fn parse(contents: &str) -> Result<LoadedHooks, String> {
         }
     }
 
-    Ok(LoadedHooks { hooks: file.hooks })
+    let mut hooks = file.hooks;
+    for hook in &mut hooks {
+        hook.command[0] = normalize_program(&hook.command[0])
+            .map_err(|err| format!("hook `{}`: {err}", hook.id))?;
+    }
+
+    Ok(LoadedHooks { hooks })
 }
 
 #[cfg(test)]
@@ -428,7 +493,7 @@ mod tests {
 
     #[test]
     fn parses_a_minimal_hook_definition() {
-        let hooks = parse(&one(r#"["./hook.sh"]"#)).unwrap();
+        let hooks = parse(&one(r#"["/opt/dsh-hooks/hook.sh"]"#)).unwrap();
         let matched = hooks.matching(HookEvent::PreToolUse, Some("execute"));
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, "audit");
@@ -439,7 +504,7 @@ mod tests {
     #[test]
     fn unknown_field_is_a_parse_error() {
         let err = parse(
-            r#"{"version":1,"hooks":[{"id":"a","event":["pre-tool-use"],"command":["./hook.sh"]}]}"#,
+            r#"{"version":1,"hooks":[{"id":"a","event":["pre-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .expect_err("a typo must not load quietly");
         assert!(err.contains("event"), "{err}");
@@ -462,8 +527,8 @@ mod tests {
     fn duplicate_hook_id_is_rejected() {
         let err = parse(
             r#"{"version":1,"hooks":[
-                {"id":"a","events":["pre-tool-use"],"command":["./hook.sh"]},
-                {"id":"a","events":["post-tool-use"],"command":["./hook.sh"]}]}"#,
+                {"id":"a","events":["pre-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]},
+                {"id":"a","events":["post-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .expect_err("ids name hooks in approvals");
         assert!(err.contains("used twice"), "{err}");
@@ -472,7 +537,7 @@ mod tests {
     #[test]
     fn unknown_event_name_is_a_parse_error() {
         let err = parse(
-            r#"{"version":1,"hooks":[{"id":"a","events":["PreToolUse"],"command":["./hook.sh"]}]}"#,
+            r#"{"version":1,"hooks":[{"id":"a","events":["PreToolUse"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .expect_err("event names are kebab-case");
         assert!(
@@ -491,8 +556,8 @@ mod tests {
     fn timeout_is_clamped_to_the_supported_range() {
         let hooks = parse(
             r#"{"version":1,"hooks":[
-                {"id":"slow","events":["post-tool-use"],"command":["./hook.sh"],"timeout_ms":9999999},
-                {"id":"fast","events":["post-tool-use"],"command":["./hook.sh"],"timeout_ms":1}]}"#,
+                {"id":"slow","events":["post-tool-use"],"command":["/opt/dsh-hooks/hook.sh"],"timeout_ms":9999999},
+                {"id":"fast","events":["post-tool-use"],"command":["/opt/dsh-hooks/hook.sh"],"timeout_ms":1}]}"#,
         )
         .unwrap();
         let all = hooks.all();
@@ -504,7 +569,7 @@ mod tests {
     fn more_than_eight_hooks_for_one_event_is_rejected() {
         let entries = (0..9)
             .map(|i| {
-                format!(r#"{{"id":"h{i}","events":["pre-tool-use"],"command":["./hook.sh"]}}"#)
+                format!(r#"{{"id":"h{i}","events":["pre-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}}"#)
             })
             .collect::<Vec<_>>()
             .join(",");
@@ -516,7 +581,7 @@ mod tests {
     #[test]
     fn a_disabled_file_loads_nothing() {
         let hooks = parse(
-            r#"{"version":1,"enabled":false,"hooks":[{"id":"a","events":["pre-tool-use"],"command":["./hook.sh"]}]}"#,
+            r#"{"version":1,"enabled":false,"hooks":[{"id":"a","events":["pre-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .unwrap();
         assert!(hooks.is_empty());
@@ -525,7 +590,7 @@ mod tests {
     #[test]
     fn a_disabled_hook_never_matches() {
         let hooks = parse(
-            r#"{"version":1,"hooks":[{"id":"a","events":["pre-tool-use"],"command":["./hook.sh"],"enabled":false}]}"#,
+            r#"{"version":1,"hooks":[{"id":"a","events":["pre-tool-use"],"command":["/opt/dsh-hooks/hook.sh"],"enabled":false}]}"#,
         )
         .unwrap();
         assert!(
@@ -538,7 +603,7 @@ mod tests {
     #[test]
     fn tool_match_glob_matches_an_mcp_prefix() {
         let hooks = parse(
-            r#"{"version":1,"hooks":[{"id":"a","events":["pre-tool-use"],"match":{"tools":["mcp__*","edit"]},"command":["./hook.sh"]}]}"#,
+            r#"{"version":1,"hooks":[{"id":"a","events":["pre-tool-use"],"match":{"tools":["mcp__*","edit"]},"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .unwrap();
 
@@ -565,7 +630,7 @@ mod tests {
     fn a_star_anywhere_but_the_end_is_rejected_rather_than_taken_literally() {
         fn config(pattern: &str) -> String {
             format!(
-                r#"{{"version":1,"hooks":[{{"id":"a","events":["pre-tool-use"],"match":{{"tools":["{pattern}"]}},"command":["./hook.sh"]}}]}}"#
+                r#"{{"version":1,"hooks":[{{"id":"a","events":["pre-tool-use"],"match":{{"tools":["{pattern}"]}},"command":["/opt/dsh-hooks/hook.sh"]}}]}}"#
             )
         }
 
@@ -604,20 +669,71 @@ mod tests {
         assert!(!HookEvent::ResponseComplete.is_gate());
     }
 
+    /// 664 is what `umask 002` produces, and on those systems the group is the
+    /// user's own. Refusing it meant creating the file the ordinary way stopped
+    /// `!` from working at all.
     #[test]
-    fn group_writable_config_is_refused() {
+    fn a_group_writable_config_loads_but_a_world_writable_one_does_not() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
         let path = dir.path().join("ai-hooks.json");
         std::fs::write(&path, r#"{"version":1,"hooks":[]}"#).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
 
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        assert!(read(&path).is_ok(), "umask 002 must not brick the chat");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
         let err = read(&path).expect_err("a world-writable command list is a way in");
-        assert!(err.contains("writable by other users"), "{err}");
+        assert!(err.contains("world-writable"), "{err}");
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         assert!(read(&path).is_ok());
+    }
+
+    /// The file's own mode is no protection when anyone can replace it.
+    #[test]
+    fn a_world_writable_directory_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("conf");
+        std::fs::create_dir(&nested).unwrap();
+        let path = nested.join("ai-hooks.json");
+        std::fs::write(&path, r#"{"version":1,"hooks":[]}"#).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let err = read(&path).expect_err("anyone could swap the file");
+        assert!(err.contains("world-writable"), "{err}");
+
+        std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(read(&path).is_ok());
+    }
+
+    /// A relative program is resolved after the runner chdirs, so `./hook.sh`
+    /// meant "whatever sits in the repository the user cd'd into".
+    #[test]
+    fn a_relative_hook_command_is_refused_at_load_time() {
+        for program in ["./hook.sh", "../hook.sh", "hooks/audit.sh"] {
+            let err = parse(&one(&format!(r#"["{program}"]"#)))
+                .err()
+                .unwrap_or_else(|| panic!("`{program}` must be refused"));
+            assert!(err.contains("relative path"), "{program}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_bare_command_name_is_pinned_to_its_path_entry() {
+        let hooks = parse(&one(r#"["true"]"#)).expect("a PATH name is allowed");
+        let program = &hooks.all()[0].command[0];
+        // Either resolved to an absolute path, or left alone when not on PATH -
+        // never left as something a later chdir could reinterpret.
+        assert!(
+            Path::new(program).is_absolute() || program == "true",
+            "{program}"
+        );
     }
 
     #[test]
@@ -638,7 +754,7 @@ mod tests {
 
         std::fs::write(
             &path,
-            r#"{"version":1,"hooks":[{"id":"a","events":["post-tool-use"],"command":["./hook.sh"]}]}"#,
+            r#"{"version":1,"hooks":[{"id":"a","events":["post-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
         )
         .unwrap();
         let reloaded = read(&path).unwrap();

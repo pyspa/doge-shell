@@ -170,6 +170,7 @@ impl HookContext {
         event: HookEvent,
         tool: Option<&str>,
         detail: impl FnOnce() -> Value,
+        cancel: &dyn Fn() -> bool,
     ) -> HookOutcome {
         if self.hooks.is_empty() {
             return HookOutcome::default();
@@ -192,7 +193,7 @@ impl HookContext {
 
         for hook in hooks {
             let env = self.env_for(hook, event, tool);
-            match runner::run_hook(hook, &payload, &env, &self.cwd) {
+            match runner::run_hook(hook, &payload, &env, &self.cwd, cancel) {
                 runner::HookRun::Answered(response) => {
                     if let Some(message) = response.message.as_deref().map(str::trim)
                         && !message.is_empty()
@@ -419,6 +420,12 @@ impl Drop for ReentryGuard {
     }
 }
 
+/// Passed where there is nothing to cancel against, so the parameter is never
+/// silently defaulted at a call site that should have wired one up.
+pub(crate) fn never_cancelled() -> bool {
+    false
+}
+
 fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -486,7 +493,12 @@ mod tests {
     #[test]
     fn a_disabled_context_fires_nothing() {
         let ctx = HookContext::disabled();
-        let outcome = ctx.fire(HookEvent::PreToolUse, Some("execute"), || json!({}));
+        let outcome = ctx.fire(
+            HookEvent::PreToolUse,
+            Some("execute"),
+            || json!({}),
+            &never_cancelled,
+        );
         assert_eq!(outcome.decision, HookDecision::Continue);
         assert!(outcome.context.is_empty());
     }
@@ -551,7 +563,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = context(&dir, r#"["pre-tool-use"]"#, "exit 9");
 
-        let outcome = ctx.fire(HookEvent::PreToolUse, Some("execute"), || json!({}));
+        let outcome = ctx.fire(
+            HookEvent::PreToolUse,
+            Some("execute"),
+            || json!({}),
+            &never_cancelled,
+        );
 
         let (hook, reason) = outcome.denied().expect("a broken gate must refuse");
         assert_eq!(hook, "probe");
@@ -565,7 +582,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = context(&dir, r#"["post-tool-use"]"#, "exit 9");
 
-        let outcome = ctx.fire(HookEvent::PostToolUse, Some("execute"), || json!({}));
+        let outcome = ctx.fire(
+            HookEvent::PostToolUse,
+            Some("execute"),
+            || json!({}),
+            &never_cancelled,
+        );
 
         assert_eq!(outcome.decision, HookDecision::Continue);
     }
@@ -580,7 +602,12 @@ mod tests {
             r#"echo '{"decision":"ask","reason":"too late"}'"#,
         );
 
-        let outcome = ctx.fire(HookEvent::ResponseComplete, None, || json!({}));
+        let outcome = ctx.fire(
+            HookEvent::ResponseComplete,
+            None,
+            || json!({}),
+            &never_cancelled,
+        );
 
         assert_eq!(outcome.decision, HookDecision::Continue);
     }
@@ -594,7 +621,12 @@ mod tests {
             r#"echo '{"additional_context":"repo policy: no edits under /etc"}'"#,
         );
 
-        let outcome = ctx.fire(HookEvent::PostToolUse, Some("edit"), || json!({}));
+        let outcome = ctx.fire(
+            HookEvent::PostToolUse,
+            Some("edit"),
+            || json!({}),
+            &never_cancelled,
+        );
 
         assert_eq!(
             outcome.context_note().as_deref(),

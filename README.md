@@ -315,7 +315,7 @@ The shell includes many built-in commands:
 | `comp-gen`          | Generate or audit command completion JSON (`--stdout`, `--check`, `--audit`, `--list-dynamic-providers`)                  |
 | `output-gen`        | Generate or audit `\|:` output-schemas (`--stdout`, `--force`, `--check`, `--audit`)                                       |
 | `dashboard`         | Show integrated dashboard (System, Git, GitHub)                                                                            |
-| `doctor`            | Diagnose config, AI, MCP, project, runtime, skills, safety, setup, and dev validation state                                |
+| `doctor`            | Diagnose config, AI, hooks, MCP, project, runtime, skills, safety, setup, and dev validation state                         |
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
@@ -1022,6 +1022,7 @@ doctor
 
 # Focus on one area
 doctor ai
+doctor hooks
 doctor project
 doctor skills
 doctor setup
@@ -1032,7 +1033,7 @@ doctor validate
 doctor --help
 ```
 
-`doctor` reports on configuration files, AI settings, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, runtime Skill drift, setup readiness, and focused validation commands for changed files. `doctor fix` creates safe missing setup files and directories such as `config.lisp`, runtime skills, and completion directories.
+`doctor` reports on configuration files, AI settings, AI chat hook configuration, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, the skills this shell would load (and anything wrong with them), runtime Skill drift, setup readiness, and focused validation commands for changed files. `doctor fix` creates safe missing setup files and directories such as `config.lisp`, runtime skills, and completion directories.
 
 ### `help` Command
 
@@ -1272,6 +1273,9 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `DSH_EXECUTE_TOOL_CONFIG` | `~/.config/dsh/openai-execute-tool.json` | Path of that JSON allowlist file |
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
+   | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dsh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
+   | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
+   | `DSH_AI_HOOKS_CONFIG` | `~/.config/dsh/ai-hooks.json` | Path of the hook configuration |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
    `Retry-After`.
@@ -1468,6 +1472,27 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     can be removed - every summary costs tokens on every turn, and `doctor skills`
     warns once there are more than eight.
 
+    **The first time you use `!` in a repository that ships skills, dsh asks.** Their
+    descriptions would otherwise be in every prompt before you had decided anything,
+    and the assistant on the other side of that prompt can run commands. Answer `y`
+    for this shell session or `a` to remember the repository; adding a skill, or
+    rewording one, asks again. `skill trust` shows the current answer and
+    `skill untrust` takes it back. Under `agent run` nothing is asked and an
+    untrusted repository is simply not read - an unattended run should be the more
+    careful one, not the more trusting one.
+
+    **Naming a skill outright.** Start the message with `@name` to load it whether or
+    not the assistant would have picked it:
+
+    ```
+    ! @deploy-staging ship the current branch
+    ```
+
+    Up to five, and parsing stops at the first word that is not a skill - so an email
+    address at the start of a message is left alone. An invoked skill arrives with its
+    bundled `references/`, `scripts/` and `assets/` files *named* (not read), so the
+    assistant knows what is there without spending a turn looking.
+
     A project's skills arrive with a `git clone`, so treat them as you would any other
     file in that repository. They are notes, never permission: a skill cannot authorise
     skipping a confirmation, and a script bundled with one always asks before it runs -
@@ -1526,7 +1551,15 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     first line of stderr as the reason; exiting `0` with no JSON means "carry on".
 
     `command` is an argument vector, not a shell line: the hook is executed directly, so
-    put any pipeline in a script file. Hooks run as you, with your environment - read one
+    put any pipeline in a script file. The first element must be an **absolute path** or
+    a bare name found on `PATH` - a relative one like `./hook.sh` is refused, because it
+    would resolve against whatever directory the chat happens to be in when the hook
+    runs, which is the very thing that keeps `.dsh/hooks.json` unread. A bare name is
+    looked up once, at load time.
+
+    The configuration file (and its directory) must not be world-writable; it is a list
+    of commands the shell will run for you. Group-writable is fine, so a `umask` of 002
+    needs no special handling. Hooks run as you, with your environment - read one
     before installing it, the way you would read a `config.lisp`. A hook that fails or
     times out on `user-prompt-submit` or `pre-tool-use` **blocks**, because a check that
     can be got past by crashing is not a check; failures on the other three events are

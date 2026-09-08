@@ -5,7 +5,7 @@
 //! carries text the model chose and text the user typed, and `argv` is visible
 //! to every other user through `ps`.
 
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -55,11 +55,26 @@ pub(crate) fn run_hook(
     payload: &str,
     env: &[(String, String)],
     cwd: &Path,
+    cancel: &dyn Fn() -> bool,
 ) -> HookRun {
+    // The payload goes in through an anonymous temp file rather than a pipe.
+    //
+    // A pipe needs someone to feed it while the child is running, which means a
+    // writer thread; and a writer thread cannot be joined safely, because a
+    // grandchild holding the read end keeps `write_all` blocked long after the
+    // child itself has exited - with no timeout, that hung the whole shell.
+    // Handing the child a file it can read at its own pace removes the writer,
+    // the pipe and the deadlock together. The file is never linked into a
+    // directory and disappears when the handle is dropped.
+    let stdin = match payload_file(payload) {
+        Ok(file) => file,
+        Err(err) => return HookRun::Failed(format!("could not stage the event: {err}")),
+    };
+
     let mut builder = Command::new(&hook.command[0]);
     builder
         .args(&hook.command[1..])
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(stdin))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Own process group, so a timeout takes the whole tree down instead of
@@ -81,23 +96,11 @@ pub(crate) fn run_hook(
         }
     };
 
-    // The payload has to be written from another thread. Writing it inline
-    // blocks as soon as the pipe buffer fills, and the hook cannot drain it
-    // while we are not reading its stdout - a deadlock that only shows up once
-    // a payload gets big enough, which is to say in production.
-    let stdin = child.stdin.take();
-    let payload = payload.to_string();
-    let writer = std::thread::spawn(move || {
-        if let Some(mut stdin) = stdin {
-            let _ = stdin.write_all(payload.as_bytes());
-            // Dropping the handle is the EOF the hook is waiting for.
-        }
-    });
-
     let stdout = capture(child.stdout.take());
     let stderr = capture(child.stderr.take());
 
     let deadline = Instant::now() + Duration::from_millis(hook.timeout_ms());
+    let mut cancelled = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
@@ -107,7 +110,10 @@ pub(crate) fn run_hook(
             }
         }
 
-        if Instant::now() >= deadline {
+        // Ctrl-C has to reach here. Eight hooks at the sixty-second ceiling is
+        // eight minutes of a shell that will not answer.
+        cancelled = cancel();
+        if cancelled || Instant::now() >= deadline {
             crate::chatgpt::tool::execute::kill_process_group(&child);
             let _ = child.kill();
             let _ = child.wait();
@@ -117,7 +123,6 @@ pub(crate) fn run_hook(
         std::thread::sleep(POLL_INTERVAL);
     };
 
-    let _ = writer.join();
     // The child is gone, so EOF has either arrived or never will; take what the
     // readers have either way.
     wait_for_eof(&[&stdout, &stderr], Duration::from_millis(200));
@@ -125,7 +130,11 @@ pub(crate) fn run_hook(
     let stderr = stderr.text();
 
     let Some(status) = status else {
-        return HookRun::Failed(format!("timed out after {}ms", hook.timeout_ms()));
+        return if cancelled {
+            HookRun::Failed("cancelled".to_string())
+        } else {
+            HookRun::Failed(format!("timed out after {}ms", hook.timeout_ms()))
+        };
     };
 
     interpret(status.code(), &stdout, &stderr)
@@ -176,6 +185,14 @@ fn interpret(code: Option<i32>, stdout: &str, stderr: &str) -> HookRun {
         },
         Err(err) => HookRun::Failed(format!("printed JSON that could not be read: {err}")),
     }
+}
+
+/// An anonymous temp file holding the event, positioned at the start.
+fn payload_file(payload: &str) -> std::io::Result<std::fs::File> {
+    let mut file = tempfile::tempfile()?;
+    file.write_all(payload.as_bytes())?;
+    file.seek(std::io::SeekFrom::Start(0))?;
+    Ok(file)
 }
 
 struct Capture {
@@ -248,13 +265,17 @@ fn wait_for_eof(captures: &[&Capture], grace: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
+    /// Written without the executable bit and run as `sh <path>`.
+    ///
+    /// Execing a file this process just wrote races with every other test: a
+    /// concurrent `fork` snapshots the still-open write descriptor, and the
+    /// kernel answers the `exec` with ETXTBSY. Making `sh` the program - a
+    /// binary nobody here writes - removes the race instead of retrying it.
     fn script(dir: &TempDir, body: &str) -> std::path::PathBuf {
         let path = dir.path().join("hook.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&path, format!("{body}\n")).unwrap();
         path
     }
 
@@ -269,14 +290,14 @@ mod tests {
     }
 
     fn run(dir: &TempDir, hook: &HookDefinition, payload: &str) -> HookRun {
-        run_hook(hook, payload, &[], dir.path())
+        run_hook(hook, payload, &[], dir.path(), &|| false)
     }
 
     #[test]
     fn stdout_json_deny_becomes_a_deny_decision() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, r#"echo '{"decision":"deny","reason":"nope"}'"#);
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         match run(&dir, &hook, "{}") {
             HookRun::Answered(response) => {
@@ -291,7 +312,7 @@ mod tests {
     fn exit_code_two_denies_with_stderr_as_the_reason() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, "echo 'writes outside the repo' >&2\nexit 2");
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         match run(&dir, &hook, "{}") {
             HookRun::Answered(response) => {
@@ -306,7 +327,7 @@ mod tests {
     fn non_json_stdout_on_success_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, "echo logged it");
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         match run(&dir, &hook, "{}") {
             HookRun::Answered(response) => assert!(response.decision.is_none()),
@@ -319,7 +340,7 @@ mod tests {
     fn allow_decision_in_json_is_a_parse_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, r#"echo '{"decision":"allow"}'"#);
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         match run(&dir, &hook, "{}") {
             HookRun::Failed(err) => assert!(err.contains("never permit"), "{err}"),
@@ -331,7 +352,7 @@ mod tests {
     fn an_unreadable_answer_is_a_failure_not_a_pass() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, r#"echo '{"decision":'"#);
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         match run(&dir, &hook, "{}") {
             HookRun::Failed(err) => assert!(err.contains("could not be read"), "{err}"),
@@ -351,7 +372,7 @@ mod tests {
                 out.display()
             ),
         );
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         run(&dir, &hook, r#"{"event":"pre-tool-use"}"#);
 
@@ -363,14 +384,15 @@ mod tests {
         );
     }
 
-    /// The writer thread exists for this: a payload larger than a pipe buffer
-    /// plus a hook that talks back used to deadlock both sides.
+    /// A payload larger than a pipe buffer, plus a hook that talks back before
+    /// reading it. With a pipe this deadlocked both sides; with a file the hook
+    /// reads at its own pace.
     #[test]
     fn large_payload_and_large_output_do_not_deadlock() {
         let dir = tempfile::tempdir().unwrap();
         // Reads its whole stdin only after writing a lot of its own output.
         let path = script(&dir, "yes abcdefghij | head -c 200000\ncat > /dev/null");
-        let hook = definition(vec![path.display().to_string()], 10_000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 10_000);
         let payload = "x".repeat(512 * 1024);
 
         match run(&dir, &hook, &payload) {
@@ -379,11 +401,53 @@ mod tests {
         }
     }
 
+    /// The failure the writer thread caused: the hook exits cleanly but leaves
+    /// a grandchild holding the read end of stdin. Feeding the child a file
+    /// instead of a pipe means there is nothing left to block on.
+    #[test]
+    fn a_hook_that_leaves_a_grandchild_holding_stdin_still_returns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = script(
+            &dir,
+            "sleep 30 &
+exit 0",
+        );
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 10_000);
+        let payload = "x".repeat(512 * 1024);
+
+        let started = Instant::now();
+        let outcome = run(&dir, &hook, &payload);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "run_hook must not wait on a grandchild"
+        );
+        assert!(matches!(outcome, HookRun::Answered(_)), "{outcome:?}");
+    }
+
+    /// Eight hooks at the sixty-second ceiling is eight minutes of a shell that
+    /// will not answer Ctrl-C.
+    #[test]
+    fn a_cancelled_hook_stops_without_waiting_for_its_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = script(&dir, "sleep 30");
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 60_000);
+
+        let started = Instant::now();
+        let outcome = run_hook(&hook, "{}", &[], dir.path(), &|| true);
+
+        assert!(started.elapsed() < Duration::from_secs(5));
+        match outcome {
+            HookRun::Failed(err) => assert!(err.contains("cancelled"), "{err}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
     #[test]
     fn timeout_kills_the_process_group() {
         let dir = tempfile::tempdir().unwrap();
         let path = script(&dir, "sleep 30");
-        let hook = definition(vec![path.display().to_string()], 200);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 200);
 
         let started = Instant::now();
         match run(&dir, &hook, "{}") {
@@ -404,15 +468,20 @@ mod tests {
         }
     }
 
-    /// Arguments reach the program as written. If they went through a shell,
-    /// `$HOME` would expand and `;` would start a second command.
+    /// Arguments reach the program as written. If the runner built a shell
+    /// command line out of them, `$HOME` would expand and `;` would start a
+    /// second command.
     #[test]
-    fn command_is_not_run_through_a_shell() {
+    fn arguments_reach_the_program_unexpanded() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("argv.txt");
         let path = script(&dir, &format!("printf '%s' \"$1\" > {}", out.display()));
         let hook = definition(
-            vec![path.display().to_string(), "$HOME; rm -rf /".to_string()],
+            vec![
+                "sh".to_string(),
+                path.display().to_string(),
+                "$HOME; rm -rf /".to_string(),
+            ],
             5000,
         );
 
@@ -429,7 +498,7 @@ mod tests {
             &dir,
             &format!("printf '%s' \"$DSH_HOOK_DEPTH\" > {}", out.display()),
         );
-        let hook = definition(vec![path.display().to_string()], 5000);
+        let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 
         run(&dir, &hook, "{}");
 

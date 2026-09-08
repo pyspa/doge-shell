@@ -20,8 +20,8 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "doctor",
         category: "setup",
-        summary: "Diagnose shell setup, AI, MCP, project, runtime, skills, safety, and validation state.",
-        usage: "doctor [config|ai|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate]",
+        summary: "Diagnose shell setup, AI, hooks, MCP, project, runtime, skills, safety, and validation state.",
+        usage: "doctor [config|ai|hooks|mcp|project|runtime|performance|skills|safety|setup|fix|dev|validate]",
         examples: &[
             "doctor setup",
             "doctor safety",

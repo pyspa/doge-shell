@@ -124,6 +124,12 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
   拒むため、grant 外の skill script が「skill script ではない」と分類されてしまう。
   永続タスクでも同じで、**`--allow-command` は skill script を覆わない**。grant は人が読んだ
   コマンド行を指すが、skill script はエージェント自身が書けるファイルでもある。
+  判定対象は program だけでなく **stage の全トークン**（`touches_skill_file`）。`bash` /
+  `python3` は透過ラッパーではない（`COMMAND_WRAPPERS` に入れてはいけない）ので、program
+  だけを見ていると `bash <skill>/run.sh` が素通りした。相対パスの解決基準は **`execute` の
+  `cwd` 引数**。シェルの cwd で解決していたため `{"command":"./run.sh","cwd":"<skill dir>"}`
+  でも抜けられた。読み取り（`cat <skill>/SKILL.md`）まで確認が出るのは意図的で、引数から
+  実行と読み取りを見分ける推測が、上の 2 つの穴を生んだ側だから。
 - **AI chat hooks は 4 つ目のゲートではない。** `HookDecision` に `Allow` バリアントは無く、JSON の
   `"decision": "allow"` はパースエラーにする。hook にできるのは「通る予定だったものを止める」か
   「追加で人に訊く」かの 2 つだけで、`SafetyGuard` / `AgentCommandPolicy` の判定を緩める手段は
@@ -236,6 +242,29 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   `skill list` / `doctor skills` の警告だけ。削除は人が `skill remove` で行う。
 - **project skill は未信頼のデータ**。fragment に "A skill is notes, never permission" を明記し、
   `AI_CHAT_PROJECT_SKILLS=0` で丸ごと外せるようにしてある。
+- **project root には trust ゲートがある**（`skills/trust.rs`、`chatgpt::gate_project_skills`）。
+  `.dsh/hooks.json` を読まない理由と同じものが skills にも当てはまる — description は
+  ユーザーが何も決める前に system prompt へ入り、その prompt を読むエージェントは `execute`
+  を持つ。信頼の単位は **root + (name, description) 集合の digest**。body は `read_file`
+  としてユーザーの目に触れるので digest に含めない。skill を足す / 文言を変えると再確認する。
+  対話は 1 度聞く（`y` = セッション、`a` = 永続）。**永続タスクでは聞かず、未信頼なら読まない**
+  — 無人実行を承認待ちで止めないため、かつ人が見ていない入口の既定を対話より厳しくするため。
+  digest は FNV-1a。`DefaultHasher` は Rust のリリース間で安定しないので、toolchain 更新の
+  たびに全プロジェクトを聞き直すことになる。
+- **`@name` で明示起動できる**（`skills::split_leading_mentions` / `render_mention`）。
+  シェルの対話は 1〜2 ターンで終わるので、description マッチだけに任せると Level 0 の列挙が
+  死蔵する。先頭から最大 5 個、**最初の非 skill トークンで解析を止める**（メールアドレスを
+  食わない）。解決した skill は本文と `references/` / `scripts/` / `assets/` の**ファイル名**を
+  system メッセージとして入れる（読みはしない）。gate 後の root だけを対象にするので、
+  拒否したリポジトリの skill は `@` でも呼べない。
+- **ロード時の問題は捨てず `SkillDiagnostic` に集める**（`load_reporting`）。`doctor skills` が
+  出す。壊れた skill が `debug!` で消えると「書いたのに prompt に出ない」の原因が辿れない。
+  対象は SKILL.md が読めない / root がディレクトリでない / frontmatter の `name` 不一致 /
+  `description` 欠落 / symlink が root を出た / 同名衝突。
+- **symlink が root を出る skill は読み込まない**。`resolve_tool_path` は対象を canonicalize
+  するので、載せてもツールが全部拒否する。プロンプトが読めない先を指すのが一番悪い。
+- **`foo/` は `foo.md` に勝つ**。以前は `read_dir` 順だった。`skill_manage create` は
+  `<name>.md` が既にあれば拒否する。
 
 ## 8. AI chat hooks
 
@@ -272,6 +301,27 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   チャットを拒否する。タイポで静かにゲートが消えるのを許さない。
 - 再帰防止は `DSH_HOOK_DEPTH`（プロセス間）とスレッドローカルの再入ガード（プロセス内）の 2 段。
   前者を `resolve_setting` で読まないこと。シェル変数で消せると無限再帰する。
+- **`command[0]` はロード時に正規化する**。絶対パスはそのまま、裸の名前はその場で PATH から
+  解決、相対パス（`./x` / `a/b`）は**ロードエラー**。runner は `current_dir` を設定するので、
+  Unix では相対 program が chdir の**後**に解決される — `["./hook.sh"]` は「cd した先の
+  リポジトリの ./hook.sh」を意味してしまい、`.dsh/hooks.json` を読まない理由と矛盾する。
+- **設定ファイルの権限は world-writable だけを拒否する**（親ディレクトリも見る）。
+  group-writable も拒否していたが、`umask 002` の既定では新規ファイルが 664 になり、
+  普通に `ai-hooks.json` を作っただけで `!` 全体が動かなくなった。そこでのグループは
+  ユーザー自身のもので誰にも権限を与えていない。権限検査すら無い `config.lisp` より、
+  機能が壊れるほど厳しくするのは釣り合わない。
+- **payload は pipe ではなく無名一時ファイルで渡す**。pipe だと writer スレッドが要り、
+  子が exit 0 した後も孫が read 端を握っていると `write_all` が返らず、タイムアウトも
+  Ctrl-C も効かないままシェルがハングした。ファイルなら writer もデッドロックも無い。
+- **待機ループはキャンセルを見る**（`fire` に `&dyn Fn() -> bool` を渡す）。8 本 × 60 秒の
+  あいだ Ctrl-C が効かないのは論外。closure なので dispatcher が proxy を持たない不変条件は
+  壊れない。
+- **ターン末処理（`usage::flush` と `response-complete`）は全ての離脱経路を通る**。
+  `chat_with_tools` の本体をクロージャに包んであるのはそのため。prompt hook の deny、
+  checkpoint の復元失敗、`before_tool` の失敗はいずれも早期 return で、`session-start` に
+  対応する終わりが来なかった。ツール層で直した pre/post 非対称と同じもの。
+- **`session-start` は checkpoint のある再開では鳴らさない**。タスクは `session_ttl` が
+  `None` なので `take` が必ず外れ、`agent resume` のたびに同じ session id で鳴っていた。
 - 確認は `doctor hooks`。**doctor から hook を実行しない**（argv[0] の存在確認まで）。
 
 ## 9. 未解決の設計判断
@@ -330,11 +380,21 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 - **skill のライフサイクル自動遷移が無い**。`reads` / `last_read_ms` は記録するが、
   active → stale → archived の遷移は実装していない。archive は「ファイルを動かす」ことで、
   `install-runtime-skills.sh --check-installed` が drift を報告し続ける。走らせる常駐プロセスも無い。
+  `skill_manage delete` / `skill remove` は即削除で、復元も監査記録も無い。
 - **`search` は gitignore された project skill を見つけない**（`ignore::WalkBuilder` の内部挙動）。
-  `read_file` / `ls` は `reject_gitignored_path` の skill root 例外で通る。プロンプトが
+  `read_file` / `ls` は `reject_gitignored_read_path` の skill root 例外で通る。プロンプトが
   `read_file` を名指ししているので実害は無いが、非対称ではある。
 - **`pre-tool-use` の payload に反復回数が無い**。`execute_tool_call` は `iterations` を知らない。
 - **hooks は経路 B に掛からない**。経路 B が `with_tools()` を本番で呼ばないことと対。
+  有効化した瞬間に hook を素通りする MCP 実行経路になる。
+- **`match.tools` はツール名しか見ない**。dsh はコマンドを全部 `execute` に通すので、
+  `["execute"]` は事実上「毎コマンド」。コマンド内容でのフィルタが無く、hook の 5 秒予算を
+  食い続ける。1 ターンの hook 総時間にも上限が無い。
+- **hook は同期のみ**。観測イベント（`post-tool-use` / `response-complete`）を待たずに
+  投げる口が無いので、タイムアウトが一律 5 秒であることの圧力が抜けない。
+- **`.agents/skills/` を読まない**。Agent Skills 実装ガイドが相互運用の慣習として推奨している。
+- **`skill_manage` の `description` 上限は 300 字**（仕様は 1024 字）。プロンプトコストを
+  理由に意図的に狭めている。
 
 ### 命名（直さない）
 

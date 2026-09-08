@@ -131,9 +131,12 @@ pub fn execute_tool_call(
     // guard does next.
     let tool_call_id = tool_call.get("id").and_then(Value::as_str);
     let kind = tool_kind(name, is_mcp_tool);
-    let pre = hooks.fire(hooks::HookEvent::PreToolUse, Some(name), || {
-        hooks::tool_detail(name, tool_call_id, kind, arguments)
-    });
+    let pre = hooks.fire(
+        hooks::HookEvent::PreToolUse,
+        Some(name),
+        || hooks::tool_detail(name, tool_call_id, kind, arguments),
+        &|| proxy.is_canceled(),
+    );
     if let Some((hook, reason)) = pre.denied() {
         return Ok(ToolExecution {
             content: format!("Blocked by hook `{hook}`: {reason}"),
@@ -191,17 +194,22 @@ pub fn execute_tool_call(
     // Fired for a failed call too. An audit hook that pairs pre with post was
     // otherwise left with an unmatched open event for exactly the calls it most
     // wants to see.
-    let post = hooks.fire(hooks::HookEvent::PostToolUse, Some(name), || {
-        post_tool_detail(
-            name,
-            tool_call_id,
-            kind,
-            arguments,
-            &content,
-            outcome,
-            elapsed,
-        )
-    });
+    let post = hooks.fire(
+        hooks::HookEvent::PostToolUse,
+        Some(name),
+        || {
+            post_tool_detail(
+                name,
+                tool_call_id,
+                kind,
+                arguments,
+                &content,
+                outcome,
+                elapsed,
+            )
+        },
+        &|| proxy.is_canceled(),
+    );
     // The tool has already run: a `deny` here cannot undo it, but it can stop
     // the model from reading the result as a success.
     if let Some((hook, reason)) = post.denied() {
@@ -1276,14 +1284,14 @@ mod tests {
 
     /// A hook context whose single hook prints `body` on every tool call.
     fn hook_context(dir: &tempfile::TempDir, body: &str) -> HookContext {
-        use std::os::unix::fs::PermissionsExt;
-
+        // Run as `sh <path>` rather than exec'ing a file this process just
+        // wrote: a concurrent test's `fork` holds the write descriptor open and
+        // the kernel answers with ETXTBSY.
         let path = dir.path().join("hook.sh");
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&path, format!("{body}\n")).unwrap();
 
         let config = format!(
-            r#"{{"version":1,"hooks":[{{"id":"gatekeeper","events":["pre-tool-use","post-tool-use"],"command":["{}"]}}]}}"#,
+            r#"{{"version":1,"hooks":[{{"id":"gatekeeper","events":["pre-tool-use","post-tool-use"],"command":["sh","{}"]}}]}}"#,
             path.display()
         );
         HookContext::with_hooks(

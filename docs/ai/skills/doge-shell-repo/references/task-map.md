@@ -31,12 +31,12 @@
 - skill / SKILL.md / skill_manage / project skill / 使用統計
   - 先に読む: [ai-architecture.md](ai-architecture.md) の「Skill」節
   - Read: `dsh-builtin/src/chatgpt/skills/`, `dsh-builtin/src/chatgpt/tool/skill.rs`, `dsh-builtin/src/skill.rs`
-  - Regression: skill 一覧は system prompt の identity に**含めない**（含めると skill を書いた瞬間に会話が消える）。skill script は全 root で必ず確認する。
+  - Regression: skill 一覧は system prompt の identity に**含めない**（含めると skill を書いた瞬間に会話が消える）。skill script は全 root・**stage の全トークン**・`execute` の `cwd` 基準で必ず確認する（program だけ / シェル cwd 基準では `bash <skill>/run.sh` と `cwd` 指定で抜けられた）。project root は trust ゲートの内側で、タスクでは聞かずに読まない。ロード時の問題は握り潰さず `SkillDiagnostic` へ。
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::skills`; `cargo test -p dsh-builtin --lib chatgpt::tool::skill`
 - AI chat hooks / ai-hooks.json / pre-tool-use / 外部コマンド
   - 先に読む: [ai-architecture.md](ai-architecture.md) の §4（hook は許可を与えられない）
   - Read: `dsh-builtin/src/chatgpt/hooks/`
-  - Regression: `HookDecision` に `Allow` を足さない。gate イベントは fail-closed、観測イベントは fail-open。payload は必ず stdin。
+  - Regression: `HookDecision` に `Allow` を足さない。gate イベントは fail-closed、観測イベントは fail-open。payload は stdin、ただし pipe ではなく一時ファイル（pipe だと孫が read 端を握ったときシェルがハングする）。`command[0]` はロード時に絶対パス化し、相対パスは拒否。権限検査は world-writable のみ。ターン末処理は全離脱経路を通す。`session-start` は checkpoint 再開では鳴らさない。
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
 - agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
   - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`

@@ -102,6 +102,18 @@ pub fn skills_state_file() -> PathBuf {
         .join("skills.json")
 }
 
+/// Which project skill directories the user has agreed to read.
+///
+/// Beside `skills_state_file()` and outside the skills directories for the same
+/// reasons: a trust decision must survive the installer replacing a skill, and
+/// it is about a directory rather than about anything inside one.
+pub fn skills_trust_file() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("skill-trust.json")
+}
+
 /// Private durable agent state, resolved consistently on both supported OSes.
 pub fn agent_state_dir() -> PathBuf {
     xdg::BaseDirectories::with_prefix(APP)

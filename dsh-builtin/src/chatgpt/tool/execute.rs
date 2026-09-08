@@ -133,7 +133,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     let cwd = resolve_execution_dir(&parsed, proxy)?;
 
     if matches!(
-        authorize(command, &stages, proxy)?,
+        authorize(command, &stages, cwd.as_deref(), proxy)?,
         Authorization::Cancelled
     ) {
         return Ok("Execution cancelled by user.".to_string());
@@ -453,18 +453,13 @@ enum Authorization {
 fn authorize(
     command: &str,
     stages: &[CommandStage],
+    execution_dir: Option<&Path>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<Authorization, String> {
     // A skill script is arbitrary code that the agent can also write to, so it
     // is confirmed even when the rest of the policy would wave it through -
     // including under `agent run`, where `--allow-command` does not cover it.
-    let mut skill_script = false;
-    for stage in stages {
-        if is_skill_script_program(&stage.program, proxy)? {
-            skill_script = true;
-            break;
-        }
-    }
+    let skill_script = touches_skill_file(stages, execution_dir, proxy)?;
 
     // The shell's runtime list plus the JSON config and the environment
     // variable; dropping this merge would have quietly disabled
@@ -867,50 +862,91 @@ fn command_is_allowlisted(program: &str, args: &[String], allowlist: &[String]) 
         .any(|entry| allowlist_entry_matches(entry, program, args))
 }
 
-/// Is this program a script that ships with a skill?
+/// Does any part of this command line reach a file that ships with a skill?
 ///
 /// Every skill root counts, the project one included. A skill arrives with a
-/// `git clone` and the prompt actively points the model at it, so a script
-/// under `<project>/.dsh/skills` is exactly the case that must not fall through
-/// to the ordinary command policy and run unasked under `loose`.
+/// `git clone` and the prompt actively points the model at it, so a file under
+/// `<project>/.dsh/skills` is exactly the case that must not fall through to
+/// the ordinary command policy and run unasked under `loose`.
+///
+/// Judged over **every token of every stage**, not just the program. Only the
+/// program was checked at first, and `bash <skill>/run.sh` walked straight
+/// past: `bash` is not a transparent wrapper (`COMMAND_WRAPPERS` is right not
+/// to list it - `bash foo.sh` runs a script, it does not pass through), so the
+/// stage stayed `("bash", ["…run.sh"])` and the program alone said "no".
+///
+/// This deliberately also asks about reading one - `cat <skill>/SKILL.md` gets
+/// a prompt. Telling execution from reading by looking at the arguments means
+/// guessing what the program does with them, and guessing wrong in the
+/// permissive direction is how the hole above happened. An extra question about
+/// a file the agent can also write is the cheaper mistake.
 ///
 /// `AI_CHAT_PROJECT_SKILLS=0` hides project skills from the prompt; it does not
 /// make running one of their scripts safe, so this always considers both roots.
-fn is_skill_script_program(program: &str, proxy: &mut dyn ChatToolHost) -> Result<bool, String> {
-    if !program.contains('/') && !Path::new(program).is_absolute() {
+fn touches_skill_file(
+    stages: &[CommandStage],
+    execution_dir: Option<&Path>,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<bool, String> {
+    let shell_dir = proxy
+        .get_current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+    // The directory the command will actually run in. `execute` takes a `cwd`
+    // argument, and resolving relative tokens against the shell's directory
+    // instead let `{"command": "./run.sh", "cwd": "<skill dir>"}` past.
+    let base = execution_dir.unwrap_or(&shell_dir);
+
+    let roots: Vec<PathBuf> = crate::chatgpt::skills::skill_roots(Some(base), true)
+        .iter()
+        .map(|root| {
+            std::fs::canonicalize(&root.path).unwrap_or_else(|_| super::normalize_path(&root.path))
+        })
+        .collect();
+    if roots.is_empty() {
         return Ok(false);
     }
 
-    let current_dir = proxy
-        .get_current_dir()
-        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+    for stage in stages {
+        if std::iter::once(&stage.program)
+            .chain(stage.args.iter())
+            .any(|token| token_is_within(token, base, &roots))
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn token_is_within(token: &str, base: &Path, roots: &[PathBuf]) -> bool {
+    // A bare word is a PATH lookup, not a path into a skill.
+    if !token.contains('/') && !Path::new(token).is_absolute() {
+        return false;
+    }
+    // Options like `--config=x` are not paths; a real path token starting with
+    // `-` would have to be written `./-foo` anyway.
+    if token.starts_with('-') {
+        return false;
+    }
 
     // Resolved here rather than through `resolve_tool_path`, which is an access
     // decision: under a task it refuses any path outside the grants, so every
     // ungranted skill script came back as "not a skill script" and fell through
     // to the ordinary command policy - the exact opposite of what this is for.
-    let Ok(expanded) = shellexpand::full(program) else {
-        return Ok(false);
+    let Ok(expanded) = shellexpand::full(token) else {
+        return false;
     };
     let path = Path::new(expanded.as_ref());
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
-        current_dir.join(path)
+        base.join(path)
     };
-    let Ok(resolved_program) = super::resolve_with_existing_ancestor(&absolute) else {
-        return Ok(false);
+    let Ok(resolved) = super::resolve_with_existing_ancestor(&absolute) else {
+        return false;
     };
 
-    Ok(
-        crate::chatgpt::skills::skill_roots(Some(&current_dir), true)
-            .iter()
-            .any(|root| {
-                let resolved_root = std::fs::canonicalize(&root.path)
-                    .unwrap_or_else(|_| super::normalize_path(&root.path));
-                resolved_program.starts_with(resolved_root)
-            }),
-    )
+    roots.iter().any(|root| resolved.starts_with(root))
 }
 
 /// Every source of "the agent may run this without asking", merged.
@@ -1579,6 +1615,108 @@ pub(crate) mod tests {
         let err = run(&command, &mut proxy).expect_err("a task must stop for approval");
 
         assert!(err.contains("skill script permission required"), "{err}");
+    }
+
+    /// `bash <skill>/run.sh` used to walk straight past the skill-script rule:
+    /// `bash` is not a transparent wrapper, so the stage stayed
+    /// `("bash", ["…run.sh"])` and only the program was judged.
+    #[test]
+    fn a_skill_script_run_through_an_interpreter_still_asks() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("run.sh"), "echo hello\n").unwrap();
+
+        for command in [
+            "bash .dsh/skills/deploy/scripts/run.sh",
+            "python3 .dsh/skills/deploy/scripts/run.sh",
+            "sh ./.dsh/skills/deploy/scripts/run.sh",
+        ] {
+            let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mut proxy = TestProxy {
+                agent_verdict: AgentCommandVerdict::Allowed,
+                current_dir: project_dir.clone(),
+                confirm_counter: Some(calls.clone()),
+                confirm_result: false,
+                ..TestProxy::default()
+            };
+
+            let result = run(&format!("{{\"command\":\"{command}\"}}"), &mut proxy).unwrap();
+
+            assert_eq!(result, "Execution cancelled by user.", "{command}");
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "{command}"
+            );
+        }
+    }
+
+    /// `execute` takes a `cwd`, and the rule resolved relative tokens against
+    /// the shell's directory instead, so pointing `cwd` at the skill directory
+    /// made `./run.sh` look like an ordinary local script.
+    #[test]
+    fn a_skill_script_reached_through_the_cwd_argument_still_asks() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        std::fs::write(skills_dir.join("run.sh"), "echo hello\n").unwrap();
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            agent_verdict: AgentCommandVerdict::Allowed,
+            current_dir: project_dir,
+            confirm_counter: Some(calls.clone()),
+            confirm_result: false,
+            ..TestProxy::default()
+        };
+
+        let result = run(
+            r#"{"command":"./run.sh","cwd":".dsh/skills/deploy/scripts"}"#,
+            &mut proxy,
+        )
+        .unwrap();
+
+        assert_eq!(result, "Execution cancelled by user.");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// The rule must not fire on every command that happens to name a path.
+    #[test]
+    fn an_ordinary_path_argument_does_not_trigger_the_skill_script_rule() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        std::fs::write(project_dir.join("notes.txt"), "hi\n").unwrap();
+
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            agent_verdict: AgentCommandVerdict::Allowed,
+            current_dir: project_dir,
+            confirm_counter: Some(calls.clone()),
+            confirm_result: true,
+            ..TestProxy::default()
+        };
+
+        run(r#"{"command":"cat ./notes.txt"}"#, &mut proxy).unwrap();
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// The same task path still honours an ordinary grant, so the check above is

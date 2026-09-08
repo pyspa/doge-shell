@@ -19,6 +19,7 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
+pub(crate) mod trust;
 pub(crate) mod usage;
 
 /// Where a skill came from. Declaration order is precedence order.
@@ -92,6 +93,37 @@ pub(crate) fn skill_roots(current_dir: Option<&Path>, allow_project: bool) -> Ve
     roots
 }
 
+/// What a project root's skills are, and whether the user has agreed to them.
+pub(crate) struct ProjectSkillDecision {
+    pub root: PathBuf,
+    pub names: Vec<String>,
+    pub digest: String,
+}
+
+/// Drop the project root from `roots` unless the user has agreed to it.
+///
+/// A `.dsh/skills` directory arrives with a `git clone`, and its descriptions
+/// enter the system prompt before the user has decided anything. This is the
+/// same bar `.dsh/hooks.json` is held to.
+///
+/// Returns what was asked about, so the caller can report it.
+pub(crate) fn describe_project_root(roots: &[SkillRoot]) -> Option<ProjectSkillDecision> {
+    let root = roots
+        .iter()
+        .find(|root| root.scope == SkillScope::Project)?;
+    let skills = load_root(root);
+    // Nothing to advertise, nothing to decide.
+    if skills.is_empty() {
+        return None;
+    }
+
+    Some(ProjectSkillDecision {
+        digest: trust::digest(&skills),
+        names: skills.into_iter().map(|skill| skill.name).collect(),
+        root: root.path.clone(),
+    })
+}
+
 /// The roots as they appear on disk, so a `starts_with` against a canonicalised
 /// tool path actually matches.
 fn resolved_roots(current_dir: &Path) -> Vec<SkillRoot> {
@@ -133,6 +165,19 @@ pub(crate) fn is_within_skill_root(path: &Path, current_dir: &Path) -> bool {
         .any(|root| path.starts_with(&root.path))
 }
 
+/// Something wrong with a skill on disk, kept so `doctor` can say it out loud.
+///
+/// These used to go to `debug!` and vanish, which meant the answer to "why is
+/// the skill I wrote not in the prompt?" was unobtainable. The Agent Skills
+/// implementation guide asks for exactly this: read leniently, record what was
+/// wrong, and give the user somewhere to see it.
+#[derive(Debug, Clone)]
+pub(crate) struct SkillDiagnostic {
+    pub scope: SkillScope,
+    pub path: PathBuf,
+    pub problem: String,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Skill {
     pub name: String,
@@ -142,6 +187,10 @@ pub(crate) struct Skill {
     instruction_path: String,
     /// The directory (or bare file) that is the unit of bookkeeping.
     dir: PathBuf,
+    /// `name:` as written in the frontmatter, when it was written at all.
+    declared_name: Option<String>,
+    /// Whether the summary came from `description:` rather than from the body.
+    has_description: bool,
 }
 
 impl Skill {
@@ -199,6 +248,9 @@ impl Skill {
         dir: PathBuf,
         scope: SkillScope,
     ) -> Self {
+        let (frontmatter, _) = split_frontmatter(&instruction);
+        let declared_name = frontmatter_field(frontmatter, "name");
+        let declared_description = frontmatter_field(frontmatter, "description");
         let summary = extract_skill_summary(&instruction);
 
         Self {
@@ -207,6 +259,8 @@ impl Skill {
             summary,
             instruction_path: crate::config_paths::display_path(path),
             dir,
+            declared_name,
+            has_description: declared_description.is_some(),
         }
     }
 
@@ -223,6 +277,15 @@ impl Skill {
     pub(crate) fn dir(&self) -> &Path {
         &self.dir
     }
+
+    /// The file the prompt points at: `SKILL.md`, or the bare `*.md` itself.
+    pub(crate) fn instruction_file(&self) -> PathBuf {
+        if self.dir.is_dir() {
+            self.dir.join("SKILL.md")
+        } else {
+            self.dir.clone()
+        }
+    }
 }
 
 const MAX_SKILL_SUMMARY_CHARS: usize = 140;
@@ -235,6 +298,7 @@ struct SkillsDirSignature {
     root: PathBuf,
     exists: bool,
     entries: usize,
+    readable: usize,
     newest_modified_ms: u128,
 }
 
@@ -403,15 +467,38 @@ impl SkillsManager {
     /// Listing both would leave the model to guess which of two identical names
     /// it should read.
     pub(crate) fn load_skills(&self) -> Vec<Skill> {
+        self.load_reporting().0
+    }
+
+    /// The same load, with everything that went wrong on the way.
+    pub(crate) fn load_reporting(&self) -> (Vec<Skill>, Vec<SkillDiagnostic>) {
         let mut skills: BTreeMap<String, Skill> = BTreeMap::new();
+        let mut problems = Vec::new();
 
         for root in &self.roots {
-            for skill in load_root(root) {
-                skills.entry(skill.name.clone()).or_insert(skill);
+            let (loaded, mut root_problems) = load_root_reporting(root);
+            problems.append(&mut root_problems);
+            for skill in loaded {
+                match skills.get(&skill.name) {
+                    // The precedence itself is intended; being told is the
+                    // point, so a personal skill does not go quietly missing.
+                    Some(winner) => problems.push(SkillDiagnostic {
+                        scope: skill.scope,
+                        path: skill.dir.clone(),
+                        problem: format!(
+                            "is shadowed by the {} skill of the same name ({})",
+                            winner.scope.as_str(),
+                            winner.instruction_path()
+                        ),
+                    }),
+                    None => {
+                        skills.insert(skill.name.clone(), skill);
+                    }
+                }
             }
         }
 
-        skills.into_values().collect()
+        (skills.into_values().collect(), problems)
     }
 
     pub(crate) fn get_system_prompt_fragment(&self) -> String {
@@ -528,37 +615,119 @@ impl SkillsManager {
 }
 
 fn load_root(root: &SkillRoot) -> Vec<Skill> {
-    let mut skills = Vec::new();
+    load_root_reporting(root).0
+}
+
+fn load_root_reporting(root: &SkillRoot) -> (Vec<Skill>, Vec<SkillDiagnostic>) {
+    let mut found: BTreeMap<String, Skill> = BTreeMap::new();
+    let mut problems = Vec::new();
+    let mut note = |path: &Path, problem: String| {
+        problems.push(SkillDiagnostic {
+            scope: root.scope,
+            path: path.to_path_buf(),
+            problem,
+        })
+    };
 
     if !root.path.exists() {
         debug!("Skills directory does not exist: {:?}", root.path);
-        return skills;
+        return (Vec::new(), problems);
+    }
+    if !root.path.is_dir() {
+        // Reported rather than silently empty: `doctor` used to call this
+        // "missing", which is a different thing and sends the user looking in
+        // the wrong place.
+        note(&root.path, "is not a directory".to_string());
+        return (Vec::new(), problems);
     }
 
-    match std::fs::read_dir(&root.path) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    match Skill::from_folder(&path, root.scope) {
-                        Ok(skill) => skills.push(skill),
-                        Err(e) => debug!("Skipping directory {:?}: {}", path, e),
-                    }
-                } else if path.extension().is_some_and(|ext| ext == "md") {
-                    match Skill::from_file(&path, root.scope) {
-                        Ok(skill) => skills.push(skill),
-                        Err(e) => warn!("Error loading skill from {:?}: {}", path, e),
-                    }
+    let resolved_root = std::fs::canonicalize(&root.path).unwrap_or_else(|_| root.path.clone());
+
+    let entries = match std::fs::read_dir(&root.path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            warn!("Failed to read skills directory {:?}: {}", root.path, err);
+            note(&root.path, format!("cannot be read: {err}"));
+            return (Vec::new(), problems);
+        }
+    };
+
+    // Directories first, so a `foo/` and a `foo.md` in the same root resolve
+    // the same way every time. Before this the winner was `read_dir` order,
+    // which is to say the filesystem's mood.
+    let mut directories = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            directories.push(path);
+        } else if path.extension().is_some_and(|ext| ext == "md") {
+            files.push(path);
+        }
+    }
+
+    for path in directories.into_iter().chain(files) {
+        // A symlink out of the root would be listed in the prompt and then
+        // refused by every tool, because `resolve_tool_path` canonicalises the
+        // target. Pointing the model at a path it cannot read is worse than not
+        // mentioning the skill.
+        let resolved = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if !resolved.starts_with(&resolved_root) {
+            note(
+                &path,
+                format!(
+                    "links outside the skills directory (to {})",
+                    resolved.display()
+                ),
+            );
+            continue;
+        }
+
+        let loaded = if path.is_dir() {
+            Skill::from_folder(&path, root.scope)
+        } else {
+            Skill::from_file(&path, root.scope)
+        };
+
+        match loaded {
+            Ok(skill) => {
+                if skill
+                    .declared_name
+                    .as_deref()
+                    .is_some_and(|declared| declared != skill.name)
+                {
+                    note(
+                        &path,
+                        format!(
+                            "frontmatter name `{}` does not match the directory",
+                            skill.declared_name.as_deref().unwrap_or_default()
+                        ),
+                    );
                 }
+                if !skill.has_description {
+                    note(
+                        &path,
+                        "has no frontmatter `description`; the prompt shows the first body line"
+                            .to_string(),
+                    );
+                }
+                if let Some(existing) = found.get(&skill.name) {
+                    note(
+                        &path,
+                        format!("is shadowed by {}", existing.instruction_path()),
+                    );
+                    continue;
+                }
+                found.insert(skill.name.clone(), skill);
+            }
+            Err(err) => {
+                debug!("Skipping {:?}: {}", path, err);
+                note(&path, format!("{err}"));
             }
         }
-        Err(e) => {
-            warn!("Failed to read skills directory {:?}: {}", root.path, e);
-        }
     }
 
-    skills.sort_by(|a, b| a.name.cmp(&b.name));
-    skills
+    (found.into_values().collect(), problems)
 }
 
 fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
@@ -568,12 +737,17 @@ fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
             root: root.path.clone(),
             exists: false,
             entries: 0,
+            readable: 0,
             newest_modified_ms: 0,
         };
     }
 
     let mut entries = 0usize;
     let mut newest_modified_ms = 0u128;
+    // Counted separately from `entries`: deleting a `SKILL.md` and leaving the
+    // directory changes neither the entry count nor, usually, the newest mtime,
+    // so the stale fragment kept being served.
+    let mut readable = 0usize;
 
     if let Ok(dir_entries) = std::fs::read_dir(&root.path) {
         for entry in dir_entries.flatten() {
@@ -586,11 +760,13 @@ fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
             };
 
             for metadata_path in metadata_paths {
-                if let Ok(metadata) = std::fs::metadata(&metadata_path)
-                    && let Ok(modified) = metadata.modified()
-                    && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
-                {
-                    newest_modified_ms = newest_modified_ms.max(duration.as_millis());
+                if let Ok(metadata) = std::fs::metadata(&metadata_path) {
+                    readable += 1;
+                    if let Ok(modified) = metadata.modified()
+                        && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
+                    {
+                        newest_modified_ms = newest_modified_ms.max(duration.as_millis());
+                    }
                 }
             }
         }
@@ -601,6 +777,7 @@ fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
         root: root.path.clone(),
         exists: true,
         entries,
+        readable,
         newest_modified_ms,
     }
 }
@@ -613,6 +790,111 @@ pub(crate) fn clear_skills_fragment_cache() {
     if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
         *cache = None;
     }
+}
+
+/// How many `@name` mentions one message may carry.
+const MAX_MENTIONS: usize = 5;
+/// How many bundled files to list when a skill is invoked by name.
+const MAX_LISTED_RESOURCES: usize = 20;
+
+/// Split leading `@name` mentions off the front of a chat message.
+///
+/// A skill's summary is in the prompt, but whether the model acts on it is its
+/// own judgement, and a shell conversation is often over in one turn - there is
+/// no second chance for it to notice. `@name` is the user saying so outright.
+///
+/// Parsing stops at the first token that is not a known skill, so `@user@host`,
+/// an email address, or a message that merely starts with `@` are left alone.
+/// `@` was chosen over `/` and `$`: one is a path, the other a variable.
+pub(crate) fn split_leading_mentions<'a>(
+    input: &'a str,
+    is_skill: &dyn Fn(&str) -> bool,
+) -> (Vec<String>, &'a str) {
+    let mut names = Vec::new();
+    let mut rest = input.trim_start();
+
+    while names.len() < MAX_MENTIONS {
+        let Some(candidate) = rest.strip_prefix('@') else {
+            break;
+        };
+        let end = candidate
+            .find(char::is_whitespace)
+            .unwrap_or(candidate.len());
+        let name = &candidate[..end];
+        if name.is_empty() || !is_skill(name) || names.iter().any(|seen| seen == name) {
+            break;
+        }
+        names.push(name.to_string());
+        rest = candidate[end..].trim_start();
+    }
+
+    (names, rest)
+}
+
+/// The full text of a skill, with its bundled files named but not read.
+///
+/// Listing `references/`, `scripts/` and `assets/` is the difference between
+/// the model knowing they exist and having to guess that an `ls` might be worth
+/// a turn. They are named, never loaded: that is the whole point of the tier.
+pub(crate) fn render_mention(skill: &Skill) -> Option<String> {
+    let path = skill.instruction_file();
+    let body = std::fs::read_to_string(&path).ok()?;
+
+    let mut rendered = format!(
+        "Skill `{}` ({}), loaded because the user asked for it by name:
+
+{}",
+        skill.name,
+        skill.instruction_path(),
+        body.trim_end()
+    );
+
+    let resources = bundled_resources(skill.dir());
+    if !resources.is_empty() {
+        rendered.push_str(&format!(
+            "
+
+Files bundled with this skill, relative to `{}` - read one with `read_file` only if the instructions above call for it:
+",
+            crate::config_paths::display_path(skill.dir())
+        ));
+        for resource in resources {
+            rendered.push_str(&format!(
+                "- {resource}
+"
+            ));
+        }
+    }
+
+    Some(rendered)
+}
+
+fn bundled_resources(dir: &Path) -> Vec<String> {
+    if !dir.is_dir() {
+        return Vec::new();
+    }
+
+    let mut found = Vec::new();
+    for section in ["references", "scripts", "assets"] {
+        let Ok(entries) = std::fs::read_dir(dir.join(section)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if !entry.path().is_file() {
+                continue;
+            }
+            if let Some(name) = entry.file_name().to_str() {
+                found.push(format!("{section}/{name}"));
+            }
+            if found.len() >= MAX_LISTED_RESOURCES {
+                found.push("... (more not listed)".to_string());
+                return found;
+            }
+        }
+    }
+
+    found.sort();
+    found
 }
 
 /// Attribute a successful `read_file` to the skill that owns the path.
@@ -882,6 +1164,221 @@ Longer explanation.
 
         assert!(first.contains("project a") && !first.contains("project b"));
         assert!(second.contains("project b") && !second.contains("project a"));
+    }
+
+    /// The prompt used to advertise a symlinked skill whose canonical path is
+    /// outside the root - which every tool then refused to read.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_skill_that_escapes_its_root_is_reported_not_listed() {
+        use std::os::unix::fs::symlink;
+
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        fs::create_dir_all(&root).unwrap();
+        write_skill(outside.path(), "elsewhere", "somewhere else");
+        symlink(outside.path().join("elsewhere"), root.join("elsewhere")).unwrap();
+        write_skill(&root, "local", "right here");
+
+        let (skills, problems) = SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "local");
+        assert!(
+            problems.iter().any(|p| p.problem.contains("links outside")),
+            "{problems:?}"
+        );
+    }
+
+    /// Deleting a `SKILL.md` and leaving the directory changed neither the
+    /// entry count nor the newest mtime, so the old fragment kept being served.
+    #[test]
+    fn the_cache_notices_a_deleted_skill_md() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        let doomed = write_skill(&root, "doomed", "about to go");
+        write_skill(&root, "keeper", "stays put");
+
+        let manager = SkillsManager::with_roots(vec![user_root(&root)]);
+        assert!(manager.get_system_prompt_fragment().contains("about to go"));
+
+        fs::remove_file(doomed.join("SKILL.md")).unwrap();
+
+        let after = manager.get_system_prompt_fragment();
+        assert!(!after.contains("about to go"), "{after}");
+        assert!(after.contains("stays put"));
+    }
+
+    /// `foo/` and `foo.md` in one root is two skills with one name. Which one
+    /// won used to be `read_dir` order.
+    #[test]
+    fn a_directory_skill_beats_a_file_skill_of_the_same_name() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        write_skill(&root, "deploy", "the directory one");
+        fs::write(
+            root.join("deploy.md"),
+            "---\ndescription: the file one\n---\n",
+        )
+        .unwrap();
+
+        let (skills, problems) = SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].summary(), "the directory one");
+        assert!(
+            problems.iter().any(|p| p.problem.contains("shadowed")),
+            "{problems:?}"
+        );
+    }
+
+    /// "Why is the skill I wrote not in the prompt?" had no answer at all:
+    /// every one of these went to `debug!`.
+    #[test]
+    fn load_problems_are_reported_rather_than_swallowed() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        fs::create_dir_all(root.join("no-skill-md")).unwrap();
+        let mismatched = root.join("on-disk");
+        fs::create_dir_all(&mismatched).unwrap();
+        fs::write(
+            mismatched.join("SKILL.md"),
+            "---\nname: in-frontmatter\ndescription: d\n---\n",
+        )
+        .unwrap();
+        let bare = root.join("undescribed");
+        fs::create_dir_all(&bare).unwrap();
+        fs::write(bare.join("SKILL.md"), "# just a body\n\nsome prose\n").unwrap();
+
+        let (_skills, problems) =
+            SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+
+        let joined = problems
+            .iter()
+            .map(|p| p.problem.as_str())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(joined.contains("SKILL.md not found"), "{joined}");
+        assert!(joined.contains("does not match the directory"), "{joined}");
+        assert!(joined.contains("no frontmatter `description`"), "{joined}");
+    }
+
+    /// `doctor` called this "missing", which sends the user looking in the
+    /// wrong place.
+    #[test]
+    fn a_skills_path_that_is_a_file_is_reported_as_such() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        fs::write(&root, "not a directory\n").unwrap();
+
+        let (skills, problems) = SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+
+        assert!(skills.is_empty());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.problem.contains("not a directory")),
+            "{problems:?}"
+        );
+    }
+
+    /// The precedence is intended; going quiet about it is not.
+    #[test]
+    fn a_shadowed_personal_skill_is_reported() {
+        clear_skills_fragment_cache();
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("proj/.dsh/skills");
+        let user = dir.path().join("home/skills");
+        write_skill(&project, "deploy", "repo version");
+        write_skill(&user, "deploy", "personal version");
+
+        let (skills, problems) =
+            SkillsManager::with_roots(vec![project_root(&project), user_root(&user)])
+                .load_reporting();
+
+        assert_eq!(skills.len(), 1);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.problem.contains("shadowed by the project skill")),
+            "{problems:?}"
+        );
+    }
+
+    /// Parsing has to stop at the first token that is not a skill, or an email
+    /// address at the start of a message becomes a failed lookup.
+    #[test]
+    fn leading_at_tokens_load_skills_and_stop_at_the_first_other_word() {
+        let known = |name: &str| matches!(name, "deploy" | "bisect");
+
+        let (names, rest) = split_leading_mentions("@deploy @bisect fix the build", &known);
+        assert_eq!(names, vec!["deploy", "bisect"]);
+        assert_eq!(rest, "fix the build");
+
+        // Stops at the first unknown name, and leaves it in the text.
+        let (names, rest) = split_leading_mentions("@deploy @nope do it", &known);
+        assert_eq!(names, vec!["deploy"]);
+        assert_eq!(rest, "@nope do it");
+
+        // Not a mention at all.
+        let (names, rest) = split_leading_mentions("@user@host mail them", &known);
+        assert!(names.is_empty());
+        assert_eq!(rest, "@user@host mail them");
+
+        let (names, rest) = split_leading_mentions("just a question", &known);
+        assert!(names.is_empty());
+        assert_eq!(rest, "just a question");
+
+        // A repeat is a typo, not a second load.
+        let (names, _) = split_leading_mentions("@deploy @deploy go", &known);
+        assert_eq!(names, vec!["deploy"]);
+
+        // A bare `@` is not a name.
+        let (names, rest) = split_leading_mentions("@ deploy", &known);
+        assert!(names.is_empty());
+        assert_eq!(rest, "@ deploy");
+    }
+
+    /// Naming the bundled files is what makes the third tier discoverable; the
+    /// model was otherwise left to guess that an `ls` might be worth a turn.
+    #[test]
+    fn an_invoked_skill_carries_its_body_and_names_its_bundled_files() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        let skill = write_skill(&root, "deploy", "repo deploy steps");
+        fs::create_dir_all(skill.join("references")).unwrap();
+        fs::write(skill.join("references/api.md"), "detail\n").unwrap();
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::write(skill.join("scripts/run.sh"), "echo\n").unwrap();
+
+        let loaded = SkillsManager::with_roots(vec![user_root(&root)]).load_skills();
+        let rendered = render_mention(&loaded[0]).expect("body");
+
+        assert!(rendered.contains("# deploy"), "{rendered}");
+        assert!(rendered.contains("references/api.md"), "{rendered}");
+        assert!(rendered.contains("scripts/run.sh"), "{rendered}");
+        assert!(
+            rendered.contains("only if the instructions above call for it"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_skill_with_no_bundled_files_lists_none() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("skills");
+        write_skill(&root, "plain", "nothing extra");
+
+        let loaded = SkillsManager::with_roots(vec![user_root(&root)]).load_skills();
+        let rendered = render_mention(&loaded[0]).expect("body");
+
+        assert!(!rendered.contains("Files bundled"), "{rendered}");
     }
 
     #[test]

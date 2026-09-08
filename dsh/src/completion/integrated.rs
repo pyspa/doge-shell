@@ -79,6 +79,10 @@ const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
         collect: collect_mcp_dynamic_candidates,
     },
     DynamicProviderSpec {
+        command: "skill",
+        collect: collect_skill_dynamic_candidates,
+    },
+    DynamicProviderSpec {
         command: "git",
         collect: collect_git_dynamic_candidates,
     },
@@ -2037,6 +2041,48 @@ fn collect_pj_dynamic_candidates(
     }
 }
 
+/// `skill show|path|remove <TAB>`.
+///
+/// Skill names are chosen by the model, not by the person typing, so without
+/// this the only way to learn one is to run `skill list` first.
+fn collect_skill_dynamic_candidates(
+    _engine: &IntegratedCompletionEngine,
+    request: &CompletionRequest<'_>,
+    parsed: &ParsedCommandLine,
+    cache_policy: CachePolicy,
+) -> Vec<EnhancedCandidate> {
+    use parser::CompletionContext;
+
+    // Reading two directories is not work to do on a cached-only pass.
+    if cache_policy.is_cached_only() {
+        return Vec::new();
+    }
+    if !matches!(
+        parsed.completion_context,
+        CompletionContext::Argument { .. }
+    ) {
+        return Vec::new();
+    }
+    let Some(subcommand) = parsed.subcommand_path.first() else {
+        return Vec::new();
+    };
+    if !matches!(subcommand.as_str(), "show" | "path" | "remove" | "rm") {
+        return Vec::new();
+    }
+
+    let current_token = parsed.current_token.as_str();
+    dsh_builtin::installed_skill_names(Some(request.current_dir))
+        .into_iter()
+        .filter(|(name, _)| matches_prefix(current_token, name))
+        .map(|(name, summary)| EnhancedCandidate {
+            text: name,
+            description: Some(summary),
+            candidate_type: CandidateType::Argument,
+            priority: 90,
+        })
+        .collect()
+}
+
 fn collect_mcp_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
     _request: &CompletionRequest<'_>,
@@ -2642,6 +2688,41 @@ mod tests {
         let mut engine = IntegratedCompletionEngine::new(environment);
         engine.initialize_command_completion().unwrap();
         engine
+    }
+
+    /// A skill's name is chosen by the model, so `skill remove <TAB>` not
+    /// offering it meant reading `skill list` first every time.
+    #[tokio::test]
+    async fn skill_subcommands_complete_project_skill_names() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let skill = root.join(".dsh/skills/deploy-staging");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: deploy-staging\ndescription: repo deploy steps\n---\n",
+        )
+        .unwrap();
+
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let engine = engine_with_path(&bin);
+
+        for line in ["skill show ", "skill path ", "skill remove "] {
+            wait_for_candidate(&engine, line, root, "deploy-staging").await;
+        }
+
+        // Not every argument position: `skill list` takes none.
+        let listed = engine.complete("skill list ", 11, root, 50, None).await;
+        assert!(
+            !listed
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "deploy-staging"),
+            "{:?}",
+            listed.candidates
+        );
     }
 
     #[test]

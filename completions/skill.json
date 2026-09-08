@@ -2,14 +2,67 @@
   "command": "skill",
   "description": "Inspect the skills the AI chat runtime reads",
   "global_options": [
-    { "short": "-h", "long": "--help", "description": "Show help" }
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    }
   ],
   "subcommands": [
-    { "name": "list", "description": "List every skill with its scope, read count and last use" },
-    { "name": "show", "description": "Render a skill's SKILL.md", "arguments": [{ "name": "name", "description": "Skill name" }] },
-    { "name": "path", "description": "Print the path of a skill's SKILL.md", "arguments": [{ "name": "name", "description": "Skill name" }] },
-    { "name": "remove", "aliases": ["rm"], "description": "Delete a skill after confirmation", "arguments": [{ "name": "name", "description": "Skill name" }] },
-    { "name": "help", "description": "Show help" }
+    {
+      "name": "list",
+      "description": "List every skill with its scope, read count and last use"
+    },
+    {
+      "name": "show",
+      "description": "Render a skill's SKILL.md",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "path",
+      "description": "Print the path of a skill's SKILL.md",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "remove",
+      "aliases": [
+        "rm"
+      ],
+      "description": "Delete a skill after confirmation",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "trust",
+      "description": "Show whether this repository's skills are trusted"
+    },
+    {
+      "name": "untrust",
+      "description": "Forget the trust decision for this repository"
+    },
+    {
+      "name": "help",
+      "description": "Show help"
+    }
   ],
-  "arguments": [{ "name": "name", "description": "Skill name" }]
+  "arguments": [
+    {
+      "name": "name",
+      "description": "Skill name"
+    }
+  ]
 }

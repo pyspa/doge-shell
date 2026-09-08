@@ -37,35 +37,35 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Create, update or delete a reusable skill: a short SKILL.md that a later run reads instead of rediscovering the same steps. Use it after a task that took many tool calls, or after recovering from a correction, to record what would make the next run shorter. Every call asks the user before touching the disk.",
+            "description": "Create, update or delete a reusable skill - a short SKILL.md a later run reads instead of rediscovering the same steps. Use after a task that took many steps, or after a correction. Always asks the user first.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["create", "write_file", "patch", "delete"],
-                        "description": "create: a new skill with generated frontmatter. write_file: replace one file in an existing skill. patch: one exact substring replacement. delete: remove one file, or the whole skill when `file` is omitted."
+                        "description": "delete removes the whole skill unless `file` is given."
                     },
                     "name": {
                         "type": "string",
-                        "description": "Skill name: lowercase letters, digits and hyphens, e.g. `rust-bisect`. This is the directory name and the name shown in the prompt."
+                        "description": "Lowercase letters, digits and hyphens, e.g. `rust-bisect`."
                     },
                     "scope": {
                         "type": "string",
                         "enum": ["user", "project"],
-                        "description": "`project` for knowledge tied to this repository, `user` (the default) for anything portable."
+                        "description": "`project` for this repository, `user` (default) for anything portable."
                     },
                     "description": {
                         "type": "string",
-                        "description": "One line saying when to use the skill. Required for `create`; this is all the prompt shows, so make it a trigger, not a title."
+                        "description": "Required for `create`. One line saying *when* to use the skill - this is all the prompt shows."
                     },
                     "body": {
                         "type": "string",
-                        "description": "Markdown body for `create`. Frontmatter is generated, so do not include it."
+                        "description": "Markdown body for `create`. Frontmatter is generated."
                     },
                     "file": {
                         "type": "string",
-                        "description": "Path inside the skill directory, e.g. `references/api.md`. Defaults to `SKILL.md`."
+                        "description": "Path inside the skill, e.g. `references/api.md`. Default `SKILL.md`."
                     },
                     "contents": {
                         "type": "string",
@@ -73,11 +73,11 @@ pub(crate) fn definition() -> Value {
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "For `patch`: the exact text to replace. Must appear exactly once."
+                        "description": "For `patch`. Must appear exactly once."
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "For `patch`: the replacement text."
+                        "description": "For `patch`."
                     }
                 },
                 "required": ["action", "name"],
@@ -219,6 +219,14 @@ fn create(
     if request.skill_dir.exists() {
         return Err(format!(
             "chat: the skill `{}` already exists. Use `patch` or `write_file` to change it.",
+            request.name
+        ));
+    }
+    // A `foo/` beside a `foo.md` is two skills with one name; the loader has to
+    // pick, and whichever it picks the other silently disappears.
+    if request.skill_dir.with_extension("md").exists() {
+        return Err(format!(
+            "chat: a file skill named `{}` already exists beside it. Use `patch`, or remove that file first.",
             request.name
         ));
     }
@@ -467,25 +475,64 @@ fn confirm_and_write(
         return Ok("Skill change cancelled by user.".to_string());
     }
 
-    if proxy.agent_runtime().is_some() {
-        if let Some(parent) = request.target.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-        crate::agent::files::write(&request.target, contents)
+    // Remembered before anything is created, so a half-finished `create` can be
+    // rolled back. A leftover empty directory was a dead end: `create` then said
+    // "already exists" and `patch` said "failed to read", with nothing the model
+    // could do about either.
+    let created_dir = !request.skill_dir.exists();
+
+    let written = if proxy.agent_runtime().is_some() {
+        // Symlink-safe write, which is what a task needs; `write_atomic`
+        // renames into place and would follow one.
+        ensure_parent(&request.target).and_then(|()| {
+            crate::agent::files::write(&request.target, contents).map_err(|err| err.to_string())
+        })
     } else {
-        if let Some(parent) = request.target.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        crate::atomic_write::write_atomic(&request.target, contents, true, "skill")
+            .map_err(|err| err.to_string())
+    };
+
+    if let Err(err) = written {
+        if created_dir {
+            let _ = std::fs::remove_dir_all(&request.skill_dir);
         }
-        std::fs::write(&request.target, contents)
+        return Err(format!(
+            "chat: failed to write `{}`: {err}",
+            request.relative_file
+        ));
     }
-    .map_err(|err| format!("chat: failed to write `{}`: {err}", request.relative_file))?;
 
     skills::usage::note_write(&request.skill_dir, request.scope, created);
+    refresh_project_trust(request);
     // The directory signature is coarse; a same-size rewrite in the same second
     // would otherwise keep serving the previous list.
     skills::clear_skills_fragment_cache();
 
     Ok(report(request, &request.action, contents.len()))
+}
+
+/// The user just approved a change to this project's skills, so a trusted root
+/// stays trusted rather than asking again about their own edit.
+fn refresh_project_trust(request: &Request) {
+    if request.scope != SkillScope::Project {
+        return;
+    }
+    let Some(root) = request.skill_dir.parent() else {
+        return;
+    };
+    let manager = skills::SkillsManager::with_roots(vec![skills::SkillRoot {
+        scope: SkillScope::Project,
+        path: root.to_path_buf(),
+    }]);
+    skills::trust::refresh(root, &skills::trust::digest(&manager.load_skills()));
+}
+
+fn ensure_parent(target: &Path) -> Result<(), String> {
+    let Some(parent) = target.parent() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(parent)
+        .map_err(|err| format!("cannot create `{}`: {err}", parent.display()))
 }
 
 fn report(request: &Request, action: &str, bytes: usize) -> String {
@@ -582,6 +629,20 @@ mod tests {
             confirm_result: true,
             ..TestProxy::default()
         }
+    }
+
+    /// This schema is sent on every turn whether or not a skill is ever
+    /// touched, and it was the largest of the nine - bigger than `search`,
+    /// nearly twice `execute`. Detail belongs in the errors, which are only
+    /// paid for when something actually goes wrong.
+    #[test]
+    fn the_schema_stays_small_enough_to_carry_every_turn() {
+        let rendered = definition().to_string();
+        assert!(
+            rendered.len() < 1400,
+            "skill_manage schema is {} bytes",
+            rendered.len()
+        );
     }
 
     #[test]
@@ -817,6 +878,55 @@ mod tests {
         )
         .expect_err("there is no project here");
         assert!(err.contains("no project here"), "{err}");
+    }
+
+    /// A write that fails after the directory is made left `create` saying
+    /// "already exists" and `patch` saying "failed to read" - nowhere to go.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_create_leaves_no_directory_behind() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let skills = root.join(".dsh/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        // Nothing can be created underneath, so the write fails after the
+        // request has been validated and approved.
+        std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let mut p = proxy(root.clone());
+
+        let err = run(
+            r#"{"action":"create","name":"doomed","scope":"project","description":"d"}"#,
+            &mut p,
+        )
+        .expect_err("the write cannot succeed");
+
+        std::fs::set_permissions(&skills, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(err.contains("failed to write"), "{err}");
+        assert!(
+            !skills.join("doomed").exists(),
+            "a half-made skill must not block the retry"
+        );
+    }
+
+    /// `foo/` beside `foo.md` is two skills with one name; the loader has to
+    /// pick and the other disappears.
+    #[test]
+    fn create_refuses_to_shadow_an_existing_file_skill() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let skills = root.join(".dsh/skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        std::fs::write(skills.join("deploy.md"), "---\ndescription: d\n---\n").unwrap();
+        let mut p = proxy(root);
+
+        let err = run(
+            r#"{"action":"create","name":"deploy","scope":"project","description":"d"}"#,
+            &mut p,
+        )
+        .expect_err("two skills would answer to one name");
+        assert!(err.contains("already exists beside it"), "{err}");
     }
 
     #[test]

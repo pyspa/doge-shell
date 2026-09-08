@@ -41,6 +41,7 @@ mod safety_policy;
 mod skill;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
+pub use skill::installed_names as installed_skill_names;
 mod atomic_write;
 mod bookmark;
 pub mod capability;

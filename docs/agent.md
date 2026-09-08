@@ -21,6 +21,8 @@ agent delete TASK_ID
 
 タスク中の `skill_manage` は `edit` などと同じ変更操作として扱います。`task_plan` の記録前には実行できず、実行後は完了条件の検証済み判定をやり直します。`<project>/.dsh/skills` への書き込みはそのリポジトリの `--write` に従い、`~/.config/dsh/skills` は許可の外なので入力待ちになります。
 
+未信頼のリポジトリの `.dsh/skills` はタスクでは読まれません。対話とは違い確認も出ず、承認待ちにもなりません。無人実行を止めないためと、人が見ていない入口の既定を厳しくするためです。対話で 1 度 `a` と答えるか `skill trust` で確認しておいてください。
+
 skill ディレクトリ配下のスクリプトは `--allow-command` では許可できません。許可はあなたが読んだコマンド行を指しますが、skill script はエージェント自身が書けるファイルでもあるためです。実行のたびに入力待ちになります。
 
 AI chat hooks はタスク実行中も発火します。`ask` は対話プロンプトではなく入力待ちになり、その承認キー `hook:HOOK_ID:対象` は `--allow-command` や `--allow-mcp` では満たせません。`user-prompt-submit` と `pre-tool-use` の hook は失敗やタイムアウトで拒否側に倒れます。壊れた hook でタスクが止まるときは `AI_CHAT_HOOKS=off` を使ってください。

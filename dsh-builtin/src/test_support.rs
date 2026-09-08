@@ -393,11 +393,21 @@ pub(crate) fn running_task(root: &std::path::Path) -> dsh_types::agent::AgentTas
 }
 
 /// An `AgentRuntime` backed by [`MemoryTaskStore`], ready to hand to a proxy.
+///
+/// The task is persisted first, the way `agent run` does it. `stopped()` treats
+/// a task the store cannot load as stopped, so a runtime built without saving
+/// reports "cancelled" for every command it is asked about - which a fast
+/// command wins the race against and a slow one does not.
 pub(crate) fn test_runtime(
     root: &std::path::Path,
 ) -> Arc<parking_lot::Mutex<crate::agent::AgentRuntime>> {
+    let store = Arc::new(MemoryTaskStore::default());
+    let task = running_task(root);
+    {
+        use crate::shell_capabilities::AgentTaskStore;
+        store.save(&task, None).expect("in-memory save");
+    }
     Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
-        running_task(root),
-        Arc::new(MemoryTaskStore::default()),
+        task, store,
     )))
 }

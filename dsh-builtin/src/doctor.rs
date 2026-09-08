@@ -1212,8 +1212,12 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
         } else {
             "user-skills"
         };
-        if !path.is_dir() {
+        if !path.exists() {
             let _ = ctx.write_stdout(&format!("skip {label} missing {}", path.display()));
+        } else if !path.is_dir() {
+            // Distinct from "missing": saying missing sends the user looking in
+            // the wrong place.
+            let _ = ctx.write_stdout(&format!("error {label} not-a-directory {}", path.display()));
         } else if is_project && !project_enabled {
             let _ = ctx.write_stdout(&format!(
                 "skip {label} {} entries={} AI_CHAT_PROJECT_SKILLS=off",
@@ -1229,7 +1233,31 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
         }
     }
 
-    let skills = manager.load_skills();
+    // The trust decision is what actually decides whether these reach a prompt.
+    if let Some(decision) = crate::chatgpt::skills::describe_project_root(manager.roots()) {
+        let trusted =
+            crate::chatgpt::skills::trust::is_remembered(&decision.root, &decision.digest);
+        let _ = ctx.write_stdout(&format!(
+            "{} project-skills-trust {} skills={}",
+            if trusted { "ok" } else { "warn" },
+            if trusted {
+                "remembered"
+            } else {
+                "not-yet-agreed"
+            },
+            decision.names.len()
+        ));
+    }
+
+    let (skills, problems) = manager.load_reporting();
+    for problem in &problems {
+        let _ = ctx.write_stdout(&format!(
+            "warn {}-skill {} {}",
+            problem.scope.as_str(),
+            problem.path.display(),
+            problem.problem
+        ));
+    }
     let records = usage::load();
     let now = usage::now_ms();
 
@@ -1441,19 +1469,82 @@ fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
 
     {
         let config_root = crate::config_paths::skills_dir();
-        if config_root.exists() {
-            let count = fs::read_dir(&config_root)
+        // Project skills count towards the prompt too, and used not to be
+        // counted at all - a repository with a hundred of them still reported
+        // a minimal footprint.
+        let project_root = crate::chatgpt::skills::project_skills_root(current_dir);
+        let personal = if config_root.exists() {
+            fs::read_dir(&config_root)
                 .map(|entries| entries.count())
-                .unwrap_or(0);
-            if count > 8 {
-                let _ = ctx.write_stdout(&format!(
-                    "warn runtime-skills footprint-high entries={count}"
-                ));
-            } else {
-                let _ = ctx.write_stdout(&format!("ok runtime-skills entries={count}"));
-            }
+                .unwrap_or(0)
         } else {
-            let _ = ctx.write_stdout("ok runtime-skills missing");
+            0
+        };
+        let project = project_root
+            .as_ref()
+            .filter(|path| path.is_dir())
+            .map(|path| count_skill_dirs(path))
+            .unwrap_or(0);
+        let count = personal + project;
+        if count > 8 {
+            let _ = ctx.write_stdout(&format!(
+                "warn runtime-skills footprint-high entries={count} personal={personal} project={project}"
+            ));
+        } else {
+            let _ = ctx.write_stdout(&format!(
+                "ok runtime-skills entries={count} personal={personal} project={project}"
+            ));
+        }
+
+        // The two surfaces this shell gained: a cloned repository's skills, and
+        // hooks that run external commands. Neither appeared in the safety
+        // posture, which is where a person looks before trusting a checkout.
+        match crate::chatgpt::skills::describe_project_root(&crate::chatgpt::skills::skill_roots(
+            Some(current_dir),
+            true,
+        )) {
+            Some(decision) => {
+                let trusted =
+                    crate::chatgpt::skills::trust::is_remembered(&decision.root, &decision.digest);
+                let _ = ctx.write_stdout(&format!(
+                    "{} project-skills {} {} skills={}",
+                    if trusted { "warn" } else { "ok" },
+                    if trusted { "trusted" } else { "not-yet-agreed" },
+                    decision.root.display(),
+                    decision.names.len()
+                ));
+            }
+            None => {
+                let _ = ctx.write_stdout("ok project-skills none");
+            }
+        }
+    }
+
+    {
+        use crate::chatgpt::hooks::config as hooks_config;
+        if !hooks_config::enabled(proxy) {
+            let _ = ctx.write_stdout("ok ai-hooks off");
+        } else {
+            match hooks_config::config_path(proxy).filter(|path| path.is_file()) {
+                None => {
+                    let _ = ctx.write_stdout("ok ai-hooks none");
+                }
+                Some(path) => match hooks_config::read(&path) {
+                    Ok(hooks) if hooks.is_empty() => {
+                        let _ = ctx.write_stdout(&format!("ok ai-hooks none {}", path.display()));
+                    }
+                    Ok(hooks) => {
+                        let _ = ctx.write_stdout(&format!(
+                            "warn ai-hooks {} run external commands from {}",
+                            hooks.all().len(),
+                            path.display()
+                        ));
+                    }
+                    Err(err) => {
+                        let _ = ctx.write_stdout(&format!("error ai-hooks {err}"));
+                    }
+                },
+            }
         }
     }
 
@@ -1622,6 +1713,7 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut needs_workspace_check = false;
     let mut needs_ai_guidance = false;
     let mut needs_project_consistency = false;
+    let mut needs_shell_proxy_check = false;
     let mut has_rust = false;
     let mut needs_portability = false;
 
@@ -1640,6 +1732,15 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
             || text == "scripts/check-project-consistency.py"
         {
             needs_project_consistency = true;
+        }
+        // `check.sh` runs this on every change, but nothing here suggested it,
+        // so a proxy method added over a `doctor validate` cycle only failed in
+        // CI.
+        if text == "dsh-builtin/src/lib.rs"
+            || text == "dsh-builtin/src/shell_capabilities.rs"
+            || text == "scripts/check-shell-proxy-capabilities.py"
+        {
+            needs_shell_proxy_check = true;
         }
         // Linker tuning has to stay scoped to the target that accepts it, and
         // the workflow is where the macOS side is actually proven.
@@ -1725,6 +1826,9 @@ fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     }
     if needs_project_consistency {
         add_command(&mut commands, "scripts/check-project-consistency.py");
+    }
+    if needs_shell_proxy_check {
+        add_command(&mut commands, "scripts/check-shell-proxy-capabilities.py");
     }
 
     commands
@@ -2309,6 +2413,30 @@ mod tests {
     }
 
     #[test]
+    fn touching_the_proxy_facade_requests_the_capability_check() {
+        for path in [
+            "dsh-builtin/src/lib.rs",
+            "dsh-builtin/src/shell_capabilities.rs",
+        ] {
+            let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+            assert!(
+                commands
+                    .iter()
+                    .any(|cmd| cmd == "scripts/check-shell-proxy-capabilities.py"),
+                "{path}: {commands:?}"
+            );
+        }
+
+        let unrelated = validation_commands_for_paths(&[PathBuf::from("dsh/src/repl/mod.rs")]);
+        assert!(
+            !unrelated
+                .iter()
+                .any(|cmd| cmd == "scripts/check-shell-proxy-capabilities.py"),
+            "{unrelated:?}"
+        );
+    }
+
+    #[test]
     fn safety_helpers_flag_risky_allowlist_entries() {
         assert!(is_risky_execute_allowlist_entry("bash"));
         assert!(is_risky_execute_allowlist_entry("python -c"));
@@ -2418,7 +2546,7 @@ mod tests {
     }
 
     #[test]
-    fn doctor_hooks_flags_a_group_writable_config() {
+    fn doctor_hooks_flags_a_world_writable_config() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
@@ -2433,7 +2561,7 @@ mod tests {
         let output = run_doctor_hooks(&mut proxy);
 
         assert!(output.contains("error config"), "{output}");
-        assert!(output.contains("writable by other users"), "{output}");
+        assert!(output.contains("world-writable"), "{output}");
     }
 
     #[test]

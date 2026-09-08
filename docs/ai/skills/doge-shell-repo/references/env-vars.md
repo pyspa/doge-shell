@@ -27,7 +27,7 @@
 |---|---|---|
 | `AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` / `AI_CHAT_MODEL` / `AI_CHAT_TIMEOUT_SECS` / `AI_CHAT_ALLOW_INSECURE_HTTP` | `dsh-openai/src/config.rs` | プロバイダ設定。`OPENAI_*` は legacy alias |
 | `AI_SUMMARY_MODEL` / `AI_CHAT_CONTEXT_TOKEN_BUDGET` / `AI_CHAT_TURN_TOKEN_BUDGET` / `AI_MESSAGE_LANG` / `CHAT_PROMPT` / `AI_CHAT_STREAM` | `dsh-builtin/src/chatgpt.rs` | `!` チャットの会話管理・応答言語・逐次表示の有効/無効（既定 on） |
-| `AI_CHAT_SESSION_TTL_SECS` | `dsh-builtin/src/chatgpt/session.rs` | 連続する `!` が会話を共有する時間。`0` で無効 |
+| `AI_CHAT_SESSION_TTL_SECS` | `dsh-builtin/src/chatgpt/session.rs` | 連続する `!` が会話を共有する idle timeout。`0` で無効。継続範囲は cwd 完全一致ではなく `tool::workspace_root`（プロジェクト単位） |
 | `AI_CHAT_EXECUTE_ALLOWLIST` / `DSH_EXECUTE_TOOL_CONFIG` | `dsh-builtin/src/chatgpt/tool/execute.rs` | `execute` ツールの allowlist と JSON 設定の置き場所 |
 | `AI_CHAT_PROJECT_SKILLS` | `dsh-builtin/src/chatgpt.rs` | `0`/`false`/`off`/`no` で `<project>/.dsh/skills` をプロンプトから外す。既定 on |
 | `AI_CHAT_HOOKS` / `DSH_AI_HOOKS_CONFIG` | `dsh-builtin/src/chatgpt/hooks/config.rs` | AI chat hooks の有効/無効と `ai-hooks.json` の場所 |

@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Environment variable key for storing the chat prompt template
 const PROMPT_KEY: &str = "CHAT_PROMPT";
@@ -63,6 +63,8 @@ const STREAM_KEY: &str = "AI_CHAT_STREAM";
 /// the model the first time `!` is used in that checkout. Personal skills stay
 /// available when this is off.
 const PROJECT_SKILLS_KEY: &str = "AI_CHAT_PROJECT_SKILLS";
+/// Told to the model after a rewound turn (`ConversationManager::note_turn_rewound`).
+const REWIND_NOTICE: &str = "The previous turn was removed from this conversation because it did not finish. Any tool calls it made may already have taken effect; check the actual state rather than assuming.";
 
 /// System prompt that explains how to use the builtin tools
 const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
@@ -109,6 +111,32 @@ struct ConversationManager {
     /// System prompt (fixed) - index 0
     /// First user message (pinned) - index 1
     pinned_messages: Vec<Value>,
+    /// Where this turn started, recorded when the turn continued a stored
+    /// conversation.
+    ///
+    /// A turn that fails is rewound to here instead of throwing the whole
+    /// conversation away: the prefix below `buffer_index` was left by a turn
+    /// that completed (`session::store` only ever saves one of those), so
+    /// truncating to it is guaranteed to leave every `tool_calls` message
+    /// paired with its results - unlike an arbitrary cut point. `None` means
+    /// there is nothing to rewind to: a brand new conversation, or a restored
+    /// task checkpoint (agent turns are never rewound; `session_ttl` is
+    /// always `None` for them, so nothing here is read).
+    #[serde(default)]
+    turn_mark: Option<TurnStart>,
+}
+
+/// What `rewind_to_turn_start` restores.
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+struct TurnStart {
+    /// Index into `buffer` where this turn's first message was added.
+    buffer_index: usize,
+    /// `summary` as it stood before this turn. `perform_summary` can advance
+    /// `summary` mid-turn if this turn's own messages pushed the buffer past
+    /// `should_summarize`'s threshold, so a rewind that only truncated
+    /// `buffer` would leave a discarded turn's actions described in every
+    /// later request via the "Previous Conversation Summary" block.
+    summary: Option<String>,
 }
 
 impl ConversationManager {
@@ -121,6 +149,7 @@ impl ConversationManager {
             prompt_token_budget: DEFAULT_CONTEXT_TOKEN_BUDGET,
             turn_usage: usage::TokenUsage::default(),
             pinned_messages: vec![system_prompt, first_user_message],
+            turn_mark: None,
         }
     }
 
@@ -148,6 +177,67 @@ impl ConversationManager {
     /// Start a fresh usage tally for a new turn on a carried conversation.
     fn begin_turn(&mut self) {
         self.turn_usage = usage::TokenUsage::default();
+    }
+
+    /// Remember where this turn starts, before its first message is added.
+    fn mark_turn_start(&mut self) {
+        self.turn_mark = Some(TurnStart {
+            buffer_index: self.buffer.len(),
+            summary: self.summary.clone(),
+        });
+    }
+
+    /// Drop everything this turn added, leaving the conversation as it was
+    /// when the last completed turn stored it - including undoing any
+    /// mid-turn summarization. Returns `false` when there was no mark to
+    /// rewind to (a brand new conversation, or a restored task checkpoint),
+    /// in which case nothing is touched.
+    fn rewind_to_turn_start(&mut self) -> bool {
+        let Some(start) = self.turn_mark.take() else {
+            return false;
+        };
+        if start.buffer_index < self.buffer.len() {
+            self.buffer.truncate(start.buffer_index);
+            self.buffer_chars = sum_message_lengths(&self.buffer);
+        }
+        self.summary = start.summary;
+        // The measured prompt size describes the larger request that just
+        // failed. Left in place, `should_summarize` stays true and the next
+        // turn buys a summary for a buffer that has already shrunk back down -
+        // the same reason `perform_summary` clears it after shrinking the
+        // buffer its own way.
+        self.last_prompt_tokens = 0;
+        true
+    }
+
+    /// Tell the model a rewound turn's tool calls may already have taken
+    /// effect. Skipped when the buffer already ends with this exact notice
+    /// from a `system` message, so a run of consecutive failures does not
+    /// pile up identical notices. Checking `role` too (not just `content`)
+    /// means a coincidental match in a `tool`/`assistant`/`user` message can
+    /// never suppress a genuinely new notice.
+    fn note_turn_rewound(&mut self) {
+        let already_noted = self.buffer.last().is_some_and(|message| {
+            message.get("role").and_then(Value::as_str) == Some("system")
+                && message.get("content").and_then(Value::as_str) == Some(REWIND_NOTICE)
+        });
+        if !already_noted {
+            self.add_message(json!({ "role": "system", "content": REWIND_NOTICE }));
+        }
+    }
+
+    /// Drop `retain_start` messages from the front, keeping `turn_mark`
+    /// aligned with what remains. Used by `perform_summary`, so a turn that
+    /// fails after summarizing still rewinds correctly. The mark's captured
+    /// `summary` snapshot is left untouched - it is the value from *before*
+    /// this turn started, and must survive whatever `perform_summary` does to
+    /// the live `self.summary` during the turn.
+    fn drop_buffer_prefix(&mut self, retain_start: usize) {
+        self.buffer = self.buffer.split_off(retain_start);
+        self.buffer_chars = sum_message_lengths(&self.buffer);
+        if let Some(start) = &mut self.turn_mark {
+            start.buffer_index = start.buffer_index.saturating_sub(retain_start);
+        }
     }
 
     fn last_prompt_tokens(&self) -> u64 {
@@ -359,8 +449,7 @@ impl ConversationManager {
         // Update state: keep most recent messages to maintain tool_call/result continuity
         const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
         let retain_start = retain_boundary(&self.buffer, RETAIN_AFTER_SUMMARY);
-        self.buffer = self.buffer.split_off(retain_start);
-        self.buffer_chars = sum_message_lengths(&self.buffer);
+        self.drop_buffer_prefix(retain_start);
         self.summary = Some(new_summary);
         // The measured prompt size describes the request we just replaced. Left
         // in place it keeps `should_summarize` true, and the caller's
@@ -503,6 +592,23 @@ fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
         .get_var(key)
         .or_else(|| std::env::var(key).ok())
         .filter(|value| !value.trim().is_empty())
+}
+
+/// The one place `AI_CHAT_SESSION_TTL_SECS` is read, so `chat_reset`,
+/// `chat_status`, `chat_session_description` and `chat_with_tools` cannot
+/// drift from each other about how long a conversation is carried forward.
+fn resolve_session_ttl(proxy: &mut dyn ShellProxy) -> Option<Duration> {
+    session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY))
+}
+
+/// The project boundary a turn's conversation continuity is scoped to.
+///
+/// A thin, named wrapper around `tool::workspace_root` so the wiring between
+/// a turn's cwd and the scope handed to `session::take`/`store` has a unit
+/// test of its own - `chat_with_tools` itself needs a mocked provider to
+/// exercise at all.
+fn conversation_scope(cwd: Option<&Path>) -> Option<PathBuf> {
+    cwd.map(tool::workspace_root)
 }
 
 /// Whether `!` chat should stream its answer as it is generated.
@@ -715,13 +821,14 @@ pub fn chat_reset_description() -> &'static str {
 /// Built-in chat_reset command implementation
 ///
 /// Consecutive `!` turns continue the same conversation; this starts over.
-pub fn chat_reset(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn chat_reset(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() > 1 {
         ctx.write_stderr("Usage: chat_reset").ok();
         return ExitStatus::ExitedWith(1);
     }
 
-    let detail = session::session_description();
+    let ttl = resolve_session_ttl(proxy);
+    let detail = session::session_description(ttl);
     let cleared = session::session_reset();
 
     let message = match (cleared, detail) {
@@ -733,9 +840,42 @@ pub fn chat_reset(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy)
     ExitStatus::ExitedWith(0)
 }
 
+/// Built-in chat_status command description
+pub fn chat_status_description() -> &'static str {
+    "Show the carried AI chat conversation"
+}
+
+/// Built-in chat_status command implementation
+///
+/// Read-only counterpart to `chat_reset`: names the conversation a follow-up
+/// `!` would continue, without discarding it - based on idle time, though.
+/// `session_description` cannot re-check whether the operator prompt,
+/// language, MCP connections or project changed since the conversation was
+/// stored (that needs `ChatToolHost`, not the base `ShellProxy` every builtin
+/// gets), so a conversation shown here as carried can still turn out to start
+/// fresh for one of those reasons.
+pub fn chat_status(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    if argv.len() > 1 {
+        ctx.write_stderr("Usage: chat_status").ok();
+        return ExitStatus::ExitedWith(1);
+    }
+
+    let ttl = resolve_session_ttl(proxy);
+    let message = match session::session_description(ttl) {
+        Some(detail) => format!("chat session {detail}"),
+        None if ttl.is_none() => format!(
+            "no chat session ({} is 0, so `!` turns do not share a conversation)",
+            session::SESSION_TTL_KEY
+        ),
+        None => "no chat session carried".to_string(),
+    };
+    ctx.write_stdout(&message).ok();
+    ExitStatus::ExitedWith(0)
+}
+
 /// Describe the carried conversation, for `doctor ai`.
-pub fn chat_session_description() -> Option<String> {
-    session::session_description()
+pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
+    session::session_description(resolve_session_ttl(proxy))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -762,15 +902,22 @@ fn chat_with_tools(
     let session_ttl = if runtime.is_some() {
         None
     } else {
-        session::resolve_ttl(resolve_setting(proxy, session::SESSION_TTL_KEY))
+        resolve_session_ttl(proxy)
     };
+    // Only computed when something will actually read it: an agent turn's
+    // `session_ttl` is always `None`, so paying for `conversation_scope`'s
+    // canonicalize-and-ancestor-walk there would buy nothing.
+    let scope = session_ttl
+        .is_some()
+        .then(|| conversation_scope(cwd.as_deref()))
+        .flatten();
 
     // A configuration that cannot be read stops the turn. Continuing without
     // the hooks would silently drop checks the user believes are running.
     let mut hook_ctx = hooks::HookContext::load(proxy)?;
     // Learned without consuming the conversation: `take` is destructive, and a
     // hook that refuses this prompt must leave the previous turn intact.
-    let carried_session = session::peek_id(session_ttl, &prompt.identity, cwd.as_deref());
+    let carried_session = session::peek_id(session_ttl, &prompt.identity, scope.as_deref());
     hook_ctx.set_session_id(
         carried_session
             .clone()
@@ -791,6 +938,11 @@ fn chat_with_tools(
     // would then advertise no turn budget while one was configured.
     let turn_token_budget = resolve_turn_token_budget(proxy);
     let outcome: Result<String, String> = (|| {
+        // Set when this turn continues a stored conversation, so the final
+        // `store` below can keep the idle clock from restarting if this turn
+        // fails and is rewound. Fully local to this closure - nothing after
+        // it reads this.
+        let mut carried_stored_at: Option<Instant> = None;
         let submitted = hook_ctx.fire(
             hooks::HookEvent::UserPromptSubmit,
             hooks::HookSubject::none(),
@@ -822,16 +974,30 @@ fn chat_with_tools(
 
         // Continue the previous conversation when it still applies, so a follow-up
         // question does not re-explore the repository from scratch.
-        let mut manager = match session::take(session_ttl, &prompt.identity, cwd.as_deref()) {
-            Some((mut manager, _id)) => {
+        let mut manager = match session::take(session_ttl, &prompt.identity, scope.as_deref()) {
+            session::Claim::Continued(carried) => {
+                eprintln!(
+                    "\x1b[2msession: continuing {} ({} message(s), {}s old)\x1b[0m",
+                    carried.id,
+                    carried.manager.buffer.len(),
+                    carried.stored_at.elapsed().as_secs()
+                );
+                carried_stored_at = Some(carried.stored_at);
+                let mut manager = carried.manager;
                 // The carried conversation was pinned with the skills list as it
                 // stood then. Re-render it so a skill written last turn is visible
                 // this turn without discarding the conversation.
                 set_system_prompt(&mut manager, &prompt.text);
+                // Recorded before this turn's own messages are added, so a
+                // failed turn can be rewound to exactly this point.
+                manager.mark_turn_start();
                 manager.add_message(json!({ "role": "user", "content": user_input }));
                 manager
             }
-            None => {
+            session::Claim::Fresh(reason) => {
+                if let Some(reason) = &reason {
+                    eprintln!("\x1b[2msession: new conversation ({reason})\x1b[0m");
+                }
                 // A new conversation starts exactly here, which is what
                 // `session-start` means. Observation only: its answer is ignored.
                 //
@@ -1245,16 +1411,32 @@ fn chat_with_tools(
             manager.turn_usage.total_tokens(),
         );
 
-        // Only a completed turn is worth resuming. Carrying a cancelled or failed
-        // one forward would replay its dead end - including the synthetic nudge -
-        // as the starting context of the next question.
-        if outcome.is_ok() {
+        // A turn that fails is rewound to where it started, not discarded.
+        // `take` already emptied the slot, so returning here without storing
+        // anything used to throw away every earlier, successful turn too -
+        // a single Ctrl-C, API error, iteration-cap or turn-token-budget stop
+        // erased up to `AI_CHAT_SESSION_TTL_SECS` worth of context, not just
+        // the turn that failed. `rewind_to_turn_start` only succeeds when this
+        // turn continued a stored conversation (`turn_mark` is set); a brand
+        // new conversation that fails still has nothing to keep.
+        let rewound = outcome.is_err() && manager.rewind_to_turn_start();
+        if rewound {
+            // The rewound buffer is guaranteed balanced - see `turn_mark`'s
+            // doc comment - so this cannot desync a `tool_calls`/`tool` pair.
+            manager.note_turn_rewound();
+        }
+        // Only a turn that finished or was cleanly rewound is worth resuming.
+        if outcome.is_ok() || rewound {
             session::store(
                 session_ttl,
                 manager,
                 hook_ctx.session_id(),
                 &prompt.identity,
-                cwd,
+                scope,
+                // A run of failures must not keep a dead conversation's idle
+                // clock running: only a turn that actually finished restarts
+                // it from now.
+                if rewound { carried_stored_at } else { None },
             );
         }
 
@@ -1909,6 +2091,198 @@ mod tests {
             manager.add_message(message);
         }
         manager
+    }
+
+    #[test]
+    fn rewinding_a_turn_drops_only_what_that_turn_added() {
+        let mut manager = manager_with(vec![
+            assistant_call("a", "read_file", r#"{"path":"src/main.rs"}"#),
+            tool_reply("a", "fn main() {}"),
+        ]);
+        manager.mark_turn_start();
+        manager.add_message(json!({ "role": "user", "content": "and then?" }));
+        manager.add_message(assistant_call("b", "read_file", r#"{"path":"src/lib.rs"}"#));
+        manager.add_message(tool_reply("b", "pub fn lib() {}"));
+
+        assert!(manager.rewind_to_turn_start());
+
+        assert_eq!(manager.buffer.len(), 2);
+        assert_eq!(manager.buffer_chars, sum_message_lengths(&manager.buffer));
+        assert_eq!(manager.last_prompt_tokens, 0);
+    }
+
+    /// The mark sits before the turn's first message specifically so a
+    /// Ctrl-C between the user's question and the tool call it triggered
+    /// cannot leave an assistant `tool_calls` message without its `tool`
+    /// reply - that pair either both survive the rewind together, or both go.
+    #[test]
+    fn rewinding_leaves_no_tool_call_without_its_result() {
+        let mut manager = manager_with(vec![]);
+        manager.mark_turn_start();
+        manager.add_message(json!({ "role": "user", "content": "read it" }));
+        manager.add_message(assistant_call("b", "read_file", r#"{"path":"src/lib.rs"}"#));
+        // Interrupted before the tool reply for "b" ever arrived.
+
+        assert!(manager.rewind_to_turn_start());
+
+        assert!(manager.buffer.is_empty());
+    }
+
+    #[test]
+    fn rewinding_without_a_mark_reports_nothing_to_do() {
+        let mut manager = manager_with(vec![assistant_call("a", "search", r#"{"query":"q"}"#)]);
+
+        assert!(!manager.rewind_to_turn_start());
+        assert_eq!(manager.buffer.len(), 1);
+    }
+
+    #[test]
+    fn note_turn_rewound_adds_the_notice_once() {
+        let mut manager = manager_with(vec![]);
+
+        manager.note_turn_rewound();
+        assert_eq!(manager.buffer.len(), 1);
+
+        // A run of consecutive failures must not pile up identical notices.
+        manager.note_turn_rewound();
+        assert_eq!(manager.buffer.len(), 1);
+    }
+
+    /// The dedup check must key on `role` as well as `content`: a `tool`
+    /// message that happens to contain the exact notice text is not a
+    /// previous notice, and must not suppress a real one.
+    #[test]
+    fn note_turn_rewound_ignores_a_matching_non_system_message() {
+        let mut manager = manager_with(vec![
+            json!({ "role": "tool", "tool_call_id": "x", "content": REWIND_NOTICE }),
+        ]);
+
+        manager.note_turn_rewound();
+
+        assert_eq!(manager.buffer.len(), 2);
+    }
+
+    #[test]
+    fn dropping_a_buffer_prefix_moves_the_turn_mark_with_it() {
+        let mut manager = manager_with(vec![
+            assistant_call("a", "search", r#"{"query":"q1"}"#),
+            tool_reply("a", "r1"),
+            assistant_call("b", "search", r#"{"query":"q2"}"#),
+            tool_reply("b", "r2"),
+        ]);
+        manager.mark_turn_start(); // marks index 4
+
+        manager.drop_buffer_prefix(2);
+        assert_eq!(
+            manager.turn_mark.as_ref().map(|start| start.buffer_index),
+            Some(2)
+        );
+
+        // Dropping past the mark saturates to 0 rather than underflowing.
+        manager.turn_mark.as_mut().unwrap().buffer_index = 1;
+        manager.drop_buffer_prefix(2);
+        assert_eq!(
+            manager.turn_mark.as_ref().map(|start| start.buffer_index),
+            Some(0)
+        );
+    }
+
+    /// `drop_buffer_prefix` (called mid-turn by `perform_summary`) must not
+    /// touch the mark's `summary` snapshot - that snapshot is what a later
+    /// rewind restores to, and it has to stay the pre-turn value regardless
+    /// of what the live `summary` becomes during the turn.
+    #[test]
+    fn dropping_a_buffer_prefix_does_not_touch_the_marks_summary_snapshot() {
+        let mut manager = manager_with(vec![
+            assistant_call("a", "search", r#"{"query":"q1"}"#),
+            tool_reply("a", "r1"),
+        ]);
+        manager.summary = Some("pre-turn summary".to_string());
+        manager.mark_turn_start();
+        manager.summary = Some("summary advanced mid-turn".to_string());
+
+        manager.drop_buffer_prefix(1);
+
+        assert_eq!(
+            manager
+                .turn_mark
+                .as_ref()
+                .and_then(|start| start.summary.as_deref()),
+            Some("pre-turn summary")
+        );
+        // The live summary, meanwhile, keeps whatever perform_summary set.
+        assert_eq!(
+            manager.summary.as_deref(),
+            Some("summary advanced mid-turn")
+        );
+    }
+
+    /// If a turn's own tool calls are numerous enough to trigger
+    /// `perform_summary` mid-turn, that summary can fold in part of *this*
+    /// turn's own actions. A rewind must undo that, not just truncate the
+    /// buffer - otherwise a "removed" turn's footprint survives in every
+    /// later request via the summary block.
+    #[test]
+    fn rewinding_restores_the_summary_the_turn_started_with() {
+        let mut manager = manager_with(vec![]);
+        manager.summary = Some("earlier work".to_string());
+        manager.mark_turn_start();
+        manager.add_message(json!({ "role": "user", "content": "go" }));
+        // Simulate `perform_summary` having advanced the summary mid-turn,
+        // folding this turn's own actions in.
+        manager.summary = Some("earlier work, plus this turn's actions".to_string());
+
+        assert!(manager.rewind_to_turn_start());
+
+        assert_eq!(manager.summary.as_deref(), Some("earlier work"));
+    }
+
+    /// A checkpoint written before `turn_mark` existed has no such key at
+    /// all; `#[serde(default)]` is what keeps it loadable.
+    #[test]
+    fn a_manager_from_an_older_checkpoint_has_no_turn_mark() {
+        let mut manager = manager_with(vec![assistant_call("a", "search", r#"{"query":"q"}"#)]);
+        manager.mark_turn_start();
+
+        let mut value = serde_json::to_value(&manager).unwrap();
+        value.as_object_mut().unwrap().remove("turn_mark");
+        let mut restored: ConversationManager = serde_json::from_value(value).unwrap();
+
+        assert!(!restored.rewind_to_turn_start());
+    }
+
+    /// `chat_with_tools` itself needs a mocked provider to exercise at all, so
+    /// this tests the wiring between a turn's cwd and the scope handed to
+    /// `session::take`/`store` at the one point it can be isolated: the named
+    /// function that does it.
+    #[test]
+    fn conversation_scope_is_the_same_for_a_project_and_its_subdirectory() {
+        let project = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let sub = root.join("src");
+        std::fs::create_dir(&sub).unwrap();
+
+        assert_eq!(
+            conversation_scope(Some(&root)),
+            conversation_scope(Some(&sub))
+        );
+    }
+
+    #[test]
+    fn conversation_scope_differs_across_projects() {
+        let a = tempfile::tempdir().unwrap();
+        let a_root = std::fs::canonicalize(a.path()).unwrap();
+        std::fs::create_dir(a_root.join(".git")).unwrap();
+
+        let b = tempfile::tempdir().unwrap();
+        let b_root = std::fs::canonicalize(b.path()).unwrap();
+        std::fs::create_dir(b_root.join(".git")).unwrap();
+
+        assert_ne!(
+            conversation_scope(Some(&a_root)),
+            conversation_scope(Some(&b_root))
+        );
     }
 
     /// Reading the same file twice used to keep both copies in every later

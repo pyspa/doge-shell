@@ -644,7 +644,7 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     };
     let _ = ctx.write_stdout(&format!("ok reasoning-effort {reasoning_effort_line}"));
 
-    match crate::chatgpt::chat_session_description() {
+    match crate::chatgpt::chat_session_description(proxy) {
         Some(detail) => {
             let _ = ctx.write_stdout(&format!("ok chat-session {detail}"));
         }

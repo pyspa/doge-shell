@@ -192,7 +192,7 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `AI_CHAT_REASONING_EFFORT` | なし（未設定時は `OPENAI_REASONING_MODEL_PREFIXES` 該当モデル＋`tools` 付きリクエストだけ `"none"`、それ以外はプロバイダ既定） | 同上。値は allow-list しない（`none`/`minimal`/`low`/`medium`/`high` などプロバイダ依存）。設定値が `tools` 付きリクエストで拒否された後は、このクライアントの `tools` 付きリクエストで `"none"` に強制される |
 | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | 同上 |
 | `AI_SUMMARY_MODEL` | チャットモデル | `dsh-builtin/src/chatgpt.rs` |
-| `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs` |
+| `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs`。idle timeout で、時計は成功したターンだけが進める（巻き戻したターンは進めない） |
 | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | 100000 | `dsh-builtin/src/chatgpt.rs` |
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
 | `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |
@@ -298,6 +298,30 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   `session::take` の一致判定が外れ、学習した直後に会話が消える。
   `session.rs` が比較するのは `identity`、`pinned_messages[0]` に入るのは `text`。
   再開時は `set_system_prompt` で毎回 `text` を貼り直す。
+- **会話の継続境界は cwd 完全一致ではなく `tool::workspace_root`**（`chatgpt.rs` の
+  `conversation_scope(cwd)` が `tool::workspace_root` を呼び、結果を `scope` として
+  `session::take`/`store` に渡す）。ツールサンドボックス（`allowed_tool_roots`）と skill roots
+  が既に使っている境界と同じにすることで、`cd src` のようなプロジェクト内移動だけでは会話を
+  切らない。cwd 完全一致に戻さないこと。`scope` の計算（canonicalize + 祖先探索）は
+  `session_ttl.is_some()` のときだけ行う — agent 経路は `session_ttl` が常に `None` なので、
+  結果を誰も読まない計算を毎ターン払わないため。
+- **継続の可否はユーザーに見える。ただし ttl/経過時間までしか正確ではない。**
+  `take` は `session::Claim`（`Continued`/`Fresh(reason)`）を返し、`chat_with_tools` が dim な
+  1 行（`session: continuing ...` / `session: new conversation (reason)`。ただし `Fresh(None)`
+  — 最初の `!` や `AI_CHAT_SESSION_TTL_SECS=0` 時 — は無言）を出す。`reason` は `mismatch()` が
+  ttl 超過・identity 不一致・scope 不一致のうち**該当する全て**を `"; "` で結合したもの
+  （最初の1件だけ返すと、複数の理由が同時に成立していても片方しか伝わらない）。identity の
+  不一致理由は "the prompt, language, or MCP connections changed" と3つまとめて書く —
+  `identity` は operator_prompt/language/MCP fragment を合成した1本の文字列比較なので、
+  どれが変わったかは個別に判定できない。
+  `chat_status` builtin は非破壊で現在の会話を表示する（`chat_reset` は破壊的なままにして、
+  タイポで会話を消す事故を避ける）。ただし `session_description` は `ttl` しか見ておらず
+  （ttl 無効 or 経過時間超過なら会話がスロットに残っていても `None` を返す）、identity/scope
+  の不一致までは検出できない — `agent_mcp_manager()` は `ChatToolHost` にしかなく、
+  `chat_status`/`chat_reset` は `BuiltinFn = fn(&Context, Vec<String>, &mut dyn ShellProxy) ->
+  ExitStatus`（`lib.rs`）に固定されているため。operator prompt / language / project が変わった
+  直後は、次の `!` が実際には新規会話を始めるのに `chat_status` が「継続中」と表示することが
+  ありうる、という既知の制約。
 - **書き込みは `skill_manage` ツール 1 本**（`create` / `write_file` / `patch` / `delete`）。
   読み取り専用ツールは作らない — `read_file` / `ls` が既に両 root に届く。
   承認キーは書き込みが `write:`（`edit` と同じ箱）、削除だけ `delete:`。
@@ -363,9 +387,19 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 イベントを足したら `HookEvent::ALL` に入れる。`parse` の `MAX_HOOKS_PER_EVENT` 検査はそこを
 回るので、手書きの配列に足し忘れると新しいイベントだけ上限が効かなくなる。
 
-- **`user-prompt-submit` は `session::take` より前**。`take` は常に取り除くので、後ろで deny すると
-  `outcome.is_ok()` が false になり `session::store` がスキップされ、継続中の会話が黙って消える。
-  id が要る側は非破壊の `session::peek_id` を使う。
+- **`user-prompt-submit` は `session::take` より前**。`take` は常に取り除くので、そこより後ろで
+  deny すると `outcome.is_err()` になるが、この時点ではまだ `take` していないのでスロットには
+  触っておらず、失うものは無い。id が要る側は非破壊の `session::peek_id` を使う。
+- **`store` は `outcome` に関わらず呼ばれる**。失敗ターンは `session::Claim::Continued` で得た
+  `turn_mark`（そのターンの最初のメッセージの位置）まで `rewind_to_turn_start` で巻き戻してから
+  保存する（`chatgpt.rs` の `chat_with_tools` 末尾）。巻き戻し先は必ず「前回 `store` が保存した
+  時点の buffer」＝完了ターンが残したプレフィックスなので、`truncate` だけで
+  `tool_calls`/`tool` のペアが壊れることはない。brand-new な会話（`turn_mark` が無い）が
+  失敗した場合は巻き戻す先が無いので、そのケースだけ従来どおり何も保存しない。
+  **chat 経路のクロージャに、この巻き戻し処理を経由しない新しい早期 return
+  （`?` や `return`）を足さないこと** - 足すと、そのパスだけ会話が丸ごと消える退行になる。
+  agent 経路（`session_ttl` が常に `None`）は `turn_mark` を一度も持たないので、この巻き戻しは
+  常に no-op で、agent の挙動は変わらない。
 - **`response-complete` に「継続を強制する」機能は入れない**。継続の強制は「もっと副作用を使う許可」で、
   §4 の方針に真っ向から反する。
 - **`match` は 4 種類**（`tools` / `programs` / `paths` / `arguments`）。**種類間は AND、

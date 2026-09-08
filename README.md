@@ -292,6 +292,7 @@ The shell includes many built-in commands:
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Set AI model                                                                                                               |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
+| `chat_status`       | Show the carried AI chat conversation                                                                                      |
 | `skill`             | List, show and remove the skills the AI chat runtime reads                                                                 |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
@@ -1266,7 +1267,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
    | `AI_CHAT_REASONING_EFFORT` | unset (`none` on `tools` requests to a `gpt-5`/`o1`/`o3`/`o4` model, provider default otherwise) | `reasoning_effort` sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
-   | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
+   | `AI_CHAT_SESSION_TTL_SECS` | `1800` | Idle timeout for the carried conversation; the clock restarts on each turn that finishes (a rewound failed turn does not restart it). `0` disables carrying it forward |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
    | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
@@ -1437,10 +1438,23 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 10. **Conversation continuity**:
     Consecutive `!` turns continue the same conversation, so follow-up questions work and
-    the assistant does not re-explore the project every time. It restarts when the
-    directory changes, when the model/prompt/language changes, after
-    `AI_CHAT_SESSION_TTL_SECS` (default 1800), or on `chat_reset`. Installing a skill -
-    or having the assistant write one - does not restart it.
+    the assistant does not re-explore the project every time. Each turn that continues one
+    prints a dim `session: continuing ...` line, and one that starts a new conversation
+    prints why - except the very first `!` in a shell, and every turn while
+    `AI_CHAT_SESSION_TTL_SECS=0`, which print nothing (there is no previous conversation to
+    explain away). It restarts when you move to a different project (it follows you within
+    one project root, so `cd src` keeps it), when the operator prompt or language changes
+    (`chat_model` does not restart it - the history is model-independent), when an MCP
+    server is connected or disconnected, after `AI_CHAT_SESSION_TTL_SECS` of idle time
+    (default 1800), or on `chat_reset`. Installing a skill - or having the assistant write
+    one - does not restart it. `chat_status` shows what is currently carried without
+    discarding it, based on idle time - it does not re-check whether the prompt, language,
+    MCP connections or project changed since the conversation was stored.
+
+    A turn that does not finish - Ctrl-C, an API error, the tool-iteration cap, or
+    `AI_CHAT_TURN_TOKEN_BUDGET` - is removed from the conversation, but everything before it
+    is kept: only that one turn is lost, not the whole conversation. The carried conversation
+    lives in memory only, so it does not survive the shell exiting.
 
 11. **Token usage**:
     Each `!` turn prints what it cost (`tokens: N req / in X (cached Y) / out Z`), and

@@ -181,7 +181,15 @@ const HELP_TOPICS: &[HelpTopic] = &[
         summary: "Forget the carried AI chat conversation.",
         usage: "chat_reset",
         examples: &["chat_reset"],
-        related: &["chat_model", "chat_prompt"],
+        related: &["chat_status", "chat_model", "chat_prompt"],
+    },
+    HelpTopic {
+        name: "chat_status",
+        category: "ai",
+        summary: "Show the carried AI chat conversation.",
+        usage: "chat_status",
+        examples: &["chat_status"],
+        related: &["chat_reset", "chat_model"],
     },
     HelpTopic {
         name: "chat_prompt",
@@ -424,6 +432,9 @@ mod tests {
         let output = help_output(&["chat_reset".to_string()]).unwrap();
         assert!(output.contains("Forget the carried AI chat conversation."));
         assert!(!output.contains("MCP"));
+
+        let output = help_output(&["chat_status".to_string()]).unwrap();
+        assert!(output.contains("Show the carried AI chat conversation."));
     }
 
     #[test]

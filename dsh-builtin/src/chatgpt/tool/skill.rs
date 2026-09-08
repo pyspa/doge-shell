@@ -520,8 +520,11 @@ fn refresh_project_trust(request: &Request) {
     let Some(root) = request.skill_dir.parent() else {
         return;
     };
+    // `.dsh/skills` by construction: `skill_dir` came from
+    // `skills::project_skills_root`, the only project root writes may reach.
     let manager = skills::SkillsManager::with_roots(vec![skills::SkillRoot {
         scope: SkillScope::Project,
+        origin: skills::SkillOrigin::Dsh,
         path: root.to_path_buf(),
     }]);
     skills::trust::refresh(root, &skills::trust::digest(&manager.load_skills()));
@@ -682,6 +685,7 @@ mod tests {
 
         let manager = skills::SkillsManager::with_roots(vec![skills::SkillRoot {
             scope: SkillScope::Project,
+            origin: skills::SkillOrigin::Dsh,
             path: root.join(".dsh/skills"),
         }]);
         let loaded = manager.load_skills();
@@ -878,6 +882,35 @@ mod tests {
         )
         .expect_err("there is no project here");
         assert!(err.contains("no project here"), "{err}");
+    }
+
+    /// `.agents/skills` is shared with other tools. It is read, never written:
+    /// a directory this shell does not own is not a place for it to leave
+    /// files, and `scope: "project"` has exactly one destination.
+    #[test]
+    fn project_scope_writes_to_dsh_skills_and_never_to_the_agents_root() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        std::fs::create_dir_all(root.join(".agents/skills")).unwrap();
+        let mut p = proxy(root.clone());
+
+        run(
+            r#"{"action":"create","name":"demo","scope":"project","description":"d"}"#,
+            &mut p,
+        )
+        .expect("create");
+
+        assert!(root.join(".dsh/skills/demo/SKILL.md").is_file());
+        assert!(!root.join(".agents/skills/demo").exists());
+        // The tool takes no third scope, so there is no spelling that reaches
+        // the shared root at all.
+        assert!(
+            run(
+                r#"{"action":"create","name":"other","scope":"project-agents","description":"d"}"#,
+                &mut p,
+            )
+            .is_err()
+        );
     }
 
     /// A write that fails after the directory is made left `create` saying

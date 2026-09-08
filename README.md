@@ -1275,6 +1275,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
    | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dsh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
    | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
+   | `AI_CHAT_HOOK_TURN_BUDGET_MS` | unset | Ceiling on the wall time one `!` turn waits for hooks; `0` removes it |
    | `DSH_AI_HOOKS_CONFIG` | `~/.config/dsh/ai-hooks.json` | Path of the hook configuration |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
@@ -1446,17 +1447,31 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     A skill is a short `SKILL.md` the assistant reads when it is relevant - and can
     write for itself, so a procedure worked out once is not worked out again.
 
-    The chat runtime loads them from two places, most specific first:
+    The chat runtime reads them from three places, most specific first:
 
     | Scope | Directory | What belongs there |
     |---|---|---|
     | Project | `<project>/.dsh/skills/` | procedures tied to this repository |
+    | Project, shared | `<project>/.agents/skills/` | the same, kept where every agent working in the checkout can find them |
     | Personal | `~/.config/dsh/skills/` (`$XDG_CONFIG_HOME/dsh/skills` when set) | anything portable |
 
-    A project skill shadows a personal one of the same name. Only the name, the path
-    and the frontmatter `description` reach the system prompt; the body is read on
-    demand, so keep the description a trigger ("Use when …") and move long detail into
-    `references/`.
+    A more specific root shadows a less specific one of the same name, so
+    `.dsh/skills` wins over `.agents/skills`, which wins over your personal root.
+    Only the name, the path and the frontmatter `description` reach the system
+    prompt; the body is read on demand, so keep the description a trigger
+    ("Use when …") and move long detail into `references/`. Frontmatter keys dsh
+    does not use - `allowed-tools`, `license` and the rest - are ignored rather
+    than rejected, so a skill written for another agent loads as it is; dsh does
+    not enforce `allowed-tools`, and a skill cannot narrow what the assistant may
+    do any more than it can widen it.
+
+    **`.agents/skills/` is read, never written.** It is shared with other tools,
+    and a directory this shell does not own is not a place for it to leave files,
+    so `skill_manage` with `scope: "project"` always writes to `.dsh/skills/`.
+    There is no personal equivalent: if you keep portable skills in
+    `~/.agents/skills`, point the personal root at them
+    (`ln -s ~/.agents/skills ~/.config/dsh/skills`) and they load with one trust
+    story rather than two.
 
     ```bash
     skill list                 # scope, read count, last use
@@ -1476,8 +1491,10 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     descriptions would otherwise be in every prompt before you had decided anything,
     and the assistant on the other side of that prompt can run commands. Answer `y`
     for this shell session or `a` to remember the repository; adding a skill, or
-    rewording one, asks again. `skill trust` shows the current answer and
-    `skill untrust` takes it back. Under `agent run` nothing is asked and an
+    rewording one, asks again. You are asked once per directory, so a checkout
+    carrying both `.dsh/skills/` and `.agents/skills/` asks twice and refusing one
+    leaves the other alone. `skill trust` shows the current answers and
+    `skill untrust` takes them back. Under `agent run` nothing is asked and an
     untrusted repository is simply not read - an unattended run should be the more
     careful one, not the more trusting one.
 
@@ -1496,8 +1513,9 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     A project's skills arrive with a `git clone`, so treat them as you would any other
     file in that repository. They are notes, never permission: a skill cannot authorise
     skipping a confirmation, and a script bundled with one always asks before it runs -
-    including under `agent run`, where `--allow-command` does not cover it.
-    `AI_CHAT_PROJECT_SKILLS=0` turns project skills off entirely.
+    including under `agent run`, where `--allow-command` does not cover it, and
+    including one under `.agents/skills/`. `AI_CHAT_PROJECT_SKILLS=0` turns both
+    project roots off entirely.
 
     This repository keeps canonical sample skills under `docs/ai/skills/`; install the
     ones you want with `scripts/install-runtime-skills.sh --target dsh --profile dsh-common`.
@@ -1515,7 +1533,10 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
         {
           "id": "block-etc-writes",
           "events": ["pre-tool-use"],
-          "match": { "tools": ["edit", "str_replace", "execute"] },
+          "match": {
+            "tools": ["edit", "str_replace", "execute"],
+            "paths": ["/etc/**"]
+          },
           "command": ["python3", "/home/me/.config/dsh/hooks/block-etc.py"],
           "timeout_ms": 3000
         }
@@ -1529,7 +1550,60 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     | `user-prompt-submit` | before your message is sent | yes |
     | `pre-tool-use` | before any tool runs, MCP included | yes |
     | `post-tool-use` | after a tool returns | it can mark the result failed |
+    | `pre-compact` | before the conversation is shortened | no |
     | `response-complete` | after the answer | no |
+
+    `pre-compact` fires when the conversation has grown past
+    `AI_CHAT_CONTEXT_TOKEN_BUDGET` (or the internal buffer limit), after the free
+    rule-based pass and before dsh pays a model to summarize - its
+    `will_summarize` says which. It cannot refuse: without the shortening the
+    request would simply be too large to send.
+
+    **Which calls a hook wants** is the `match` clause. dsh puts every command
+    through the one `execute` tool, so `{"tools": ["execute"]}` means *every
+    command* and a hook watching `rm` would pay its timeout on every `ls`. The
+    other three kinds narrow that. Kinds are ANDed; entries within a kind are ORed.
+
+    | Key | Matches |
+    |---|---|
+    | `tools` | tool names; `*` allowed only as the last character (`mcp__*`) |
+    | `programs` | programs the command runs, written the way `AI_CHAT_EXECUTE_ALLOWLIST` is - `execute` only |
+    | `paths` | globs against the paths the call names |
+    | `arguments` | exact values for top-level argument fields |
+
+    `programs` looks through wrappers and judges every stage, so `rm` matches
+    `sudo rm -rf x`, `timeout 5 rm x` and `echo hi \| rm -rf x` alike, and
+    `git push` matches `git push --force` but not `git pushx`. `paths` sees the
+    `path` argument of `edit`/`read_file`/`str_replace`/`ls`/`search`, every
+    non-option token and the `cwd` of an `execute` command, and any path-shaped
+    string anywhere in an MCP tool's arguments (nested objects and lists
+    included) - each both as written and resolved against the directory the call
+    will run in, so `/etc/**` matches `sub/../../etc/shadow` and matches
+    `{"command": "cat sub/x", "cwd": "/etc"}`. Inside a command line a bare word
+    could be a file or a program and the two cannot be told apart, so both are
+    offered: `rm .env` reaches a hook watching `**/*.env`, and the price is that
+    a deliberately broad pattern like `<cwd>/**` is true of a program name too.
+    `skill_manage` contributes no paths - its `file` is relative to the skill,
+    not to your working directory - so watch skill writes with
+    `"tools": ["skill_manage"]` instead. Resolution is textual, never `realpath`, so a symlink
+    can dodge a `paths` matcher; that costs you a check that did not run, never a
+    permission, because a hook cannot grant anything.
+
+    A `match` that could never be true is a load error - `programs` without an
+    `execute` entry in `tools`, an unparseable program, a bad glob, a non-scalar
+    `arguments` value - because a hook that loads cleanly and never fires is the
+    worst outcome available. Where a matcher is merely *pointless* rather than
+    impossible, `doctor hooks` says so and the hook still loads: an empty
+    `match` runs on every call, as it always has, and a matcher that cannot be
+    satisfied on only *some* of a hook's events still works on the rest.
+
+    The match is made against the arguments as the model sent them, while the
+    payload the hook receives is masked. They differ on purpose: masking rewrites
+    `-p <value>` unconditionally, so `mkdir -p /etc/myapp` reaches a hook as
+    `mkdir -p ***`, and a `/etc/**` matcher reading that would not fire. An
+    argument list that is present but cannot be read - a mismatched quote -
+    counts as a match, so a broken command line is never a way past a check; a
+    call with no arguments at all simply does not satisfy a matcher about them.
 
     The event arrives as JSON on the hook's **stdin**; the hook answers with JSON on
     stdout, or just exits:
@@ -1539,6 +1613,30 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       "message": "shown to you, not to the model",
       "additional_context": "added to what the model reads" }
     ```
+
+    Every event carries where the agent loop is, so a hook can govern the run and
+    not just the call - stop a tool once the loop has gone round forty times, or
+    once the turn has spent more than you meant to:
+
+    ```json
+    { "hook_version": 1, "event": "pre-tool-use", "session_id": "...", "turn_id": "...",
+      "cwd": "/repo", "safety_level": "normal", "agent_task_id": null,
+      "tool_name": "execute", "tool_arguments": { "command": "cargo test" },
+      "loop": { "iteration": 12, "max_iterations": 100,
+                "tokens": { "prompt": 88000, "completion": 4200, "total": 92200 },
+                "turn_token_budget": null },
+      "hook_budget": { "turn_budget_ms": null, "spent_ms": 40 } }
+    ```
+
+    Fields are only ever added to the payload, so `hook_version` stays `1`; it
+    moves only if a key changes meaning or goes away.
+
+    A short hook should not need a JSON parser, so the same facts arrive as
+    environment variables: `DSH_HOOK_EVENT`, `DSH_HOOK_ID`, `DSH_HOOK_SESSION_ID`,
+    `DSH_HOOK_TURN_ID`, `DSH_HOOK_CWD`, `DSH_HOOK_TOOL`, `DSH_HOOK_ITERATION`,
+    `DSH_HOOK_MAX_ITERATIONS`, `DSH_HOOK_TURN_TOKENS` and `DSH_HOOK_TIMEOUT_MS`
+    (the timeout that actually applies). `DSH_HOOK_DEPTH` is set too, and is what
+    stops a hook that starts `dsh` from running hooks of its own.
 
     `additional_context` lands next to the thing it is about, on the three events
     that have somewhere to put it: `user-prompt-submit` (beside your message),
@@ -1563,8 +1661,32 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     before installing it, the way you would read a `config.lisp`. A hook that fails or
     times out on `user-prompt-submit` or `pre-tool-use` **blocks**, because a check that
     can be got past by crashing is not a check; failures on the other three events are
-    reported once and ignored. `AI_CHAT_HOOKS=off` disables the lot, and `doctor hooks`
-    shows what was loaded without running anything.
+    reported once and ignored. `AI_CHAT_HOOKS=off` disables the lot - budget included, so a
+    typo there cannot outlive the switch - and `doctor hooks` shows what was
+    loaded without running anything.
+
+    Each hook has its own `timeout_ms` (5000 by default, clamped to 100-60000), and at
+    most eight hooks run for one event. `AI_CHAT_HOOK_TURN_BUDGET_MS`
+    puts a ceiling on the wall time one turn spends waiting for all of them. It is off
+    by default, because a default would mean hooks quietly stopping partway through a
+    long turn. When the budget runs out, `post-tool-use`, `pre-compact`,
+    `session-start` and `response-complete` are **skipped** with one warning per
+    turn, while
+    `user-prompt-submit` and `pre-tool-use` still run on whatever is left (at least
+    100ms) - a check that could be got past by being slow would not be a check, and a
+    gate that times out already refuses. Eight hooks each need their 100ms, so the
+    budget bounds the wait rather than guaranteeing it. Time spent answering a hook's
+    own question is not charged to it.
+
+    Hooks are synchronous, but an observer need not be. Print your line, exit `0`, and
+    leave the slow part to a child of your own: only a timeout or a `Ctrl-C` kills the
+    process group, so a hook that has already exited leaves its background work alone.
+
+    An unknown event name, an unknown `match` field or an unknown key anywhere in the
+    file is a load error, and a load error refuses the chat rather than running without
+    the checks. That also means a configuration using the newer `match` kinds will not
+    load on an older `dsh` - deliberately, and for the same reason: a typo must not be
+    a way for a gate to disappear quietly.
 
     Project-local `.dsh/hooks.json` is deliberately **not** read: cloning a repository
     should not be enough to run its commands.

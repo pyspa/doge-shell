@@ -254,9 +254,13 @@ fn json_section_details(
             let dsh = crate::config_paths::skills_dir();
             let codex = codex_runtime_skills_dir(proxy);
             let project = crate::chatgpt::skills::project_skills_root(current_dir);
+            let project_agents = crate::chatgpt::skills::project_agents_skills_root(current_dir);
             json!({
                 "dsh_runtime": json!({"path": dsh, "entries": count_skill_dirs(&dsh)}),
                 "project_runtime": project.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)})),
+                // The interop root feeds the prompt as well; tooling reading
+                // only `project_runtime` concluded a checkout shipped none.
+                "project_agents_runtime": project_agents.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)})),
                 "codex_runtime": codex.as_ref().map(|path| json!({"path": path, "entries": count_skill_dirs(path)}))
             })
         }
@@ -1124,16 +1128,11 @@ fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
             .map(|event| event.as_str())
             .collect::<Vec<_>>()
             .join(",");
-        let tools = hook
-            .matcher
-            .as_ref()
-            .map(|matcher| matcher.tools.join(","))
-            .filter(|tools| !tools.is_empty())
-            .unwrap_or_else(|| "*".to_string());
         let state = if hook.enabled { "ok" } else { "skip" };
         let _ = ctx.write_stdout(&format!(
-            "{state} hook {} events={events} tools={tools} timeout={}ms",
+            "{state} hook {} events={events} {} timeout={}ms",
             hook.id,
+            describe_matcher(hook),
             hook.timeout_ms()
         ));
 
@@ -1143,7 +1142,61 @@ fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
                 hook.id, hook.command[0]
             ));
         }
+
+        // Said rather than refused. Listing `session-start` next to
+        // `pre-tool-use` is reasonable to write, and rejecting it would break
+        // configurations that work; a hook silently never firing on one of its
+        // events - or never narrowing at all - is what the person needs told.
+        if hook.matcher_narrows_nothing() {
+            let _ = ctx.write_stdout(&format!(
+                "warn hook {} match narrows nothing; it runs on every call",
+                hook.id
+            ));
+        }
+        let kinds = hook.argument_matcher_kinds();
+        if !kinds.is_empty() {
+            for event in hook.events.iter().filter(|event| !event.carries_a_tool()) {
+                let _ = ctx.write_stdout(&format!(
+                    "warn hook {} match ({}) cannot be satisfied on {}",
+                    hook.id,
+                    kinds.join(","),
+                    event.as_str()
+                ));
+            }
+        }
     }
+}
+
+/// The `match` clause as one field per kind, so `doctor` shows what narrowed a
+/// hook and not only that something did.
+fn describe_matcher(hook: &crate::chatgpt::hooks::config::HookDefinition) -> String {
+    let Some(matcher) = hook.matcher.as_ref() else {
+        return "tools=*".to_string();
+    };
+    let mut parts = Vec::new();
+    let mut push = |name: &str, values: &[String]| {
+        if !values.is_empty() {
+            parts.push(format!("{name}={}", values.join(",")));
+        }
+    };
+    push("tools", &matcher.tools);
+    push("programs", &matcher.programs);
+    push("paths", &matcher.paths);
+    if !matcher.arguments.is_empty() {
+        parts.push(format!(
+            "args={}",
+            matcher
+                .arguments
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+    }
+    if parts.is_empty() {
+        parts.push("tools=*".to_string());
+    }
+    parts.join(" ")
 }
 
 /// Can this program be started at all? Existence only - never execution.
@@ -1170,18 +1223,31 @@ fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Value {
         return json!({"config": null, "hooks": [], "disabled_by": config::HOOKS_ENABLED_KEY});
     }
 
+    // Reported as-resolved, and an unparseable value is shown rather than
+    // swallowed: it stops the chat, so it has to be visible here.
+    let turn_budget = match config::turn_budget_ms(proxy) {
+        Ok(value) => json!(value),
+        Err(err) => json!(err),
+    };
     let Some(path) = config::config_path(proxy) else {
-        return json!({"config": null, "hooks": []});
+        return json!({"config": null, "hooks": [], "turn_budget_ms": turn_budget});
     };
     match config::read(&path) {
         Ok(hooks) => json!({
             "config": path,
+            "turn_budget_ms": turn_budget,
             "hooks": hooks.all().iter().map(|hook| json!({
                 "id": hook.id,
                 "events": hook.events.iter().map(|event| event.as_str()).collect::<Vec<_>>(),
                 "enabled": hook.enabled,
                 "timeout_ms": hook.timeout_ms(),
                 "command_found": program_is_runnable(&hook.command[0]),
+                "match": {
+                    "tools": hook.matcher.as_ref().map(|m| m.tools.clone()).unwrap_or_default(),
+                    "programs": hook.matcher.as_ref().map(|m| m.programs.clone()).unwrap_or_default(),
+                    "paths": hook.matcher.as_ref().map(|m| m.paths.clone()).unwrap_or_default(),
+                    "arguments": hook.matcher.as_ref().map(|m| m.arguments.clone()).unwrap_or_default(),
+                },
             })).collect::<Vec<_>>()
         }),
         Err(err) => json!({"config": path, "error": err}),
@@ -1199,19 +1265,14 @@ fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Value {
 fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     let project_enabled = crate::chatgpt::resolve_project_skills_enabled(proxy);
     let manager = crate::chatgpt::skills::SkillsManager::new(Some(current_dir), true);
-    let roots: Vec<(crate::chatgpt::skills::SkillScope, PathBuf)> = manager
-        .roots()
-        .iter()
-        .map(|root| (root.scope, root.path.clone()))
-        .collect();
+    let roots: Vec<crate::chatgpt::skills::SkillRoot> = manager.roots().to_vec();
 
-    for (scope, path) in &roots {
-        let is_project = *scope == crate::chatgpt::skills::SkillScope::Project;
-        let label = if is_project {
-            "project-skills"
-        } else {
-            "user-skills"
-        };
+    for root in &roots {
+        let path = &root.path;
+        let is_project = root.scope == crate::chatgpt::skills::SkillScope::Project;
+        // Per root, not per scope: a project has two, and one label for both
+        // would report the shared directory's entry count as the repository's.
+        let label = format!("{}-skills", root.label());
         if !path.exists() {
             let _ = ctx.write_stdout(&format!("skip {label} missing {}", path.display()));
         } else if !path.is_dir() {
@@ -1234,26 +1295,36 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
     }
 
     // The trust decision is what actually decides whether these reach a prompt.
-    if let Some(decision) = crate::chatgpt::skills::describe_project_root(manager.roots()) {
+    // One line per root: each is agreed to separately, so one summary would
+    // report a repository as trusted while a second directory was not.
+    for decision in crate::chatgpt::skills::describe_project_roots(manager.roots()) {
         let trusted =
             crate::chatgpt::skills::trust::is_remembered(&decision.root, &decision.digest);
         let _ = ctx.write_stdout(&format!(
-            "{} project-skills-trust {} skills={}",
+            "{} project-skills-trust {} {} skills={}",
             if trusted { "ok" } else { "warn" },
             if trusted {
                 "remembered"
             } else {
                 "not-yet-agreed"
             },
+            crate::config_paths::display_path(&decision.root),
             decision.names.len()
         ));
     }
 
     let (skills, problems) = manager.load_reporting();
     for problem in &problems {
+        // The root's label, not the scope's: two project roots are trusted
+        // separately and edited separately, so one word for both is the
+        // ambiguity `label()` was added to remove.
+        let label = roots
+            .iter()
+            .find(|root| problem.path.starts_with(&root.path))
+            .map(|root| root.label())
+            .unwrap_or_else(|| problem.scope.as_str());
         let _ = ctx.write_stdout(&format!(
-            "warn {}-skill {} {}",
-            problem.scope.as_str(),
+            "warn {label}-skill {} {}",
             problem.path.display(),
             problem.problem
         ));
@@ -1468,23 +1539,20 @@ fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     }
 
     {
-        let config_root = crate::config_paths::skills_dir();
-        // Project skills count towards the prompt too, and used not to be
-        // counted at all - a repository with a hundred of them still reported
-        // a minimal footprint.
-        let project_root = crate::chatgpt::skills::project_skills_root(current_dir);
-        let personal = if config_root.exists() {
-            fs::read_dir(&config_root)
-                .map(|entries| entries.count())
-                .unwrap_or(0)
-        } else {
-            0
+        // Counted from `skill_roots`, not from a hand-picked pair. Naming the
+        // roots here meant `.agents/skills` contributed nothing, and a
+        // repository with forty skills there still reported a minimal
+        // footprint - the very thing this check was added to catch.
+        let roots = crate::chatgpt::skills::skill_roots(Some(current_dir), true);
+        let entries = |scope| {
+            roots
+                .iter()
+                .filter(|root| root.scope == scope && root.path.is_dir())
+                .map(|root| count_skill_dirs(&root.path))
+                .sum::<usize>()
         };
-        let project = project_root
-            .as_ref()
-            .filter(|path| path.is_dir())
-            .map(|path| count_skill_dirs(path))
-            .unwrap_or(0);
+        let personal = entries(crate::chatgpt::skills::SkillScope::User);
+        let project = entries(crate::chatgpt::skills::SkillScope::Project);
         let count = personal + project;
         if count > 8 {
             let _ = ctx.write_stdout(&format!(
@@ -1499,24 +1567,22 @@ fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
         // The two surfaces this shell gained: a cloned repository's skills, and
         // hooks that run external commands. Neither appeared in the safety
         // posture, which is where a person looks before trusting a checkout.
-        match crate::chatgpt::skills::describe_project_root(&crate::chatgpt::skills::skill_roots(
-            Some(current_dir),
-            true,
-        )) {
-            Some(decision) => {
-                let trusted =
-                    crate::chatgpt::skills::trust::is_remembered(&decision.root, &decision.digest);
-                let _ = ctx.write_stdout(&format!(
-                    "{} project-skills {} {} skills={}",
-                    if trusted { "warn" } else { "ok" },
-                    if trusted { "trusted" } else { "not-yet-agreed" },
-                    decision.root.display(),
-                    decision.names.len()
-                ));
-            }
-            None => {
-                let _ = ctx.write_stdout("ok project-skills none");
-            }
+        let decisions = crate::chatgpt::skills::describe_project_roots(
+            &crate::chatgpt::skills::skill_roots(Some(current_dir), true),
+        );
+        if decisions.is_empty() {
+            let _ = ctx.write_stdout("ok project-skills none");
+        }
+        for decision in decisions {
+            let trusted =
+                crate::chatgpt::skills::trust::is_remembered(&decision.root, &decision.digest);
+            let _ = ctx.write_stdout(&format!(
+                "{} project-skills {} {} skills={}",
+                if trusted { "warn" } else { "ok" },
+                if trusted { "trusted" } else { "not-yet-agreed" },
+                decision.root.display(),
+                decision.names.len()
+            ));
         }
     }
 
@@ -2459,6 +2525,40 @@ mod tests {
         assert!(!is_https_or_local_http_url("http://127.0.0.1.evil.com/v1"));
     }
 
+    /// One line per root, named after the directory rather than the scope: a
+    /// project has two roots, and one `project-skills` line for both would
+    /// report the shared directory's entry count as the repository's.
+    #[test]
+    fn doctor_skills_labels_each_root_separately() {
+        let project = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        for (dir, name) in [(".dsh/skills", "deploy"), (".agents/skills", "review")] {
+            let skill = root.join(dir).join(name);
+            std::fs::create_dir_all(&skill).unwrap();
+            std::fs::write(
+                skill.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: d\n---\n"),
+            )
+            .unwrap();
+        }
+
+        let (ctx, observer) = observed_context();
+        let mut proxy = hooks_proxy(&root, &[]);
+        crate::chatgpt::skills::clear_skills_fragment_cache();
+        report_runtime_skills(&ctx, &mut proxy, &root);
+        let output = observed_stdout(&observer);
+
+        assert!(output.contains("ok project-skills "), "{output}");
+        assert!(output.contains("ok project-agents-skills "), "{output}");
+        // Both are untrusted here, and each gets its own line.
+        assert_eq!(
+            output.matches("project-skills-trust").count(),
+            2,
+            "{output}"
+        );
+    }
+
     fn hooks_proxy(cwd: &Path, vars: &[(&str, &str)]) -> TestProxy {
         TestProxy {
             cwd: cwd.to_path_buf(),
@@ -2515,6 +2615,86 @@ mod tests {
             output.contains("warn hook gone command not found"),
             "{output}"
         );
+    }
+
+    /// A hook narrowed by `programs` or `paths` should say so: "tools=execute"
+    /// alone reads as "every command", which is what it used to mean.
+    #[test]
+    fn doctor_hooks_shows_every_match_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(
+            &config,
+            r#"{"version":1,"hooks":[{"id":"narrow","events":["pre-tool-use"],
+               "match":{"tools":["execute"],"programs":["rm"],"paths":["/etc/**"],
+                        "arguments":{"cwd":"/srv"}},
+               "command":["sh"]}]}"#,
+        )
+        .unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(output.contains("tools=execute"), "{output}");
+        assert!(output.contains("programs=rm"), "{output}");
+        assert!(output.contains("paths=/etc/**"), "{output}");
+        assert!(output.contains("args=cwd"), "{output}");
+    }
+
+    /// Reported, not refused: the configuration works, but the author needs to
+    /// know their matcher can never be true on one of the events they listed.
+    #[test]
+    fn doctor_hooks_warns_about_a_match_that_cannot_be_satisfied() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(
+            &config,
+            r#"{"version":1,"hooks":[{"id":"wide","events":["pre-tool-use","session-start"],
+               "match":{"tools":["execute"],"programs":["rm"]},"command":["sh"]}]}"#,
+        )
+        .unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        );
+
+        let output = run_doctor_hooks(&mut proxy);
+
+        assert!(
+            output.contains("cannot be satisfied on session-start"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("cannot be satisfied on pre-tool-use"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn doctor_hooks_json_reports_the_turn_budget_and_the_matcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("ai-hooks.json");
+        std::fs::write(
+            &config,
+            r#"{"version":1,"hooks":[{"id":"narrow","events":["pre-tool-use"],
+               "match":{"tools":["execute"],"programs":["rm"]},"command":["sh"]}]}"#,
+        )
+        .unwrap();
+        let mut proxy = hooks_proxy(
+            dir.path(),
+            &[
+                ("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
+                ("AI_CHAT_HOOK_TURN_BUDGET_MS", "2500"),
+            ],
+        );
+
+        let details = json_hooks_details(&mut proxy);
+
+        assert_eq!(details["turn_budget_ms"], 2500);
+        assert_eq!(details["hooks"][0]["match"]["programs"][0], "rm");
     }
 
     /// A report that lists hooks while none of them can fire reads as "these

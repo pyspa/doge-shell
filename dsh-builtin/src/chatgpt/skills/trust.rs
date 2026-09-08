@@ -166,7 +166,7 @@ fn write_state(path: &Path, state: &TrustFile) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chatgpt::skills::{SkillRoot, SkillScope, SkillsManager};
+    use crate::chatgpt::skills::{SkillOrigin, SkillRoot, SkillScope, SkillsManager};
 
     fn skills_in(dir: &Path, entries: &[(&str, &str)]) -> Vec<Skill> {
         for (name, description) in entries {
@@ -180,6 +180,7 @@ mod tests {
         }
         SkillsManager::with_roots(vec![SkillRoot {
             scope: SkillScope::Project,
+            origin: SkillOrigin::Dsh,
             path: dir.to_path_buf(),
         }])
         .load_skills()

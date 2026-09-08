@@ -10,7 +10,7 @@
 
 use crate::ShellProxy;
 use crate::chatgpt::skills::usage;
-use crate::chatgpt::skills::{self, Skill, SkillScope, SkillsManager};
+use crate::chatgpt::skills::{self, Skill, SkillsManager};
 use crate::config_paths::display_path;
 use dsh_types::{Context, ExitStatus};
 use std::path::PathBuf;
@@ -100,19 +100,15 @@ fn find(proxy: &mut dyn ShellProxy, name: &str) -> Option<Skill> {
 
 fn list(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let manager = manager(proxy);
-    let roots: Vec<(SkillScope, PathBuf)> = manager
-        .roots()
-        .iter()
-        .map(|root| (root.scope, root.path.clone()))
-        .collect();
+    let roots: Vec<skills::SkillRoot> = manager.roots().to_vec();
     let skills = manager.load_skills();
     let records = usage::load();
     let now = usage::now_ms();
 
     if skills.is_empty() {
         let _ = ctx.write_stdout("No skills yet.");
-        for (scope, path) in &roots {
-            let _ = ctx.write_stdout(&format!("  {}: {}", scope.as_str(), display_path(path)));
+        for root in &roots {
+            let _ = ctx.write_stdout(&format!("  {}: {}", root.label(), display_path(&root.path)));
         }
         let _ =
             ctx.write_stdout("Ask the assistant to save one, or write a SKILL.md there by hand.");
@@ -133,9 +129,16 @@ fn list(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
             unused.push(skill.name.as_str());
         }
 
+        // The root's label, not the scope's: a project has two roots, and
+        // printing `project` for both hides which directory to edit.
+        let label = roots
+            .iter()
+            .find(|root| root.path == skill.root())
+            .map(|root| root.label())
+            .unwrap_or_else(|| skill.scope.as_str());
         let _ = ctx.write_stdout(&format!(
-            "{:<8} {:<28} reads={:<5} last={:<12} by={:<6} {}",
-            skill.scope.as_str(),
+            "{:<15} {:<28} reads={:<5} last={:<12} by={:<6} {}",
+            label,
             skill.name,
             reads,
             describe_age(now, last),
@@ -224,27 +227,34 @@ fn remove(ctx: &Context, proxy: &mut dyn ShellProxy, name: &str) -> ExitStatus {
     }
 }
 
-/// The project root this shell would ask about, if there is one.
-fn project_decision(proxy: &mut dyn ShellProxy) -> Option<skills::ProjectSkillDecision> {
-    let cwd = proxy.get_current_dir().ok()?;
-    skills::describe_project_root(&skills::skill_roots(Some(&cwd), true))
+/// Every project root this shell would ask about.
+fn project_decisions(proxy: &mut dyn ShellProxy) -> Vec<skills::ProjectSkillDecision> {
+    let Ok(cwd) = proxy.get_current_dir() else {
+        return Vec::new();
+    };
+    skills::describe_project_roots(&skills::skill_roots(Some(&cwd), true))
 }
 
 fn trust_status(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let Some(decision) = project_decision(proxy) else {
+    let decisions = project_decisions(proxy);
+    if decisions.is_empty() {
         let _ = ctx.write_stdout("No project skills here.");
         return ExitStatus::ExitedWith(0);
-    };
+    }
 
-    let remembered = skills::trust::is_remembered(&decision.root, &decision.digest);
-    let _ = ctx.write_stdout(&format!(
-        "{} {} ({} skill(s): {})",
-        if remembered { "trusted" } else { "untrusted" },
-        display_path(&decision.root),
-        decision.names.len(),
-        decision.names.join(", ")
-    ));
-    if !remembered {
+    let mut any_untrusted = false;
+    for decision in &decisions {
+        let remembered = skills::trust::is_remembered(&decision.root, &decision.digest);
+        any_untrusted |= !remembered;
+        let _ = ctx.write_stdout(&format!(
+            "{} {} ({} skill(s): {})",
+            if remembered { "trusted" } else { "untrusted" },
+            display_path(&decision.root),
+            decision.names.len(),
+            decision.names.join(", ")
+        ));
+    }
+    if any_untrusted {
         let _ = ctx.write_stdout(
             "The next `!` here asks before reading them. Answer `a` to remember this repository.",
         );
@@ -253,15 +263,18 @@ fn trust_status(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
 }
 
 fn untrust(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let Some(decision) = project_decision(proxy) else {
+    let decisions = project_decisions(proxy);
+    if decisions.is_empty() {
         let _ = ctx.write_stdout("No project skills here.");
         return ExitStatus::ExitedWith(0);
-    };
+    }
 
-    if skills::trust::forget(&decision.root) {
-        let _ = ctx.write_stdout(&format!("Forgot {}", display_path(&decision.root)));
-    } else {
-        let _ = ctx.write_stdout(&format!("{} was not trusted", display_path(&decision.root)));
+    for decision in &decisions {
+        if skills::trust::forget(&decision.root) {
+            let _ = ctx.write_stdout(&format!("Forgot {}", display_path(&decision.root)));
+        } else {
+            let _ = ctx.write_stdout(&format!("{} was not trusted", display_path(&decision.root)));
+        }
     }
     ExitStatus::ExitedWith(0)
 }

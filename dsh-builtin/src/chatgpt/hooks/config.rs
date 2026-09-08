@@ -8,7 +8,8 @@
 
 use serde::{Deserialize, Deserializer, de};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::cell::OnceCell;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
@@ -25,9 +26,16 @@ pub(crate) const HOOKS_ENABLED_KEY: &str = "AI_CHAT_HOOKS";
 /// Set on every hook process. A hook that starts another `dsh` must not have
 /// that shell run hooks of its own.
 pub(crate) const HOOK_DEPTH_ENV: &str = "DSH_HOOK_DEPTH";
+/// A ceiling on the wall time one turn may spend waiting for hooks.
+///
+/// Opt-in, and unlimited when unset, the same shape as
+/// `AI_CHAT_TURN_TOKEN_BUDGET`. A default would mean hooks quietly stopping at
+/// some point in a long turn, and "a check that silently stopped running" is
+/// the failure this module refuses everywhere else.
+pub(crate) const HOOK_TURN_BUDGET_KEY: &str = "AI_CHAT_HOOK_TURN_BUDGET_MS";
 
 const DEFAULT_TIMEOUT_MS: u64 = 5_000;
-const MIN_TIMEOUT_MS: u64 = 100;
+pub(crate) const MIN_TIMEOUT_MS: u64 = 100;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 /// One tool call may wait for at most this many hooks.
 const MAX_HOOKS_PER_EVENT: usize = 8;
@@ -39,16 +47,32 @@ pub(crate) enum HookEvent {
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
+    PreCompact,
     ResponseComplete,
 }
 
 impl HookEvent {
+    /// Every event, so that a check written "for all events" stays that way.
+    ///
+    /// `parse` used to spell the list out where it enforces
+    /// `MAX_HOOKS_PER_EVENT`, and a list that has to be edited alongside the
+    /// enum is a list that will not be.
+    pub(crate) const ALL: [HookEvent; 6] = [
+        HookEvent::SessionStart,
+        HookEvent::UserPromptSubmit,
+        HookEvent::PreToolUse,
+        HookEvent::PostToolUse,
+        HookEvent::PreCompact,
+        HookEvent::ResponseComplete,
+    ];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             HookEvent::SessionStart => "session-start",
             HookEvent::UserPromptSubmit => "user-prompt-submit",
             HookEvent::PreToolUse => "pre-tool-use",
             HookEvent::PostToolUse => "post-tool-use",
+            HookEvent::PreCompact => "pre-compact",
             HookEvent::ResponseComplete => "response-complete",
         }
     }
@@ -62,12 +86,27 @@ impl HookEvent {
         matches!(self, HookEvent::UserPromptSubmit | HookEvent::PreToolUse)
     }
 
+    /// Does this event carry a tool call for a matcher to look at?
+    ///
+    /// The events that do not carry one cannot satisfy an argument matcher, so
+    /// `doctor hooks` says so rather than leaving the author to notice their
+    /// hook never fires on half its events.
+    pub(crate) fn carries_a_tool(self) -> bool {
+        matches!(self, HookEvent::PreToolUse | HookEvent::PostToolUse)
+    }
+
     /// Does this event have somewhere to put `additional_context`?
+    ///
+    /// The test is not "will anyone read it later" but "is there a place to put
+    /// it that changes nothing about a control decision".
     ///
     /// `session-start` would have to change the system prompt, which decides
     /// whether the previous conversation is carried forward - a hook whose
     /// output varied would then silently end the conversation every turn.
     /// `response-complete` happens after the last thing the model reads.
+    /// `pre-compact` has only the buffer, and text added there is both about to
+    /// be compacted and enough to keep `should_summarize` true - which can buy
+    /// the user another paid summary round.
     pub(crate) fn uses_context(self) -> bool {
         matches!(
             self,
@@ -76,13 +115,381 @@ impl HookEvent {
     }
 }
 
+/// Which calls a hook actually wants.
+///
+/// `dsh` funnels every command through the one `execute` tool, so
+/// `{"tools":["execute"]}` means "every command" and a hook written to watch
+/// `rm` paid its timeout on every `ls`. The extra kinds below let a hook say
+/// what it is really watching.
+///
+/// **Kinds are ANDed, entries within a kind are ORed.** `tools` was already an
+/// OR, so that is the reading a config author already has.
+///
+/// Still not a regular expression. `programs` reuses the word-prefix form of
+/// `AI_CHAT_EXECUTE_ALLOWLIST` and `paths` uses a glob, both of which a person
+/// can read back correctly at a glance; a regex in a security-adjacent config
+/// is a thing people get subtly wrong and then trust.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HookMatch {
     /// Tool names, with `*` allowed only as the last character (`mcp__*`).
-    /// Not a regular expression: configuration is not the place for one.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// Programs the command runs, in `AI_CHAT_EXECUTE_ALLOWLIST` form.
+    /// `execute` only; wrappers are looked through and every stage is judged.
+    #[serde(default)]
+    pub programs: Vec<String>,
+    /// Globs against the paths the call names.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Exact values for top-level argument fields.
+    #[serde(default)]
+    pub arguments: BTreeMap<String, Value>,
+}
+
+impl HookMatch {
+    fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+            && self.programs.is_empty()
+            && self.paths.is_empty()
+            && self.arguments.is_empty()
+    }
+
+    fn matches_tools(&self, input: &MatchInput<'_>) -> bool {
+        if self.tools.is_empty() {
+            return true;
+        }
+        let Some(tool) = input.tool() else {
+            // A tool matcher on an event that carries no tool cannot be
+            // satisfied; firing anyway would be a surprise in the permissive
+            // direction.
+            return false;
+        };
+        self.tools.iter().any(|pattern| match_tool(pattern, tool))
+    }
+
+    fn matches_programs(&self, input: &MatchInput<'_>) -> bool {
+        if self.programs.is_empty() {
+            return true;
+        }
+        match input.command_line() {
+            // Unreadable arguments fire. See `MatchInput`.
+            Field::Unreadable => true,
+            Field::Missing => false,
+            Field::Present(command) => {
+                super::super::tool::execute::command_names_any(command, &self.programs)
+            }
+        }
+    }
+
+    fn matches_paths(&self, input: &MatchInput<'_>) -> bool {
+        if self.paths.is_empty() {
+            return true;
+        }
+        let candidates = match input.path_candidates() {
+            Field::Unreadable => return true,
+            Field::Missing => return false,
+            Field::Present(candidates) => candidates,
+        };
+        if candidates.is_empty() {
+            return false;
+        }
+        self.paths.iter().any(|pattern| {
+            // Compiled here, not at load time: `LoadedHooks` is cached by file
+            // signature and `glob::Pattern` is neither `Deserialize` nor worth
+            // a parallel structure. `parse` already proved every pattern
+            // compiles, so this cannot fail in a way that hides a hook.
+            glob::Pattern::new(pattern).is_ok_and(|glob| {
+                candidates
+                    .iter()
+                    .any(|candidate| glob.matches(candidate.as_str()))
+            })
+        })
+    }
+
+    fn matches_arguments(&self, input: &MatchInput<'_>) -> bool {
+        if self.arguments.is_empty() {
+            return true;
+        }
+        let arguments = match input.parsed() {
+            Field::Unreadable => return true,
+            Field::Missing => return false,
+            Field::Present(value) => value,
+        };
+        self.arguments
+            .iter()
+            .all(|(field, expected)| arguments.get(field) == Some(expected))
+    }
+}
+
+/// The three answers a matcher can get about a value it wants to look at.
+///
+/// `Missing` and `Unreadable` are kept apart because they point opposite ways.
+/// `Missing` is structural - a `session-start` event has no tool arguments and
+/// never will - so a matcher about arguments simply is not satisfied, the same
+/// reading `tools` already has. `Unreadable` means the data is there and cannot
+/// be read, and then the matcher fires: a mismatched quote must not be a way to
+/// skip a check the user asked for.
+enum Field<T> {
+    Missing,
+    Unreadable,
+    Present(T),
+}
+
+/// Argument fields that name a path, per tool.
+///
+/// A table rather than a guess, for the tools whose schemas this crate owns.
+/// Everything else - MCP included - falls back to
+/// `MatchInput::inferred_path_fields`, which over-includes on purpose: a hook
+/// firing when it need not have costs a hook run, and a hook not firing when it
+/// should have costs the check.
+const PATH_ARGUMENT_FIELDS: &[(&str, &[&str])] = &[
+    ("edit", &["path"]),
+    ("read_file", &["path"]),
+    ("str_replace", &["path"]),
+    ("ls", &["path"]),
+    ("search", &["path"]),
+    // `file` is relative to the *skill directory*, not to the chat's working
+    // directory, so joining it with the latter tests a path the call never
+    // touches. Resolving it properly would mean re-deriving the skill root
+    // here, which `ai-architecture.md` §7 keeps to `skill_roots` alone. A hook
+    // that wants to watch skill writes matches `tools: ["skill_manage"]`.
+    ("skill_manage", &[]),
+];
+
+/// What a `match` clause is judged against.
+///
+/// Plain copyable data: the tool's name and the arguments the model sent.
+/// Those arguments are the **unmasked** ones. Matching happens inside this
+/// process and the value never reaches a hook - what the hook reads still goes
+/// through `tool_detail`'s masking - because masking is lossy in the
+/// *permissive* direction for a matcher. `safety_policy::SECRET_OPTION` rewrites
+/// `-p <value>` unconditionally, so `mkdir -p /etc/myapp` masks to
+/// `mkdir -p ***` and a hook watching `/etc/**` would never fire. A gate that
+/// silently stops firing is the failure this file's doctrine exists to prevent.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HookSubject<'a> {
+    pub tool: Option<&'a str>,
+    pub arguments: Option<&'a str>,
+}
+
+impl<'a> HookSubject<'a> {
+    /// An event that carries no tool, so no tool matcher can be true of it.
+    pub(crate) fn none() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn tool(name: &'a str, arguments: &'a str) -> Self {
+        Self {
+            tool: Some(name),
+            arguments: Some(arguments),
+        }
+    }
+}
+
+/// A subject plus whatever had to be derived from it to answer a `match`.
+///
+/// Built **once per `fire`**, never once per hook: the whole point of `match` is
+/// to spend less, and re-parsing a command for each of eight hooks would spend
+/// more than the filter saves. Each derived form is a `OnceCell`, so a config
+/// that only uses `tools` never touches the arguments at all.
+pub(crate) struct MatchInput<'a> {
+    subject: HookSubject<'a>,
+    /// The directory the call will run in, for turning a relative path
+    /// argument into something a `/etc/**` glob can match.
+    cwd: &'a Path,
+    parsed: OnceCell<Option<Value>>,
+    paths: OnceCell<Option<Vec<String>>>,
+}
+
+impl<'a> MatchInput<'a> {
+    pub(crate) fn new(subject: HookSubject<'a>, cwd: &'a Path) -> Self {
+        Self {
+            subject,
+            cwd,
+            parsed: OnceCell::new(),
+            paths: OnceCell::new(),
+        }
+    }
+
+    fn tool(&self) -> Option<&'a str> {
+        self.subject.tool
+    }
+
+    fn parsed(&self) -> Field<&Value> {
+        // Empty is *absent*, not unreadable. `execute_tool_call` builds the
+        // string with `unwrap_or_default`, so a provider that omits `arguments`
+        // for a no-argument tool arrives here as `""`; calling that unreadable
+        // made every argument matcher fire on those calls.
+        let Some(raw) = self.subject.arguments.filter(|raw| !raw.trim().is_empty()) else {
+            return Field::Missing;
+        };
+        match self
+            .parsed
+            .get_or_init(|| serde_json::from_str::<Value>(raw).ok())
+        {
+            Some(value) => Field::Present(value),
+            None => Field::Unreadable,
+        }
+    }
+
+    /// The `command` string of an `execute` call.
+    fn command_line(&self) -> Field<&str> {
+        match self.parsed() {
+            Field::Missing => Field::Missing,
+            Field::Unreadable => Field::Unreadable,
+            Field::Present(value) => match value.get("command").and_then(Value::as_str) {
+                Some(command) => Field::Present(command),
+                None => Field::Missing,
+            },
+        }
+    }
+
+    /// Every path this call names, both as written and lexically absolute.
+    ///
+    /// Lexical only - never `canonicalize`. Resolving would `stat` paths the
+    /// model chose, which is a side effect and a symlink race brought into
+    /// deciding *which hook to run*. A symlink can therefore dodge a `paths`
+    /// matcher; that is a missed check, never a false permit, because a hook
+    /// cannot grant anything. The real path decisions stay with `SafetyGuard`
+    /// and `reject_gitignored_read_path`.
+    fn path_candidates(&self) -> Field<&[String]> {
+        let arguments = match self.parsed() {
+            Field::Missing => return Field::Missing,
+            Field::Unreadable => return Field::Unreadable,
+            Field::Present(value) => value,
+        };
+        let built = self.paths.get_or_init(|| {
+            let mut raw: Vec<String> = Vec::new();
+            // Where a relative token lands. `execute` takes a `cwd` argument and
+            // the command runs there, so resolving against the shell's
+            // directory instead is the same hole `touches_skill_file` closed
+            // for skill scripts: `{"command":"cat sub/x","cwd":"/etc"}`.
+            let mut base = self.cwd.to_path_buf();
+
+            if self.tool() == Some("execute") {
+                if let Some(cwd) = arguments.get("cwd").and_then(Value::as_str) {
+                    // `join` with an absolute path replaces, so this covers
+                    // both an absolute and a relative `cwd`.
+                    base = base.join(cwd);
+                    raw.push(cwd.to_string());
+                }
+                // `None` here means the command line could not be tokenised,
+                // which has to reach the matcher as `Unreadable` rather than
+                // as "names no paths".
+                let command = arguments.get("command").and_then(Value::as_str);
+                match command.map(super::super::tool::execute::command_tokens) {
+                    Some(None) => return None,
+                    Some(Some(tokens)) => raw.extend(
+                        // Options are not paths; a real path token starting
+                        // with `-` would have to be written `./-foo`. Every
+                        // other token is kept even though a bare word is more
+                        // often a program name than a file: `rm .env` and
+                        // `rm ./.env` must both reach a hook watching
+                        // `**/*.env`, and there is no way to tell a bare
+                        // filename from a bare program name. So this
+                        // over-includes, like everything else here, because a
+                        // hook that fires needlessly costs one hook run while
+                        // one that stays quiet costs the check.
+                        tokens.into_iter().filter(|token| !token.starts_with('-')),
+                    ),
+                    None => {}
+                }
+            }
+
+            let fields = PATH_ARGUMENT_FIELDS
+                .iter()
+                .find(|(tool, _)| Some(*tool) == self.tool())
+                .map(|(_, fields)| *fields);
+            match fields {
+                // An empty list means "this crate knows the tool and it names
+                // no path", which must not fall through to inference.
+                Some(fields) => raw.extend(
+                    fields
+                        .iter()
+                        .filter_map(|field| arguments.get(*field).and_then(Value::as_str))
+                        .map(str::to_string),
+                ),
+                None if self.tool() != Some("execute") => {
+                    raw.extend(Self::inferred_path_fields(arguments))
+                }
+                None => {}
+            }
+
+            Some(Self::expand_path_candidates(raw, &base))
+        });
+        match built {
+            Some(candidates) => Field::Present(candidates.as_slice()),
+            None => Field::Unreadable,
+        }
+    }
+
+    /// Path-shaped strings anywhere in the arguments, for tools whose schema
+    /// this crate does not own. Keeping a table of every MCP server's arguments
+    /// is not a thing anyone can maintain, so shape stands in for a
+    /// declaration.
+    ///
+    /// Every string leaf, not just the top-level ones: an MCP tool is as likely
+    /// to take `{"paths": ["/etc/shadow"]}` or `{"target": {"path": "..."}}` as
+    /// a flat field, and a matcher that quietly misses those is the no-op this
+    /// module exists to prevent. Depth and count are capped so a pathological
+    /// payload cannot turn hook *selection* into an unbounded walk.
+    fn inferred_path_fields(arguments: &Value) -> Vec<String> {
+        const MAX_DEPTH: usize = 6;
+        const MAX_CANDIDATES: usize = 64;
+
+        fn walk(value: &Value, depth: usize, out: &mut Vec<String>) {
+            if depth > MAX_DEPTH || out.len() >= MAX_CANDIDATES {
+                return;
+            }
+            match value {
+                Value::String(text) if text.contains('/') || text.starts_with('~') => {
+                    out.push(text.clone())
+                }
+                Value::Array(items) => {
+                    for item in items {
+                        walk(item, depth + 1, out);
+                    }
+                }
+                Value::Object(fields) => {
+                    for field in fields.values() {
+                        walk(field, depth + 1, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut out = Vec::new();
+        walk(arguments, 0, &mut out);
+        out
+    }
+
+    fn expand_path_candidates(raw: Vec<String>, cwd: &Path) -> Vec<String> {
+        let mut out = Vec::with_capacity(raw.len() * 2);
+        for token in raw {
+            if token.is_empty() {
+                continue;
+            }
+            let expanded = shellexpand::full(&token)
+                .map(|value| value.into_owned())
+                .unwrap_or_else(|_| token.clone());
+            let path = Path::new(&expanded);
+            let absolute = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                cwd.join(path)
+            };
+            let normalized = super::super::tool::normalize_path(&absolute);
+            out.push(token);
+            if let Some(text) = normalized.to_str() {
+                out.push(text.to_string());
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,23 +514,50 @@ impl HookDefinition {
             .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
     }
 
-    fn matches_tool(&self, tool: Option<&str>) -> bool {
+    /// Does every kind of matcher this hook declares hold for `input`?
+    ///
+    /// Kinds are ANDed, entries within a kind are ORed.
+    fn matches(&self, input: &MatchInput<'_>) -> bool {
         let Some(matcher) = &self.matcher else {
             return true;
         };
-        if matcher.tools.is_empty() {
-            return true;
-        }
-        let Some(tool) = tool else {
-            // A tool matcher on an event that carries no tool cannot be
-            // satisfied; firing anyway would be a surprise in the permissive
-            // direction.
-            return false;
+        matcher.matches_tools(input)
+            && matcher.matches_programs(input)
+            && matcher.matches_paths(input)
+            && matcher.matches_arguments(input)
+    }
+
+    /// Does this hook carry a `match` that narrows nothing?
+    ///
+    /// Not a load error - `{"tools": []}` has always meant "every call" - but
+    /// worth saying, because it usually means the author expected it to filter.
+    pub(crate) fn matcher_narrows_nothing(&self) -> bool {
+        self.matcher.as_ref().is_some_and(HookMatch::is_empty)
+    }
+
+    /// Which of this hook's matcher kinds need arguments to be satisfiable.
+    ///
+    /// Used by `doctor hooks` to say so, not to refuse the configuration: a
+    /// hook listing `session-start` alongside `pre-tool-use` is a reasonable
+    /// thing to write, and refusing it would break setups that work today.
+    pub(crate) fn argument_matcher_kinds(&self) -> Vec<&'static str> {
+        let Some(matcher) = &self.matcher else {
+            return Vec::new();
         };
-        matcher
-            .tools
-            .iter()
-            .any(|pattern| match_tool(pattern, tool))
+        let mut kinds = Vec::new();
+        if !matcher.tools.is_empty() {
+            kinds.push("tools");
+        }
+        if !matcher.programs.is_empty() {
+            kinds.push("programs");
+        }
+        if !matcher.paths.is_empty() {
+            kinds.push("paths");
+        }
+        if !matcher.arguments.is_empty() {
+            kinds.push("arguments");
+        }
+        kinds
     }
 }
 
@@ -136,6 +570,63 @@ fn match_tool(pattern: &str, tool: &str) -> bool {
 
 fn enabled_by_default() -> bool {
     true
+}
+
+/// Refuse a matcher that can never be true, or that is true in a way its author
+/// did not write.
+///
+/// Every check here exists because the alternative is a hook that loads, reports
+/// clean in `doctor hooks`, and never fires. That is the one failure this module
+/// is built to prevent, so it is worth refusing the whole chat over.
+fn validate_matcher(id: &str, matcher: &HookMatch) -> Result<(), String> {
+    // An empty `match` is *not* an error. `{"tools": []}` has always meant
+    // "every call", and a configuration that works today must not start
+    // refusing the whole chat. `doctor hooks` points it out instead - the same
+    // treatment the unsatisfiable-per-event case gets.
+
+    if !matcher.programs.is_empty() {
+        // `programs` reads the `command` argument, which only `execute` has.
+        // Without an `execute`-shaped `tools` entry the matcher is dead
+        // configuration that looks like a filter.
+        if !matcher
+            .tools
+            .iter()
+            .any(|pattern| match_tool(pattern, "execute"))
+        {
+            return Err(format!(
+                "hook `{id}`: `programs` needs `\"tools\": [\"execute\"]`; \
+                 only the execute tool carries a command line"
+            ));
+        }
+        for entry in &matcher.programs {
+            match shell_words::split(entry) {
+                Ok(tokens) if !tokens.is_empty() => {}
+                _ => {
+                    return Err(format!(
+                        "hook `{id}`: `programs` entry `{entry}` is not a command; \
+                         write it the way `AI_CHAT_EXECUTE_ALLOWLIST` does, e.g. \"git push\""
+                    ));
+                }
+            }
+        }
+    }
+
+    for pattern in &matcher.paths {
+        glob::Pattern::new(pattern).map_err(|err| {
+            format!("hook `{id}`: `paths` entry `{pattern}` is not a glob: {err}")
+        })?;
+    }
+
+    for (field, value) in &matcher.arguments {
+        if !matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
+            return Err(format!(
+                "hook `{id}`: `arguments.{field}` must be a string, number or boolean; \
+                 use `paths` for a path and `programs` for a command"
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Pin `command[0]` to something a later `chdir` cannot reinterpret.
@@ -223,10 +714,14 @@ impl LoadedHooks {
         &self.hooks
     }
 
-    pub(crate) fn matching(&self, event: HookEvent, tool: Option<&str>) -> Vec<&HookDefinition> {
+    pub(crate) fn matching(
+        &self,
+        event: HookEvent,
+        input: &MatchInput<'_>,
+    ) -> Vec<&HookDefinition> {
         self.hooks
             .iter()
-            .filter(|hook| hook.enabled && hook.events.contains(&event) && hook.matches_tool(tool))
+            .filter(|hook| hook.enabled && hook.events.contains(&event) && hook.matches(input))
             .collect()
     }
 }
@@ -266,6 +761,34 @@ pub(crate) fn enabled(proxy: &mut dyn ShellProxy) -> bool {
 /// prevents.
 pub(crate) fn nested_in_a_hook() -> bool {
     std::env::var_os(HOOK_DEPTH_ENV).is_some()
+}
+
+/// The turn-wide hook time budget, or `None` for unlimited.
+///
+/// `0` means unlimited too, matching `AI_CHAT_SESSION_TTL_SECS`. A value below
+/// `MIN_TIMEOUT_MS` would let no hook run to completion, so it is refused
+/// rather than silently disabling every hook.
+pub(crate) fn turn_budget_ms(proxy: &mut dyn ShellProxy) -> Result<Option<u64>, String> {
+    let Some(raw) = super::super::resolve_setting(proxy, HOOK_TURN_BUDGET_KEY) else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let value: u64 = trimmed.parse().map_err(|_| {
+        format!("chat: {HOOK_TURN_BUDGET_KEY} must be a whole number of milliseconds, got `{raw}`")
+    })?;
+    if value == 0 {
+        return Ok(None);
+    }
+    if value < MIN_TIMEOUT_MS {
+        return Err(format!(
+            "chat: {HOOK_TURN_BUDGET_KEY} of {value}ms is below the {MIN_TIMEOUT_MS}ms minimum \
+             one hook needs; use 0 to remove the budget"
+        ));
+    }
+    Ok(Some(value))
 }
 
 pub(crate) fn config_path(proxy: &mut dyn ShellProxy) -> Option<PathBuf> {
@@ -437,28 +960,23 @@ pub(crate) fn parse(contents: &str) -> Result<LoadedHooks, String> {
         if hook.command.is_empty() || hook.command[0].trim().is_empty() {
             return Err(format!("hook `{}` has an empty command", hook.id));
         }
-        if let Some(matcher) = &hook.matcher
-            && let Some(bad) = matcher.tools.iter().find(|pattern| {
+        if let Some(matcher) = &hook.matcher {
+            if let Some(bad) = matcher.tools.iter().find(|pattern| {
                 // `trim_end_matches` strips *every* trailing star, so `mcp**`
                 // passed validation and then matched nothing at all - the
                 // silent no-op this module exists to prevent.
                 pattern.strip_suffix('*').unwrap_or(pattern).contains('*')
-            })
-        {
-            return Err(format!(
-                "hook `{}`: `{bad}` may only use `*` as the last character",
-                hook.id
-            ));
+            }) {
+                return Err(format!(
+                    "hook `{}`: `{bad}` may only use `*` as the last character",
+                    hook.id
+                ));
+            }
+            validate_matcher(&hook.id, matcher)?;
         }
     }
 
-    for event in [
-        HookEvent::SessionStart,
-        HookEvent::UserPromptSubmit,
-        HookEvent::PreToolUse,
-        HookEvent::PostToolUse,
-        HookEvent::ResponseComplete,
-    ] {
+    for event in HookEvent::ALL {
         let count = file
             .hooks
             .iter()
@@ -485,6 +1003,21 @@ pub(crate) fn parse(contents: &str) -> Result<LoadedHooks, String> {
 mod tests {
     use super::*;
 
+    /// A subject standing in for one `execute`-shaped tool call.
+    fn tool_input(tool: &str) -> MatchInput<'_> {
+        MatchInput::new(HookSubject::tool(tool, "{}"), Path::new("/repo"))
+    }
+
+    /// One call with real arguments, resolved against `/repo`.
+    fn call_input<'a>(tool: &'a str, arguments: &'a str) -> MatchInput<'a> {
+        MatchInput::new(HookSubject::tool(tool, arguments), Path::new("/repo"))
+    }
+
+    /// An event that carries no tool at all (`user-prompt-submit`).
+    fn no_tool_input() -> MatchInput<'static> {
+        MatchInput::new(HookSubject::none(), Path::new("/repo"))
+    }
+
     fn one(command: &str) -> String {
         format!(
             r#"{{"version":1,"hooks":[{{"id":"audit","events":["pre-tool-use"],"command":{command}}}]}}"#
@@ -494,7 +1027,7 @@ mod tests {
     #[test]
     fn parses_a_minimal_hook_definition() {
         let hooks = parse(&one(r#"["/opt/dsh-hooks/hook.sh"]"#)).unwrap();
-        let matched = hooks.matching(HookEvent::PreToolUse, Some("execute"));
+        let matched = hooks.matching(HookEvent::PreToolUse, &tool_input("execute"));
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id, "audit");
         assert_eq!(matched[0].timeout_ms(), 5_000);
@@ -595,7 +1128,7 @@ mod tests {
         .unwrap();
         assert!(
             hooks
-                .matching(HookEvent::PreToolUse, Some("execute"))
+                .matching(HookEvent::PreToolUse, &tool_input("execute"))
                 .is_empty()
         );
     }
@@ -609,18 +1142,27 @@ mod tests {
 
         assert_eq!(
             hooks
-                .matching(HookEvent::PreToolUse, Some("mcp__x__y"))
+                .matching(HookEvent::PreToolUse, &tool_input("mcp__x__y"))
                 .len(),
             1
         );
-        assert_eq!(hooks.matching(HookEvent::PreToolUse, Some("edit")).len(), 1);
+        assert_eq!(
+            hooks
+                .matching(HookEvent::PreToolUse, &tool_input("edit"))
+                .len(),
+            1
+        );
         assert!(
             hooks
-                .matching(HookEvent::PreToolUse, Some("execute"))
+                .matching(HookEvent::PreToolUse, &tool_input("execute"))
                 .is_empty()
         );
         // No tool at all cannot satisfy a tool matcher.
-        assert!(hooks.matching(HookEvent::PreToolUse, None).is_empty());
+        assert!(
+            hooks
+                .matching(HookEvent::PreToolUse, &no_tool_input())
+                .is_empty()
+        );
     }
 
     /// Only a trailing `*` is supported. `mcp**` used to pass validation and
@@ -645,28 +1187,377 @@ mod tests {
         let hooks = parse(&config("mcp__*")).expect("a trailing star is the supported form");
         assert_eq!(
             hooks
-                .matching(HookEvent::PreToolUse, Some("mcp__server__tool"))
+                .matching(HookEvent::PreToolUse, &tool_input("mcp__server__tool"))
                 .len(),
             1
         );
     }
 
-    #[test]
-    fn the_two_events_with_nowhere_to_put_context_say_so() {
-        assert!(HookEvent::UserPromptSubmit.uses_context());
-        assert!(HookEvent::PreToolUse.uses_context());
-        assert!(HookEvent::PostToolUse.uses_context());
-        assert!(!HookEvent::SessionStart.uses_context());
-        assert!(!HookEvent::ResponseComplete.uses_context());
+    /// `{"tools":["execute"]}` is every command; these are the narrowings.
+    fn matcher(extra: &str) -> String {
+        format!(
+            r#"{{"version":1,"hooks":[{{"id":"audit","events":["pre-tool-use"],
+               "match":{{{extra}}},"command":["/opt/dsh-hooks/hook.sh"]}}]}}"#
+        )
+    }
+
+    fn fires(config: &str, tool: &str, arguments: &str) -> bool {
+        let hooks = parse(config).expect(config);
+        !hooks
+            .matching(HookEvent::PreToolUse, &call_input(tool, arguments))
+            .is_empty()
+    }
+
+    fn command_fires(config: &str, command: &str) -> bool {
+        let arguments = serde_json::json!({ "command": command }).to_string();
+        fires(config, "execute", &arguments)
     }
 
     #[test]
-    fn only_prompt_and_pre_tool_events_can_stop_anything() {
-        assert!(HookEvent::UserPromptSubmit.is_gate());
-        assert!(HookEvent::PreToolUse.is_gate());
-        assert!(!HookEvent::SessionStart.is_gate());
-        assert!(!HookEvent::PostToolUse.is_gate());
-        assert!(!HookEvent::ResponseComplete.is_gate());
+    fn programs_matches_through_a_wrapper_and_every_stage() {
+        let config = matcher(r#""tools":["execute"],"programs":["rm"]"#);
+        for command in [
+            "rm -rf /tmp/x",
+            "sudo rm -rf /tmp/x",
+            "timeout 5 rm /tmp/x",
+            "echo hi | rm -rf /tmp/x",
+            "cd /tmp && rm -rf x",
+        ] {
+            assert!(command_fires(&config, command), "{command}");
+        }
+        for command in ["ls -la", "cargo test", "echo rm"] {
+            assert!(!command_fires(&config, command), "{command}");
+        }
+    }
+
+    #[test]
+    fn programs_is_a_word_prefix_not_a_substring() {
+        let config = matcher(r#""tools":["execute"],"programs":["git push"]"#);
+        assert!(command_fires(&config, "git push --force"));
+        assert!(!command_fires(&config, "git pushx"));
+        assert!(!command_fires(&config, "git status"));
+    }
+
+    /// Dead configuration that looks like a filter is the failure mode here.
+    #[test]
+    fn programs_without_an_execute_tool_entry_is_a_load_error() {
+        let err = parse(&matcher(r#""tools":["edit"],"programs":["rm"]"#)).unwrap_err();
+        assert!(err.contains("`programs` needs"), "{err}");
+
+        // A trailing-star pattern that covers `execute` is fine.
+        assert!(parse(&matcher(r#""tools":["exec*"],"programs":["rm"]"#)).is_ok());
+    }
+
+    #[test]
+    fn an_untokenizable_programs_entry_is_a_load_error() {
+        let err = parse(&matcher(r#""tools":["execute"],"programs":["'unclosed"]"#)).unwrap_err();
+        assert!(err.contains("is not a command"), "{err}");
+    }
+
+    /// `{"tools": []}` has always meant "every call". Refusing it would refuse
+    /// the whole chat for a configuration that worked yesterday.
+    #[test]
+    fn an_empty_match_object_loads_and_runs_on_every_call() {
+        for extra in ["", r#""tools":[]"#] {
+            let config = matcher(extra);
+            assert!(command_fires(&config, "anything at all"), "{extra}");
+            let hooks = parse(&config).expect(extra);
+            assert!(hooks.all()[0].matcher_narrows_nothing(), "{extra}");
+        }
+
+        // A matcher that does narrow is not reported as narrowing nothing.
+        let narrow = parse(&matcher(r#""tools":["execute"]"#)).unwrap();
+        assert!(!narrow.all()[0].matcher_narrows_nothing());
+    }
+
+    #[test]
+    fn paths_glob_matches_a_path_argument() {
+        let config = matcher(r#""tools":["edit"],"paths":["/etc/**"]"#);
+        assert!(fires(&config, "edit", r#"{"path":"/etc/hosts"}"#));
+        assert!(!fires(&config, "edit", r#"{"path":"/tmp/hosts"}"#));
+    }
+
+    /// A relative argument has to be judged where it will land, not as written.
+    #[test]
+    fn paths_matches_the_lexically_absolute_form() {
+        let config = matcher(r#""tools":["read_file"],"paths":["/repo/src/**"]"#);
+        assert!(fires(&config, "read_file", r#"{"path":"src/a.rs"}"#));
+    }
+
+    #[test]
+    fn paths_does_not_let_dot_dot_dodge_the_glob() {
+        let config = matcher(r#""tools":["read_file"],"paths":["/etc/**"]"#);
+        assert!(fires(
+            &config,
+            "read_file",
+            r#"{"path":"sub/../../etc/shadow"}"#
+        ));
+    }
+
+    /// Every token, not just the program: `bash <path>/run.sh` names a path.
+    #[test]
+    fn paths_matches_a_token_of_an_execute_command() {
+        let config = matcher(r#""tools":["execute"],"paths":["/etc/**"]"#);
+        assert!(command_fires(&config, "cat /etc/shadow"));
+        assert!(command_fires(&config, "bash /etc/init.d/thing"));
+        assert!(!command_fires(&config, "cat /tmp/shadow"));
+    }
+
+    /// Inside a command line a bare word could be a program or a file, and the
+    /// two are not distinguishable. Every ambiguity in this module resolves
+    /// toward firing, because a needless hook run costs a hook run while a
+    /// missed one costs the check.
+    #[test]
+    fn a_bare_filename_argument_still_reaches_a_paths_matcher() {
+        let config = matcher(r#""tools":["execute"],"paths":["**/*.env"]"#);
+        assert!(command_fires(&config, "rm .env"));
+        assert!(command_fires(&config, "rm ./.env"));
+        assert!(command_fires(&config, "cat /repo/.env"));
+        assert!(!command_fires(&config, "rm notes.md"));
+
+        // The cost of that choice: a broad pattern is true of a program name
+        // too. Specific patterns are the useful ones.
+        let broad = matcher(r#""tools":["execute"],"paths":["/repo/**"]"#);
+        assert!(command_fires(&broad, "cat"));
+
+        // An option is still not a path; a real one is written `./-foo`.
+        let dashes = matcher(r#""tools":["execute"],"paths":["/repo/-p"]"#);
+        assert!(!command_fires(&dashes, "cargo test -p"));
+    }
+
+    /// `execute` runs the command in its `cwd` argument, so that is where a
+    /// relative token lands - the hole `touches_skill_file` closed for skill
+    /// scripts, in the matcher this time.
+    #[test]
+    fn paths_resolve_against_the_calls_own_cwd() {
+        let config = matcher(r#""tools":["execute"],"paths":["/etc/sub/**"]"#);
+        assert!(fires(
+            &config,
+            "execute",
+            r#"{"command":"cat sub/secret","cwd":"/etc"}"#
+        ));
+        // Without the `cwd` argument the shell's directory is the base.
+        assert!(!fires(
+            &config,
+            "execute",
+            r#"{"command":"cat sub/secret"}"#
+        ));
+    }
+
+    /// A provider that omits `arguments` for a no-argument tool sends `""`.
+    /// Treating that as unreadable made every argument matcher fire on it.
+    #[test]
+    fn an_absent_arguments_string_is_missing_not_unreadable() {
+        let config = matcher(r#""tools":["execute"],"programs":["rm"]"#);
+        assert!(!fires(&config, "execute", ""));
+        assert!(!fires(&config, "execute", "   "));
+        // Text that is actually present and unparseable still fires.
+        assert!(fires(&config, "execute", "{not json"));
+    }
+
+    /// An MCP tool is as likely to carry paths in a list or a nested object.
+    #[test]
+    fn paths_are_inferred_from_nested_and_repeated_fields() {
+        let config = matcher(r#""tools":["mcp__*"],"paths":["/etc/**"]"#);
+        for arguments in [
+            r#"{"paths":["/tmp/a","/etc/myservice.conf"]}"#,
+            r#"{"target":{"path":"/etc/myservice.conf"}}"#,
+            r#"{"jobs":[{"src":"/etc/myservice.conf","dst":"/tmp/x"}]}"#,
+        ] {
+            assert!(fires(&config, "mcp__fs__write", arguments), "{arguments}");
+        }
+        assert!(!fires(
+            &config,
+            "mcp__fs__write",
+            r#"{"target":{"path":"/tmp/x"}}"#
+        ));
+    }
+
+    /// `skill_manage`'s `file` is relative to the skill directory, so joining
+    /// it with the chat's cwd tests a path the call never touches.
+    #[test]
+    fn skill_manage_offers_no_path_candidates() {
+        let config = matcher(r#""tools":["skill_manage"],"paths":["/repo/**"]"#);
+        assert!(!fires(
+            &config,
+            "skill_manage",
+            r#"{"action":"write_file","name":"deploy","scope":"project","file":"scripts/run.sh"}"#
+        ));
+    }
+
+    #[test]
+    fn paths_matches_the_execute_cwd_argument() {
+        let config = matcher(r#""tools":["execute"],"paths":["/etc/**"]"#);
+        assert!(fires(
+            &config,
+            "execute",
+            r#"{"command":"ls","cwd":"/etc/apache2"}"#
+        ));
+    }
+
+    /// No table for an MCP server's arguments; path *shape* stands in.
+    #[test]
+    fn paths_infers_a_path_shaped_field_of_an_unknown_tool() {
+        let config = matcher(r#""tools":["mcp__*"],"paths":["/etc/**"]"#);
+        assert!(fires(
+            &config,
+            "mcp__fs__write",
+            r#"{"target":"/etc/myservice.conf","mode":"append"}"#
+        ));
+        assert!(!fires(
+            &config,
+            "mcp__fs__write",
+            r#"{"target":"notapath","mode":"append"}"#
+        ));
+    }
+
+    #[test]
+    fn paths_with_an_invalid_glob_is_a_load_error() {
+        let err = parse(&matcher(r#""tools":["edit"],"paths":["/etc/[bad"]"#)).unwrap_err();
+        assert!(err.contains("is not a glob"), "{err}");
+    }
+
+    #[test]
+    fn arguments_match_is_exact_equality() {
+        let config = matcher(r#""tools":["search"],"arguments":{"type":"content"}"#);
+        assert!(fires(
+            &config,
+            "search",
+            r#"{"query":"x","type":"content"}"#
+        ));
+        assert!(!fires(
+            &config,
+            "search",
+            r#"{"query":"x","type":"filename"}"#
+        ));
+        assert!(!fires(&config, "search", r#"{"query":"x"}"#));
+
+        let numeric = matcher(r#""tools":["read_file"],"arguments":{"offset":1}"#);
+        assert!(fires(&numeric, "read_file", r#"{"path":"a","offset":1}"#));
+        assert!(!fires(&numeric, "read_file", r#"{"path":"a","offset":2}"#));
+    }
+
+    #[test]
+    fn an_arguments_entry_that_is_not_a_scalar_is_a_load_error() {
+        let err = parse(&matcher(r#""tools":["edit"],"arguments":{"path":["a"]}"#)).unwrap_err();
+        assert!(err.contains("must be a string, number or boolean"), "{err}");
+    }
+
+    /// Kinds are ANDed; each one alone is not enough.
+    #[test]
+    fn matcher_kinds_are_anded() {
+        let config = matcher(r#""tools":["execute"],"programs":["rm"],"paths":["/etc/**"]"#);
+        assert!(!command_fires(&config, "rm -rf /tmp/x"));
+        assert!(!command_fires(&config, "cat /etc/shadow"));
+        assert!(command_fires(&config, "rm -rf /etc/thing"));
+    }
+
+    /// The masked form of this command is `mkdir -p ***`, which no `/etc/**`
+    /// matcher can see. Matching therefore reads the unmasked arguments; only
+    /// the payload the hook receives is masked.
+    #[test]
+    fn matching_uses_the_unmasked_arguments() {
+        let config = matcher(r#""tools":["execute"],"paths":["/etc/**"]"#);
+        let command = "mkdir -p /etc/myapp";
+        assert!(
+            crate::safety_policy::redact_sensitive_text(command).contains("***"),
+            "this test is only meaningful while `-p` is masked"
+        );
+        assert!(command_fires(&config, command));
+    }
+
+    /// A mismatched quote must not be a way to skip a check.
+    #[test]
+    fn unreadable_arguments_make_an_argument_matcher_fire() {
+        for extra in [
+            r#""tools":["execute"],"programs":["rm"]"#,
+            r#""tools":["execute"],"paths":["/etc/**"]"#,
+        ] {
+            let config = matcher(extra);
+            // A command line that does not tokenise.
+            assert!(command_fires(&config, "echo 'unclosed"), "{extra}");
+            // Arguments that are not JSON at all.
+            assert!(fires(&config, "execute", "{not json"), "{extra}");
+        }
+        let args = matcher(r#""tools":["search"],"arguments":{"type":"content"}"#);
+        assert!(fires(&args, "search", "{not json"));
+    }
+
+    /// Structural absence is the other direction: nothing to be true of.
+    #[test]
+    fn an_argument_matcher_cannot_be_satisfied_without_arguments() {
+        for extra in [
+            r#""tools":["execute"],"programs":["rm"]"#,
+            r#""tools":["execute"],"paths":["/etc/**"]"#,
+            r#""tools":["execute"],"arguments":{"command":"rm"}"#,
+        ] {
+            let hooks = parse(&matcher(extra)).expect(extra);
+            assert!(
+                hooks
+                    .matching(HookEvent::PreToolUse, &no_tool_input())
+                    .is_empty(),
+                "{extra}"
+            );
+        }
+    }
+
+    /// The shape every existing configuration has.
+    #[test]
+    fn a_tools_only_config_still_loads() {
+        let config = matcher(r#""tools":["execute"]"#);
+        assert!(command_fires(&config, "anything at all"));
+    }
+
+    /// The per-event cap has to see every event, including the next one added.
+    #[test]
+    fn every_event_is_covered_by_the_hook_cap() {
+        for event in HookEvent::ALL {
+            let name = event.as_str();
+            let hooks: Vec<String> = (0..=MAX_HOOKS_PER_EVENT)
+                .map(|i| {
+                    format!(
+                        r#"{{"id":"h{i}","events":["{name}"],"command":["/opt/dsh-hooks/hook.sh"]}}"#
+                    )
+                })
+                .collect();
+            let config = format!(r#"{{"version":1,"hooks":[{}]}}"#, hooks.join(","));
+            let err = parse(&config).unwrap_err();
+            assert!(err.contains(name), "{name}: {err}");
+        }
+    }
+
+    /// Gate-ness and context-carrying are properties of every event, so assert
+    /// them over `ALL` rather than over a list that drifts.
+    #[test]
+    fn every_events_gate_and_context_answers_are_pinned() {
+        for event in HookEvent::ALL {
+            let expect_gate = matches!(event, HookEvent::UserPromptSubmit | HookEvent::PreToolUse);
+            assert_eq!(event.is_gate(), expect_gate, "{}", event.as_str());
+
+            let expect_context = matches!(
+                event,
+                HookEvent::UserPromptSubmit | HookEvent::PreToolUse | HookEvent::PostToolUse
+            );
+            assert_eq!(event.uses_context(), expect_context, "{}", event.as_str());
+        }
+    }
+
+    /// Compaction cannot be refused: the request would just be too large.
+    #[test]
+    fn pre_compact_neither_gates_nor_takes_context() {
+        assert!(!HookEvent::PreCompact.is_gate());
+        assert!(!HookEvent::PreCompact.uses_context());
+        let hooks = parse(
+            r#"{"version":1,"hooks":[{"id":"c","events":["pre-compact"],
+               "command":["/opt/dsh-hooks/hook.sh"]}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hooks
+                .matching(HookEvent::PreCompact, &no_tool_input())
+                .len(),
+            1
+        );
     }
 
     /// 664 is what `umask 002` produces, and on those systems the group is the

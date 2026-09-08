@@ -147,6 +147,18 @@ impl ConversationManager {
         self.turn_usage = usage::TokenUsage::default();
     }
 
+    fn last_prompt_tokens(&self) -> u64 {
+        self.last_prompt_tokens
+    }
+
+    fn prompt_token_budget(&self) -> u64 {
+        self.prompt_token_budget
+    }
+
+    fn buffer_len(&self) -> usize {
+        self.buffer.len()
+    }
+
     fn should_summarize(&self) -> bool {
         self.buffer_size_chars() > MAX_BUFFER_CHARS
             || self.last_prompt_tokens > self.prompt_token_budget
@@ -397,7 +409,7 @@ mod session;
 
 pub(crate) mod hooks;
 pub(crate) mod skills;
-use skills::{SkillRoot, SkillScope, SkillsManager};
+use skills::{SkillRoot, SkillsManager};
 
 /// Where to cut the buffer so that `retain` messages survive a summary.
 ///
@@ -516,6 +528,25 @@ fn resolve_turn_token_budget(proxy: &mut dyn ShellProxy) -> Option<u64> {
 }
 
 /// Prompt-token ceiling that forces a summary regardless of buffer bytes.
+/// Where the loop is, in the shape the hook layer publishes.
+///
+/// One place so that the three call sites in `chat_with_tools` cannot drift
+/// apart and hand a hook two different views of the same round.
+fn loop_state(
+    iterations: usize,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    turn_token_budget: Option<u64>,
+) -> hooks::LoopState {
+    hooks::LoopState {
+        iteration: u32::try_from(iterations).unwrap_or(u32::MAX),
+        max_iterations: u32::try_from(MAX_TOOL_ITERATIONS).unwrap_or(u32::MAX),
+        prompt_tokens,
+        completion_tokens,
+        turn_token_budget,
+    }
+}
+
 fn resolve_prompt_token_budget(proxy: &mut dyn ShellProxy) -> u64 {
     resolve_setting(proxy, CONTEXT_TOKEN_BUDGET_KEY)
         .and_then(|value| value.trim().parse::<u64>().ok())
@@ -750,10 +781,16 @@ fn chat_with_tools(
     // `before_tool` all used to leave `session-start` with no matching end.
     let mut iterations = 0usize;
     let mut turn_tokens = (0u64, 0u64, 0u64);
+    // Read out here as well so the final `loop` envelope can be built after the
+    // closure has returned.
+    // Resolved out here, not inside the closure: a prompt hook that denies
+    // returns before the closure reaches it, and the final `loop` envelope
+    // would then advertise no turn budget while one was configured.
+    let turn_token_budget = resolve_turn_token_budget(proxy);
     let outcome: Result<String, String> = (|| {
         let submitted = hook_ctx.fire(
             hooks::HookEvent::UserPromptSubmit,
-            None,
+            hooks::HookSubject::none(),
             || {
                 json!({
                     "prompt": hooks::redact(user_input),
@@ -805,7 +842,7 @@ fn chat_with_tools(
                 if !resuming {
                     hook_ctx.fire(
                         hooks::HookEvent::SessionStart,
-                        None,
+                        hooks::HookSubject::none(),
                         || {
                             json!({
                                 "source": if runtime.is_some() { "agent" } else { "chat" },
@@ -851,7 +888,6 @@ fn chat_with_tools(
         if runtime.is_none() {
             manager.begin_turn();
         }
-        let turn_token_budget = resolve_turn_token_budget(proxy);
 
         let mut tools = build_tools();
         {
@@ -904,15 +940,57 @@ fn chat_with_tools(
                 ));
             }
 
+            // Told before any hook of this round can fire, so a governor hook
+            // sees the round it is about to authorise rather than the last one.
+            hook_ctx.note_loop(loop_state(
+                iterations,
+                manager.turn_usage.prompt_tokens,
+                manager.turn_usage.completion_tokens,
+                turn_token_budget,
+            ));
+
             // Compact by rule before paying a model to summarize. Superseded and
             // stale tool output is most of what makes a long run large, and
             // dropping it costs nothing; on the runs where this is enough, the
             // summarization request below never happens.
             if manager.should_summarize() {
+                let buffer_before = manager.buffer_size_chars();
+                // Read before compaction, like `buffer_before`: the free pass
+                // can bring the buffer back under its limit, and asking
+                // afterwards then names `prompt_tokens` for a round the buffer
+                // size triggered.
+                let reason = if buffer_before > MAX_BUFFER_CHARS {
+                    "buffer_chars"
+                } else {
+                    "prompt_tokens"
+                };
                 let reclaimed = manager.compact_buffer();
                 if reclaimed > 0 {
                     tracing::debug!("compacted {reclaimed} chars of tool output out of the buffer");
                 }
+
+                // Fired after the free pass and before the paid one, so the
+                // payload can say whether this round is about to cost anything.
+                // Observation only: refusing compaction would leave the request
+                // too large to send, so there is no safe `deny` to offer.
+                let will_summarize = manager.should_summarize();
+                hook_ctx.fire(
+                    hooks::HookEvent::PreCompact,
+                    hooks::HookSubject::none(),
+                    || {
+                        json!({
+                            "reason": reason,
+                            "buffer_chars": manager.buffer_size_chars(),
+                            "buffer_chars_before": buffer_before,
+                            "buffer_messages": manager.buffer_len(),
+                            "reclaimed_chars": reclaimed,
+                            "last_prompt_tokens": manager.last_prompt_tokens(),
+                            "prompt_token_budget": manager.prompt_token_budget(),
+                            "will_summarize": will_summarize,
+                        })
+                    },
+                    &|| proxy.is_canceled(),
+                );
             }
 
             // Check for Summarization (may need multiple rounds if buffer is huge).
@@ -989,6 +1067,15 @@ fn chat_with_tools(
             // Feed the measured prompt size back so the next summarization
             // decision is based on what the provider charged, not a byte proxy.
             manager.turn_usage.add_response(&response);
+            // Updated a second time: the call above is what makes this round's
+            // tokens known, and a `pre-tool-use` hook watching spend would
+            // otherwise always be one round behind.
+            hook_ctx.note_loop(loop_state(
+                iterations,
+                manager.turn_usage.prompt_tokens,
+                manager.turn_usage.completion_tokens,
+                turn_token_budget,
+            ));
             if let Some(reported) = usage::TokenUsage::from_response(&response) {
                 manager.note_prompt_tokens(reported.prompt_tokens);
             } else if runtime.is_some() {
@@ -1178,9 +1265,17 @@ fn chat_with_tools(
     // Observation only. "Keep going" is a request to spend more of the user's
     // money and touch more of their machine, which is the one thing a hook is
     // not allowed to ask for.
+    // Keeps the envelope's `loop` in step with the `iterations` and `tokens`
+    // this event has carried in its own detail since it was added.
+    hook_ctx.note_loop(loop_state(
+        iterations,
+        turn_tokens.0,
+        turn_tokens.1,
+        turn_token_budget,
+    ));
     hook_ctx.fire(
         hooks::HookEvent::ResponseComplete,
-        None,
+        hooks::HookSubject::none(),
         || {
             json!({
                 "status": if outcome.is_ok() { "ok" } else { "error" },
@@ -1463,20 +1558,28 @@ fn resolve_skill_mentions<'a>(
 /// the one that should be *more* careful, not equally trusting. An untrusted
 /// project is simply not read there.
 fn gate_project_skills(roots: &mut Vec<skills::SkillRoot>, proxy: &mut dyn ChatToolHost) {
-    let Some(decision) = skills::describe_project_root(roots) else {
-        return;
-    };
+    // Asked per root and dropped per root. Trust is recorded against a root
+    // path, so declining one shared directory must not also throw away a
+    // directory the user has already agreed to.
+    for decision in skills::describe_project_roots(roots) {
+        if !trusts_project_root(&decision, proxy) {
+            roots.retain(|root| root.path != decision.root);
+        }
+    }
+}
 
-    let drop_project =
-        |roots: &mut Vec<skills::SkillRoot>| roots.retain(|root| root.scope != SkillScope::Project);
-
+/// Does the user agree to this one project skills root?
+fn trusts_project_root(
+    decision: &skills::ProjectSkillDecision,
+    proxy: &mut dyn ChatToolHost,
+) -> bool {
     if skills::trust::is_remembered(&decision.root, &decision.digest) {
-        return;
+        return true;
     }
 
     let session_key = skills::trust::session_key(&decision.root, &decision.digest);
     if proxy.agent_session_approvals().contains(&session_key) {
-        return;
+        return true;
     }
 
     if proxy.agent_runtime().is_some() {
@@ -1484,8 +1587,7 @@ fn gate_project_skills(roots: &mut Vec<skills::SkillRoot>, proxy: &mut dyn ChatT
             "skipping untrusted project skills at {}",
             decision.root.display()
         );
-        drop_project(roots);
-        return;
+        return false;
     }
 
     let shown: Vec<&str> = decision.names.iter().take(8).map(String::as_str).collect();
@@ -1506,16 +1608,18 @@ fn gate_project_skills(roots: &mut Vec<skills::SkillRoot>, proxy: &mut dyn ChatT
     match proxy.request_agent_approval(&message) {
         Ok(crate::shell_capabilities::ApprovalDecision::Allow) => {
             proxy.remember_agent_approval(&session_key);
+            true
         }
         Ok(crate::shell_capabilities::ApprovalDecision::AllowAlways) => {
             proxy.remember_agent_approval(&session_key);
             skills::trust::remember(&decision.root, &decision.digest);
+            true
         }
-        Ok(crate::shell_capabilities::ApprovalDecision::Deny) => drop_project(roots),
+        Ok(crate::shell_capabilities::ApprovalDecision::Deny) => false,
         Err(err) => {
             // Fail closed: an unanswerable question is not consent.
             tracing::debug!("could not ask about project skills: {err}");
-            drop_project(roots);
+            false
         }
     }
 }
@@ -2027,22 +2131,39 @@ mod tests {
     fn project_with_a_skill(dir: &std::path::Path) -> std::path::PathBuf {
         let root = std::fs::canonicalize(dir).unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();
-        let skill = root.join(".dsh/skills/deploy");
-        std::fs::create_dir_all(&skill).unwrap();
+        write_project_skill(&root.join(".dsh/skills"), "deploy", "repo deploy steps");
+        root
+    }
+
+    fn write_project_skill(root: &std::path::Path, name: &str, description: &str) {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            skill.join("SKILL.md"),
-            "---\nname: deploy\ndescription: repo deploy steps\n---\n",
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n"),
         )
         .unwrap();
-        root
     }
 
     fn project_roots(root: &std::path::Path) -> Vec<SkillRoot> {
         skills::skill_roots(Some(root), true)
     }
 
-    fn has_project(roots: &[SkillRoot]) -> bool {
-        roots.iter().any(|root| root.scope == SkillScope::Project)
+    /// Is the named project root still in the list?
+    ///
+    /// By path, not by scope. A project now has two candidate roots and
+    /// `skill_roots` lists both whether or not they exist on disk, so "any
+    /// project-scoped root remains" no longer answers "was this one dropped".
+    fn has_root(roots: &[SkillRoot], path: &std::path::Path) -> bool {
+        roots.iter().any(|root| root.path == path)
+    }
+
+    fn dsh_root(project: &std::path::Path) -> std::path::PathBuf {
+        project.join(".dsh").join("skills")
+    }
+
+    fn agents_root(project: &std::path::Path) -> std::path::PathBuf {
+        project.join(".agents").join("skills")
     }
 
     /// A cloned repository's descriptions must not reach the prompt before the
@@ -2060,11 +2181,14 @@ mod tests {
                 ..crate::test_support::TestShellProxy::default()
             };
             let mut roots = project_roots(&root);
-            assert!(has_project(&roots));
+            assert!(has_root(&roots, &dsh_root(&root)));
 
             gate_project_skills(&mut roots, &mut proxy);
 
-            assert!(!has_project(&roots), "a declined project must be dropped");
+            assert!(
+                !has_root(&roots, &dsh_root(&root)),
+                "a declined project must be dropped"
+            );
         });
     }
 
@@ -2086,7 +2210,7 @@ mod tests {
 
             let mut roots = project_roots(&root);
             gate_project_skills(&mut roots, &mut proxy);
-            assert!(has_project(&roots));
+            assert!(has_root(&roots, &dsh_root(&root)));
             assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
             // A fresh shell: no session approvals, but the decision is on disk.
@@ -2098,7 +2222,10 @@ mod tests {
             };
             let mut roots = project_roots(&root);
             gate_project_skills(&mut roots, &mut fresh);
-            assert!(has_project(&roots), "a remembered project stays trusted");
+            assert!(
+                has_root(&roots, &dsh_root(&root)),
+                "a remembered project stays trusted"
+            );
             assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
             // A skill added afterwards changes what the prompt would carry.
@@ -2112,11 +2239,48 @@ mod tests {
 
             let mut roots = project_roots(&root);
             gate_project_skills(&mut roots, &mut fresh);
-            assert!(!has_project(&roots));
+            assert!(!has_root(&roots, &dsh_root(&root)));
             assert_eq!(
                 calls.load(std::sync::atomic::Ordering::SeqCst),
                 2,
                 "a new skill must ask again"
+            );
+        });
+    }
+
+    /// Trust is recorded per root, so declining the shared directory must not
+    /// throw away one the user already agreed to. Deciding for the repository
+    /// as a whole would make the answer to one question depend on the other.
+    #[test]
+    fn an_untrusted_agents_root_is_dropped_while_a_trusted_dsh_root_stays() {
+        let state = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let root = project_with_a_skill(project.path());
+        write_project_skill(&agents_root(&root), "shared", "someone else's notes");
+
+        with_state_home(state.path(), || {
+            // `.dsh` was agreed to on disk; `.agents` has never been seen.
+            let mut roots = project_roots(&root);
+            let dsh = skills::describe_project_roots(&roots)
+                .into_iter()
+                .find(|decision| decision.root == dsh_root(&root))
+                .expect("the dsh root has a skill");
+            skills::trust::remember(&dsh.root, &dsh.digest);
+
+            let mut proxy = crate::test_support::TestShellProxy {
+                current_dir: root.clone(),
+                confirm_result: false,
+                ..crate::test_support::TestShellProxy::default()
+            };
+            gate_project_skills(&mut roots, &mut proxy);
+
+            assert!(
+                has_root(&roots, &dsh_root(&root)),
+                "the agreed root must survive a refusal about the other one"
+            );
+            assert!(
+                !has_root(&roots, &agents_root(&root)),
+                "the refused root must be dropped"
             );
         });
     }
@@ -2128,6 +2292,7 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         let root = project_with_a_skill(project.path());
+        write_project_skill(&agents_root(&root), "shared", "someone else's notes");
 
         with_state_home(state.path(), || {
             let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -2141,7 +2306,11 @@ mod tests {
             let mut roots = project_roots(&root);
             gate_project_skills(&mut roots, &mut proxy);
 
-            assert!(!has_project(&roots));
+            assert!(!has_root(&roots, &dsh_root(&root)));
+            assert!(
+                !has_root(&roots, &agents_root(&root)),
+                "the shared root is no more trusted than the other one"
+            );
             assert_eq!(
                 calls.load(std::sync::atomic::Ordering::SeqCst),
                 0,
@@ -2179,7 +2348,7 @@ mod tests {
     /// produced it.
     #[test]
     fn system_prompt_identity_ignores_the_skills_list() {
-        use skills::{SkillRoot, SkillScope};
+        use skills::SkillRoot;
 
         let mcp_manager = McpManager::load_blocking(vec![]);
         let dir = tempfile::tempdir().unwrap();
@@ -2192,7 +2361,8 @@ mod tests {
         )
         .unwrap();
         let roots = vec![SkillRoot {
-            scope: SkillScope::User,
+            scope: skills::SkillScope::User,
+            origin: skills::SkillOrigin::Dsh,
             path: root,
         }];
 

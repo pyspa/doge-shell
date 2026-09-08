@@ -50,11 +50,17 @@ pub(crate) enum HookRun {
     Failed(String),
 }
 
+/// Run one hook and read its answer.
+///
+/// `timeout` is passed in rather than read from `hook`: the turn-wide hook
+/// budget can shorten it, and the message a timeout produces has to name the
+/// value that actually applied, not the one in the file.
 pub(crate) fn run_hook(
     hook: &HookDefinition,
     payload: &str,
     env: &[(String, String)],
     cwd: &Path,
+    timeout: Duration,
     cancel: &dyn Fn() -> bool,
 ) -> HookRun {
     // The payload goes in through an anonymous temp file rather than a pipe.
@@ -99,7 +105,7 @@ pub(crate) fn run_hook(
     let stdout = capture(child.stdout.take());
     let stderr = capture(child.stderr.take());
 
-    let deadline = Instant::now() + Duration::from_millis(hook.timeout_ms());
+    let deadline = Instant::now() + timeout;
     let mut cancelled = false;
     let status = loop {
         match child.try_wait() {
@@ -133,7 +139,7 @@ pub(crate) fn run_hook(
         return if cancelled {
             HookRun::Failed("cancelled".to_string())
         } else {
-            HookRun::Failed(format!("timed out after {}ms", hook.timeout_ms()))
+            HookRun::Failed(format!("timed out after {}ms", timeout.as_millis()))
         };
     };
 
@@ -290,7 +296,32 @@ mod tests {
     }
 
     fn run(dir: &TempDir, hook: &HookDefinition, payload: &str) -> HookRun {
-        run_hook(hook, payload, &[], dir.path(), &|| false)
+        run_with_timeout(dir, hook, payload, Duration::from_millis(hook.timeout_ms()))
+    }
+
+    fn run_with_timeout(
+        dir: &TempDir,
+        hook: &HookDefinition,
+        payload: &str,
+        timeout: Duration,
+    ) -> HookRun {
+        run_hook(hook, payload, &[], dir.path(), timeout, &|| false)
+    }
+
+    /// The turn budget shortens a hook's window; the message has to say the
+    /// value that applied, not the one the file asked for.
+    #[test]
+    fn an_explicit_timeout_overrides_the_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = script(&dir, "sleep 30\n");
+        let hook = definition(vec!["sh".to_string(), script.display().to_string()], 60_000);
+
+        match run_with_timeout(&dir, &hook, "{}", Duration::from_millis(200)) {
+            HookRun::Failed(err) => {
+                assert!(err.contains("timed out after 200ms"), "{err}");
+            }
+            other => panic!("expected a timeout, got {other:?}"),
+        }
     }
 
     #[test]
@@ -434,7 +465,14 @@ exit 0",
         let hook = definition(vec!["sh".to_string(), path.display().to_string()], 60_000);
 
         let started = Instant::now();
-        let outcome = run_hook(&hook, "{}", &[], dir.path(), &|| true);
+        let outcome = run_hook(
+            &hook,
+            "{}",
+            &[],
+            dir.path(),
+            Duration::from_secs(30),
+            &|| true,
+        );
 
         assert!(started.elapsed() < Duration::from_secs(5));
         match outcome {

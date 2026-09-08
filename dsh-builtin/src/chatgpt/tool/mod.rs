@@ -133,7 +133,7 @@ pub fn execute_tool_call(
     let kind = tool_kind(name, is_mcp_tool);
     let pre = hooks.fire(
         hooks::HookEvent::PreToolUse,
-        Some(name),
+        hooks::HookSubject::tool(name, arguments),
         || hooks::tool_detail(name, tool_call_id, kind, arguments),
         &|| proxy.is_canceled(),
     );
@@ -196,7 +196,7 @@ pub fn execute_tool_call(
     // wants to see.
     let post = hooks.fire(
         hooks::HookEvent::PostToolUse,
-        Some(name),
+        hooks::HookSubject::tool(name, arguments),
         || {
             post_tool_detail(
                 name,
@@ -1298,6 +1298,78 @@ mod tests {
             hooks::config::parse(&config).expect("test hook config"),
             dir.path().to_path_buf(),
         )
+    }
+
+    /// Like `hook_context`, but with a `match` clause the caller chooses.
+    fn matched_hook_context(dir: &tempfile::TempDir, matcher: &str, body: &str) -> HookContext {
+        let path = dir.path().join("hook.sh");
+        std::fs::write(&path, format!("{body}\n")).unwrap();
+
+        let config = format!(
+            r#"{{"version":1,"hooks":[{{"id":"gatekeeper","events":["pre-tool-use"],"match":{matcher},"command":["sh","{}"]}}]}}"#,
+            path.display()
+        );
+        HookContext::with_hooks(
+            hooks::config::parse(&config).expect("test hook config"),
+            dir.path().to_path_buf(),
+        )
+    }
+
+    fn execute_call(command: &str) -> Value {
+        serde_json::json!({
+            "id": "call_1",
+            "function": {
+                "name": "execute",
+                "arguments": serde_json::json!({ "command": command }).to_string(),
+            }
+        })
+    }
+
+    /// `dsh` puts every command through `execute`, so a hook watching `rm` used
+    /// to pay its timeout on every `ls`. `programs` is what makes it not.
+    #[test]
+    fn a_hook_matching_on_the_command_narrows_to_one_call() {
+        let dir = tempdir().unwrap();
+        let hooks = matched_hook_context(
+            &dir,
+            r#"{"tools":["execute"],"programs":["rm"]}"#,
+            r#"echo '{"decision":"deny","reason":"no removals here"}'"#,
+        );
+        let mcp = Arc::new(RwLock::new(McpManager::default()));
+
+        // The tool the hook does not care about runs untouched - and never even
+        // starts the hook process.
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            ..TestShellProxy::default()
+        };
+        let allowed = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+        assert_eq!(allowed.outcome, ToolOutcome::Success);
+
+        // The one it does care about is stopped before the policy is asked.
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            ..TestShellProxy::default()
+        };
+        let denied =
+            execute_tool_call(&execute_call("rm -rf /tmp/x"), &mcp, &hooks, &mut proxy).unwrap();
+        assert_eq!(denied.outcome, ToolOutcome::Failure);
+        assert!(
+            denied.content.contains("no removals here"),
+            "{}",
+            denied.content
+        );
+
+        // A different command through the same tool is not the hook's business.
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            agent_verdict: AgentCommandVerdict::Allowed,
+            ..TestShellProxy::default()
+        };
+        let other = execute_tool_call(&execute_call("true"), &mcp, &hooks, &mut proxy).unwrap();
+        assert_eq!(other.outcome, ToolOutcome::Success);
     }
 
     fn ls_call() -> Value {

@@ -14,6 +14,7 @@
 - Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
 - Claude Code project skills: `<repo>/.claude/skills/` (`../docs/ai/skills` への symlink。全 Skill がそのまま見える)
 - doge-shell project skills: `<project>/.dsh/skills/` (dsh の `!` チャットだけが読む。installer の対象外で、リポジトリが自分で持つ)
+- cross-agent project skills: `<project>/.agents/skills/` (**読み取り専用**の相互運用 root。installer の対象外 — 他ツールと共有するディレクトリを installer が `rm -rf` するのは越権)
 
 ## 使い分け
 - `AGENTS.md`: この repo で最初に守る短いルールだけを書く。`CLAUDE.md` は `@AGENTS.md` を import するだけの薄いアダプタにし、内容は複製しない。
@@ -45,6 +46,8 @@ doctor skills
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
 - 失敗しやすい実装パターンを見つけたら、`task-map.md` か該当 Skill の `references/` へ短く戻す。
+- `description` は dsh のプロンプトでは 140 字で切られる。trigger を先頭に置く。
+- `allowed-tools` などの他ツール向け frontmatter キーは dsh では無視される（強制しない）。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill

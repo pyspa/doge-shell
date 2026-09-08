@@ -180,6 +180,7 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `DSH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
 | `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt.rs` |
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
+| `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
 | `DSH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
 | `DSH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**唯一の例外 |
 
@@ -220,8 +221,33 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 
 モデルが読み、モデル自身が書けるようになった手順書。実装は `dsh-builtin/src/chatgpt/skills/`。
 
-- **root は 2 つ**。`<project>/.dsh/skills`（`workspace_root` が project marker を持つときだけ）と
-  `config_paths::skills_dir()`。同名は **project が勝つ**。`skill_roots` が唯一の解決経路。
+- **書き込み可能な root は 2 つ、読み取り root は最大 3 つ**。`skill_roots` が唯一の解決経路。
+  | root | scope / origin | 書ける |
+  |---|---|---|
+  | `<project>/.dsh/skills` | Project / Dsh | ○ |
+  | `<project>/.agents/skills` | Project / Agents | × |
+  | `config_paths::skills_dir()` | User / Dsh | ○ |
+  project 側は `workspace_root` が project marker を持つときだけ。precedence は表の順（`.dsh` >
+  `.agents` > user）で、同名は上が勝ち下は shadow 診断になる。**canonical path で dedup する** —
+  `.agents/skills` が `.dsh/skills` への symlink のとき、二重掲載と二重 trust 質問になる。
+  `AI_CHAT_PROJECT_SKILLS=0` は project の 2 つを両方落とす（新しい環境変数を増やさない）。
+- **`SkillScope` に variant を足さない。`SkillOrigin` を足す。** `scope == SkillScope::Project`
+  の比較は「checkout と一緒に降ってきたか」を意味し、trust ゲート・`doctor`・`skill_manage` に
+  散在する。3 つ目の variant はそれら全てに `false` を返す = ゲートにとって緩い方向で、しかも
+  何もコンパイルエラーにならない。どのディレクトリかは `SkillRoot.origin`。
+- **`.agents/skills` へは書かない。** 他ツールと共有するディレクトリに、このシェルが勝手に
+  ファイルを置く筋合いはない。`skill_manage` の `scope: "project"` は常に `.dsh/skills`。
+  `project_skills_root` の意味を `.dsh` 固定のまま変えないことがその保証（`tool/skill.rs` と
+  `doctor` が「書ける root」としてこれを呼ぶ）。
+- **他ツールの frontmatter キー（`allowed-tools` / `license` / `version`）は無視する。**
+  自前パーサは top-level の `name` / `description` しか読まないので互換対応は不要。
+  `allowed-tools` を**強制しないと決めた**理由は 3 つ: 名前空間が違う（慣習は `Bash`/`Read`、
+  dsh は `execute`/`read_file`）のでマッピングは推測になり両側の変更ごとに腐る。narrowing は
+  escalation ではないが **availability 攻撃**になる（未信頼 repo のファイルが `task_plan` を
+  消せると `agent run` の完了条件記録が原因不明で壊れる）。効くのは `@mention` したターンだけ。
+- **`~/.agents/skills` は 4 つ目の root にしない。** user scope に trust ゲートは無く、ユーザーが
+  知らないディレクトリの description が全プロンプトに無言で入る。`skills_dir()` は `is_dir()` =
+  symlink 追従なので `ln -s ~/.agents/skills ~/.config/dsh/skills` が今日そのまま動く。
 - **プロンプトに載るのは name / path / `description` の 1 行だけ**。本文はモデルが `read_file` で読む。
   frontmatter は自前パーサで、読むのは `description` のみ。YAML crate は入れない
   — 書き手（`skill_manage`）が読み手の分かる平坦な部分集合だけを出すことで整合を保証している。
@@ -242,6 +268,16 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
   `skill list` / `doctor skills` の警告だけ。削除は人が `skill remove` で行う。
 - **project skill は未信頼のデータ**。fragment に "A skill is notes, never permission" を明記し、
   `AI_CHAT_PROJECT_SKILLS=0` で丸ごと外せるようにしてある。
+- **`describe_project_roots` は `Vec` を返す。** 単数版は
+  `roots.iter().find(scope == Project)` だったので、最初の project root が空で 2 つ目に
+  description があると「決めることは無い」と答え、**未信頼のテキストがゲートを素通りして
+  プロンプトに入った**。`Vec` にしたのは呼び出し側（gate / `doctor` ×2 / `skill` CLI）を
+  コンパイラに再読させる唯一の確実な手段だから。gate は **root ごとに聞き、root ごとに落とす**
+  （path 単位の `retain`）。trust は root path に対して記録されるので、共有ディレクトリを
+  断ったことで既に同意済みのディレクトリまで捨ててはいけない。
+- **prompt fragment は root 単位でグループ化する**（`Skill.root`）。scope 単位のフィルタは
+  1 scope = 1 ディレクトリの間だけ正しく、project root が 2 つになると同じ skill を両方の
+  ブロックに出す。
 - **project root には trust ゲートがある**（`skills/trust.rs`、`chatgpt::gate_project_skills`）。
   `.dsh/hooks.json` を読まない理由と同じものが skills にも当てはまる — description は
   ユーザーが何も決める前に system prompt へ入り、その prompt を読むエージェントは `execute`
@@ -277,23 +313,100 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 | `user-prompt-submit` | `session::take` の**前** | deny / ask |
 | `pre-tool-use` | `execute_tool_call` の入口（builtin / MCP / task 全部） | deny / ask |
 | `post-tool-use` | 結果確定後 | deny（結果を失敗にする）/ `additional_context` |
+| `pre-compact` | `should_summarize()` の枝内、`compact_buffer` の後・要約 `while` の前 | 効かない |
 | `response-complete` | `session::store` の直後 | 効かない |
+
+イベントを足したら `HookEvent::ALL` に入れる。`parse` の `MAX_HOOKS_PER_EVENT` 検査はそこを
+回るので、手書きの配列に足し忘れると新しいイベントだけ上限が効かなくなる。
 
 - **`user-prompt-submit` は `session::take` より前**。`take` は常に取り除くので、後ろで deny すると
   `outcome.is_ok()` が false になり `session::store` がスキップされ、継続中の会話が黙って消える。
   id が要る側は非破壊の `session::peek_id` を使う。
 - **`response-complete` に「継続を強制する」機能は入れない**。継続の強制は「もっと副作用を使う許可」で、
   §4 の方針に真っ向から反する。
+- **`match` は 4 種類**（`tools` / `programs` / `paths` / `arguments`）。**種類間は AND、
+  種類内は OR**。dsh はコマンドを全部 `execute` に通すので `{"tools":["execute"]}` は事実上
+  「毎コマンド」で、hook を 1 本入れたユーザーが最初にぶつかるのがそれ。正規表現は入れない
+  — `programs` は `AI_CHAT_EXECUTE_ALLOWLIST` と同じ語プレフィックス、`paths` は glob。
+  - `programs` は `execute` 専用で `command_names_any`（`tool/execute.rs`）を再利用する。
+    `command_stages` + `command_candidates` がラッパを透過し全ステージを見るので `sudo rm` /
+    `timeout 5 rm` / `echo hi | rm` が `rm` に一致する。素朴な先頭一致は `sudo` で外れる =
+    許容側に倒れるので採らない。
+  - **allowlist とマッチャは極性が逆**。allowlist で一致は「無確認で実行」なので厳しくすると
+    拒否が増える（安全側）。hook の `match` で一致は「チェックを走らせる」なので、同じ
+    マッチャを厳しくするとチェックが走らなくなる（ゲートが静かに弱まる）。
+    `allowlist_entry_matches` を触るときは両方の呼び出し元を読む。境界テストは
+    `command_names_any_looks_through_wrappers_and_stages`。
+  - `paths` はコマンド行の**オプション以外の全トークン**を候補にする。裸の語を「PATH 参照だから
+    除く」形も試したが、それでは `rm .env` が `**/*.env` の hook に届かない。裸のファイル名と裸の
+    プログラム名は区別できないので、この層の他の全ての曖昧さと同じく**発火側**に倒す。代償は
+    `<cwd>/**` のような広いパターンがプログラム名にも真になること。`skill_manage` の `file` は
+    skill ディレクトリ基準なので候補にしない（cwd と結合すると触らないパスを判定する。正しく解決
+    するには skill root を再導出することになり §7 に反する）。`tools: ["skill_manage"]` で見る。
+  - **相対トークンの基準は呼び出し自身の `cwd` 引数**。シェルの cwd で解決すると
+    `{"command":"cat sub/x","cwd":"/etc"}` を取り逃がす。`touches_skill_file` が
+    `execution_dir` で閉じた穴と同じもの。
+  - MCP の推測は**ネストした string leaf まで再帰する**（深さ・件数上限つき）。top-level の
+    string だけだと `{"paths":["/etc/shadow"]}` を取り逃がす = 「意図的に過剰包含」と書いた方針の逆。
+  - `paths` の解決は**字句正規化だけ**（`tool::normalize_path`）。`canonicalize` すると、
+    モデルが名指ししたパスを stat する副作用と symlink race が「どの hook を走らせるか」の
+    判断に入る。symlink で `paths` を回避できるが、hook は許可を出せないので見逃しであって
+    誤許可ではない。実際のパス判定は `SafetyGuard` / `reject_gitignored_read_path` 側。
+  - **照合は redact 前の生の引数で行う**。`safety_policy::SECRET_OPTION` は `-p <値>` を無条件に
+    マスクするので、`mkdir -p /etc/myapp` は `mkdir -p ***` になり `paths:["/etc/**"]` の hook が
+    **発火しない**。`cp -p` / `rsync -p` / `docker run -p` / `psql -p` も同じ。これは false-deny
+    ではなく**許容側**に倒れる。照合はプロセス内で完結し hook には渡らない（payload は従来どおり
+    `tool_detail` でマスク済み）。
+  - **引数が読めないときは一致させる**。トークナイズできないコマンド行や JSON でない引数は
+    発火側に倒す。`false` にすると引用符の壊れたコマンドでゲートが黙って外れる。
+    構造的に引数が無いとき（`user-prompt-submit`、および provider が `arguments` を省いて
+    `""` になる無引数ツール）は逆で、不成立（`tools` と同じ読み）。`""` を Unreadable 扱いに
+    すると、それらの呼び出しで全ての引数マッチャが発火した。
+  - **充足不可能な `match` はロードエラー**（`programs` に対応する `tools` が無い / トークナイズ
+    できない entry / 不正な glob / scalar でない `arguments` の値）。
+    **空の `match` はエラーにしない** — `{"tools": []}` は従来から「全呼び出し」を意味しており、
+    今動く設定がチャット全体を拒否し始めてはいけない。`events` × `match` が一部のイベントで
+    満たせないだけの場合と同じく `doctor hooks` の warn にする。
+- **payload に loop 状態を載せる**（`hooks::LoopState`、ネストした `loop` オブジェクト）。
+  `response-complete` の detail が持つ `iterations` / `tokens` と名前衝突させないため。既存キーは
+  消さない。`chatgpt.rs` の 3 箇所（反復チェック後 / `turn_usage.add_response` 直後 /
+  `response-complete` 発火直前）で `note_loop` を呼ぶ。2 つ目が無いと、そのラウンドのトークンを
+  hook が 1 ラウンド遅れで見ることになる。**payload のフィールドは追加のみ。`hook_version` は
+  意味を変えるか削除するときだけ上げる。**
+- **`Cell` による interior mutability**。`fire(&self, ...)` は `execute_tool_call` から共有参照で
+  呼ばれ、予算の計上もそこから*書く*必要がある。再入ガードがスレッドローカルであるのと同じ理由で
+  1 ターン = 1 スレッドを前提にしている。スレッドを跨ぐようになったら `AtomicU64` へ。
+- **ターン予算 `AI_CHAT_HOOK_TURN_BUDGET_MS` は既定 off**。既定値を入れると「長いターンの
+  途中から hook が静かに鳴らなくなる」= この層が他の全箇所で拒否している失敗になる。
+  超過時、**gate はスキップしない**。残予算（下限 `MIN_TIMEOUT_MS`）を timeout に縮めて必ず実行し、
+  縮んだ timeout を超えたら既存の `HookRun::Failed` → deny。遅さは許可を買えない。
+  観測イベントは decision を持たないのでスキップし、**ターンに 1 回**だけ 1 行出す
+  （`warn_once` を使わない。あれは dedup キーがプロセス全体で hook の*失敗*報告と同じ箱なので、
+  流用するとスキップはシェルの生存中 1 回しか出ず、しかも同じ hook の本物のクラッシュ報告を
+  以後ずっと潰す）。
+  **予算の解決は hook が 1 本もないときは行わない。** `AI_CHAT_HOOKS=off` は壊れた hook 設定からの
+  出口として文書化されているので、予算値のタイポがその出口を塞いではいけない。
+  計測は `run_hook` の前後だけ — 承認プロンプトは `fire` の呼び出し側にあるので、人が考えている
+  時間で予算が尽きて次の gate が deny されることはない。
+- **観測イベントの非同期化は入れない**（§9 参照）。
 - **設定は argv 配列のみ**。文字列は拒否する。`execute` が `sh -c` を使えるのは `authorize` が
   行全体を判定しているからで、hooks には判定者がいない。あるのはモデルが決めたツール引数と
   ユーザーが打った任意の文字列だけなので、シェル文字列を許すと hook 作者は必ず補間する。
-- **payload は stdin だけ**（argv は `ps` で他ユーザーに見える）。書き込みは別スレッドから行う
-  — 同期書き込みしながら子の stdout が埋まると古典的なパイプデッドロックになる。
+- **payload は stdin だけ**（argv は `ps` で他ユーザーに見える）。渡し方は pipe ではなく無名
+  一時ファイル（下の「payload は pipe ではなく」参照）。writer スレッドは無い。
 - **masking は既存のものを使う**。payload はコマンドの再構成には使えない。それでよいのは
   hook が approve を出せないから — ずれは false-allow ではなく false-deny か見逃しにしかならない。
-- **`additional_context` の置き場所がないイベントでは受け取らない**。`session-start` は
-  system prompt を可変にすることになり、会話継続の判定（§7）に絡んで hook の出力が揺れるたび
-  会話が切れる。`response-complete` はモデルが読む最後のものより後。
+- **`additional_context` の置き場所がないイベントでは受け取らない**。判定基準は「後で読まれるか」
+  ではなく「**制御判断を変えない置き場所があるか**」。`session-start` は system prompt を可変に
+  することになり、会話継続の判定（§7）に絡んで hook の出力が揺れるたび会話が切れる。
+  `response-complete` はモデルが読む最後のものより後。`pre-compact` は buffer 以外に置き場所が
+  無く、そこに足したテキストは (a) 直後に圧縮対象になり (b) `buffer_chars` を増やして
+  `should_summarize()` を真に保ち、有料の `perform_summary` をもう 1 ラウンド呼びうる。
+- **`pre-compact` は gate にしない**。`deny` は「圧縮するな」を意味し、`should_summarize()` が
+  真のままループに入るか provider が 400 を返す。安全な `deny` が存在しない。
+  発火は `compact_buffer()` の**後**・要約 `while` の**前**にする。規則圧縮だけで足りたケースでも
+  鳴り、「これから金を払うか」が `will_summarize` として payload に載る。
+  **1 ターンに最大 `MAX_TOOL_ITERATIONS`(100) 回鳴りうるので、ターン予算と組で入れる。**
 - **project-local `.dsh/hooks.json` は読まない**。`git clone` して `cd` して `!` と打っただけで
   任意コマンドが走るのは direnv（`direnv allow` を要求）より弱い。将来入れるなら
   ユーザー自身の設定に許可ルートを書く形（`(allow-direnv ...)` と同型）にする。
@@ -377,24 +490,46 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 
 ### Skill / hooks（調査済み・未着手）
 
-- **skill のライフサイクル自動遷移が無い**。`reads` / `last_read_ms` は記録するが、
-  active → stale → archived の遷移は実装していない。archive は「ファイルを動かす」ことで、
-  `install-runtime-skills.sh --check-installed` が drift を報告し続ける。走らせる常駐プロセスも無い。
+- **`skill_manage` は書き込む内容を検証しない**。`validate()` は名前・scope・パスを見るが
+  contents を見ないので、`patch` が `description:` 行を消すと通る。その skill は
+  `summary()` のフォールバックで本文先頭行を拾い「`description` 欠落」診断に落ちる —
+  **モデルが自分で書いた直後にプロンプトから実質的に消える**。ユーザーには `doctor skills` を
+  見るまで分からない。直すなら `skills/lint.rs` を新設し、`SKILL.md` を書く 3 アクション
+  （`create` / `write_file` / `patch`）で最終内容を検査して frontmatter 欠落・`description`
+  欠落・`name` 不一致は**聞く前に**拒否する。同じ lint を `doctor skills` の deep 検査
+  （参照リンクの存在・本文長・内部 symlink の root 逸脱）に再利用でき、repo 自身の
+  `docs/ai/skills` を corpus テストにできる。deep 検査は `load_reporting`（毎ターン経路）に
+  入れず、別 API にすること。
+- **skill のライフサイクル自動遷移が無い**。`reads` / `last_read_ms` と `is_stale`(90 日) は
+  あるが active → stale → archived の遷移は無い。archive を「ファイルを動かす」で実装すると
+  `install-runtime-skills.sh --check-installed` と `doctor skills` の drift 検査が永久に赤くなる
+  ので、入れるなら state ファイルの `archived_ms` フラグにする（`STATE_VERSION` は上げない —
+  上げると旧シェルの `read_state` が `None` を返してカウンタ記録自体が止まる）。CLI 限定にし、
+  `skill_manage` には archive を足さない（モデルが自分をプロンプトから隠せる操作を持つべきでない）。
   `skill_manage delete` / `skill remove` は即削除で、復元も監査記録も無い。
+- **`MAX_SKILL_SUMMARY_CHARS` は 140 字**で、repo の canonical skill の多くがそれを超える
+  （`doge-shell-completion-spec` は 234 字）。**dsh 自身のプロンプトで trigger 文が切られている。**
+  上げるなら `trust::digest` の入力も生 description に切り替える変更と**同一リリースに**まとめる
+  こと。別々に出すと既存の trust が 2 回無効化されて 2 回聞かれる。
+- **`skill_manage` の `description` 上限は 300 字**（仕様は 1024 字）。プロンプトコストを
+  理由に意図的に狭めている。
 - **`search` は gitignore された project skill を見つけない**（`ignore::WalkBuilder` の内部挙動）。
   `read_file` / `ls` は `reject_gitignored_read_path` の skill root 例外で通る。プロンプトが
   `read_file` を名指ししているので実害は無いが、非対称ではある。
-- **`pre-tool-use` の payload に反復回数が無い**。`execute_tool_call` は `iterations` を知らない。
 - **hooks は経路 B に掛からない**。経路 B が `with_tools()` を本番で呼ばないことと対。
   有効化した瞬間に hook を素通りする MCP 実行経路になる。
-- **`match.tools` はツール名しか見ない**。dsh はコマンドを全部 `execute` に通すので、
-  `["execute"]` は事実上「毎コマンド」。コマンド内容でのフィルタが無く、hook の 5 秒予算を
-  食い続ける。1 ターンの hook 総時間にも上限が無い。
-- **hook は同期のみ**。観測イベント（`post-tool-use` / `response-complete`）を待たずに
-  投げる口が無いので、タイムアウトが一律 5 秒であることの圧力が抜けない。
-- **`.agents/skills/` を読まない**。Agent Skills 実装ガイドが相互運用の慣習として推奨している。
-- **`skill_manage` の `description` 上限は 300 字**（仕様は 1024 字）。プロンプトコストを
-  理由に意図的に狭めている。
+- **観測イベントの非同期化は入れない**（調査済み・入れないと決定）。
+  1. **回収の担い手が居ない**。`dsh/src/process/job_wait.rs` は既知 pid にしか `waitpid` せず
+     `waitpid(-1)` が無いので、detach した hook はシェルが終わるまでゾンビとして残る。
+  2. **pre/post のペア保証が壊れる**。`fire` を跨いで生き残る子は、call N の post が call N+1 の
+     pre より後に完了しうる。この対称性は `tool/mod.rs` がわざわざ守っているもの。
+  3. **応答の置き場所が無い**。`message` / `additional_context` / `decision` を読む相手が居ない
+     時刻に答えるので、そのイベントだけ JSON プロトコルが静かに効かなくなる。
+  4. **動機が消えた**。「一律 5 秒の圧力」は `match` の絞り込みとターン予算で抜けた。
+  5. **ユーザー空間の逃げ道が既にある**。`run_hook` の `killpg` はタイムアウト / キャンセル時
+     だけなので、`exit 0` した hook が残した孫は殺されない。「1 行出して exit、重い処理は自分の
+     子で」は今日書けて、`a_hook_that_leaves_a_grandchild_holding_stdin_still_returns` が
+     それを担保している。README にパターンとして書いた。
 
 ### 命名（直さない）
 

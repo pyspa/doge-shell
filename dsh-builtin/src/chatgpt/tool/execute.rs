@@ -862,6 +862,55 @@ fn command_is_allowlisted(program: &str, args: &[String], allowlist: &[String]) 
         .any(|entry| allowlist_entry_matches(entry, program, args))
 }
 
+/// Does any stage of `command` run a program named by one of `entries`?
+///
+/// `entries` uses the same word-prefix form as `AI_CHAT_EXECUTE_ALLOWLIST`, so
+/// `"git push"` covers `git push --force` while `"rm"` covers every `rm`. Every
+/// stage is judged and wrappers are looked through (`command_candidates`), so
+/// `sudo rm -rf x`, `timeout 5 rm x` and `echo hi | rm -rf x` all answer `rm`.
+///
+/// # The polarity here is the opposite of the allowlist's
+///
+/// For the allowlist a match means "run without asking", so a matcher that
+/// grows stricter refuses more - the safe direction. For a hook's `match` a
+/// match means "run this check", so the same matcher growing stricter runs the
+/// check *less*: a gate weakening in silence. Anything that changes
+/// `allowlist_entry_matches` has to be read with both callers in mind, which is
+/// what `command_names_any_looks_through_wrappers_and_stages` pins down.
+///
+/// An unparseable command line answers **`true`**. A hook's matcher is all that
+/// stands between a command and a check the user asked for, and a mismatched
+/// quote must not be a way to skip it. `authorize` refuses such a line
+/// separately, so firing costs nothing but one hook run.
+pub(crate) fn command_names_any(command: &str, entries: &[String]) -> bool {
+    let Some(stages) = readable_stages(command) else {
+        return true;
+    };
+    stages
+        .iter()
+        .any(|stage| command_is_allowlisted(&stage.program, &stage.args, entries))
+}
+
+/// Every token of every stage, or `None` when the line cannot be read.
+///
+/// Same reasoning as `touches_skill_file`: the program alone misses
+/// `bash <path>/run.sh`, because `bash` is not a transparent wrapper. A caller
+/// asking "does this command line mention such a path" has to see the arguments
+/// too. `None` is kept distinct from an empty vector so the caller decides what
+/// an unreadable line means rather than inheriting "mentions nothing".
+pub(crate) fn command_tokens(command: &str) -> Option<Vec<String>> {
+    Some(
+        readable_stages(command)?
+            .into_iter()
+            .flat_map(|stage| std::iter::once(stage.program).chain(stage.args))
+            .collect(),
+    )
+}
+
+fn readable_stages(command: &str) -> Option<Vec<CommandStage>> {
+    command_stages(command).ok()
+}
+
 /// Does any part of this command line reach a file that ships with a skill?
 ///
 /// Every skill root counts, the project one included. A skill arrives with a
@@ -1426,6 +1475,56 @@ pub(crate) mod tests {
         assert_eq!(stages[0].args, vec!["test".to_string(), "2>&1".to_string()]);
     }
 
+    /// The boundary the hooks `match` layer stands on.
+    ///
+    /// `HookMatch.programs` reuses this, and its polarity is inverted: for the
+    /// allowlist a match grants, for a matcher a match *checks*. A change here
+    /// that "tightens" the allowlist loosens every hook whose `programs` stops
+    /// matching, so the semantics are pinned in this crate rather than left to
+    /// the two call sites to agree about.
+    #[test]
+    fn command_names_any_looks_through_wrappers_and_stages() {
+        let rm = vec!["rm".to_string()];
+        for command in [
+            "rm -rf /tmp/x",
+            "sudo rm -rf /tmp/x",
+            "timeout 5 rm /tmp/x",
+            "echo hi | rm -rf /tmp/x",
+            "cd /tmp && rm -rf x",
+        ] {
+            assert!(
+                command_names_any(command, &rm),
+                "`{command}` should have named rm"
+            );
+        }
+        for command in ["ls -la", "echo rm", "cargo test"] {
+            assert!(
+                !command_names_any(command, &rm),
+                "`{command}` should not have named rm"
+            );
+        }
+
+        // Word prefix, matching the allowlist form the config already uses.
+        let push = vec!["git push".to_string()];
+        assert!(command_names_any("git push --force", &push));
+        assert!(!command_names_any("git pushx", &push));
+        assert!(!command_names_any("git status", &push));
+
+        // A line no one can read must not be a way past a check.
+        assert!(command_names_any("echo 'unclosed", &rm));
+        assert_eq!(command_tokens("echo 'unclosed"), None);
+
+        assert_eq!(
+            command_tokens("cat /etc/hosts | tail -1"),
+            Some(vec![
+                "cat".to_string(),
+                "/etc/hosts".to_string(),
+                "tail".to_string(),
+                "-1".to_string(),
+            ])
+        );
+    }
+
     #[test]
     fn run_rejects_string_eval_flags() {
         let _lock = env_lock();
@@ -1579,6 +1678,41 @@ pub(crate) mod tests {
         };
 
         let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());
+        let result = run(&command, &mut proxy);
+
+        assert_eq!(result.unwrap(), "Execution cancelled by user.".to_string());
+        assert_eq!(confirm_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    /// The interop root arrives with the same `git clone`, so it is held to the
+    /// same rule. This follows `skill_roots`, and the test is what keeps it
+    /// following: a third root added without one would be silently exempt.
+    #[test]
+    fn a_script_under_the_project_agents_skills_directory_always_asks() {
+        let _lock = env_lock();
+        let config_root = tempdir().unwrap();
+        let _cfg_guard = EnvGuard::set("XDG_CONFIG_HOME", config_root.path().to_str().unwrap());
+
+        let project = tempdir().unwrap();
+        let project_dir = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(project_dir.join(".git")).unwrap();
+        let skills_dir = project_dir.join(".agents/skills/deploy/scripts");
+        std::fs::create_dir_all(&skills_dir).unwrap();
+        let script_path = skills_dir.join("run.sh");
+        std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
+
+        let confirm_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = TestProxy {
+            agent_verdict: AgentCommandVerdict::Allowed,
+            current_dir: project_dir,
+            confirm_counter: Some(confirm_calls.clone()),
+            confirm_result: false,
+            ..TestProxy::default()
+        };
+
+        // Through an interpreter, so this also covers the "every token of every
+        // stage" rule for the new root rather than only its program position.
+        let command = format!("{{\"command\":\"bash {}\"}}", script_path.to_string_lossy());
         let result = run(&command, &mut proxy);
 
         assert_eq!(result.unwrap(), "Execution cancelled by user.".to_string());

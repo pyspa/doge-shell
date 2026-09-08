@@ -6,13 +6,21 @@
 //! relevant. That keeps the per-turn cost proportional to the number of skills
 //! rather than to their length.
 //!
-//! Skills come from two roots. The personal one is the user's own configuration
-//! directory; the project one is `.dsh/skills` inside the enclosing project, so a
-//! repository can carry its own procedures. A project skill wins a name clash:
-//! it is the more specific of the two.
+//! Skills are **read** from up to three roots and **written** to two.
+//!
+//! The personal one is the user's own configuration directory. A project can
+//! carry its own procedures in `.dsh/skills`, and - because the same files are
+//! useful to whichever agent the user is driving - in the vendor-neutral
+//! `.agents/skills` other tools have settled on. More specific wins a name
+//! clash, so `.dsh/skills` shadows `.agents/skills`, which shadows the personal
+//! root.
+//!
+//! `skill_manage` still only ever writes to `.dsh/skills` or the personal root.
+//! `.agents/skills` is shared with other tools, and a directory this shell does
+//! not own is not a place for it to leave files.
 
 use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::sync::Mutex;
@@ -23,10 +31,26 @@ pub(crate) mod trust;
 pub(crate) mod usage;
 
 /// Where a skill came from. Declaration order is precedence order.
+///
+/// Deliberately **still two values** now that a project has two roots. Every
+/// `scope == SkillScope::Project` comparison in this crate - the trust gate,
+/// `doctor`, `skill_manage` - reads as "did this arrive with the checkout", and
+/// a third variant would answer `false` to all of them at once. That is the
+/// permissive direction for a gate, and nothing would fail to compile. Which
+/// directory it was is `SkillOrigin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SkillScope {
     Project,
     User,
+}
+
+/// Which directory of a scope, where a scope has more than one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SkillOrigin {
+    /// This shell's own directory: `.dsh/skills`, or the personal root.
+    Dsh,
+    /// The cross-agent convention: `<project>/.agents/skills`.
+    Agents,
 }
 
 impl SkillScope {
@@ -36,19 +60,44 @@ impl SkillScope {
             SkillScope::User => "user",
         }
     }
-
-    fn heading(self) -> &'static str {
-        match self {
-            SkillScope::Project => "Project skills",
-            SkillScope::User => "Personal skills",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SkillRoot {
     pub scope: SkillScope,
+    pub origin: SkillOrigin,
     pub path: PathBuf,
+}
+
+impl SkillRoot {
+    /// The prompt heading for this root. On the root rather than on the scope,
+    /// because one scope can now hold more than one directory.
+    fn heading(&self) -> &'static str {
+        match (self.scope, self.origin) {
+            (SkillScope::Project, SkillOrigin::Dsh) => "Project skills",
+            (SkillScope::Project, SkillOrigin::Agents) => "Shared project skills",
+            (SkillScope::User, _) => "Personal skills",
+        }
+    }
+
+    fn provenance(&self) -> &'static str {
+        match (self.scope, self.origin) {
+            (SkillScope::Project, SkillOrigin::Dsh) => ", provided by this repository",
+            (SkillScope::Project, SkillOrigin::Agents) => {
+                ", provided by this repository for any agent"
+            }
+            (SkillScope::User, _) => "",
+        }
+    }
+
+    /// The word `doctor` and `skill list` use for this root.
+    pub(crate) fn label(&self) -> &'static str {
+        match (self.scope, self.origin) {
+            (SkillScope::Project, SkillOrigin::Dsh) => "project",
+            (SkillScope::Project, SkillOrigin::Agents) => "project-agents",
+            (SkillScope::User, _) => "user",
+        }
+    }
 }
 
 /// The project-relative skills directory.
@@ -57,14 +106,34 @@ pub(crate) struct SkillRoot {
 /// `config_paths::APP` all spell it `dsh`.
 pub(crate) const PROJECT_SKILLS_DIR: &str = ".dsh/skills";
 
-/// The project skills root for `current_dir`, when there is a project at all.
+/// The cross-agent project skills directory.
+///
+/// The convention that grew up alongside `AGENTS.md`, so one checkout can carry
+/// one set of procedures for every agent working in it instead of one per tool.
+pub(crate) const PROJECT_AGENTS_SKILLS_DIR: &str = ".agents/skills";
+
+/// The enclosing project, when `current_dir` is inside one.
 ///
 /// Reuses `workspace_root`, which climbs to the outermost enclosing project and
 /// stops short of `$HOME`. Resolving the root a second way is exactly how the
 /// skills directory once ended up meaning three different paths on macOS.
-pub(crate) fn project_skills_root(current_dir: &Path) -> Option<PathBuf> {
+fn project_marker_root(current_dir: &Path) -> Option<PathBuf> {
     let root = super::tool::workspace_root(current_dir);
-    crate::project_context::has_project_marker(&root).then(|| root.join(".dsh").join("skills"))
+    crate::project_context::has_project_marker(&root).then_some(root)
+}
+
+/// The project skills root for `current_dir`, when there is a project at all.
+///
+/// **This keeps meaning `.dsh/skills` specifically.** `skill_manage` and
+/// `doctor` call it to answer "where would a write go", so leaving it alone is
+/// what guarantees the interop root stays read-only.
+pub(crate) fn project_skills_root(current_dir: &Path) -> Option<PathBuf> {
+    project_marker_root(current_dir).map(|root| root.join(PROJECT_SKILLS_DIR))
+}
+
+/// The cross-agent project skills root for `current_dir`.
+pub(crate) fn project_agents_skills_root(current_dir: &Path) -> Option<PathBuf> {
+    project_marker_root(current_dir).map(|root| root.join(PROJECT_AGENTS_SKILLS_DIR))
 }
 
 /// Every root to read skills from, most specific first.
@@ -73,24 +142,50 @@ pub(crate) fn project_skills_root(current_dir: &Path) -> Option<PathBuf> {
 /// repository can put text in front of the model just by existing, so turning
 /// that off has to be possible without also giving up personal skills.
 pub(crate) fn skill_roots(current_dir: Option<&Path>, allow_project: bool) -> Vec<SkillRoot> {
-    let mut roots = Vec::with_capacity(2);
+    let mut roots = Vec::with_capacity(3);
 
-    if allow_project
-        && let Some(cwd) = current_dir
-        && let Some(path) = project_skills_root(cwd)
-    {
-        roots.push(SkillRoot {
-            scope: SkillScope::Project,
-            path,
-        });
+    if allow_project && let Some(cwd) = current_dir {
+        // `.dsh` first: the tool-specific answer beats the shared one.
+        if let Some(path) = project_skills_root(cwd) {
+            roots.push(SkillRoot {
+                scope: SkillScope::Project,
+                origin: SkillOrigin::Dsh,
+                path,
+            });
+        }
+        if let Some(path) = project_agents_skills_root(cwd) {
+            roots.push(SkillRoot {
+                scope: SkillScope::Project,
+                origin: SkillOrigin::Agents,
+                path,
+            });
+        }
     }
 
     roots.push(SkillRoot {
         scope: SkillScope::User,
+        origin: SkillOrigin::Dsh,
         path: crate::config_paths::skills_dir(),
     });
 
+    dedupe_roots(roots)
+}
+
+/// Drop roots that are the same directory reached two ways.
+///
+/// `.agents/skills` symlinked to `.dsh/skills` is a reasonable thing for a
+/// repository to do, and without this it would list every skill twice and ask
+/// for trust twice for one set of files.
+fn dedupe_roots(roots: Vec<SkillRoot>) -> Vec<SkillRoot> {
+    let mut seen = BTreeSet::new();
     roots
+        .into_iter()
+        .filter(|root| {
+            let key = std::fs::canonicalize(&root.path)
+                .unwrap_or_else(|_| super::tool::normalize_path(&root.path));
+            seen.insert(key)
+        })
+        .collect()
 }
 
 /// What a project root's skills are, and whether the user has agreed to them.
@@ -100,28 +195,35 @@ pub(crate) struct ProjectSkillDecision {
     pub digest: String,
 }
 
-/// Drop the project root from `roots` unless the user has agreed to it.
+/// Every project root that has something to decide about, in `roots` order.
 ///
-/// A `.dsh/skills` directory arrives with a `git clone`, and its descriptions
+/// A project skills directory arrives with a `git clone`, and its descriptions
 /// enter the system prompt before the user has decided anything. This is the
 /// same bar `.dsh/hooks.json` is held to.
 ///
-/// Returns what was asked about, so the caller can report it.
-pub(crate) fn describe_project_root(roots: &[SkillRoot]) -> Option<ProjectSkillDecision> {
-    let root = roots
+/// **A `Vec`, not an `Option`.** The single-root version took
+/// `roots.iter().find(scope == Project)`, so a repository whose first project
+/// root was empty answered "nothing to decide" while a second one still had
+/// descriptions to contribute - the gate passing over untrusted text without
+/// asking. Returning every root makes the caller handle each, and changing the
+/// signature is what forced every existing caller to be re-read.
+pub(crate) fn describe_project_roots(roots: &[SkillRoot]) -> Vec<ProjectSkillDecision> {
+    roots
         .iter()
-        .find(|root| root.scope == SkillScope::Project)?;
-    let skills = load_root(root);
-    // Nothing to advertise, nothing to decide.
-    if skills.is_empty() {
-        return None;
-    }
-
-    Some(ProjectSkillDecision {
-        digest: trust::digest(&skills),
-        names: skills.into_iter().map(|skill| skill.name).collect(),
-        root: root.path.clone(),
-    })
+        .filter(|root| root.scope == SkillScope::Project)
+        .filter_map(|root| {
+            let skills = load_root(root);
+            // Nothing to advertise, nothing to decide.
+            if skills.is_empty() {
+                return None;
+            }
+            Some(ProjectSkillDecision {
+                digest: trust::digest(&skills),
+                names: skills.into_iter().map(|skill| skill.name).collect(),
+                root: root.path.clone(),
+            })
+        })
+        .collect()
 }
 
 /// The roots as they appear on disk, so a `starts_with` against a canonicalised
@@ -130,8 +232,8 @@ fn resolved_roots(current_dir: &Path) -> Vec<SkillRoot> {
     skill_roots(Some(current_dir), true)
         .into_iter()
         .map(|root| SkillRoot {
-            scope: root.scope,
             path: std::fs::canonicalize(&root.path).unwrap_or(root.path),
+            ..root
         })
         .collect()
 }
@@ -187,6 +289,12 @@ pub(crate) struct Skill {
     instruction_path: String,
     /// The directory (or bare file) that is the unit of bookkeeping.
     dir: PathBuf,
+    /// The root this skill was loaded from.
+    ///
+    /// Grouping the prompt by `scope` worked only while one scope meant one
+    /// directory. It no longer does, and a scope-keyed filter renders the same
+    /// skills once per root of that scope.
+    root: PathBuf,
     /// `name:` as written in the frontmatter, when it was written at all.
     declared_name: Option<String>,
     /// Whether the summary came from `description:` rather than from the body.
@@ -194,7 +302,7 @@ pub(crate) struct Skill {
 }
 
 impl Skill {
-    pub(crate) fn from_folder(path: &Path, scope: SkillScope) -> Result<Self> {
+    pub(crate) fn from_folder(path: &Path, root: &SkillRoot) -> Result<Self> {
         let name = path
             .file_name()
             .and_then(|s| s.to_str())
@@ -216,11 +324,11 @@ impl Skill {
             content,
             &skill_md_path,
             path.to_path_buf(),
-            scope,
+            root,
         ))
     }
 
-    pub(crate) fn from_file(path: &Path, scope: SkillScope) -> Result<Self> {
+    pub(crate) fn from_file(path: &Path, root: &SkillRoot) -> Result<Self> {
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -237,7 +345,7 @@ impl Skill {
             content,
             path,
             path.to_path_buf(),
-            scope,
+            root,
         ))
     }
 
@@ -246,7 +354,7 @@ impl Skill {
         instruction: String,
         path: &Path,
         dir: PathBuf,
-        scope: SkillScope,
+        root: &SkillRoot,
     ) -> Self {
         let (frontmatter, _) = split_frontmatter(&instruction);
         let declared_name = frontmatter_field(frontmatter, "name");
@@ -255,10 +363,11 @@ impl Skill {
 
         Self {
             name,
-            scope,
+            scope: root.scope,
             summary,
             instruction_path: crate::config_paths::display_path(path),
             dir,
+            root: root.path.clone(),
             declared_name,
             has_description: declared_description.is_some(),
         }
@@ -276,6 +385,11 @@ impl Skill {
     /// The directory the usage record is keyed on.
     pub(crate) fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The root this skill came from, which is what the prompt groups by.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
     /// The file the prompt points at: `SKILL.md`, or the bare `*.md` itself.
@@ -560,11 +674,13 @@ impl SkillsManager {
         );
 
         for root in &self.roots {
-            let in_scope: Vec<&Skill> = skills
+            // By root path, not by scope: two roots can share a scope, and a
+            // scope-keyed filter renders each of their skills under both.
+            let in_root: Vec<&Skill> = skills
                 .iter()
-                .filter(|skill| skill.scope == root.scope)
+                .filter(|skill| skill.root() == root.path)
                 .collect();
-            if in_scope.is_empty() {
+            if in_root.is_empty() {
                 continue;
             }
 
@@ -572,16 +688,13 @@ impl SkillsManager {
             // hard-coded: `XDG_CONFIG_HOME` moves it, and a `read_file` call
             // against the wrong path is a wasted turn.
             let display_root = crate::config_paths::display_path(&root.path);
-            let provenance = match root.scope {
-                SkillScope::Project => ", provided by this repository",
-                SkillScope::User => "",
-            };
             fragment.push_str(&format!(
-                "\n{} (`{display_root}/`{provenance}):\n",
-                root.scope.heading()
+                "\n{} (`{display_root}/`{}):\n",
+                root.heading(),
+                root.provenance()
             ));
 
-            for skill in in_scope {
+            for skill in in_root {
                 // A skill is either a directory holding SKILL.md or a bare
                 // `.md` file; telling the model to read `<name>/SKILL.md` for
                 // the second kind sent it after a file that does not exist.
@@ -684,9 +797,9 @@ fn load_root_reporting(root: &SkillRoot) -> (Vec<Skill>, Vec<SkillDiagnostic>) {
         }
 
         let loaded = if path.is_dir() {
-            Skill::from_folder(&path, root.scope)
+            Skill::from_folder(&path, root)
         } else {
-            Skill::from_file(&path, root.scope)
+            Skill::from_file(&path, root)
         };
 
         match loaded {
@@ -915,6 +1028,7 @@ mod tests {
     fn user_root(path: &Path) -> SkillRoot {
         SkillRoot {
             scope: SkillScope::User,
+            origin: SkillOrigin::Dsh,
             path: path.to_path_buf(),
         }
     }
@@ -922,6 +1036,15 @@ mod tests {
     fn project_root(path: &Path) -> SkillRoot {
         SkillRoot {
             scope: SkillScope::Project,
+            origin: SkillOrigin::Dsh,
+            path: path.to_path_buf(),
+        }
+    }
+
+    fn project_agents_root(path: &Path) -> SkillRoot {
+        SkillRoot {
+            scope: SkillScope::Project,
+            origin: SkillOrigin::Agents,
             path: path.to_path_buf(),
         }
     }
@@ -953,7 +1076,7 @@ Longer explanation.
             .to_string(),
             Path::new("/tmp/skills/demo/SKILL.md"),
             PathBuf::from("/tmp/skills/demo"),
-            SkillScope::User,
+            &user_root(Path::new("/tmp/skills")),
         );
 
         assert_eq!(skill.summary(), "Short runtime summary");
@@ -966,7 +1089,7 @@ Longer explanation.
             "# Demo\n\nUse this to inspect prompts.\n".to_string(),
             Path::new("/tmp/skills/demo/SKILL.md"),
             PathBuf::from("/tmp/skills/demo"),
-            SkillScope::User,
+            &user_root(Path::new("/tmp/skills")),
         );
 
         assert_eq!(skill.summary(), "Use this to inspect prompts.");
@@ -980,7 +1103,7 @@ Longer explanation.
             format!("---\ndescription: \"{repeated}\"\n---\n"),
             Path::new("/tmp/skills/demo/SKILL.md"),
             PathBuf::from("/tmp/skills/demo"),
-            SkillScope::User,
+            &user_root(Path::new("/tmp/skills")),
         );
 
         assert!(skill.summary().ends_with("..."));
@@ -997,7 +1120,7 @@ Longer explanation.
                 .to_string(),
             Path::new("/tmp/skills/demo/SKILL.md"),
             PathBuf::from("/tmp/skills/demo"),
-            SkillScope::User,
+            &user_root(Path::new("/tmp/skills")),
         );
 
         assert_eq!(skill.summary(), "Use for deploys and rollbacks");
@@ -1012,7 +1135,7 @@ Longer explanation.
                 .to_string(),
             Path::new("/tmp/skills/demo/SKILL.md"),
             PathBuf::from("/tmp/skills/demo"),
-            SkillScope::User,
+            &user_root(Path::new("/tmp/skills")),
         );
 
         assert_eq!(skill.summary(), "the real summary");
@@ -1419,8 +1542,10 @@ Longer explanation.
         );
     }
 
+    /// One switch, both project roots. A cloned repository can put text in
+    /// front of the model from either directory.
     #[test]
-    fn turning_project_skills_off_leaves_only_the_personal_root() {
+    fn turning_project_skills_off_drops_both_project_roots() {
         let dir = tempdir().unwrap();
         let project = dir.path().join("proj");
         std::fs::create_dir_all(project.join(".git")).unwrap();
@@ -1429,5 +1554,157 @@ Longer explanation.
 
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].scope, SkillScope::User);
+    }
+
+    #[test]
+    fn the_agents_root_needs_a_project_marker_like_the_dsh_one() {
+        let dir = tempdir().unwrap();
+        let bare = dir.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(project_agents_skills_root(&bare), None);
+
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        assert_eq!(
+            project_agents_skills_root(&project),
+            Some(project.join(".agents").join("skills"))
+        );
+    }
+
+    /// `.dsh` is this shell's own answer, so it beats the shared one, which in
+    /// turn beats the personal root.
+    #[test]
+    fn skill_root_precedence_is_dsh_then_agents_then_user() {
+        let dir = tempdir().unwrap();
+        let project = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+
+        let roots = skill_roots(Some(&project), true);
+        let paths: Vec<&Path> = roots.iter().map(|root| root.path.as_path()).collect();
+        assert_eq!(
+            paths[..2],
+            [
+                project.join(".dsh").join("skills").as_path(),
+                project.join(".agents").join("skills").as_path()
+            ]
+        );
+        assert_eq!(roots[0].origin, SkillOrigin::Dsh);
+        assert_eq!(roots[1].origin, SkillOrigin::Agents);
+        assert_eq!(roots[2].scope, SkillScope::User);
+
+        // Same name in all three: the most specific one is what loads, and the
+        // others are reported as shadowed rather than silently gone.
+        let dsh = project.join(".dsh/skills");
+        let agents = project.join(".agents/skills");
+        let personal = project.join("personal");
+        for root in [&dsh, &agents, &personal] {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        write_skill(&dsh, "deploy", "the dsh one");
+        write_skill(&agents, "deploy", "the shared one");
+        write_skill(&personal, "deploy", "the personal one");
+
+        let manager = SkillsManager::with_roots(vec![
+            project_root(&dsh),
+            project_agents_root(&agents),
+            user_root(&personal),
+        ]);
+        let (skills, problems) = manager.load_reporting();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].summary(), "the dsh one");
+        assert_eq!(
+            problems
+                .iter()
+                .filter(|problem| problem.problem.contains("shadowed"))
+                .count(),
+            2
+        );
+    }
+
+    /// Grouping by scope rendered a project's skills once per project root.
+    #[test]
+    fn an_agents_skill_is_listed_in_its_own_block() {
+        let dir = tempdir().unwrap();
+        let dsh = dir.path().join(".dsh/skills");
+        let agents = dir.path().join(".agents/skills");
+        std::fs::create_dir_all(&dsh).unwrap();
+        std::fs::create_dir_all(&agents).unwrap();
+        write_skill(&dsh, "deploy", "the dsh one");
+        write_skill(&agents, "review", "the shared one");
+
+        clear_skills_fragment_cache();
+        let fragment =
+            SkillsManager::with_roots(vec![project_root(&dsh), project_agents_root(&agents)])
+                .get_system_prompt_fragment();
+
+        assert_eq!(fragment.matches("the dsh one").count(), 1, "{fragment}");
+        assert_eq!(fragment.matches("the shared one").count(), 1, "{fragment}");
+        // One heading per root, and each root's skills under only its own.
+        assert_eq!(
+            fragment.matches("\nProject skills (").count(),
+            1,
+            "{fragment}"
+        );
+        assert_eq!(
+            fragment.matches("\nShared project skills (").count(),
+            1,
+            "{fragment}"
+        );
+    }
+
+    /// A repository is free to symlink one at the other; that is one set of
+    /// files, so it must not be listed - or asked about - twice.
+    #[test]
+    fn an_agents_root_symlinked_to_the_dsh_root_is_deduplicated() {
+        let dir = tempdir().unwrap();
+        let project = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(project.join(".dsh/skills")).unwrap();
+        std::fs::create_dir_all(project.join(".agents")).unwrap();
+        std::os::unix::fs::symlink(project.join(".dsh/skills"), project.join(".agents/skills"))
+            .unwrap();
+
+        let roots = skill_roots(Some(&project), true);
+        let project_roots = roots
+            .iter()
+            .filter(|root| root.scope == SkillScope::Project)
+            .count();
+        assert_eq!(project_roots, 1, "{roots:?}");
+    }
+
+    /// The reason `~/.agents/skills` is not a fourth root: pointing the
+    /// personal one at it already works, and keeps the one trust story.
+    #[test]
+    fn a_personal_root_that_is_a_symlink_loads_the_skills_behind_it() {
+        let dir = tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        write_skill(&shared, "portable", "works in any agent");
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&shared, &link).unwrap();
+
+        let skills = SkillsManager::with_roots(vec![user_root(&link)]).load_skills();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "portable");
+    }
+
+    /// Another tool's frontmatter carries keys this parser does not read.
+    #[test]
+    fn an_unknown_frontmatter_key_does_not_stop_a_skill_loading() {
+        let dir = tempdir().unwrap();
+        let agents = dir.path().join(".agents/skills/review");
+        std::fs::create_dir_all(&agents).unwrap();
+        fs::write(
+            agents.join("SKILL.md"),
+            "---\nname: review\ndescription: Use when reviewing.\nallowed-tools: [Bash, Read]\nlicense: MIT\n---\n# Review\n",
+        )
+        .unwrap();
+
+        let root = dir.path().join(".agents/skills");
+        let (skills, problems) =
+            SkillsManager::with_roots(vec![project_agents_root(&root)]).load_reporting();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].summary(), "Use when reviewing.");
+        assert!(problems.is_empty(), "{problems:?}");
     }
 }

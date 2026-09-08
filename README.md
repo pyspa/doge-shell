@@ -1265,6 +1265,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible endpoint |
    | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
+   | `AI_CHAT_REASONING_EFFORT` | unset (provider default) | `reasoning_effort` sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | How long consecutive `!` turns share a conversation; `0` disables it |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
@@ -1279,7 +1280,12 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `DSH_AI_HOOKS_CONFIG` | `~/.config/dsh/ai-hooks.json` | Path of the hook configuration |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
-   `Retry-After`.
+   `Retry-After`. An optional request field the endpoint rejects outright is
+   dropped once and the request retried. A model whose default reasoning
+   effort is incompatible with function tools (e.g. it answers `tools`
+   requests with a 400 naming `reasoning_effort`) gets `reasoning_effort:
+   none` resent automatically on `tools` requests only; set
+   `AI_CHAT_REASONING_EFFORT=none` to skip that extra round-trip.
 
 2. **The AI features are off by default.** An API key on its own sends no
    requests: inline suggestions, automatic fixes and inline explanations each

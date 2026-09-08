@@ -4,6 +4,14 @@ use std::time::Duration;
 /// Environment key overriding the total per-request timeout, in seconds.
 pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
 
+/// Environment key for the `reasoning_effort` field sent with every request.
+///
+/// No value here is allow-listed: a reasoning-model generation the client does
+/// not yet recognise still forwards whatever the operator set, and a value the
+/// endpoint rejects costs one retry via `DROPPABLE_FIELDS` in `client.rs`
+/// instead of failing to start.
+pub const REASONING_EFFORT_ENV: &str = "AI_CHAT_REASONING_EFFORT";
+
 /// API-key variables in resolution order.
 pub const API_KEY_ENV_VARS: [&str; 3] = ["AI_CHAT_API_KEY", "OPENAI_API_KEY", "OPEN_AI_API_KEY"];
 
@@ -37,6 +45,7 @@ pub struct OpenAiConfig {
     base_url: String,
     default_model: String,
     timeout: Duration,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiConfig {
@@ -72,6 +81,7 @@ impl OpenAiConfig {
             base_url,
             default_model,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+            reasoning_effort: None,
         }
     }
 
@@ -87,16 +97,24 @@ impl OpenAiConfig {
             .map(|secs| secs.clamp(MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS))
             .map(Duration::from_secs);
 
-        let config = OpenAiConfig::new_with_http_policy(
+        let reasoning_effort = getter(REASONING_EFFORT_ENV).and_then(|value| {
+            let trimmed = value.trim().to_ascii_lowercase();
+            (!trimmed.is_empty()).then_some(trimmed)
+        });
+
+        let mut config = OpenAiConfig::new_with_http_policy(
             api_key,
             base_url,
             default_model,
             getter(ALLOW_INSECURE_HTTP_ENV),
         );
-        match timeout {
-            Some(timeout) => config.with_timeout(timeout),
-            None => config,
+        if let Some(timeout) = timeout {
+            config = config.with_timeout(timeout);
         }
+        if let Some(reasoning_effort) = reasoning_effort {
+            config = config.with_reasoning_effort(Some(reasoning_effort));
+        }
+        config
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -126,6 +144,15 @@ impl OpenAiConfig {
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    pub fn reasoning_effort(&self) -> Option<&str> {
+        self.reasoning_effort.as_deref()
+    }
+
+    pub fn with_reasoning_effort(mut self, reasoning_effort: Option<String>) -> Self {
+        self.reasoning_effort = reasoning_effort;
         self
     }
 }
@@ -267,6 +294,30 @@ mod tests {
         assert_eq!(cfg.api_key(), Some("legacy"));
         assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
         assert_eq!(cfg.default_model(), DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn from_getter_reads_the_reasoning_effort() {
+        let getter = |key: &str| match key {
+            "AI_CHAT_REASONING_EFFORT" => Some("  Low  ".to_string()),
+            _ => None,
+        };
+
+        let cfg = OpenAiConfig::from_getter(getter);
+
+        assert_eq!(cfg.reasoning_effort(), Some("low"));
+    }
+
+    #[test]
+    fn from_getter_treats_a_blank_reasoning_effort_as_unset() {
+        let getter = |key: &str| match key {
+            "AI_CHAT_REASONING_EFFORT" => Some("   ".to_string()),
+            _ => None,
+        };
+
+        let cfg = OpenAiConfig::from_getter(getter);
+
+        assert_eq!(cfg.reasoning_effort(), None);
     }
 
     #[test]

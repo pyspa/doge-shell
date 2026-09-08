@@ -12,8 +12,16 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 - したがって **Anthropic Messages API（`x-api-key` + `anthropic-version`）はそのままでは使えない**。
   OpenAI 互換ゲートウェイ経由で使う。Responses API も対象外。
 - ローカル / 互換サーバ対応は 2 つの仕組みで済ませる。増やさない。
-  - `DROPPABLE_FIELDS`（`client.rs`）: 400 で拒否された optional フィールドを 1 回落として再送し、
-    以後そのクライアントでは送らない。
+  - 400 リカバリ（`client.rs`）: `recover()` が 2 方向を試す。
+    1. `reasoning_effort_conflict`: `tools` 付きリクエストが「`reasoning_effort` が `tools` と
+       両立しない」400 を受けたら `reasoning_effort: "none"` を**足して**再送し、
+       以後そのクライアントの `tools` 付きリクエストには常に `"none"` を強制する
+       （`force_reasoning_none` / `reasoning_none_forced`。`tools` を送らないリクエストは影響を受けない）。
+    2. `unsupported_field`（`DROPPABLE_FIELDS`）: 400 で拒否された optional フィールドを 1 回落として
+       再送し、以後そのクライアントでは送らない。
+    両者は同じ `RecoveryState` を共有し、**1 の判定を 2 より先に評価する**。逆にすると
+    `reasoning_effort` が `DROPPABLE_FIELDS` にも入っているため 2 が先に一致して「落として」しまい、
+    サーバ側既定が `none` 以外のまま同じ 400 が返って手詰まりになる。
   - `AI_CHAT_ALLOW_INSECURE_HTTP`: `http://` の base URL を許可する。既定では https へ差し替え、
     stderr に 1 回警告する。
 
@@ -167,6 +175,7 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `AI_CHAT_BASE_URL` → `OPENAI_BASE_URL` | `https://api.openai.com/v1/` | 同上 |
 | `AI_CHAT_MODEL` → `OPENAI_MODEL` | `DEFAULT_MODEL` | 同上 |
 | `AI_CHAT_TIMEOUT_SECS` | 180（5〜1800 に clamp） | 同上 |
+| `AI_CHAT_REASONING_EFFORT` | なし（プロバイダ既定） | 同上。値は allow-list しない（`none`/`minimal`/`low`/`medium`/`high` などプロバイダ依存）。`tools` 付きリクエストが `reasoning_effort` を理由に拒否された後は、このクライアントの `tools` 付きリクエストで `"none"` に強制される |
 | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | 同上 |
 | `AI_SUMMARY_MODEL` | チャットモデル | `dsh-builtin/src/chatgpt.rs` |
 | `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs` |
@@ -483,8 +492,26 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 - **既定モデルでは temperature が効かない**。`client.rs` の
   `FIXED_TEMPERATURE_MODEL_PREFIXES`（`gpt-5` / `o1` / `o3` / `o4`）に当たると 1.0 を強制する。
   既定は `gpt-5-mini` なので、ゴーストテキストの 0.0 も JSON 生成の 0.1 も**すべて 1.0**。
-  決定性が要るなら `reasoning_effort` を送る口を作るのが筋で、temperature を足しても意味がない。
-- **`reasoning_effort` / `verbosity` を送る口が無い**。
+  `reasoning_effort` を送る口（`AI_CHAT_REASONING_EFFORT`）は入ったが、temperature の代わりには
+  ならない（両方ともプロバイダ側の解釈次第で、決定性を保証しない）。
+- **`verbosity` を送る口が無い**（`reasoning_effort` は入った）。
+- **`reasoning_effort` の 400 リカバリはクライアント寿命の学習で、プロセス全体キャッシュは
+  入れない**。`!` チャットは 1 メッセージごとに `ChatGptClient` を作り直す
+  （`dsh-builtin/src/chatgpt.rs` の `execute_chat_message`）ので、次のメッセージでは学習が消えて
+  400 を 1 回払い直す。プロセス全体に広げるとキーが `(endpoint, 解決済みモデル)` になり、
+  §1 の「2 つの仕組みで済ませる」に 3 つ目を足すことになる。恒久化したい場合は
+  `AI_CHAT_REASONING_EFFORT=none` を設定すればよく、それで十分。
+- **`reasoning_effort: "none"` + `tools` でも 400 を返すモデルは対象外**。エラーメッセージが
+  `/v1/responses` を案内していても、それは §1 の方針変更（chat/completions 固定）になるため、
+  そのモデルは chat/completions では使えないという結論になる。
+- **400 リカバリの学習（`unsupported` / `force_reasoning_none`）はクライアント単位で、モデル単位
+  ではない**。`perform_summary`（`dsh-builtin/src/chatgpt.rs`）は `AI_SUMMARY_MODEL` が本体と
+  違っても同じ `ChatGptClient` を使い回す。要約モデル側が `reasoning_effort` を理由に無関係の
+  400 を返すと `unsupported_field` 経由でそのフィールドがクライアント全体で無効化され、
+  本体モデルの `tools` リクエストが後で同じ 400 に遭っても
+  `reasoning_effort_conflict` の `already_dropped` チェックで補正されなくなりうる。
+  `unsupported` Vec 自体が元々同じ弱点を持つ既存の不整合で、今回は広げない。直すならクライアントを
+  モデルごとに分けるかキーをモデル付きにする必要があり、別作業になる。
 - **構造化出力が `json_object` 止まり**。`json_schema` + `strict` にすれば
   `strip_code_fence` → `serde_json::from_str` → フォールバックの手作業が要らなくなる。
   対象は `safe_run` ×2、`ai_features/command.rs` ×3、comp-gen。

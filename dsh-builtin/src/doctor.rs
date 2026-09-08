@@ -194,6 +194,7 @@ fn json_section_details(
             "base_url": config.base_url(),
             "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string()),
             "timeout_secs": config.timeout().as_secs(),
+            "reasoning_effort": config.reasoning_effort().unwrap_or("default"),
             "usage": {
                 "requests": usage.requests,
                 "prompt_tokens": usage.prompt_tokens,
@@ -626,6 +627,10 @@ fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
 
     let _ = ctx.write_stdout(&format!("ok request-timeout {}s", ai_timeout_secs(proxy)));
+    let _ = ctx.write_stdout(&format!(
+        "ok reasoning-effort {}",
+        config.reasoning_effort().unwrap_or("default")
+    ));
 
     match crate::chatgpt::chat_session_description() {
         Some(detail) => {

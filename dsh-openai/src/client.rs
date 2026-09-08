@@ -1,8 +1,10 @@
 use anyhow::{Error, Result, anyhow};
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fmt;
 use std::future::Future;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tracing::debug;
@@ -38,6 +40,10 @@ const DROPPABLE_FIELDS: &[&str] = &[
     "temperature",
     "stream_options",
     "stream",
+    // A compatible server that does not implement `reasoning_effort` at all
+    // (as opposed to one that just rejects it alongside `tools`, handled by
+    // `reasoning_effort_conflict` below) still needs an escape hatch.
+    "reasoning_effort",
 ];
 
 #[derive(Debug)]
@@ -188,6 +194,18 @@ pub struct ChatGptClient {
     /// Remembered so a server that only speaks the older schema is probed once
     /// instead of paying a failed round-trip on every request.
     unsupported: Arc<Mutex<Vec<&'static str>>>,
+    /// The operator's configured `reasoning_effort` (`AI_CHAT_REASONING_EFFORT`),
+    /// sent on every request that supports the field.
+    default_reasoning_effort: Option<String>,
+    /// Set once a `tools` request came back naming a `reasoning_effort` /
+    /// `tools` conflict, so every later `tools` request on this client sends
+    /// `reasoning_effort: "none"` instead of paying that round-trip again.
+    ///
+    /// Kept out of `unsupported`: that vector means "never send this field",
+    /// which is the opposite of what forcing `"none"` needs `build_body` to do.
+    /// `Arc` because `ChatGptClient` is `Clone` and callers hand clones around
+    /// (e.g. `dsh/src/repl/mod.rs`) - the learning must follow all of them.
+    force_reasoning_none: Arc<AtomicBool>,
 }
 
 impl ChatGptClient {
@@ -223,6 +241,8 @@ impl ChatGptClient {
             client: Self::build_client(config.timeout())?,
             request_timeout: config.timeout(),
             unsupported: Arc::new(Mutex::new(Vec::new())),
+            default_reasoning_effort: config.reasoning_effort().map(str::to_string),
+            force_reasoning_none: Arc::new(AtomicBool::new(false)),
         };
         Ok(client)
     }
@@ -288,6 +308,49 @@ impl ChatGptClient {
         }
     }
 
+    fn reasoning_none_forced(&self) -> bool {
+        // SeqCst, not Relaxed: this flag changes what a concurrent `build_body`
+        // call on a cloned client (e.g. the command-palette `LiveAiService`
+        // shares a clone with the suggestion backend, `dsh/src/repl/mod.rs`)
+        // puts on the wire, not just a debug print, so a stale read must not
+        // linger past the store that set it.
+        self.force_reasoning_none.load(Ordering::SeqCst)
+    }
+
+    /// Remember that `tools` requests on this client must force
+    /// `reasoning_effort: "none"`, and warn once per process per model - a new
+    /// `ChatGptClient` is built for every `!` message
+    /// (`dsh-builtin/src/chatgpt.rs`), so a plain "once ever" flag would warn
+    /// about the first model hit and then silently skip every other model the
+    /// operator later switches to.
+    fn remember_reasoning_none_forced(&self, model: &str) {
+        static WARNED_MODELS: LazyLock<Mutex<HashSet<String>>> =
+            LazyLock::new(|| Mutex::new(HashSet::new()));
+
+        if !self.force_reasoning_none.swap(true, Ordering::SeqCst) {
+            debug!(
+                chat_direction = "retry",
+                reason = "reasoning_effort conflicts with tools",
+                model = model
+            );
+        }
+
+        let first_time_for_this_model = WARNED_MODELS
+            .lock()
+            .map(|mut warned| warned.insert(model.to_string()))
+            .unwrap_or(true);
+        if !first_time_for_this_model {
+            return;
+        }
+
+        eprintln!(
+            "dsh: model `{model}` does not allow function tools together with its default \
+             reasoning effort, so `!` chat resent this turn with reasoning_effort: none. \
+             Set AI_CHAT_REASONING_EFFORT=none to skip the extra round-trip, or pick a \
+             different model if tool-using answers need full reasoning."
+        );
+    }
+
     fn block_on<F: Future>(&self, future: F) -> Result<F::Output> {
         let runtime = shared_runtime()?;
         if tokio::runtime::Handle::try_current().is_ok() {
@@ -305,7 +368,7 @@ impl ChatGptClient {
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
         let mut attempt = 0usize;
-        let mut dropped_fields: Vec<&'static str> = self.known_unsupported();
+        let mut recovery = RecoveryState::seed(self.known_unsupported());
 
         loop {
             match self.send_once(&body, cancel_check).await {
@@ -315,19 +378,7 @@ impl ChatGptClient {
                         return Err(err);
                     }
 
-                    // An endpoint that rejects an optional field: drop it once
-                    // and try again rather than failing the whole turn.
-                    if let Some(field) = unsupported_field(&err, &body, &dropped_fields) {
-                        debug!(
-                            chat_direction = "retry",
-                            reason = "unsupported field",
-                            field = field
-                        );
-                        if let Some(map) = body.as_object_mut() {
-                            map.remove(field);
-                        }
-                        dropped_fields.push(field);
-                        self.remember_unsupported(field);
+                    if self.recover(&err, &mut body, &mut recovery) {
                         continue;
                     }
 
@@ -408,7 +459,7 @@ impl ChatGptClient {
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Value> {
         let mut attempt = 0usize;
-        let mut dropped_fields: Vec<&'static str> = self.known_unsupported();
+        let mut recovery = RecoveryState::seed(self.known_unsupported());
 
         loop {
             match self
@@ -424,21 +475,10 @@ impl ChatGptClient {
                         return Err(err);
                     }
 
-                    // An endpoint that rejects `stream` / `stream_options` /
-                    // any other optional field: drop it once and try again.
-                    // Dropping `stream` itself degrades this turn to a single
-                    // non-streaming response rather than failing it.
-                    if let Some(field) = unsupported_field(&err, &body, &dropped_fields) {
-                        debug!(
-                            chat_direction = "retry",
-                            reason = "unsupported field",
-                            field = field
-                        );
-                        if let Some(map) = body.as_object_mut() {
-                            map.remove(field);
-                        }
-                        dropped_fields.push(field);
-                        self.remember_unsupported(field);
+                    // Dropping `stream` itself (one of the recoverable fields)
+                    // degrades this turn to a single non-streaming response
+                    // rather than failing it.
+                    if self.recover(&err, &mut body, &mut recovery) {
                         continue;
                     }
 
@@ -742,6 +782,44 @@ impl ChatGptClient {
         }
     }
 
+    /// Try to fix up `body` in response to a 400 the request just failed with,
+    /// so the caller can retry instead of spending one of the transient-error
+    /// attempts on it. Returns whether `body` changed.
+    ///
+    /// Checked in this order:
+    /// 1. `reasoning_effort_conflict` - additive (forces `"none"` into the
+    ///    body) - must run first. If `unsupported_field` ran first it could
+    ///    match `"reasoning_effort"` too (the message names the field either
+    ///    way) and *drop* it instead; the server's non-`none` default would
+    ///    stay in effect and the identical 400 would come back with nothing
+    ///    left in `state` to try.
+    /// 2. `unsupported_field` - an optional field the endpoint rejects outright.
+    fn recover(&self, err: &Error, body: &mut Value, state: &mut RecoveryState) -> bool {
+        if let Some(model) = reasoning_effort_conflict(err, body, &state.dropped) {
+            if let Some(map) = body.as_object_mut() {
+                map.insert("reasoning_effort".into(), json!("none"));
+            }
+            self.remember_reasoning_none_forced(&model);
+            return true;
+        }
+
+        if let Some(field) = unsupported_field(err, body, &state.dropped) {
+            debug!(
+                chat_direction = "retry",
+                reason = "unsupported field",
+                field = field
+            );
+            if let Some(map) = body.as_object_mut() {
+                map.remove(field);
+            }
+            state.dropped.push(field);
+            self.remember_unsupported(field);
+            return true;
+        }
+
+        false
+    }
+
     fn build_client(total_timeout: Duration) -> Result<Client> {
         let client = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
@@ -784,6 +862,23 @@ impl ChatGptClient {
         {
             map.insert("tools".into(), json!(tools));
         }
+        // A `tools` request this client already learned the endpoint rejects
+        // over `reasoning_effort` always forces `"none"`, regardless of the
+        // configured value - that is what the previous 400 asked for. A
+        // request without `tools` is untouched, so a request that never uses
+        // function calling (summarization, `safe_run`'s JSON generation) keeps
+        // the configured reasoning quality.
+        let reasoning_effort: Option<&str> =
+            if map.contains_key("tools") && self.reasoning_none_forced() {
+                Some("none")
+            } else {
+                self.default_reasoning_effort.as_deref()
+            };
+        if let Some(reasoning_effort) = reasoning_effort
+            && supported("reasoning_effort")
+        {
+            map.insert("reasoning_effort".into(), json!(reasoning_effort));
+        }
         if let Some(max_tokens) = options.max_tokens
             && supported("max_completion_tokens")
         {
@@ -816,7 +911,8 @@ impl ChatGptClient {
             tool_count = options.tools.as_ref().map(|t| t.len()).unwrap_or(0),
             temperature = ?final_temperature,
             max_tokens = ?options.max_tokens,
-            stream = options.stream
+            stream = options.stream,
+            reasoning_effort = ?reasoning_effort
         );
 
         body
@@ -897,18 +993,92 @@ fn retry_delay(err: &Error, attempt: usize) -> Option<Duration> {
     None
 }
 
+/// One request's accumulated 400 recoveries: optional fields dropped so far.
+/// Seeded from the client's cross-request memory (`known_unsupported`) so a
+/// server already known to reject something is not probed again.
+///
+/// A `reasoning_effort` force needs no equivalent flag here: `build_body`
+/// already mirrors the client's `reasoning_none_forced()` into the body
+/// before the first attempt, and `recover` mutates that same body in place on
+/// every retry, so the body's own `reasoning_effort` value is always
+/// authoritative - `reasoning_effort_conflict`'s `already_none` check reads
+/// it directly instead of tracking a parallel bool that could drift from it.
+struct RecoveryState {
+    dropped: Vec<&'static str>,
+}
+
+impl RecoveryState {
+    fn seed(dropped: Vec<&'static str>) -> Self {
+        Self { dropped }
+    }
+}
+
+/// The lowercased message of a 400 `ApiError`, or `None` for anything else
+/// (a different status, or an error `downcast_ref` can't identify as one).
+/// Shared by `reasoning_effort_conflict` and `unsupported_field` so the two
+/// 400-sniffing checks can't drift on how a bad request is recognised.
+fn bad_request_message(err: &Error) -> Option<String> {
+    let api_error = err.downcast_ref::<ApiError>()?;
+    (api_error.status == Some(StatusCode::BAD_REQUEST.as_u16()))
+        .then(|| api_error.message.to_ascii_lowercase())
+}
+
+/// Whether `err` is a 400 naming a `reasoning_effort` / `tools` conflict that
+/// forcing `reasoning_effort: "none"` into the body can fix, and if so the
+/// model that reported it (for the one-time warning).
+///
+/// Requires the message to mention both `reasoning_effort` and `tool` or
+/// `function` - not the exact phrase, so a gateway wording the same conflict
+/// differently (e.g. "function calling" instead of "tool") still matches -
+/// but not `reasoning_effort` alone. An operator typo in
+/// `AI_CHAT_REASONING_EFFORT` produces a 400 that names the field too (e.g.
+/// "Invalid value for reasoning_effort: must be one of ..."); without the
+/// second word that error would be misread as a `tools` conflict, forced to
+/// `"none"` and latched for the rest of the client's life over what was
+/// actually a config typo.
+fn reasoning_effort_conflict(
+    err: &Error,
+    body: &Value,
+    already_dropped: &[&'static str],
+) -> Option<String> {
+    if already_dropped.contains(&"reasoning_effort") {
+        return None;
+    }
+
+    let message = bad_request_message(err)?;
+    if !message.contains("reasoning_effort")
+        || !(message.contains("tool") || message.contains("function"))
+    {
+        return None;
+    }
+
+    // `build_body` only inserts `tools` when non-empty, so presence alone
+    // means this request actually offers function calling.
+    body.get("tools")?;
+
+    let already_none = body
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "none");
+    if already_none {
+        return None;
+    }
+
+    Some(
+        body.get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("configured model")
+            .to_string(),
+    )
+}
+
 /// Name the optional body field a 400 complained about, if any.
 fn unsupported_field(
     err: &Error,
     body: &Value,
     already_dropped: &[&'static str],
 ) -> Option<&'static str> {
-    let api_error = err.downcast_ref::<ApiError>()?;
-    if api_error.status != Some(StatusCode::BAD_REQUEST.as_u16()) {
-        return None;
-    }
-
-    let message = api_error.message.to_ascii_lowercase();
+    let message = bad_request_message(err)?;
     DROPPABLE_FIELDS.iter().copied().find(|field| {
         !already_dropped.contains(field) && message.contains(*field) && body.get(*field).is_some()
     })
@@ -980,6 +1150,21 @@ mod tests {
             Some("https://example.invalid".to_string()),
         )
         .expect("client should initialize")
+    }
+
+    /// Like [`client`], but with `AI_CHAT_REASONING_EFFORT` set - through
+    /// `OpenAiConfig::from_getter`'s closure, never real process env, so
+    /// parallel tests cannot race each other over it.
+    fn client_with_reasoning_effort(effort: &str) -> ChatGptClient {
+        let effort = effort.to_string();
+        let config = OpenAiConfig::from_getter(move |key| match key {
+            "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+            "AI_CHAT_MODEL" => Some("gpt-5.6-luna".to_string()),
+            "AI_CHAT_BASE_URL" => Some("https://example.invalid".to_string()),
+            "AI_CHAT_REASONING_EFFORT" => Some(effort.clone()),
+            _ => None,
+        });
+        ChatGptClient::try_from_config(&config).expect("client should initialize")
     }
 
     #[tokio::test]
@@ -1167,6 +1352,77 @@ mod tests {
         assert!(body.get("stream_options").is_none());
     }
 
+    #[test]
+    fn build_body_sends_the_configured_reasoning_effort() {
+        let client = client_with_reasoning_effort("high");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new(),
+        );
+
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn build_body_omits_reasoning_effort_when_unset() {
+        let client = client();
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new(),
+        );
+
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn build_body_drops_reasoning_effort_once_the_endpoint_rejects_the_field_itself() {
+        let client = client_with_reasoning_effort("high");
+        client.remember_unsupported("reasoning_effort");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new(),
+        );
+
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    /// Once a `tools` request has been corrected, every later `tools` request
+    /// on the same client must send `"none"` too - `build_body` runs on every
+    /// iteration of a `!` chat turn, so without this the shell would pay the
+    /// same 400 on every tool-using round instead of once per turn.
+    #[test]
+    fn build_body_forces_none_for_tools_requests_after_the_endpoint_asked_for_it() {
+        let client = client_with_reasoning_effort("high");
+        client.remember_reasoning_none_forced("gpt-5.6-luna");
+
+        let tools = vec![json!({ "type": "function", "function": { "name": "execute" } })];
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new().with_tools(Some(tools)),
+        );
+
+        assert_eq!(body["reasoning_effort"], "none");
+    }
+
+    /// The forced `"none"` must not leak into requests that never offer
+    /// `tools` - summarization (`AI_SUMMARY_MODEL`) and JSON-generating
+    /// requests (`safe_run`, ghost text) still want the configured quality.
+    #[test]
+    fn build_body_keeps_the_configured_effort_without_tools_even_after_the_correction() {
+        let client = client_with_reasoning_effort("high");
+        client.remember_reasoning_none_forced("gpt-5.6-luna");
+
+        let body = client.build_body(
+            &[json!({ "role": "user", "content": "hi" })],
+            &ChatRequestOptions::new(),
+        );
+
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
     /// `"stream_options"` contains `"stream"` as a substring: an error
     /// message naming the longer field must not be misread as naming the
     /// shorter one, or a stream-capable server would be downgraded to a
@@ -1195,6 +1451,131 @@ mod tests {
         .into();
 
         assert_eq!(unsupported_field(&err, &body, &[]), Some("stream"));
+    }
+
+    fn gpt_5_6_luna_reasoning_conflict() -> Error {
+        ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Function tools with reasoning_effort are not supported for gpt-5.6-luna \
+                      in /v1/chat/completions. To use function tools, use /v1/responses or set \
+                      reasoning_effort to 'none'."
+                .into(),
+        }
+        .into()
+    }
+
+    #[test]
+    fn a_tools_request_rejected_over_reasoning_effort_is_corrected_to_none() {
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let body = json!({
+            "model": "gpt-5.6-luna",
+            "tools": [{ "type": "function", "function": { "name": "execute" } }],
+        });
+
+        assert_eq!(
+            reasoning_effort_conflict(&err, &body, &[]),
+            Some("gpt-5.6-luna".to_string())
+        );
+    }
+
+    /// An operator typo in `AI_CHAT_REASONING_EFFORT` produces a 400 that also
+    /// names the field (e.g. an enum-validation error), but says nothing
+    /// about tools or function calling. Misreading that as a `tools`
+    /// conflict would force `"none"` and latch it for the rest of the
+    /// client's life over what was actually a config mistake.
+    #[test]
+    fn a_reasoning_effort_error_without_tool_wording_is_not_a_tools_conflict() {
+        let err: Error = ApiError {
+            status: Some(400),
+            retry_after: None,
+            message: "Invalid value for reasoning_effort: must be one of low, medium, high, none"
+                .into(),
+        }
+        .into();
+        let body = json!({
+            "model": "gpt-5.6-luna",
+            "tools": [{ "type": "function", "function": { "name": "execute" } }],
+        });
+
+        assert_eq!(reasoning_effort_conflict(&err, &body, &[]), None);
+    }
+
+    #[test]
+    fn a_request_without_tools_is_not_corrected() {
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let body = json!({ "model": "gpt-5.6-luna" });
+
+        assert_eq!(reasoning_effort_conflict(&err, &body, &[]), None);
+    }
+
+    #[test]
+    fn a_body_that_already_says_none_is_not_corrected_again() {
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let body = json!({
+            "tools": [{ "type": "function" }],
+            "reasoning_effort": "none",
+        });
+
+        assert_eq!(reasoning_effort_conflict(&err, &body, &[]), None);
+    }
+
+    #[test]
+    fn a_server_that_rejects_the_field_itself_stops_the_correction() {
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let body = json!({ "tools": [{ "type": "function" }], "reasoning_effort": "high" });
+
+        assert_eq!(
+            reasoning_effort_conflict(&err, &body, &["reasoning_effort"]),
+            None
+        );
+    }
+
+    /// If `unsupported_field` ran before the additive correction, this 400
+    /// would have `reasoning_effort` *dropped* (it is in `DROPPABLE_FIELDS`
+    /// and the message names it) instead of forced to `"none"` - the server's
+    /// non-`none` default would stay in effect and the identical error would
+    /// come back with nothing left in `state` to try.
+    #[test]
+    fn the_reasoning_correction_precedes_dropping_the_field() {
+        let client = client();
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let mut body = json!({
+            "model": "gpt-5.6-luna",
+            "tools": [{ "type": "function", "function": { "name": "execute" } }],
+        });
+        let mut state = RecoveryState::seed(client.known_unsupported());
+
+        assert!(client.recover(&err, &mut body, &mut state));
+
+        assert_eq!(body["reasoning_effort"], "none");
+        assert!(body.get("tools").is_some());
+        assert!(!state.dropped.contains(&"reasoning_effort"));
+        assert!(client.reasoning_none_forced());
+    }
+
+    /// A server that keeps answering the identical 400 must not recover
+    /// forever: once `reasoning_effort` has been forced to `"none"` and then
+    /// (a server that never learns the field at all) dropped outright,
+    /// `recover` must stop offering a body change so the caller's ordinary
+    /// 400-is-terminal handling in `send_with_retry` takes over.
+    #[test]
+    fn the_recovery_loop_is_bounded_for_a_repeating_reasoning_effort_conflict() {
+        let client = client();
+        let err = gpt_5_6_luna_reasoning_conflict();
+        let mut body = json!({
+            "model": "gpt-5.6-luna",
+            "tools": [{ "type": "function", "function": { "name": "execute" } }],
+        });
+        let mut state = RecoveryState::seed(client.known_unsupported());
+
+        assert!(client.recover(&err, &mut body, &mut state));
+        assert_eq!(body["reasoning_effort"], "none");
+
+        assert!(client.recover(&err, &mut body, &mut state));
+        assert!(body.get("reasoning_effort").is_none());
+
+        assert!(!client.recover(&err, &mut body, &mut state));
     }
 
     #[test]
@@ -1351,6 +1732,114 @@ mod tests {
             unsupported_field(&err, &body, &client.known_unsupported()),
             None
         );
+    }
+
+    /// Read one HTTP request off `stream` and parse its JSON body. Mirrors
+    /// `dsh/src/agent/tests.rs`'s fixture, which stands in for a real
+    /// OpenAI-compatible server across the crate.
+    fn read_request(stream: &mut std::net::TcpStream) -> Value {
+        use std::io::Read;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        let mut byte = [0u8; 1];
+        while !bytes.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            bytes.push(byte[0]);
+        }
+        let header = String::from_utf8(bytes).unwrap();
+        let size = header
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                    .map(|s| s.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        let mut body = vec![0; size];
+        stream.read_exact(&mut body).unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    fn reply(stream: &mut std::net::TcpStream, status_line: &str, body: &Value) {
+        use std::io::Write;
+        let text = body.to_string();
+        write!(
+            stream,
+            "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+            text.len()
+        )
+        .unwrap();
+    }
+
+    /// End-to-end: a real `send_chat` call against a fake server that answers
+    /// the exact 400 `gpt-5.6-luna` returns for `tools`, then accepts the
+    /// corrected retry - covering the full path (`build_body` ->
+    /// `send_with_retry` -> `recover` -> `build_body`'s forced-none branch)
+    /// that the unit tests above exercise piecewise.
+    #[test]
+    fn a_reasoning_effort_conflict_is_corrected_over_the_wire() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let first = read_request(&mut stream);
+            assert!(first.get("tools").is_some());
+            assert!(first.get("reasoning_effort").is_none());
+            reply(
+                &mut stream,
+                "400 Bad Request",
+                &json!({
+                    "error": {
+                        "message": "Function tools with reasoning_effort are not supported \
+                                    for gpt-5.6-luna in /v1/chat/completions. To use function \
+                                    tools, use /v1/responses or set reasoning_effort to 'none'."
+                    }
+                }),
+            );
+
+            let (mut stream, _) = listener.accept().unwrap();
+            let second = read_request(&mut stream);
+            assert_eq!(second["reasoning_effort"], "none");
+            assert_eq!(second["model"], "gpt-5.6-luna");
+            assert!(second.get("tools").is_some());
+            reply(
+                &mut stream,
+                "200 OK",
+                &json!({
+                    "choices": [{
+                        "message": { "role": "assistant", "content": "hi" },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": { "prompt_tokens": 10, "completion_tokens": 2 }
+                }),
+            );
+        });
+
+        // `from_getter`'s closure, not real process env: parallel tests
+        // cannot race each other over `AI_CHAT_ALLOW_INSECURE_HTTP`.
+        let config = OpenAiConfig::from_getter(move |key| match key {
+            "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+            "AI_CHAT_MODEL" => Some("gpt-5.6-luna".to_string()),
+            "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
+            "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
+            "AI_CHAT_TIMEOUT_SECS" => Some("5".to_string()),
+            _ => None,
+        });
+        let client = ChatGptClient::try_from_config(&config).expect("client should initialize");
+
+        let tools = vec![json!({ "type": "function", "function": { "name": "execute" } })];
+        let messages = vec![json!({ "role": "user", "content": "hi" })];
+        let options = ChatRequestOptions::new().with_tools(Some(tools));
+
+        let result = client.send_chat(&messages, &options, None);
+
+        server.join().expect("fixture server thread panicked");
+        let data = result.expect("the corrected retry should succeed");
+        assert_eq!(data["choices"][0]["message"]["content"], "hi");
+        assert!(client.reasoning_none_forced());
     }
 
     #[test]

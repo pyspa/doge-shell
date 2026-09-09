@@ -53,7 +53,7 @@ impl SqliteTaskStore {
             secrets: Mutex::new(
                 std::env::vars()
                     .filter(|(key, value)| {
-                        dsh_types::safety_policy::is_sensitive_key(key) && value.len() >= 4
+                        dsh_types::safety_policy::is_sensitive_key(key) && value.len() >= 8
                     })
                     .map(|(_, value)| value)
                     .collect(),

@@ -1,0 +1,2456 @@
+{
+  "command": "herdr",
+  "description": "Terminal workspace manager for AI coding agents",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Print version and exit"
+    },
+    {
+      "long": "--session",
+      "description": "Use or create a named persistent session",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--remote",
+      "description": "Attach through SSH to a remote Herdr server",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--remote-keybindings",
+      "description": "Keybindings for remote attach",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "local",
+          "server"
+        ]
+      }
+    },
+    {
+      "long": "--handoff",
+      "description": "Opt into live handoff for update or remote attach"
+    },
+    {
+      "long": "--default-config",
+      "description": "Print default configuration and exit"
+    },
+    {
+      "long": "--skill",
+      "description": "Print the agent skill file and exit"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "status",
+      "description": "Show local client and running server status",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Print JSON output"
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "server",
+          "description": "Show running server status"
+        },
+        {
+          "name": "client",
+          "description": "Show local client status"
+        }
+      ]
+    },
+    {
+      "name": "server",
+      "description": "Run or control the headless server",
+      "subcommands": [
+        {
+          "name": "stop",
+          "description": "Stop the running server"
+        },
+        {
+          "name": "reload-config",
+          "description": "Reload config in the running server"
+        },
+        {
+          "name": "agent-manifests",
+          "description": "Show active agent detection manifests",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "update-agent-manifests",
+          "description": "Fetch and reload agent detection manifests",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "reload-agent-manifests",
+          "description": "Reload local agent detection manifest overrides"
+        }
+      ]
+    },
+    {
+      "name": "api",
+      "description": "Inspect socket API metadata and live runtime state",
+      "subcommands": [
+        {
+          "name": "snapshot",
+          "description": "Print the live session snapshot"
+        },
+        {
+          "name": "schema",
+          "description": "Print or write the bundled API schema",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print the full JSON Schema document"
+            },
+            {
+              "long": "--output",
+              "description": "Write the schema document to a file",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {
+                  "extensions": [
+                    ".json"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "completion",
+      "description": "Generate shell completion scripts",
+      "arguments": [
+        {
+          "name": "shell",
+          "description": "Shell to generate completions for",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "bash",
+              "elvish",
+              "fish",
+              "powershell",
+              "zsh"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "completions",
+      "description": "Generate shell completion scripts (alias of completion)",
+      "arguments": [
+        {
+          "name": "shell",
+          "description": "Shell to generate completions for",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "bash",
+              "elvish",
+              "fish",
+              "powershell",
+              "zsh"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Download and install the latest version",
+      "options": [
+        {
+          "long": "--handoff",
+          "description": "Try live handoff after installing"
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "Manage local configuration",
+      "subcommands": [
+        {
+          "name": "check",
+          "description": "Validate config.toml and print diagnostics"
+        },
+        {
+          "name": "reset-keys",
+          "description": "Back up config.toml and remove custom keybindings"
+        }
+      ]
+    },
+    {
+      "name": "channel",
+      "description": "Manage stable and preview update channels",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Print the configured update channel"
+        },
+        {
+          "name": "set",
+          "description": "Choose the update channel",
+          "arguments": [
+            {
+              "name": "channel",
+              "description": "Update channel",
+              "type": {
+                "type": "Choice",
+                "data": [
+                  "stable",
+                  "preview"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "machine",
+      "description": "Manage saved SSH machines",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List saved SSH machines",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "add",
+          "description": "Prepare the remote Herdr server and save an SSH machine",
+          "options": [
+            {
+              "long": "--label",
+              "description": "Machine label shown in the sidebar",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--remote-session",
+              "description": "Explicit Herdr session on the remote machine",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a saved SSH machine",
+          "options": [
+            {
+              "long": "--label",
+              "description": "New machine label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "Remove a saved SSH machine"
+        },
+        {
+          "name": "enable",
+          "description": "Enable a saved SSH machine"
+        },
+        {
+          "name": "disable",
+          "description": "Disable a saved SSH machine"
+        }
+      ]
+    },
+    {
+      "name": "workspace",
+      "description": "Manage workspaces over the socket API",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List workspaces"
+        },
+        {
+          "name": "create",
+          "description": "Create a workspace",
+          "options": [
+            {
+              "long": "--cwd",
+              "description": "Working directory for the workspace",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--label",
+              "description": "Workspace label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--env",
+              "description": "Add KEY=VALUE to the new root shell",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              },
+              "multiple": true
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the new workspace"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            }
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Show a workspace",
+          "arguments": [
+            {
+              "name": "workspace_id",
+              "description": "Workspace ID"
+            }
+          ]
+        },
+        {
+          "name": "focus",
+          "description": "Focus a workspace",
+          "arguments": [
+            {
+              "name": "workspace_id",
+              "description": "Workspace ID"
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a workspace",
+          "arguments": [
+            {
+              "name": "workspace_id",
+              "description": "Workspace ID"
+            },
+            {
+              "name": "label",
+              "description": "New label"
+            }
+          ]
+        },
+        {
+          "name": "report-metadata",
+          "description": "Report display-only workspace metadata",
+          "options": [
+            {
+              "long": "--source",
+              "description": "Reporter source ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--token",
+              "description": "Set display token NAME=VALUE",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--clear-token",
+              "description": "Clear a display token",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--seq",
+              "description": "Sequence number for stale report filtering",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--ttl-ms",
+              "description": "Metadata TTL in milliseconds",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "close",
+          "description": "Close a workspace",
+          "options": [
+            {
+              "long": "--group",
+              "description": "Also close linked worktree group"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "worktree",
+      "description": "Manage Git worktree-backed workspaces",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List worktree workspaces",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--cwd",
+              "description": "Repository path",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--trust-repository",
+              "description": "Trust the resolved repository path for this command"
+            }
+          ]
+        },
+        {
+          "name": "create",
+          "description": "Create and open a Git worktree",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--cwd",
+              "description": "Repository path",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--branch",
+              "description": "Branch name",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--base",
+              "description": "Base ref",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--path",
+              "description": "Checkout path",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--label",
+              "description": "Workspace label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the new workspace"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            },
+            {
+              "long": "--trust-repository",
+              "description": "Trust the resolved repository path for this command"
+            }
+          ]
+        },
+        {
+          "name": "open",
+          "description": "Open an existing Git worktree",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--cwd",
+              "description": "Repository path",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--path",
+              "description": "Worktree path",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--branch",
+              "description": "Branch name",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--label",
+              "description": "Workspace label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the workspace"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            },
+            {
+              "long": "--trust-repository",
+              "description": "Trust the resolved repository path for this command"
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "Remove a worktree checkout",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--force",
+              "description": "Force removal of a dirty checkout"
+            },
+            {
+              "long": "--trust-repository",
+              "description": "Trust the resolved repository path for this command"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "tab",
+      "description": "Manage tabs over the socket API",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List tabs",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "create",
+          "description": "Create a tab",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--cwd",
+              "description": "Working directory",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--label",
+              "description": "Tab label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--env",
+              "description": "Add KEY=VALUE to the new root shell",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              },
+              "multiple": true
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the new tab"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            }
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Show a tab",
+          "arguments": [
+            {
+              "name": "tab_id",
+              "description": "Tab ID"
+            }
+          ]
+        },
+        {
+          "name": "focus",
+          "description": "Focus a tab",
+          "arguments": [
+            {
+              "name": "tab_id",
+              "description": "Tab ID"
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a tab",
+          "arguments": [
+            {
+              "name": "tab_id",
+              "description": "Tab ID"
+            },
+            {
+              "name": "label",
+              "description": "New label"
+            }
+          ]
+        },
+        {
+          "name": "close",
+          "description": "Close a tab",
+          "arguments": [
+            {
+              "name": "tab_id",
+              "description": "Tab ID"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "notification",
+      "description": "Show Herdr notifications",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Show a notification",
+          "arguments": [
+            {
+              "name": "title",
+              "description": "Notification title"
+            }
+          ],
+          "options": [
+            {
+              "long": "--body",
+              "description": "Notification body text",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--position",
+              "description": "In-app toast position",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "top-left",
+                  "top-right",
+                  "bottom-left",
+                  "bottom-right"
+                ]
+              }
+            },
+            {
+              "long": "--sound",
+              "description": "Sound to play when shown",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "none",
+                  "done",
+                  "request"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "session",
+      "description": "Manage named persistent sessions",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List sessions",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "attach",
+          "description": "Attach to a session",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Session name"
+            }
+          ]
+        },
+        {
+          "name": "stop",
+          "description": "Stop a session",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Session name"
+            }
+          ],
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "delete",
+          "description": "Delete a stopped session",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Session name"
+            }
+          ],
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "agent",
+      "description": "Control and inspect agent panes",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List agents"
+        },
+        {
+          "name": "get",
+          "description": "Show an agent",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ]
+        },
+        {
+          "name": "read",
+          "description": "Read agent terminal output",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Terminal snapshot source",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "visible",
+                  "recent",
+                  "recent-unwrapped",
+                  "detection"
+                ]
+              }
+            },
+            {
+              "long": "--lines",
+              "description": "Number of lines to read",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--format",
+              "description": "Output format",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "text",
+                  "ansi"
+                ]
+              }
+            },
+            {
+              "long": "--ansi",
+              "description": "Preserve ANSI escape sequences"
+            }
+          ]
+        },
+        {
+          "name": "send-keys",
+          "description": "Send key presses to an agent",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            },
+            {
+              "name": "key",
+              "description": "Key combo (e.g. enter, esc, ctrl+c)",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "prompt",
+          "description": "Submit a prompt to an agent",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            },
+            {
+              "name": "text",
+              "description": "Prompt text"
+            }
+          ],
+          "options": [
+            {
+              "long": "--wait",
+              "description": "Wait for the first matching state after submission"
+            },
+            {
+              "long": "--until",
+              "description": "State to match after --wait (repeatable)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "idle",
+                  "working",
+                  "blocked",
+                  "done",
+                  "unknown"
+                ]
+              },
+              "multiple": true
+            },
+            {
+              "long": "--timeout",
+              "description": "Timeout in milliseconds",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename an agent",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            },
+            {
+              "name": "name",
+              "description": "New name or --clear"
+            }
+          ]
+        },
+        {
+          "name": "focus",
+          "description": "Focus an agent",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ]
+        },
+        {
+          "name": "wait",
+          "description": "Wait until an agent reaches one of the requested states",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--until",
+              "description": "State to match (repeatable)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "idle",
+                  "working",
+                  "blocked",
+                  "done",
+                  "unknown"
+                ]
+              },
+              "multiple": true
+            },
+            {
+              "long": "--timeout",
+              "description": "Timeout in milliseconds",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "attach",
+          "description": "Attach directly to an agent terminal",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--takeover",
+              "description": "Replace the current input owner"
+            }
+          ]
+        },
+        {
+          "name": "start",
+          "description": "Start a supported interactive agent in an existing pane",
+          "options": [
+            {
+              "long": "--kind",
+              "description": "Agent kind to start",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "pi",
+                  "claude",
+                  "codex",
+                  "gemini",
+                  "cursor",
+                  "devin",
+                  "agy",
+                  "cline",
+                  "omp",
+                  "mastracode",
+                  "opencode",
+                  "copilot",
+                  "kimi",
+                  "kiro",
+                  "droid",
+                  "amp",
+                  "grok",
+                  "hermes",
+                  "kilo",
+                  "qodercli",
+                  "qwen",
+                  "maki",
+                  "muse"
+                ]
+              }
+            },
+            {
+              "long": "--pane",
+              "description": "Existing pane at an interactive shell prompt",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--timeout",
+              "description": "Startup timeout in milliseconds (3000-300000)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ],
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Unique agent name ([a-z][a-z0-9_-]{0,31})",
+              "required": true
+            },
+            {
+              "name": "agent_arg",
+              "description": "Arguments passed to the agent executable after --",
+              "required": false,
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "explain",
+          "description": "Explain agent detection state",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Agent name or pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--json",
+              "description": "Print machine-readable output"
+            },
+            {
+              "long": "--verbose",
+              "description": "Show detailed evidence"
+            },
+            {
+              "long": "--file",
+              "description": "Explain a saved snapshot fixture",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {}
+              }
+            },
+            {
+              "long": "--agent",
+              "description": "Agent label for --file",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pane",
+      "description": "Control terminal panes",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List panes",
+          "options": [
+            {
+              "long": "--workspace",
+              "description": "Workspace ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "current",
+          "description": "Show the current pane",
+          "options": [
+            {
+              "long": "--pane",
+              "description": "Pane ID to inspect",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--current",
+              "description": "Use the calling pane via HERDR_PANE_ID"
+            }
+          ]
+        },
+        {
+          "name": "get",
+          "description": "Show a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ]
+        },
+        {
+          "name": "layout",
+          "description": "Show pane layout information"
+        },
+        {
+          "name": "process-info",
+          "description": "Show pane process information"
+        },
+        {
+          "name": "neighbor",
+          "description": "Find a pane neighbor",
+          "options": [
+            {
+              "long": "--direction",
+              "description": "Direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "left",
+                  "right",
+                  "up",
+                  "down"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "edges",
+          "description": "Show pane edge information"
+        },
+        {
+          "name": "focus",
+          "description": "Focus a neighboring pane",
+          "options": [
+            {
+              "long": "--direction",
+              "description": "Direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "left",
+                  "right",
+                  "up",
+                  "down"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "resize",
+          "description": "Resize a pane split",
+          "options": [
+            {
+              "long": "--direction",
+              "description": "Direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "left",
+                  "right",
+                  "up",
+                  "down"
+                ]
+              }
+            },
+            {
+              "long": "--amount",
+              "description": "Resize amount",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "zoom",
+          "description": "Toggle or set pane zoom",
+          "options": [
+            {
+              "long": "--toggle",
+              "description": "Toggle zoom state"
+            },
+            {
+              "long": "--on",
+              "description": "Turn zoom on"
+            },
+            {
+              "long": "--off",
+              "description": "Turn zoom off"
+            }
+          ]
+        },
+        {
+          "name": "read",
+          "description": "Read pane terminal output",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Terminal snapshot source",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "visible",
+                  "recent",
+                  "recent-unwrapped",
+                  "detection"
+                ]
+              }
+            },
+            {
+              "long": "--lines",
+              "description": "Number of lines to read",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--format",
+              "description": "Output format",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "text",
+                  "ansi"
+                ]
+              }
+            },
+            {
+              "long": "--ansi",
+              "description": "Preserve ANSI escape sequences"
+            },
+            {
+              "long": "--raw",
+              "description": "Print raw output"
+            }
+          ]
+        },
+        {
+          "name": "rename",
+          "description": "Rename a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            },
+            {
+              "name": "label",
+              "description": "New label or --clear"
+            }
+          ]
+        },
+        {
+          "name": "input",
+          "description": "Set pane input routing",
+          "options": [
+            {
+              "long": "--right-click",
+              "description": "Right-click gesture routing",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "herdr",
+                  "pane"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "split",
+          "description": "Split a pane",
+          "options": [
+            {
+              "long": "--direction",
+              "description": "Split direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "right",
+                  "down"
+                ]
+              }
+            },
+            {
+              "long": "--ratio",
+              "description": "Split ratio (0-1)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--cwd",
+              "description": "Working directory",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--env",
+              "description": "Add KEY=VALUE to the new shell",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              },
+              "multiple": true
+            },
+            {
+              "long": "--right-click",
+              "description": "Right-click gesture routing",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "herdr",
+                  "pane"
+                ]
+              }
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the new pane"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            }
+          ]
+        },
+        {
+          "name": "swap",
+          "description": "Swap panes",
+          "options": [
+            {
+              "long": "--direction",
+              "description": "Direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "left",
+                  "right",
+                  "up",
+                  "down"
+                ]
+              }
+            },
+            {
+              "long": "--source-pane",
+              "description": "Source pane ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--target-pane",
+              "description": "Target pane ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "move",
+          "description": "Move a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--tab",
+              "description": "Move into an existing tab",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--new-tab",
+              "description": "Move into a new tab"
+            },
+            {
+              "long": "--new-workspace",
+              "description": "Move into a new workspace"
+            },
+            {
+              "long": "--workspace",
+              "description": "Workspace ID for --new-tab/--new-workspace",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--label",
+              "description": "Workspace or tab label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--tab-label",
+              "description": "Tab label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--split",
+              "description": "Split direction",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "right",
+                  "down"
+                ]
+              }
+            },
+            {
+              "long": "--target-pane",
+              "description": "Target pane ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--ratio",
+              "description": "Split ratio (0-1)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--focus",
+              "description": "Focus the moved pane"
+            },
+            {
+              "long": "--no-focus",
+              "description": "Keep the current focus"
+            }
+          ]
+        },
+        {
+          "name": "close",
+          "description": "Close a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ]
+        },
+        {
+          "name": "send-text",
+          "description": "Send literal text to a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            },
+            {
+              "name": "text",
+              "description": "Text to send"
+            }
+          ]
+        },
+        {
+          "name": "send-keys",
+          "description": "Send key presses to a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            },
+            {
+              "name": "key",
+              "description": "Key combo (e.g. enter, esc, ctrl+c)",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "wait-output",
+          "description": "Wait for matching pane output",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--match",
+              "description": "Match a literal substring",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--regex",
+              "description": "Match a Rust regular expression",
+              "takes_value": true,
+              "value_type": {
+                "type": "Regex"
+              }
+            },
+            {
+              "long": "--source",
+              "description": "Terminal snapshot source",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "visible",
+                  "recent",
+                  "recent-unwrapped"
+                ]
+              }
+            },
+            {
+              "long": "--lines",
+              "description": "Restrict the searched snapshot to N lines",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--timeout",
+              "description": "Timeout in milliseconds",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--raw",
+              "description": "Keep ANSI escape sequences while matching"
+            }
+          ]
+        },
+        {
+          "name": "run",
+          "description": "Run a command in a pane",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            },
+            {
+              "name": "command",
+              "description": "Command to submit",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "report-agent",
+          "description": "Report pane agent lifecycle state",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Reporter source ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent",
+              "description": "Agent label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--state",
+              "description": "Agent lifecycle state",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "idle",
+                  "working",
+                  "blocked",
+                  "unknown"
+                ]
+              }
+            },
+            {
+              "long": "--message",
+              "description": "Status message",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--seq",
+              "description": "Sequence number",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--agent-session-id",
+              "description": "Native session ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent-session-path",
+              "description": "Native session path",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {}
+              }
+            }
+          ]
+        },
+        {
+          "name": "report-agent-session",
+          "description": "Report pane agent session identity",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Reporter source ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent",
+              "description": "Agent label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--seq",
+              "description": "Sequence number",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--agent-session-id",
+              "description": "Native session ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent-session-path",
+              "description": "Native session path",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {}
+              }
+            },
+            {
+              "long": "--session-start-source",
+              "description": "Session start source",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "release-agent",
+          "description": "Release pane agent lifecycle authority",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Reporter source ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent",
+              "description": "Agent label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--seq",
+              "description": "Sequence number",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "report-metadata",
+          "description": "Report display-only pane metadata",
+          "arguments": [
+            {
+              "name": "pane_id",
+              "description": "Pane ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--source",
+              "description": "Reporter source ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--agent",
+              "description": "Agent label guarded by this report",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--applies-to-source",
+              "description": "Source the display fields apply to",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--title",
+              "description": "Pane title",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--clear-title",
+              "description": "Clear the pane title"
+            },
+            {
+              "long": "--display-agent",
+              "description": "Visible agent name",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--clear-display-agent",
+              "description": "Clear the display agent name"
+            },
+            {
+              "long": "--state-label",
+              "description": "Set STATUS=TEXT label",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--clear-state-labels",
+              "description": "Clear all state labels"
+            },
+            {
+              "long": "--token",
+              "description": "Set display token NAME=VALUE",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--clear-token",
+              "description": "Clear a display token",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--seq",
+              "description": "Sequence number",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            },
+            {
+              "long": "--ttl-ms",
+              "description": "Metadata TTL in milliseconds",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "integration",
+      "description": "Manage built-in agent integrations",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install an integration",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Integration target",
+              "type": {
+                "type": "Choice",
+                "data": [
+                  "pi",
+                  "omp",
+                  "claude",
+                  "codex",
+                  "copilot",
+                  "devin",
+                  "droid",
+                  "kimi",
+                  "opencode",
+                  "kilo",
+                  "hermes",
+                  "qodercli",
+                  "qwen",
+                  "cursor",
+                  "mastracode",
+                  "antigravity-cli",
+                  "grok"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "uninstall",
+          "description": "Uninstall an integration",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "Integration target",
+              "type": {
+                "type": "Choice",
+                "data": [
+                  "pi",
+                  "omp",
+                  "claude",
+                  "codex",
+                  "copilot",
+                  "devin",
+                  "droid",
+                  "kimi",
+                  "opencode",
+                  "kilo",
+                  "hermes",
+                  "qodercli",
+                  "qwen",
+                  "cursor",
+                  "mastracode",
+                  "antigravity-cli",
+                  "grok"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "description": "Show integration status",
+          "options": [
+            {
+              "long": "--outdated-only",
+              "description": "Show only outdated integrations"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "plugin",
+      "description": "Install and run workflow plugins",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install a plugin from GitHub",
+          "arguments": [
+            {
+              "name": "repo",
+              "description": "owner/repo/subdir shorthand"
+            }
+          ],
+          "options": [
+            {
+              "long": "--ref",
+              "description": "Git ref to install",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--yes",
+              "description": "Skip the trust preview"
+            }
+          ]
+        },
+        {
+          "name": "uninstall",
+          "description": "Uninstall a plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin ID or owner/repo shorthand"
+            }
+          ]
+        },
+        {
+          "name": "link",
+          "description": "Link a local plugin",
+          "arguments": [
+            {
+              "name": "path",
+              "description": "Plugin directory or manifest path",
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ],
+          "options": [
+            {
+              "long": "--disabled",
+              "description": "Link without enabling"
+            }
+          ]
+        },
+        {
+          "name": "unlink",
+          "description": "Unlink a local plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin ID"
+            }
+          ]
+        },
+        {
+          "name": "enable",
+          "description": "Enable a plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin ID"
+            }
+          ]
+        },
+        {
+          "name": "disable",
+          "description": "Disable a plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin ID"
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "List installed plugins",
+          "options": [
+            {
+              "long": "--plugin",
+              "description": "Filter by plugin ID",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--json",
+              "description": "Print JSON output"
+            }
+          ]
+        },
+        {
+          "name": "config-dir",
+          "description": "Print a plugin config directory",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin ID"
+            }
+          ]
+        },
+        {
+          "name": "action",
+          "description": "List or invoke plugin actions",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "List plugin actions",
+              "options": [
+                {
+                  "long": "--plugin",
+                  "description": "Filter by plugin ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "invoke",
+              "description": "Invoke a plugin action",
+              "arguments": [
+                {
+                  "name": "action_id",
+                  "description": "Qualified action ID"
+                }
+              ],
+              "options": [
+                {
+                  "long": "--plugin",
+                  "description": "Plugin ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "log",
+          "description": "Inspect plugin command logs",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "List plugin command logs",
+              "options": [
+                {
+                  "long": "--plugin",
+                  "description": "Filter by plugin ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--limit",
+                  "description": "Maximum entries",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Number"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "pane",
+          "description": "Manage plugin-owned panes",
+          "subcommands": [
+            {
+              "name": "open",
+              "description": "Open a plugin-managed terminal pane",
+              "options": [
+                {
+                  "long": "--plugin",
+                  "description": "Plugin ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--entrypoint",
+                  "description": "Entrypoint ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--placement",
+                  "description": "Placement",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Choice",
+                    "data": [
+                      "overlay",
+                      "popup",
+                      "split",
+                      "tab",
+                      "zoomed"
+                    ]
+                  }
+                },
+                {
+                  "long": "--width",
+                  "description": "Popup width",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--height",
+                  "description": "Popup height",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--workspace",
+                  "description": "Workspace ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--target-pane",
+                  "description": "Target pane ID",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  }
+                },
+                {
+                  "long": "--direction",
+                  "description": "Split direction",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Choice",
+                    "data": [
+                      "right",
+                      "down"
+                    ]
+                  }
+                },
+                {
+                  "long": "--cwd",
+                  "description": "Working directory",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Directory"
+                  }
+                },
+                {
+                  "long": "--env",
+                  "description": "Add KEY=VALUE to the pane shell",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "String"
+                  },
+                  "multiple": true
+                },
+                {
+                  "long": "--focus",
+                  "description": "Focus the new pane"
+                },
+                {
+                  "long": "--no-focus",
+                  "description": "Keep the current focus"
+                }
+              ]
+            },
+            {
+              "name": "focus",
+              "description": "Focus a plugin pane",
+              "arguments": [
+                {
+                  "name": "pane_id",
+                  "description": "Pane ID"
+                }
+              ]
+            },
+            {
+              "name": "close",
+              "description": "Close a plugin pane",
+              "arguments": [
+                {
+                  "name": "pane_id",
+                  "description": "Pane ID"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "terminal",
+      "description": "Direct terminal attach and streaming",
+      "subcommands": [
+        {
+          "name": "attach",
+          "description": "Attach directly to a terminal",
+          "arguments": [
+            {
+              "name": "terminal_id",
+              "description": "Terminal ID"
+            }
+          ],
+          "options": [
+            {
+              "long": "--takeover",
+              "description": "Replace the current input owner"
+            }
+          ]
+        },
+        {
+          "name": "session",
+          "description": "Live terminal session streams",
+          "subcommands": [
+            {
+              "name": "control",
+              "description": "Open a writable live terminal stream",
+              "options": [
+                {
+                  "long": "--takeover",
+                  "description": "Replace the current controller"
+                },
+                {
+                  "long": "--cols",
+                  "description": "Terminal width",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Number"
+                  }
+                },
+                {
+                  "long": "--rows",
+                  "description": "Terminal height",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Number"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "observe",
+              "description": "Open a read-only live terminal stream",
+              "options": [
+                {
+                  "long": "--cols",
+                  "description": "Terminal width",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Number"
+                  }
+                },
+                {
+                  "long": "--rows",
+                  "description": "Terminal height",
+                  "takes_value": true,
+                  "value_type": {
+                    "type": "Number"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "title",
+          "description": "Manage the terminal window title",
+          "subcommands": [
+            {
+              "name": "set",
+              "description": "Set the terminal window title",
+              "arguments": [
+                {
+                  "name": "title",
+                  "description": "Title text"
+                }
+              ]
+            },
+            {
+              "name": "clear",
+              "description": "Clear the terminal window title"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2286 @@
+{
+  "command": "hermes",
+  "description": "Hermes Agent - AI assistant with tool-calling capabilities",
+  "global_options": [
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help and exit"
+    },
+    {
+      "short": "-V",
+      "long": "--version",
+      "description": "Show version and exit"
+    },
+    {
+      "short": "-z",
+      "long": "--oneshot",
+      "description": "One-shot mode: print only the final response text",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--usage-file",
+      "description": "Write a JSON usage report after a one-shot run",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            ".json"
+          ]
+        }
+      }
+    },
+    {
+      "short": "-m",
+      "long": "--model",
+      "description": "Model override for this invocation",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--provider",
+      "description": "Provider override for this invocation",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--reasoning",
+      "description": "Reasoning effort for this invocation",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ]
+      }
+    },
+    {
+      "short": "-t",
+      "long": "--toolsets",
+      "description": "Comma-separated toolsets to enable",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-r",
+      "long": "--resume",
+      "description": "Resume a previous session by ID or title",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "short": "-c",
+      "long": "--continue",
+      "description": "Resume a session by name, or the most recent if no name given",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--no-restore-cwd",
+      "description": "Do not cd into a resumed session's recorded working directory"
+    },
+    {
+      "long": "--in",
+      "description": "Change into DIR before starting or resuming",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-w",
+      "long": "--worktree",
+      "description": "Run in an isolated git worktree"
+    },
+    {
+      "long": "--accept-hooks",
+      "description": "Auto-approve unseen shell hooks without a TTY prompt"
+    },
+    {
+      "short": "-s",
+      "long": "--skills",
+      "description": "Preload skills for the session (repeatable or comma-separated)",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--yolo",
+      "description": "Bypass dangerous-command approval prompts"
+    },
+    {
+      "long": "--pass-session-id",
+      "description": "Include the session ID in the system prompt"
+    },
+    {
+      "long": "--ignore-user-config",
+      "description": "Ignore user config and use built-in defaults"
+    },
+    {
+      "long": "--ignore-rules",
+      "description": "Skip auto-injection of AGENTS.md, memory, and skills"
+    },
+    {
+      "long": "--safe-mode",
+      "description": "Disable all customizations for troubleshooting"
+    },
+    {
+      "long": "--tui",
+      "description": "Launch the TUI instead of the classic CLI"
+    },
+    {
+      "long": "--cli",
+      "description": "Force the classic REPL"
+    },
+    {
+      "long": "--dev",
+      "description": "With --tui: run TypeScript sources via tsx"
+    },
+    {
+      "short": "-p",
+      "long": "--profile",
+      "description": "Profile to use for this invocation",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "chat",
+      "description": "Interactive or one-shot chat with the agent",
+      "options": [
+        {
+          "short": "-q",
+          "long": "--query",
+          "description": "Seed the session with a prompt",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--query-file",
+          "description": "Read the query from a file ('-' reads stdin)",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {}
+          }
+        },
+        {
+          "long": "--oneshot",
+          "description": "With -q: answer the query and exit"
+        },
+        {
+          "long": "--image",
+          "description": "Attach a local image to a single query",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": [
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp"
+              ]
+            }
+          }
+        },
+        {
+          "short": "-v",
+          "long": "--verbose",
+          "description": "Verbose output"
+        },
+        {
+          "short": "-Q",
+          "long": "--quiet",
+          "description": "Programmatic mode: suppress banner/spinner/tool previews"
+        },
+        {
+          "long": "--checkpoints",
+          "description": "Enable filesystem checkpoints before destructive changes"
+        },
+        {
+          "long": "--max-turns",
+          "description": "Maximum tool-calling iterations per turn",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--source",
+          "description": "Session source tag for filtering",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--create-if-missing",
+          "description": "Create the session if it does not exist"
+        }
+      ]
+    },
+    {
+      "name": "model",
+      "description": "Interactively choose the default provider and model"
+    },
+    {
+      "name": "moa",
+      "description": "Configure Mixture of Agents provider/model slots",
+      "subcommands": [
+        {
+          "name": "configure",
+          "description": "Interactively pick MoA models"
+        },
+        {
+          "name": "list",
+          "description": "Show current MoA model slots"
+        },
+        {
+          "name": "delete",
+          "description": "Delete a MoA preset"
+        }
+      ]
+    },
+    {
+      "name": "fallback",
+      "description": "Manage fallback providers for the primary model",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Pick a provider and model to add to the chain"
+        },
+        {
+          "name": "list",
+          "description": "Show the current fallback chain"
+        },
+        {
+          "name": "remove",
+          "description": "Remove an entry from the chain"
+        },
+        {
+          "name": "clear",
+          "description": "Remove all fallback entries"
+        }
+      ]
+    },
+    {
+      "name": "worktree",
+      "description": "Audit and reclaim accumulated git worktrees",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "Classify trees with age, size, and verdict"
+        },
+        {
+          "name": "prune",
+          "description": "Remove safe trees and delete merged branches"
+        }
+      ]
+    },
+    {
+      "name": "browser",
+      "description": "Real-profile browsing helpers",
+      "subcommands": [
+        {
+          "name": "close-profile",
+          "description": "Close the browser locking your real profile"
+        }
+      ]
+    },
+    {
+      "name": "secrets",
+      "description": "Manage external secret sources",
+      "subcommands": [
+        {
+          "name": "bitwarden",
+          "description": "Bitwarden Secrets Manager integration",
+          "subcommands": [
+            {
+              "name": "setup",
+              "description": "Interactive Bitwarden setup wizard"
+            },
+            {
+              "name": "status",
+              "description": "Show config and token validation status"
+            },
+            {
+              "name": "token",
+              "description": "Rotate the access token"
+            },
+            {
+              "name": "sync",
+              "description": "Fetch secrets and report changes"
+            },
+            {
+              "name": "install",
+              "description": "Download and verify the pinned bws binary"
+            },
+            {
+              "name": "disable",
+              "description": "Turn off the Bitwarden integration"
+            }
+          ]
+        },
+        {
+          "name": "onepassword",
+          "description": "1Password (op:// references) integration"
+        }
+      ]
+    },
+    {
+      "name": "egress",
+      "description": "Manage the iron-proxy egress credential-injection firewall",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Download the pinned iron-proxy binary"
+        },
+        {
+          "name": "setup",
+          "description": "Interactive wizard: CA, mappings, config"
+        },
+        {
+          "name": "start",
+          "description": "Start the managed iron-proxy"
+        },
+        {
+          "name": "stop",
+          "description": "Stop the managed iron-proxy"
+        },
+        {
+          "name": "restart",
+          "description": "Restart the managed iron-proxy"
+        },
+        {
+          "name": "reload",
+          "description": "Hot-reload the ruleset in place"
+        },
+        {
+          "name": "status",
+          "description": "Show proxy state and mappings"
+        },
+        {
+          "name": "disable",
+          "description": "Turn off the proxy integration"
+        },
+        {
+          "name": "config",
+          "description": "Print the generated proxy.yaml path"
+        }
+      ]
+    },
+    {
+      "name": "migrate",
+      "description": "Migrate config for retired models or deprecated settings",
+      "subcommands": [
+        {
+          "name": "xai",
+          "description": "Rewrite xAI model references to official replacements",
+          "options": [
+            {
+              "long": "--apply",
+              "description": "Rewrite config.yaml in place (default: dry-run)"
+            },
+            {
+              "long": "--no-backup",
+              "description": "Skip the timestamped config backup"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gateway",
+      "description": "Messaging gateway management",
+      "subcommands": [
+        {
+          "name": "run",
+          "description": "Run the gateway in the foreground"
+        },
+        {
+          "name": "start",
+          "description": "Start the installed background service",
+          "options": [
+            {
+              "long": "--all",
+              "description": "Act on all gateway processes across all profiles"
+            },
+            {
+              "long": "--system",
+              "description": "Target the Linux system-level gateway service"
+            }
+          ]
+        },
+        {
+          "name": "stop",
+          "description": "Stop the service",
+          "options": [
+            {
+              "long": "--all",
+              "description": "Act on all gateway processes across all profiles"
+            },
+            {
+              "long": "--system",
+              "description": "Target the Linux system-level gateway service"
+            }
+          ]
+        },
+        {
+          "name": "restart",
+          "description": "Restart the service",
+          "options": [
+            {
+              "long": "--all",
+              "description": "Act on all gateway processes across all profiles"
+            },
+            {
+              "long": "--system",
+              "description": "Target the Linux system-level gateway service"
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "description": "Show service status"
+        },
+        {
+          "name": "list",
+          "description": "List all profiles and gateway status"
+        },
+        {
+          "name": "install",
+          "description": "Install as a systemd/launchd background service"
+        },
+        {
+          "name": "uninstall",
+          "description": "Remove the installed service"
+        },
+        {
+          "name": "setup",
+          "description": "Interactive messaging-platform setup"
+        },
+        {
+          "name": "migrate-legacy",
+          "description": "Remove legacy hermes.service units"
+        },
+        {
+          "name": "enroll",
+          "description": "Enroll this gateway with a relay connector"
+        }
+      ]
+    },
+    {
+      "name": "proxy",
+      "description": "Local OpenAI-compatible proxy to OAuth providers",
+      "subcommands": [
+        {
+          "name": "start",
+          "description": "Run the proxy in the foreground",
+          "options": [
+            {
+              "long": "--provider",
+              "description": "Upstream provider",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "nous",
+                  "xai"
+                ]
+              }
+            },
+            {
+              "long": "--host",
+              "description": "Listen address",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--port",
+              "description": "Listen port",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "description": "Show which proxy upstreams are ready"
+        },
+        {
+          "name": "providers",
+          "description": "List available proxy upstream providers"
+        }
+      ]
+    },
+    {
+      "name": "lsp",
+      "description": "Language Server Protocol management",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show LSP service status"
+        },
+        {
+          "name": "list",
+          "description": "List supported language servers"
+        },
+        {
+          "name": "install",
+          "description": "Install a server binary"
+        },
+        {
+          "name": "install-all",
+          "description": "Install every server with a known recipe"
+        },
+        {
+          "name": "restart",
+          "description": "Tear down running LSP clients"
+        },
+        {
+          "name": "which",
+          "description": "Print the resolved binary path for a server"
+        }
+      ]
+    },
+    {
+      "name": "setup",
+      "description": "Interactive setup wizard",
+      "arguments": [
+        {
+          "name": "section",
+          "description": "Wizard section",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "model",
+              "tts",
+              "terminal",
+              "gateway",
+              "tools",
+              "agent"
+            ]
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--portal",
+          "description": "One-shot Nous Portal setup"
+        },
+        {
+          "long": "--quick",
+          "description": "Only prompt for missing items"
+        },
+        {
+          "long": "--non-interactive",
+          "description": "Use defaults without prompts"
+        },
+        {
+          "long": "--reset",
+          "description": "Reset configuration before setup"
+        },
+        {
+          "long": "--reconfigure",
+          "description": "Run the full reconfigure wizard"
+        }
+      ]
+    },
+    {
+      "name": "whatsapp",
+      "description": "Set up WhatsApp integration"
+    },
+    {
+      "name": "whatsapp-cloud",
+      "description": "Set up WhatsApp Business Cloud API integration"
+    },
+    {
+      "name": "slack",
+      "description": "Slack integration helpers",
+      "subcommands": [
+        {
+          "name": "manifest",
+          "description": "Print or write a Slack app manifest",
+          "options": [
+            {
+              "long": "--write",
+              "description": "Write to a file instead of stdout",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {}
+              }
+            },
+            {
+              "long": "--name",
+              "description": "Bot display name",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--description",
+              "description": "Bot description",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--long-description",
+              "description": "Inline long description",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--long-description-file",
+              "description": "Long description from a file",
+              "takes_value": true,
+              "value_type": {
+                "type": "File",
+                "data": {}
+              }
+            },
+            {
+              "long": "--slashes-only",
+              "description": "Emit only features.slash_commands"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Deprecated: use hermes auth (removed from the CLI)"
+    },
+    {
+      "name": "logout",
+      "description": "Clear authentication for an inference provider"
+    },
+    {
+      "name": "send",
+      "description": "Send a one-shot message to a configured platform",
+      "options": [
+        {
+          "short": "-t",
+          "long": "--to",
+          "description": "Delivery target (platform, platform:chat_id, platform:#channel)",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "short": "-f",
+          "long": "--file",
+          "description": "Read the message body from a file ('-' reads stdin)",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {}
+          }
+        },
+        {
+          "short": "-s",
+          "long": "--subject",
+          "description": "Prepend a subject line",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "short": "-l",
+          "long": "--list",
+          "description": "List configured targets (optional positional platform filter)"
+        },
+        {
+          "short": "-q",
+          "long": "--quiet",
+          "description": "Suppress stdout on success"
+        },
+        {
+          "long": "--json",
+          "description": "Emit raw JSON result"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "message",
+          "description": "Message text"
+        }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Manage pooled provider credentials",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add a pooled credential",
+          "options": [
+            {
+              "long": "--api-key",
+              "description": "API key to store",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            },
+            {
+              "long": "--type",
+              "description": "Credential type",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "api-key",
+                  "oauth"
+                ]
+              }
+            },
+            {
+              "long": "--priority",
+              "description": "Priority in fill_first order",
+              "takes_value": true,
+              "value_type": {
+                "type": "Number"
+              }
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "List pooled credentials"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a pooled credential"
+        },
+        {
+          "name": "reset",
+          "description": "Clear exhaustion/cooldown status"
+        },
+        {
+          "name": "priority",
+          "description": "Move a credential to the front of fill_first order"
+        },
+        {
+          "name": "refresh",
+          "description": "Refresh one OAuth credential"
+        },
+        {
+          "name": "status",
+          "description": "Show auth status for a provider"
+        },
+        {
+          "name": "logout",
+          "description": "Log out a provider and clear stored auth state"
+        },
+        {
+          "name": "spotify",
+          "description": "Authenticate with Spotify via PKCE"
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Show status of all components",
+      "options": [
+        {
+          "long": "--all",
+          "description": "Show all details (redacted for sharing)"
+        },
+        {
+          "long": "--deep",
+          "description": "Run deeper checks that may take longer"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "description": "Emergency stop: pause cron/kanban dispatch and new gateway turns"
+    },
+    {
+      "name": "resume",
+      "description": "Lift the emergency stop set by hermes pause"
+    },
+    {
+      "name": "cron",
+      "description": "Cron job management",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List scheduled jobs"
+        },
+        {
+          "name": "create",
+          "description": "Create a scheduled job"
+        },
+        {
+          "name": "edit",
+          "description": "Edit an existing scheduled job"
+        },
+        {
+          "name": "pause",
+          "description": "Pause a scheduled job"
+        },
+        {
+          "name": "resume",
+          "description": "Resume a paused job"
+        },
+        {
+          "name": "run",
+          "description": "Trigger a job on the next scheduler tick"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a scheduled job"
+        },
+        {
+          "name": "status",
+          "description": "Check whether the cron scheduler is running"
+        },
+        {
+          "name": "runs",
+          "description": "Show durable execution attempts"
+        },
+        {
+          "name": "history",
+          "description": "Show run history"
+        },
+        {
+          "name": "incidents",
+          "description": "List or acknowledge cron failure incidents"
+        },
+        {
+          "name": "notepad",
+          "description": "Read/write a job's durable notepad"
+        },
+        {
+          "name": "doctor",
+          "description": "Check scheduled jobs for health issues"
+        },
+        {
+          "name": "tick",
+          "description": "Run due jobs once and exit"
+        }
+      ]
+    },
+    {
+      "name": "sync",
+      "description": "Skill Sync - sync skills across devices",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show what is synced and from where"
+        },
+        {
+          "name": "pull",
+          "description": "Pull synced skills"
+        },
+        {
+          "name": "push",
+          "description": "Push opted-in skills"
+        },
+        {
+          "name": "now",
+          "description": "Reconcile now: pull then push"
+        },
+        {
+          "name": "enable",
+          "description": "Include a skill in your sync"
+        },
+        {
+          "name": "disable",
+          "description": "Exclude a skill from your sync"
+        },
+        {
+          "name": "device",
+          "description": "Show or set this device's label"
+        },
+        {
+          "name": "propose",
+          "description": "Share a skill with your organisation"
+        }
+      ]
+    },
+    {
+      "name": "webhook",
+      "description": "Manage dynamic webhook subscriptions",
+      "subcommands": [
+        {
+          "name": "subscribe",
+          "description": "Create a webhook subscription"
+        },
+        {
+          "name": "list",
+          "description": "List all dynamic subscriptions"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a subscription"
+        },
+        {
+          "name": "test",
+          "description": "Send a test POST to a webhook route"
+        }
+      ]
+    },
+    {
+      "name": "peer",
+      "description": "Bot-to-bot DMs across machines",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Register (or update) a peer gateway"
+        },
+        {
+          "name": "list",
+          "description": "List registered peers"
+        },
+        {
+          "name": "dm",
+          "description": "Message an agent on a peer gateway and print its reply"
+        },
+        {
+          "name": "run",
+          "description": "Start an asynchronous peer turn"
+        },
+        {
+          "name": "status",
+          "description": "Read the status of an asynchronous peer run"
+        },
+        {
+          "name": "stop",
+          "description": "Stop one asynchronous peer run"
+        },
+        {
+          "name": "remove",
+          "description": "Remove a peer"
+        }
+      ]
+    },
+    {
+      "name": "portal",
+      "description": "Nous Portal login and Tool Gateway routing",
+      "subcommands": [
+        {
+          "name": "info",
+          "description": "Show Portal auth and routing summary"
+        },
+        {
+          "name": "login",
+          "description": "Log in to Nous Portal"
+        },
+        {
+          "name": "open",
+          "description": "Open the Portal subscription page"
+        },
+        {
+          "name": "tools",
+          "description": "List Tool Gateway tools"
+        }
+      ]
+    },
+    {
+      "name": "kanban",
+      "description": "Multi-profile collaboration board",
+      "subcommands": [
+        {
+          "name": "init",
+          "description": "Create kanban.db if missing"
+        },
+        {
+          "name": "boards",
+          "description": "Manage kanban boards"
+        },
+        {
+          "name": "create",
+          "description": "Create a new task"
+        },
+        {
+          "name": "list",
+          "description": "List tasks"
+        },
+        {
+          "name": "show",
+          "description": "Show a task with comments and events"
+        },
+        {
+          "name": "assign",
+          "description": "Assign or reassign a task"
+        },
+        {
+          "name": "claim",
+          "description": "Atomically claim a ready task"
+        },
+        {
+          "name": "complete",
+          "description": "Mark one or more tasks done"
+        },
+        {
+          "name": "block",
+          "description": "Mark one or more tasks blocked"
+        },
+        {
+          "name": "unblock",
+          "description": "Return blocked tasks to ready"
+        },
+        {
+          "name": "schedule",
+          "description": "Park tasks in Scheduled"
+        },
+        {
+          "name": "link",
+          "description": "Add a parent-child dependency"
+        },
+        {
+          "name": "unlink",
+          "description": "Remove a parent-child dependency"
+        },
+        {
+          "name": "comment",
+          "description": "Append a comment to a task"
+        },
+        {
+          "name": "request-review",
+          "description": "Move a task to review"
+        },
+        {
+          "name": "request-changes",
+          "description": "Return an active review to its implementer"
+        },
+        {
+          "name": "reopen-review",
+          "description": "Send review tasks back for changes"
+        },
+        {
+          "name": "archive",
+          "description": "Archive one or more tasks"
+        },
+        {
+          "name": "tail",
+          "description": "Follow a task's event stream"
+        },
+        {
+          "name": "dispatch",
+          "description": "One dispatcher pass"
+        },
+        {
+          "name": "context",
+          "description": "Print the full worker context for a task"
+        },
+        {
+          "name": "specify",
+          "description": "Flesh out a triage task into a concrete spec"
+        },
+        {
+          "name": "decompose",
+          "description": "Decompose a task into child tasks"
+        },
+        {
+          "name": "gc",
+          "description": "Remove archived-task workspaces"
+        },
+        {
+          "name": "swarm",
+          "description": "Create a Kanban Swarm graph"
+        }
+      ],
+      "options": [
+        {
+          "long": "--board",
+          "description": "Operate on a specific board",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "project",
+      "description": "Manage named multi-folder workspaces",
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Create a new project"
+        },
+        {
+          "name": "list",
+          "description": "List projects"
+        },
+        {
+          "name": "show",
+          "description": "Show a project's details"
+        },
+        {
+          "name": "add-folder",
+          "description": "Add a folder to a project"
+        },
+        {
+          "name": "remove-folder",
+          "description": "Remove a folder from a project"
+        },
+        {
+          "name": "rename",
+          "description": "Rename a project"
+        },
+        {
+          "name": "set-primary",
+          "description": "Set the primary folder"
+        },
+        {
+          "name": "use",
+          "description": "Set the active project"
+        },
+        {
+          "name": "archive",
+          "description": "Archive a project"
+        },
+        {
+          "name": "restore",
+          "description": "Restore an archived project"
+        },
+        {
+          "name": "bind-board",
+          "description": "Bind a kanban board to a project"
+        }
+      ]
+    },
+    {
+      "name": "hooks",
+      "description": "Inspect and manage shell-script hooks",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List configured hooks"
+        },
+        {
+          "name": "doctor",
+          "description": "Check each configured hook"
+        },
+        {
+          "name": "test",
+          "description": "Fire hooks against a synthetic payload"
+        },
+        {
+          "name": "revoke",
+          "description": "Remove allowlist entries for a command"
+        }
+      ]
+    },
+    {
+      "name": "doctor",
+      "description": "Check configuration and dependencies"
+    },
+    {
+      "name": "verify",
+      "description": "Detect a project's run recipe and smoke-test it",
+      "options": [
+        {
+          "long": "--phase",
+          "description": "Phase to run",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "bootstrap",
+              "build",
+              "test",
+              "start"
+            ]
+          }
+        },
+        {
+          "long": "--port",
+          "description": "Port for the start phase",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--timeout",
+          "description": "Timeout in seconds",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "security",
+      "description": "Supply-chain audit via OSV.dev",
+      "subcommands": [
+        {
+          "name": "audit",
+          "description": "Run a one-shot audit",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Machine-readable output"
+            },
+            {
+              "long": "--fail-on",
+              "description": "Exit non-zero at this severity",
+              "takes_value": true,
+              "value_type": {
+                "type": "Choice",
+                "data": [
+                  "low",
+                  "moderate",
+                  "high",
+                  "critical"
+                ]
+              }
+            },
+            {
+              "long": "--skip-venv",
+              "description": "Skip the Hermes venv"
+            },
+            {
+              "long": "--skip-plugins",
+              "description": "Skip plugin requirements"
+            },
+            {
+              "long": "--skip-mcp",
+              "description": "Skip pinned MCP servers"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "approvals",
+      "description": "Approval-prompt tools",
+      "subcommands": [
+        {
+          "name": "suggest",
+          "description": "Propose allowlist entries from past approvals"
+        },
+        {
+          "name": "test",
+          "description": "Dry-run the approval verdict for a command"
+        }
+      ]
+    },
+    {
+      "name": "dump",
+      "description": "Copy-pasteable setup summary for support"
+    },
+    {
+      "name": "debug",
+      "description": "Debug tools: upload logs and system info",
+      "subcommands": [
+        {
+          "name": "share",
+          "description": "Upload a debug report and print a shareable URL"
+        },
+        {
+          "name": "delete",
+          "description": "Delete an uploaded paste"
+        }
+      ]
+    },
+    {
+      "name": "backup",
+      "description": "Back up the Hermes home directory to a zip file"
+    },
+    {
+      "name": "checkpoints",
+      "description": "Inspect, prune, or clear the checkpoint store",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show size and per-project breakdown"
+        },
+        {
+          "name": "prune",
+          "description": "Delete orphan and stale checkpoints"
+        },
+        {
+          "name": "clear",
+          "description": "Delete the entire checkpoint store"
+        },
+        {
+          "name": "clear-legacy",
+          "description": "Delete legacy archives only"
+        },
+        {
+          "name": "list",
+          "description": "Alias for status"
+        }
+      ]
+    },
+    {
+      "name": "import",
+      "description": "Restore a Hermes backup from a zip file",
+      "arguments": [
+        {
+          "name": "archive",
+          "description": "Backup zip file",
+          "type": {
+            "type": "File",
+            "data": {
+              "extensions": [
+                ".zip"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "import-agent",
+      "description": "Import a Claude Code or Codex CLI setup",
+      "arguments": [
+        {
+          "name": "kind",
+          "description": "Source agent",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "claude-code",
+              "codex"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "config",
+      "description": "View and edit configuration",
+      "subcommands": [
+        {
+          "name": "show",
+          "description": "Show current configuration"
+        },
+        {
+          "name": "edit",
+          "description": "Open the config file in an editor"
+        },
+        {
+          "name": "get",
+          "description": "Print a resolved configuration value"
+        },
+        {
+          "name": "set",
+          "description": "Set a configuration value"
+        },
+        {
+          "name": "unset",
+          "description": "Remove a configuration value"
+        },
+        {
+          "name": "path",
+          "description": "Print the config file path"
+        },
+        {
+          "name": "env-path",
+          "description": "Print the .env file path"
+        },
+        {
+          "name": "check",
+          "description": "Check for missing or outdated config"
+        },
+        {
+          "name": "migrate",
+          "description": "Update config with new options"
+        }
+      ]
+    },
+    {
+      "name": "skin",
+      "description": "List, switch, and tweak display skins",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List available skins"
+        },
+        {
+          "name": "use",
+          "description": "Switch the active skin"
+        },
+        {
+          "name": "set",
+          "description": "Tweak one color of the active skin"
+        }
+      ]
+    },
+    {
+      "name": "console",
+      "description": "Open the safe Hermes command console"
+    },
+    {
+      "name": "pairing",
+      "description": "Approve or revoke messaging pairing codes",
+      "subcommands": [
+        {
+          "name": "approve",
+          "description": "Approve a pairing request"
+        },
+        {
+          "name": "list",
+          "description": "Show pending and approved users"
+        },
+        {
+          "name": "revoke",
+          "description": "Revoke user access"
+        },
+        {
+          "name": "clear-pending",
+          "description": "Clear all pending codes"
+        }
+      ]
+    },
+    {
+      "name": "skills",
+      "description": "Search, install, and manage skills",
+      "subcommands": [
+        {
+          "name": "search",
+          "description": "Search skill registries"
+        },
+        {
+          "name": "browse",
+          "description": "Browse all available skills"
+        },
+        {
+          "name": "install",
+          "description": "Install a skill"
+        },
+        {
+          "name": "inspect",
+          "description": "Preview a skill without installing"
+        },
+        {
+          "name": "list",
+          "description": "List installed skills"
+        },
+        {
+          "name": "check",
+          "description": "Check installed skills for updates"
+        },
+        {
+          "name": "update",
+          "description": "Update installed skills"
+        },
+        {
+          "name": "audit",
+          "description": "Re-scan installed hub skills"
+        },
+        {
+          "name": "uninstall",
+          "description": "Remove a hub-installed skill"
+        },
+        {
+          "name": "reset",
+          "description": "Reset a bundled skill"
+        },
+        {
+          "name": "diff",
+          "description": "Show how a bundled skill differs from stock"
+        },
+        {
+          "name": "list-modified",
+          "description": "List edited bundled skills"
+        },
+        {
+          "name": "opt-out",
+          "description": "Stop bundled skills from being seeded"
+        },
+        {
+          "name": "opt-in",
+          "description": "Re-enable bundled-skill seeding"
+        },
+        {
+          "name": "repair-official",
+          "description": "Restore official optional skills"
+        },
+        {
+          "name": "publish",
+          "description": "Publish a skill to a registry"
+        },
+        {
+          "name": "snapshot",
+          "description": "Export or import skill configurations"
+        },
+        {
+          "name": "tap",
+          "description": "Manage skill sources"
+        },
+        {
+          "name": "config",
+          "description": "Interactive skill configuration"
+        },
+        {
+          "name": "trust",
+          "description": "Trust a repo's project-local skills"
+        },
+        {
+          "name": "untrust",
+          "description": "Revoke project-skill trust for a repo"
+        }
+      ]
+    },
+    {
+      "name": "bundles",
+      "description": "Group skills under a single slash command",
+      "subcommands": [
+        {
+          "name": "create",
+          "description": "Create a new skill bundle"
+        },
+        {
+          "name": "list",
+          "description": "List installed skill bundles"
+        },
+        {
+          "name": "show",
+          "description": "Show one bundle's contents"
+        },
+        {
+          "name": "delete",
+          "description": "Delete a skill bundle"
+        },
+        {
+          "name": "reload",
+          "description": "Re-scan the bundles directory"
+        }
+      ]
+    },
+    {
+      "name": "plugins",
+      "description": "Manage and validate plugins",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install a plugin from a Git URL or index name"
+        },
+        {
+          "name": "search",
+          "description": "Search the community plugin index"
+        },
+        {
+          "name": "update",
+          "description": "Pull latest changes for an installed plugin"
+        },
+        {
+          "name": "remove",
+          "description": "Remove an installed plugin"
+        },
+        {
+          "name": "list",
+          "description": "List installed plugins"
+        },
+        {
+          "name": "enable",
+          "description": "Enable a disabled plugin"
+        },
+        {
+          "name": "disable",
+          "description": "Disable a plugin"
+        },
+        {
+          "name": "capabilities",
+          "description": "Show declared vs granted capabilities"
+        },
+        {
+          "name": "doctor",
+          "description": "Validate a plugin against runtime contracts"
+        },
+        {
+          "name": "compat",
+          "description": "Show plugins incompatible with the current version"
+        },
+        {
+          "name": "pack",
+          "description": "Manage shareable plugin sets"
+        },
+        {
+          "name": "show",
+          "description": "Show details for a single plugin"
+        }
+      ]
+    },
+    {
+      "name": "curator",
+      "description": "Background skill maintenance",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show curator status and skill stats"
+        },
+        {
+          "name": "run",
+          "description": "Trigger a curator review now"
+        },
+        {
+          "name": "pause",
+          "description": "Pause the curator"
+        },
+        {
+          "name": "resume",
+          "description": "Resume a paused curator"
+        },
+        {
+          "name": "pin",
+          "description": "Pin a skill"
+        },
+        {
+          "name": "unpin",
+          "description": "Unpin a skill"
+        },
+        {
+          "name": "archive",
+          "description": "Manually archive a skill"
+        },
+        {
+          "name": "restore",
+          "description": "Restore an archived skill"
+        },
+        {
+          "name": "prune",
+          "description": "Bulk-archive idle skills"
+        },
+        {
+          "name": "purge",
+          "description": "Delete old archived skills"
+        },
+        {
+          "name": "backup",
+          "description": "Snapshot the skills directory"
+        },
+        {
+          "name": "rollback",
+          "description": "Restore skills from a snapshot"
+        },
+        {
+          "name": "ledger",
+          "description": "List the skill audit ledger"
+        },
+        {
+          "name": "usage",
+          "description": "Show skill usage telemetry"
+        },
+        {
+          "name": "adopt",
+          "description": "Hand unmanaged skills to the curator"
+        },
+        {
+          "name": "list-archived",
+          "description": "List archived skills"
+        },
+        {
+          "name": "list-unmanaged",
+          "description": "List curation-eligible skills"
+        }
+      ]
+    },
+    {
+      "name": "pets",
+      "description": "Browse and install petdex animated pets",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "Browse the petdex gallery"
+        },
+        {
+          "name": "install",
+          "description": "Install a pet from the gallery"
+        },
+        {
+          "name": "select",
+          "description": "Set the active pet"
+        },
+        {
+          "name": "show",
+          "description": "Animate the active pet"
+        },
+        {
+          "name": "off",
+          "description": "Disable the pet display"
+        },
+        {
+          "name": "scale",
+          "description": "Resize the pet"
+        },
+        {
+          "name": "remove",
+          "description": "Delete an installed pet"
+        },
+        {
+          "name": "doctor",
+          "description": "Check pet and terminal graphics support"
+        }
+      ]
+    },
+    {
+      "name": "journey",
+      "description": "Timeline of learned skills and memories",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List node ids"
+        },
+        {
+          "name": "edit",
+          "description": "Edit a learned skill or memory"
+        },
+        {
+          "name": "delete",
+          "description": "Delete a learned skill or memory"
+        }
+      ],
+      "aliases": [
+        "learning",
+        "memory-graph"
+      ]
+    },
+    {
+      "name": "memory",
+      "description": "Configure the external memory provider",
+      "subcommands": [
+        {
+          "name": "setup",
+          "description": "Interactive provider selection"
+        },
+        {
+          "name": "status",
+          "description": "Show current memory provider config"
+        },
+        {
+          "name": "off",
+          "description": "Disable the external provider"
+        },
+        {
+          "name": "reset",
+          "description": "Erase built-in memory"
+        }
+      ]
+    },
+    {
+      "name": "tools",
+      "description": "Configure enabled tools per platform",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "Show all tools and their status"
+        },
+        {
+          "name": "enable",
+          "description": "Enable toolsets or MCP tools"
+        },
+        {
+          "name": "disable",
+          "description": "Disable toolsets or MCP tools"
+        },
+        {
+          "name": "post-setup",
+          "description": "Run a provider's post-setup install hook"
+        }
+      ]
+    },
+    {
+      "name": "computer-use",
+      "description": "Manage the Computer Use backend",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install or repair the cua-driver binary"
+        },
+        {
+          "name": "status",
+          "description": "Print whether cua-driver is on PATH"
+        },
+        {
+          "name": "doctor",
+          "description": "Run the cua-driver health report"
+        },
+        {
+          "name": "permissions",
+          "description": "Check or grant macOS permissions"
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "description": "Manage MCP servers and run Hermes as an MCP server",
+      "subcommands": [
+        {
+          "name": "add",
+          "description": "Add an MCP server (discovery-first install)"
+        },
+        {
+          "name": "remove",
+          "description": "Remove an MCP server"
+        },
+        {
+          "name": "list",
+          "description": "List configured MCP servers"
+        },
+        {
+          "name": "test",
+          "description": "Test MCP server connection"
+        },
+        {
+          "name": "configure",
+          "description": "Toggle tool selection"
+        },
+        {
+          "name": "login",
+          "description": "Force re-authentication for an OAuth MCP server"
+        },
+        {
+          "name": "reauth",
+          "description": "Re-authenticate one or all OAuth MCP servers"
+        },
+        {
+          "name": "picker",
+          "description": "Interactive catalog picker"
+        },
+        {
+          "name": "catalog",
+          "description": "List approved MCPs for one-click install"
+        },
+        {
+          "name": "install",
+          "description": "Install a catalog MCP by name"
+        },
+        {
+          "name": "serve",
+          "description": "Run Hermes as an MCP server"
+        }
+      ]
+    },
+    {
+      "name": "sessions",
+      "description": "Manage session history",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List recent sessions"
+        },
+        {
+          "name": "browse",
+          "description": "Interactive session picker"
+        },
+        {
+          "name": "export",
+          "description": "Export sessions to JSONL, Markdown, or QMD"
+        },
+        {
+          "name": "import",
+          "description": "Import a Claude Code or Codex CLI session"
+        },
+        {
+          "name": "rename",
+          "description": "Set or change a session's title"
+        },
+        {
+          "name": "delete",
+          "description": "Delete a specific session"
+        },
+        {
+          "name": "prune",
+          "description": "Delete old sessions"
+        },
+        {
+          "name": "archive",
+          "description": "Bulk-archive sessions matching filters"
+        },
+        {
+          "name": "pin",
+          "description": "Pin sessions"
+        },
+        {
+          "name": "unpin",
+          "description": "Remove the pin from sessions"
+        },
+        {
+          "name": "pinned",
+          "description": "List pinned sessions"
+        },
+        {
+          "name": "stats",
+          "description": "Show session store statistics"
+        },
+        {
+          "name": "optimize",
+          "description": "Reclaim disk space in the session store"
+        },
+        {
+          "name": "optimize-storage",
+          "description": "Migrate the search index to the compact layout"
+        },
+        {
+          "name": "clean-markers",
+          "description": "Clear stale tool-call marker content"
+        },
+        {
+          "name": "repair",
+          "description": "Repair a malformed state.db schema"
+        },
+        {
+          "name": "repair-routing",
+          "description": "Re-stamp gateway session routing identity"
+        },
+        {
+          "name": "recover",
+          "description": "Rebuild session data into a clean database"
+        },
+        {
+          "name": "retitle-skills",
+          "description": "Re-title skill-owned sessions"
+        }
+      ]
+    },
+    {
+      "name": "insights",
+      "description": "Show token, cost, and activity analytics"
+    },
+    {
+      "name": "monitoring",
+      "description": "Inspect gateway monitoring and diagnostics export",
+      "subcommands": [
+        {
+          "name": "status",
+          "description": "Show monitoring settings and export state"
+        }
+      ]
+    },
+    {
+      "name": "claw",
+      "description": "OpenClaw migration tools",
+      "subcommands": [
+        {
+          "name": "migrate",
+          "description": "Migrate from OpenClaw to Hermes"
+        },
+        {
+          "name": "cleanup",
+          "description": "Archive leftover OpenClaw directories"
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Update Hermes Agent to the latest version",
+      "options": [
+        {
+          "long": "--check",
+          "description": "Check for an update without installing"
+        },
+        {
+          "long": "--plan",
+          "description": "Show the update plan and exit"
+        },
+        {
+          "long": "--backup",
+          "description": "Take a pre-pull snapshot"
+        },
+        {
+          "long": "--no-backup",
+          "description": "Skip the pre-pull snapshot"
+        },
+        {
+          "long": "--yes",
+          "description": "Assume yes for prompts"
+        },
+        {
+          "long": "--keep-stash",
+          "description": "Keep the git stash after update"
+        },
+        {
+          "long": "--branch",
+          "description": "Branch to pull",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--switch-branch",
+          "description": "Switch to the configured branch"
+        },
+        {
+          "long": "--force",
+          "description": "Force the update"
+        },
+        {
+          "long": "--force-venv",
+          "description": "Rebuild the venv"
+        }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "description": "Uninstall Hermes Agent",
+      "options": [
+        {
+          "long": "--dry-run",
+          "description": "Show what would be removed"
+        }
+      ]
+    },
+    {
+      "name": "acp",
+      "description": "Run Hermes as an ACP server for editor integration"
+    },
+    {
+      "name": "profile",
+      "description": "Manage multiple isolated Hermes profiles",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List all profiles"
+        },
+        {
+          "name": "use",
+          "description": "Set the sticky default profile"
+        },
+        {
+          "name": "create",
+          "description": "Create a new profile"
+        },
+        {
+          "name": "delete",
+          "description": "Delete a profile"
+        },
+        {
+          "name": "show",
+          "description": "Show profile details"
+        },
+        {
+          "name": "describe",
+          "description": "Read or set a profile's description"
+        },
+        {
+          "name": "alias",
+          "description": "Manage wrapper scripts"
+        },
+        {
+          "name": "rename",
+          "description": "Rename a profile"
+        },
+        {
+          "name": "export",
+          "description": "Export a profile to archive"
+        },
+        {
+          "name": "import",
+          "description": "Import a profile from archive"
+        },
+        {
+          "name": "install",
+          "description": "Install a profile distribution"
+        },
+        {
+          "name": "update",
+          "description": "Re-pull a distribution and apply updates"
+        },
+        {
+          "name": "info",
+          "description": "Show a profile's distribution manifest"
+        }
+      ]
+    },
+    {
+      "name": "completion",
+      "description": "Print shell completion scripts",
+      "arguments": [
+        {
+          "name": "shell",
+          "description": "Shell type (default: bash)",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "bash",
+              "zsh",
+              "fish"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "dashboard",
+      "description": "Launch the web UI dashboard",
+      "options": [
+        {
+          "long": "--skip-build",
+          "description": "Skip the build step"
+        },
+        {
+          "long": "--isolated",
+          "description": "Run isolated"
+        },
+        {
+          "long": "--stop",
+          "description": "Stop the running dashboard"
+        },
+        {
+          "long": "--status",
+          "description": "Show dashboard status"
+        },
+        {
+          "long": "--no-open",
+          "description": "Do not open the browser"
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "register",
+          "description": "Register a self-hosted dashboard with Nous Portal"
+        }
+      ]
+    },
+    {
+      "name": "serve",
+      "description": "Start the Hermes backend server (headless)",
+      "options": [
+        {
+          "long": "--skip-build",
+          "description": "Skip the build step"
+        },
+        {
+          "long": "--isolated",
+          "description": "Run isolated"
+        },
+        {
+          "long": "--stop",
+          "description": "Stop the running server"
+        },
+        {
+          "long": "--status",
+          "description": "Show server status"
+        }
+      ]
+    },
+    {
+      "name": "desktop",
+      "description": "Build and launch the native desktop app"
+    },
+    {
+      "name": "gui",
+      "description": "Alias of desktop"
+    },
+    {
+      "name": "logs",
+      "description": "View and filter Hermes log files",
+      "arguments": [
+        {
+          "name": "log_name",
+          "description": "Log to view: agent, errors, gateway, gui, or list",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "agent",
+              "errors",
+              "gateway",
+              "gui",
+              "desktop",
+              "list"
+            ]
+          }
+        }
+      ],
+      "options": [
+        {
+          "short": "-n",
+          "long": "--lines",
+          "description": "Number of lines to show",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        },
+        {
+          "short": "-f",
+          "long": "--follow",
+          "description": "Follow the log in real time"
+        },
+        {
+          "long": "--level",
+          "description": "Minimum log level",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--session",
+          "description": "Filter by session ID",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--since",
+          "description": "Show entries since a time",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--component",
+          "description": "Filter by component name",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "prompt-size",
+      "description": "Show a byte breakdown of the system prompt and tool schemas"
+    }
+  ]
+}

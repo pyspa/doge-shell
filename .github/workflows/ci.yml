@@ -35,7 +35,7 @@ jobs:
         with:
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.os }}
 
@@ -53,7 +53,7 @@ jobs:
       # dsh/tests/ launch the shell as a child process, and a test binary
       # inherits fd 0. There is no tty on a runner, but closing it keeps the
       # suite honest about never reading one.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -105,7 +105,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@3920daf79df8fb8df1dbef6e64563e2901a73745 # 1.91
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: msrv-1.91
 

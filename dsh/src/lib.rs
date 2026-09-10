@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 pub mod agent;
+pub mod agent_lifecycle;
 pub mod ai_features;
 pub mod argument_explainer;
 pub mod blocks_ui;
@@ -852,6 +853,29 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     shell.set_signals();
     ctx.save_history = false;
 
+    // Herdr lifecycle reporting, if this process is running inside a Herdr
+    // pane. Scoped to this function (not `Repl::new`/`Drop for Repl`, which
+    // runs across unrelated unit tests) and to interactive/notebook mode
+    // only - a one-shot `-c`/`-l` invocation isn't the "pane a human is
+    // watching" model Herdr targets. `_lifecycle_shutdown` releases
+    // authority on every return path out of this function.
+    let (lifecycle, owner_marker) = agent_lifecycle::activate();
+    shell.environment.write().integration_state.lifecycle = lifecycle.clone();
+    if let Some((key, value)) = owner_marker {
+        // Published through the shell's own environment snapshot, not
+        // `std::env::set_var`: `dsh/src/process/process.rs` builds each
+        // spawned child's `envp` explicitly from
+        // `Environment.variable_state.system_env_vars`, so a nested `dsh`
+        // (or any other agent CLI started from inside this shell) only sees
+        // this marker if it goes through that path.
+        shell
+            .environment
+            .write()
+            .set_system_env_var(key.to_string(), value);
+        spawn_herdr_shutdown_signal_watcher(lifecycle.clone());
+    }
+    let _lifecycle_shutdown = agent_lifecycle::ShutdownGuard::new(lifecycle);
+
     let mut repl = Repl::new(shell);
     if let Err(err) = repl.shell.eval_str(ctx, "cd .".to_string(), false).await {
         display_user_error(&err, true);
@@ -912,6 +936,53 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         }
         ExitCode::from(0)
     }
+}
+
+/// SIGTERM/SIGHUP have no handler in this shell today (`Shell::set_signals`
+/// only touches SIGINT/SIGQUIT/SIGTSTP/SIGTTIN/SIGTTOU); default disposition
+/// terminates the process immediately, running no destructors at all. That's
+/// very likely the *most common* way a real Herdr user ends a session
+/// (closing the pane), so without this, every such exit would leave stale
+/// "working"/"blocked" state in Herdr until the pane itself is torn down.
+///
+/// Spawned only when Herdr reporting is actually active - a zero-cost no-op
+/// for every non-Herdr user. Deliberately doesn't touch `Shell` (which is
+/// `!Send`): it holds only the `Send + Sync` lifecycle manager, does its own
+/// best-effort release, and exits the whole process directly. This is
+/// already an improvement over the default disposition (which never called
+/// `release-agent` at all), so it also takes the same opportunity to restore
+/// the terminal (mirroring `setup_panic_handler`'s own best-effort
+/// `disable_raw_mode` before an abnormal exit) and to exit with this
+/// codebase's own `128 + signal` convention for a signal-terminated process
+/// (`dsh/src/repl/job_notify.rs::JobNoticeState::exit_code`), rather than a
+/// bare `0` that would misreport a forced shutdown as a clean exit to
+/// whatever waits on this process.
+fn spawn_herdr_shutdown_signal_watcher(lifecycle: Arc<agent_lifecycle::AgentLifecycleManager>) {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    tokio::spawn(async move {
+        let mut term = match signal(SignalKind::terminate()) {
+            Ok(s) => s,
+            Err(e) => {
+                debug!("herdr lifecycle: failed to install SIGTERM watcher: {e}");
+                return;
+            }
+        };
+        let mut hup = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                debug!("herdr lifecycle: failed to install SIGHUP watcher: {e}");
+                return;
+            }
+        };
+        let received = tokio::select! {
+            _ = term.recv() => nix::sys::signal::Signal::SIGTERM,
+            _ = hup.recv() => nix::sys::signal::Signal::SIGHUP,
+        };
+        lifecycle.shutdown();
+        let _ = crossterm::terminal::disable_raw_mode();
+        std::process::exit(128 + received as i32);
+    });
 }
 
 #[cfg(test)]

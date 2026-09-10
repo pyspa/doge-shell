@@ -106,6 +106,8 @@ pub async fn eval_str(
             input.len(),
             message.len()
         );
+        let lifecycle = crate::agent_lifecycle::current(shell);
+        let _turn = lifecycle.begin_turn();
         let status = execute_chat_message(ctx, shell, message, None);
         let code = match status {
             ExitStatus::ExitedWith(exit) if exit >= 0 => exit,

@@ -184,6 +184,8 @@ impl AgentCommandPolicy for Shell {
             runtime.save(None)?;
             return Ok(ApprovalDecision::Deny);
         }
+        let lifecycle = crate::agent_lifecycle::current(self);
+        let _blocked = lifecycle.begin_blocked(message);
         Ok(match crate::repl::confirmation::confirm_action(message)? {
             ConfirmationAction::Yes => ApprovalDecision::Allow,
             ConfirmationAction::AlwaysAllow => ApprovalDecision::AllowAlways,

@@ -268,6 +268,25 @@ impl AgentTaskStore for SqliteTaskStore {
 
 const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT]\nagent list | show ID | cancel ID | delete ID\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap.\n";
 
+/// Whether a turn that just ended needs an explicit
+/// `AgentLifecycleManager::report_blocked` call rather than letting
+/// `TurnGuard::drop` report `Idle` as usual.
+///
+/// A persistent task's approval requests never reach the interactive
+/// `confirm_action` bracket: `dsh/src/proxy/mod.rs`'s `agent_runtime.is_some()`
+/// branch sets `TaskStatus::InputRequired` and returns immediately instead of
+/// waiting on anyone, since nothing is watching an unattended task. So for
+/// this path, "blocked" is a final state the turn ends in - detected here,
+/// after `execute_chat_message` has already returned - not a bracket that
+/// resolves before the turn is over.
+fn blocked_reason_for(status: TaskStatus, stop_reason: Option<&str>) -> Option<String> {
+    (status == TaskStatus::InputRequired).then(|| {
+        stop_reason
+            .map(str::to_string)
+            .unwrap_or_else(|| "agent task needs approval".to_string())
+    })
+}
+
 pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
     use dsh_builtin::ShellProxy;
     if argv.len() < 2 || matches!(argv[1].as_str(), "help" | "--help" | "-h") {
@@ -361,6 +380,18 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                 store.delete(id)?;
                 ctx.write_stdout("Task and recorded output deleted")?;
             }
+        }
+        if matches!(action, "cancel" | "delete") {
+            // The user just explicitly resolved a pending decision without
+            // going through `agent resume` - e.g. a foreground `agent run`
+            // blocked, returned control to this same interactive shell with
+            // `TaskStatus::InputRequired`, and the user chose to give up on
+            // it instead. That left this shell's lifecycle state at
+            // `Blocked` (see `blocked_reason_for`'s call site below); it must
+            // not go on claiming a human's attention is still needed. A
+            // harmless no-op if the state wasn't `Blocked` (or wasn't this
+            // task) to begin with - `report_idle` dedupes.
+            crate::agent_lifecycle::current(shell).report_idle();
         }
         return Ok(());
     }
@@ -515,8 +546,18 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     let goal = task.goal.clone();
     let id = task.id.clone();
     shell.agent_runtime = Some(Arc::new(Mutex::new(AgentRuntime::new(task, store))));
+    let lifecycle = crate::agent_lifecycle::current(shell);
+    let turn = lifecycle.begin_turn();
     let status = dsh_builtin::execute_chat_message(ctx, shell, &goal, None);
     let mut completed = false;
+    // Unattended approval requests never reach the interactive
+    // `confirm_action` bracket (`dsh/src/proxy/mod.rs`'s
+    // `agent_runtime.is_some()` branch sets `TaskStatus::InputRequired` and
+    // returns immediately instead of waiting on anyone) - so "blocked" here
+    // is a final state the turn ends in, not one that resolves before it
+    // does. Reported explicitly, before `turn` drops, so `TurnGuard::drop`
+    // sees it and skips forcing `Idle` over it.
+    let mut blocked_reason = None;
     let cleanup = if let Some(runtime) = shell.agent_runtime.take() {
         let mut runtime = runtime.lock();
         let result = if runtime.task.status == TaskStatus::Running {
@@ -525,6 +566,8 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             Ok(())
         };
         completed = runtime.task.status == TaskStatus::Completed;
+        blocked_reason =
+            blocked_reason_for(runtime.task.status, runtime.task.stop_reason.as_deref());
         result.and_then(|()| {
             ctx.write_stdout(&format!(
                 "Task {id}: {:?} — {}\n",
@@ -539,6 +582,10 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     } else {
         Ok(())
     };
+    if let Some(reason) = blocked_reason {
+        lifecycle.report_blocked(reason);
+    }
+    drop(turn);
     let restored = shell.changepwd(&old_cwd.to_string_lossy());
     cleanup?;
     restored?;

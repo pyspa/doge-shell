@@ -103,6 +103,12 @@ pub(crate) struct IntegrationState {
     /// reference cycle - the environment holds the service.
     pub(crate) response_language: Arc<RwLock<Option<String>>>,
     pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
+    /// Agent lifecycle reporting (idle/working/blocked), forwarded to
+    /// whatever external backend `agent_lifecycle::activate` chose. Always a
+    /// valid, `NullReporter`-backed value until (and unless) `run_interactive`
+    /// upgrades it - same "always a slot, never an `Option`" shape as
+    /// `mcp_manager`/`response_language` above.
+    pub(crate) lifecycle: Arc<crate::agent_lifecycle::AgentLifecycleManager>,
 }
 
 pub(crate) struct SessionOutputState {
@@ -202,6 +208,7 @@ impl Environment {
                 mcp_manager: Arc::new(RwLock::new(McpManager::default())),
                 response_language: Arc::new(RwLock::new(None)),
                 ai_service: None,
+                lifecycle: crate::agent_lifecycle::AgentLifecycleManager::null(),
             },
             session_output_state: SessionOutputState {
                 output_history: OutputHistory::new(),
@@ -269,6 +276,7 @@ impl Environment {
                     mcp_manager: parent.integration_state.mcp_manager.clone(),
                     response_language: parent.integration_state.response_language.clone(),
                     ai_service: parent.integration_state.ai_service.clone(),
+                    lifecycle: parent.integration_state.lifecycle.clone(),
                 },
                 PolicyState {
                     execute_allowlist: parent.policy_state.execute_allowlist.clone(),

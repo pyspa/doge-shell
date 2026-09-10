@@ -1127,6 +1127,11 @@ impl<'a> Repl<'a> {
         let _ = self.shell.exec_input_timeout_hooks();
         self.services.prompt_refresh.schedule();
         self.refresh_status_line();
+        // Cheap no-op when Herdr isn't active (`NullReporter::is_stale`
+        // always answers "no"): catches the rare case where a transient
+        // `herdr` failure dropped exactly the report that would have moved
+        // the reported state off `Working`/`Blocked`.
+        crate::agent_lifecycle::current(self.shell).reconcile_if_stale();
         Ok(())
     }
 
@@ -1604,6 +1609,8 @@ impl<'a> Repl<'a> {
         // `write_stdout` calls need cooked mode for their newlines to land
         // as real line breaks instead of a staircase.
         let raw_mode_pause = terminal_state::RawModePause::new();
+        let lifecycle = crate::agent_lifecycle::current(self.shell);
+        let _turn = lifecycle.begin_turn();
         execute_chat_message(&ctx, &mut *self.shell, &message, None);
         drop(raw_mode_pause);
 

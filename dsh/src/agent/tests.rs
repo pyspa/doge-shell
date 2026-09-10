@@ -676,3 +676,39 @@ fn summary_budget_and_missing_usage_stop_before_another_request() {
         }
     }
 }
+
+#[test]
+fn blocked_reason_for_reports_input_required_with_its_stop_reason() {
+    assert_eq!(
+        blocked_reason_for(
+            TaskStatus::InputRequired,
+            Some("needs approval to delete files")
+        ),
+        Some("needs approval to delete files".to_string())
+    );
+}
+
+#[test]
+fn blocked_reason_for_falls_back_when_input_required_has_no_stop_reason() {
+    assert_eq!(
+        blocked_reason_for(TaskStatus::InputRequired, None),
+        Some("agent task needs approval".to_string())
+    );
+}
+
+#[test]
+fn blocked_reason_for_is_none_for_every_terminal_status() {
+    for status in [
+        TaskStatus::Running,
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Interrupted,
+        TaskStatus::Cancelled,
+    ] {
+        assert_eq!(
+            blocked_reason_for(status, Some("irrelevant")),
+            None,
+            "{status:?} must not be classified as blocked"
+        );
+    }
+}

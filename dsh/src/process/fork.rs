@@ -42,10 +42,34 @@ pub(crate) fn fork_builtin_process(
                 // For now, minimizing risk by suppressing complex logging.
             }
 
+            // `fork()` only duplicates the calling thread, so a builtin that
+            // reports agent lifecycle state (e.g. `agent run ... -- goal &`,
+            // which runs its whole AI turn right here in the child) needs a
+            // reporter of its own - the parent's `HerdrReporter` worker
+            // thread does not exist in this process even though the `Arc`
+            // does. A no-op when lifecycle reporting wasn't active.
+            crate::agent_lifecycle::reactivate_after_fork(shell);
+
             // Execute the builtin command
             // Note: process.launch might still use tracing internally if not careful.
             // Ideally builtins should be careful too, but at least we removed the immediate logging.
-            if let Err(_e) = process.launch_sync(ctx, shell) {
+            let result = process.launch_sync(ctx, shell);
+
+            // Give any lifecycle report this builtin queued (working/blocked/
+            // idle/release) a bounded chance to actually reach Herdr before
+            // this process vanishes via `std::process::exit` below, which
+            // skips destructors entirely - `ShutdownGuard`'s own `Drop` never
+            // runs in a forked child. A no-op if lifecycle reporting was
+            // never reactivated for this child (`owned_by_this_process`
+            // guards it).
+            shell
+                .environment
+                .read()
+                .integration_state
+                .lifecycle
+                .shutdown();
+
+            if result.is_err() {
                 std::process::exit(1);
             }
 

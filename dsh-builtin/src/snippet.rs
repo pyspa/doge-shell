@@ -82,7 +82,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 _ => {
                     ctx.write_stderr(&format!("snippet: unknown subcommand '{subcommand}'"))
                         .ok();
-                    show_help(ctx)
+                    let _ = show_help(ctx);
+                    ExitStatus::ExitedWith(1)
                 }
             }
         }
@@ -95,7 +96,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 add_snippet(ctx, name, &command, None, proxy)
             } else {
                 ctx.write_stderr("snippet: invalid arguments").ok();
-                show_help(ctx)
+                let _ = show_help(ctx);
+                ExitStatus::ExitedWith(1)
             }
         }
     }
@@ -124,7 +126,7 @@ Examples:
 
 /// List all snippets in a formatted table
 fn truncate_preview(text: &str, max_chars: usize) -> String {
-    if text.len() > 50 {
+    if text.chars().count() > 50 {
         let prefix: String = text.chars().take(max_chars).collect();
         format!("{prefix}...")
     } else {
@@ -510,5 +512,12 @@ mod tests {
                 vec!["-c".to_string(), "echo hello".to_string()]
             ))
         );
+    }
+
+    #[test]
+    fn truncate_preview_judges_multibyte_text_by_char_count() {
+        let text = "あ".repeat(17);
+        assert_eq!(text.len(), 51);
+        assert_eq!(truncate_preview(&text, 47), text);
     }
 }

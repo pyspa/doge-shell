@@ -61,9 +61,7 @@ impl DirEnvironment {
                     out.write_fmt(format_args!("+{} ", env_entry.key)).ok();
                 }
                 Entry::PathAdd(path_entry) => {
-                    let mut path = path_entry.path.clone();
-                    path.push_str(&env_path);
-                    env_path = path;
+                    env_path = prepend_path_entry(&path_entry.path, &env_path);
                 }
             }
         }
@@ -117,6 +115,14 @@ impl DirEnvironment {
             }
         }
         Ok(())
+    }
+}
+
+fn prepend_path_entry(dir: &str, current: &str) -> String {
+    if current.is_empty() {
+        dir.to_string()
+    } else {
+        format!("{dir}:{current}")
     }
 }
 
@@ -317,5 +323,18 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(matches!(entries[0], Entry::PathAdd(_)));
         Ok(())
+    }
+
+    #[test]
+    fn test_prepend_path_entry_joins_with_separator() {
+        assert_eq!(
+            prepend_path_entry("/usr/local/bin", "/usr/bin:/bin"),
+            "/usr/local/bin:/usr/bin:/bin"
+        );
+    }
+
+    #[test]
+    fn test_prepend_path_entry_on_empty_path() {
+        assert_eq!(prepend_path_entry("/usr/local/bin", ""), "/usr/local/bin");
     }
 }

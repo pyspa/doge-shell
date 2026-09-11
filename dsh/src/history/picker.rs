@@ -87,10 +87,11 @@ pub fn format_duration(duration_ms: Option<u64>) -> String {
 
 /// Coarse "how long ago", in the widest unit that still reads as a number.
 pub fn format_relative_time(when: i64, now: i64) -> String {
-    let delta = now.saturating_sub(when);
-    if delta < 0 {
+    // Clock skew (when > now) reads as "now" instead of a negative or
+    // clamped delta.
+    let Some(delta) = now.checked_sub(when) else {
         return "now".to_string();
-    }
+    };
     match delta {
         d if d < 60 => "now".to_string(),
         d if d < 3600 => format!("{}m", d / 60),

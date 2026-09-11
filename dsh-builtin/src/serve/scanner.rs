@@ -519,11 +519,55 @@ impl DirectoryListingGenerator {
 }
 
 /// Escape HTML special characters
-fn html_escape(input: &str) -> String {
+pub(crate) fn html_escape(input: &str) -> String {
     input
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
+}
+
+/// Percent-encode a single path segment for use inside an `href` attribute.
+///
+/// Keeps RFC 3986 unreserved characters and encodes everything else so file
+/// names with spaces, quotes or non-ASCII bytes still resolve as links.
+pub(crate) fn url_path_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// Decode percent-escapes in a URL path.
+///
+/// Invalid escapes (`%` not followed by two hex digits) are kept verbatim and
+/// the result is lossily converted to UTF-8. `+` stays a literal plus because
+/// it is only a space in query strings, not in path segments.
+pub(crate) fn url_path_unescape(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            let hi = (bytes[i + 1] as char).to_digit(16).unwrap() as u16;
+            let lo = (bytes[i + 2] as char).to_digit(16).unwrap() as u16;
+            out.push(((hi << 4) | lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

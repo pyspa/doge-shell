@@ -100,10 +100,13 @@ Replacement Syntax:
   Use $0 to reference the entire matched filename
 
 Examples:
-  dmv '*.txt' '*.bak'           # Rename all .txt files to .bak
+  dmv '(*).txt' '$1.bak'       # Rename all .txt files to .bak
   dmv '(*).txt' '$1.backup'     # Add .backup extension to .txt files
   dmv 'IMG_(*).jpg' 'photo_$1.jpg'  # Rename IMG_*.jpg to photo_*.jpg
   dmv -n '*.log' 'old_*.log'    # Dry run: show what would be renamed
+
+Note: A replacement without a $N reference is a literal name, so every match
+would rename to the same file. Use capture groups to keep names distinct.
 "#;
     ctx.write_stdout(help_text).ok();
 }
@@ -479,7 +482,7 @@ fn check_rename_conflicts(rename_ops: &[(PathBuf, PathBuf)], force: bool) -> Res
         // Check for duplicate targets
         if let Some(existing_source) = target_files.get(target) {
             return Err(format!(
-                "Multiple files would be renamed to {}: {} and {}",
+                "Multiple files would be renamed to {}: {} and {}\nhint: reference a capture group ($1, ...) in the replacement to keep names distinct",
                 target.display(),
                 existing_source.display(),
                 source.display()

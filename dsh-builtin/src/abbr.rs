@@ -47,21 +47,20 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         // "abbr" - list all abbreviations
         1 => list_all_abbreviations(ctx, proxy),
 
-        // "abbr -l", "abbr -s", "abbr -e name", "abbr name"
+        // "abbr -l", "abbr -s", "abbr -e", "abbr --erase", "abbr name"
         2 => {
             let arg = &argv[1];
             match arg.as_str() {
                 "-l" | "-s" | "--list" => list_all_abbreviations(ctx, proxy),
+                "-e" | "--erase" => {
+                    ctx.write_stderr("abbr: -e option requires abbreviation name")
+                        .ok();
+                    ctx.write_stderr("Usage: abbr -e <name>").ok();
+                    ExitStatus::ExitedWith(1)
+                }
                 _ => {
-                    if arg.starts_with("-e") {
-                        ctx.write_stderr("abbr: -e option requires abbreviation name")
-                            .ok();
-                        ctx.write_stderr("Usage: abbr -e <name>").ok();
-                        ExitStatus::ExitedWith(1)
-                    } else {
-                        // Show specific abbreviation
-                        show_specific_abbreviation(ctx, arg, proxy)
-                    }
+                    // Show specific abbreviation
+                    show_specific_abbreviation(ctx, arg, proxy)
                 }
             }
         }
@@ -269,6 +268,23 @@ mod tests {
 
         let result = add_abbreviation(&ctx, "invalid name", "command", &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+    }
+
+    #[test]
+    fn test_erase_without_name_reports_usage_for_both_option_forms() {
+        use nix::unistd::getpid;
+        for option in ["-e", "--erase"] {
+            let mut proxy = MockShellProxy::default();
+            let pid = getpid();
+            let ctx = Context::new_safe(pid, pid, false);
+
+            let status = command(
+                &ctx,
+                vec!["abbr".to_string(), option.to_string()],
+                &mut proxy,
+            );
+            assert_eq!(status, ExitStatus::ExitedWith(1), "option: {option}");
+        }
     }
 
     #[test]

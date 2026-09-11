@@ -12,7 +12,7 @@ pub fn get_string(pair: Pair<Rule>) -> Option<String> {
             } else {
                 "".to_string()
             };
-            Some(res)
+            Some(unescape_s_quoted(&res))
         }
         // A double-quoted string is now a run of literal, variable and
         // command-substitution parts, so every part contributes.
@@ -91,6 +91,29 @@ fn unescape_double_quoted(text: &str) -> String {
                 out.push(next);
             }
             None => out.push('\\'),
+        }
+    }
+    out
+}
+
+/// Drop the backslash from the one escape single quotes honour.
+///
+/// `literal_s_quoted` (shell.pest) accepts `\'` so a closing quote can be
+/// embedded, and every other backslash stays literal. The extraction used to
+/// return the raw text, so completion-inserted `'can\'t.rs'` executed with a
+/// literal backslash in the argument.
+fn unescape_s_quoted(text: &str) -> String {
+    if !text.contains("\\'") {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'\'') {
+            chars.next();
+            out.push('\'');
+        } else {
+            out.push(c);
         }
     }
     out

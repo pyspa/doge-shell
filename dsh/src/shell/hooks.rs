@@ -7,6 +7,16 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::debug;
 
+/// Prepare a string for splicing into a Lisp string literal.
+///
+/// The Lisp reader has no escape syntax (see `shell::struct_pipe`), so a raw
+/// `"` would terminate the literal early and break the generated code.
+/// Folding quotes to `'` keeps the hook argument readable while guaranteeing
+/// the generated form parses.
+fn lisp_string_arg(text: &str) -> String {
+    text.replace('"', "'")
+}
+
 pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
     let pwd = Path::new(pwd);
 
@@ -50,7 +60,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
 
             let lisp_code = format!(
                 "(when (bound? '*on-project-switch-hooks*) (map (lambda (hook) (hook \"{}\")) *on-project-switch-hooks*))",
-                name.replace("\"", "\\\"")
+                lisp_string_arg(name)
             );
             if let Err(e) = shell.lisp_engine.borrow().run(&lisp_code) {
                 debug!("Failed to execute on-project-switch-hooks: {}", e);
@@ -109,7 +119,7 @@ pub fn exec_pre_exec_hooks(shell: &Shell, command: &str) -> Result<()> {
 
     let lisp_code = format!(
         "(map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*)",
-        command.replace("\"", "\\\"")
+        lisp_string_arg(command)
     );
 
     if let Err(e) = shell.lisp_engine.borrow().run(&lisp_code) {
@@ -131,7 +141,7 @@ pub fn exec_post_exec_hooks(shell: &Shell, command: &str, exit_code: i32) -> Res
 
     let lisp_code = format!(
         "(map (lambda (hook) (hook \"{}\" {})) *post-exec-hooks*)",
-        command.replace("\"", "\\\""),
+        lisp_string_arg(command),
         exit_code
     );
 
@@ -157,7 +167,7 @@ pub fn exec_command_not_found_hooks(shell: &Shell, command: &str) -> bool {
     let lisp_code = format!(
         "(let ((results (map (lambda (hook) (hook \"{}\")) *command-not-found-hooks*)))
           (filter (lambda (r) r) results))",
-        command.replace("\"", "\\\"")
+        lisp_string_arg(command)
     );
 
     match shell.lisp_engine.borrow().run(&lisp_code) {
@@ -188,7 +198,7 @@ pub fn exec_completion_hooks(shell: &Shell, input: &str, cursor: usize) -> Resul
 
     let lisp_code = format!(
         "(map (lambda (hook) (hook \"{}\" {})) *completion-hooks*)",
-        input.replace("\"", "\\\""),
+        lisp_string_arg(input),
         cursor
     );
 
@@ -233,5 +243,36 @@ mod tests {
         // The original test used chpwd_update_env.
 
         // PWD update test is simple enough to trust or move to integration tests if needed.
+    }
+
+    #[test]
+    fn lisp_string_arg_folds_double_quotes() {
+        assert_eq!(super::lisp_string_arg("echo \"hi\""), "echo 'hi'");
+        assert_eq!(super::lisp_string_arg("plain"), "plain");
+    }
+
+    #[test]
+    fn generated_hook_code_parses_for_quoted_commands() {
+        use crate::environment::Environment;
+        use crate::lisp::LispEngine;
+
+        // The pre-exec hook code for a command containing quotes must parse
+        // cleanly: the Lisp reader has no escape syntax, so `\"` would break it.
+        let engine = LispEngine::new(Environment::new());
+        engine
+            .borrow()
+            .run("(define *pre-exec-hooks* '())")
+            .expect("defining empty hook list should succeed");
+
+        for command in ["echo \"hi\"", "git commit -m \"fix: a b\"", "plain"] {
+            let lisp_code = format!(
+                "(map (lambda (hook) (hook \"{}\")) *pre-exec-hooks*)",
+                super::lisp_string_arg(command)
+            );
+            engine
+                .borrow()
+                .run(&lisp_code)
+                .unwrap_or_else(|e| panic!("generated hook code failed: {e}\n{lisp_code}"));
+        }
     }
 }

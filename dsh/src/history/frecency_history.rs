@@ -128,6 +128,11 @@ impl FrecencyHistory {
         }
 
         drop(conn);
+        // Rows come back in rowid order, and `INSERT OR REPLACE` reassigns
+        // rowids on every save, so re-sort by name to restore the invariant
+        // `FrecencyStore::get` / `search_prefix_range` rely on (see
+        // dsh-frecency/src/store.rs).
+        store.items.sort_by(|a, b| a.item.cmp(&b.item));
         store.size = store.items.len();
 
         Ok(FrecencyHistory {

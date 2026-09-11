@@ -117,6 +117,18 @@ fn select_completion_items_simple(
     )
 }
 
+/// Strip the `* ` marker that flags a selected entry in command output
+/// (e.g. the current branch in `git branch --all`).
+///
+/// Only the exact `"* "` prefix is removed so a candidate that merely starts
+/// with `*` (a glob result, `*tar`, ...) keeps its text.
+fn strip_selected_marker(val: String) -> String {
+    match val.strip_prefix("* ") {
+        Some(trimmed) => trimmed.to_string(),
+        None => val,
+    }
+}
+
 pub fn completion_from_cmd(
     input: String,
     query: Option<&str>,
@@ -249,13 +261,7 @@ fn completion_from_lisp_with_prompt(
                 // run command
                 let res = completion_from_cmd(cmd.to_string(), query, framework);
                 if let CompletionSelection::Selected(val) = res {
-                    if val.starts_with('*') {
-                        // Skip the leading "* " prefix safely (handles non-ASCII)
-                        let trimmed: String = val.chars().skip(2).collect();
-                        return CompletionSelection::Selected(trimmed);
-                    } else {
-                        return CompletionSelection::Selected(val);
-                    }
+                    return CompletionSelection::Selected(strip_selected_marker(val));
                 } else if let CompletionSelection::Interactive(..) = res {
                     return res;
                 }
@@ -609,6 +615,15 @@ mod tests {
                 std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
             },
         }
+    }
+
+    #[test]
+    fn strip_selected_marker_only_removes_star_space_prefix() {
+        assert_eq!(super::strip_selected_marker("* main".to_string()), "main");
+        // A candidate that merely starts with '*' must keep its text.
+        assert_eq!(super::strip_selected_marker("*tar".to_string()), "*tar");
+        assert_eq!(super::strip_selected_marker("*".to_string()), "*");
+        assert_eq!(super::strip_selected_marker("plain".to_string()), "plain");
     }
 
     #[test]

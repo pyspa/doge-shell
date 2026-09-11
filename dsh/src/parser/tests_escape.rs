@@ -76,3 +76,37 @@ fn test_escape_backslash() {
         assert_eq!("\\", get_string(arg).unwrap());
     }
 }
+
+#[test]
+fn test_single_quote_escaped_quote() {
+    init();
+    let pairs = ShellParser::parse(Rule::simple_command, r#"echo 'don\'t'"#)
+        .unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let mut inner = pair.into_inner();
+        let _cmd = inner.next().unwrap();
+        let args_pair = inner.next().unwrap();
+        let mut args = args_pair.into_inner();
+
+        let arg = args.next().unwrap();
+        assert_eq!("don't", get_string(arg).unwrap());
+    }
+}
+
+#[test]
+fn test_single_quote_keeps_other_backslashes() {
+    init();
+    let pairs = ShellParser::parse(Rule::simple_command, r#"echo 'C:\path\to'"#)
+        .unwrap_or_else(|e| panic!("{}", e));
+
+    for pair in pairs {
+        let mut inner = pair.into_inner();
+        let _cmd = inner.next().unwrap();
+        let args_pair = inner.next().unwrap();
+        let mut args = args_pair.into_inner();
+
+        let arg = args.next().unwrap();
+        assert_eq!(r"C:\path\to", get_string(arg).unwrap());
+    }
+}

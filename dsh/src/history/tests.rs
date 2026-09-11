@@ -390,3 +390,51 @@ fn test_frecency_reload() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_frecency_from_file_restores_name_sorted_order() -> anyhow::Result<()> {
+    init();
+    let db_name = "test_frecency_sorted_load";
+    let db_path = crate::environment::get_data_file(&format!("{db_name}.db"))?;
+    let _ = std::fs::remove_file(&db_path);
+
+    // Seed rows out of name order and simulate rowid churn: every
+    // INSERT OR REPLACE on an existing path reassigns the rowid, so over time
+    // rowid order drifts away from name order.
+    {
+        let db = crate::db::Db::new(db_path.clone())?;
+        let conn = db.get_connection();
+        for path in ["/tmp/zeta", "/tmp/c", "/tmp/mid", "/tmp/a"] {
+            conn.execute(
+                "INSERT OR REPLACE INTO directory_snapshot
+                 (path, score, last_accessed, access_count, half_life, context)
+                 VALUES (?1, 1.0, 0, 1, 43200.0, NULL)",
+                rusqlite::params![path],
+            )?;
+        }
+        conn.execute(
+            "INSERT OR REPLACE INTO directory_snapshot
+             (path, score, last_accessed, access_count, half_life, context)
+             VALUES ('/tmp/c', 2.0, 0, 2, 43200.0, NULL)",
+            [],
+        )?;
+    }
+
+    let history = FrecencyHistory::from_file(db_name)?;
+    let store = history.store.as_ref().unwrap();
+    let names: Vec<&str> = store.items.iter().map(|i| i.item.as_str()).collect();
+
+    // The name-sorted invariant that `get` / `search_prefix_range` rely on.
+    assert_eq!(names, vec!["/tmp/a", "/tmp/c", "/tmp/mid", "/tmp/zeta"]);
+
+    let range = store.search_prefix_range("/tmp/");
+    assert_eq!(range.end - range.start, names.len());
+    for name in &names {
+        assert!(
+            range.contains(&store.items.iter().position(|i| i.item == *name).unwrap()),
+            "prefix search missed {name}"
+        );
+    }
+
+    Ok(())
+}

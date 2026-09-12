@@ -12,6 +12,7 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHELL_PROXY_SOURCE = REPO_ROOT / "dsh-builtin/src/lib.rs"
 CAPABILITY_SOURCE = REPO_ROOT / "dsh-builtin/src/shell_capabilities.rs"
+LEGACY_CAPABILITY_SOURCE = REPO_ROOT / "dsh-builtin/src/capability.rs"
 CAPABILITY_TRAITS = (
     "ShellExecution",
     "ShellNavigation",
@@ -20,6 +21,16 @@ CAPABILITY_TRAITS = (
     "ShellSessionData",
     "ShellDiagnostics",
     "ShellAiIntegration",
+)
+# capability.rs is legacy (see its module doc): everything it once declared
+# that collided with one of the CAPABILITY_TRAITS names above (same method
+# name, different trait) was deleted, because a file that `use`d both traits
+# would fail to compile with an ambiguous-method error the moment it needed
+# one method from each side. These are the traits still living there; check
+# that neither reintroduces a name shell_capabilities.rs already claims.
+LEGACY_CAPABILITY_TRAITS = (
+    "ExecutionCapability",
+    "AiCapability",
 )
 MAX_COMPATIBILITY_METHODS = 73
 METHOD_PATTERN = re.compile(r"^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.MULTILINE)
@@ -107,6 +118,27 @@ def main() -> int:
             f"({len(proxy_methods)} > {MAX_COMPATIBILITY_METHODS}); "
             "add the operation to a capability trait instead"
         )
+
+    legacy_source = LEGACY_CAPABILITY_SOURCE.read_text(encoding="utf-8")
+    legacy_methods = {
+        trait_name: set(trait_methods(legacy_source, trait_name))
+        for trait_name in LEGACY_CAPABILITY_TRAITS
+    }
+    capability_method_sets = {
+        trait_name: set(methods) for trait_name, methods in capability_methods.items()
+    }
+    for legacy_trait, methods in legacy_methods.items():
+        for capability_trait, other_methods in capability_method_sets.items():
+            colliding = sorted(methods & other_methods)
+            if colliding:
+                failures.append(
+                    f"capability.rs::{legacy_trait} and "
+                    f"shell_capabilities.rs::{capability_trait} declare the same "
+                    f"method name(s) ({', '.join(colliding)}); a file that `use`s "
+                    "both traits fails to compile with an ambiguous-method error "
+                    "the moment it needs one method from each side - rename one "
+                    "side instead of leaving the collision"
+                )
 
     if failures:
         for failure in failures:

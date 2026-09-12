@@ -994,13 +994,19 @@ impl TurnSetup {
 /// `tools` here (rather than back in `chat_with_tools`) is what lets
 /// `tool_search` discoveries take effect the same round they are found.
 ///
+/// Takes just the two pieces of `TurnSetup` this round actually reads
+/// (`runtime`, `hook_ctx`), not the whole struct - so a change to
+/// `TurnSetup`'s other fields (skill roots, prompt, session ttl/scope,
+/// budgets) is visibly unrelated to this function.
+///
 /// A failing tool call becomes an error message the model reads next round,
 /// not a stopped turn - only `before_tool`/`after_tool` failing (the durable
 /// task ledger itself is broken) propagates out as `Err`.
 fn run_tool_calls(
     tool_calls: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
-    setup: &TurnSetup,
+    runtime: Option<&Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
+    hook_ctx: &hooks::HookContext,
     proxy: &mut dyn ChatToolHost,
     manager: &mut ConversationManager,
     tools: &mut Vec<Value>,
@@ -1012,7 +1018,7 @@ fn run_tool_calls(
             .unwrap_or_default()
             .to_string();
 
-        if let Some(runtime) = &setup.runtime {
+        if let Some(runtime) = runtime {
             runtime
                 .lock()
                 .before_tool(
@@ -1021,7 +1027,7 @@ fn run_tool_calls(
                 )
                 .map_err(|e| e.to_string())?;
         }
-        let execution = match execute_tool_call(tool_call, mcp_manager, &setup.hook_ctx, proxy) {
+        let execution = match execute_tool_call(tool_call, mcp_manager, hook_ctx, proxy) {
             Ok(execution) => execution,
             Err(error) => tool::ToolExecution {
                 content: format!(
@@ -1032,7 +1038,7 @@ fn run_tool_calls(
         };
         let mut tool_result = execution.content;
 
-        if let Some(runtime) = &setup.runtime {
+        if let Some(runtime) = runtime {
             let sequence = runtime
                 .lock()
                 .after_tool(tool_call, &tool_result, execution.outcome)
@@ -1433,7 +1439,8 @@ fn chat_with_tools(
                     run_tool_calls(
                         &tool_calls,
                         mcp_manager,
-                        &setup,
+                        setup.runtime.as_ref(),
+                        &setup.hook_ctx,
                         proxy,
                         &mut manager,
                         &mut tools,

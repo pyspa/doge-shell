@@ -191,6 +191,10 @@ mod tests {
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+        assert_eq!(
+            proxy.dispatch_attempts,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 
     #[test]
@@ -210,6 +214,10 @@ mod tests {
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+        assert_eq!(
+            proxy.dispatch_attempts,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 
     #[test]
@@ -226,6 +234,10 @@ mod tests {
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+        assert_eq!(
+            proxy.dispatch_attempts,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 
     #[test]
@@ -242,6 +254,10 @@ mod tests {
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+        assert_eq!(
+            proxy.dispatch_attempts,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 
     #[test]
@@ -258,5 +274,9 @@ mod tests {
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(1));
+        assert_eq!(
+            proxy.dispatch_attempts,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 }

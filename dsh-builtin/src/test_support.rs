@@ -25,6 +25,11 @@ pub(crate) struct TestShellProxy {
     pub allow_changepwd: bool,
     pub allow_dispatch: bool,
     pub dispatched: Vec<(String, Vec<String>)>,
+    /// Every `dispatch` call, recorded before `dispatch_error`/`allow_dispatch`
+    /// decide the outcome - unlike `dispatched`, which only ever holds calls
+    /// that returned `Ok`. Lets a test assert the caller passed the right
+    /// command/argv even when it configured `dispatch()` to fail.
+    pub dispatch_attempts: Vec<(String, Vec<String>)>,
     pub confirm_result: bool,
     pub confirm_calls: usize,
     pub confirm_counter: Option<Arc<AtomicUsize>>,
@@ -102,6 +107,7 @@ impl Default for TestShellProxy {
             allow_changepwd: false,
             allow_dispatch: false,
             dispatched: Vec::new(),
+            dispatch_attempts: Vec::new(),
             confirm_result: false,
             confirm_calls: 0,
             confirm_counter: None,
@@ -157,6 +163,7 @@ impl ShellProxy for TestShellProxy {
     }
 
     fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
+        self.dispatch_attempts.push((cmd.to_string(), argv.clone()));
         if let Some(message) = &self.dispatch_error {
             return Err(anyhow::anyhow!(message.clone()));
         }

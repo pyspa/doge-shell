@@ -114,6 +114,19 @@ pub fn skills_trust_file() -> PathBuf {
         .join("skill-trust.json")
 }
 
+/// Skill writes staged for a person to review before they land.
+///
+/// Beside `skills_state_file()` and `skills_trust_file()`, and outside the
+/// skills directories for the same reason: the installer replaces a runtime
+/// skill with `rm -rf <skill>`, and `doctor` counts entries under the skills
+/// root to warn about prompt footprint. A proposal is not yet a skill.
+pub fn skills_pending_dir() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("skills-pending")
+}
+
 /// Private durable agent state, resolved consistently on both supported OSes.
 pub fn agent_state_dir() -> PathBuf {
     xdg::BaseDirectories::with_prefix(APP)

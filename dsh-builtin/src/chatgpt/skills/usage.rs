@@ -42,6 +42,16 @@ pub(crate) struct SkillUsage {
     pub writes: u64,
     #[serde(default)]
     pub last_write_ms: u64,
+    /// When this skill was archived, `0` if it never was. `#[serde(default)]`
+    /// so a record written before this field existed loads as unarchived,
+    /// and so a newer shell's record survives round-tripping through an
+    /// older one that does not know this key (see `STATE_VERSION`'s comment
+    /// on why the version itself does not move for this).
+    #[serde(default)]
+    pub archived_ms: u64,
+    /// Pinned skills are never touched by the optional auto-archive sweep.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +125,30 @@ pub(crate) fn forget(skill_dir: &Path) {
     }
 }
 
+/// Whether this turn's buffered counters already include a write.
+///
+/// Read before `flush()` empties the buffer - reflection has to ask this
+/// before the turn's own bookkeeping is merged in, or it would always see
+/// zero. A turn where the model wrote a skill itself is not also
+/// second-guessed by the reviewer.
+pub(crate) fn wrote_this_turn() -> bool {
+    with_pending(|pending| pending.values().any(|delta| delta.writes > 0)).unwrap_or(false)
+}
+
+/// Every skill directory this turn actually read, for the reviewer to open,
+/// and only those - never a skill the turn did not look at. Read before
+/// `flush()` for the same reason as `wrote_this_turn`.
+pub(crate) fn read_this_turn() -> Vec<PathBuf> {
+    with_pending(|pending| {
+        pending
+            .iter()
+            .filter(|(_, delta)| delta.reads > 0)
+            .map(|(dir, _)| dir.clone())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// Merge the buffered counters into the state file. Called once per turn.
 pub(crate) fn flush() {
     flush_to(&crate::config_paths::skills_state_file());
@@ -173,6 +207,130 @@ pub(crate) fn load() -> BTreeMap<String, SkillUsage> {
     read_state(&crate::config_paths::skills_state_file())
         .unwrap_or_default()
         .skills
+}
+
+/// Set or clear a skill's archived flag.
+///
+/// Written immediately, like `forget` - this is a person's direct command
+/// (`skill archive`/`skill unarchive`), not a turn's buffered counter.
+/// Returns `Ok(false)`, touching nothing, when the state file is a version
+/// this shell does not understand - the same "leave it alone" rule every
+/// other write here follows.
+pub(crate) fn set_archived(skill_dir: &Path, archived: bool) -> Result<bool, String> {
+    set_flag_at(
+        &crate::config_paths::skills_state_file(),
+        skill_dir,
+        |entry| {
+            entry.archived_ms = if archived { now_ms() } else { 0 };
+        },
+    )
+}
+
+/// Set or clear a skill's pinned flag. Pinned skills are never touched by
+/// the optional auto-archive sweep.
+pub(crate) fn set_pinned(skill_dir: &Path, pinned: bool) -> Result<bool, String> {
+    set_flag_at(
+        &crate::config_paths::skills_state_file(),
+        skill_dir,
+        |entry| {
+            entry.pinned = pinned;
+        },
+    )
+}
+
+fn set_flag_at(
+    path: &Path,
+    skill_dir: &Path,
+    apply: impl FnOnce(&mut SkillUsage),
+) -> Result<bool, String> {
+    let Some(mut state) = read_state(path) else {
+        return Ok(false);
+    };
+    let entry = state.skills.entry(key(skill_dir)).or_default();
+    apply(entry);
+    write_state(path, &state);
+    Ok(true)
+}
+
+pub(crate) fn is_archived(record: Option<&SkillUsage>) -> bool {
+    record.is_some_and(|record| record.archived_ms > 0)
+}
+
+/// Every skill directory (by `key()`) currently archived.
+///
+/// Read only by `render_fragment` - `load_skills`/`load_reporting` must
+/// never filter on this, or the set of `(name, description)` pairs a trust
+/// digest is keyed on would change just by archiving something, re-asking
+/// every trusted project for a reason that has nothing to do with what
+/// changed in it.
+pub(crate) fn archived_keys() -> std::collections::BTreeSet<String> {
+    load()
+        .into_iter()
+        .filter(|(_, record)| is_archived(Some(record)))
+        .map(|(key, _)| key)
+        .collect()
+}
+
+/// A fingerprint of the archived/pinned flags, for the prompt fragment
+/// cache's signature.
+///
+/// Not the directory mtime the rest of the signature uses: `usage::flush()`
+/// rewrites the state file on nearly every turn (read/write counters), and
+/// keying the cache on that file's mtime would invalidate the fragment on
+/// every turn regardless of whether anything archived actually changed -
+/// defeating the point of caching it at all. This only moves when
+/// `archived_ms` or `pinned` themselves change.
+pub(crate) fn lifecycle_digest() -> String {
+    let mut parts: Vec<String> = load()
+        .into_iter()
+        .filter(|(_, record)| record.archived_ms > 0 || record.pinned)
+        .map(|(key, record)| format!("{key}\u{1f}{}\u{1f}{}", record.archived_ms, record.pinned))
+        .collect();
+    parts.sort();
+    super::fnv1a_hex(parts.join("\u{1e}").as_bytes())
+}
+
+/// Archive every agent-written, unpinned skill unread for `unused_after_days`.
+/// Opt-in: the caller only invokes this when `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS`
+/// says to, and passes the threshold it read from that variable.
+///
+/// Never touches a `user`-written skill (a person's own notes are not this
+/// shell's to hide) and never touches a `project` skill (a repository's
+/// skills are not this shell's to prune, and archiving is scoped to `user`
+/// specifically so it can never change what a trust digest hashes - see
+/// `archived_keys`). Returns how many were newly archived.
+pub(crate) fn sweep(now_ms: u64, unused_after_days: u64) -> usize {
+    sweep_at(
+        &crate::config_paths::skills_state_file(),
+        now_ms,
+        unused_after_days,
+    )
+}
+
+fn sweep_at(path: &Path, now_ms: u64, unused_after_days: u64) -> usize {
+    let Some(mut state) = read_state(path) else {
+        return 0;
+    };
+
+    let mut archived = 0usize;
+    for record in state.skills.values_mut() {
+        if record.scope != "user"
+            || record.created_by != "agent"
+            || record.pinned
+            || record.archived_ms > 0
+        {
+            continue;
+        }
+        if stale_after(record, now_ms, unused_after_days) {
+            record.archived_ms = now_ms;
+            archived += 1;
+        }
+    }
+
+    if archived > 0 {
+        write_state(path, &state);
+    }
+    archived
 }
 
 /// How a skill directory is named in the state file.
@@ -248,15 +406,20 @@ pub(crate) fn days_since(now_ms: u64, then_ms: u64) -> Option<u64> {
 /// the first run. A skill that has never been read is judged on its age, so the
 /// one the agent wrote a minute ago is left alone.
 pub(crate) fn is_stale(record: Option<&SkillUsage>, now_ms: u64) -> bool {
-    let Some(record) = record else {
-        return false;
-    };
+    record.is_some_and(|record| stale_after(record, now_ms, UNUSED_AFTER_DAYS))
+}
+
+/// `is_stale`'s definition, parametrised on the day count - shared so the
+/// optional auto-archive sweep judges staleness the exact same way
+/// `skill list`/`doctor skills` display it, just against a threshold the
+/// caller picked instead of the fixed one.
+fn stale_after(record: &SkillUsage, now_ms: u64, unused_after_days: u64) -> bool {
     let reference = if record.last_read_ms > 0 {
         record.last_read_ms
     } else {
         record.created_ms
     };
-    days_since(now_ms, reference).is_some_and(|days| days >= UNUSED_AFTER_DAYS)
+    days_since(now_ms, reference).is_some_and(|days| days >= unused_after_days)
 }
 
 #[cfg(test)]
@@ -422,5 +585,222 @@ mod tests {
             ..SkillUsage::default()
         };
         assert!(!is_stale(Some(&future), 100));
+    }
+
+    #[test]
+    fn archived_and_pinned_survive_a_counter_flush() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let state = dir.path().join("skills.json");
+
+        note_write(&skill, SkillScope::User, true);
+        flush_to(&state);
+
+        let mut file = read_state(&state).unwrap();
+        let entry = file.skills.get_mut(&key(&skill)).unwrap();
+        entry.archived_ms = 42;
+        entry.pinned = true;
+        write_state(&state, &file);
+
+        note_read(&skill, SkillScope::User);
+        flush_to(&state);
+
+        let after = read_state(&state).unwrap();
+        let entry = after.skills.get(&key(&skill)).unwrap();
+        assert_eq!(entry.archived_ms, 42);
+        assert!(entry.pinned);
+        assert_eq!(entry.reads, 1);
+    }
+
+    /// A state file written before these fields existed must still load, and
+    /// the missing fields must read as "not archived, not pinned" rather
+    /// than an error - `#[serde(default)]` is what this checks.
+    #[test]
+    fn a_state_file_written_before_the_lifecycle_fields_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("skills.json");
+        std::fs::write(
+            &state,
+            r#"{"version":1,"skills":{"x":{"scope":"user","reads":3}}}"#,
+        )
+        .unwrap();
+
+        let loaded = read_state(&state).expect("still readable");
+        let entry = loaded.skills.get("x").unwrap();
+        assert_eq!(entry.archived_ms, 0);
+        assert!(!entry.pinned);
+        assert!(!is_archived(Some(entry)));
+    }
+
+    /// `sweep` itself has no on/off switch - the environment variable gate
+    /// lives in `chatgpt.rs`, which decides whether to call this at all. So
+    /// the only thing to prove here is that a skill stale enough to qualify
+    /// stays unarchived until something actually calls `sweep_at` - writing
+    /// usage records on its own must never archive anything.
+    #[test]
+    fn auto_archive_is_off_unless_the_caller_invokes_it() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let state = dir.path().join("skills.json");
+        let now = 400 * DAY_MS;
+
+        let mut file = UsageFile::default();
+        file.skills.insert(
+            key(&skill),
+            SkillUsage {
+                scope: "user".to_string(),
+                created_by: "agent".to_string(),
+                created_ms: now - 200 * DAY_MS,
+                ..SkillUsage::default()
+            },
+        );
+        write_state(&state, &file);
+
+        assert!(
+            !is_archived(read_state(&state).unwrap().skills.get(&key(&skill))),
+            "a stale skill must not archive itself just by existing"
+        );
+
+        let archived = sweep_at(&state, now, UNUSED_AFTER_DAYS);
+        assert_eq!(archived, 1);
+        assert!(is_archived(
+            read_state(&state).unwrap().skills.get(&key(&skill))
+        ));
+    }
+
+    #[test]
+    fn auto_archive_only_touches_agent_written_unpinned_user_skills() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("skills.json");
+        let now = 400 * DAY_MS;
+
+        let mut file = UsageFile::default();
+        file.skills.insert(
+            "agent-user".to_string(),
+            SkillUsage {
+                scope: "user".to_string(),
+                created_by: "agent".to_string(),
+                created_ms: now - 200 * DAY_MS,
+                ..SkillUsage::default()
+            },
+        );
+        file.skills.insert(
+            "pinned".to_string(),
+            SkillUsage {
+                scope: "user".to_string(),
+                created_by: "agent".to_string(),
+                created_ms: now - 200 * DAY_MS,
+                pinned: true,
+                ..SkillUsage::default()
+            },
+        );
+        file.skills.insert(
+            "user-written".to_string(),
+            SkillUsage {
+                scope: "user".to_string(),
+                created_by: "user".to_string(),
+                created_ms: now - 200 * DAY_MS,
+                ..SkillUsage::default()
+            },
+        );
+        file.skills.insert(
+            "project".to_string(),
+            SkillUsage {
+                scope: "project".to_string(),
+                created_by: "agent".to_string(),
+                created_ms: now - 200 * DAY_MS,
+                ..SkillUsage::default()
+            },
+        );
+        file.skills.insert(
+            "fresh".to_string(),
+            SkillUsage {
+                scope: "user".to_string(),
+                created_by: "agent".to_string(),
+                created_ms: now - DAY_MS,
+                ..SkillUsage::default()
+            },
+        );
+        write_state(&state, &file);
+
+        let archived = sweep_at(&state, now, UNUSED_AFTER_DAYS);
+        assert_eq!(archived, 1);
+
+        let after = read_state(&state).unwrap();
+        assert!(after.skills["agent-user"].archived_ms > 0);
+        assert_eq!(after.skills["pinned"].archived_ms, 0);
+        assert_eq!(after.skills["user-written"].archived_ms, 0);
+        assert_eq!(after.skills["project"].archived_ms, 0);
+        assert_eq!(after.skills["fresh"].archived_ms, 0);
+    }
+
+    #[test]
+    fn set_archived_and_set_pinned_round_trip() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        let state = dir.path().join("skills.json");
+
+        note_write(&skill, SkillScope::User, true);
+        flush_to(&state);
+
+        assert!(set_flag_at(&state, &skill, |e| e.pinned = true).unwrap());
+        assert!(set_flag_at(&state, &skill, |e| e.archived_ms = 7).unwrap());
+
+        let loaded = read_state(&state).unwrap();
+        let entry = loaded.skills.get(&key(&skill)).unwrap();
+        assert!(entry.pinned);
+        assert_eq!(entry.archived_ms, 7);
+    }
+
+    /// `set_flag` (and therefore `set_archived`/`set_pinned`) must not touch
+    /// a state file whose version this shell does not understand - the same
+    /// rule every other write here follows.
+    #[test]
+    fn set_flag_leaves_a_future_version_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("skills.json");
+        let original = r#"{"version":99,"skills":{}}"#;
+        std::fs::write(&state, original).unwrap();
+
+        let applied = set_flag_at(&state, Path::new("/tmp/does-not-matter"), |e| {
+            e.pinned = true
+        })
+        .unwrap();
+        assert!(!applied);
+        assert_eq!(std::fs::read_to_string(&state).unwrap(), original);
+    }
+
+    #[test]
+    fn wrote_this_turn_reflects_only_the_buffered_writes() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let skill = dir.path().join("demo");
+
+        assert!(!wrote_this_turn());
+        note_read(&skill, SkillScope::User);
+        assert!(!wrote_this_turn());
+        note_write(&skill, SkillScope::User, false);
+        assert!(wrote_this_turn());
+    }
+
+    #[test]
+    fn read_this_turn_lists_only_directories_actually_read() {
+        let _lock = test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let read_dir = dir.path().join("read");
+        let written_dir = dir.path().join("written");
+
+        note_read(&read_dir, SkillScope::User);
+        note_write(&written_dir, SkillScope::User, false);
+
+        let opened = read_this_turn();
+        assert_eq!(opened, vec![read_dir]);
     }
 }

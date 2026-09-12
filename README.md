@@ -293,7 +293,7 @@ The shell includes many built-in commands:
 | `chat_model`        | Set AI model                                                                                                               |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
 | `chat_status`       | Show the carried AI chat conversation                                                                                      |
-| `skill`             | List, show and remove the skills the AI chat runtime reads                                                                 |
+| `skill`             | List, review and manage the skills the AI chat runtime reads (see "Skills" above)                                          |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
 | `gco`               | Git checkout with interactive branch selection                                                                             |
@@ -1276,6 +1276,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
    | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dsh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
+   | `AI_CHAT_SKILL_STAGING` | `task` | Whether `skill_manage` writes land immediately or wait in `skill pending`: `task` (only when an `agent run` has no `--write` grant for the target) / `always` / `off` |
+   | `AI_CHAT_SKILL_REFLECT` | off | Send one tool-free request after a long turn proposing a skill from what it did; never writes directly |
+   | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | `5` | Tool calls a turn needs before the reflection reviewer considers it |
+   | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL`, then the chat model | Model used for the reflection request |
+   | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off | Archive an agent-written, unpinned personal skill once unread this many days; unset or `0` disables it |
    | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
    | `AI_CHAT_HOOK_TURN_BUDGET_MS` | unset | Ceiling on the wall time one `!` turn waits for hooks; `0` removes it |
    | `DSH_AI_HOOKS_CONFIG` | `~/.config/dsh/ai-hooks.json` | Path of the hook configuration |
@@ -1387,7 +1392,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
 9. **Agent tools**:
     Inside `!` chat the assistant can call `shell_history`, `shell_context`, `search`,
-    `ls`, `read_file`, `str_replace`, `edit` and `execute`.
+    `ls`, `read_file`, `str_replace`, `edit`, `execute` and `skill_manage`.
 
     - `shell_history` shows what you recently ran, with the working directory, the exit
       code and both output streams. Ask "why did that fail" and the assistant reads the
@@ -1435,6 +1440,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       session, so a long editing run is one question per file rather than one per
       edit. Deleting a skill is asked separately: an "always" given for writing a
       file does not authorise removing it.
+    - With `AI_CHAT_SKILL_STAGING` (default `task`), a `skill_manage` write that
+      would otherwise stall an unattended `agent run` with no `--write` grant for the
+      target is queued instead of asked about, so the task keeps running. Review it
+      with `skill pending`/`skill diff`/`skill approve`/`skill reject` - see
+      "Skills" below.
 
 10. **Conversation continuity**:
     Consecutive `!` turns continue the same conversation, so follow-up questions work and
@@ -1518,6 +1528,46 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     `skill list` shows which skills are actually being read, so the ones that are not
     can be removed - every summary costs tokens on every turn, and `doctor skills`
     warns once there are more than eight.
+
+    **Reviewing a write before it lands.** `AI_CHAT_SKILL_STAGING` controls whether a
+    `skill_manage` write goes to disk right away or waits for you: `task` (default)
+    only queues one when an `agent run` has no `--write` grant covering the target -
+    the one case that used to stall the task on a question nobody could answer -
+    `always` queues every write, interactive included, and `off` restores today's
+    behaviour. A queued write is never counted as a read or a write, and it never
+    touches trust or the prompt fragment until it is applied.
+
+    ```bash
+    skill pending               # what is waiting, and why
+    skill diff rust-bisect      # what it would change
+    skill approve rust-bisect   # apply it - asks first, then writes through
+                                 # the same path skill_manage itself uses
+    skill reject rust-bisect    # discard it
+    ```
+
+    `delete` is never queued - there is nothing to review, and it is the one change
+    here with no undo. `skill approve` refuses a proposal whose target has moved
+    since it was staged (edited by hand, or by an approval that landed first) rather
+    than overwrite it; reject it and ask again.
+
+    **An optional reviewer at the end of a long turn.** `AI_CHAT_SKILL_REFLECT` (off
+    by default) sends one extra, tool-free request after a turn that used at least
+    `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` (default 5) tool calls, asking whether anything
+    from it is worth saving. It never writes directly - a proposal it makes is queued
+    exactly like one `skill_manage` would stage, and it never rewrites a skill it did
+    not see the body of during that turn. A failed or empty reviewer call never
+    changes the turn's own answer.
+
+    **Archiving what nobody reads any more.** `skill archive <name>` drops a personal
+    skill out of the prompt without deleting it - `skill unarchive` brings it back,
+    and `skill pin` exempts one from ever being swept automatically. Only personal
+    (`user`-scope) skills can be archived: archiving is what keeps a repository's own
+    trust decision (the digest of what it advertises) from changing whenever a
+    *personal* skill's status changes, so it deliberately stops at the door of
+    anything a project ships. `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` (off unless set to a
+    positive number) archives an agent-written, unpinned personal skill once it has
+    gone unread that many days - the same staleness `skill list` and `doctor skills`
+    already report, just acted on instead of only mentioned.
 
     **The first time you use `!` in a repository that ships skills, dsh asks.** Their
     descriptions would otherwise be in every prompt before you had decided anything,

@@ -14,7 +14,7 @@
 //! will follow, so writing one is closer to editing configuration than to
 //! editing a working file.
 
-use crate::chatgpt::skills::{self, MAX_DESCRIPTION_CHARS, SkillScope};
+use crate::chatgpt::skills::{self, MAX_DESCRIPTION_CHARS, SkillScope, pending};
 use crate::shell_capabilities::ChatToolHost;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -87,17 +87,17 @@ pub(crate) fn definition() -> Value {
 }
 
 /// What the caller asked for, after the arguments have been checked.
-struct Request {
-    action: String,
-    name: String,
-    scope: SkillScope,
-    skill_dir: PathBuf,
+pub(crate) struct Request {
+    pub(crate) action: String,
+    pub(crate) name: String,
+    pub(crate) scope: SkillScope,
+    pub(crate) skill_dir: PathBuf,
     /// Resolved target, canonical as far as it exists.
-    target: PathBuf,
+    pub(crate) target: PathBuf,
     /// Whether `file` was given, which is what separates "delete one file" from
     /// "delete the skill".
-    explicit_file: bool,
-    relative_file: String,
+    pub(crate) explicit_file: bool,
+    pub(crate) relative_file: String,
 }
 
 pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<String, String> {
@@ -116,10 +116,24 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 }
 
 /// Everything that can be checked before the user is asked anything.
-///
-/// Ordering matters: a question about a change that was going to be refused
-/// anyway trains people to answer without reading.
 fn validate(parsed: &Value, proxy: &mut dyn ChatToolHost) -> Result<Request, String> {
+    let current_dir = proxy
+        .get_current_dir()
+        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
+    validate_in(parsed, &current_dir)
+}
+
+/// The same checks as `validate`, against an explicit directory rather than
+/// a live proxy.
+///
+/// Split out so `skill approve` can run the identical name/scope/path/
+/// symlink checks against a staged proposal without needing a
+/// `ChatToolHost` - approval happens from the `skill` builtin, which only
+/// has a `ShellProxy`. Nothing here asks the user anything; ordering matters
+/// only in that a question about a change that was going to be refused
+/// anyway trains people to answer without reading, and this function is
+/// exactly the part that runs before any question is asked.
+pub(crate) fn validate_in(parsed: &Value, current_dir: &Path) -> Result<Request, String> {
     let action = parsed
         .get("action")
         .and_then(Value::as_str)
@@ -146,13 +160,9 @@ fn validate(parsed: &Value, proxy: &mut dyn ChatToolHost) -> Result<Request, Str
         Some(other) => return Err(format!("chat: `{other}` is not a skill scope")),
     };
 
-    let current_dir = proxy
-        .get_current_dir()
-        .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
-
     let root = match scope {
         SkillScope::User => crate::config_paths::skills_dir(),
-        SkillScope::Project => skills::project_skills_root(&current_dir).ok_or_else(|| {
+        SkillScope::Project => skills::project_skills_root(current_dir).ok_or_else(|| {
             format!(
                 "chat: there is no project here, so `{}` has nowhere to live. Use scope `user`.",
                 skills::PROJECT_SKILLS_DIR
@@ -204,17 +214,17 @@ fn validate(parsed: &Value, proxy: &mut dyn ChatToolHost) -> Result<Request, Str
     })
 }
 
-fn create(
-    parsed: &Value,
-    request: &Request,
-    proxy: &mut dyn ChatToolHost,
-) -> Result<String, String> {
-    if request.explicit_file {
-        return Err(format!(
-            "chat: `create` always writes SKILL.md; use `write_file` to add `{}`",
-            request.relative_file
-        ));
-    }
+/// The `create`-specific guards against a name collision: the skill
+/// directory must not already exist, and no sibling `<name>.md` file-skill
+/// may already answer to the same name.
+///
+/// Shared between `create()` (checked before anything is written) and
+/// `skill approve` (checked again at approval time): a `create` proposal's
+/// staleness check alone - the digest of `request.target`, which does not
+/// exist either way for a brand-new skill - cannot see a *sibling*
+/// collision that appeared after the proposal was staged, only a change to
+/// the exact file it names.
+pub(crate) fn reject_create_collision(request: &Request) -> Result<(), String> {
     if request.skill_dir.exists() {
         return Err(format!(
             "chat: the skill `{}` already exists. Use `patch` or `write_file` to change it.",
@@ -229,6 +239,21 @@ fn create(
             request.name
         ));
     }
+    Ok(())
+}
+
+fn create(
+    parsed: &Value,
+    request: &Request,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<String, String> {
+    if request.explicit_file {
+        return Err(format!(
+            "chat: `create` always writes SKILL.md; use `write_file` to add `{}`",
+            request.relative_file
+        ));
+    }
+    reject_create_collision(request)?;
 
     let description = parsed
         .get("description")
@@ -468,11 +493,13 @@ fn confirm_and_write(
     created: bool,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    // Content that would not reach the model, or would reach it broken,
-    // is refused before anyone is asked about it - a question about a change
-    // that was going to be rejected anyway trains people to answer without
-    // reading (the same ordering `validate` already follows for the request
-    // shape).
+    // Content that would not reach the model, or would reach it broken, is
+    // refused before anyone is asked about it or it is staged - a question
+    // (or a proposal) about a change that was going to be rejected anyway
+    // trains people to answer without reading (the same ordering `validate`
+    // already follows for the request shape). `apply_skill_write` runs the
+    // identical check again on the content it actually writes, so this
+    // first pass exists only to reject early, not to replace that one.
     let findings = if request.relative_file == "SKILL.md" {
         skills::lint::lint_skill_md(&request.name, contents)
     } else {
@@ -481,7 +508,21 @@ fn confirm_and_write(
     if let Some(reason) = skills::lint::has_rejection(&findings) {
         return Err(format!("chat: {reason}"));
     }
-    let warnings = skills::lint::warnings(findings);
+
+    // Staged rather than written, when policy says so - checked before
+    // `confirm_agent_action`, so a staged write never touches the task's
+    // status the way falling through to that function would.
+    match crate::chatgpt::resolve_skill_staging(proxy) {
+        crate::chatgpt::SkillStaging::Off => {}
+        crate::chatgpt::SkillStaging::Always => return stage_instead(request, contents),
+        crate::chatgpt::SkillStaging::Task
+            if proxy.agent_runtime().is_some()
+                && !super::agent_write_granted(proxy, &request.target) =>
+        {
+            return stage_instead(request, contents);
+        }
+        crate::chatgpt::SkillStaging::Task => {}
+    }
 
     // The same key `edit` and `str_replace` use: the user is deciding about a
     // file, not about which tool happens to write it.
@@ -489,49 +530,150 @@ fn confirm_and_write(
         return Ok("Skill change cancelled by user.".to_string());
     }
 
+    let warnings = apply_skill_write(
+        &SkillWrite {
+            name: &request.name,
+            scope: request.scope,
+            skill_dir: &request.skill_dir,
+            target: &request.target,
+            relative_file: &request.relative_file,
+            created,
+            // Symlink-safe write, which is what a task needs; `write_atomic`
+            // renames into place and would follow one. `skill approve` never
+            // runs under a task, so it always asks for the plain writer.
+            symlink_safe: proxy.agent_runtime().is_some(),
+        },
+        contents,
+    )?;
+
+    Ok(report(request, &request.action, contents.len(), &warnings))
+}
+
+/// Everything `apply_skill_write` needs to lint, write and account for an
+/// already-approved change - "approved" meaning either a live confirmation
+/// or a staged proposal a person just ran `skill approve` on.
+pub(crate) struct SkillWrite<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) scope: SkillScope,
+    pub(crate) skill_dir: &'a Path,
+    pub(crate) target: &'a Path,
+    pub(crate) relative_file: &'a str,
+    /// `usage::note_write`'s `created_by` attribution.
+    pub(crate) created: bool,
+    /// `true` for an agent task's own tool call (needs the symlink-safe
+    /// writer); `false` for `skill approve`, which never runs under a task.
+    pub(crate) symlink_safe: bool,
+}
+
+/// Lint, write, and update bookkeeping for a skill change that has already
+/// been approved. Never asks anyone anything - that is the caller's job,
+/// whether the answer came from a live confirmation (`confirm_and_write`) or
+/// from a person running `skill approve` on a staged proposal.
+pub(crate) fn apply_skill_write(w: &SkillWrite<'_>, contents: &str) -> Result<Vec<String>, String> {
+    let findings = if w.relative_file == "SKILL.md" {
+        skills::lint::lint_skill_md(w.name, contents)
+    } else {
+        skills::lint::lint_bundled(w.relative_file, contents)
+    };
+    if let Some(reason) = skills::lint::has_rejection(&findings) {
+        return Err(format!("chat: {reason}"));
+    }
+    let warnings = skills::lint::warnings(findings);
+
     // Remembered before anything is created, so a half-finished `create` can be
     // rolled back. A leftover empty directory was a dead end: `create` then said
     // "already exists" and `patch` said "failed to read", with nothing the model
     // could do about either.
-    let created_dir = !request.skill_dir.exists();
+    let created_dir = !w.skill_dir.exists();
 
-    let written = if proxy.agent_runtime().is_some() {
-        // Symlink-safe write, which is what a task needs; `write_atomic`
-        // renames into place and would follow one.
-        ensure_parent(&request.target).and_then(|()| {
-            crate::agent::files::write(&request.target, contents).map_err(|err| err.to_string())
+    let written = if w.symlink_safe {
+        ensure_parent(w.target).and_then(|()| {
+            crate::agent::files::write(w.target, contents).map_err(|err| err.to_string())
         })
     } else {
-        crate::atomic_write::write_atomic(&request.target, contents, true, "skill")
+        crate::atomic_write::write_atomic(w.target, contents, true, "skill")
             .map_err(|err| err.to_string())
     };
 
     if let Err(err) = written {
         if created_dir {
-            let _ = std::fs::remove_dir_all(&request.skill_dir);
+            let _ = std::fs::remove_dir_all(w.skill_dir);
         }
         return Err(format!(
             "chat: failed to write `{}`: {err}",
-            request.relative_file
+            w.relative_file
         ));
     }
 
-    skills::usage::note_write(&request.skill_dir, request.scope, created);
-    refresh_project_trust(request);
+    skills::usage::note_write(w.skill_dir, w.scope, w.created);
+    refresh_project_trust(w.scope, w.skill_dir);
     // The directory signature is coarse; a same-size rewrite in the same second
     // would otherwise keep serving the previous list.
     skills::clear_skills_fragment_cache();
 
-    Ok(report(request, &request.action, contents.len(), &warnings))
+    Ok(warnings)
+}
+
+/// Stage `contents` instead of writing it, and report that back in the same
+/// shape a direct write's `report` would.
+///
+/// `request.target`'s current content (if any) is fingerprinted so
+/// `skill approve` can notice a target that moved since this was staged and
+/// refuse rather than clobber it.
+fn stage_instead(request: &Request, contents: &str) -> Result<String, String> {
+    let base_digest = std::fs::read_to_string(&request.target)
+        .ok()
+        .map(|existing| pending::content_digest(&existing));
+    let project_root = if request.scope == SkillScope::Project {
+        request.skill_dir.parent().map(Path::to_path_buf)
+    } else {
+        None
+    };
+
+    let proposal = pending::Proposal {
+        version: 0, // overwritten by `pending::stage`
+        id: pending::proposal_id(request.scope, &request.name, &request.relative_file),
+        scope: request.scope.as_str().to_string(),
+        name: request.name.clone(),
+        file: request.relative_file.clone(),
+        // Normalized to what `apply_skill_write` will actually do, not the
+        // original tool action: `Proposal.action` documents only two values
+        // ("create"/"write_file"), and a `patch` (or a `write_file` against
+        // a target that does not exist yet) is a write like any other once
+        // its diff has already been applied into `contents`. `base_digest`
+        // already carries the same distinction `approve()` reads back.
+        action: if base_digest.is_none() {
+            "create".to_string()
+        } else {
+            "write_file".to_string()
+        },
+        project_root,
+        contents: contents.to_string(),
+        base_digest,
+        created_ms: skills::usage::now_ms(),
+        origin: "tool".to_string(),
+        note: None,
+    };
+
+    let id = pending::stage(proposal)?;
+    Ok(json!({
+        "action": "staged",
+        "id": id,
+        "scope": request.scope.as_str(),
+        "skill": request.name,
+        "path": crate::config_paths::display_path(&request.target),
+        "note": "Not written yet - the user reviews it with `skill pending` and applies it with `skill approve`. Do not retry with `edit`.",
+    })
+    .to_string())
 }
 
 /// The user just approved a change to this project's skills, so a trusted root
 /// stays trusted rather than asking again about their own edit.
-fn refresh_project_trust(request: &Request) {
-    if request.scope != SkillScope::Project {
+fn refresh_project_trust(scope: SkillScope, skill_dir: &Path) {
+    if scope != SkillScope::Project {
         return;
     }
-    let Some(root) = request.skill_dir.parent() else {
+    let Some(root) = skill_dir.parent() else {
         return;
     };
     // `.dsh/skills` by construction: `skill_dir` came from
@@ -583,7 +725,7 @@ fn one_line(value: &str) -> String {
 ///
 /// The writer guaranteeing the subset the parser handles is what lets this crate
 /// stay off a YAML dependency for two fields.
-fn render_skill_md(name: &str, description: &str, body: &str) -> String {
+pub(crate) fn render_skill_md(name: &str, description: &str, body: &str) -> String {
     let mut out = String::from("---\n");
     out.push_str(&format!("name: {name}\n"));
     out.push_str(&format!("description: {}\n", quote_if_needed(description)));
@@ -649,6 +791,218 @@ mod tests {
             confirm_result: true,
             ..TestProxy::default()
         }
+    }
+
+    /// `skills_pending_dir()` is read from the environment too, so a test
+    /// that stages a proposal needs the same kind of scoped override.
+    fn with_state_home<R>(dir: &Path, f: impl FnOnce() -> R) -> R {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: single-threaded under `env_lock`.
+        unsafe { std::env::set_var("XDG_STATE_HOME", dir) };
+        let result = f();
+        match previous {
+            Some(value) => unsafe { std::env::set_var("XDG_STATE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
+        }
+        result
+    }
+
+    /// A task with no `--write` grant for the target used to stall on
+    /// `InputRequired` the same as an interactive denial. With the default
+    /// staging mode (`task`), it stages a proposal and keeps running
+    /// instead - the one behaviour change this whole feature makes.
+    #[test]
+    fn a_task_without_a_write_grant_stages_instead_of_stalling() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            let runtime = crate::test_support::test_runtime(&root);
+            let mut p = TestProxy {
+                current_dir: root.clone(),
+                agent_runtime: Some(runtime.clone()),
+                ..TestProxy::default()
+            };
+
+            let result = run(
+                r#"{"action":"create","name":"demo","scope":"project","description":"d","body":"step"}"#,
+                &mut p,
+            )
+            .expect("staging must not return an error");
+
+            assert!(result.contains("\"staged\""), "{result}");
+            assert!(!root.join(".dsh/skills/demo").exists());
+            assert_eq!(
+                runtime.lock().task.status,
+                dsh_types::agent::TaskStatus::Running,
+                "the task must not be stopped for a person to look at"
+            );
+
+            let (proposals, _broken) = skills::pending::list();
+            assert_eq!(proposals.len(), 1);
+            assert_eq!(proposals[0].origin, "tool");
+            assert_eq!(proposals[0].name, "demo");
+        });
+    }
+
+    /// The interactive path must be completely unaffected by the default
+    /// staging mode - only a task with no grant is redirected.
+    #[test]
+    fn an_interactive_turn_is_unchanged_by_the_default_staging_mode() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            let mut p = proxy(root.clone());
+
+            let result = run(
+                r#"{"action":"create","name":"demo","scope":"project","description":"d","body":"step"}"#,
+                &mut p,
+            )
+            .unwrap();
+
+            assert!(!result.contains("\"staged\""), "{result}");
+            assert!(root.join(".dsh/skills/demo/SKILL.md").is_file());
+            assert!(skills::pending::list().0.is_empty());
+        });
+    }
+
+    /// `AI_CHAT_SKILL_STAGING=always` stages every write, interactive or
+    /// not - for a person who wants to review each one before it lands.
+    #[test]
+    fn staging_always_queues_an_interactive_write_without_touching_disk() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mut p = TestProxy {
+                current_dir: root.clone(),
+                confirm_counter: Some(calls.clone()),
+                confirm_result: true,
+                vars: [("AI_CHAT_SKILL_STAGING".to_string(), "always".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..TestProxy::default()
+            };
+
+            let result = run(
+                r#"{"action":"create","name":"demo","scope":"project","description":"d","body":"step"}"#,
+                &mut p,
+            )
+            .unwrap();
+
+            assert!(result.contains("\"staged\""), "{result}");
+            assert!(!root.join(".dsh/skills/demo").exists());
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                0,
+                "a staged write must not ask - approval happens later, at `skill approve`"
+            );
+            assert_eq!(skills::pending::list().0.len(), 1);
+        });
+    }
+
+    /// A write that the lint would reject must never reach the queue -
+    /// `skill approve` would only fail on it later, after a person already
+    /// spent a look on it.
+    #[test]
+    fn a_lint_rejection_is_refused_before_it_can_be_staged() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            let mut p = TestProxy {
+                current_dir: root.clone(),
+                vars: [("AI_CHAT_SKILL_STAGING".to_string(), "always".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..TestProxy::default()
+            };
+
+            let err = run(
+                r#"{"action":"create","name":"nameless","scope":"project","body":"x"}"#,
+                &mut p,
+            )
+            .expect_err("a skill with no description must not be staged");
+            assert!(err.contains("description"), "{err}");
+            assert!(skills::pending::list().0.is_empty());
+        });
+    }
+
+    /// Staging must not touch the counters or the cache a real write
+    /// updates - nothing was written yet, so nothing about it should look
+    /// used or fresh.
+    #[test]
+    fn staging_does_not_bump_the_usage_counters_or_clear_the_cache() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            let mut p = TestProxy {
+                current_dir: root.clone(),
+                vars: [("AI_CHAT_SKILL_STAGING".to_string(), "always".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..TestProxy::default()
+            };
+
+            run(
+                r#"{"action":"create","name":"demo","scope":"project","description":"d","body":"step"}"#,
+                &mut p,
+            )
+            .unwrap();
+
+            assert!(
+                skills::usage::load().is_empty(),
+                "a staged write is not a usage event"
+            );
+        });
+    }
+
+    /// `delete` is never staged: there is nothing to review, and it is the
+    /// one change here with no undo.
+    #[test]
+    fn delete_is_never_staged() {
+        let dir = tempdir().unwrap();
+        let root = project(dir.path());
+        let state = tempdir().unwrap();
+
+        with_state_home(state.path(), || {
+            // Create the skill normally first, so `delete` has something to
+            // refuse to stage rather than failing earlier on "no such skill".
+            let mut interactive = proxy(root.clone());
+            run(
+                r#"{"action":"create","name":"demo","scope":"project","description":"d","body":"step"}"#,
+                &mut interactive,
+            )
+            .unwrap();
+
+            let runtime = crate::test_support::test_runtime(&root);
+            let mut p = TestProxy {
+                current_dir: root.clone(),
+                agent_runtime: Some(runtime.clone()),
+                ..TestProxy::default()
+            };
+
+            let err = run(
+                r#"{"action":"delete","name":"demo","scope":"project"}"#,
+                &mut p,
+            )
+            .expect_err("delete under a task with no grant must stall, not stage");
+            assert!(err.contains("agent: permission required"), "{err}");
+            assert!(skills::pending::list().0.is_empty());
+            assert!(
+                root.join(".dsh/skills/demo").exists(),
+                "nothing must actually be deleted"
+            );
+        });
     }
 
     /// This schema is sent on every turn whether or not a skill is ever

@@ -55,6 +55,80 @@
       "description": "Forget the trust decision for this repository"
     },
     {
+      "name": "pending",
+      "description": "List skill changes staged for review"
+    },
+    {
+      "name": "diff",
+      "description": "Show what a staged change would write",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Pending proposal id"
+        }
+      ]
+    },
+    {
+      "name": "approve",
+      "description": "Apply a staged change, after confirmation",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Pending proposal id"
+        }
+      ]
+    },
+    {
+      "name": "reject",
+      "description": "Discard a staged change, after confirmation",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Pending proposal id"
+        }
+      ]
+    },
+    {
+      "name": "archive",
+      "description": "Hide a personal skill from the prompt without deleting it",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "unarchive",
+      "description": "Bring an archived personal skill back",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "pin",
+      "description": "Exempt a personal skill from auto-archiving",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
+      "name": "unpin",
+      "description": "Undo `pin`",
+      "arguments": [
+        {
+          "name": "name",
+          "description": "Skill name"
+        }
+      ]
+    },
+    {
       "name": "help",
       "description": "Show help"
     }

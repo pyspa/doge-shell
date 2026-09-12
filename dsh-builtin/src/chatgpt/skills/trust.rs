@@ -64,12 +64,7 @@ pub(crate) fn digest(skills: &[Skill]) -> String {
         .collect();
     pairs.sort();
 
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in pairs.join("\u{1e}").as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    super::fnv1a_hex(pairs.join("\u{1e}").as_bytes())
 }
 
 pub(crate) fn key(root: &Path) -> String {

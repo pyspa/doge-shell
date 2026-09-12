@@ -63,6 +63,20 @@ const STREAM_KEY: &str = "AI_CHAT_STREAM";
 /// the model the first time `!` is used in that checkout. Personal skills stay
 /// available when this is off.
 const PROJECT_SKILLS_KEY: &str = "AI_CHAT_PROJECT_SKILLS";
+/// Environment key controlling whether `skill_manage` writes are staged for
+/// review instead of landing immediately. `task` (default) / `always` / `off`.
+const SKILL_STAGING_KEY: &str = "AI_CHAT_SKILL_STAGING";
+/// Environment key turning on the turn-end skill reviewer. Off by default.
+const SKILL_REFLECT_KEY: &str = "AI_CHAT_SKILL_REFLECT";
+/// Environment key for the reviewer's tool-call threshold. Default 5.
+const SKILL_REFLECT_MIN_TOOLS_KEY: &str = "AI_CHAT_SKILL_REFLECT_MIN_TOOLS";
+/// Environment key overriding the model the reviewer uses. Defaults to
+/// `AI_SUMMARY_MODEL`, then the turn's own model.
+const SKILL_REFLECT_MODEL_KEY: &str = "AI_CHAT_SKILL_REFLECT_MODEL";
+/// Environment key enabling the optional archive sweep. `0` (default) means
+/// off; a positive integer is the number of unread days before an
+/// agent-written, unpinned, `user`-scope skill is archived.
+const SKILL_AUTO_ARCHIVE_DAYS_KEY: &str = "AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS";
 /// Told to the model after a rewound turn (`ConversationManager::note_turn_rewound`).
 const REWIND_NOTICE: &str = "The previous turn was removed from this conversation because it did not finish. Any tool calls it made may already have taken effect; check the actual state rather than assuming.";
 
@@ -364,53 +378,7 @@ impl ConversationManager {
         }));
 
         let current_summary_text = self.summary.as_deref().unwrap_or("None");
-        let buffer_text = self
-            .buffer
-            .iter()
-            .map(|msg| {
-                let role = msg
-                    .get("role")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let mut content = extract_message_content(msg).unwrap_or_default();
-                if role == "tool" && content.len() > MAX_SUMMARY_TOOL_CHARS {
-                    // The summary needs the gist, not the whole build log.
-                    let end = content.floor_char_boundary(MAX_SUMMARY_TOOL_CHARS);
-                    content = format!("{}... (truncated)", &content[..end]);
-                }
-
-                // Include tool_calls information if present
-                let tool_calls_desc = msg
-                    .get("tool_calls")
-                    .and_then(|tc| tc.as_array())
-                    .map(|calls| {
-                        let tool_names: Vec<String> = calls
-                            .iter()
-                            .filter_map(|c| {
-                                let name = c
-                                    .get("function")
-                                    .and_then(|f| f.get("name"))
-                                    .and_then(|n| n.as_str())?;
-                                let args = c
-                                    .get("function")
-                                    .and_then(|f| f.get("arguments"))
-                                    .and_then(|a| a.as_str())
-                                    .unwrap_or("{}");
-                                Some(format!("{name}({args})"))
-                            })
-                            .collect();
-                        if tool_names.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" [Called: {}]", tool_names.join(", "))
-                        }
-                    })
-                    .unwrap_or_default();
-
-                format!("{role}: {content}{tool_calls_desc}")
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let buffer_text = flatten_conversation(&self.buffer, MAX_SUMMARY_TOOL_CHARS);
 
         summary_messages.push(json!({
             "role": "user",
@@ -500,8 +468,65 @@ use tool::{build_tools, execute_tool_call};
 mod session;
 
 pub(crate) mod hooks;
+mod reflect;
 pub(crate) mod skills;
 use skills::{SkillRoot, SkillsManager};
+
+/// Flatten the buffer to `"role: content [Called: tool(args)]"` lines, one
+/// per message, joined by a blank line.
+///
+/// Shared by `perform_summary` (the paid conversation summary) and
+/// `reflect` (the optional turn-end skill reviewer) so the two read the
+/// exact same shape of transcript - the reviewer is not a second, slightly
+/// different idea of "what happened this turn".
+fn flatten_conversation(buffer: &[Value], max_tool_chars: usize) -> String {
+    buffer
+        .iter()
+        .map(|msg| {
+            let role = msg
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let mut content = extract_message_content(msg).unwrap_or_default();
+            if role == "tool" && content.len() > max_tool_chars {
+                // The reader needs the gist, not the whole build log.
+                let end = content.floor_char_boundary(max_tool_chars);
+                content = format!("{}... (truncated)", &content[..end]);
+            }
+
+            // Include tool_calls information if present
+            let tool_calls_desc = msg
+                .get("tool_calls")
+                .and_then(|tc| tc.as_array())
+                .map(|calls| {
+                    let tool_names: Vec<String> = calls
+                        .iter()
+                        .filter_map(|c| {
+                            let name = c
+                                .get("function")
+                                .and_then(|f| f.get("name"))
+                                .and_then(|n| n.as_str())?;
+                            let args = c
+                                .get("function")
+                                .and_then(|f| f.get("arguments"))
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("{}");
+                            Some(format!("{name}({args})"))
+                        })
+                        .collect();
+                    if tool_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [Called: {}]", tool_names.join(", "))
+                    }
+                })
+                .unwrap_or_default();
+
+            format!("{role}: {content}{tool_calls_desc}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
 
 /// Where to cut the buffer so that `retain` messages survive a summary.
 ///
@@ -937,6 +962,9 @@ fn chat_with_tools(
     // returns before the closure reaches it, and the final `loop` envelope
     // would then advertise no turn budget while one was configured.
     let turn_token_budget = resolve_turn_token_budget(proxy);
+    // Snapshot before the turn runs: `staged_this_process` never resets, so
+    // this turn's own count is the difference read after it.
+    let staged_before_turn = skills::pending::staged_this_process();
     let outcome: Result<String, String> = (|| {
         // Set when this turn continues a stored conversation, so the final
         // `store` below can keep the idle clock from restarting if this turn
@@ -1391,6 +1419,21 @@ fn chat_with_tools(
             }
         };
 
+        // Before the checkpoint/finish below, so a task's final token total
+        // includes whatever this spent, and before `manager` moves into
+        // `session::store` further down. Never changes `outcome` - see
+        // `reflect::maybe_reflect`'s own doc comment for why sending one
+        // more request here is not a third agent loop.
+        reflect::maybe_reflect(
+            client,
+            proxy,
+            &mut manager,
+            iterations,
+            outcome.is_ok(),
+            turn_token_budget,
+            model_override.clone(),
+        );
+
         if let Some(runtime) = &runtime {
             let mut runtime = runtime.lock();
             runtime
@@ -1446,6 +1489,19 @@ fn chat_with_tools(
     // One write per turn, not one per `read_file`: the loop can run a hundred
     // iterations and these are counters, not state anything depends on.
     skills::usage::flush();
+
+    // Told after `flush()`, not before: this turn's own writes and reads are
+    // already accounted for, so a sweep judges "unused" against numbers that
+    // include what just happened rather than what stood before it.
+    maybe_auto_archive_skills(proxy);
+
+    let staged_this_turn =
+        skills::pending::staged_this_process().saturating_sub(staged_before_turn);
+    if staged_this_turn > 0 {
+        eprintln!(
+            "\x1b[2mskills: {staged_this_turn} proposal(s) staged; review with `skill pending`\x1b[0m"
+        );
+    }
 
     // Observation only. "Keep going" is a request to spend more of the user's
     // money and touch more of their machine, which is the one thing a hook is
@@ -1821,6 +1877,53 @@ pub(crate) fn resolve_project_skills_enabled(proxy: &mut dyn ShellProxy) -> bool
             value.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "off" | "no"
         ),
+    }
+}
+
+/// Whether `skill_manage` writes land on disk immediately or wait for a
+/// person to `skill approve` them.
+///
+/// - `task` (default): only staged when there is an agent task *and* that
+///   task's `--write` grant does not already cover the target. A task that
+///   was given the grant writes exactly as it does today; only the path that
+///   used to stall on `InputRequired` now stages instead. An interactive `!`
+///   session is unaffected either way.
+/// - `always`: every write is staged, interactive or not - for a person who
+///   wants to review every skill change before it lands.
+/// - `off`: today's behaviour. A task with no grant still stalls on
+///   `InputRequired`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkillStaging {
+    Off,
+    Task,
+    Always,
+}
+
+/// Archive stale, agent-written, unpinned personal skills, when
+/// `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` says to. Off unless set to a positive
+/// integer - this shell does not prune anything on its own by default.
+fn maybe_auto_archive_skills(proxy: &mut dyn ChatToolHost) {
+    let Some(days) = resolve_setting(proxy, SKILL_AUTO_ARCHIVE_DAYS_KEY)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|days| *days > 0)
+    else {
+        return;
+    };
+    let archived = skills::usage::sweep(skills::usage::now_ms(), days);
+    if archived > 0 {
+        skills::clear_skills_fragment_cache();
+    }
+}
+
+pub(crate) fn resolve_skill_staging(proxy: &mut dyn ShellProxy) -> SkillStaging {
+    match resolve_setting(proxy, SKILL_STAGING_KEY)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("task") => SkillStaging::Task,
+        Some("always") => SkillStaging::Always,
+        Some("off") => SkillStaging::Off,
+        Some(_) => SkillStaging::Task,
     }
 }
 

@@ -19,7 +19,9 @@ agent delete TASK_ID
 
 ツール実行前の意図と結果を別々に保存します。プロセス終了後、結果が残っていない操作を自動的に再実行しません。ファイルや外部サービスの状態を確認したうえで `agent resume TASK_ID --reconcile '実際に確認した結果'` を実行します。完了条件は開始後に差し替えられず、成功したツール結果を根拠に各条件を検証します。検証はモデルの判断を含むため、重要な条件は `--check` で具体的に指定してください。
 
-タスク中の `skill_manage` は `edit` などと同じ変更操作として扱います。`task_plan` の記録前には実行できず、実行後は完了条件の検証済み判定をやり直します。`<project>/.dsh/skills` への書き込みはそのリポジトリの `--write` に従い、`~/.config/dsh/skills` は許可の外なので入力待ちになります。`<project>/.agents/skills` は読み取り専用で、`scope` に `project` を指定した書き込みも `.dsh/skills` へ向きます。
+タスク中の `skill_manage` は `edit` などと同じ変更操作として扱います。`task_plan` の記録前には実行できず、実行後は完了条件の検証済み判定をやり直します。`<project>/.dsh/skills` への書き込みはそのリポジトリの `--write` に従い、`~/.config/dsh/skills` は許可の外です。`<project>/.agents/skills` は読み取り専用で、`scope` に `project` を指定した書き込みも `.dsh/skills` へ向きます。
+
+`AI_CHAT_SKILL_STAGING`（既定 `task`）が `off` でない限り、`--write` グラントが無い対象への書き込みは入力待ちで止まらず、`skill pending` に積まれてタスクは続行します。人が `skill approve`/`skill reject` で後から判断します。グラントがある対象は今まで通り直接書きます。`delete` は積まれず、常に入力待ちのままです。
 
 未信頼のリポジトリの `.dsh/skills` と `.agents/skills` はタスクでは読まれません。対話とは違い確認も出ず、承認待ちにもなりません。無人実行を止めないためと、人が見ていない入口の既定を厳しくするためです。信頼はディレクトリごとに記録されるので、対話で各ディレクトリについて 1 度 `a` と答えるか `skill trust` で確認しておいてください。
 

@@ -1420,14 +1420,24 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
 
     let mut authored = 0usize;
     let mut unused = Vec::new();
+    let mut archived = 0usize;
+    let mut pinned = 0usize;
     for skill in &skills {
         let record = records.get(&usage::key(skill.dir()));
         if record.is_some_and(|r| r.created_by == "agent") {
             authored += 1;
         }
+        let is_archived = usage::is_archived(record);
+        if is_archived {
+            archived += 1;
+        }
+        if record.is_some_and(|r| r.pinned) {
+            pinned += 1;
+        }
         // The same rule `skill list` uses. Two copies disagreed at the boundary,
         // so one command called a skill dead while the other called it healthy.
-        if usage::is_stale(record, now) {
+        // Archived, not unread: it is already out of the prompt on purpose.
+        if !is_archived && usage::is_stale(record, now) {
             unused.push(skill.name.clone());
         }
     }
@@ -1440,6 +1450,33 @@ fn report_runtime_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir:
             "warn unused-skills {} not read recently: {}",
             unused.len(),
             unused.join(",")
+        ));
+    }
+    let _ = ctx.write_stdout(&format!("ok archived-skills {archived}"));
+    let _ = ctx.write_stdout(&format!("ok pinned-skills {pinned}"));
+
+    let (proposals, broken) = crate::chatgpt::skills::pending::list();
+    if proposals.is_empty() {
+        // Still printed even when only `broken` is non-empty: a consumer
+        // scanning for this line by name must always find one.
+        let _ = ctx.write_stdout("ok pending-skills 0");
+    } else {
+        let names: Vec<&str> = proposals.iter().map(|p| p.name.as_str()).collect();
+        let _ = ctx.write_stdout(&format!(
+            "warn pending-skills {} awaiting review: {}",
+            proposals.len(),
+            names.join(",")
+        ));
+    }
+    if !broken.is_empty() {
+        let _ = ctx.write_stdout(&format!(
+            "warn pending-skills-unreadable {} {}",
+            broken.len(),
+            broken
+                .iter()
+                .map(|b| crate::config_paths::display_path(&b.path))
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
 }
@@ -2665,6 +2702,64 @@ mod tests {
 
         assert!(
             output.contains("error project-skill") && output.contains("description"),
+            "{output}"
+        );
+    }
+
+    /// Archived and pending are their own lines, and an archived skill is
+    /// counted there instead of under `unused-skills` - reported twice would
+    /// read as two different problems for one decision.
+    #[test]
+    fn doctor_skills_reports_archived_and_pending_separately() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let project = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(project.path()).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let skill = root.join(".dsh/skills/demo");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo\ndescription: d\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let state = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: single-threaded under `env_lock`.
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+
+        usage::set_archived(&skill, true).unwrap();
+        crate::chatgpt::skills::pending::stage(crate::chatgpt::skills::pending::Proposal {
+            version: 0,
+            id: "project.other".to_string(),
+            scope: "project".to_string(),
+            name: "other".to_string(),
+            file: "SKILL.md".to_string(),
+            action: "create".to_string(),
+            project_root: Some(root.join(".dsh/skills")),
+            contents: "---\nname: other\ndescription: d\n---\n".to_string(),
+            base_digest: None,
+            created_ms: usage::now_ms(),
+            origin: "tool".to_string(),
+            note: None,
+        })
+        .unwrap();
+
+        let (ctx, observer) = observed_context();
+        let mut proxy = hooks_proxy(&root, &[]);
+        crate::chatgpt::skills::clear_skills_fragment_cache();
+        report_runtime_skills(&ctx, &mut proxy, &root);
+        let output = observed_stdout(&observer);
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("XDG_STATE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
+        }
+
+        assert!(output.contains("ok archived-skills 1"), "{output}");
+        assert!(output.contains("ok unused-skills 0"), "{output}");
+        assert!(
+            output.contains("warn pending-skills 1 awaiting review: other"),
             "{output}"
         );
     }

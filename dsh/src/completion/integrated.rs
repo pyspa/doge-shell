@@ -2041,10 +2041,11 @@ fn collect_pj_dynamic_candidates(
     }
 }
 
-/// `skill show|path|remove <TAB>`.
+/// `skill show|path|remove|archive|unarchive|pin|unpin <TAB>` (skill names)
+/// and `skill diff|approve|reject <TAB>` (pending proposal ids).
 ///
-/// Skill names are chosen by the model, not by the person typing, so without
-/// this the only way to learn one is to run `skill list` first.
+/// Both are chosen by the model, not by the person typing, so without this
+/// the only way to learn either is to run `skill list`/`skill pending` first.
 fn collect_skill_dynamic_candidates(
     _engine: &IntegratedCompletionEngine,
     request: &CompletionRequest<'_>,
@@ -2066,11 +2067,28 @@ fn collect_skill_dynamic_candidates(
     let Some(subcommand) = parsed.subcommand_path.first() else {
         return Vec::new();
     };
-    if !matches!(subcommand.as_str(), "show" | "path" | "remove" | "rm") {
+    let current_token = parsed.current_token.as_str();
+
+    if matches!(subcommand.as_str(), "diff" | "approve" | "reject") {
+        return dsh_builtin::pending_proposal_ids()
+            .into_iter()
+            .filter(|(id, _)| matches_prefix(current_token, id))
+            .map(|(id, summary)| EnhancedCandidate {
+                text: id,
+                description: Some(summary),
+                candidate_type: CandidateType::Argument,
+                priority: 90,
+            })
+            .collect();
+    }
+
+    if !matches!(
+        subcommand.as_str(),
+        "show" | "path" | "remove" | "rm" | "archive" | "unarchive" | "pin" | "unpin"
+    ) {
         return Vec::new();
     }
 
-    let current_token = parsed.current_token.as_str();
     dsh_builtin::installed_skill_names(Some(request.current_dir))
         .into_iter()
         .filter(|(name, _)| matches_prefix(current_token, name))
@@ -2709,7 +2727,15 @@ mod tests {
         fs::create_dir_all(&bin).unwrap();
         let engine = engine_with_path(&bin);
 
-        for line in ["skill show ", "skill path ", "skill remove "] {
+        for line in [
+            "skill show ",
+            "skill path ",
+            "skill remove ",
+            "skill archive ",
+            "skill unarchive ",
+            "skill pin ",
+            "skill unpin ",
+        ] {
             wait_for_candidate(&engine, line, root, "deploy-staging").await;
         }
 
@@ -2723,6 +2749,65 @@ mod tests {
             "{:?}",
             listed.candidates
         );
+    }
+
+    /// `skill diff|approve|reject <TAB>` completes a pending proposal id,
+    /// never a skill name - offering the wrong kind of token there would be
+    /// actively misleading.
+    ///
+    /// No other test in this crate's unit-test binary reads or writes
+    /// `XDG_STATE_HOME` in-process (the integration tests under
+    /// `dsh/tests/` set it only for a spawned child process), so this one
+    /// does not need to share a lock with anything else.
+    #[tokio::test]
+    async fn skill_review_subcommands_complete_pending_proposal_ids() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let state = tempdir().unwrap();
+
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        // SAFETY: this is the only test in this binary that touches
+        // `XDG_STATE_HOME` in-process.
+        unsafe { std::env::set_var("XDG_STATE_HOME", state.path()) };
+
+        // Written directly rather than through `dsh-builtin`'s own
+        // `pending::stage`, which is crate-private: this only needs the
+        // file on disk in the shape `pending_proposal_ids()` reads back.
+        let pending_dir = state.path().join("dsh/skills-pending");
+        fs::create_dir_all(&pending_dir).unwrap();
+        fs::write(
+            pending_dir.join("project.deploy-staging.json"),
+            serde_json::json!({
+                "version": 1,
+                "id": "project.deploy-staging",
+                "scope": "project",
+                "name": "deploy-staging",
+                "file": "SKILL.md",
+                "action": "create",
+                "project_root": root.join(".dsh/skills"),
+                "contents": "---\nname: deploy-staging\ndescription: d\n---\n",
+                "base_digest": null,
+                "created_ms": 1,
+                "origin": "tool",
+                "note": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let engine = engine_with_path(&bin);
+
+        for line in ["skill diff ", "skill approve ", "skill reject "] {
+            wait_for_candidate(&engine, line, root, "project.deploy-staging").await;
+        }
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("XDG_STATE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
+        }
     }
 
     #[test]

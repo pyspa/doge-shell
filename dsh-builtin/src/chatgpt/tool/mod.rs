@@ -19,7 +19,7 @@ mod replace;
 mod search;
 mod shell_context;
 mod shell_history;
-mod skill;
+pub(crate) mod skill;
 
 /// Global backstop for the size of a single tool result. Individual tools apply
 /// their own tighter limits first so that the important part of their output
@@ -873,6 +873,34 @@ pub(crate) fn reject_broken_skill_md(
     Ok(())
 }
 
+/// Close the one way `edit`/`str_replace` could bypass staged review for a
+/// path `skill_manage` would have queued instead of writing.
+///
+/// Only `SkillStaging::Always` needs this. `SkillStaging::Task` redirects an
+/// agent task with no write grant for the target - and `edit`/`str_replace`
+/// already stall there today through the very same `confirm_agent_action`
+/// grant check `skill_manage` uses, so nothing is bypassed; it is simply not
+/// unblocked the way `skill_manage`'s own write now is. `Always` is
+/// different: it means a person asked to review *every* skill write, and
+/// `edit`/`str_replace` writing the same file through their own ordinary
+/// interactive confirmation would skip that review entirely.
+pub(crate) fn reject_skill_path_while_staging_always(
+    path: &Path,
+    current_dir: &Path,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<(), String> {
+    if crate::chatgpt::resolve_skill_staging(proxy) != crate::chatgpt::SkillStaging::Always {
+        return Ok(());
+    }
+    if crate::chatgpt::skills::containing_skill(path, current_dir).is_none() {
+        return Ok(());
+    }
+    Err(
+        "chat: this path belongs to a skill; use `skill_manage` so the change is queued for review like every other skill write"
+            .to_string(),
+    )
+}
+
 pub(crate) fn confirm_sensitive_access(
     proxy: &mut dyn ChatToolHost,
     action: &str,
@@ -910,8 +938,7 @@ pub(crate) fn confirm_agent_action(
 ) -> Result<bool, String> {
     if let Some(runtime) = proxy.agent_runtime() {
         if let Some(path) = approval_key.strip_prefix("write:")
-            && proxy.evaluate_agent_file(Path::new(path), true)
-                == crate::shell_capabilities::AgentCommandVerdict::Allowed
+            && agent_write_granted(proxy, Path::new(path))
         {
             return Ok(true);
         }
@@ -940,6 +967,19 @@ pub(crate) fn confirm_agent_action(
         }
         ApprovalDecision::Deny => Ok(false),
     }
+}
+
+/// Whether an agent task's `--write` grant already covers `path`, without
+/// touching the task's status.
+///
+/// Shared by `confirm_agent_action` (which falls through to
+/// `InputRequired` when this is `false`) and `skill_manage`'s staging check
+/// (which falls through to staging a proposal instead), so the two can never
+/// disagree about what a task's grant covers. `false` when there is no agent
+/// task at all - callers that only make sense under one check that
+/// themselves.
+pub(crate) fn agent_write_granted(proxy: &mut dyn ChatToolHost, path: &Path) -> bool {
+    proxy.evaluate_agent_file(path, true) == crate::shell_capabilities::AgentCommandVerdict::Allowed
 }
 
 /// What "always" remembers for a file the agent wants to change.

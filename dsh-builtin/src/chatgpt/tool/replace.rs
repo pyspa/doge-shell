@@ -88,6 +88,11 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
 
     super::reject_gitignored_path(&normalized_abs_path, &normalized_current_dir, path_value)?;
+    super::reject_skill_path_while_staging_always(
+        &normalized_abs_path,
+        &normalized_current_dir,
+        proxy,
+    )?;
 
     if !normalized_abs_path.is_file() {
         return Err(format!(
@@ -334,6 +339,46 @@ mod tests {
         let err = run(&args.to_string(), &mut p).unwrap_err();
 
         assert!(err.contains("description"), "{err}");
+        assert_eq!(confirm_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),
+            original
+        );
+    }
+
+    /// With `AI_CHAT_SKILL_STAGING=always`, `str_replace` reaching a skill
+    /// path directly would bypass the same review queue `skill_manage`'s
+    /// own write to that file is routed through.
+    #[test]
+    fn str_replace_refuses_a_skill_path_while_staging_is_always() {
+        let dir = tempdir().unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        let skill_dir = root.join(".dsh/skills/demo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
+        fs::write(skill_dir.join("SKILL.md"), original).unwrap();
+
+        let confirm_calls = Arc::new(AtomicUsize::new(0));
+        let mut p = TestShellProxy {
+            current_dir: root,
+            confirm_counter: Some(confirm_calls.clone()),
+            confirm_result: true,
+            vars: [("AI_CHAT_SKILL_STAGING".to_string(), "always".to_string())]
+                .into_iter()
+                .collect(),
+            ..TestShellProxy::default()
+        };
+
+        let args = serde_json::json!({
+            "path": ".dsh/skills/demo/SKILL.md",
+            "old_string": "body",
+            "new_string": "bypassing the queue",
+        });
+        let err = run(&args.to_string(), &mut p)
+            .expect_err("a skill path must not bypass staging through str_replace");
+
+        assert!(err.contains("skill_manage"), "{err}");
         assert_eq!(confirm_calls.load(Ordering::SeqCst), 0);
         assert_eq!(
             fs::read_to_string(skill_dir.join("SKILL.md")).unwrap(),

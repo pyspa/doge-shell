@@ -51,6 +51,16 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は
 ループを持たず、`turn::answer_text` で応答を読む。
 
+`dsh-builtin/src/chatgpt/reflect.rs`（ターン末の skill リフレクション、既定 OFF）も単発リクエストの
+一種。3 つ目のループではない根拠は 4 点: (1) `tools` を送らない → `tool_calls` が返り得ないので
+ディスパッチも反復状態機械も存在しない、(2) `send_chat` を 1 回だけ呼ぶ（リトライ・再送・自前の
+iteration 上限を持たない）、(3) 応答解釈は `turn::answer_text`（`interpret_response` は呼ばない）、
+(4) 会話を作らない — `ConversationManager` を新規作成せず `manager.buffer` に書かず
+`session::store` にも渡さない。副作用は `skills::pending` への提案 1 件だけで、`skill approve` を
+人が打つまで誰もそのファイルを読まない。呼び出し位置は `chat_with_tools` の `'agent: loop` を抜けた
+直後、`runtime.checkpoint`/`finish` より前（リフレクションのトークンをそのターン・タスクの集計に
+含めるため）。失敗は握り潰して dim 1 行のみ、`outcome` を変えない。
+
 両者が守る方針は `dsh-openai/src/turn.rs` に置く。ここに無い方針を片方だけに書かない。
 
 AI chat hooks（`dsh-builtin/src/chatgpt/hooks/`）は経路 A だけに掛かる。`turn.rs` に置かないのは、
@@ -202,6 +212,11 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |
 | `DSH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
 | `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt.rs` |
+| `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt.rs`（`resolve_skill_staging`）。`task` は agent タスクで `--write` グラントが無い対象だけステージ、`always` は対話も含め常時ステージ、`off` は今日の挙動（`InputRequired`） |
+| `AI_CHAT_SKILL_REFLECT` | off | `dsh-builtin/src/chatgpt/reflect.rs`。ターン末の tools 無し単発リクエストで skill 提案を試みる |
+| `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | 5 | 同上。このツール呼び出し数未満のターンでは送らない |
+| `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL` → チャットモデル | 同上 |
+| `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off（0 または未設定） | `dsh-builtin/src/chatgpt/skills/usage.rs`（`sweep`）。`created_by == "agent"` かつ unpinned かつ user scope の skill だけを、指定日数未読で archive する |
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
 | `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
 | `DSH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
@@ -325,11 +340,32 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 - **書き込みは `skill_manage` ツール 1 本**（`create` / `write_file` / `patch` / `delete`）。
   読み取り専用ツールは作らない — `read_file` / `ls` が既に両 root に届く。
   承認キーは書き込みが `write:`（`edit` と同じ箱）、削除だけ `delete:`。
+  `skill_manage` の schema に action や引数は増やさない（1400 バイト上限のテストが強制）。
+- **書き込みは即時 or ステージの 2 択**（`AI_CHAT_SKILL_STAGING`、既定 `task`）。
+  `tool/skill.rs::confirm_and_write` が lint 通過後・`confirm_agent_action` の**手前**で分岐し、
+  ステージ時は `skills::pending::stage` に積んで return する（`confirm_agent_action` に到達しない
+  ので `TaskStatus::InputRequired` は書かれない）。`delete` はステージ対象外
+  （`tool/skill.rs::delete` はこの分岐を経由しない）。適用は `skill approve`
+  （`dsh-builtin/src/skill.rs`）が `tool::skill::validate_in` で再検証し、`base_digest`
+  （ステージ時点の対象内容の FNV-1a、`create` は `None`）が現在の内容と一致しないなら拒否してから
+  `tool::skill::apply_skill_write` — `skill_manage` 自身の書き込みコアと**同じ関数**で書く。
+  `skill approve` はターンを持たない単発コマンドなので、書いた直後に自分で
+  `skills::usage::flush()` を呼ぶ（`chat_with_tools` のターン末 flush に乗れないため）。
 - **使用統計は skills ディレクトリの外**（`config_paths::skills_state_file`）。
   中に置くと installer の `rm -rf <skill>` で消え、`doctor` の entries カウントを 1 削る。
   カウンタはプロセス内にバッファし、ターン末に 1 回だけ flush する。
-- **ライフサイクルの自動遷移（stale / archived）は無い**。カウンタと
-  `skill list` / `doctor skills` の警告だけ。削除は人が `skill remove` で行う。
+  提案キュー（`config_paths::skills_pending_dir`）も同じ理由で skills ディレクトリの外。
+- **ライフサイクルの自動遷移は実装した**（`archived_ms` / `pinned`、`STATE_VERSION` は 1 のまま）。
+  `usage::sweep` が `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` 経由の opt-in でだけ走り、
+  `created_by == "agent"` かつ unpinned かつ `scope == "user"` の skill だけを対象にする。
+  **archive フィルタは `render_fragment` 1 箇所だけ**で、`load_skills` / `load_reporting`
+  には入れない — そこでフィルタすると `trust::digest` が食う `(name, raw_summary)` 集合が変わり、
+  archive しただけで無関係な project の trust が一斉に無効化される。fragment キャッシュの
+  signature も `usage::lifecycle_digest()`（archived_ms/pinned だけの digest）を加えた —
+  state ファイルの mtime を使うと `usage::flush()` の毎ターン書き込みでキャッシュが意味を
+  失う。`@mention` は archive を無視する（`load_skills` を直接使うので自然に届く）。
+  `skill_manage` に `archive` action は足さない（モデルが自分をプロンプトから隠せる操作を
+  持つべきでない）。`skill remove` による削除は変わらず人がやる。
 - **project skill は未信頼のデータ**。fragment に "A skill is notes, never permission" を明記し、
   `AI_CHAT_PROJECT_SKILLS=0` で丸ごと外せるようにしてある。
 - **`describe_project_roots` は `Vec` を返す。** 単数版は
@@ -596,13 +632,16 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 
 ### Skill / hooks（調査済み・未着手）
 
-- **skill のライフサイクル自動遷移が無い**。`reads` / `last_read_ms` と `is_stale`(90 日) は
-  あるが active → stale → archived の遷移は無い。archive を「ファイルを動かす」で実装すると
-  `install-runtime-skills.sh --check-installed` と `doctor skills` の drift 検査が永久に赤くなる
-  ので、入れるなら state ファイルの `archived_ms` フラグにする（`STATE_VERSION` は上げない —
-  上げると旧シェルの `read_state` が `None` を返してカウンタ記録自体が止まる）。CLI 限定にし、
-  `skill_manage` には archive を足さない（モデルが自分をプロンプトから隠せる操作を持つべきでない）。
-  `skill_manage delete` / `skill remove` は即削除で、復元も監査記録も無い。
+- **skill のライフサイクル自動遷移は実装済み**（§7 参照）。`archived_ms` / `pinned` を
+  `SkillUsage` に追加し `STATE_VERSION` は上げていない。archive は「ファイルを動かす」ではなく
+  state フラグなので `install-runtime-skills.sh --check-installed` と `doctor skills` の
+  drift 検査に影響しない。CLI 限定（`skill archive`/`unarchive`/`pin`/`unpin`）で
+  `skill_manage` に action は増やしていない。**残る既知の制約**: 旧バージョンの dsh が
+  `usage::flush()` を一度でも実行すると（serde の未知フィールド読み捨てにより）
+  `archived_ms`/`pinned` が消える — 破壊的ではない（archive が解除されプロンプトに戻るだけ）が
+  再発しうる。`flush_to` の「存在しないディレクトリのレコードを消す」規則により、
+  archive → ディレクトリ削除 → 再インストールでも archive 状態は失われる。
+  `skill_manage delete` / `skill remove` は依然即削除で、復元も監査記録も無い。
 - **`skill_manage` の `description` 上限は 300 字**（仕様は 1024 字）。プロンプトコストを
   理由に意図的に狭めている。
 - **`search` は gitignore された project skill を見つけない**（`ignore::WalkBuilder` の内部挙動）。

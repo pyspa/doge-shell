@@ -231,117 +231,20 @@ fn run_bookmark(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) -> ExitSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy;
 
-    struct MockShellProxy {
-        bookmarks: std::collections::HashMap<String, (String, i64)>,
-        last_command: Option<String>,
-        dispatched: Option<(String, Vec<String>)>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                bookmarks: std::collections::HashMap::new(),
-                last_command: Some("echo test".to_string()),
-                dispatched: None,
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
-            self.dispatched = Some((cmd.to_string(), argv));
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-
-        // Bookmark methods
-        fn add_bookmark(&mut self, name: String, command: String) -> bool {
-            self.bookmarks.insert(name, (command, 0));
-            true
-        }
-        fn remove_bookmark(&mut self, name: &str) -> bool {
-            self.bookmarks.remove(name).is_some()
-        }
-        fn list_bookmarks(&self) -> Vec<(String, String, i64)> {
-            self.bookmarks
-                .iter()
-                .map(|(k, v)| (k.clone(), v.0.clone(), v.1))
-                .collect()
-        }
-        fn get_bookmark(&self, name: &str) -> Option<(String, i64)> {
-            self.bookmarks.get(name).cloned()
-        }
-        fn record_bookmark_use(&mut self, name: &str) {
-            if let Some(b) = self.bookmarks.get_mut(name) {
-                b.1 += 1;
-            }
-        }
-        fn get_last_command(&self) -> Option<String> {
-            self.last_command.clone()
+    fn bookmark_proxy() -> TestShellProxy {
+        TestShellProxy {
+            last_command: Some("echo test".to_string()),
+            allow_dispatch: true,
+            ..TestShellProxy::default()
         }
     }
 
     #[test]
     fn test_add_bookmark() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = bookmark_proxy();
         let pid = getpid();
         let ctx = Context::new_safe(pid, pid, false);
 
@@ -353,7 +256,7 @@ mod tests {
     #[test]
     fn test_remove_bookmark() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = bookmark_proxy();
         proxy.add_bookmark("test".to_string(), "echo hello".to_string());
 
         let pid = getpid();
@@ -367,7 +270,7 @@ mod tests {
     #[test]
     fn test_run_bookmark_dispatches_shell_command_without_duplicate_sh() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = bookmark_proxy();
         proxy.add_bookmark("test".to_string(), "echo hello".to_string());
         let pid = getpid();
         let ctx = Context::new_safe(pid, pid, false);
@@ -377,10 +280,10 @@ mod tests {
         assert_eq!(result, ExitStatus::ExitedWith(0));
         assert_eq!(
             proxy.dispatched,
-            Some((
+            vec![(
                 "sh".to_string(),
                 vec!["-c".to_string(), "echo hello".to_string()]
-            ))
+            )]
         );
     }
 

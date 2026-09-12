@@ -296,167 +296,12 @@ fn edit_snippet(ctx: &Context, name: &str, proxy: &mut dyn ShellProxy) -> ExitSt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    // Simple snippet struct for testing
-    #[derive(Clone)]
-    struct TestSnippet {
-        name: String,
-        command: String,
-        description: Option<String>,
-        use_count: i64,
-    }
-
-    struct MockShellProxy {
-        snippets: HashMap<String, TestSnippet>,
-        dispatched: Option<(String, Vec<String>)>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                snippets: HashMap::new(),
-                dispatched: None,
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
-            self.dispatched = Some((cmd.to_string(), argv));
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-
-        // Snippet methods
-        fn add_snippet(
-            &mut self,
-            name: String,
-            command: String,
-            description: Option<String>,
-        ) -> bool {
-            self.snippets.insert(
-                name.clone(),
-                TestSnippet {
-                    name,
-                    command,
-                    description,
-                    use_count: 0,
-                },
-            );
-            true
-        }
-        fn remove_snippet(&mut self, name: &str) -> bool {
-            self.snippets.remove(name).is_some()
-        }
-        fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet> {
-            self.snippets
-                .values()
-                .map(|s| dsh_types::snippet::Snippet {
-                    id: 0,
-                    name: s.name.clone(),
-                    command: s.command.clone(),
-                    description: s.description.clone(),
-                    tags: None,
-                    created_at: 0,
-                    last_used: None,
-                    use_count: s.use_count,
-                })
-                .collect()
-        }
-        fn get_snippet(&self, name: &str) -> Option<dsh_types::snippet::Snippet> {
-            self.snippets
-                .get(name)
-                .map(|s| dsh_types::snippet::Snippet {
-                    id: 0,
-                    name: s.name.clone(),
-                    command: s.command.clone(),
-                    description: s.description.clone(),
-                    tags: None,
-                    created_at: 0,
-                    last_used: None,
-                    use_count: s.use_count,
-                })
-        }
-        fn update_snippet(&mut self, name: &str, command: &str, description: Option<&str>) -> bool {
-            if let Some(s) = self.snippets.get_mut(name) {
-                s.command = command.to_string();
-                s.description = description.map(|d| d.to_string());
-                true
-            } else {
-                false
-            }
-        }
-        fn record_snippet_use(&mut self, name: &str) {
-            if let Some(s) = self.snippets.get_mut(name) {
-                s.use_count += 1;
-            }
-        }
-    }
+    use crate::test_support::TestShellProxy;
 
     #[test]
     fn test_add_snippet() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = TestShellProxy::default();
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
@@ -469,7 +314,7 @@ mod tests {
     #[test]
     fn test_remove_snippet() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = TestShellProxy::default();
         proxy.add_snippet("test".to_string(), "echo hello".to_string(), None);
 
         let pid = getpid();
@@ -484,7 +329,7 @@ mod tests {
     #[test]
     fn test_invalid_snippet_name() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = TestShellProxy::default();
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
@@ -496,7 +341,10 @@ mod tests {
     #[test]
     fn test_run_snippet_dispatches_shell_command_without_duplicate_sh() {
         use nix::unistd::getpid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = TestShellProxy {
+            allow_dispatch: true,
+            ..TestShellProxy::default()
+        };
         proxy.add_snippet("test".to_string(), "echo hello".to_string(), None);
         let pid = getpid();
         let pgid = pid;
@@ -507,10 +355,10 @@ mod tests {
         assert_eq!(result, ExitStatus::ExitedWith(0));
         assert_eq!(
             proxy.dispatched,
-            Some((
+            vec![(
                 "sh".to_string(),
                 vec!["-c".to_string(), "echo hello".to_string()]
-            ))
+            )]
         );
     }
 

@@ -2164,116 +2164,12 @@ fn count_skill_dirs(root: &Path) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy as TestProxy;
     use dsh_types::mcp::{McpServerConfig, McpTransport};
     use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
     use std::collections::HashMap;
     use std::os::fd::IntoRawFd;
     use std::process::Command as StdCommand;
-
-    struct TestProxy {
-        cwd: PathBuf,
-        vars: HashMap<String, String>,
-        allowlist: Vec<String>,
-        servers: Vec<McpServerConfig>,
-        direnv_allowed: bool,
-    }
-
-    impl ShellProxy for TestProxy {
-        fn exit_shell(&mut self) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn save_path_history(&mut self, _path: &str) {}
-
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-
-        fn get_var(&mut self, key: &str) -> Option<String> {
-            self.vars.get(key).cloned()
-        }
-
-        fn set_var(&mut self, _key: String, _value: String) {}
-
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-
-        fn is_direnv_allowed(&self, _path: &Path) -> bool {
-            self.direnv_allowed
-        }
-
-        fn unset_env_var(&mut self, _key: &str) {}
-
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn set_alias(&mut self, _name: String, _command: String) {}
-
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            self.servers.clone()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            self.allowlist.clone()
-        }
-
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(self.cwd.clone())
-        }
-
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
 
     fn observed_context() -> (Context, SharedOutputObserver) {
         let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
@@ -2431,14 +2327,12 @@ mod tests {
             .unwrap()
             .to_path_buf();
         let mut proxy = TestProxy {
-            cwd: repo_root.clone(),
+            current_dir: repo_root.clone(),
             vars: HashMap::from([(
                 "CODEX_HOME".to_string(),
                 codex_home.path().display().to_string(),
             )]),
-            allowlist: Vec::new(),
-            servers: Vec::new(),
-            direnv_allowed: false,
+            ..TestProxy::default()
         };
 
         let details = json_section_details(&mut proxy, &repo_root, Some("skills"));
@@ -2766,14 +2660,12 @@ mod tests {
 
     fn hooks_proxy(cwd: &Path, vars: &[(&str, &str)]) -> TestProxy {
         TestProxy {
-            cwd: cwd.to_path_buf(),
+            current_dir: cwd.to_path_buf(),
             vars: vars
                 .iter()
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect(),
-            allowlist: Vec::new(),
-            servers: Vec::new(),
-            direnv_allowed: false,
+            ..TestProxy::default()
         }
     }
 
@@ -2976,10 +2868,10 @@ mod tests {
             "http://example.com/v1".to_string(),
         );
         let mut proxy = TestProxy {
-            cwd: dir.path().to_path_buf(),
+            current_dir: dir.path().to_path_buf(),
             vars,
-            allowlist: vec!["bash".to_string(), "git status".to_string()],
-            servers: vec![
+            execute_allowlist: vec!["bash".to_string(), "git status".to_string()],
+            mcp_servers: vec![
                 McpServerConfig {
                     label: "local".to_string(),
                     description: None,
@@ -2998,7 +2890,7 @@ mod tests {
                     },
                 },
             ],
-            direnv_allowed: false,
+            ..TestProxy::default()
         };
         let (ctx, observer) = observed_context();
 
@@ -3078,17 +2970,15 @@ mod tests {
     #[test]
     fn doctor_mcp_reports_legacy_sse_as_configuration_only() {
         let mut proxy = TestProxy {
-            cwd: PathBuf::from("."),
-            vars: HashMap::new(),
-            allowlist: Vec::new(),
-            servers: vec![McpServerConfig {
+            current_dir: PathBuf::from("."),
+            mcp_servers: vec![McpServerConfig {
                 label: "legacy".to_string(),
                 description: None,
                 transport: McpTransport::Sse {
                     url: "https://example.com/sse".to_string(),
                 },
             }],
-            direnv_allowed: false,
+            ..TestProxy::default()
         };
         let (ctx, observer) = observed_context();
 

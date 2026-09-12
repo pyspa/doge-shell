@@ -245,106 +245,7 @@ pub fn print_last_stdout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::mcp::McpServerConfig;
-    use dsh_types::output_history::OutputEntry;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    struct MockShellProxy {
-        vars: HashMap<String, String>,
-        history: Vec<OutputEntry>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                vars: HashMap::new(),
-                history: Vec::new(),
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn get_var(&mut self, key: &str) -> Option<String> {
-            self.vars.get(key).cloned()
-        }
-
-        fn exit_shell(&mut self) {}
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn set_var(&mut self, key: String, value: String) {
-            self.vars.insert(key, value);
-        }
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(PathBuf::from("/"))
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn get_full_output_history(&self) -> Vec<OutputEntry> {
-            self.history.clone()
-        }
-        fn clear_output_history(&mut self) -> usize {
-            let removed = self.history.len();
-            self.history.clear();
-            removed
-        }
-    }
+    use crate::test_support::TestShellProxy;
 
     #[test]
     fn parse_options_supports_list_limit_and_clear() {
@@ -380,7 +281,7 @@ mod tests {
     #[test]
     fn test_print_last_stdout() {
         use nix::unistd::Pid;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = TestShellProxy::default();
         proxy
             .vars
             .insert("OUT".to_string(), "hello world".to_string());

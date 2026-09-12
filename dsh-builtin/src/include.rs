@@ -134,116 +134,23 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use crate::test_support::TestShellProxy;
     use std::sync::{LazyLock, Mutex};
 
     // Mutex to prevent test races on environment variables
     static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-    struct MockShellProxy {
-        env: RefCell<HashMap<String, String>>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                env: RefCell::new(HashMap::new()),
-            }
-        }
-    }
-
-    impl crate::ShellProxy for MockShellProxy {
-        fn exit_shell(&mut self) {}
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, key: &str) -> Option<String> {
-            self.env.borrow().get(key).cloned()
-        }
-        fn set_var(&mut self, key: String, value: String) {
-            self.env.borrow_mut().insert(key, value);
-        }
-        fn set_env_var(&mut self, key: String, value: String) {
-            unsafe { std::env::set_var(&key, &value) }; // Also set real env for testing
-            self.env.borrow_mut().insert(key, value);
-        }
-        fn unset_env_var(&mut self, key: &str) {
-            unsafe { std::env::remove_var(key) }; // Also unset real env
-            self.env.borrow_mut().remove(key);
-        }
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::path::PathBuf::from("/"))
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            Ok(true)
-        }
-        fn is_canceled(&self) -> bool {
-            false
-        }
-        fn get_full_output_history(&self) -> Vec<dsh_types::output_history::OutputEntry> {
-            Vec::new()
-        }
-        fn capture_command(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-        ) -> anyhow::Result<(i32, String, String)> {
-            Ok((0, String::new(), String::new()))
-        }
-        fn open_editor(&mut self, _content: &str, _extension: &str) -> anyhow::Result<String> {
-            Ok(String::new())
+    fn env_mirroring_proxy() -> TestShellProxy {
+        TestShellProxy {
+            confirm_result: true,
+            // This suite intentionally checks that `include`d `export`/`unset`
+            // reach the real process environment, so it opts into
+            // TestShellProxy's real-env mirroring rather than only asserting
+            // on the fake's own state.
+            mutate_real_env: true,
+            capture_command_response: Some((0, String::new(), String::new())),
+            open_editor_response: Some(String::new()),
+            ..TestShellProxy::default()
         }
     }
 
@@ -251,7 +158,7 @@ mod tests {
     fn test_include_command() {
         let _lock = ENV_LOCK.lock().unwrap();
         use std::io::Write;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = env_mirroring_proxy();
         let ctx = Context::new_safe(
             nix::unistd::Pid::from_raw(0),
             nix::unistd::Pid::from_raw(0),
@@ -279,7 +186,7 @@ mod tests {
     fn test_include_unset() {
         let _lock = ENV_LOCK.lock().unwrap();
         use std::io::Write;
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = env_mirroring_proxy();
         let ctx = Context::new_safe(
             nix::unistd::Pid::from_raw(0),
             nix::unistd::Pid::from_raw(0),

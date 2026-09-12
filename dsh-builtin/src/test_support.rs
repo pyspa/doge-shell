@@ -1,10 +1,13 @@
-use crate::ShellProxy;
 use crate::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, ApprovalDecision};
+use crate::{ProxyFuture, ShellProxy};
 use anyhow::Result;
-use dsh_types::{Context, mcp::McpServerConfig};
+use dsh_types::{
+    Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
+    snippet::Snippet,
+};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -46,6 +49,40 @@ pub(crate) struct TestShellProxy {
     pub aliases: HashMap<String, String>,
     pub abbrs: HashMap<String, String>,
     pub exported: HashMap<String, String>,
+    /// Number of `set_env_var` calls, independent of `exported`'s contents -
+    /// some tests assert "nothing was exported" by call count rather than by
+    /// diffing the map.
+    pub set_env_calls: usize,
+    /// Number of `insert_path` calls.
+    pub insert_path_calls: usize,
+    pub mcp_servers: Vec<McpServerConfig>,
+    pub direnv_allowed: bool,
+    pub output_history: Vec<OutputEntry>,
+    pub command_blocks: Vec<CommandBlock>,
+    pub snippets: HashMap<String, Snippet>,
+    pub bookmarks: HashMap<String, (String, i64)>,
+    pub last_command: Option<String>,
+    /// `open_editor`'s canned reply. `None` fails closed, matching
+    /// `ShellProxy`'s own default.
+    pub open_editor_response: Option<String>,
+    pub open_editor_calls: Vec<(String, String)>,
+    pub capture_command_response: Option<(i32, String, String)>,
+    /// `ask_ai_async`'s canned reply. `None` fails closed.
+    pub ai_response: Option<String>,
+    pub requested_eval: Vec<String>,
+    /// When set, `request_eval_command` fails with this message instead of
+    /// recording into `requested_eval`.
+    pub request_eval_error: Option<String>,
+    /// Overrides `dispatch` to fail with this message regardless of
+    /// `allow_dispatch` - for exercising a caller's error handling rather
+    /// than the dispatch-not-configured default.
+    pub dispatch_error: Option<String>,
+    /// Opt-in: also mirror `set_env_var`/`unset_env_var` into the real
+    /// process environment. Off by default so ordinary tests cannot leak
+    /// state into each other; a test that specifically exercises "does this
+    /// builtin export a real environment variable" turns it on and takes
+    /// responsibility for serializing against other env-touching tests.
+    pub mutate_real_env: bool,
 }
 
 impl Default for TestShellProxy {
@@ -74,6 +111,23 @@ impl Default for TestShellProxy {
             aliases: HashMap::new(),
             abbrs: HashMap::new(),
             exported: HashMap::new(),
+            set_env_calls: 0,
+            insert_path_calls: 0,
+            mcp_servers: Vec::new(),
+            direnv_allowed: false,
+            output_history: Vec::new(),
+            command_blocks: Vec::new(),
+            snippets: HashMap::new(),
+            bookmarks: HashMap::new(),
+            last_command: None,
+            open_editor_response: None,
+            open_editor_calls: Vec::new(),
+            capture_command_response: None,
+            ai_response: None,
+            requested_eval: Vec::new(),
+            request_eval_error: None,
+            dispatch_error: None,
+            mutate_real_env: false,
         }
     }
 }
@@ -94,6 +148,9 @@ impl ShellProxy for TestShellProxy {
     }
 
     fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {
+        if let Some(message) = &self.dispatch_error {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
         if !self.allow_dispatch {
             return Err(anyhow::anyhow!("dispatch not configured"));
         }
@@ -112,7 +169,9 @@ impl ShellProxy for TestShellProxy {
         Ok(())
     }
 
-    fn insert_path(&mut self, _index: usize, _path: &str) {}
+    fn insert_path(&mut self, _index: usize, _path: &str) {
+        self.insert_path_calls += 1;
+    }
 
     fn get_var(&mut self, key: &str) -> Option<String> {
         self.vars.get(key).cloned()
@@ -123,10 +182,25 @@ impl ShellProxy for TestShellProxy {
     }
 
     fn set_env_var(&mut self, key: String, value: String) {
+        self.set_env_calls += 1;
+        if self.mutate_real_env {
+            // SAFETY: opt-in only (`mutate_real_env`); callers that turn this
+            // on take responsibility for serializing against other tests
+            // that touch the same environment variables.
+            unsafe { std::env::set_var(&key, &value) };
+        }
         self.exported.insert(key, value);
     }
 
+    fn is_direnv_allowed(&self, _path: &Path) -> bool {
+        self.direnv_allowed
+    }
+
     fn unset_env_var(&mut self, key: &str) {
+        if self.mutate_real_env {
+            // SAFETY: see `set_env_var` above.
+            unsafe { std::env::remove_var(key) };
+        }
         self.exported.remove(key);
     }
 
@@ -162,7 +236,7 @@ impl ShellProxy for TestShellProxy {
     }
 
     fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-        Vec::new()
+        self.mcp_servers.clone()
     }
 
     fn list_execute_allowlist(&mut self) -> Vec<String> {
@@ -203,6 +277,243 @@ impl ShellProxy for TestShellProxy {
             counter.fetch_add(1, Ordering::SeqCst);
         }
         Ok(self.confirm_result)
+    }
+
+    fn get_full_output_history(&self) -> Vec<OutputEntry> {
+        self.output_history.clone()
+    }
+
+    fn clear_output_history(&mut self) -> usize {
+        let removed = self.output_history.len();
+        self.output_history.clear();
+        removed
+    }
+
+    fn get_command_blocks(&self) -> Vec<CommandBlock> {
+        self.command_blocks.clone()
+    }
+
+    fn clear_command_blocks(&mut self) -> usize {
+        let removed = self.command_blocks.len();
+        self.command_blocks.clear();
+        removed
+    }
+
+    fn request_eval_command(&mut self, command: String) -> Result<()> {
+        if let Some(message) = &self.request_eval_error {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
+        self.requested_eval.push(command);
+        Ok(())
+    }
+
+    fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
+        self.capture_command_response
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("capture_command not configured"))
+    }
+
+    fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
+        self.open_editor_calls
+            .push((content.to_string(), extension.to_string()));
+        self.open_editor_response
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("open_editor not configured"))
+    }
+
+    fn ask_ai_async<'a>(
+        &'a mut self,
+        _messages: Vec<serde_json::Value>,
+    ) -> ProxyFuture<'a, String> {
+        let response = self.ai_response.clone();
+        Box::pin(
+            async move { response.ok_or_else(|| anyhow::anyhow!("no ai response configured")) },
+        )
+    }
+
+    // Snippet management.
+    fn add_snippet(&mut self, name: String, command: String, description: Option<String>) -> bool {
+        self.snippets.insert(
+            name.clone(),
+            Snippet {
+                id: 0,
+                name,
+                command,
+                description,
+                tags: None,
+                created_at: 0,
+                last_used: None,
+                use_count: 0,
+            },
+        );
+        true
+    }
+
+    fn remove_snippet(&mut self, name: &str) -> bool {
+        self.snippets.remove(name).is_some()
+    }
+
+    fn list_snippets(&self) -> Vec<Snippet> {
+        self.snippets.values().cloned().collect()
+    }
+
+    fn get_snippet(&self, name: &str) -> Option<Snippet> {
+        self.snippets.get(name).cloned()
+    }
+
+    fn update_snippet(&mut self, name: &str, command: &str, description: Option<&str>) -> bool {
+        let Some(snippet) = self.snippets.get_mut(name) else {
+            return false;
+        };
+        snippet.command = command.to_string();
+        snippet.description = description.map(str::to_string);
+        true
+    }
+
+    fn record_snippet_use(&mut self, name: &str) {
+        if let Some(snippet) = self.snippets.get_mut(name) {
+            snippet.use_count += 1;
+        }
+    }
+
+    // Bookmark management.
+    fn add_bookmark(&mut self, name: String, command: String) -> bool {
+        self.bookmarks.insert(name, (command, 0));
+        true
+    }
+
+    fn remove_bookmark(&mut self, name: &str) -> bool {
+        self.bookmarks.remove(name).is_some()
+    }
+
+    fn list_bookmarks(&self) -> Vec<(String, String, i64)> {
+        self.bookmarks
+            .iter()
+            .map(|(name, (command, use_count))| (name.clone(), command.clone(), *use_count))
+            .collect()
+    }
+
+    fn get_bookmark(&self, name: &str) -> Option<(String, i64)> {
+        self.bookmarks.get(name).cloned()
+    }
+
+    fn record_bookmark_use(&mut self, name: &str) {
+        if let Some(bookmark) = self.bookmarks.get_mut(name) {
+            bookmark.1 += 1;
+        }
+    }
+
+    fn get_last_command(&self) -> Option<String> {
+        self.last_command.clone()
+    }
+
+    fn add_dir_alias(&mut self, _name: String, _path: String) -> bool {
+        false
+    }
+
+    fn remove_dir_alias(&mut self, _name: &str) -> bool {
+        false
+    }
+
+    fn list_dir_aliases(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    fn get_dir_alias(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    fn command_history_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn completion_diagnostics(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn dir_stack(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn dir_stack_set(&mut self, _stack: Vec<String>) {}
+
+    fn dispatch_core_action(
+        &mut self,
+        ctx: &Context,
+        action: crate::CoreShellAction,
+        argv: Vec<String>,
+    ) -> Result<()> {
+        self.dispatch(ctx, action.command_name(), argv)
+    }
+
+    fn executable_cache_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn generate_command_completion_async<'a>(
+        &'a mut self,
+        _command_name: &'a str,
+        _help_text: &'a str,
+    ) -> ProxyFuture<'a, String> {
+        Box::pin(async move {
+            Err(anyhow::anyhow!(
+                "generate_command_completion_async not implemented"
+            ))
+        })
+    }
+
+    fn is_canceled(&self) -> bool {
+        false
+    }
+
+    fn latency_probe_lines(&self, _iterations: usize) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn run_hook(&mut self, _hook_name: &str, _args: Vec<String>) -> Result<()> {
+        Err(anyhow::anyhow!("run_hook not implemented"))
+    }
+
+    fn safety_level(&mut self) -> dsh_types::safety_policy::SafetyLevel {
+        dsh_types::safety_policy::SafetyLevel::from_env_value(self.get_var("SAFETY_LEVEL"))
+    }
+
+    fn save_output_history(&mut self, entry: OutputEntry) {
+        self.output_history.push(entry);
+    }
+
+    fn sched_add(&mut self, _spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn sched_as_lisp(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn sched_enabled(&self) -> bool {
+        false
+    }
+
+    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
+        Vec::new()
+    }
+
+    fn sched_remove(&mut self, _selector: &str) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn sched_set_enabled(&mut self, _enabled: bool) {}
+
+    fn sched_set_paused(&mut self, _selector: &str, _paused: bool) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn sched_trigger(&mut self, _selector: &str) -> Result<String, String> {
+        Err("scheduler unavailable".to_string())
+    }
+
+    fn select_item(&mut self, _items: Vec<String>) -> Result<Option<String>> {
+        Err(anyhow::anyhow!("select_item not implemented"))
     }
 }
 

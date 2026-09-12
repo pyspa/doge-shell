@@ -1136,113 +1136,10 @@ fn dedup_strings(values: Vec<String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy;
     use std::fs::File;
     use std::io::Write;
-    use std::path::PathBuf;
     use tempfile::tempdir;
-
-    struct MockShellProxy {
-        current_dir: PathBuf,
-        dispatched: Option<(String, Vec<String>)>,
-    }
-
-    impl MockShellProxy {
-        fn new(current_dir: PathBuf) -> Self {
-            Self {
-                current_dir,
-                dispatched: None,
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn exit_shell(&mut self) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-
-        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
-            self.dispatched = Some((cmd.to_string(), argv));
-            Ok(())
-        }
-
-        fn save_path_history(&mut self, _path: &str) {}
-
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-
-        fn set_var(&mut self, _key: String, _value: String) {}
-
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-
-        fn unset_env_var(&mut self, _key: &str) {}
-
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn set_alias(&mut self, _name: String, _command: String) {}
-
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(self.current_dir.clone())
-        }
-
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
 
     #[test]
     fn test_detect_package_json() {
@@ -1508,7 +1405,11 @@ help
     fn command_dispatches_selected_task_through_shell_without_duplicate_sh() {
         let dir = tempdir().unwrap();
         File::create(dir.path().join("Cargo.toml")).unwrap();
-        let mut proxy = MockShellProxy::new(dir.path().to_path_buf());
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            allow_dispatch: true,
+            ..TestShellProxy::default()
+        };
         let pid = nix::unistd::getpid();
         let ctx = Context::new_safe(pid, pid, false);
 
@@ -1521,7 +1422,7 @@ help
         assert_eq!(status, ExitStatus::ExitedWith(0));
         assert_eq!(
             proxy.dispatched,
-            Some((
+            vec![(
                 "sh".to_string(),
                 vec![
                     "-c".to_string(),
@@ -1530,7 +1431,7 @@ help
                         dir.path().canonicalize().unwrap().display()
                     )
                 ]
-            ))
+            )]
         );
     }
 

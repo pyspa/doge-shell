@@ -158,6 +158,13 @@ impl CoreShellAction {
 
 /// Trait that provides an interface for builtin commands to interact with the shell
 /// This allows builtin commands to perform shell operations without direct coupling
+///
+/// No method here has a default body, deliberately. There are exactly two
+/// implementors - the real `Shell` (`dsh/src/proxy/mod.rs`) and the shared
+/// test double [`crate::test_support::TestShellProxy`] - and both provide
+/// every method explicitly. A default body would let either one silently
+/// fall back to a no-op if a method were forgotten after a signature change;
+/// requiring every method keeps that a compile error instead.
 pub trait ShellProxy {
     /// Initiates shell exit process
     fn exit_shell(&mut self);
@@ -178,18 +185,18 @@ pub trait ShellProxy {
     /// Typed compatibility facade for operations owned by the shell core.
     ///
     /// Existing proxy implementations continue to work through `dispatch`;
-    /// the real shell overrides this to avoid a second string registry.
+    /// the real shell overrides this to avoid a second string registry. The
+    /// obvious body (delegate to `dispatch`) is not a default here - see the
+    /// module doc for why this trait has no default method bodies at all.
     fn dispatch_core_action(
         &mut self,
         ctx: &Context,
         action: CoreShellAction,
         argv: Vec<String>,
-    ) -> Result<()> {
-        self.dispatch(ctx, action.command_name(), argv)
-    }
+    ) -> Result<()>;
 
     /// Saves a command output entry to the shell's history
-    fn save_output_history(&mut self, _entry: OutputEntry) {}
+    fn save_output_history(&mut self, entry: OutputEntry);
 
     /// Records a path in the shell's path history for frecency-based navigation
     fn save_path_history(&mut self, path: &str);
@@ -199,55 +206,34 @@ pub trait ShellProxy {
 
     /// Returns the `pushd`/`popd` directory stack, slot 0 being the current
     /// directory. Empty when the shell has not changed directory yet.
-    ///
-    /// Defaulted so the many test doubles of this trait keep compiling.
-    fn dir_stack(&self) -> Vec<String> {
-        Vec::new()
-    }
+    fn dir_stack(&self) -> Vec<String>;
 
     /// Replaces the directory stack wholesale.
     ///
     /// Callers are expected to route the actual directory change through
     /// [`ShellProxy::changepwd`] so path history and chpwd hooks still fire.
-    fn dir_stack_set(&mut self, _stack: Vec<String>) {}
+    fn dir_stack_set(&mut self, stack: Vec<String>);
 
     /// Registers a periodic task, returning its id.
-    ///
-    /// All the scheduler hooks below are defaulted for the same reason as the
-    /// directory-stack pair: this trait has a large number of test doubles.
-    fn sched_add(&mut self, _spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
-        Err("scheduler unavailable".to_string())
-    }
+    fn sched_add(&mut self, spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String>;
 
-    fn sched_remove(&mut self, _selector: &str) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
+    fn sched_remove(&mut self, selector: &str) -> Result<String, String>;
 
     /// Pauses or resumes one task.
-    fn sched_set_paused(&mut self, _selector: &str, _paused: bool) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
+    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String>;
 
     /// Makes a task due on the next scan.
-    fn sched_trigger(&mut self, _selector: &str) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
+    fn sched_trigger(&mut self, selector: &str) -> Result<String, String>;
 
-    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
-        Vec::new()
-    }
+    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView>;
 
     /// `sched list --lisp`: the `sched-add` calls that recreate the task set.
-    fn sched_as_lisp(&self) -> Vec<String> {
-        Vec::new()
-    }
+    fn sched_as_lisp(&self) -> Vec<String>;
 
     /// Whether the scheduler as a whole is running.
-    fn sched_enabled(&self) -> bool {
-        false
-    }
+    fn sched_enabled(&self) -> bool;
 
-    fn sched_set_enabled(&mut self, _enabled: bool) {}
+    fn sched_set_enabled(&mut self, enabled: bool);
 
     /// Inserts a path at the specified index in the PATH environment variable
     fn insert_path(&mut self, index: usize, path: &str);
@@ -262,9 +248,7 @@ pub trait ShellProxy {
     fn set_env_var(&mut self, key: String, value: String);
 
     /// Returns true when a project root has been allow-listed for `.envrc` loading.
-    fn is_direnv_allowed(&self, _path: &std::path::Path) -> bool {
-        false
-    }
+    fn is_direnv_allowed(&self, path: &std::path::Path) -> bool;
 
     /// Unsets an environment variable (removes it from child processes)
     fn unset_env_var(&mut self, key: &str);
@@ -305,191 +289,114 @@ pub trait ShellProxy {
     fn get_current_dir(&self) -> Result<std::path::PathBuf>;
 
     /// Number of command history entries currently loaded in memory.
-    fn command_history_len(&self) -> Option<usize> {
-        None
-    }
+    fn command_history_len(&self) -> Option<usize>;
 
     /// Number of prewarmed PATH executable names currently loaded in memory.
-    fn executable_cache_len(&self) -> Option<usize> {
-        None
-    }
+    fn executable_cache_len(&self) -> Option<usize>;
 
     /// Dynamic completion cache diagnostics, when the shell runtime exposes them.
-    fn completion_diagnostics(&self) -> Vec<String> {
-        Vec::new()
-    }
+    fn completion_diagnostics(&self) -> Vec<String>;
 
     /// Runs shell latency probes when supported by the runtime.
-    fn latency_probe_lines(&self, _iterations: usize) -> Vec<String> {
-        Vec::new()
-    }
+    fn latency_probe_lines(&self, iterations: usize) -> Vec<String>;
 
     /// Retrieves a variable from the Lisp environment
     fn get_lisp_var(&self, key: &str) -> Option<String>;
 
     /// Current shell safety level as a typed value.
-    fn safety_level(&mut self) -> SafetyLevel {
-        SafetyLevel::from_env_value(self.get_var("SAFETY_LEVEL"))
-    }
+    fn safety_level(&mut self) -> SafetyLevel;
 
     /// Requests user confirmation for a potentially dangerous action
-    fn confirm_action(&mut self, _message: &str) -> Result<bool> {
-        Ok(false)
-    }
+    fn confirm_action(&mut self, message: &str) -> Result<bool>;
 
     /// Checks if the current operation has been canceled (e.g. via Ctrl+C)
-    fn is_canceled(&self) -> bool {
-        false
-    }
+    fn is_canceled(&self) -> bool;
 
     /// Get the full output history
-    fn get_full_output_history(&self) -> Vec<OutputEntry> {
-        Vec::new()
-    }
+    fn get_full_output_history(&self) -> Vec<OutputEntry>;
 
     /// Clear output history and return the number of removed entries.
-    fn clear_output_history(&mut self) -> usize {
-        0
-    }
+    fn clear_output_history(&mut self) -> usize;
 
     /// Get the session-local command block history.
-    fn get_command_blocks(&self) -> Vec<CommandBlock> {
-        Vec::new()
-    }
+    fn get_command_blocks(&self) -> Vec<CommandBlock>;
 
     /// Clear command block history and return the number of removed blocks.
-    fn clear_command_blocks(&mut self) -> usize {
-        0
-    }
+    fn clear_command_blocks(&mut self) -> usize;
 
     /// Request that the interactive shell evaluate a command through the normal async path.
-    fn request_eval_command(&mut self, _command: String) -> Result<()> {
-        Err(anyhow::anyhow!("request_eval_command not implemented"))
-    }
+    fn request_eval_command(&mut self, command: String) -> Result<()>;
 
-    fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
-        // Default implementation returns error as this requires direct shell access
-        Err(anyhow::anyhow!("capture_command not implemented"))
-    }
+    fn capture_command(&mut self, ctx: &Context, cmd: &str) -> Result<(i32, String, String)>;
 
     /// Opens the external editor with the given content
-    fn open_editor(&mut self, _content: &str, _extension: &str) -> Result<String> {
-        Err(anyhow::anyhow!("open_editor not implemented"))
-    }
+    fn open_editor(&mut self, content: &str, extension: &str) -> Result<String>;
 
     fn generate_command_completion_async<'a>(
         &'a mut self,
-        _command_name: &'a str,
-        _help_text: &'a str,
-    ) -> ProxyFuture<'a, String> {
-        Box::pin(async move {
-            Err(anyhow::anyhow!(
-                "generate_command_completion_async not implemented"
-            ))
-        })
-    }
+        command_name: &'a str,
+        help_text: &'a str,
+    ) -> ProxyFuture<'a, String>;
 
     /// Ask AI for a response given a list of messages.
-    fn ask_ai_async<'a>(
-        &'a mut self,
-        _messages: Vec<serde_json::Value>,
-    ) -> ProxyFuture<'a, String> {
-        Box::pin(async move { Err(anyhow::anyhow!("ask_ai_async not implemented")) })
-    }
+    fn ask_ai_async<'a>(&'a mut self, messages: Vec<serde_json::Value>) -> ProxyFuture<'a, String>;
 
     /// Triggers a Lisp hook by name with arguments
-    fn run_hook(&mut self, _hook_name: &str, _args: Vec<String>) -> Result<()> {
-        Err(anyhow::anyhow!("run_hook not implemented"))
-    }
+    fn run_hook(&mut self, hook_name: &str, args: Vec<String>) -> Result<()>;
 
     /// Interactive selection of an item from a list
-    fn select_item(&mut self, _items: Vec<String>) -> Result<Option<String>> {
-        Err(anyhow::anyhow!("select_item not implemented"))
-    }
+    fn select_item(&mut self, items: Vec<String>) -> Result<Option<String>>;
 
     // Snippet management methods
     /// Adds a new snippet
-    fn add_snippet(
-        &mut self,
-        _name: String,
-        _command: String,
-        _description: Option<String>,
-    ) -> bool {
-        false
-    }
+    fn add_snippet(&mut self, name: String, command: String, description: Option<String>) -> bool;
 
     /// Removes a snippet by name, returns true if it existed
-    fn remove_snippet(&mut self, _name: &str) -> bool {
-        false
-    }
+    fn remove_snippet(&mut self, name: &str) -> bool;
 
     /// Lists all snippets
-    fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet> {
-        Vec::new()
-    }
+    fn list_snippets(&self) -> Vec<dsh_types::snippet::Snippet>;
 
     /// Gets a snippet by name
-    fn get_snippet(&self, _name: &str) -> Option<dsh_types::snippet::Snippet> {
-        None
-    }
+    fn get_snippet(&self, name: &str) -> Option<dsh_types::snippet::Snippet>;
 
     /// Updates a snippet's command and description
-    fn update_snippet(&mut self, _name: &str, _command: &str, _description: Option<&str>) -> bool {
-        false
-    }
+    fn update_snippet(&mut self, name: &str, command: &str, description: Option<&str>) -> bool;
 
     /// Records usage of a snippet
-    fn record_snippet_use(&mut self, _name: &str) {}
+    fn record_snippet_use(&mut self, name: &str);
 
     // Bookmark management methods
     /// Adds a new bookmark
-    fn add_bookmark(&mut self, _name: String, _command: String) -> bool {
-        false
-    }
+    fn add_bookmark(&mut self, name: String, command: String) -> bool;
 
     /// Removes a bookmark by name
-    fn remove_bookmark(&mut self, _name: &str) -> bool {
-        false
-    }
+    fn remove_bookmark(&mut self, name: &str) -> bool;
 
     /// Lists all bookmarks as (name, command, use_count);
-    fn list_bookmarks(&self) -> Vec<(String, String, i64)> {
-        Vec::new()
-    }
+    fn list_bookmarks(&self) -> Vec<(String, String, i64)>;
 
     /// Gets a bookmark by name (command, use_count)
-    fn get_bookmark(&self, _name: &str) -> Option<(String, i64)> {
-        None
-    }
+    fn get_bookmark(&self, name: &str) -> Option<(String, i64)>;
 
     /// Records usage of a bookmark
-    fn record_bookmark_use(&mut self, _name: &str) {}
+    fn record_bookmark_use(&mut self, name: &str);
 
     /// Gets the last executed command from history
-    fn get_last_command(&self) -> Option<String> {
-        None
-    }
+    fn get_last_command(&self) -> Option<String>;
 
     // Directory alias methods for z enhancement
     /// Adds a directory alias
-    fn add_dir_alias(&mut self, _name: String, _path: String) -> bool {
-        false
-    }
+    fn add_dir_alias(&mut self, name: String, path: String) -> bool;
 
     /// Removes a directory alias
-    fn remove_dir_alias(&mut self, _name: &str) -> bool {
-        false
-    }
+    fn remove_dir_alias(&mut self, name: &str) -> bool;
 
     /// Lists all directory aliases
-    fn list_dir_aliases(&self) -> Vec<(String, String)> {
-        Vec::new()
-    }
+    fn list_dir_aliases(&self) -> Vec<(String, String)>;
 
     /// Gets a directory alias path by name
-    fn get_dir_alias(&self, _name: &str) -> Option<String> {
-        None
-    }
+    fn get_dir_alias(&self, name: &str) -> Option<String>;
 }
 
 pub type ProxyFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + 'a>>;

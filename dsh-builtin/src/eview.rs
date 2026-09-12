@@ -63,103 +63,12 @@ fn pipe_to_editor(ctx: &Context, proxy: &mut dyn ShellProxy) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::{Context, mcp::McpServerConfig};
+    use crate::test_support::TestShellProxy;
+    use dsh_types::Context;
     use nix::unistd::pipe;
-    use std::collections::HashMap;
     use std::fs::File;
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
-
-    struct MockShellProxy {
-        pub captured_content: String,
-        pub file_extension: String,
-        pub return_content: String,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                captured_content: String::new(),
-                file_extension: String::new(),
-                return_content: "edited content".to_string(),
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn exit_shell(&mut self) {}
-        fn dispatch(&mut self, _ctx: &Context, _cmd: &str, _argv: Vec<String>) -> Result<()> {
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn get_current_dir(&self) -> Result<std::path::PathBuf> {
-            Ok(std::path::PathBuf::from("/"))
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn capture_command(&mut self, _ctx: &Context, _cmd: &str) -> Result<(i32, String, String)> {
-            Ok((0, String::new(), String::new()))
-        }
-
-        fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
-            self.captured_content = content.to_string();
-            self.file_extension = extension.to_string();
-            Ok(self.return_content.clone())
-        }
-    }
 
     #[test]
     fn test_eview_pipe() -> Result<()> {
@@ -179,16 +88,21 @@ mod tests {
         ctx.infile = read_in.as_raw_fd();
         ctx.outfile = write_out.as_raw_fd();
 
-        // Setup MockProxy
-        let mut proxy = MockShellProxy::new();
+        // Setup proxy
+        let mut proxy = TestShellProxy {
+            open_editor_response: Some("edited content".to_string()),
+            ..TestShellProxy::default()
+        };
 
         // Run command
         let status = command(&ctx, vec![], &mut proxy);
         assert_eq!(status, ExitStatus::ExitedWith(0));
 
         // Verify proxy calls
-        assert_eq!(proxy.captured_content, "original content");
-        assert_eq!(proxy.file_extension, "txt");
+        assert_eq!(
+            proxy.open_editor_calls,
+            vec![("original content".to_string(), "txt".to_string())]
+        );
 
         // Verify output
         drop(write_out);

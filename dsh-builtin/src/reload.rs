@@ -99,99 +99,12 @@ fn show_usage(ctx: &Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use crate::test_support::TestShellProxy;
 
-    // Mock ShellProxy for testing
-    struct MockShellProxy {
-        dispatch_result: Result<(), anyhow::Error>,
-    }
-
-    impl MockShellProxy {
-        fn new() -> Self {
-            Self {
-                dispatch_result: Ok(()),
-            }
-        }
-
-        fn with_error(error: anyhow::Error) -> Self {
-            Self {
-                dispatch_result: Err(error),
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn get_current_dir(&self) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::env::current_dir()?)
-        }
-        fn exit_shell(&mut self) {}
-
-        fn dispatch(&mut self, _ctx: &Context, cmd: &str, argv: Vec<String>) -> anyhow::Result<()> {
-            assert_eq!(cmd, "reload");
-            assert_eq!(argv, vec!["reload".to_string()]);
-            self.dispatch_result
-                .as_ref()
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-            Ok(())
-        }
-
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<dsh_types::mcp::McpServerConfig> {
-            Vec::new()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            vec![]
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            true
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
+    fn dispatching_proxy() -> TestShellProxy {
+        TestShellProxy {
+            allow_dispatch: true,
+            ..TestShellProxy::default()
         }
     }
 
@@ -201,11 +114,15 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = dispatching_proxy();
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
         assert_eq!(result, ExitStatus::ExitedWith(0));
+        assert_eq!(
+            proxy.dispatched,
+            vec![("reload".to_string(), vec!["reload".to_string()])]
+        );
     }
 
     #[test]
@@ -214,7 +131,7 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = dispatching_proxy();
 
         let argv = vec!["reload".to_string(), "--help".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -227,7 +144,7 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = dispatching_proxy();
 
         let argv = vec!["reload".to_string(), "-h".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -240,7 +157,7 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = dispatching_proxy();
 
         let argv = vec!["reload".to_string(), "--invalid".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -253,7 +170,7 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::new();
+        let mut proxy = dispatching_proxy();
 
         let argv = vec!["reload".to_string(), "arg1".to_string(), "arg2".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -266,7 +183,10 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::with_error(anyhow::anyhow!("test error"));
+        let mut proxy = TestShellProxy {
+            dispatch_error: Some("test error".to_string()),
+            ..TestShellProxy::default()
+        };
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -279,9 +199,13 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
-            "Failed to read config file: ~/.config/dsh/config.lisp: No such file or directory"
-        ));
+        let mut proxy = TestShellProxy {
+            dispatch_error: Some(
+                "Failed to read config file: ~/.config/dsh/config.lisp: No such file or directory"
+                    .to_string(),
+            ),
+            ..TestShellProxy::default()
+        };
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -294,7 +218,10 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::with_error(anyhow::anyhow!("Permission denied"));
+        let mut proxy = TestShellProxy {
+            dispatch_error: Some("Permission denied".to_string()),
+            ..TestShellProxy::default()
+        };
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -307,9 +234,10 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
-            "Parse error: unexpected token ')' at index 15"
-        ));
+        let mut proxy = TestShellProxy {
+            dispatch_error: Some("Parse error: unexpected token ')' at index 15".to_string()),
+            ..TestShellProxy::default()
+        };
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);
@@ -322,9 +250,10 @@ mod tests {
         let pid = getpid();
         let pgid = pid;
         let ctx = Context::new_safe(pid, pgid, false);
-        let mut proxy = MockShellProxy::with_error(anyhow::anyhow!(
-            "Runtime error: undefined function 'invalid-func'"
-        ));
+        let mut proxy = TestShellProxy {
+            dispatch_error: Some("Runtime error: undefined function 'invalid-func'".to_string()),
+            ..TestShellProxy::default()
+        };
 
         let argv = vec!["reload".to_string()];
         let result = command(&ctx, argv, &mut proxy);

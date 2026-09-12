@@ -1076,121 +1076,17 @@ fn help_text() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy;
     use dsh_types::command_block::{AiWatchSummary, CommandBlock};
-    use dsh_types::mcp::McpServerConfig;
     use dsh_types::observed_output::{ObservedOutput, ObservedOutputSnapshot};
-    use std::collections::HashMap;
-    use std::path::PathBuf;
 
-    struct MockShellProxy {
-        blocks: Vec<CommandBlock>,
-        requested_eval: Vec<String>,
-        ai_response: Option<String>,
-        request_eval_error: Option<String>,
-    }
-
-    impl MockShellProxy {
-        fn new(blocks: Vec<CommandBlock>) -> Self {
-            Self {
-                blocks,
-                requested_eval: Vec::new(),
-                ai_response: Some("explained".to_string()),
-                request_eval_error: None,
-            }
-        }
-    }
-
-    impl ShellProxy for MockShellProxy {
-        fn exit_shell(&mut self) {}
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-        fn get_job_count(&self) -> usize {
-            0
-        }
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            self.requested_eval.push(argv.join(" "));
-            Ok(())
-        }
-        fn save_path_history(&mut self, _path: &str) {}
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn insert_path(&mut self, _index: usize, _path: &str) {}
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-        fn set_var(&mut self, _key: String, _value: String) {}
-        fn set_env_var(&mut self, _key: String, _value: String) {}
-        fn unset_env_var(&mut self, _key: &str) {}
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-        fn set_alias(&mut self, _name: String, _command: String) {}
-        fn list_aliases(&mut self) -> HashMap<String, String> {
-            HashMap::new()
-        }
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            Vec::new()
-        }
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(PathBuf::from("/tmp"))
-        }
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-        fn confirm_action(&mut self, _message: &str) -> anyhow::Result<bool> {
-            Ok(true)
-        }
-        fn ask_ai_async<'a>(
-            &'a mut self,
-            _messages: Vec<serde_json::Value>,
-        ) -> crate::ProxyFuture<'a, String> {
-            let response = self.ai_response.clone();
-            Box::pin(async move { response.ok_or_else(|| anyhow::anyhow!("no ai")) })
-        }
-        fn get_command_blocks(&self) -> Vec<CommandBlock> {
-            self.blocks.clone()
-        }
-        fn clear_command_blocks(&mut self) -> usize {
-            let removed = self.blocks.len();
-            self.blocks.clear();
-            removed
-        }
-        fn request_eval_command(&mut self, command: String) -> anyhow::Result<()> {
-            if let Some(error) = &self.request_eval_error {
-                return Err(anyhow::anyhow!(error.clone()));
-            }
-            self.requested_eval.push(command);
-            Ok(())
+    fn blocks_proxy(blocks: Vec<CommandBlock>) -> TestShellProxy {
+        TestShellProxy {
+            current_dir: "/tmp".into(),
+            command_blocks: blocks,
+            confirm_result: true,
+            ai_response: Some("explained".to_string()),
+            ..TestShellProxy::default()
         }
     }
 
@@ -1333,7 +1229,7 @@ mod tests {
 
     #[test]
     fn export_writes_a_runbook_notebook_play_can_load() {
-        let mut proxy = MockShellProxy::new(export_fixture());
+        let mut proxy = blocks_proxy(export_fixture());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("runbook.md");
 
@@ -1368,7 +1264,7 @@ mod tests {
 
     #[test]
     fn export_without_output_prints_markdown() {
-        let mut proxy = MockShellProxy::new(export_fixture());
+        let mut proxy = blocks_proxy(export_fixture());
         let (status, snapshot) =
             run_with_observer(args(&["blocks", "export", "--last", "1"]), &mut proxy);
         assert_eq!(status, ExitStatus::ExitedWith(0));
@@ -1474,7 +1370,7 @@ mod tests {
     fn fix_json_uses_deterministic_engine_without_running_command() {
         let mut failed = block("gti status", 127, false);
         failed.stderr = "dsh: command not found: gti".to_string();
-        let mut proxy = MockShellProxy::new(vec![failed]);
+        let mut proxy = blocks_proxy(vec![failed]);
         let (status, snapshot) = run_with_observer(
             vec![
                 "blocks".to_string(),
@@ -1493,7 +1389,7 @@ mod tests {
     #[test]
     fn command_prints_block_command() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
-        let mut proxy = MockShellProxy::new(vec![block("echo hi", 0, false)]);
+        let mut proxy = blocks_proxy(vec![block("echo hi", 0, false)]);
 
         let status = command(
             &ctx,
@@ -1506,7 +1402,7 @@ mod tests {
 
     #[test]
     fn show_stdout_outputs_block_stdout() {
-        let mut proxy = MockShellProxy::new(vec![block_with_streams(
+        let mut proxy = blocks_proxy(vec![block_with_streams(
             "echo hi",
             "stdout text",
             "stderr text",
@@ -1529,7 +1425,7 @@ mod tests {
 
     #[test]
     fn show_stderr_outputs_block_stderr_to_stdout() {
-        let mut proxy = MockShellProxy::new(vec![block_with_streams(
+        let mut proxy = blocks_proxy(vec![block_with_streams(
             "echo hi",
             "stdout text",
             "stderr text",
@@ -1552,7 +1448,7 @@ mod tests {
 
     #[test]
     fn show_all_outputs_metadata_and_both_streams() {
-        let mut proxy = MockShellProxy::new(vec![block_with_streams(
+        let mut proxy = blocks_proxy(vec![block_with_streams(
             "echo hi",
             "stdout text",
             "stderr text",
@@ -1580,7 +1476,7 @@ mod tests {
     #[test]
     fn clear_removes_blocks() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
-        let mut proxy = MockShellProxy::new(vec![block("echo hi", 0, false)]);
+        let mut proxy = blocks_proxy(vec![block("echo hi", 0, false)]);
 
         let status = command(
             &ctx,
@@ -1589,13 +1485,13 @@ mod tests {
         );
 
         assert_eq!(status, ExitStatus::ExitedWith(0));
-        assert!(proxy.blocks.is_empty());
+        assert!(proxy.command_blocks.is_empty());
     }
 
     #[test]
     fn rerun_requests_normal_shell_eval() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
-        let mut proxy = MockShellProxy::new(vec![block("echo hi", 0, false)]);
+        let mut proxy = blocks_proxy(vec![block("echo hi", 0, false)]);
 
         let status = command(
             &ctx,
@@ -1610,7 +1506,7 @@ mod tests {
     #[test]
     fn rerun_reports_rejected_nested_eval_request() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
-        let mut proxy = MockShellProxy::new(vec![block("blocks rerun 1", 0, false)]);
+        let mut proxy = blocks_proxy(vec![block("blocks rerun 1", 0, false)]);
         proxy.request_eval_error = Some("nested command block rerun is not allowed".to_string());
 
         let status = command(
@@ -1626,7 +1522,7 @@ mod tests {
     #[tokio::test]
     async fn explain_uses_ai() {
         let ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), true);
-        let mut proxy = MockShellProxy::new(vec![block("echo hi", 0, true)]);
+        let mut proxy = blocks_proxy(vec![block("echo hi", 0, true)]);
 
         let status = command_async(
             &ctx,

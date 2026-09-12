@@ -1280,119 +1280,11 @@ fn jump(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::mcp::McpServerConfig;
+    use crate::test_support::TestShellProxy as TestProxy;
     use dsh_types::observed_output::ObservedOutput;
     use std::io::Write;
     use std::os::fd::IntoRawFd;
     use std::os::unix::fs::PermissionsExt;
-
-    struct TestProxy {
-        cwd: PathBuf,
-        direnv_allowed: bool,
-        set_env_calls: usize,
-        insert_path_calls: usize,
-    }
-
-    impl ShellProxy for TestProxy {
-        fn exit_shell(&mut self) {}
-
-        fn get_github_status(&self) -> (usize, usize, usize) {
-            (0, 0, 0)
-        }
-
-        fn get_git_branch(&self) -> Option<String> {
-            None
-        }
-
-        fn get_job_count(&self) -> usize {
-            0
-        }
-
-        fn dispatch(
-            &mut self,
-            _ctx: &Context,
-            _cmd: &str,
-            _argv: Vec<String>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn save_path_history(&mut self, _path: &str) {}
-
-        fn changepwd(&mut self, _path: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn insert_path(&mut self, _index: usize, _path: &str) {
-            self.insert_path_calls += 1;
-        }
-
-        fn get_var(&mut self, _key: &str) -> Option<String> {
-            None
-        }
-
-        fn set_var(&mut self, _key: String, _value: String) {}
-
-        fn set_env_var(&mut self, _key: String, _value: String) {
-            self.set_env_calls += 1;
-        }
-
-        fn is_direnv_allowed(&self, _path: &Path) -> bool {
-            self.direnv_allowed
-        }
-
-        fn unset_env_var(&mut self, _key: &str) {}
-
-        fn get_alias(&mut self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn set_alias(&mut self, _name: String, _command: String) {}
-
-        fn list_aliases(&mut self) -> std::collections::HashMap<String, String> {
-            std::collections::HashMap::new()
-        }
-
-        fn add_abbr(&mut self, _name: String, _expansion: String) {}
-
-        fn remove_abbr(&mut self, _name: &str) -> bool {
-            false
-        }
-
-        fn list_abbrs(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn get_abbr(&self, _name: &str) -> Option<String> {
-            None
-        }
-
-        fn list_mcp_servers(&mut self) -> Vec<McpServerConfig> {
-            Vec::new()
-        }
-
-        fn list_execute_allowlist(&mut self) -> Vec<String> {
-            Vec::new()
-        }
-
-        fn list_exported_vars(&self) -> Vec<(String, String)> {
-            Vec::new()
-        }
-
-        fn export_var(&mut self, _key: &str) -> bool {
-            false
-        }
-
-        fn set_and_export_var(&mut self, _key: String, _value: String) {}
-
-        fn get_current_dir(&self) -> anyhow::Result<PathBuf> {
-            Ok(self.cwd.clone())
-        }
-
-        fn get_lisp_var(&self, _key: &str) -> Option<String> {
-            None
-        }
-    }
 
     fn observed_context() -> (Context, dsh_types::observed_output::SharedOutputObserver) {
         let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
@@ -1496,10 +1388,9 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".venv/bin")).unwrap();
 
         let mut proxy = TestProxy {
-            cwd: dir.path().to_path_buf(),
+            current_dir: dir.path().to_path_buf(),
             direnv_allowed: true,
-            set_env_calls: 0,
-            insert_path_calls: 0,
+            ..TestProxy::default()
         };
         let (ctx, observer) = observed_context();
 
@@ -1556,10 +1447,9 @@ exit 1
         assert_eq!(status.missing_tools, vec!["python"]);
 
         let mut proxy = TestProxy {
-            cwd: dir.path().to_path_buf(),
+            current_dir: dir.path().to_path_buf(),
             direnv_allowed: false,
-            set_env_calls: 0,
-            insert_path_calls: 0,
+            ..TestProxy::default()
         };
         let (ctx, observer) = observed_context();
         activate_mise(&ctx, &mut proxy, dir.path(), &status, true).unwrap();

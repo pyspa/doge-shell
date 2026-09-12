@@ -227,7 +227,15 @@ def collect_sites() -> list[tuple[str, str]]:
     for path in rust_sources():
         relative = path.relative_to(REPO_ROOT).as_posix()
         source = strip_comment_lines(path.read_text(encoding="utf-8"))
-        whole_file_is_test = "/tests/" in f"/{relative}"
+        # A unit-test module extracted to its own file carries no `#[cfg(test)]`
+        # of its own - the attribute sits on the parent's `mod tests;` - so
+        # without this the command-path check below would find no test region
+        # and silently pass on every one of them.
+        whole_file_is_test = (
+            "/tests/" in f"/{relative}"
+            or path.name == "tests.rs"
+            or path.name.endswith("_tests.rs")
+        )
         for literal in os_specific_literals(source) | command_literals(
             source, whole_file_is_test
         ):

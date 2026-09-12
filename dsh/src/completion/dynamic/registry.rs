@@ -1,6 +1,6 @@
 use super::{
     CachePolicy, DynamicCompletionProvider, container, dev, external, git, kubernetes, linux,
-    project,
+    local, project,
 };
 use crate::completion::integrated::EnhancedCandidate;
 use crate::completion::parser::ParsedCommandLine;
@@ -48,6 +48,15 @@ impl ProviderRegistration {
             self.collector,
             collector_for(self.family)
         ));
+        // Fixed-shape providers (a fixed executable + fixed args + a parser,
+        // or a fixed path + a loader) are answered from the `local` spec
+        // tables before the family collector runs, so adding one is a data
+        // row rather than a wrapper method plus a `match` arm. `family_for`
+        // still classifies every id - the row lives in a family module's
+        // table - it just does not have to route these.
+        if let Some(candidates) = local::collect(provider, request) {
+            return Some(candidates);
+        }
         (self.collector)(provider, request)
     }
 }
@@ -83,91 +92,63 @@ fn collector_for(family: ProviderFamily) -> ProviderCollector {
     }
 }
 
+/// Which family collector owns a provider that is *not* answered from a
+/// `local::LocalSpec` row.
+///
+/// Only the providers that still need a family collector appear here. A
+/// provider with a table row never reaches `collector_for`
+/// (`ProviderRegistration::collect` consults `local` first), so classifying it
+/// would be dead weight that also implies an ownership the family module does
+/// not have - `a_table_driven_provider_never_also_has_a_family_arm` in
+/// `local.rs` enforces that the two routes stay disjoint. A misclassification
+/// here is not silent either: the unconditional `External` fallthrough sends
+/// the provider to `platform::collect`, which returns `None` for a local id,
+/// and `every_registered_provider_has_a_dispatch_arm` fails.
 fn family_for(provider: &str) -> ProviderFamily {
     if provider.starts_with("git.") {
         ProviderFamily::Git
     } else if provider.starts_with("docker.") || provider.starts_with("podman.") {
         ProviderFamily::Container
-    } else if provider.starts_with("kubectl.")
-        || provider.starts_with("helm.")
-        || matches!(
-            provider,
-            "kind.cluster" | "k3d.cluster" | "minikube.profile"
-        )
-    {
+    } else if provider.starts_with("kubectl.") || provider.starts_with("helm.") {
         ProviderFamily::Kubernetes
-    } else if provider == "pacman.repository"
-        || matches!(
-            provider.split_once('.').map(|(prefix, _)| prefix),
-            Some(
-                "block"
-                    | "dbus"
-                    | "firewalld"
-                    | "fstab"
-                    | "ip"
-                    | "ipset"
-                    | "journalctl"
-                    | "kernel"
-                    | "localectl"
-                    | "loginctl"
-                    | "login"
-                    | "loop"
-                    | "lvm"
-                    | "mkinitcpio"
-                    | "mount"
-                    | "networkctl"
-                    | "nft"
-                    | "nmcli"
-                    | "screen"
-                    | "selinux"
-                    | "snapper"
-                    | "swap"
-                    | "sysctl"
-                    | "system"
-                    | "systemctl"
-                    | "timedatectl"
-                    | "tmux"
-                    | "udev"
-                    | "wireguard"
-                    | "wireless"
-                    | "zfs"
-                    | "zpool"
-            )
+    } else if matches!(
+        provider.split_once('.').map(|(prefix, _)| prefix),
+        Some(
+            "block"
+                | "kernel"
+                | "mkinitcpio"
+                | "mount"
+                | "nmcli"
+                | "selinux"
+                | "snapper"
+                | "sysctl"
+                | "system"
+                | "systemctl"
+                | "wireguard"
         )
-    {
+    ) {
         ProviderFamily::Linux
     } else if matches!(
         provider.split_once('.').map(|(prefix, _)| prefix),
         Some(
-            "asdf"
-                | "bacon"
-                | "bat"
+            "bacon"
                 | "cargo"
-                | "code"
-                | "ffmpeg"
                 | "ghq"
                 | "go"
-                | "golangci_lint"
                 | "hatch"
                 | "jj"
                 | "js"
                 | "maven"
                 | "meson"
-                | "mise"
                 | "node"
                 | "nox"
-                | "op"
                 | "pdm"
                 | "pip"
                 | "pipenv"
-                | "pipx"
                 | "pre_commit"
                 | "python"
-                | "rg"
-                | "rustup"
                 | "terraform"
                 | "tox"
-                | "vagrant"
         )
     ) {
         ProviderFamily::Development
@@ -175,8 +156,6 @@ fn family_for(provider: &str) -> ProviderFamily {
         provider,
         "project.task"
             | "archive.entry"
-            | "direnv.rc"
-            | "filesystem.type"
             | "man.page"
             | "shell.abbr"
             | "shell.alias"

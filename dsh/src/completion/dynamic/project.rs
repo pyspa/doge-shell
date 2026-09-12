@@ -11,6 +11,20 @@ use std::fs;
 use std::path::Path;
 use tracing::warn;
 
+/// This family's rows for `local::collect` - see `local` for what belongs
+/// here. Table only; routing is unaffected by which family's table a
+/// provider's row lives in.
+pub(super) const LOCAL_SPECS: &[super::local::LocalSpec] = &[super::local::LocalSpec {
+    provider: "direnv.rc",
+    command_name: "direnv",
+    value_kind: "rc",
+    scope: super::local::Scope::CurrentDir,
+    source: super::local::Source::ScopePath {
+        loader: load_direnv_rc_values,
+    },
+    description: ".envrc file",
+}];
+
 pub(super) fn collect(
     collector: &super::DynamicCompletionProvider,
     request: &super::registry::DynamicProviderRequest<'_>,
@@ -48,9 +62,6 @@ pub(super) fn collect(
                 )
             }
         }
-        "filesystem.type" => {
-            collector.collect_filesystem_type_candidates(current_token, cached_only)
-        }
         "ssh.host" => collector.collect_ssh_host_candidates(
             parsed_command_line,
             current_dir,
@@ -61,9 +72,6 @@ pub(super) fn collect(
         "shell.alias" => collector.collect_shell_alias_candidates(current_token),
         "shell.env_var" => collector.collect_shell_env_var_candidates(current_token),
         "shell.job" => Vec::new(),
-        "direnv.rc" => {
-            collector.collect_direnv_rc_candidates(current_dir, current_token, cached_only)
-        }
         _ => {
             return platform::collect(
                 collector,
@@ -77,24 +85,6 @@ pub(super) fn collect(
 }
 
 impl DynamicCompletionProvider {
-    pub(crate) fn collect_direnv_rc_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let scope = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "direnv",
-            "rc",
-            scope.clone(),
-            current_token,
-            ".envrc file",
-            cached_only,
-            move || Ok(load_direnv_rc_values(&scope)),
-        )
-    }
-
     pub(crate) fn collect_project_task_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,

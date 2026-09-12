@@ -5,6 +5,60 @@ use super::{
 };
 use std::path::Path;
 
+/// This family's rows for `local::collect` - see `local` for what belongs
+/// here. Table only; routing is unaffected by which family's table a
+/// provider's row lives in.
+pub(super) const LOCAL_SPECS: &[super::local::LocalSpec] = &[
+    super::local::LocalSpec {
+        provider: "docker.network",
+        command_name: "docker",
+        value_kind: "network",
+        scope: super::local::Scope::CurrentDirCanonical,
+        source: super::local::Source::Lines {
+            executable: "docker",
+            args: &["network", "ls", "--format", "{{.Name}}"],
+            parser: super::parse_non_empty_lines,
+        },
+        description: "docker network",
+    },
+    super::local::LocalSpec {
+        provider: "docker.volume",
+        command_name: "docker",
+        value_kind: "volume",
+        scope: super::local::Scope::CurrentDirCanonical,
+        source: super::local::Source::Lines {
+            executable: "docker",
+            args: &["volume", "ls", "--format", "{{.Name}}"],
+            parser: super::parse_non_empty_lines,
+        },
+        description: "docker volume",
+    },
+    super::local::LocalSpec {
+        provider: "podman.network",
+        command_name: "podman",
+        value_kind: "network",
+        scope: super::local::Scope::CurrentDirCanonical,
+        source: super::local::Source::Lines {
+            executable: "podman",
+            args: &["network", "ls", "--format", "{{.Name}}"],
+            parser: super::parse_non_empty_lines,
+        },
+        description: "podman network",
+    },
+    super::local::LocalSpec {
+        provider: "podman.volume",
+        command_name: "podman",
+        value_kind: "volume",
+        scope: super::local::Scope::CurrentDirCanonical,
+        source: super::local::Source::Lines {
+            executable: "podman",
+            args: &["volume", "ls", "--format", "{{.Name}}"],
+            parser: super::parse_non_empty_lines,
+        },
+        description: "podman volume",
+    },
+];
+
 pub(super) fn collect(
     collector: &super::DynamicCompletionProvider,
     request: &super::registry::DynamicProviderRequest<'_>,
@@ -26,26 +80,6 @@ pub(super) fn collect(
             current_dir,
             current_token,
             scope != Some("running"),
-            cached_only,
-        ),
-        "docker.network" => collector.collect_container_object_candidates(
-            "docker",
-            "network",
-            current_dir,
-            current_token,
-            "docker network",
-            &["network", "ls", "--format", "{{.Name}}"],
-            parse_non_empty_lines,
-            cached_only,
-        ),
-        "docker.volume" => collector.collect_container_object_candidates(
-            "docker",
-            "volume",
-            current_dir,
-            current_token,
-            "docker volume",
-            &["volume", "ls", "--format", "{{.Name}}"],
-            parse_non_empty_lines,
             cached_only,
         ),
         "docker.compose_service" => {
@@ -75,26 +109,6 @@ pub(super) fn collect(
             current_dir,
             current_token,
             scope != Some("running"),
-            cached_only,
-        ),
-        "podman.network" => collector.collect_container_object_candidates(
-            "podman",
-            "network",
-            current_dir,
-            current_token,
-            "podman network",
-            &["network", "ls", "--format", "{{.Name}}"],
-            parse_non_empty_lines,
-            cached_only,
-        ),
-        "podman.volume" => collector.collect_container_object_candidates(
-            "podman",
-            "volume",
-            current_dir,
-            current_token,
-            "podman volume",
-            &["volume", "ls", "--format", "{{.Name}}"],
-            parse_non_empty_lines,
             cached_only,
         ),
         _ => {

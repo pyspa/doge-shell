@@ -38,7 +38,7 @@
 ## 設計境界
 - AI 機能の設計境界は `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に集約する。エージェントループを 3 つ目にしない。設定解決・レスポンス解釈・切り詰め・応答言語・config ディレクトリ・コマンド危険度判定・MCP マネージャを再実装しない。
 - `dirs::config_dir()` を直接呼ばない。macOS では `~/Library/Application Support` を指し、XDG を使う installer や config ローダと食い違う。`dsh-builtin/src/config_paths.rs`（`dsh` crate では `environment::get_config_file`）を通す。`scripts/check-portability.py` が検査する。
-- 動的補完 provider は `dsh/src/completion/dynamic/registry.rs` の `DynamicProviderId` へ一度だけ登録し、family collector と `CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。
+- 動的補完 provider は `dsh-types` の `DYNAMIC_COMPLETION_PROVIDERS` へ一度だけ登録し、`CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。収集の実装は 2 経路のどちらかで、**混在させない**（両方あるとテーブルが黙って勝つ）。固定シェイプ（固定の実行ファイル + 固定引数、または固定パス読み取り + パーサ関数）は `dsh/src/completion/dynamic/local.rs` の `LocalSpec` テーブルに 1 行足すだけで、`registry.rs` の `family_for` にも family collector にも触らない。動的な引数構築・JSON 解釈・複数コマンドのマージが要るものだけ `family_for` + family collector を使う。詳細は `docs/ai/skills/doge-shell-repo/references/invariants.md` の「Completion 定義」。
 - `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
 - `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
 - プラットフォーム分岐は `#[cfg(not(target_os = "macos"))]` と `#[cfg(target_os = "macos")]` の対で書き、共通ロジックは cfg の外の純粋関数に置く（`dsh/src/completion/generators/user.rs`）。片方だけ書くと、もう一方の OS ではその項目が消えるだけでコンパイルもテストも通る。

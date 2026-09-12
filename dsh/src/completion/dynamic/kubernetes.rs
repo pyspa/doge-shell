@@ -18,11 +18,6 @@ pub(super) fn collect(
     let current_token = parsed_command_line.current_token.as_str();
 
     Some(match provider {
-        "kind.cluster" => collector.collect_kind_cluster_candidates(current_token, cached_only),
-        "k3d.cluster" => collector.collect_k3d_cluster_candidates(current_token, cached_only),
-        "minikube.profile" => {
-            collector.collect_minikube_profile_candidates(current_token, cached_only)
-        }
         "kubectl.context" => {
             collector.collect_kubectl_context_candidates(current_dir, current_token, cached_only)
         }

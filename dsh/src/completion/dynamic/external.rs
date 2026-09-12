@@ -21,41 +21,12 @@ pub(super) fn collect(
 
     Some(match provider {
         "brew.installed" => collector.collect_brew_installed_candidates(current_token, cached_only),
-        "ollama.model" => collector.collect_ollama_model_candidates(current_token, cached_only),
         "apt.installed_package" => collector.collect_apt_installed_package_candidates(
             current_dir,
             current_token,
             parsed_command_line.command.as_str(),
             cached_only,
         ),
-        "apk.installed_package" => collector.collect_apk_installed_package_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
-        "dnf.installed_package" => collector.collect_rpm_installed_package_candidates(
-            current_dir,
-            current_token,
-            "dnf",
-            cached_only,
-        ),
-        "rpm.installed_package" => collector.collect_rpm_installed_package_candidates(
-            current_dir,
-            current_token,
-            "rpm",
-            cached_only,
-        ),
-        "zypper.installed_package" => collector.collect_zypper_installed_package_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
-        "machinectl.machine" => {
-            collector.collect_machinectl_machine_candidates(current_dir, current_token, cached_only)
-        }
-        "ufw.application" => {
-            collector.collect_ufw_application_candidates(current_dir, current_token, cached_only)
-        }
         "pacman.package" => match pacman_sync_mode(parsed_command_line) {
             Some(sync) => collector.collect_pacman_package_candidates(
                 current_dir,
@@ -65,7 +36,6 @@ pub(super) fn collect(
             ),
             None => Vec::new(),
         },
-        "audit.rule_key" => collector.collect_audit_rule_key_candidates(current_token, cached_only),
         "ansible.inventory_host" => collector.collect_ansible_inventory_host_candidates(
             parsed_command_line,
             current_dir,
@@ -84,7 +54,6 @@ pub(super) fn collect(
             collector.collect_btrfs_subvolume_candidates(current_dir, current_token, cached_only)
         }
         "dmsetup.device" => collector.collect_dmsetup_device_candidates(current_token, cached_only),
-        "mdadm.array" => collector.collect_mdadm_array_candidates(current_token, cached_only),
         _ => {
             return platform::collect(
                 collector,

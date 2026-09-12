@@ -4,14 +4,26 @@
 //! This module and the Linux loaders in `dynamic.rs` are the only places
 //! allowed to read a source that exists on one platform only, and
 //! `scripts/portability-allowlist.txt` pins every such literal. Nothing here is
-//! compiled out on macOS: `registry::collector_for` dispatches
-//! `ProviderFamily::Linux` unconditionally, and each collector finds its file
-//! or command missing and returns no candidates. That silence is the intended
-//! behaviour -- these are completions for tools macOS does not have -- and it is
-//! the one place in the tree where "empty on the other platform" is correct
-//! rather than a porting gap.
+//! compiled out on macOS: both dispatch routes below run unconditionally, and
+//! each one finds its file or command missing and returns no candidates. That
+//! silence is the intended behaviour -- these are completions for tools macOS
+//! does not have -- and it is the one place in the tree where "empty on the
+//! other platform" is correct rather than a porting gap.
 //!
-//! See docs/ai/skills/doge-shell-repo/references/platform-support.md.
+//! Two routes reach this file, and a provider uses exactly one of them:
+//!
+//! - `LOCAL_SPECS` below, for the fixed-shape providers. `local::collect` reads
+//!   these rows straight from `registry::ProviderRegistration::collect`, so they
+//!   never reach `collector_for`/`family_for` at all -- their `ProviderFamily`
+//!   classification is irrelevant, which is why four rows here
+//!   (`machinectl.machine`, `ufw.application`, `audit.rule_key`, `mdadm.array`)
+//!   are classified `External` yet live in this table: a row belongs to the file
+//!   that owns the parser or loader it names, not to its family.
+//! - `collect` below, reached via `registry::collector_for(ProviderFamily::Linux)`,
+//!   for the providers that need runtime-built arguments or multi-source merges.
+//!
+//! See docs/ai/skills/doge-shell-repo/references/platform-support.md, and
+//! `local.rs` for what makes a provider "fixed shape".
 
 use super::{
     CachePolicy, CompletionContext, DynamicCompletionProvider, ParsedCommandLine, SystemdUnitQuery,
@@ -21,6 +33,241 @@ use super::{
 use crate::completion::integrated::EnhancedCandidate;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// This family's rows for `local::collect` - see `local` for what belongs
+/// here. Table only; routing is unaffected by which family's table a
+/// provider's row lives in.
+pub(super) const LOCAL_SPECS: &[super::local::LocalSpec] = &[
+    super::local::LocalSpec {
+        provider: "ip.netns",
+        command_name: "ip",
+        value_kind: "network-namespace",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "ip",
+            args: &["netns", "list"],
+            parser: parse_first_column_values,
+        },
+        description: "network namespace",
+    },
+    super::local::LocalSpec {
+        provider: "nft.table",
+        command_name: "nft",
+        value_kind: "table",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "nft",
+            args: &["list", "tables"],
+            parser: parse_nft_tables,
+        },
+        description: "nftables table",
+    },
+    super::local::LocalSpec {
+        provider: "nft.chain",
+        command_name: "nft",
+        value_kind: "chain",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "nft",
+            args: &["-a", "list", "ruleset"],
+            parser: parse_nft_chains,
+        },
+        description: "nftables chain",
+    },
+    super::local::LocalSpec {
+        provider: "lvm.physical_volume",
+        command_name: "lvm",
+        value_kind: "physical-volume",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "pvs",
+            args: &["--noheadings", "-o", "pv_name"],
+            parser: parse_first_column_values,
+        },
+        description: "LVM physical volume",
+    },
+    super::local::LocalSpec {
+        provider: "lvm.volume_group",
+        command_name: "lvm",
+        value_kind: "volume-group",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "vgs",
+            args: &["--noheadings", "-o", "vg_name"],
+            parser: parse_first_column_values,
+        },
+        description: "LVM volume group",
+    },
+    super::local::LocalSpec {
+        provider: "lvm.logical_volume",
+        command_name: "lvm",
+        value_kind: "logical-volume",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "lvs",
+            args: &["--noheadings", "-o", "lv_path,vg_name,lv_name"],
+            parser: parse_lvm_logical_volumes,
+        },
+        description: "LVM logical volume",
+    },
+    super::local::LocalSpec {
+        provider: "zfs.dataset",
+        command_name: "zfs",
+        value_kind: "dataset",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "zfs",
+            args: &["list", "-H", "-o", "name"],
+            parser: parse_non_empty_lines,
+        },
+        description: "ZFS dataset",
+    },
+    super::local::LocalSpec {
+        provider: "zpool.pool",
+        command_name: "zpool",
+        value_kind: "pool",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "zpool",
+            args: &["list", "-H", "-o", "name"],
+            parser: parse_non_empty_lines,
+        },
+        description: "ZFS pool",
+    },
+    super::local::LocalSpec {
+        provider: "journalctl.identifier",
+        command_name: "journalctl",
+        value_kind: "identifier",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "journalctl",
+            args: &["--no-pager", "-F", "SYSLOG_IDENTIFIER"],
+            parser: parse_non_empty_lines,
+        },
+        description: "journal identifier",
+    },
+    super::local::LocalSpec {
+        provider: "machinectl.machine",
+        command_name: "machinectl",
+        value_kind: "machine",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "machinectl",
+            args: &["list", "--no-legend", "--no-pager"],
+            parser: parse_first_column_values,
+        },
+        description: "systemd machine",
+    },
+    super::local::LocalSpec {
+        provider: "ufw.application",
+        command_name: "ufw",
+        value_kind: "application",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "ufw",
+            args: &["app", "list"],
+            parser: parse_ufw_applications,
+        },
+        description: "UFW application profile",
+    },
+    super::local::LocalSpec {
+        provider: "wireless.device",
+        command_name: "iw",
+        value_kind: "wireless-device",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "iw",
+            args: &["dev"],
+            parser: parse_iw_devices,
+        },
+        description: "wireless device",
+    },
+    super::local::LocalSpec {
+        provider: "selinux.boolean",
+        command_name: "getsebool",
+        value_kind: "boolean",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "getsebool",
+            args: &["-a"],
+            parser: parse_selinux_booleans,
+        },
+        description: "SELinux boolean",
+    },
+    super::local::LocalSpec {
+        provider: "pacman.repository",
+        command_name: "pacman-conf",
+        value_kind: "repository",
+        scope: super::local::Scope::Fixed("/etc/pacman.conf"),
+        source: super::local::Source::Lines {
+            executable: "pacman-conf",
+            args: &["--repo-list"],
+            parser: parse_non_empty_lines,
+        },
+        description: "pacman repository",
+    },
+    super::local::LocalSpec {
+        provider: "ip.route_table",
+        command_name: "ip",
+        value_kind: "route-table",
+        scope: super::local::Scope::Fixed("/etc/iproute2/rt_tables"),
+        source: super::local::Source::ScopePath {
+            loader: load_ip_route_tables,
+        },
+        description: "IP route table",
+    },
+    super::local::LocalSpec {
+        provider: "mdadm.array",
+        command_name: "mdadm",
+        value_kind: "array",
+        scope: super::local::Scope::Fixed("/proc/mdstat"),
+        source: super::local::Source::ScopePath {
+            loader: load_mdadm_arrays,
+        },
+        description: "mdraid array",
+    },
+    super::local::LocalSpec {
+        provider: "audit.rule_key",
+        command_name: "audit",
+        value_kind: "rule-key",
+        scope: super::local::Scope::Fixed("/etc/audit/rules.d"),
+        source: super::local::Source::ScopePath {
+            loader: load_audit_rule_keys,
+        },
+        description: "audit rule key",
+    },
+    super::local::LocalSpec {
+        provider: "login.shell",
+        command_name: "shells",
+        value_kind: "login-shell",
+        scope: super::local::Scope::Fixed("/etc"),
+        source: super::local::Source::Path {
+            path: "/etc/shells",
+            loader: load_login_shells,
+        },
+        description: "login shell",
+    },
+    super::local::LocalSpec {
+        provider: "udev.subsystem",
+        command_name: "udevadm",
+        value_kind: "subsystem",
+        scope: super::local::Scope::Fixed("/sys/class"),
+        source: super::local::Source::ScopePath {
+            loader: load_udev_subsystems,
+        },
+        description: "device subsystem",
+    },
+    super::local::LocalSpec {
+        provider: "snapper.config",
+        command_name: "snapper",
+        value_kind: "config",
+        scope: super::local::Scope::Fixed("/etc/snapper/configs"),
+        source: super::local::Source::ScopePath {
+            loader: load_file_names,
+        },
+        description: "snapper configuration",
+    },
+];
 
 pub(super) fn collect(
     collector: &super::DynamicCompletionProvider,
@@ -36,9 +283,6 @@ pub(super) fn collect(
     let current_token = parsed_command_line.current_token.as_str();
 
     Some(match provider {
-        "block.device" => {
-            collector.collect_block_device_candidates(current_dir, current_token, cached_only)
-        }
         "block.label" => collector.collect_blkid_attribute_candidates(
             current_dir,
             current_token,
@@ -53,9 +297,6 @@ pub(super) fn collect(
             "block uuid",
             cached_only,
         ),
-        "dbus.service" => {
-            collector.collect_dbus_service_candidates(current_dir, current_token, cached_only)
-        }
         "systemctl.unit" => {
             let kind = systemctl_unit_kind_for_context(parsed_command_line);
             collector.collect_systemd_unit_candidates(
@@ -81,59 +322,10 @@ pub(super) fn collect(
             "systemd unit file",
             cached_only,
         ),
-        "journalctl.boot" => {
-            collector.collect_journalctl_boot_candidates(current_dir, current_token, cached_only)
-        }
-        "journalctl.identifier" => collector.collect_journalctl_identifier_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
-        "firewalld.zone" => {
-            collector.collect_firewalld_zone_candidates(current_dir, current_token, cached_only)
-        }
-        "firewalld.service" => {
-            collector.collect_firewalld_service_candidates(current_dir, current_token, cached_only)
-        }
-        "firewalld.icmp_type" => collector.collect_firewalld_icmp_type_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
-        "networkctl.link" => {
-            collector.collect_networkctl_link_candidates(current_dir, current_token, cached_only)
-        }
-        "ipset.set" => {
-            collector.collect_ipset_set_candidates(current_dir, current_token, cached_only)
-        }
-        "wireguard.interface" => collector.collect_wireguard_interface_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
         "wireguard.config" => {
             collector.collect_wireguard_config_candidates(current_dir, current_token)
         }
-        "fstab.mountpoint" => {
-            collector.collect_fstab_mountpoint_candidates(current_token, cached_only)
-        }
-        "localectl.keymap" => {
-            collector.collect_localectl_keymap_candidates(current_dir, current_token, cached_only)
-        }
-        "localectl.locale" => {
-            collector.collect_localectl_locale_candidates(current_dir, current_token, cached_only)
-        }
-        "loginctl.seat" => {
-            collector.collect_loginctl_seat_candidates(current_dir, current_token, cached_only)
-        }
-        "loginctl.session" => {
-            collector.collect_loginctl_session_candidates(current_dir, current_token, cached_only)
-        }
-        "loop.device" => {
-            collector.collect_loop_device_candidates(current_dir, current_token, cached_only)
-        }
         "sysctl.key" => collector.collect_sysctl_key_candidates(current_token, cached_only),
-        "swap.device" => collector.collect_swap_device_candidates(current_token, cached_only),
         "system.process_name" => collector.collect_process_name_candidates(
             parsed_command_line,
             "system",
@@ -141,17 +333,6 @@ pub(super) fn collect(
         ),
         "system.process_pid" => {
             collector.collect_process_pid_candidates(parsed_command_line, cached_only)
-        }
-        "timedatectl.timezone" => collector.collect_timedatectl_timezone_candidates(
-            current_dir,
-            current_token,
-            cached_only,
-        ),
-        "tmux.session" => {
-            collector.collect_tmux_session_candidates(current_dir, current_token, cached_only)
-        }
-        "screen.session" => {
-            collector.collect_screen_session_candidates(current_dir, current_token, cached_only)
         }
         "nmcli.connection" => collector.collect_nmcli_value_candidates(
             current_dir,
@@ -181,56 +362,19 @@ pub(super) fn collect(
         "kernel.module" => {
             collector.collect_kernel_module_candidates(scope, current_token, cached_only)
         }
-        "ip.netns" => {
-            collector.collect_ip_netns_candidates(current_dir, current_token, cached_only)
-        }
-        "ip.route_table" => collector.collect_ip_route_table_candidates(current_token, cached_only),
-        "lvm.logical_volume" => {
-            collector.collect_lvm_logical_volume_candidates(current_token, cached_only)
-        }
-        "lvm.physical_volume" => {
-            collector.collect_lvm_physical_volume_candidates(current_token, cached_only)
-        }
-        "lvm.volume_group" => {
-            collector.collect_lvm_volume_group_candidates(current_token, cached_only)
-        }
         "mkinitcpio.preset" => {
             collector.collect_mkinitcpio_preset_candidates(current_token, cached_only)
-        }
-        "nft.chain" => {
-            collector.collect_nft_chain_candidates(current_dir, current_token, cached_only)
-        }
-        "nft.table" => {
-            collector.collect_nft_table_candidates(current_dir, current_token, cached_only)
         }
         "selinux.module" => collector.collect_selinux_module_candidates(current_token, cached_only),
         "system.owner_group" => {
             collector.collect_owner_group_candidates(current_token, cached_only)
         }
-        "wireless.device" => {
-            collector.collect_wireless_device_candidates(current_dir, current_token, cached_only)
-        }
-        "login.shell" => collector.collect_login_shell_candidates(current_token, cached_only),
-        "udev.subsystem" => collector.collect_udev_subsystem_candidates(current_token, cached_only),
-        "selinux.boolean" => {
-            collector.collect_selinux_boolean_candidates(current_token, cached_only)
-        }
-        "pacman.repository" => {
-            collector.collect_pacman_repository_candidates(current_dir, current_token, cached_only)
-        }
-        "snapper.config" => collector.collect_snapper_config_candidates(current_token, cached_only),
         "snapper.snapshot" => collector.collect_snapper_snapshot_candidates(
             parsed_command_line,
             current_dir,
             current_token,
             cached_only,
         ),
-        "zfs.dataset" => {
-            collector.collect_zfs_dataset_candidates(current_dir, current_token, cached_only)
-        }
-        "zpool.pool" => {
-            collector.collect_zpool_pool_candidates(current_dir, current_token, cached_only)
-        }
         _ => {
             return platform::collect(
                 collector,
@@ -283,241 +427,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(crate) fn collect_ip_netns_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("ip");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "ip",
-            "network-namespace",
-            current_dir.clone(),
-            current_token,
-            "network namespace",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_first_column_values(&run_command_lines(
-                    &command_path,
-                    &["netns", "list"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_ip_route_table_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let path = PathBuf::from("/etc/iproute2/rt_tables");
-        self.collect_cached_value_candidates(
-            "ip",
-            "route-table",
-            path.clone(),
-            current_token,
-            "IP route table",
-            cached_only,
-            move || Ok(load_ip_route_tables(&path)),
-        )
-    }
-
-    pub(crate) fn collect_nft_table_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("nft");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "nft",
-            "table",
-            current_dir.clone(),
-            current_token,
-            "nftables table",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_nft_tables(&run_command_lines(
-                    &command_path,
-                    &["list", "tables"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_nft_chain_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("nft");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "nft",
-            "chain",
-            current_dir.clone(),
-            current_token,
-            "nftables chain",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_nft_chains(&run_command_lines(
-                    &command_path,
-                    &["-a", "list", "ruleset"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_lvm_physical_volume_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("pvs");
-        self.collect_cached_value_candidates(
-            "lvm",
-            "physical-volume",
-            PathBuf::from("/"),
-            current_token,
-            "LVM physical volume",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_first_column_values(&run_command_lines(
-                    &command_path,
-                    &["--noheadings", "-o", "pv_name"],
-                    Path::new("/"),
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_lvm_volume_group_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("vgs");
-        self.collect_cached_value_candidates(
-            "lvm",
-            "volume-group",
-            PathBuf::from("/"),
-            current_token,
-            "LVM volume group",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_first_column_values(&run_command_lines(
-                    &command_path,
-                    &["--noheadings", "-o", "vg_name"],
-                    Path::new("/"),
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_lvm_logical_volume_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("lvs");
-        self.collect_cached_value_candidates(
-            "lvm",
-            "logical-volume",
-            PathBuf::from("/"),
-            current_token,
-            "LVM logical volume",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_lvm_logical_volumes(&run_command_lines(
-                    &command_path,
-                    &["--noheadings", "-o", "lv_path,vg_name,lv_name"],
-                    Path::new("/"),
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_zfs_dataset_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("zfs");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "zfs",
-            "dataset",
-            current_dir.clone(),
-            current_token,
-            "ZFS dataset",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_non_empty_lines(&run_command_lines(
-                    &command_path,
-                    &["list", "-H", "-o", "name"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_zpool_pool_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("zpool");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "zpool",
-            "pool",
-            current_dir.clone(),
-            current_token,
-            "ZFS pool",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_non_empty_lines(&run_command_lines(
-                    &command_path,
-                    &["list", "-H", "-o", "name"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
     pub(crate) fn collect_btrfs_subvolume_candidates(
         &self,
         current_dir: &Path,
@@ -547,22 +456,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(crate) fn collect_mdadm_array_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_cached_value_candidates(
-            "mdadm",
-            "array",
-            PathBuf::from("/proc/mdstat"),
-            current_token,
-            "mdraid array",
-            cached_only,
-            move || Ok(load_mdadm_arrays(Path::new("/proc/mdstat"))),
-        )
-    }
-
     pub(crate) fn collect_dmsetup_device_candidates(
         &self,
         current_token: &str,
@@ -585,22 +478,6 @@ impl DynamicCompletionProvider {
                 }
                 Ok(dedup_sorted(values))
             },
-        )
-    }
-
-    pub(crate) fn collect_audit_rule_key_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_cached_value_candidates(
-            "audit",
-            "rule-key",
-            PathBuf::from("/etc/audit/rules.d"),
-            current_token,
-            "audit rule key",
-            cached_only,
-            move || Ok(load_audit_rule_keys(Path::new("/etc/audit/rules.d"))),
         )
     }
 
@@ -629,176 +506,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(crate) fn collect_journalctl_identifier_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("journalctl");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "journalctl",
-            "identifier",
-            current_dir.clone(),
-            current_token,
-            "journal identifier",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_non_empty_lines(&run_command_lines(
-                    &command_path,
-                    &["--no-pager", "-F", "SYSLOG_IDENTIFIER"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_machinectl_machine_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("machinectl");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "machinectl",
-            "machine",
-            current_dir.clone(),
-            current_token,
-            "systemd machine",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_first_column_values(&run_command_lines(
-                    &command_path,
-                    &["list", "--no-legend", "--no-pager"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_ufw_application_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("ufw");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "ufw",
-            "application",
-            current_dir.clone(),
-            current_token,
-            "UFW application profile",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_ufw_applications(&run_command_lines(
-                    &command_path,
-                    &["app", "list"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_wireless_device_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("iw");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "iw",
-            "wireless-device",
-            current_dir.clone(),
-            current_token,
-            "wireless device",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_iw_devices(&run_command_lines(
-                    &command_path,
-                    &["dev"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    pub(crate) fn collect_login_shell_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_cached_value_candidates(
-            "shells",
-            "login-shell",
-            PathBuf::from("/etc"),
-            current_token,
-            "login shell",
-            cached_only,
-            move || Ok(load_login_shells(Path::new("/etc/shells"))),
-        )
-    }
-
-    pub(crate) fn collect_udev_subsystem_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_cached_value_candidates(
-            "udevadm",
-            "subsystem",
-            PathBuf::from("/sys/class"),
-            current_token,
-            "device subsystem",
-            cached_only,
-            move || Ok(load_udev_subsystems(Path::new("/sys/class"))),
-        )
-    }
-
-    pub(crate) fn collect_selinux_boolean_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("getsebool");
-        self.collect_cached_value_candidates(
-            "getsebool",
-            "boolean",
-            PathBuf::from("/"),
-            current_token,
-            "SELinux boolean",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_selinux_booleans(&run_command_lines(
-                    &command_path,
-                    &["-a"],
-                    Path::new("/"),
-                )?))
-            },
-        )
-    }
-
     fn collect_mkinitcpio_preset_candidates(
         &self,
         current_token: &str,
@@ -814,52 +521,6 @@ impl DynamicCompletionProvider {
             "mkinitcpio preset",
             cached_only,
             move || Ok(load_file_stems(&preset_dir, ".preset")),
-        )
-    }
-
-    fn collect_pacman_repository_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("pacman-conf");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "pacman-conf",
-            "repository",
-            PathBuf::from("/etc/pacman.conf"),
-            current_token,
-            "pacman repository",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_non_empty_lines(&run_command_lines(
-                    &command_path,
-                    &["--repo-list"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    fn collect_snapper_config_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let config_dir = PathBuf::from("/etc/snapper/configs");
-        let scope = config_dir.clone();
-        self.collect_cached_value_candidates(
-            "snapper",
-            "config",
-            scope,
-            current_token,
-            "snapper configuration",
-            cached_only,
-            move || Ok(load_file_names(&config_dir)),
         )
     }
 

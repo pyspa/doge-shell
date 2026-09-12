@@ -9,6 +9,216 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// This family's rows for `local::collect` - see `local` for what belongs
+/// here. Table only; routing is unaffected by which family's table a
+/// provider's row lives in.
+pub(super) const LOCAL_SPECS: &[super::local::LocalSpec] = &[
+    super::local::LocalSpec {
+        provider: "rustup.component",
+        command_name: "rustup",
+        value_kind: "component",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "rustup",
+            args: &["component", "list"],
+            parser: parse_rustup_components,
+        },
+        description: "rustup component",
+    },
+    super::local::LocalSpec {
+        provider: "rustup.target",
+        command_name: "rustup",
+        value_kind: "target",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "rustup",
+            args: &["target", "list"],
+            parser: parse_rustup_targets,
+        },
+        description: "rustup target",
+    },
+    super::local::LocalSpec {
+        provider: "cargo.installed_binary",
+        command_name: "cargo",
+        value_kind: "installed-binary",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "cargo",
+            args: &["install", "--list"],
+            parser: parse_cargo_installed_crates,
+        },
+        description: "cargo installed crate",
+    },
+    super::local::LocalSpec {
+        provider: "bat.theme",
+        command_name: "bat",
+        value_kind: "theme",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "bat",
+            args: &["--list-themes"],
+            parser: parse_plain_lines,
+        },
+        description: "bat theme",
+    },
+    super::local::LocalSpec {
+        provider: "bat.language",
+        command_name: "bat",
+        value_kind: "language",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "bat",
+            args: &["--list-languages"],
+            parser: parse_colon_prefixed_names,
+        },
+        description: "bat language",
+    },
+    super::local::LocalSpec {
+        provider: "rg.file_type",
+        command_name: "rg",
+        value_kind: "file-type",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "rg",
+            args: &["--type-list"],
+            parser: parse_colon_prefixed_names,
+        },
+        description: "ripgrep file type",
+    },
+    super::local::LocalSpec {
+        provider: "ffmpeg.encoder",
+        command_name: "ffmpeg",
+        value_kind: "encoder",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "ffmpeg",
+            args: &["-hide_banner", "-encoders"],
+            parser: parse_ffmpeg_table,
+        },
+        description: "ffmpeg encoder",
+    },
+    super::local::LocalSpec {
+        provider: "ffmpeg.decoder",
+        command_name: "ffmpeg",
+        value_kind: "decoder",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "ffmpeg",
+            args: &["-hide_banner", "-decoders"],
+            parser: parse_ffmpeg_table,
+        },
+        description: "ffmpeg decoder",
+    },
+    super::local::LocalSpec {
+        provider: "ffmpeg.format",
+        command_name: "ffmpeg",
+        value_kind: "format",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "ffmpeg",
+            args: &["-hide_banner", "-formats"],
+            parser: parse_ffmpeg_table,
+        },
+        description: "ffmpeg format",
+    },
+    super::local::LocalSpec {
+        provider: "go.env_key",
+        command_name: "go",
+        value_kind: "env-key",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "go",
+            args: &["env"],
+            parser: parse_go_env_keys,
+        },
+        description: "go environment key",
+    },
+    super::local::LocalSpec {
+        provider: "pipx.installed_package",
+        command_name: "pipx",
+        value_kind: "installed-package",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "pipx",
+            args: &["list", "--short"],
+            parser: parse_first_field_lines,
+        },
+        description: "pipx installed package",
+    },
+    super::local::LocalSpec {
+        provider: "asdf.plugin",
+        command_name: "asdf",
+        value_kind: "plugin",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "asdf",
+            args: &["plugin", "list"],
+            parser: parse_first_field_lines,
+        },
+        description: "asdf plugin",
+    },
+    super::local::LocalSpec {
+        provider: "mise.tool",
+        command_name: "mise",
+        value_kind: "tool",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "mise",
+            args: &["ls", "--installed"],
+            parser: parse_mise_tools,
+        },
+        description: "mise tool",
+    },
+    super::local::LocalSpec {
+        provider: "op.item",
+        command_name: "op",
+        value_kind: "item",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "op",
+            args: &["item", "list", "--format", "json"],
+            parser: parse_op_items,
+        },
+        description: "1Password item",
+    },
+    super::local::LocalSpec {
+        provider: "vagrant.box",
+        command_name: "vagrant",
+        value_kind: "box",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "vagrant",
+            args: &["box", "list"],
+            parser: parse_first_field_lines,
+        },
+        description: "vagrant box",
+    },
+    super::local::LocalSpec {
+        provider: "code.extension",
+        command_name: "code",
+        value_kind: "extension",
+        scope: super::local::Scope::FixedCwd("/"),
+        source: super::local::Source::Lines {
+            executable: "code",
+            args: &["--list-extensions"],
+            parser: parse_plain_lines,
+        },
+        description: "VS Code extension",
+    },
+    super::local::LocalSpec {
+        provider: "golangci_lint.linter",
+        command_name: "golangci-lint",
+        value_kind: "linter",
+        scope: super::local::Scope::CurrentDir,
+        source: super::local::Source::Lines {
+            executable: "golangci-lint",
+            args: &["linters"],
+            parser: parse_golangci_linters,
+        },
+        description: "golangci-lint linter",
+    },
+];
+
 pub(super) fn collect(
     collector: &super::DynamicCompletionProvider,
     request: &super::registry::DynamicProviderRequest<'_>,
@@ -52,9 +262,6 @@ pub(super) fn collect(
             parsed_command_line.command.as_str(),
             cached_only,
         ),
-        "rustup.toolchain" => {
-            collector.collect_rustup_toolchain_candidates(current_dir, current_token, cached_only)
-        }
         "pip.installed_package" => collector.collect_pip_installed_package_candidates(
             current_dir,
             parsed_command_line.command.as_str(),
@@ -89,13 +296,6 @@ pub(super) fn collect(
             current_token,
             cached_only,
         ),
-        "rustup.component" => {
-            collector.collect_rustup_component_candidates(current_token, cached_only)
-        }
-        "rustup.target" => collector.collect_rustup_target_candidates(current_token, cached_only),
-        "cargo.installed_binary" => {
-            collector.collect_cargo_installed_binary_candidates(current_token, cached_only)
-        }
         "cargo.test" => collector.collect_cargo_metadata_candidates(
             current_dir,
             current_token,
@@ -110,37 +310,6 @@ pub(super) fn collect(
             "cargo bench target",
             cached_only,
         ),
-        "bat.theme" => collector.collect_bat_theme_candidates(current_token, cached_only),
-        "bat.language" => collector.collect_bat_language_candidates(current_token, cached_only),
-        "rg.file_type" => collector.collect_rg_file_type_candidates(current_token, cached_only),
-        "ffmpeg.encoder" => collector.collect_ffmpeg_table_candidates(
-            "encoder",
-            current_token,
-            "ffmpeg encoder",
-            &["-hide_banner", "-encoders"],
-            cached_only,
-        ),
-        "ffmpeg.decoder" => collector.collect_ffmpeg_table_candidates(
-            "decoder",
-            current_token,
-            "ffmpeg decoder",
-            &["-hide_banner", "-decoders"],
-            cached_only,
-        ),
-        "ffmpeg.format" => collector.collect_ffmpeg_table_candidates(
-            "format",
-            current_token,
-            "ffmpeg format",
-            &["-hide_banner", "-formats"],
-            cached_only,
-        ),
-        "go.env_key" => collector.collect_go_env_key_candidates(current_token, cached_only),
-        "pipx.installed_package" => {
-            collector.collect_pipx_installed_package_candidates(current_token, cached_only)
-        }
-        "asdf.plugin" => collector.collect_asdf_plugin_candidates(current_token, cached_only),
-        "mise.tool" => collector.collect_mise_tool_candidates(current_token, cached_only),
-        "code.extension" => collector.collect_code_extension_candidates(current_token, cached_only),
         "nox.session" => {
             collector.collect_nox_session_candidates(current_dir, current_token, cached_only)
         }
@@ -164,9 +333,6 @@ pub(super) fn collect(
         }
         "ghq.repository" => {
             collector.collect_ghq_repository_candidates(current_dir, current_token, cached_only)
-        }
-        "golangci_lint.linter" => {
-            collector.collect_golangci_linter_candidates(current_dir, current_token, cached_only)
         }
         "jj.bookmark" => collector.collect_jj_candidates(
             parsed_command_line,
@@ -207,8 +373,6 @@ pub(super) fn collect(
             current_token,
             cached_only,
         ),
-        "op.item" => collector.collect_op_item_candidates(current_token, cached_only),
-        "vagrant.box" => collector.collect_vagrant_box_candidates(current_token, cached_only),
         _ => {
             return platform::collect(
                 collector,
@@ -520,233 +684,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(crate) fn collect_rustup_component_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "rustup",
-            "component",
-            current_token,
-            "rustup component",
-            &["component", "list"],
-            parse_rustup_components,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_rustup_target_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "rustup",
-            "target",
-            current_token,
-            "rustup target",
-            &["target", "list"],
-            parse_rustup_targets,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_cargo_installed_binary_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "cargo",
-            "installed-binary",
-            current_token,
-            "cargo installed crate",
-            &["install", "--list"],
-            parse_cargo_installed_crates,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_bat_theme_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "bat",
-            "theme",
-            current_token,
-            "bat theme",
-            &["--list-themes"],
-            parse_plain_lines,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_bat_language_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "bat",
-            "language",
-            current_token,
-            "bat language",
-            &["--list-languages"],
-            parse_colon_prefixed_names,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_rg_file_type_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "rg",
-            "file-type",
-            current_token,
-            "ripgrep file type",
-            &["--type-list"],
-            parse_colon_prefixed_names,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_ffmpeg_table_candidates(
-        &self,
-        value_kind: &'static str,
-        current_token: &str,
-        description: &str,
-        args: &'static [&'static str],
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "ffmpeg",
-            value_kind,
-            current_token,
-            description,
-            args,
-            parse_ffmpeg_table,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_go_env_key_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "go",
-            "env-key",
-            current_token,
-            "go environment key",
-            &["env"],
-            parse_go_env_keys,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_pipx_installed_package_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "pipx",
-            "installed-package",
-            current_token,
-            "pipx installed package",
-            &["list", "--short"],
-            parse_first_field_lines,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_asdf_plugin_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "asdf",
-            "plugin",
-            current_token,
-            "asdf plugin",
-            &["plugin", "list"],
-            parse_first_field_lines,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_mise_tool_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "mise",
-            "tool",
-            current_token,
-            "mise tool",
-            &["ls", "--installed"],
-            parse_mise_tools,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_op_item_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "op",
-            "item",
-            current_token,
-            "1Password item",
-            &["item", "list", "--format", "json"],
-            parse_op_items,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_vagrant_box_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "vagrant",
-            "box",
-            current_token,
-            "vagrant box",
-            &["box", "list"],
-            parse_first_field_lines,
-            cached_only,
-        )
-    }
-
-    pub(crate) fn collect_code_extension_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        self.collect_global_command_candidates(
-            "code",
-            "extension",
-            current_token,
-            "VS Code extension",
-            &["--list-extensions"],
-            parse_plain_lines,
-            cached_only,
-        )
-    }
-
     pub(crate) fn collect_nox_session_candidates(
         &self,
         current_dir: &Path,
@@ -928,34 +865,6 @@ impl DynamicCompletionProvider {
                 Ok(parse_plain_lines(&run_command_lines(
                     &command_path,
                     &["list"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
-    fn collect_golangci_linter_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("golangci-lint");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "golangci-lint",
-            "linter",
-            current_dir.clone(),
-            current_token,
-            "golangci-lint linter",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_golangci_linters(&run_command_lines(
-                    &command_path,
-                    &["linters"],
                     &current_dir,
                 )?))
             },
@@ -2410,685 +2319,4 @@ fn load_terraform_workspaces(root: &Path) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-    use std::time::Duration;
-    use tempfile::tempdir;
-
-    fn lines(value: &str) -> Vec<String> {
-        value.lines().map(str::to_string).collect()
-    }
-
-    #[test]
-    fn rustup_component_parser_strips_the_shared_host_triple() {
-        let listing = lines(
-            "cargo-x86_64-unknown-linux-gnu (installed)\n\
-             clippy-x86_64-unknown-linux-gnu (installed)\n\
-             rust-src-x86_64-unknown-linux-gnu\n",
-        );
-        assert_eq!(
-            parse_rustup_components(&listing),
-            vec![
-                "cargo".to_string(),
-                "clippy".to_string(),
-                "rust-src".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn rustup_component_parser_keeps_names_without_a_shared_triple() {
-        let listing = lines("clippy\nrustfmt\n");
-        assert_eq!(
-            parse_rustup_components(&listing),
-            vec!["clippy".to_string(), "rustfmt".to_string()]
-        );
-    }
-
-    #[test]
-    fn rustup_component_parser_finds_the_host_triple_among_other_targets() {
-        // The real listing carries one rust-std row per supported target, so no
-        // suffix is shared by every name.
-        let listing = lines(
-            "cargo-x86_64-unknown-linux-gnu (installed)\n\
-             clippy-x86_64-unknown-linux-gnu (installed)\n\
-             rust-src-x86_64-unknown-linux-gnu\n\
-             rust-std-x86_64-unknown-linux-gnu (installed)\n\
-             rust-std-aarch64-apple-darwin\n\
-             rust-std-wasm32-unknown-unknown\n\
-             rust-std-x86_64-pc-windows-msvc\n",
-        );
-        assert_eq!(
-            parse_rustup_components(&listing),
-            vec![
-                "cargo".to_string(),
-                "clippy".to_string(),
-                "rust-src".to_string(),
-                "rust-std".to_string(),
-                "rust-std-aarch64-apple-darwin".to_string(),
-                "rust-std-wasm32-unknown-unknown".to_string(),
-                "rust-std-x86_64-pc-windows-msvc".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn rustup_component_parser_handles_a_three_segment_host_triple() {
-        let listing = lines(
-            "cargo-aarch64-apple-darwin (installed)\n\
-             clippy-aarch64-apple-darwin (installed)\n\
-             rust-src-aarch64-apple-darwin\n\
-             rust-std-x86_64-unknown-linux-gnu\n",
-        );
-        assert_eq!(
-            parse_rustup_components(&listing),
-            vec![
-                "cargo".to_string(),
-                "clippy".to_string(),
-                "rust-src".to_string(),
-                "rust-std-x86_64-unknown-linux-gnu".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn rustup_target_parser_drops_the_installed_marker() {
-        let listing = lines("aarch64-apple-darwin\nx86_64-unknown-linux-gnu (installed)\n");
-        assert_eq!(
-            parse_rustup_targets(&listing),
-            vec![
-                "aarch64-apple-darwin".to_string(),
-                "x86_64-unknown-linux-gnu".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn cargo_install_list_parser_keeps_only_crate_headers() {
-        // The command runner trims every line, so the parser must not rely on
-        // the indentation that separates binaries from their crate header.
-        let listing = lines("cargo-make v0.37.23:\ncargo-make\nmakers\nripgrep v14.1.0:\nrg\n");
-        assert_eq!(
-            parse_cargo_installed_crates(&listing),
-            vec!["cargo-make".to_string(), "ripgrep".to_string()]
-        );
-    }
-
-    #[test]
-    fn go_env_parser_keeps_keys_containing_digits() {
-        let listing = lines("GO111MODULE='on'\nGOAMD64='v1'\nGO386=''\nGOROOT='/usr/lib/go'\n");
-        assert_eq!(
-            parse_go_env_keys(&listing),
-            vec![
-                "GO111MODULE".to_string(),
-                "GO386".to_string(),
-                "GOAMD64".to_string(),
-                "GOROOT".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn colon_prefixed_parser_reads_bat_and_ripgrep_listings() {
-        assert_eq!(
-            parse_colon_prefixed_names(&lines("Rust:rs\nApache Conf:envvars,htaccess\n")),
-            vec!["Apache Conf".to_string(), "Rust".to_string()]
-        );
-        assert_eq!(
-            parse_colon_prefixed_names(&lines("ada: *.adb, *.ads\nrust: *.rs\n")),
-            vec!["ada".to_string(), "rust".to_string()]
-        );
-    }
-
-    #[test]
-    fn ffmpeg_table_parser_skips_the_legend_and_splits_aliases() {
-        let listing = lines(
-            "File formats:\n D. = Demuxing supported\n E. = Muxing supported\n --\n \
-             D  3dostr          3DO STR\n DE matroska,webm  Matroska / WebM\n",
-        );
-        assert_eq!(
-            parse_ffmpeg_table(&listing),
-            vec![
-                "3dostr".to_string(),
-                "matroska".to_string(),
-                "webm".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn go_env_parser_keeps_only_upper_case_keys() {
-        let listing = lines("AR='ar'\nCGO_CFLAGS='-O2 -g'\nnot a key\n");
-        assert_eq!(
-            parse_go_env_keys(&listing),
-            vec!["AR".to_string(), "CGO_CFLAGS".to_string()]
-        );
-    }
-
-    #[test]
-    fn mise_listing_parser_drops_the_header_row() {
-        let listing = lines("Tool  Version  Source\nnode  22.1.0  .mise.toml\npython  3.13.1\n");
-        assert_eq!(
-            parse_mise_tools(&listing),
-            vec!["node".to_string(), "python".to_string()]
-        );
-    }
-
-    #[test]
-    fn noxfile_parser_reads_decorated_sessions_without_executing_them() {
-        let contents = r#"
-import nox
-
-VERSIONS = ["3.11", "3.12"]
-
-@nox.session(python=VERSIONS)
-def tests(session):
-    session.run("pytest")
-
-@nox.session(
-    python="3.12",
-    name="type-check",
-)
-def mypy(session):
-    session.run("mypy")
-
-@session
-async def lint(session):
-    session.run("ruff")
-
-def helper():
-    return 1
-"#;
-        assert_eq!(
-            parse_nox_sessions(contents),
-            vec![
-                "lint".to_string(),
-                "tests".to_string(),
-                "type-check".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn tox_ini_parser_reads_envlist_and_testenv_sections() {
-        let contents =
-            "[tox]\nenvlist = py311, py312\n    lint\n\n[testenv:docs]\ncommands = mkdocs build\n";
-        assert_eq!(
-            parse_tox_ini_environments(contents),
-            vec![
-                "docs".to_string(),
-                "lint".to_string(),
-                "py311".to_string(),
-                "py312".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn tox_envlist_parser_drops_inline_comments() {
-        let contents = "[tox]\nenvlist = py311, py312  # run before release\n";
-        assert_eq!(
-            parse_tox_ini_environments(contents),
-            vec!["py311".to_string(), "py312".to_string()]
-        );
-    }
-
-    #[test]
-    fn hatch_environments_come_from_pyproject_and_hatch_toml() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[tool.hatch.envs.default]\ndependencies = []\n[tool.hatch.envs.docs]\n",
-        )
-        .unwrap();
-        fs::write(dir.path().join("hatch.toml"), "[envs.lint]\n").unwrap();
-        assert_eq!(
-            load_hatch_environments(dir.path()),
-            vec![
-                "default".to_string(),
-                "docs".to_string(),
-                "lint".to_string()
-            ]
-        );
-    }
-
-    #[test]
-    fn pre_commit_parser_reads_hook_ids() {
-        let contents = "repos:\n  - repo: local\n    hooks:\n      - id: fmt\n        name: fmt\n      - id: \"clippy\"\n";
-        assert_eq!(
-            parse_pre_commit_hook_ids(contents),
-            vec!["clippy".to_string(), "fmt".to_string()]
-        );
-    }
-
-    #[test]
-    fn python_dependency_parser_reads_common_project_files() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            r#"
-[project]
-dependencies = ["requests>=2", "fastapi[standard]"]
-[project.optional-dependencies]
-dev = ["pytest>=8"]
-[dependency-groups]
-lint = ["ruff==0.8"]
-[tool.poetry.dependencies]
-python = "^3.12"
-pendulum = "^3"
-[tool.poetry.group.docs.dependencies]
-mkdocs = "^1"
-"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("requirements-dev.txt"),
-            "black==24.0\n-r base.txt\n./local-package\ngit+https://example.invalid/pkg\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("Pipfile"),
-            "[packages]\nflask = \"*\"\n[dev-packages]\ncoverage = \"*\"\n",
-        )
-        .unwrap();
-
-        assert_eq!(
-            load_python_project_dependencies(dir.path()),
-            vec![
-                "black".to_string(),
-                "coverage".to_string(),
-                "fastapi".to_string(),
-                "flask".to_string(),
-                "mkdocs".to_string(),
-                "pendulum".to_string(),
-                "pytest".to_string(),
-                "requests".to_string(),
-                "ruff".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn node_bin_loader_reads_local_package_binaries() {
-        let dir = tempdir().unwrap();
-        let bin_dir = dir.path().join("node_modules").join(".bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::write(bin_dir.join("vite"), "").unwrap();
-        fs::write(bin_dir.join("eslint"), "").unwrap();
-        fs::write(bin_dir.join(".ignored"), "").unwrap();
-
-        assert_eq!(
-            load_node_bin_names(dir.path()),
-            vec!["eslint".to_string(), "vite".to_string()]
-        );
-    }
-
-    #[test]
-    fn node_bin_root_walks_up_from_workspace_subdir() {
-        let dir = tempdir().unwrap();
-        let bin_dir = dir.path().join("node_modules").join(".bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        let package_dir = dir.path().join("packages").join("web").join("src");
-        fs::create_dir_all(&package_dir).unwrap();
-
-        assert_eq!(
-            find_node_bin_root(&package_dir).as_deref(),
-            Some(dir.path().canonicalize().unwrap().as_path())
-        );
-    }
-
-    #[test]
-    fn python_module_loader_reads_dependencies_and_project_modules() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[project]\ndependencies = [\"fast-api>=1\", \"google-cloud-storage\"]\n",
-        )
-        .unwrap();
-        let package_dir = dir.path().join("src").join("demo_app");
-        fs::create_dir_all(&package_dir).unwrap();
-        fs::write(package_dir.join("__init__.py"), "").unwrap();
-        fs::write(package_dir.join("cli.py"), "").unwrap();
-        fs::write(dir.path().join("tool.py"), "").unwrap();
-
-        assert_eq!(
-            load_python_modules(dir.path()),
-            vec![
-                "demo_app".to_string(),
-                "demo_app.cli".to_string(),
-                "fast_api".to_string(),
-                "google_cloud_storage".to_string(),
-                "tool".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn node_workspace_loader_reads_package_json_and_pnpm_workspace() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("package.json"),
-            r#"{ "workspaces": ["packages/*"] }"#,
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("pnpm-workspace.yaml"),
-            "packages:\n  - apps/*\n  - '!ignored/*'\n",
-        )
-        .unwrap();
-        let web_dir = dir.path().join("packages").join("web");
-        let api_dir = dir.path().join("apps").join("api");
-        fs::create_dir_all(&web_dir).unwrap();
-        fs::create_dir_all(&api_dir).unwrap();
-        fs::write(web_dir.join("package.json"), r#"{ "name": "@demo/web" }"#).unwrap();
-        fs::write(api_dir.join("package.json"), r#"{ "name": "api" }"#).unwrap();
-
-        assert_eq!(
-            find_node_workspace_root(&web_dir).as_deref(),
-            Some(dir.path().canonicalize().unwrap().as_path())
-        );
-        assert_eq!(
-            load_node_workspaces(dir.path()),
-            vec![
-                "@demo/web".to_string(),
-                "api".to_string(),
-                "apps/api".to_string(),
-                "packages/web".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn cloud_and_terraform_loaders_read_local_config_only() {
-        let dir = tempdir().unwrap();
-        let aws_dir = dir.path().join(".aws");
-        fs::create_dir_all(&aws_dir).unwrap();
-        fs::write(
-            aws_dir.join("config"),
-            "[default]\nregion = us-east-1\n[profile dev]\nregion = us-west-2\n",
-        )
-        .unwrap();
-        fs::write(
-            aws_dir.join("credentials"),
-            "[prod]\naws_access_key_id = test\n",
-        )
-        .unwrap();
-        assert_eq!(
-            load_aws_profiles(&aws_dir.join("config"), &aws_dir.join("credentials")),
-            vec!["default".to_string(), "dev".to_string(), "prod".to_string()]
-        );
-
-        let gcloud_dir = dir.path().join("gcloud");
-        let configs_dir = gcloud_dir.join("configurations");
-        fs::create_dir_all(&configs_dir).unwrap();
-        fs::write(configs_dir.join("config_dev"), "project = demo-dev\n").unwrap();
-        fs::write(configs_dir.join("config_prod"), "project = demo-prod\n").unwrap();
-        assert_eq!(
-            load_gcloud_configurations(&gcloud_dir),
-            vec!["dev".to_string(), "prod".to_string()]
-        );
-        assert_eq!(
-            load_gcloud_projects(&gcloud_dir),
-            vec!["demo-dev".to_string(), "demo-prod".to_string()]
-        );
-
-        let azure_dir = dir.path().join(".azure");
-        fs::create_dir_all(&azure_dir).unwrap();
-        fs::write(
-            azure_dir.join("azureProfile.json"),
-            r#"{
-                "subscriptions": [
-                    { "id": "0000-1111", "name": "Dev Subscription" },
-                    { "id": "2222-3333", "name": "Prod Subscription" }
-                ]
-            }"#,
-        )
-        .unwrap();
-        assert_eq!(
-            load_az_subscriptions(&azure_dir.join("azureProfile.json")),
-            vec!["0000-1111".to_string(), "2222-3333".to_string()]
-        );
-        assert!(
-            !load_az_subscriptions(&azure_dir.join("azureProfile.json"))
-                .iter()
-                .any(|value| value.contains(' ')),
-            "subscription names are not shell-safe as raw argument candidates"
-        );
-
-        let terraform_dir = dir.path().join(".terraform");
-        fs::create_dir_all(terraform_dir.join("terraform.tfstate.d").join("dev")).unwrap();
-        fs::write(terraform_dir.join("environment"), "staging\n").unwrap();
-        assert_eq!(
-            load_terraform_workspaces(dir.path()),
-            vec![
-                "default".to_string(),
-                "dev".to_string(),
-                "staging".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn maven_loaders_read_profiles_and_modules_from_pom() {
-        let dir = tempdir().unwrap();
-        let pom = dir.path().join("pom.xml");
-        fs::write(
-            &pom,
-            r#"
-<project>
-  <modules>
-    <module>service-api</module>
-    <module>service-web</module>
-  </modules>
-  <profiles>
-    <profile><id>dev</id></profile>
-    <profile><id>release</id></profile>
-  </profiles>
-</project>
-"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            load_maven_modules(&pom),
-            vec!["service-api".to_string(), "service-web".to_string()]
-        );
-        assert_eq!(
-            load_maven_profiles(&pom),
-            vec!["dev".to_string(), "release".to_string()]
-        );
-    }
-
-    #[test]
-    fn ansible_inventory_parser_reads_ini_and_yaml_names() {
-        let inventory = r#"
-[web]
-web-1 ansible_host=192.0.2.10
-
-[db:children]
-postgres
-
-all:
-  children:
-    api:
-      hosts:
-        api-1:
-"#;
-
-        assert_eq!(
-            parse_ansible_inventory_values(inventory),
-            vec![
-                "api".to_string(),
-                "api-1".to_string(),
-                "db".to_string(),
-                "postgres".to_string(),
-                "web".to_string(),
-                "web-1".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn go_list_parser_exposes_import_and_relative_package_values() {
-        let root = PathBuf::from("/workspace/app");
-        let lines = vec![
-            "/workspace/app\t/workspace/app".to_string(),
-            "example.com/app/pkg/api\t/workspace/app/pkg/api".to_string(),
-        ];
-
-        assert_eq!(
-            parse_go_list_package_values(&lines, &root),
-            vec![
-                ".".to_string(),
-                "./...".to_string(),
-                "./pkg/api".to_string(),
-                "/workspace/app".to_string(),
-                "example.com/app/pkg/api".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn dynamic_collectors_filter_cached_values_by_prefix() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[project]\ndependencies = [\"requests>=2\", \"pytest\"]\n",
-        )
-        .unwrap();
-        let bin_dir = dir.path().join("node_modules").join(".bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::write(bin_dir.join("vite"), "").unwrap();
-
-        let provider = DynamicCompletionProvider::new(crate::environment::Environment::new());
-        let started = std::time::Instant::now();
-        let py = loop {
-            let candidates =
-                provider.collect_python_project_dependency_candidates(dir.path(), "req", false);
-            if !candidates.is_empty() {
-                break candidates;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "timed out waiting for Python dependency cache refresh"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        assert_eq!(py[0].text, "requests");
-
-        let started = std::time::Instant::now();
-        let node = loop {
-            let candidates = provider.collect_node_bin_candidates(dir.path(), "vi", false);
-            if !candidates.is_empty() {
-                break candidates;
-            }
-            assert!(
-                started.elapsed() < Duration::from_secs(20),
-                "timed out waiting for Node binary cache refresh"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        assert_eq!(node[0].text, "vite");
-    }
-
-    #[test]
-    fn new_developer_provider_parsers_read_project_metadata() {
-        let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join("bacon.toml"),
-            "[jobs.check]\ncommand = [\"cargo\", \"check\"]\n[jobs.test]\ncommand = [\"cargo\", \"test\"]\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("pyproject.toml"),
-            "[tool.pdm.scripts]\ntest = \"pytest\"\nlint = \"ruff check\"\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("Pipfile"),
-            "[scripts]\ntest = \"pytest\"\nserve = \"python -m app\"\n",
-        )
-        .unwrap();
-
-        assert_eq!(
-            load_toml_table_keys(&dir.path().join("bacon.toml"), &["jobs"]),
-            vec!["check".to_string(), "test".to_string()]
-        );
-        assert_eq!(
-            load_toml_table_keys(
-                &dir.path().join("pyproject.toml"),
-                &["tool", "pdm", "scripts"]
-            ),
-            vec!["lint".to_string(), "test".to_string()]
-        );
-        assert_eq!(
-            load_toml_table_keys(&dir.path().join("Pipfile"), &["scripts"]),
-            vec!["serve".to_string(), "test".to_string()]
-        );
-    }
-
-    #[test]
-    fn new_developer_command_parsers_ignore_headers_and_malformed_json() {
-        assert_eq!(
-            parse_golangci_linters(&[
-                "Enabled by default linters:".to_string(),
-                "errcheck: Errcheck is a program for checking errors".to_string(),
-                "  govet: Vet examines Go source code".to_string(),
-                "Disabled by default linters:".to_string(),
-                "gocyclo: Computes cyclomatic complexity".to_string(),
-            ]),
-            vec![
-                "errcheck".to_string(),
-                "gocyclo".to_string(),
-                "govet".to_string(),
-            ]
-        );
-        assert_eq!(
-            parse_meson_targets(
-                r#"[{"name":"app","id":"app@exe"},{"name":"tests","id":"tests@run"}]"#
-            ),
-            vec!["app".to_string(), "tests".to_string()]
-        );
-        assert!(parse_meson_targets("not-json").is_empty());
-    }
-
-    #[test]
-    fn meson_build_directory_and_jj_root_are_context_scoped() {
-        use crate::completion::parser::CommandLineParser;
-
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("meson.build"), "project('demo', 'c')\n").unwrap();
-        fs::create_dir_all(dir.path().join("out")).unwrap();
-        fs::create_dir_all(dir.path().join(".jj")).unwrap();
-        let child = dir.path().join("src");
-        fs::create_dir_all(&child).unwrap();
-
-        let input = "meson compile -C out ";
-        let parsed = CommandLineParser::new().parse(input, input.len());
-        assert_eq!(
-            selected_meson_build_dir(&parsed, dir.path()),
-            dir.path().join("out")
-        );
-        let default_input = "meson compile ";
-        let default_parsed = CommandLineParser::new().parse(default_input, default_input.len());
-        assert_eq!(
-            selected_meson_build_dir(&default_parsed, dir.path()),
-            dir.path().join("build")
-        );
-        assert_eq!(find_jj_root(&child), Some(dir.path().to_path_buf()));
-
-        let repository = dir.path().join("other");
-        for input in [
-            format!("jj -R {} bookmark delete ", repository.display()),
-            format!("jj --repository={} bookmark delete ", repository.display()),
-        ] {
-            let parsed = CommandLineParser::new().parse(&input, input.len());
-            assert_eq!(
-                selected_jj_repository(&parsed, dir.path()),
-                Some(repository.clone()),
-                "{input}"
-            );
-        }
-    }
-}
+mod tests;

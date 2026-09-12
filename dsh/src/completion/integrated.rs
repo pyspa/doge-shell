@@ -2761,6 +2761,31 @@ mod tests {
             ("git worktree unlock ", "git.worktree"),
             ("git worktree repair ", "git.worktree"),
             ("git worktree add x ", "git.branch"),
+            // Second-argument-position cases for the subcommands whose old
+            // Rust dispatch never checked `arg_index`: add/restore accept
+            // multiple paths, log/diff/show/reset multiple revisions, and
+            // branch/tag were offered regardless of position even though a
+            // second `git branch`/`git tag` argument does not always name
+            // another branch/tag. `completions/git.json` now marks each of
+            // these arguments `"multiple": true` to match. Without it,
+            // `resolve_argument_definition` (this file) returns `None` past
+            // the first argument and this second position silently loses
+            // its dynamic completion - the regression this block guards.
+            ("git add f1 ", "git.changed_path"),
+            ("git restore f1 ", "git.changed_path"),
+            ("git log v1 ", "git.revision"),
+            ("git diff v1 ", "git.revision"),
+            ("git show v1 ", "git.revision"),
+            ("git reset v1 ", "git.revision"),
+            ("git branch b1 ", "git.branch"),
+            ("git tag t1 ", "git.tag"),
+            // `git restore -s/--source <TAB>` is an OptionValue context, not
+            // an Argument one, but it too is already declared in
+            // completions/git.json (on the option itself) - proving this
+            // resolves via JSON is what let collect_git_candidates drop its
+            // own hand-written special case for it.
+            ("git restore -s ", "git.revision"),
+            ("git restore --source ", "git.revision"),
         ];
 
         for (input, expected_provider) in cases {

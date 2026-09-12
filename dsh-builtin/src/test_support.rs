@@ -62,8 +62,9 @@ pub(crate) struct TestShellProxy {
     pub snippets: HashMap<String, Snippet>,
     pub bookmarks: HashMap<String, (String, i64)>,
     pub last_command: Option<String>,
-    /// `open_editor`'s canned reply. `None` fails closed, matching
-    /// `ShellProxy`'s own default.
+    /// `open_editor`'s canned reply. `None` fails closed (the same fail-safe
+    /// shape `ShellProxy`'s methods used to default to, back when the trait
+    /// had default bodies at all).
     pub open_editor_response: Option<String>,
     pub open_editor_calls: Vec<(String, String)>,
     pub capture_command_response: Option<(i32, String, String)>,
@@ -80,8 +81,16 @@ pub(crate) struct TestShellProxy {
     /// Opt-in: also mirror `set_env_var`/`unset_env_var` into the real
     /// process environment. Off by default so ordinary tests cannot leak
     /// state into each other; a test that specifically exercises "does this
-    /// builtin export a real environment variable" turns it on and takes
-    /// responsibility for serializing against other env-touching tests.
+    /// builtin export a real environment variable" turns it on.
+    ///
+    /// This does not by itself serialize against other tests that also
+    /// mutate `std::env` - the crate has one shared lock for that,
+    /// `chatgpt::tool::execute::tests::env_lock()`. A test that sets this
+    /// flag must take that lock (`let _lock = crate::chatgpt::tool::execute
+    /// ::tests::env_lock();`), the same as every other env-touching test in
+    /// this crate, rather than declare a lock of its own - two independent
+    /// mutexes guarding the same process-global `std::env` is exactly the
+    /// race this flag exists to avoid.
     pub mutate_real_env: bool,
 }
 

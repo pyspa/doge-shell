@@ -81,20 +81,20 @@ pub(super) fn selected_remote(parsed_command_line: &super::ParsedCommandLine) ->
 }
 
 impl DynamicCompletionProvider {
-    /// Two cases the declarative JSON path (`completions/git.json`) cannot
-    /// express, so this still handles them by hand:
-    /// - the bare subcommand position (`git co<TAB>`), where a user-defined
-    ///   git alias should complete alongside the built-in subcommand names -
-    ///   `argument_type_for_completion_context` never resolves a `Dynamic`
-    ///   provider for `CompletionContext::SubCommand`, by design (that
-    ///   position lists subcommand *names*, not argument values);
-    /// - `git restore -s/--source <TAB>`, an option value that names a
-    ///   revision, keyed off a specific option rather than a plain argument
-    ///   position.
+    /// One case the declarative JSON path (`completions/git.json`) cannot
+    /// express, so this still handles it by hand: the bare subcommand
+    /// position (`git co<TAB>`), where a user-defined git alias should
+    /// complete alongside the built-in subcommand names.
+    /// `argument_type_for_completion_context` never resolves a `Dynamic`
+    /// provider for `CompletionContext::SubCommand`, by design (that
+    /// position lists subcommand *names*, not argument values), so there is
+    /// no JSON equivalent to fall back to here.
     ///
-    /// Every other position - every `CompletionContext::Argument` and the
-    /// inferred-subcommand case - is declared directly in
-    /// `completions/git.json` and reaches the same
+    /// Every other position - every `CompletionContext::Argument`, the
+    /// inferred-subcommand case, and every option value (including
+    /// `git restore -s/--source`, which `completions/git.json` already
+    /// declares as `Dynamic { provider: "git.revision" }` on that option) -
+    /// is declared directly in `completions/git.json` and reaches the same
     /// `collect_git_*_candidates` methods this file used to dispatch to by
     /// hand. `completion::integrated::tests::
     /// every_hand_dispatched_git_argument_case_matches_the_declared_json_provider`
@@ -123,18 +123,6 @@ impl DynamicCompletionProvider {
                     candidate
                 })
                 .collect();
-        }
-
-        if let CompletionContext::OptionValue { option_name, .. } =
-            &parsed_command_line.completion_context
-            && parsed_command_line
-                .subcommand_path
-                .first()
-                .map(String::as_str)
-                == Some("restore")
-            && matches!(option_name.as_str(), "-s" | "--source")
-        {
-            return self.collect_git_revision_candidates(current_dir, current_token, cached_only);
         }
 
         Vec::new()

@@ -291,6 +291,7 @@
         {
           "name": "file",
           "description": "Files to add",
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -914,6 +915,7 @@
           "name": "revision",
           "description": "Revision to show",
           "required": false,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -932,6 +934,7 @@
           "name": "revision",
           "description": "Revision or file",
           "required": false,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -950,6 +953,7 @@
           "name": "object",
           "description": "Object to show",
           "required": true,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -968,6 +972,7 @@
           "name": "commit",
           "description": "Commit to reset to",
           "required": false,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -1044,6 +1049,7 @@
           "name": "branchname",
           "description": "Branch name",
           "required": false,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -1062,6 +1068,7 @@
           "name": "tagname",
           "description": "Tag name",
           "required": false,
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {
@@ -1218,6 +1225,7 @@
         {
           "name": "pathspec",
           "description": "Files to restore",
+          "multiple": true,
           "type": {
             "type": "Dynamic",
             "data": {

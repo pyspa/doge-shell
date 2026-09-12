@@ -135,10 +135,6 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 mod tests {
     use super::*;
     use crate::test_support::TestShellProxy;
-    use std::sync::{LazyLock, Mutex};
-
-    // Mutex to prevent test races on environment variables
-    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn env_mirroring_proxy() -> TestShellProxy {
         TestShellProxy {
@@ -156,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_include_command() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
         use std::io::Write;
         let mut proxy = env_mirroring_proxy();
         let ctx = Context::new_safe(
@@ -184,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_include_unset() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
         use std::io::Write;
         let mut proxy = env_mirroring_proxy();
         let ctx = Context::new_safe(

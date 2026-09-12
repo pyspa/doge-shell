@@ -904,6 +904,164 @@ pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
     session::session_description(resolve_session_ttl(proxy))
 }
 
+/// Everything about a turn that is decided once, before the tool-calling
+/// loop starts: which skills the model may see, the fixed system prompt,
+/// whether this is an agent task, session continuity, the hook context, and
+/// the two budgets a turn is held to. Bundled here so `chat_with_tools`
+/// reads as "resolve the turn, then run it" instead of nine separate locals
+/// threaded through a 600-line function.
+struct TurnSetup {
+    skill_roots: Vec<skills::SkillRoot>,
+    prompt: SystemPrompt,
+    /// Optional durable task context. `chat_with_tools` treats a turn
+    /// differently in several places when this is `Some` - session
+    /// continuity is disabled, an unverified `Answer` is retried, and the
+    /// checkpoint/finish calls at the end of the turn only fire here.
+    runtime: Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
+    session_ttl: Option<Duration>,
+    scope: Option<PathBuf>,
+    hook_ctx: hooks::HookContext,
+    turn_token_budget: Option<u64>,
+    /// Snapshot of `skills::pending::staged_this_process()` before this turn,
+    /// so the turn's own count is the difference read afterward.
+    staged_before_turn: usize,
+}
+
+impl TurnSetup {
+    /// A configuration that cannot be read stops the turn (via `?`).
+    /// Continuing without the hooks would silently drop checks the user
+    /// believes are running.
+    fn build(
+        operator_prompt: Option<String>,
+        language: Option<String>,
+        mcp_manager: &Arc<RwLock<McpManager>>,
+        proxy: &mut dyn ChatToolHost,
+    ) -> Result<Self, String> {
+        let cwd = proxy.get_current_dir().ok();
+        let mut skill_roots =
+            skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
+        gate_project_skills(&mut skill_roots, proxy);
+
+        // Build System Prompt (fixed for the session)
+        let prompt =
+            build_system_prompt(operator_prompt, language, &mcp_manager.read(), &skill_roots);
+
+        let runtime = proxy.agent_runtime();
+        let session_ttl = if runtime.is_some() {
+            None
+        } else {
+            resolve_session_ttl(proxy)
+        };
+        // Only computed when something will actually read it: an agent turn's
+        // `session_ttl` is always `None`, so paying for `conversation_scope`'s
+        // canonicalize-and-ancestor-walk there would buy nothing.
+        let scope = session_ttl
+            .is_some()
+            .then(|| conversation_scope(cwd.as_deref()))
+            .flatten();
+
+        let mut hook_ctx = hooks::HookContext::load(proxy)?;
+        // Learned without consuming the conversation: `take` is destructive, and
+        // a hook that refuses this prompt must leave the previous turn intact.
+        let carried_session = session::peek_id(session_ttl, &prompt.identity, scope.as_deref());
+        hook_ctx.set_session_id(
+            carried_session
+                .clone()
+                .unwrap_or_else(|| hook_ctx.new_session_id()),
+        );
+
+        let turn_token_budget = resolve_turn_token_budget(proxy);
+        // Snapshot before the turn runs: `staged_this_process` never resets, so
+        // this turn's own count is the difference read after it.
+        let staged_before_turn = skills::pending::staged_this_process();
+
+        Ok(Self {
+            skill_roots,
+            prompt,
+            runtime,
+            session_ttl,
+            scope,
+            hook_ctx,
+            turn_token_budget,
+            staged_before_turn,
+        })
+    }
+}
+
+/// Runs one round's tool calls against the shell: `before_tool`/`after_tool`
+/// bookkeeping for a durable task (when there is one), dispatch through
+/// `execute_tool_call`, and appending each result to `manager`. Growing
+/// `tools` here (rather than back in `chat_with_tools`) is what lets
+/// `tool_search` discoveries take effect the same round they are found.
+///
+/// A failing tool call becomes an error message the model reads next round,
+/// not a stopped turn - only `before_tool`/`after_tool` failing (the durable
+/// task ledger itself is broken) propagates out as `Err`.
+fn run_tool_calls(
+    tool_calls: &[Value],
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    setup: &TurnSetup,
+    proxy: &mut dyn ChatToolHost,
+    manager: &mut ConversationManager,
+    tools: &mut Vec<Value>,
+) -> Result<(), String> {
+    for tool_call in tool_calls {
+        let tool_call_id = tool_call
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        if let Some(runtime) = &setup.runtime {
+            runtime
+                .lock()
+                .before_tool(
+                    tool_call,
+                    serde_json::to_value(&*manager).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        let execution = match execute_tool_call(tool_call, mcp_manager, &setup.hook_ctx, proxy) {
+            Ok(execution) => execution,
+            Err(error) => tool::ToolExecution {
+                content: format!(
+                    "Error: {error}\nPlease analyze the error and retry with corrected arguments."
+                ),
+                outcome: error.outcome,
+            },
+        };
+        let mut tool_result = execution.content;
+
+        if let Some(runtime) = &setup.runtime {
+            let sequence = runtime
+                .lock()
+                .after_tool(tool_call, &tool_result, execution.outcome)
+                .map_err(|e| e.to_string())?;
+            if tool_call["function"]["name"] == "tool_search"
+                && let Ok(result) = serde_json::from_str::<Value>(&tool_result)
+                && let Some(found) = result["tools"].as_array()
+            {
+                for definition in found {
+                    if !tools
+                        .iter()
+                        .any(|d| d["function"]["name"] == definition["function"]["name"])
+                    {
+                        tools.push(definition.clone());
+                    }
+                }
+            }
+            tool_result.push_str(&format!("\n[task event {sequence}]"));
+        }
+        // Add tool result to history buffer
+        manager.add_message(json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": tool_result,
+        }));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
     client: &dyn ChatClient,
@@ -916,39 +1074,7 @@ fn chat_with_tools(
     mut stream_sink: Option<&mut StreamSink>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    let cwd = proxy.get_current_dir().ok();
-    let mut skill_roots =
-        skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
-    gate_project_skills(&mut skill_roots, proxy);
-
-    // Build System Prompt (fixed for the session)
-    let prompt = build_system_prompt(operator_prompt, language, &mcp_manager.read(), &skill_roots);
-
-    let runtime = proxy.agent_runtime();
-    let session_ttl = if runtime.is_some() {
-        None
-    } else {
-        resolve_session_ttl(proxy)
-    };
-    // Only computed when something will actually read it: an agent turn's
-    // `session_ttl` is always `None`, so paying for `conversation_scope`'s
-    // canonicalize-and-ancestor-walk there would buy nothing.
-    let scope = session_ttl
-        .is_some()
-        .then(|| conversation_scope(cwd.as_deref()))
-        .flatten();
-
-    // A configuration that cannot be read stops the turn. Continuing without
-    // the hooks would silently drop checks the user believes are running.
-    let mut hook_ctx = hooks::HookContext::load(proxy)?;
-    // Learned without consuming the conversation: `take` is destructive, and a
-    // hook that refuses this prompt must leave the previous turn intact.
-    let carried_session = session::peek_id(session_ttl, &prompt.identity, scope.as_deref());
-    hook_ctx.set_session_id(
-        carried_session
-            .clone()
-            .unwrap_or_else(|| hook_ctx.new_session_id()),
-    );
+    let setup = TurnSetup::build(operator_prompt, language, mcp_manager, proxy)?;
 
     // Everything below runs inside a closure so that the tail - the usage flush
     // and `response-complete` - is reached on every exit, not only the happy
@@ -957,22 +1083,13 @@ fn chat_with_tools(
     // `before_tool` all used to leave `session-start` with no matching end.
     let mut iterations = 0usize;
     let mut turn_tokens = (0u64, 0u64, 0u64);
-    // Read out here as well so the final `loop` envelope can be built after the
-    // closure has returned.
-    // Resolved out here, not inside the closure: a prompt hook that denies
-    // returns before the closure reaches it, and the final `loop` envelope
-    // would then advertise no turn budget while one was configured.
-    let turn_token_budget = resolve_turn_token_budget(proxy);
-    // Snapshot before the turn runs: `staged_this_process` never resets, so
-    // this turn's own count is the difference read after it.
-    let staged_before_turn = skills::pending::staged_this_process();
     let outcome: Result<String, String> = (|| {
         // Set when this turn continues a stored conversation, so the final
         // `store` below can keep the idle clock from restarting if this turn
         // fails and is rewound. Fully local to this closure - nothing after
         // it reads this.
         let mut carried_stored_at: Option<Instant> = None;
-        let submitted = hook_ctx.fire(
+        let submitted = setup.hook_ctx.fire(
             hooks::HookEvent::UserPromptSubmit,
             hooks::HookSubject::none(),
             || {
@@ -999,11 +1116,15 @@ fn chat_with_tools(
         // `@name` is the user naming a skill outright. Resolved against the
         // gated roots, so a repository whose skills were declined cannot be
         // reached this way either.
-        let (mentioned, user_input) = resolve_skill_mentions(user_input, &skill_roots);
+        let (mentioned, user_input) = resolve_skill_mentions(user_input, &setup.skill_roots);
 
         // Continue the previous conversation when it still applies, so a follow-up
         // question does not re-explore the repository from scratch.
-        let mut manager = match session::take(session_ttl, &prompt.identity, scope.as_deref()) {
+        let mut manager = match session::take(
+            setup.session_ttl,
+            &setup.prompt.identity,
+            setup.scope.as_deref(),
+        ) {
             session::Claim::Continued(carried) => {
                 eprintln!(
                     "\x1b[2msession: continuing {} ({} message(s), {}s old)\x1b[0m",
@@ -1016,7 +1137,7 @@ fn chat_with_tools(
                 // The carried conversation was pinned with the skills list as it
                 // stood then. Re-render it so a skill written last turn is visible
                 // this turn without discarding the conversation.
-                set_system_prompt(&mut manager, &prompt.text);
+                set_system_prompt(&mut manager, &setup.prompt.text);
                 // Recorded before this turn's own messages are added, so a
                 // failed turn can be rewound to exactly this point.
                 manager.mark_turn_start();
@@ -1034,16 +1155,17 @@ fn chat_with_tools(
                 // `None` for tasks so `take` always misses, which fired
                 // `session-start` again on every `agent resume` - with the same
                 // session id, so a hook doing per-session setup ran twice.
-                let resuming = runtime
+                let resuming = setup
+                    .runtime
                     .as_ref()
                     .is_some_and(|runtime| runtime.lock().task.checkpoint.is_some());
                 if !resuming {
-                    hook_ctx.fire(
+                    setup.hook_ctx.fire(
                         hooks::HookEvent::SessionStart,
                         hooks::HookSubject::none(),
                         || {
                             json!({
-                                "source": if runtime.is_some() { "agent" } else { "chat" },
+                                "source": if setup.runtime.is_some() { "agent" } else { "chat" },
                                 "streaming": stream_sink.is_some(),
                             })
                         },
@@ -1051,13 +1173,13 @@ fn chat_with_tools(
                     );
                 }
                 ConversationManager::new(
-                    json!({ "role": "system", "content": prompt.text.clone() }),
+                    json!({ "role": "system", "content": setup.prompt.text.clone() }),
                     // First User Input (Pinned - the original goal)
                     json!({ "role": "user", "content": user_input }),
                 )
             }
         };
-        if let Some(runtime) = &runtime {
+        if let Some(runtime) = &setup.runtime {
             let saved = runtime.lock().task.clone();
             if let Some(checkpoint) = &saved.checkpoint {
                 manager = serde_json::from_value(checkpoint.clone())
@@ -1071,7 +1193,7 @@ fn chat_with_tools(
                         .events(&saved.id)
                         .map_err(|e| e.to_string())?,
                 );
-                set_system_prompt(&mut manager, &prompt.text);
+                set_system_prompt(&mut manager, &setup.prompt.text);
             }
         }
         for text in &mentioned {
@@ -1083,18 +1205,18 @@ fn chat_with_tools(
             manager.add_message(json!({ "role": "system", "content": note }));
         }
         manager.set_prompt_token_budget(resolve_prompt_token_budget(proxy));
-        if runtime.is_none() {
+        if setup.runtime.is_none() {
             manager.begin_turn();
         }
 
         let mut tools = build_tools();
         {
             let mcp = mcp_manager.read();
-            if runtime.is_none() && !mcp.is_empty() {
+            if setup.runtime.is_none() && !mcp.is_empty() {
                 tools.extend(mcp.tool_definitions());
             }
         }
-        if runtime.is_some() {
+        if setup.runtime.is_some() {
             tools.extend(crate::agent::definitions());
             tools.extend(tool::agent_definitions());
         }
@@ -1105,7 +1227,7 @@ fn chat_with_tools(
         let mut stalled_rounds = 0usize;
 
         let outcome = 'agent: loop {
-            if let Some(runtime) = &runtime {
+            if let Some(runtime) = &setup.runtime {
                 let mut runtime = runtime.lock();
                 runtime
                     .checkpoint(
@@ -1128,7 +1250,7 @@ fn chat_with_tools(
             // Checked before the request, not after: stopping once the bill is
             // already over the line would let a single expensive turn blow through
             // whatever number the user set.
-            if let Some(budget) = turn_token_budget
+            if let Some(budget) = setup.turn_token_budget
                 && manager.turn_usage.total_tokens() >= budget
             {
                 break Err(format!(
@@ -1140,11 +1262,11 @@ fn chat_with_tools(
 
             // Told before any hook of this round can fire, so a governor hook
             // sees the round it is about to authorise rather than the last one.
-            hook_ctx.note_loop(loop_state(
+            setup.hook_ctx.note_loop(loop_state(
                 iterations,
                 manager.turn_usage.prompt_tokens,
                 manager.turn_usage.completion_tokens,
-                turn_token_budget,
+                setup.turn_token_budget,
             ));
 
             // Compact by rule before paying a model to summarize. Superseded and
@@ -1172,7 +1294,7 @@ fn chat_with_tools(
                 // Observation only: refusing compaction would leave the request
                 // too large to send, so there is no safe `deny` to offer.
                 let will_summarize = manager.should_summarize();
-                hook_ctx.fire(
+                setup.hook_ctx.fire(
                     hooks::HookEvent::PreCompact,
                     hooks::HookSubject::none(),
                     || {
@@ -1199,7 +1321,7 @@ fn chat_with_tools(
                 summary_rounds += 1;
                 // Graceful fallback on summary failure
                 if let Err(e) = manager.perform_summary(client, proxy, model_override.clone()) {
-                    if runtime.is_some() {
+                    if setup.runtime.is_some() {
                         break 'agent Err(e);
                     }
                     tracing::warn!("Context summarization failed: {e}, continuing without summary");
@@ -1209,7 +1331,7 @@ fn chat_with_tools(
 
             let mut current_messages =
                 manager.build_messages_for_chat(dynamic_context.message(proxy));
-            if let Some(runtime) = &runtime {
+            if let Some(runtime) = &setup.runtime {
                 current_messages.push(json!({"role":"system","content":runtime.lock().context()}));
             }
 
@@ -1269,15 +1391,15 @@ fn chat_with_tools(
             // Updated a second time: the call above is what makes this round's
             // tokens known, and a `pre-tool-use` hook watching spend would
             // otherwise always be one round behind.
-            hook_ctx.note_loop(loop_state(
+            setup.hook_ctx.note_loop(loop_state(
                 iterations,
                 manager.turn_usage.prompt_tokens,
                 manager.turn_usage.completion_tokens,
-                turn_token_budget,
+                setup.turn_token_budget,
             ));
             if let Some(reported) = usage::TokenUsage::from_response(&response) {
                 manager.note_prompt_tokens(reported.prompt_tokens);
-            } else if runtime.is_some() {
+            } else if setup.runtime.is_some() {
                 break Err(
                     "agent: provider omitted token usage; cannot enforce the task budget".into(),
                 );
@@ -1308,68 +1430,17 @@ fn chat_with_tools(
             match turn.outcome {
                 TurnOutcome::ToolCalls(tool_calls) => {
                     stalled_rounds = 0;
-
-                    for tool_call in &tool_calls {
-                        let tool_call_id = tool_call
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-
-                        if let Some(runtime) = &runtime {
-                            runtime
-                                .lock()
-                                .before_tool(
-                                    tool_call,
-                                    serde_json::to_value(&manager).map_err(|e| e.to_string())?,
-                                )
-                                .map_err(|e| e.to_string())?;
-                        }
-                        let execution = match execute_tool_call(
-                            tool_call,
-                            mcp_manager,
-                            &hook_ctx,
-                            proxy,
-                        ) {
-                            Ok(execution) => execution,
-                            Err(error) => tool::ToolExecution {
-                                content: format!(
-                                    "Error: {error}\nPlease analyze the error and retry with corrected arguments."
-                                ),
-                                outcome: error.outcome,
-                            },
-                        };
-                        let mut tool_result = execution.content;
-
-                        if let Some(runtime) = &runtime {
-                            let sequence = runtime
-                                .lock()
-                                .after_tool(tool_call, &tool_result, execution.outcome)
-                                .map_err(|e| e.to_string())?;
-                            if tool_call["function"]["name"] == "tool_search"
-                                && let Ok(result) = serde_json::from_str::<Value>(&tool_result)
-                                && let Some(found) = result["tools"].as_array()
-                            {
-                                for definition in found {
-                                    if !tools.iter().any(|d| {
-                                        d["function"]["name"] == definition["function"]["name"]
-                                    }) {
-                                        tools.push(definition.clone());
-                                    }
-                                }
-                            }
-                            tool_result.push_str(&format!("\n[task event {sequence}]"));
-                        }
-                        // Add tool result to history buffer
-                        manager.add_message(json!({
-                            "role": "tool",
-                            "tool_call_id": tool_call_id,
-                            "content": tool_result,
-                        }));
-                    }
+                    run_tool_calls(
+                        &tool_calls,
+                        mcp_manager,
+                        &setup,
+                        proxy,
+                        &mut manager,
+                        &mut tools,
+                    )?;
                 }
                 TurnOutcome::Answer(content) => {
-                    if let Some(runtime) = &runtime
+                    if let Some(runtime) = &setup.runtime
                         && {
                             let runtime = runtime.lock();
                             !runtime.task.verified()
@@ -1432,11 +1503,11 @@ fn chat_with_tools(
             &mut manager,
             iterations,
             outcome.is_ok(),
-            turn_token_budget,
+            setup.turn_token_budget,
             model_override.clone(),
         );
 
-        if let Some(runtime) = &runtime {
+        if let Some(runtime) = &setup.runtime {
             let mut runtime = runtime.lock();
             runtime
                 .checkpoint(
@@ -1473,11 +1544,13 @@ fn chat_with_tools(
         // Only a turn that finished or was cleanly rewound is worth resuming.
         if outcome.is_ok() || rewound {
             session::store(
-                session_ttl,
+                setup.session_ttl,
                 manager,
-                hook_ctx.session_id(),
-                &prompt.identity,
-                scope,
+                setup.hook_ctx.session_id(),
+                &setup.prompt.identity,
+                // Cloned, not moved: `setup` is a shared `&TurnSetup` capture
+                // (see `run_tool_calls`), and this closure runs only once.
+                setup.scope.clone(),
                 // A run of failures must not keep a dead conversation's idle
                 // clock running: only a turn that actually finished restarts
                 // it from now.
@@ -1498,7 +1571,7 @@ fn chat_with_tools(
     maybe_auto_archive_skills(proxy);
 
     let staged_this_turn =
-        skills::pending::staged_this_process().saturating_sub(staged_before_turn);
+        skills::pending::staged_this_process().saturating_sub(setup.staged_before_turn);
     if staged_this_turn > 0 {
         eprintln!(
             "\x1b[2mskills: {staged_this_turn} proposal(s) staged; review with `skill pending`\x1b[0m"
@@ -1510,13 +1583,13 @@ fn chat_with_tools(
     // not allowed to ask for.
     // Keeps the envelope's `loop` in step with the `iterations` and `tokens`
     // this event has carried in its own detail since it was added.
-    hook_ctx.note_loop(loop_state(
+    setup.hook_ctx.note_loop(loop_state(
         iterations,
         turn_tokens.0,
         turn_tokens.1,
-        turn_token_budget,
+        setup.turn_token_budget,
     ));
-    hook_ctx.fire(
+    setup.hook_ctx.fire(
         hooks::HookEvent::ResponseComplete,
         hooks::HookSubject::none(),
         || {

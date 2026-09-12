@@ -2,10 +2,14 @@ use super::*;
 use std::sync::Mutex as StdMutex;
 
 /// Records every call it receives instead of touching anything external, so
-/// these tests never need a real `herdr` binary.
+/// these tests never need a real `herdr` binary. Also tracks the same
+/// "last confirmed delivery" `herdr::HerdrReporter` does, so
+/// `reconcile_if_stale` behaves the same way against this fake as it would
+/// against the real backend.
 #[derive(Default)]
 struct RecordingReporter {
     calls: StdMutex<Vec<Call>>,
+    delivered: StdMutex<Option<AgentState>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +24,7 @@ impl LifecycleReporter for RecordingReporter {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(Call::Report(state.clone(), seq));
+        *self.delivered.lock().unwrap_or_else(|p| p.into_inner()) = Some(state.clone());
     }
 
     fn release(&self, seq: u64) {
@@ -27,9 +32,18 @@ impl LifecycleReporter for RecordingReporter {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .push(Call::Release(seq));
+        *self.delivered.lock().unwrap_or_else(|p| p.into_inner()) = None;
     }
 
     fn shutdown(&self, _timeout: Duration) {}
+
+    fn is_stale(&self, desired: &AgentState) -> bool {
+        self.delivered
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            != Some(desired)
+    }
 }
 
 fn manager_with_recorder() -> (Arc<AgentLifecycleManager>, Arc<RecordingReporter>) {
@@ -143,6 +157,7 @@ fn owner_pid_guard_makes_a_foreign_process_manager_inert() {
         state: Mutex::new(ManagerState {
             last_reported: None,
             last_seq: 0,
+            yield_depth: 0,
         }),
         depth: AtomicUsize::new(0),
         reporter: reporter.clone(),
@@ -264,4 +279,191 @@ fn null_reporter_reports_inactive_so_a_forked_child_never_reactivates_needlessly
     // was never active in the parent to begin with.
     assert!(!NullReporter.is_active());
     assert!(RecordingReporter::default().is_active());
+}
+
+#[test]
+fn begin_yield_releases_and_the_guards_drop_reclaims_the_prior_state() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+    assert!(!manager.is_yielded());
+
+    let guard = manager.begin_yield();
+    assert!(manager.is_yielded());
+    assert!(
+        matches!(calls_of(&reporter).last(), Some(Call::Release(_))),
+        "begin_yield must release this pane's authority"
+    );
+
+    drop(guard);
+    assert!(!manager.is_yielded());
+    let calls = calls_of(&reporter);
+    assert!(
+        matches!(calls.last(), Some(Call::Report(AgentState::Working, _))),
+        "end_yield must reclaim with the state from before the yield: {calls:?}"
+    );
+}
+
+#[test]
+fn reports_made_while_yielded_are_tracked_but_never_sent() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_idle();
+    let guard = manager.begin_yield();
+    let calls_before = calls_of(&reporter).len();
+
+    manager.report_working();
+    manager.report_working(); // dedup still applies while yielded
+    assert_eq!(
+        calls_of(&reporter).len(),
+        calls_before,
+        "a state change while authority is on loan must not reach the reporter"
+    );
+
+    drop(guard);
+    let calls = calls_of(&reporter);
+    assert!(
+        matches!(calls.last(), Some(Call::Report(AgentState::Working, _))),
+        "end_yield must reclaim with the latest state tracked while yielded, \
+         not the pre-yield one: {calls:?}"
+    );
+}
+
+#[test]
+fn reclaim_after_a_blocked_yield_restores_blocked_not_idle() {
+    let (manager, reporter) = manager_with_recorder();
+    let guard = manager.begin_yield();
+    manager.report_blocked("needs approval");
+    drop(guard);
+    let calls = calls_of(&reporter);
+    assert!(
+        matches!(calls.last(), Some(Call::Report(AgentState::Blocked(_), _))),
+        "reclaim must resend Blocked, not fall back to Idle: {calls:?}"
+    );
+}
+
+#[test]
+fn nested_yields_release_and_reclaim_exactly_once() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+
+    let outer = manager.begin_yield();
+    let inner = manager.begin_yield();
+    let release_count = |reporter: &RecordingReporter| {
+        calls_of(reporter)
+            .iter()
+            .filter(|c| matches!(c, Call::Release(_)))
+            .count()
+    };
+    assert_eq!(
+        release_count(&reporter),
+        1,
+        "only the outermost begin_yield should release"
+    );
+
+    drop(inner);
+    assert!(
+        manager.is_yielded(),
+        "dropping the inner guard must not end the yield"
+    );
+
+    drop(outer);
+    assert!(!manager.is_yielded());
+    assert_eq!(release_count(&reporter), 1, "still only one release total");
+}
+
+#[test]
+fn reconcile_is_suppressed_while_yielded() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+    let guard = manager.begin_yield();
+
+    let calls_before = calls_of(&reporter).len();
+    manager.reconcile_if_stale();
+    assert_eq!(
+        calls_of(&reporter).len(),
+        calls_before,
+        "reconcile_if_stale must not resend while authority is on loan"
+    );
+
+    drop(guard);
+}
+
+#[test]
+fn seq_stays_strictly_increasing_across_a_yield_and_reclaim() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+    let guard = manager.begin_yield();
+    manager.report_blocked("waiting");
+    drop(guard);
+    manager.report_idle();
+
+    let calls = calls_of(&reporter);
+    let seqs: Vec<u64> = calls
+        .iter()
+        .map(|c| match c {
+            Call::Report(_, seq) => *seq,
+            Call::Release(seq) => *seq,
+        })
+        .collect();
+    for pair in seqs.windows(2) {
+        assert!(
+            pair[1] > pair[0],
+            "seq must strictly increase across yield/reclaim: {seqs:?}"
+        );
+    }
+}
+
+#[test]
+fn a_yield_guard_dropped_after_shutdown_never_reclaims() {
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+    let guard = manager.begin_yield();
+    manager.shutdown();
+    let calls_before = calls_of(&reporter).len();
+
+    drop(guard);
+    assert_eq!(
+        calls_of(&reporter).len(),
+        calls_before,
+        "a guard dropped after shutdown must not re-claim authority this process already gave up"
+    );
+}
+
+#[test]
+fn begin_yield_after_shutdown_never_releases() {
+    // Mirrors `emit`'s own post-shutdown guard: a `begin_yield` call that
+    // races an emergency signal-triggered `shutdown()` (a separate task,
+    // per `dsh/src/lib.rs`'s SIGTERM/SIGHUP watcher) must not send a stray
+    // `release-agent` for a process that already gave up authority.
+    let (manager, reporter) = manager_with_recorder();
+    manager.report_working();
+    manager.shutdown();
+    let calls_before = calls_of(&reporter).len();
+
+    let guard = manager.begin_yield();
+    assert!(
+        !manager.is_yielded(),
+        "begin_yield after shutdown must not even bump yield_depth"
+    );
+    assert_eq!(
+        calls_of(&reporter).len(),
+        calls_before,
+        "begin_yield after shutdown must not release"
+    );
+
+    drop(guard);
+    assert_eq!(
+        calls_of(&reporter).len(),
+        calls_before,
+        "dropping that guard must not reclaim anything either"
+    );
+}
+
+#[test]
+fn yield_on_a_null_reporter_manager_is_a_pure_no_op() {
+    let manager = AgentLifecycleManager::null();
+    let guard = manager.begin_yield();
+    assert!(!manager.is_yielded(), "NullReporter is never active");
+    drop(guard);
+    // Nothing to assert beyond "did not panic" - same spirit as
+    // `null_reporter_is_a_pure_no_op`.
 }

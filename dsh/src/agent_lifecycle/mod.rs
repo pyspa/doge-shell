@@ -39,6 +39,7 @@
 //!   `release-agent`), but delivery order is what the single worker thread
 //!   guarantees.
 
+mod agent_command;
 mod herdr;
 
 #[cfg(test)]
@@ -165,6 +166,24 @@ struct ManagerState {
     /// later, unrelated state change happened to occur first.
     last_reported: Option<AgentState>,
     last_seq: u64,
+    /// Nesting depth of [`AgentLifecycleManager::begin_yield`]. While
+    /// non-zero, this pane's authority has been handed to a foreground agent
+    /// CLI: `emit` keeps tracking state locally (so the reclaim on the
+    /// outermost guard's drop can resend it) but never calls into
+    /// `reporter.report`, and `reconcile_if_stale` is a no-op - see
+    /// [`AgentLifecycleManager::begin_yield`].
+    yield_depth: usize,
+}
+
+/// Allocate the next `--seq` value for this manager, keeping it strictly
+/// increasing across both wall-clock time and every previous call - the same
+/// rule `emit` and `shutdown` already relied on before this was extracted so
+/// `begin_yield`/`end_yield` could share it without duplicating the
+/// `max(now_millis(), ..)` idiom a third time.
+fn next_seq(state: &mut ManagerState) -> u64 {
+    let seq = std::cmp::max(now_millis(), state.last_seq + 1);
+    state.last_seq = seq;
+    seq
 }
 
 /// Tracks the shell's current agent lifecycle state, deduplicates repeated
@@ -185,17 +204,24 @@ pub struct AgentLifecycleManager {
 }
 
 impl AgentLifecycleManager {
-    pub fn new(reporter: Arc<dyn LifecycleReporter>) -> Arc<Self> {
+    /// Shared by every constructor below so a future field only needs
+    /// updating in one place instead of in every struct literal.
+    fn with_seq(reporter: Arc<dyn LifecycleReporter>, last_seq: u64) -> Arc<Self> {
         Arc::new(Self {
             owner_pid: std::process::id(),
             state: Mutex::new(ManagerState {
                 last_reported: None,
-                last_seq: now_millis(),
+                last_seq,
+                yield_depth: 0,
             }),
             depth: AtomicUsize::new(0),
             reporter,
             shutdown_once: Once::new(),
         })
+    }
+
+    pub fn new(reporter: Arc<dyn LifecycleReporter>) -> Arc<Self> {
+        Self::with_seq(reporter, now_millis())
     }
 
     /// A manager backed by [`NullReporter`] - the default until (and unless)
@@ -211,16 +237,17 @@ impl AgentLifecycleManager {
     /// within the same millisecond).
     #[cfg(test)]
     fn new_with_seed_seq(reporter: Arc<dyn LifecycleReporter>, seed_seq: u64) -> Arc<Self> {
-        Arc::new(Self {
-            owner_pid: std::process::id(),
-            state: Mutex::new(ManagerState {
-                last_reported: None,
-                last_seq: seed_seq,
-            }),
-            depth: AtomicUsize::new(0),
-            reporter,
-            shutdown_once: Once::new(),
-        })
+        Self::with_seq(reporter, seed_seq)
+    }
+
+    /// A manager that starts already yielded (`yield_depth == 1`, no initial
+    /// report sent) - for a forked child continuing its parent's
+    /// already-yielded pane authority rather than reclaiming authority the
+    /// parent doesn't currently hold. See [`reactivate_after_fork`].
+    fn new_yielded(reporter: Arc<dyn LifecycleReporter>) -> Arc<Self> {
+        let manager = Self::new(reporter);
+        manager.state.lock().yield_depth = 1;
+        manager
     }
 
     /// Fork safety: a forked child that still holds a clone of this `Arc`
@@ -240,6 +267,13 @@ impl AgentLifecycleManager {
         if !self.owned_by_this_process() {
             return;
         }
+        // Once `shutdown()` has run, this manager is done for good (it's
+        // idempotent via `Once`, so a late `TurnGuard`/`YieldGuard` drop
+        // after the interactive session has already torn down must not
+        // re-claim authority this process just released).
+        if self.shutdown_once.is_completed() {
+            return;
+        }
         let mut guard = self.state.lock();
         // `last_reported` starts `None`, not `Some(Idle)`: the very first
         // call for any state must always go through, or Herdr is never told
@@ -248,10 +282,18 @@ impl AgentLifecycleManager {
         if !force && guard.last_reported.as_ref() == Some(&state) {
             return;
         }
-        let seq = std::cmp::max(now_millis(), guard.last_seq + 1);
-        guard.last_seq = seq;
+        let seq = next_seq(&mut guard);
         guard.last_reported = Some(state.clone());
+        // While this pane's authority is on loan to a foreground agent CLI
+        // (`begin_yield`), keep tracking what we *would* report - so the
+        // reclaim on `end_yield` can resend the current state - but never
+        // actually call into the reporter. Reporting here would fight the
+        // agent CLI (or Herdr's own detection of it) for the same pane.
+        let yielded = guard.yield_depth > 0;
         drop(guard);
+        if yielded {
+            return;
+        }
         self.reporter.report(&state, seq);
     }
 
@@ -317,6 +359,97 @@ impl AgentLifecycleManager {
         self.report_working();
     }
 
+    /// Whether the backend is genuinely doing something (as opposed to
+    /// [`NullReporter`]). [`yield_to_foreground_agent`] gates on this right
+    /// after its one `environment.read()`, so starting an ordinary
+    /// foreground command costs one lock acquisition plus this call when
+    /// Herdr isn't active - no `state` lock, and no work past this point.
+    pub fn is_active(&self) -> bool {
+        self.reporter.is_active()
+    }
+
+    /// Whether this pane's authority is currently on loan to a foreground
+    /// agent CLI. See [`Self::begin_yield`].
+    pub fn is_yielded(&self) -> bool {
+        self.state.lock().yield_depth > 0
+    }
+
+    /// Hand this pane's Herdr lifecycle authority to a foreground agent CLI
+    /// this shell is about to run: Herdr's own screen detection is disabled
+    /// for a pane for as long as an external integration (this one) holds
+    /// its authority, so as long as dsh keeps it, starting `codex` or
+    /// `claude` from inside dsh is never recognized by Herdr. Releasing it
+    /// for the duration lets Herdr's built-in detection (or the agent CLI's
+    /// own integration) classify the pane instead.
+    ///
+    /// Only the outermost call actually releases, and only the outermost
+    /// guard's drop reclaims - see [`Self::end_yield`]. A complete no-op
+    /// (`is_yielded()` stays `false`) for a [`NullReporter`] manager, one
+    /// not owned by the current process (a stale post-fork clone; see
+    /// [`Self::owned_by_this_process`]), or one that has already
+    /// `shutdown()` (mirrors the same guard in [`Self::emit`], for the same
+    /// reason: a release racing an emergency signal-triggered shutdown must
+    /// not run after this process already considers itself torn down) -
+    /// [`yield_to_foreground_agent`] also gates on [`Self::is_active`]
+    /// before calling this, so the check here is a backstop, not the only
+    /// thing standing between a `NullReporter` manager and a real `herdr`
+    /// invocation.
+    pub fn begin_yield(self: &Arc<Self>) -> YieldGuard {
+        if self.owned_by_this_process()
+            && self.reporter.is_active()
+            && !self.shutdown_once.is_completed()
+        {
+            let mut guard = self.state.lock();
+            guard.yield_depth += 1;
+            let is_outermost = guard.yield_depth == 1;
+            let seq = if is_outermost {
+                Some(next_seq(&mut guard))
+            } else {
+                None
+            };
+            drop(guard);
+            if let Some(seq) = seq {
+                self.reporter.release(seq);
+            }
+        }
+        YieldGuard {
+            manager: self.clone(),
+        }
+    }
+
+    fn end_yield(&self) {
+        if !self.owned_by_this_process() {
+            return;
+        }
+        let resend = {
+            let mut guard = self.state.lock();
+            if guard.yield_depth == 0 {
+                // The common case, not a rare one: `begin_yield` only ever
+                // incremented `yield_depth` when Herdr was active, owned by
+                // this process, and not yet shut down (see its own guard) -
+                // so for most sessions (Herdr inactive) every `YieldGuard`
+                // reaches this branch. Also guards against underflow if
+                // `end_yield` is ever somehow called more times than
+                // `begin_yield` incremented.
+                return;
+            }
+            guard.yield_depth -= 1;
+            if guard.yield_depth == 0 {
+                guard.last_reported.clone()
+            } else {
+                None
+            }
+        };
+        // Reclaiming with whatever we most recently *would* have reported
+        // (tracked by `emit` even while yielded) rather than unconditionally
+        // `Idle`: if the agent CLI's own turn ran a nested `!`/`agent`
+        // command that moved this shell to `Blocked`, that's what a human
+        // still needs to see once authority comes back.
+        if let Some(state) = resend {
+            self.emit(state, true);
+        }
+    }
+
     /// Release lifecycle authority and give the backend a bounded window to
     /// flush any queued work. Idempotent - safe to call from both the normal
     /// end-of-session guard and an emergency signal-triggered shutdown.
@@ -325,12 +458,7 @@ impl AgentLifecycleManager {
             return;
         }
         self.shutdown_once.call_once(|| {
-            let seq = {
-                let mut guard = self.state.lock();
-                let seq = std::cmp::max(now_millis(), guard.last_seq + 1);
-                guard.last_seq = seq;
-                seq
-            };
+            let seq = next_seq(&mut self.state.lock());
             self.reporter.release(seq);
             self.reporter.shutdown(Duration::from_millis(750));
         });
@@ -346,6 +474,13 @@ impl AgentLifecycleManager {
     /// tick, not a new timer.
     pub fn reconcile_if_stale(&self) {
         if !self.owned_by_this_process() {
+            return;
+        }
+        // Authority is on loan to a foreground agent CLI: reconciling here
+        // would resend our own last state and fight that CLI (or Herdr's
+        // detection of it) for the pane - exactly what `begin_yield` exists
+        // to prevent.
+        if self.is_yielded() {
             return;
         }
         // Nothing has been reported yet (activation's own report is still
@@ -381,6 +516,20 @@ pub struct BlockedGuard {
 impl Drop for BlockedGuard {
     fn drop(&mut self) {
         self.manager.end_blocked();
+    }
+}
+
+/// RAII guard for a foreground agent CLI holding this pane's Herdr
+/// authority. See [`AgentLifecycleManager::begin_yield`] and
+/// [`yield_to_foreground_agent`].
+#[must_use]
+pub struct YieldGuard {
+    manager: Arc<AgentLifecycleManager>,
+}
+
+impl Drop for YieldGuard {
+    fn drop(&mut self) {
+        self.manager.end_yield();
     }
 }
 
@@ -479,14 +628,17 @@ pub fn activate() -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>
 /// `Environment.integration_state.lifecycle` before the child actually
 /// exits - `std::process::exit` skips destructors entirely, so
 /// `ShutdownGuard`'s own `Drop` never runs in a forked child.
+///
+/// If the parent had yielded pane authority to a foreground agent CLI at
+/// the moment of the fork (`yield_to_foreground_agent`), the child
+/// continues that same yield rather than reclaiming authority the parent
+/// itself doesn't currently hold.
 pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
-    let was_active = shell
-        .environment
-        .read()
-        .integration_state
-        .lifecycle
-        .reporter
-        .is_active();
+    let (was_active, was_yielded) = {
+        let env = shell.environment.read();
+        let lifecycle = &env.integration_state.lifecycle;
+        (lifecycle.is_active(), lifecycle.is_yielded())
+    };
     if !was_active {
         return;
     }
@@ -494,7 +646,67 @@ pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
         return;
     };
     let reporter = herdr::HerdrReporter::spawn(env, SOURCE, AGENT_LABEL);
-    let manager = AgentLifecycleManager::new(reporter);
-    manager.report_idle();
+    let manager = if was_yielded {
+        AgentLifecycleManager::new_yielded(reporter)
+    } else {
+        let manager = AgentLifecycleManager::new(reporter);
+        manager.report_idle();
+        manager
+    };
     shell.environment.write().integration_state.lifecycle = manager;
+}
+
+/// If the foreground job about to run is a Herdr-recognized agent CLI, hand
+/// this pane's Herdr lifecycle authority to it for the duration - see
+/// [`AgentLifecycleManager::begin_yield`] for why that's needed at all
+/// (Herdr's own screen detection is disabled for a pane for as long as an
+/// external integration holds its authority, so as long as dsh keeps it,
+/// starting `codex` or `claude` from inside dsh is never recognized by
+/// Herdr).
+///
+/// `interactive`/`foreground` are explicit arguments rather than read off
+/// `job` because `fg` resumes a job whose own `job.foreground` stays
+/// `false` (it was backgrounded) - see
+/// `dsh/src/proxy/builtin/jobs.rs::execute_fg`, the other call site, which
+/// passes `true` directly for exactly this reason. Only the pipeline's last
+/// external command is inspected, matching
+/// `terminal::title::last_external_command_basename`'s rule: a command that
+/// only feeds a pipe never draws to the terminal for Herdr's screen
+/// detection to see either, so yielding for it would only cost this shell
+/// its own authority for nothing in return.
+///
+/// A complete no-op (`None`, no lock taken beyond
+/// [`AgentLifecycleManager::is_active`]) whenever Herdr isn't active, the
+/// job isn't a foreground external command, the handoff feature is disabled
+/// (`DSH_HERDR_AGENT_HANDOFF`), or the job's last pipeline stage isn't a
+/// recognized agent CLI (`DSH_HERDR_AGENT_COMMANDS`).
+pub fn yield_to_foreground_agent(
+    shell: &crate::shell::Shell,
+    job: &crate::process::Job,
+    interactive: bool,
+    foreground: bool,
+) -> Option<YieldGuard> {
+    if !interactive || !foreground || job.capture_output || !job.struct_pipe_exprs.is_empty() {
+        return None;
+    }
+    // One `environment.read()` for everything this needs (the manager
+    // clone and both settings) rather than `current(shell)`'s own lock plus
+    // a second one here - every foreground job pays this, so it should
+    // cost at most one lock acquisition even when it turns out not to be a
+    // recognized agent CLI.
+    let env = shell.environment.read();
+    let manager = env.integration_state.lifecycle.clone();
+    if !manager.is_active() {
+        return None;
+    }
+    if !agent_command::handoff_enabled(env.get_var(agent_command::HANDOFF_KEY).as_deref()) {
+        return None;
+    }
+    let name = crate::terminal::title::last_external_command_basename(job)?;
+    let configured = env.get_var(agent_command::AGENT_COMMANDS_KEY);
+    if !agent_command::is_agent_command(&name, configured.as_deref()) {
+        return None;
+    }
+    drop(env);
+    Some(manager.begin_yield())
 }

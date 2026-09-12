@@ -256,6 +256,18 @@ pub async fn eval_str(
             job.cmd, job.foreground, job.redirects, job.list_op, job.capture_output,
         );
         let _title_guard = TitleGuard::new(ctx, &job);
+        // Hand this pane's Herdr lifecycle authority to a recognized agent
+        // CLI (`codex`, `claude`, ...) for as long as it runs in the
+        // foreground, so Herdr's own detection can classify the pane
+        // instead of leaving it stuck on whatever this shell last reported.
+        // A complete no-op when Herdr isn't active or `job` isn't such a
+        // command. See `agent_lifecycle::yield_to_foreground_agent`.
+        let _agent_handoff = crate::agent_lifecycle::yield_to_foreground_agent(
+            shell,
+            &job,
+            ctx.interactive,
+            job.foreground,
+        );
 
         // Handle capture mode with |>
         if job.capture_output {

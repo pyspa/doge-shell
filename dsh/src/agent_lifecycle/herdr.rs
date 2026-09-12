@@ -191,6 +191,36 @@ fn join_with_timeout(handle: thread::JoinHandle<()>, timeout: Duration) {
     let _ = handle.join();
 }
 
+/// What `worker_loop` should do to `delivered` after processing one `job`,
+/// given whether the `herdr` invocation for it succeeded. Extracted as a
+/// pure function so this rule is unit-testable without spawning a real
+/// `herdr` process.
+enum DeliveredUpdate {
+    Set(AgentState),
+    Clear,
+    Unchanged,
+}
+
+fn delivered_update(job: &Job, succeeded: bool) -> DeliveredUpdate {
+    match job {
+        // Only a *successful* report tells us what Herdr now shows; a
+        // failure leaves `delivered` exactly as informative (or stale) as
+        // it already was.
+        Job::Report { state, .. } if succeeded => DeliveredUpdate::Set(state.clone()),
+        Job::Report { .. } => DeliveredUpdate::Unchanged,
+        // Unconditional, regardless of whether the release itself reached
+        // Herdr: either way this process no longer knows whether Herdr
+        // still shows whatever state `delivered` was holding. Leaving a
+        // stale `Some(state)` here would make a reclaim that immediately
+        // re-reports that same state (the common case: nothing changed
+        // while yielded) look "already delivered" to `is_stale`, so a
+        // `Report` that actually failed would never get retried by the next
+        // `reconcile_if_stale` tick - the pane would stay without an agent
+        // until something *else* happened to change state.
+        Job::Release { .. } => DeliveredUpdate::Clear,
+    }
+}
+
 fn worker_loop(
     rx: mpsc::Receiver<Job>,
     bin_path: PathBuf,
@@ -200,15 +230,15 @@ fn worker_loop(
     delivered: Arc<Mutex<Option<AgentState>>>,
 ) {
     for job in rx {
-        let (args, reported_state) = match &job {
-            Job::Report { state, seq } => (
-                build_report_args(&pane_id, source, agent, state, *seq),
-                Some(state.clone()),
-            ),
-            Job::Release { seq } => (build_release_args(&pane_id, source, agent, *seq), None),
+        let args = match &job {
+            Job::Report { state, seq } => build_report_args(&pane_id, source, agent, state, *seq),
+            Job::Release { seq } => build_release_args(&pane_id, source, agent, *seq),
         };
-        if run_herdr(&bin_path, &args) && reported_state.is_some() {
-            *lock(&delivered) = reported_state;
+        let succeeded = run_herdr(&bin_path, &args);
+        match delivered_update(&job, succeeded) {
+            DeliveredUpdate::Set(state) => *lock(&delivered) = Some(state),
+            DeliveredUpdate::Clear => *lock(&delivered) = None,
+            DeliveredUpdate::Unchanged => {}
         }
     }
 }
@@ -466,6 +496,48 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--state"));
         assert!(!args.iter().any(|a| a == "--message"));
         assert!(args.iter().any(|a| a == "--seq"));
+    }
+
+    #[test]
+    fn a_successful_report_marks_that_state_delivered() {
+        let job = Job::Report {
+            state: AgentState::Working,
+            seq: 1,
+        };
+        assert!(matches!(
+            delivered_update(&job, true),
+            DeliveredUpdate::Set(AgentState::Working)
+        ));
+    }
+
+    #[test]
+    fn a_failed_report_leaves_delivered_unchanged() {
+        let job = Job::Report {
+            state: AgentState::Working,
+            seq: 1,
+        };
+        assert!(matches!(
+            delivered_update(&job, false),
+            DeliveredUpdate::Unchanged
+        ));
+    }
+
+    #[test]
+    fn a_release_always_clears_delivered_even_when_it_failed() {
+        // Regression test: without this, a `Release` that fails to actually
+        // reach `herdr` (or one that succeeds but is followed by a reclaim
+        // report that fails) leaves a stale `Some(state)` behind, and
+        // `is_stale` then wrongly reports "already current" forever - see
+        // this function's own doc comment.
+        let job = Job::Release { seq: 1 };
+        assert!(matches!(
+            delivered_update(&job, false),
+            DeliveredUpdate::Clear
+        ));
+        assert!(matches!(
+            delivered_update(&job, true),
+            DeliveredUpdate::Clear
+        ));
     }
 
     #[test]

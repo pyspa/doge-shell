@@ -30,17 +30,37 @@ fn command_title(job: &Job) -> String {
     sanitize_title(first_token(&job.cmd))
 }
 
-fn last_external_process_name(process: &JobProcess) -> Option<String> {
-    let next_external = process
-        .next()
-        .and_then(|next| last_external_process_name(&next));
-    if next_external.is_some() {
-        return next_external;
-    }
+/// The basename of the last external command in `job`'s pipeline (`None` for
+/// a builtin-only job), unsanitized. Used by
+/// `crate::agent_lifecycle::yield_to_foreground_agent` to decide whether a
+/// foreground job is a Herdr-recognized agent CLI - the same "last external
+/// process in the pipeline" rule `command_title` uses for the terminal
+/// title, since a command that only feeds a pipe never draws to the
+/// terminal for Herdr's own screen detection to see either.
+pub(crate) fn last_external_command_basename(job: &Job) -> Option<String> {
+    let process = job.process.as_ref()?;
+    let name = last_external_process_name(process)?;
+    Some(basename(&name).into_owned())
+}
 
-    match process {
-        JobProcess::Command(_) => Some(process.get_cmd().to_string()),
-        JobProcess::Builtin(_) => None,
+/// The pipeline's true last stage's name, if that stage is an external
+/// command (`None` if it's a builtin). Only ever looks at the actual last
+/// stage - it must not fall back to naming an earlier stage just because
+/// nothing further along resolved: for `codex | cd`, the pipeline's last
+/// stage is the builtin `cd`, so this returns `None` even though `codex`
+/// (an earlier stage) is a `Command`. `command_title`'s own fallback to
+/// `first_token(&job.cmd)` still shows something reasonable in the title
+/// bar for that case; `last_external_command_basename`'s callers rely on
+/// `None` meaning "the last stage draws nothing of its own to the
+/// terminal" - a fallback to `codex` here would be simply wrong for that
+/// use.
+fn last_external_process_name(process: &JobProcess) -> Option<String> {
+    match process.next() {
+        Some(next) => last_external_process_name(&next),
+        None => match process {
+            JobProcess::Command(_) => Some(process.get_cmd().to_string()),
+            JobProcess::Builtin(_) => None,
+        },
     }
 }
 
@@ -77,7 +97,7 @@ fn basename(raw: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::command_title;
+    use super::{command_title, last_external_command_basename};
     use crate::process::{BuiltinProcess, Job, JobProcess, Process};
     use nix::unistd::getpgrp;
 
@@ -139,6 +159,68 @@ mod tests {
         )));
 
         assert_eq!(command_title(&job), "a".repeat(64));
+    }
+
+    #[test]
+    fn last_external_command_basename_uses_absolute_path_basename() {
+        let job = job_with_process(JobProcess::Command(Process::new(
+            "/usr/local/bin/codex".to_string(),
+            vec!["/usr/local/bin/codex".to_string()],
+        )));
+
+        assert_eq!(
+            last_external_command_basename(&job).as_deref(),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn last_external_command_basename_uses_last_process_in_pipeline() {
+        let mut first = Process::new(
+            "git".to_string(),
+            vec!["git".to_string(), "log".to_string()],
+        );
+        first.link(JobProcess::Command(Process::new(
+            "codex".to_string(),
+            vec!["codex".to_string()],
+        )));
+        let job = job_with_process(JobProcess::Command(first));
+
+        assert_eq!(
+            last_external_command_basename(&job).as_deref(),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn last_external_command_basename_is_none_for_builtin_only_input() {
+        let job = job_with_process(JobProcess::Builtin(BuiltinProcess::new(
+            "cd".to_string(),
+            dummy_builtin,
+            vec!["cd".to_string(), "/tmp".to_string()],
+        )));
+
+        assert_eq!(last_external_command_basename(&job), None);
+    }
+
+    #[test]
+    fn last_external_command_basename_is_none_when_the_pipeline_ends_in_a_builtin() {
+        // Regression test: `codex | cd` must not report "codex" as the
+        // pipeline's last command. The builtin `cd` is the actual last
+        // stage and draws nothing to the terminal itself, but neither does
+        // `codex` here - its output feeds `cd`, not the screen - so this
+        // must not be mistaken for a foreground agent CLI actually running
+        // (see `agent_lifecycle::yield_to_foreground_agent`, the consumer
+        // this distinction matters for).
+        let mut first = Process::new("codex".to_string(), vec!["codex".to_string()]);
+        first.link(JobProcess::Builtin(BuiltinProcess::new(
+            "cd".to_string(),
+            dummy_builtin,
+            vec!["cd".to_string(), "/tmp".to_string()],
+        )));
+        let job = job_with_process(JobProcess::Command(first));
+
+        assert_eq!(last_external_command_basename(&job), None);
     }
 
     fn job_with_process(process: JobProcess) -> Job {

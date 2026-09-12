@@ -59,6 +59,7 @@ dsh/src/process/job.rs	/usr/bin/touch
 dsh/src/process/wait.rs	/usr/bin/touch
 dsh/src/safety/mod.rs	/etc/passwd
 dsh/src/safety/mod.rs	/etc/shadow
+dsh/src/terminal/title.rs	/bin/codex
 dsh/src/terminal/title.rs	/usr/bin/nvim
 dsh/tests/common/mod.rs	/bin/false
 dsh/tests/common/mod.rs	/bin/true

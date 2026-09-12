@@ -180,6 +180,20 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
                 job.job_id, cont
             );
 
+            // `fg` resumes a job whose own `job.foreground` stayed `false`
+            // (it was backgrounded), so `yield_to_foreground_agent` can't
+            // read that off `job` the way `shell/eval.rs` does for a
+            // command that started in the foreground - pass `true`
+            // directly instead. Without this, Ctrl+Z on a recognized agent
+            // CLI followed by `fg` would leave this pane stuck reporting
+            // `dsh` for the rest of that agent's run.
+            let _agent_handoff = crate::agent_lifecycle::yield_to_foreground_agent(
+                shell,
+                &job,
+                ctx.interactive,
+                true,
+            );
+
             match job.put_in_foreground_sync(true, cont) {
                 Ok(_) => {
                     debug!(

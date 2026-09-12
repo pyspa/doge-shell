@@ -669,6 +669,24 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 - **builtin 名の表記ゆれ**。`chat_prompt` / `chat_model` / `chat_reset`（snake）と
   `ai-commit` / `ai-watch` / `safe-run`（kebab）。
 
+## 10. Herdr 連携
+
+`dsh/src/agent_lifecycle/` が唯一の実装（`dsh` crate に閉じる。`dsh-builtin`/`dsh-types`/
+`ShellProxy` は変更しない）。
+
+- Herdr は「custom source が lifecycle authority を握っている間、そのペインでは組み込みの画面
+  検出を止める」仕様（herdr.dev の integrations ガイド）。つまり dsh が
+  `custom:doge-shell` を握り続けると、dsh の中で `codex`/`claude` を起動しても Herdr 側は
+  `dsh` のまま変わらない。
+- そこで `AgentLifecycleManager::begin_yield`/`YieldGuard`
+  （`agent_lifecycle::yield_to_foreground_agent` がエントリポイント）が、認識済みエージェント
+  CLI（既定リストは `agent_lifecycle/agent_command.rs`、`DSH_HERDR_AGENT_COMMANDS` で追加/除外）
+  が **前景** で実行されている間だけ `release-agent` で authority を明け渡し、終了時に
+  `report-agent` で取り戻す。フック位置は `shell/eval.rs`（通常実行）と
+  `proxy/builtin/jobs.rs::execute_fg`（`fg` での再開）の 2 箇所だけ。
+- `report-agent`/`release-agent` の argv 生成・`--seq` 採番・`herdr` 呼び出しの timeout/killpg
+  は `agent_lifecycle::herdr` に一本化されている。再実装しない。
+
 ## 永続タスク (`agent`)
 
 `dsh/src/agent.rs` がSQLiteとCLIを所有し、`AgentTaskStore` と `AgentCommandPolicy::agent_runtime` を通してループAへ渡す。`dsh-types/src/agent.rs` が状態型、`dsh-builtin/src/agent/` が記録・検証・ジョブ・任意のSRTアダプターを所有する。ループは追加しない。詳細と利用例は [../../../../agent.md](../../../../agent.md)。

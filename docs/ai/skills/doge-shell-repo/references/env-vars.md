@@ -35,4 +35,15 @@
 | `SAFETY_LEVEL` | `dsh-types/src/safety_policy.rs` | 起動時に `policy_state.safety_level` へ seed される。**単一ソースは policy_state のほう**、変数は表示用 |
 
 これらは **シェル変数 → プロセス環境** の順に解決する（`chatgpt::load_openai_config`）。`std::env::var` だけを見る新しいキーを足さない。
-唯一の例外は `DSH_HOOK_DEPTH` で、これは意図的にプロセス環境だけを見る（理由はコードのコメントにある）。
+この表の中での例外は `DSH_HOOK_DEPTH` で、これは意図的にプロセス環境だけを見る（理由はコードのコメントにある）。同種の例外は下の「Herdr 連携の変数」にもある。
+
+## Herdr 連携の変数
+
+| 変数 | 定義位置 | 用途 |
+|---|---|---|
+| `HERDR_ENV` / `HERDR_PANE_ID` / `HERDR_BIN_PATH` | `dsh/src/agent_lifecycle/herdr.rs`（`HerdrEnv::detect`） | Herdr pane 内で起動されたことの検出。**プロセス環境だけを見る**（`DSH_HOOK_DEPTH` と同じ理由。シェル変数で「Herdr 配下だ」と偽装・抑止できてはいけない） |
+| `DSH_HERDR_OWNER_PID` | 同上 | 同一 pane 内の入れ子 `dsh` が lifecycle authority を取り合わないためのガード。プロセス環境だけを見る |
+| `DSH_HERDR_AGENT_COMMANDS` | `dsh/src/agent_lifecycle/agent_command.rs` | `codex`/`claude` など前景で認識するエージェント CLI 名の `:` 区切りリスト。素の名前は追加、`-name` は既定リストから除外 |
+| `DSH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
+
+`DSH_HERDR_AGENT_COMMANDS`/`DSH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく **シェル変数 → プロセス環境** の順（`Environment::get_var`）。`HERDR_*`/`DSH_HERDR_OWNER_PID` は `DSH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。

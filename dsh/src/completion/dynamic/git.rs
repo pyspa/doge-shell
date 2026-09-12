@@ -81,6 +81,25 @@ pub(super) fn selected_remote(parsed_command_line: &super::ParsedCommandLine) ->
 }
 
 impl DynamicCompletionProvider {
+    /// Two cases the declarative JSON path (`completions/git.json`) cannot
+    /// express, so this still handles them by hand:
+    /// - the bare subcommand position (`git co<TAB>`), where a user-defined
+    ///   git alias should complete alongside the built-in subcommand names -
+    ///   `argument_type_for_completion_context` never resolves a `Dynamic`
+    ///   provider for `CompletionContext::SubCommand`, by design (that
+    ///   position lists subcommand *names*, not argument values);
+    /// - `git restore -s/--source <TAB>`, an option value that names a
+    ///   revision, keyed off a specific option rather than a plain argument
+    ///   position.
+    ///
+    /// Every other position - every `CompletionContext::Argument` and the
+    /// inferred-subcommand case - is declared directly in
+    /// `completions/git.json` and reaches the same
+    /// `collect_git_*_candidates` methods this file used to dispatch to by
+    /// hand. `completion::integrated::tests::
+    /// every_hand_dispatched_git_argument_case_matches_the_declared_json_provider`
+    /// is what proved that removal safe; extend it before removing a case
+    /// from here.
     pub(crate) fn collect_git_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -89,147 +108,36 @@ impl DynamicCompletionProvider {
     ) -> Vec<EnhancedCandidate> {
         let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
-        let Some(primary_subcommand) = parsed_command_line.subcommand_path.first() else {
-            // At the subcommand position (`git co<TAB>`), offer user-defined
-            // git aliases alongside the built-in subcommands (from JSON).
-            if matches!(
+
+        if parsed_command_line.subcommand_path.is_empty()
+            && matches!(
                 parsed_command_line.completion_context,
                 CompletionContext::SubCommand
-            ) {
-                return self
-                    .collect_git_alias_candidates(current_dir, current_token, cached_only)
-                    .into_iter()
-                    .map(|mut candidate| {
-                        candidate.candidate_type = CandidateType::SubCommand;
-                        candidate
-                    })
-                    .collect();
-            }
-            return Vec::new();
-        };
-        let inferred_subcommand_arg_index =
-            parsed_command_line.subcommand_path.len().saturating_sub(2);
-
-        match &parsed_command_line.completion_context {
-            CompletionContext::OptionValue { option_name, .. } => {
-                if primary_subcommand == "restore"
-                    && matches!(option_name.as_str(), "-s" | "--source")
-                {
-                    self.collect_git_revision_candidates(current_dir, current_token, cached_only)
-                } else {
-                    Vec::new()
-                }
-            }
-            CompletionContext::Argument { arg_index, .. } => self.collect_git_argument_candidates(
-                primary_subcommand,
-                *arg_index,
-                parsed_command_line,
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            CompletionContext::SubCommand => self.collect_git_argument_candidates(
-                primary_subcommand,
-                inferred_subcommand_arg_index,
-                parsed_command_line,
-                current_dir,
-                current_token,
-                cached_only,
-            ),
-            _ => Vec::new(),
+            )
+        {
+            return self
+                .collect_git_alias_candidates(current_dir, current_token, cached_only)
+                .into_iter()
+                .map(|mut candidate| {
+                    candidate.candidate_type = CandidateType::SubCommand;
+                    candidate
+                })
+                .collect();
         }
-    }
 
-    fn collect_git_argument_candidates(
-        &self,
-        primary_subcommand: &str,
-        arg_index: usize,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        match primary_subcommand {
-            "checkout" => {
-                self.collect_git_checkout_target_candidates(current_dir, current_token, cached_only)
-            }
-            "switch" | "merge" | "rebase" => {
-                self.collect_git_branch_candidates(current_dir, current_token, cached_only)
-            }
-            "add" | "restore" => {
-                self.collect_git_changed_path_candidates(current_dir, current_token, cached_only)
-            }
-            "push" => {
-                if arg_index == 0 {
-                    self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-                } else {
-                    self.collect_git_push_branch_candidates(
-                        current_dir,
-                        selected_remote(parsed_command_line),
-                        current_token,
-                        cached_only,
-                    )
-                }
-            }
-            "pull" | "fetch" => {
-                if arg_index == 0 {
-                    self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-                } else {
-                    self.collect_git_remote_branch_candidates(
-                        current_dir,
-                        selected_remote(parsed_command_line),
-                        current_token,
-                        cached_only,
-                    )
-                }
-            }
-            "log" | "diff" | "show" | "reset" => {
-                self.collect_git_revision_candidates(current_dir, current_token, cached_only)
-            }
-            "branch" => self.collect_git_branch_candidates(current_dir, current_token, cached_only),
-            "tag" => self.collect_git_tag_candidates(current_dir, current_token, cached_only),
-            "stash" => {
-                let secondary = parsed_command_line
-                    .subcommand_path
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                if matches!(secondary, "pop" | "apply" | "drop") {
-                    self.collect_git_stash_candidates(current_dir, current_token, cached_only)
-                } else {
-                    Vec::new()
-                }
-            }
-            "remote" => {
-                let secondary = parsed_command_line
-                    .subcommand_path
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                match secondary {
-                    "remove" | "rename" | "show" | "get-url" | "set-url" => {
-                        self.collect_git_remote_candidates(current_dir, current_token, cached_only)
-                    }
-                    _ => Vec::new(),
-                }
-            }
-            "worktree" => {
-                let secondary = parsed_command_line
-                    .subcommand_path
-                    .get(1)
-                    .map(String::as_str)
-                    .unwrap_or("");
-                match secondary {
-                    "remove" | "move" | "lock" | "unlock" | "repair" => self
-                        .collect_git_worktree_candidates(current_dir, current_token, cached_only),
-                    "add" if arg_index > 0 => {
-                        self.collect_git_branch_candidates(current_dir, current_token, cached_only)
-                    }
-                    _ => Vec::new(),
-                }
-            }
-            _ => Vec::new(),
+        if let CompletionContext::OptionValue { option_name, .. } =
+            &parsed_command_line.completion_context
+            && parsed_command_line
+                .subcommand_path
+                .first()
+                .map(String::as_str)
+                == Some("restore")
+            && matches!(option_name.as_str(), "-s" | "--source")
+        {
+            return self.collect_git_revision_candidates(current_dir, current_token, cached_only);
         }
+
+        Vec::new()
     }
 }
 

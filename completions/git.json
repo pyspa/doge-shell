@@ -1278,6 +1278,81 @@
           ]
         },
         {
+          "name": "move",
+          "description": "Move a worktree to a new path",
+          "arguments": [
+            {
+              "name": "worktree",
+              "description": "Worktree to move",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.worktree",
+                  "scope": "project"
+                }
+              }
+            },
+            {
+              "name": "new_path",
+              "description": "New path for the worktree",
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "lock",
+          "description": "Lock a worktree",
+          "arguments": [
+            {
+              "name": "worktree",
+              "description": "Worktree to lock",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.worktree",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "unlock",
+          "description": "Unlock a worktree",
+          "arguments": [
+            {
+              "name": "worktree",
+              "description": "Worktree to unlock",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.worktree",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "repair",
+          "description": "Repair worktree administrative files",
+          "arguments": [
+            {
+              "name": "worktree",
+              "description": "Worktree to repair",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.worktree",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
           "name": "prune",
           "description": "Prune worktree information"
         }
@@ -1330,7 +1405,24 @@
         },
         {
           "name": "rename",
-          "description": "Rename a remote"
+          "description": "Rename a remote",
+          "arguments": [
+            {
+              "name": "old",
+              "description": "Existing remote name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.remote",
+                  "scope": "project"
+                }
+              }
+            },
+            {
+              "name": "new",
+              "description": "New name for the remote"
+            }
+          ]
         },
         {
           "name": "show",
@@ -1346,6 +1438,44 @@
                   "scope": "project"
                 }
               }
+            }
+          ]
+        },
+        {
+          "name": "get-url",
+          "description": "Show the URL for a remote",
+          "arguments": [
+            {
+              "name": "remote",
+              "description": "Remote to show the URL for",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.remote",
+                  "scope": "project"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "set-url",
+          "description": "Change the URL for a remote",
+          "arguments": [
+            {
+              "name": "remote",
+              "description": "Remote to update",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "git.remote",
+                  "scope": "project"
+                }
+              }
+            },
+            {
+              "name": "url",
+              "description": "New URL"
             }
           ]
         },

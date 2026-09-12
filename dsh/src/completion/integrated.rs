@@ -2708,6 +2708,78 @@ mod tests {
         engine
     }
 
+    fn parsed_for(engine: &IntegratedCompletionEngine, input: &str) -> ParsedCommandLine {
+        let mut parsed = CommandLineParser::new().parse(input, input.len());
+        engine.normalize_parsed_command_line(&mut parsed);
+        parsed
+    }
+
+    /// `dynamic/git.rs::collect_git_argument_candidates` hand-dispatches ~90
+    /// lines of `(subcommand, arg_index) -> provider` cases that
+    /// `completions/git.json` already declares as data. Before that Rust
+    /// table can be deleted, every case it handles must resolve to the
+    /// *same* declared provider through the ordinary JSON path - otherwise
+    /// deleting it silently drops a completion. This is what makes that
+    /// deletion safe: both paths end up calling the identical
+    /// `DynamicCompletionProvider::collect_git_*_candidates` method, so
+    /// matching providers means matching output, without needing a real
+    /// git repository to compare candidate lists against.
+    #[test]
+    fn every_hand_dispatched_git_argument_case_matches_the_declared_json_provider() {
+        let mut engine = IntegratedCompletionEngine::new(Environment::new());
+        engine.initialize_command_completion().unwrap();
+        let cases: &[(&str, &str)] = &[
+            ("git checkout ", "git.checkout_target"),
+            ("git switch ", "git.branch"),
+            ("git merge ", "git.branch"),
+            ("git rebase ", "git.branch"),
+            ("git add ", "git.changed_path"),
+            ("git restore ", "git.changed_path"),
+            ("git push origin ", "git.push_branch"),
+            ("git push ", "git.remote"),
+            ("git pull origin ", "git.remote_branch"),
+            ("git pull ", "git.remote"),
+            ("git fetch origin ", "git.remote_branch"),
+            ("git fetch ", "git.remote"),
+            ("git log ", "git.revision"),
+            ("git diff ", "git.revision"),
+            ("git show ", "git.revision"),
+            ("git reset ", "git.revision"),
+            ("git branch ", "git.branch"),
+            ("git tag ", "git.tag"),
+            ("git stash pop ", "git.stash"),
+            ("git stash apply ", "git.stash"),
+            ("git stash drop ", "git.stash"),
+            ("git remote remove ", "git.remote"),
+            ("git remote rename ", "git.remote"),
+            ("git remote show ", "git.remote"),
+            ("git remote get-url ", "git.remote"),
+            ("git remote set-url ", "git.remote"),
+            ("git worktree remove ", "git.worktree"),
+            ("git worktree move ", "git.worktree"),
+            ("git worktree lock ", "git.worktree"),
+            ("git worktree unlock ", "git.worktree"),
+            ("git worktree repair ", "git.worktree"),
+            ("git worktree add x ", "git.branch"),
+        ];
+
+        for (input, expected_provider) in cases {
+            let parsed = parsed_for(&engine, input);
+            match engine.argument_type_for_completion_context(&parsed) {
+                Some(ArgumentType::Dynamic { provider, .. }) => {
+                    assert_eq!(
+                        provider, *expected_provider,
+                        "{input:?} resolved to the wrong provider through completions/git.json"
+                    );
+                }
+                other => panic!(
+                    "{input:?} did not resolve to a Dynamic provider via completions/git.json \
+                     (got {other:?}); collect_git_argument_candidates cannot be deleted until it does"
+                ),
+            }
+        }
+    }
+
     /// A skill's name is chosen by the model, so `skill remove <TAB>` not
     /// offering it meant reading `skill list` first every time.
     #[tokio::test]

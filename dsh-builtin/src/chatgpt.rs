@@ -4,7 +4,8 @@ use crate::markdown::stream::MarkdownBlockSplitter;
 use crate::shell_capabilities::ChatToolHost;
 use dsh_openai::turn::{self, TurnOutcome, extract_message_content, interpret_response};
 use dsh_openai::{
-    CANCELLED_MESSAGE, ChatGptClient, ChatRequestOptions, OpenAiConfig, is_ctrl_c_cancelled, usage,
+    CANCELLED_MESSAGE, ChatClient, ChatGptClient, ChatRequestOptions, OpenAiConfig,
+    is_ctrl_c_cancelled, usage,
 };
 use dsh_types::{Context, ExitStatus};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -347,7 +348,7 @@ impl ConversationManager {
 
     fn perform_summary(
         &mut self,
-        client: &ChatGptClient,
+        client: &dyn ChatClient,
         proxy: &mut dyn ChatToolHost,
         model_override: Option<String>,
     ) -> Result<(), String> {
@@ -393,7 +394,7 @@ impl ConversationManager {
             .with_temperature(Some(0.3)) // Lower temperature for consistent summarization
             .with_model(summary_model);
         let response = client
-            .send_chat(&summary_messages, &options, Some(&|| task_cancelled(proxy)))
+            .send_chat_cancellable(&summary_messages, &options, &|| task_cancelled(proxy))
             .map_err(|e| format!("Summarization failed: {e}"))?;
         self.turn_usage.add_response(&response);
         if let Some(runtime) = proxy.agent_runtime() {
@@ -629,9 +630,9 @@ fn resolve_session_ttl(proxy: &mut dyn ShellProxy) -> Option<Duration> {
 /// The project boundary a turn's conversation continuity is scoped to.
 ///
 /// A thin, named wrapper around `tool::workspace_root` so the wiring between
-/// a turn's cwd and the scope handed to `session::take`/`store` has a unit
-/// test of its own - `chat_with_tools` itself needs a mocked provider to
-/// exercise at all.
+/// a turn's cwd and the scope handed to `session::take`/`store` has a focused
+/// unit test of its own, cheaper than driving the whole turn through
+/// `chat_with_tools` (see `tests::ScriptedClient` for that route).
 fn conversation_scope(cwd: Option<&Path>) -> Option<PathBuf> {
     cwd.map(tool::workspace_root)
 }
@@ -905,7 +906,7 @@ pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
 
 #[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
-    client: &ChatGptClient,
+    client: &dyn ChatClient,
     user_input: &str,
     operator_prompt: Option<String>,
     language: Option<String>,
@@ -1225,7 +1226,7 @@ fn chat_with_tools(
                 let result = client.send_chat_streaming(
                     &current_messages,
                     &options,
-                    Some(&|| task_cancelled(proxy)),
+                    &|| task_cancelled(proxy),
                     &mut |text| sink.on_delta(&spinner, text),
                 );
                 match result {
@@ -1248,7 +1249,8 @@ fn chat_with_tools(
                 }
             } else {
                 let _spinner = SpinnerGuard::start("");
-                match client.send_chat(&current_messages, &options, Some(&|| task_cancelled(proxy)))
+                match client
+                    .send_chat_cancellable(&current_messages, &options, &|| task_cancelled(proxy))
                 {
                     Ok(response) => response,
                     Err(err) => {
@@ -2169,6 +2171,7 @@ fn repair_interrupted_tool_calls(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn assistant_call(id: &str, name: &str, arguments: &str) -> Value {
         json!({
@@ -2194,6 +2197,130 @@ mod tests {
             manager.add_message(message);
         }
         manager
+    }
+
+    /// A [`ChatClient`] that returns canned responses in order, so
+    /// `chat_with_tools` - previously undocumented as untestable without a
+    /// real provider - can be driven end to end. `dsh-openai::ChatClient`
+    /// is exactly the seam that makes this possible: `chat_with_tools` takes
+    /// `&dyn ChatClient` rather than the concrete `ChatGptClient`.
+    struct ScriptedClient {
+        responses: std::sync::Mutex<std::collections::VecDeque<Value>>,
+    }
+
+    impl ScriptedClient {
+        fn new(responses: Vec<Value>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(responses.into_iter().collect()),
+            }
+        }
+    }
+
+    impl ChatClient for ScriptedClient {
+        fn send_chat_request(
+            &self,
+            _messages: &[Value],
+            _options: &ChatRequestOptions,
+        ) -> anyhow::Result<Value> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| anyhow::anyhow!("ScriptedClient: no more scripted responses"))
+        }
+    }
+
+    /// One assistant message, `finish_reason: "stop"`, no `tool_calls`.
+    fn final_answer(content: &str) -> Value {
+        json!({
+            "choices": [{
+                "finish_reason": "stop",
+                "message": { "role": "assistant", "content": content },
+            }],
+        })
+    }
+
+    /// A host with hooks and session continuity turned off, so a test needs
+    /// nothing more than a scripted client to drive `chat_with_tools`.
+    /// `current_dir` has no `.git`, so no project skill root is ever found
+    /// and nothing prompts for trust.
+    fn hermetic_chat_proxy(cwd: std::path::PathBuf) -> crate::test_support::TestShellProxy {
+        crate::test_support::TestShellProxy {
+            current_dir: cwd,
+            vars: HashMap::from([
+                (
+                    hooks::config::HOOKS_ENABLED_KEY.to_string(),
+                    "off".to_string(),
+                ),
+                (session::SESSION_TTL_KEY.to_string(), "0".to_string()),
+            ]),
+            ..crate::test_support::TestShellProxy::default()
+        }
+    }
+
+    #[test]
+    fn chat_with_tools_returns_the_final_answer_without_any_tool_calls() {
+        let cwd = tempfile::tempdir().unwrap();
+        let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+        let client = ScriptedClient::new(vec![final_answer("42")]);
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
+
+        let result = chat_with_tools(
+            &client,
+            "what is six times seven",
+            None,
+            None,
+            Some(0.0),
+            None,
+            &mcp_manager,
+            None,
+            &mut proxy,
+        );
+
+        assert_eq!(result, Ok("42".to_string()));
+    }
+
+    /// An assistant message carrying one `tool_calls` entry - `finish_reason`
+    /// does not matter once `tool_calls` is non-empty, see
+    /// `dsh_openai::turn::interpret_response`.
+    fn tool_call_response(id: &str, name: &str, arguments: &str) -> Value {
+        json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "function",
+                        "function": { "name": name, "arguments": arguments },
+                    }],
+                },
+            }],
+        })
+    }
+
+    #[test]
+    fn chat_with_tools_runs_a_tool_call_then_returns_the_next_final_answer() {
+        let cwd = tempfile::tempdir().unwrap();
+        let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+        let client = ScriptedClient::new(vec![
+            tool_call_response("call-1", "ls", r#"{"path":"."}"#),
+            final_answer("the directory is empty"),
+        ]);
+        let mcp_manager = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
+
+        let result = chat_with_tools(
+            &client,
+            "what is in this directory?",
+            None,
+            None,
+            Some(0.0),
+            None,
+            &mcp_manager,
+            None,
+            &mut proxy,
+        );
+
+        assert_eq!(result, Ok("the directory is empty".to_string()));
     }
 
     #[test]
@@ -2354,10 +2481,10 @@ mod tests {
         assert!(!restored.rewind_to_turn_start());
     }
 
-    /// `chat_with_tools` itself needs a mocked provider to exercise at all, so
-    /// this tests the wiring between a turn's cwd and the scope handed to
-    /// `session::take`/`store` at the one point it can be isolated: the named
-    /// function that does it.
+    /// This tests the wiring between a turn's cwd and the scope handed to
+    /// `session::take`/`store` at the one point it can be isolated cheaply:
+    /// the named function that does it. See `ScriptedClient` above for
+    /// exercising the whole turn.
     #[test]
     fn conversation_scope_is_the_same_for_a_project_and_its_subdirectory() {
         let project = tempfile::tempdir().unwrap();

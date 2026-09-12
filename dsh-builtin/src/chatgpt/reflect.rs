@@ -28,8 +28,7 @@ use super::{ConversationManager, flatten_conversation};
 use crate::shell_capabilities::ChatToolHost;
 use dsh_openai::turn::{answer_text, truncate_middle};
 use dsh_openai::{
-    ChatGptClient, ChatRequestOptions, apply_language_to_field, json_object_format,
-    strip_code_fence,
+    ChatClient, ChatRequestOptions, apply_language_to_field, json_object_format, strip_code_fence,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -121,7 +120,7 @@ fn should_reflect(
 /// reported as a single dim line, the same as a skipped hook.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn maybe_reflect(
-    client: &ChatGptClient,
+    client: &dyn ChatClient,
     proxy: &mut dyn ChatToolHost,
     manager: &mut ConversationManager,
     iterations: usize,
@@ -259,7 +258,7 @@ struct ReflectionAnswer {
 }
 
 fn propose(
-    client: &ChatGptClient,
+    client: &dyn ChatClient,
     proxy: &mut dyn ChatToolHost,
     manager: &mut ConversationManager,
     model_override: Option<String>,
@@ -298,7 +297,7 @@ fn propose(
         .with_response_format(Some(json_object_format()));
 
     let response = client
-        .send_chat(&messages, &options, Some(&|| super::task_cancelled(proxy)))
+        .send_chat_cancellable(&messages, &options, &|| super::task_cancelled(proxy))
         .map_err(|err| format!("request failed: {err}"))?;
     // Counted against this turn's budget like everything else it spent -
     // this is not a request the user gets for free just because it is

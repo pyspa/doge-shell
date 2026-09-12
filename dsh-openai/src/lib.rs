@@ -1,3 +1,4 @@
+mod chat_client;
 mod client;
 mod config;
 mod response;
@@ -5,6 +6,7 @@ mod stream;
 pub mod turn;
 pub mod usage;
 
+pub use crate::chat_client::ChatClient;
 pub use crate::client::{
     ApiError, CANCELLED_MESSAGE, ChatGptClient, ChatRequestOptions, is_ctrl_c_cancelled,
     is_openai_reasoning_model,

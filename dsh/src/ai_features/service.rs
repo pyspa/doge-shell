@@ -8,8 +8,8 @@ use crate::safety::{SafetyGuard, SafetyLevel, SafetyResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use dsh_builtin::McpManager;
+use dsh_openai::ChatRequestOptions;
 use dsh_openai::turn::{self, TurnOutcome};
-use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -143,35 +143,11 @@ pub trait ConfirmationHandler: Send + Sync {
 }
 
 /// Chat client trait for sending requests to chat APIs.
-pub trait ChatClient: Send + Sync {
-    fn send_chat_cancellable(
-        &self,
-        messages: &[Value],
-        options: &ChatRequestOptions,
-        cancel: &(dyn Fn() -> bool + Sync),
-    ) -> Result<Value> {
-        if cancel() {
-            anyhow::bail!("AI request cancelled");
-        }
-        self.send_chat_request(messages, options)
-    }
-    /// Send a chat request.
-    fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value>;
-}
-
-impl ChatClient for ChatGptClient {
-    fn send_chat_cancellable(
-        &self,
-        messages: &[Value],
-        options: &ChatRequestOptions,
-        cancel: &(dyn Fn() -> bool + Sync),
-    ) -> Result<Value> {
-        self.send_chat(messages, options, Some(cancel))
-    }
-    fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value> {
-        self.send_chat(messages, options, None)
-    }
-}
+///
+/// Defined in `dsh-openai` (`dsh-builtin` cannot depend on this crate, but
+/// can depend on that one) and re-exported here so existing `dsh` imports
+/// keep working.
+pub use dsh_openai::ChatClient;
 
 /// The shell's permission state, as the AI service reads it.
 ///

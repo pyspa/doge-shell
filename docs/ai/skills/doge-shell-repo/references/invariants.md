@@ -76,7 +76,8 @@
 - `Path::join` は空パスを与えると区切りを足す。`PathBuf::new()` から接尾辞を積むと `notes.txt/` になり、`fs::write` が ENOENT で落ちる（`resolve_with_existing_ancestor`、`edit` が新規ファイルを作れなかった）。
 
 ## 二重化しているもの（多数派が正解とは限らない）
-- builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、利用ファイル数だけは多い。新しい依存は前者へ足す。
+- builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、生き残っているのは `ExecutionCapability` と `AiCapability`（利用 14 ファイル）だけ。`EnvironmentCapability` / `HistoryCapability` / `PersistenceCapability` は呼び出し元 0 件のうえ `add_snippet` 等が `ShellSessionData` と同名だったため削除済み（両方 `use` した瞬間に E0034 で落ちる地雷だった）。新しい依存は `capability.rs` に足さず `shell_capabilities.rs` へ。
+- `shell_capabilities.rs` の 7 trait（`ShellExecution`…`ShellAiIntegration`）は `ShellProxy` の 73 メソッドを**同じ集合の別の眺め**として写しているだけなので、そのどれかにメソッドを足すなら `ShellProxy` 側にも足す必要があり、73 の上限に縛られる。**新しい能力**（この 7 つが表す既存操作の言い換えではないもの）は、この 7 つを拡張せず `AgentCommandPolicy` に倣って**独立した trait**を作り、host 型（`Shell`）に直接 `impl` する。`ShellProxy` への追加も 73 の上限も要らない。`check-shell-proxy-capabilities.py` は「`ShellProxy` の全メソッドがどれか 1 つの capability trait に分類されていること」だけを見る片方向チェックで、逆方向（capability trait のメソッドは全部 `ShellProxy` にあること）は課さない。
 - **AI 機能の方針**は `ai-architecture.md` が正。エージェントループは 2 つだけ、共有方針は `dsh-openai/src/turn.rs`、安全ゲートは `SafetyGuard` 1 つ。新しい AI 経路を足す前にそこを読む。
 - `SafetyLevel` は `dsh-types/src/safety_policy.rs` が**正**。`dsh/src/safety/mod.rs` はそこを re-export しているだけ。以前は 2 つの enum があり、値の読み先も 2 つ（`SAFETY_LEVEL` 変数と `policy_state.safety_level`）だったので、`(safety-level ...)` の二重書きだけが同期を保っていた。**単一ソースは `policy_state.safety_level`**、変数は表示用のコピー。
 - `McpManager` の実体は `Environment.integration_state.mcp_manager` ただ 1 つ。以前 `!` チャットだけが自前の 2 個目を作って 300 秒キャッシュしていたので、`mcp connect` / `mcp disconnect` がチャットに効かず `mcp status` の表示と食い違った。builtin からは `AgentCommandPolicy::agent_mcp_manager` で受け取る。

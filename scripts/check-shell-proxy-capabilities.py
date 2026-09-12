@@ -81,12 +81,16 @@ def main() -> int:
             "ShellProxy methods missing a capability trait: " + ", ".join(missing)
         )
 
-    unexpected = sorted(set(classified) - set(proxy_methods))
-    if unexpected:
-        failures.append(
-            "capability methods missing from ShellProxy compatibility facade: "
-            + ", ".join(unexpected)
-        )
+    # Deliberately one-directional: every ShellProxy method must be classified
+    # into exactly one capability trait (checked above and below), but a
+    # capability trait may carry extra methods that ShellProxy does not have.
+    # That is how a capability trait grows past the frozen facade - a new
+    # method with a default body compiles fine under the blanket
+    # `impl<T: ShellProxy + ?Sized>` and needs no matching ShellProxy method.
+    # Requiring the reverse (every capability method must also exist on
+    # ShellProxy) would force every such addition through the 73-method
+    # ceiling below, which contradicts AGENTS.md's instruction to grow
+    # capability traits instead of ShellProxy.
 
     multiply_classified = sorted(
         method for method, count in classified.items() if count > 1

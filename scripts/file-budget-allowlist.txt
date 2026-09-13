@@ -76,7 +76,6 @@ oversized	dsh-builtin/src/gwt.rs
 oversized	dsh-builtin/src/project_context.rs
 oversized	dsh-types/src/safety_policy.rs
 oversized	dsh/src/completion/context.rs
-oversized	dsh/src/completion/display.rs
 oversized	dsh/src/completion/dynamic.rs
 oversized	dsh/src/completion/dynamic/dev.rs
 oversized	dsh/src/completion/dynamic/linux.rs

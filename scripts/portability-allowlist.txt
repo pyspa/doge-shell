@@ -66,8 +66,8 @@ dsh/src/output_schema/loader.rs	/usr/bin/ps
 dsh/src/output_schema/text_parser.rs	/sbin/init
 dsh/src/process/job.rs	/usr/bin/touch
 dsh/src/process/wait.rs	/usr/bin/touch
-dsh/src/safety/mod.rs	/etc/passwd
-dsh/src/safety/mod.rs	/etc/shadow
+dsh/src/safety/checks.rs	/etc/passwd
+dsh/src/safety/checks.rs	/etc/shadow
 dsh/src/safety/tests.rs	/etc/shadow
 dsh/src/terminal/title.rs	/bin/codex
 dsh/src/terminal/title.rs	/usr/bin/nvim

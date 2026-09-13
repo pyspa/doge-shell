@@ -1,5 +1,10 @@
+//! kubectl/helm dynamic completion: contexts, namespaces, resource types and
+//! names (positional and by option), pods for `logs`/`exec`, and helm
+//! releases scoped to the selected namespace/context.
 use super::{
-    CachePolicy, CompletionContext, DynamicCompletionProvider, EnhancedCandidate, completion_words,
+    CachePolicy, CompletionContext, DynamicCommandCacheKind, DynamicCompletionProvider,
+    EnhancedCandidate, canonicalize_path, collect_command_lines, completion_words,
+    parse_non_empty_lines, run_command_lines, runner,
 };
 use crate::completion::parser::ParsedCommandLine;
 use std::path::Path;
@@ -118,6 +123,243 @@ impl DynamicCompletionProvider {
             }
             _ => Vec::new(),
         }
+    }
+
+    fn collect_helm_release_candidates(
+        &self,
+        parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("helm");
+        let namespace = selected_namespace(parsed_command_line).map(str::to_string);
+        let kube_context = selected_helm_context(parsed_command_line).map(str::to_string);
+        let value_kind = format!(
+            "release:{}:{}",
+            namespace.as_deref().unwrap_or("_"),
+            kube_context.as_deref().unwrap_or("_")
+        );
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "helm",
+            &value_kind,
+            current_dir.clone(),
+            current_token,
+            "Helm release",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let mut command = runner::command(&command_path);
+                command.arg("list").arg("--short").current_dir(&current_dir);
+                if let Some(namespace) = namespace.as_deref() {
+                    command.arg("--namespace").arg(namespace);
+                }
+                if let Some(kube_context) = kube_context.as_deref() {
+                    command.arg("--kube-context").arg(kube_context);
+                }
+                Ok(parse_non_empty_lines(&collect_command_lines(command)?))
+            },
+        )
+    }
+    fn collect_kubectl_resource_type_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "kubectl",
+            "resource-type",
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl resource",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                Ok(run_command_lines(
+                    &command_path,
+                    &["api-resources", "--namespaced=true", "-o", "name"],
+                    &current_dir,
+                )?
+                .into_iter()
+                .filter_map(|resource| resource.split('/').next().map(str::to_string))
+                .collect())
+            },
+        )
+    }
+    fn collect_kubectl_resource_name_candidates(
+        &self,
+        current_dir: &Path,
+        resource: &str,
+        current_token: &str,
+        namespace: Option<&str>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        let resource = resource.to_string();
+        let namespace = namespace.map(str::to_string);
+        let value_kind = namespace
+            .as_deref()
+            .map(|namespace| format!("resource-name:{namespace}:{resource}"))
+            .unwrap_or_else(|| format!("resource-name:{resource}"));
+        self.collect_cached_value_candidates(
+            "kubectl",
+            &value_kind,
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl resource name",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                let mut args = vec!["get"];
+                if let Some(namespace) = namespace.as_deref() {
+                    args.push("-n");
+                    args.push(namespace);
+                }
+                args.push(&resource);
+                args.push("-o");
+                args.push("jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}");
+                run_command_lines(&command_path, &args, &current_dir)
+            },
+        )
+    }
+    fn collect_kubectl_resource_name_candidates_for_token(
+        &self,
+        current_dir: &Path,
+        resource: &str,
+        current_token: &str,
+        namespace: Option<&str>,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        if let Some((token_resource, name_prefix)) = split_resource_name_token(current_token) {
+            return self
+                .collect_kubectl_resource_name_candidates(
+                    current_dir,
+                    token_resource,
+                    name_prefix,
+                    namespace,
+                    cached_only,
+                )
+                .into_iter()
+                .map(|mut candidate| {
+                    candidate.text = format!("{token_resource}/{}", candidate.text);
+                    candidate
+                })
+                .collect();
+        }
+
+        self.collect_kubectl_resource_name_candidates(
+            current_dir,
+            resource,
+            current_token,
+            namespace,
+            cached_only,
+        )
+    }
+    fn collect_kubectl_pod_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        let current_dir = current_dir.to_path_buf();
+        self.collect_cached_value_candidates(
+            "kubectl",
+            "pod",
+            canonicalize_path(&current_dir),
+            current_token,
+            "kubectl pod",
+            cached_only,
+            move || {
+                let Some(command_path) = command_path else {
+                    return Ok(Vec::new());
+                };
+                run_command_lines(
+                    &command_path,
+                    &[
+                        "get",
+                        "pods",
+                        "-o",
+                        "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                    ],
+                    &current_dir,
+                )
+            },
+        )
+    }
+    fn collect_kubectl_context_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::KubectlContext,
+            canonicalize_path(current_dir),
+            current_token,
+            "kubectl context",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+
+                    run_command_lines(
+                        &command_path,
+                        &["config", "get-contexts", "-o", "name"],
+                        &current_dir,
+                    )
+                }
+            },
+        )
+    }
+    fn collect_kubectl_namespace_candidates(
+        &self,
+        current_dir: &Path,
+        current_token: &str,
+        cached_only: bool,
+    ) -> Vec<EnhancedCandidate> {
+        let command_path = self.resolve_command_path("kubectl");
+        self.collect_cached_command_candidates(
+            DynamicCommandCacheKind::KubectlNamespace,
+            canonicalize_path(current_dir),
+            current_token,
+            "kubectl namespace",
+            cached_only,
+            {
+                let current_dir = current_dir.to_path_buf();
+                move || {
+                    let Some(command_path) = command_path else {
+                        return Ok(Vec::new());
+                    };
+
+                    run_command_lines(
+                        &command_path,
+                        &[
+                            "get",
+                            "namespaces",
+                            "-o",
+                            "jsonpath={range .items[*]}{.metadata.name}{\"\\n\"}{end}",
+                        ],
+                        &current_dir,
+                    )
+                }
+            },
+        )
     }
 }
 

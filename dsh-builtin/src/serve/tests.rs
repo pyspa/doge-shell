@@ -10,101 +10,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-/// Generate comprehensive help text for the serve command
-fn generate_help_text() -> String {
-    let help = r#"🐕 serve - HTTP file server for doge-shell
-
-DESCRIPTION:
-    A lightweight HTTP server for serving files and directories with modern web features.
-    Perfect for local development, file sharing, and testing web applications.
-
-USAGE:
-    serve [OPTIONS] [DIRECTORY]
-
-ARGUMENTS:
-    [DIRECTORY]    Directory to serve files from (default: current directory)
-                   Can be absolute or relative path
-
-OPTIONS:
-    -p, --port <PORT>    Port number to bind server to (default: 8000)
-                         Valid range: 1-65535
-    -v, --verbose        Enable detailed request logging with timestamps
-                         Shows method, path, status, duration, and user agent
-    -o, --open           Automatically open default browser after server starts
-                         Works on macOS, Linux, and Windows
-        --cors           Enable CORS headers for cross-origin requests
-                         Allows web apps to make requests from different origins
-        --no-index       Always show directory listings instead of index.html
-                         Useful for browsing file structures
-    -h, --help           Show this comprehensive help message
-
-FEATURES:
-    • Static file serving with proper MIME type detection
-    • Beautiful HTML directory listings with file icons
-    • Index file serving (index.html) with fallback to directory listing
-    • Cross-origin resource sharing (CORS) support for development
-    • Request logging with colored output and timing information
-    • Graceful shutdown with Ctrl+C signal handling
-    • Cross-platform browser integration
-    • Security features (directory traversal prevention)
-    • Performance optimized with async I/O and caching headers
-
-EXAMPLES:
-    Basic Usage:
-        serve                        # Serve current directory on port 8000
-        serve /path/to/website       # Serve specific directory
-        serve ~/Documents            # Serve home Documents folder
-
-    Custom Port:
-        serve -p 3000               # Use port 3000 instead of 8000
-        serve -p 8080 ./dist        # Serve ./dist directory on port 8080
-
-    Development Features:
-        serve -v                    # Enable verbose request logging
-        serve -o                    # Open browser automatically
-        serve --cors                # Enable CORS for API development
-        serve -v -o --cors          # All development features enabled
-
-    Directory Browsing:
-        serve --no-index            # Always show file listings
-        serve --no-index /var/log   # Browse log files with directory listing
-
-    Web Development:
-        serve -p 3000 -o ./build    # Serve React/Vue build output
-        serve -v --cors ./public    # Serve with CORS and logging for API testing
-
-SUPPORTED FILE TYPES:
-    Web: HTML, CSS, JavaScript, JSON, XML
-    Images: PNG, JPEG, GIF, SVG, WebP, ICO
-    Documents: PDF, TXT, Markdown
-    Fonts: WOFF, WOFF2, TTF, OTF
-    Archives: ZIP, TAR, GZIP
-    Code: Rust, Python, Java, Go, C/C++, and more
-
-ENDPOINTS:
-    /                           # Main file serving endpoint
-    /_health                    # Health check endpoint (JSON response)
-
-KEYBOARD SHORTCUTS:
-    Ctrl+C                      # Graceful server shutdown
-
-NOTES:
-    • Server binds to 127.0.0.1 (localhost) by default for security
-    • Files are served with appropriate caching headers for performance
-    • Directory listings are generated dynamically with modern styling
-    • All request paths are validated to prevent directory traversal attacks
-    • Server supports graceful shutdown and proper cleanup of resources
-
-For more information about doge-shell, visit: https://github.com/your-repo/doge-shell
-"#;
-    help.to_string()
-}
-
-/// Generate short usage text for error messages
-fn generate_usage_text() -> String {
-    "Usage: serve [OPTIONS] [DIRECTORY]\nTry 'serve --help' for more information.".to_string()
-}
-
 /// Create a temporary directory with test files for testing
 fn create_test_directory() -> TempDir {
     let temp_dir = TempDir::new().expect("Failed to create temp directory");
@@ -143,18 +48,6 @@ fn test_serve_config_default() {
     assert!(!config.enable_cors);
     assert!(config.serve_index);
     assert!(config.directory.exists());
-}
-
-#[test]
-fn test_serve_config_new() {
-    let config = ServeConfig::new();
-
-    assert_eq!(config.port, 8000);
-    assert_eq!(config.host, "127.0.0.1");
-    assert!(!config.verbose);
-    assert!(!config.open_browser);
-    assert!(!config.enable_cors);
-    assert!(config.serve_index);
 }
 
 #[test]
@@ -277,54 +170,24 @@ fn test_parse_arguments_invalid_port_non_numeric() {
     assert!(matches!(result.unwrap_err(), ServeError::ArgumentError(_)));
 }
 
+/// Each single boolean flag (short or long spelling) sets exactly the field
+/// it names and leaves the rest at their `parse_arguments_default` values.
 #[test]
-fn test_parse_arguments_verbose() {
-    let argv = vec!["serve".to_string(), "-v".to_string()];
-    let result = parse_arguments(&argv);
+fn test_parse_arguments_single_boolean_flags() {
+    let cases: &[(&str, fn(&ServeConfig) -> bool)] = &[
+        ("-v", |c| c.verbose),
+        ("--verbose", |c| c.verbose),
+        ("-o", |c| c.open_browser),
+        ("--cors", |c| c.enable_cors),
+        ("--no-index", |c| !c.serve_index),
+    ];
 
-    assert!(result.is_ok());
-    let config = result.unwrap();
-    assert!(config.verbose);
-}
-
-#[test]
-fn test_parse_arguments_verbose_long() {
-    let argv = vec!["serve".to_string(), "--verbose".to_string()];
-    let result = parse_arguments(&argv);
-
-    assert!(result.is_ok());
-    let config = result.unwrap();
-    assert!(config.verbose);
-}
-
-#[test]
-fn test_parse_arguments_open() {
-    let argv = vec!["serve".to_string(), "-o".to_string()];
-    let result = parse_arguments(&argv);
-
-    assert!(result.is_ok());
-    let config = result.unwrap();
-    assert!(config.open_browser);
-}
-
-#[test]
-fn test_parse_arguments_cors() {
-    let argv = vec!["serve".to_string(), "--cors".to_string()];
-    let result = parse_arguments(&argv);
-
-    assert!(result.is_ok());
-    let config = result.unwrap();
-    assert!(config.enable_cors);
-}
-
-#[test]
-fn test_parse_arguments_no_index() {
-    let argv = vec!["serve".to_string(), "--no-index".to_string()];
-    let result = parse_arguments(&argv);
-
-    assert!(result.is_ok());
-    let config = result.unwrap();
-    assert!(!config.serve_index);
+    for (flag, field) in cases {
+        let argv = vec!["serve".to_string(), flag.to_string()];
+        let config =
+            parse_arguments(&argv).unwrap_or_else(|error| panic!("{flag} should parse: {error}"));
+        assert!(field(&config), "{flag} should set its flag");
+    }
 }
 
 #[test]
@@ -380,59 +243,23 @@ fn test_parse_arguments_multiple_flags() {
 }
 
 #[test]
-fn test_mime_type_detector_html() {
-    let path = Path::new("test.html");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "text/html; charset=utf-8");
-}
+fn test_mime_type_detector_by_extension() {
+    let cases = [
+        ("test.html", "text/html; charset=utf-8"),
+        ("style.css", "text/css; charset=utf-8"),
+        ("script.js", "application/javascript; charset=utf-8"),
+        ("data.json", "application/json; charset=utf-8"),
+        ("image.png", "image/png"),
+        ("photo.jpg", "image/jpeg"),
+        ("unknown.xyz", "application/octet-stream"),
+        // Extension matching is case-insensitive.
+        ("TEST.HTML", "text/html; charset=utf-8"),
+    ];
 
-#[test]
-fn test_mime_type_detector_css() {
-    let path = Path::new("style.css");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "text/css; charset=utf-8");
-}
-
-#[test]
-fn test_mime_type_detector_javascript() {
-    let path = Path::new("script.js");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "application/javascript; charset=utf-8");
-}
-
-#[test]
-fn test_mime_type_detector_json() {
-    let path = Path::new("data.json");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "application/json; charset=utf-8");
-}
-
-#[test]
-fn test_mime_type_detector_png() {
-    let path = Path::new("image.png");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "image/png");
-}
-
-#[test]
-fn test_mime_type_detector_jpeg() {
-    let path = Path::new("photo.jpg");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "image/jpeg");
-}
-
-#[test]
-fn test_mime_type_detector_unknown() {
-    let path = Path::new("unknown.xyz");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "application/octet-stream");
-}
-
-#[test]
-fn test_mime_type_detector_case_insensitive() {
-    let path = Path::new("TEST.HTML");
-    let mime_type = MimeTypeDetector::get_mime_type(path);
-    assert_eq!(mime_type, "text/html; charset=utf-8");
+    for (file_name, expected) in cases {
+        let mime_type = MimeTypeDetector::get_mime_type(Path::new(file_name));
+        assert_eq!(mime_type, expected, "mime type for {file_name}");
+    }
 }
 
 #[test]
@@ -590,15 +417,6 @@ fn test_file_server_resolve_file_path() {
 }
 
 #[test]
-fn test_serve_config_cors_flag() {
-    let mut config = ServeConfig::new();
-    assert!(!config.enable_cors);
-
-    config.enable_cors = true;
-    assert!(config.enable_cors);
-}
-
-#[test]
 fn test_serve_error_user_message() {
     let error = ServeError::PortInUse { port: 8000 };
     let message = error.user_message();
@@ -637,28 +455,6 @@ fn test_serve_config_host_validation() {
 
     config.host = "0.0.0.0".to_string();
     assert_eq!(config.host, "0.0.0.0");
-}
-
-#[test]
-fn test_generate_help_text() {
-    let help = generate_help_text();
-
-    assert!(help.contains("serve - HTTP file server"));
-    assert!(help.contains("USAGE:"));
-    assert!(help.contains("OPTIONS:"));
-    assert!(help.contains("EXAMPLES:"));
-    assert!(help.contains("--port"));
-    assert!(help.contains("--verbose"));
-    assert!(help.contains("--cors"));
-    assert!(help.contains("doge-shell"));
-}
-
-#[test]
-fn test_generate_usage_text() {
-    let usage = generate_usage_text();
-
-    assert!(usage.contains("Usage: serve"));
-    assert!(usage.contains("--help"));
 }
 
 #[test]

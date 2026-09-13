@@ -999,6 +999,18 @@ fn test_brace_expansion_unit() -> Result<()> {
     let replaced = expand_alias(input, Arc::clone(&env))?;
     assert_eq!(replaced, "echo a1 a2 b1 b2".to_string());
 
+    // Each word on the line is brace-expanded independently, not as a
+    // cartesian product across words.
+    let input = "echo a{1,2} b{x,y}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo a1 a2 bx by".to_string());
+
+    // A brace group with no comma still expands to its single element,
+    // rather than staying literal like some shells.
+    let input = "echo {a}".to_string();
+    let replaced = expand_alias(input, Arc::clone(&env))?;
+    assert_eq!(replaced, "echo a".to_string());
+
     // Check globbing interaction
     // Since files don't exist, glob pattern remains literal
     let input = "echo {*.test_dummy_1,*.test_dummy_2}".to_string();

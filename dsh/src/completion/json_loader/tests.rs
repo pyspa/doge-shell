@@ -518,24 +518,6 @@ fn test_load_completion_from_content() {
     assert_eq!(completion.subcommands[0].name, "sub");
 }
 
-fn extract_option_base(option: &str) -> &str {
-    // Extract the base option name without any placeholders
-    // e.g., "-f <FILE>" -> "-f", "--type <TYPE>" -> "--type"
-    option.split_whitespace().next().unwrap_or(option)
-}
-
-#[test]
-fn test_extract_option_base() {
-    assert_eq!(extract_option_base("-f"), "-f");
-    assert_eq!(extract_option_base("--file"), "--file");
-    assert_eq!(extract_option_base("-f <FILE>"), "-f");
-    assert_eq!(extract_option_base("--type <TYPE>"), "--type");
-    assert_eq!(extract_option_base("--output <PATH>"), "--output");
-    assert_eq!(extract_option_base("--file-name <NAME>"), "--file-name");
-    assert_eq!(extract_option_base("--option"), "--option");
-    assert_eq!(extract_option_base(""), "");
-}
-
 #[test]
 fn test_validate_option_with_placeholders() {
     let loader = JsonCompletionLoader::new();
@@ -755,89 +737,61 @@ fn test_completion_candidates_generation_from_json() {
     let database = loader.load_database().expect("Failed to load database");
     let generator = CompletionGenerator::new(&database);
 
-    // Test with the commands we know exist in the test files
-    let test_commands = ["git", "cargo", "docker", "rg"];
+    for command in ["git", "cargo", "docker", "rg"] {
+        assert!(
+            generator.has_command_completion(command),
+            "test fixture expects a completion for '{command}'"
+        );
 
-    for command in &test_commands {
-        if generator.has_command_completion(command) {
-            println!(
-                "Testing completion candidate generation for command: {}",
-                command
-            );
+        let parsed_command = ParsedCommandLine {
+            command: command.to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: Some("".to_string()),
+            completion_context: CompletionContext::Command,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            raw_args: vec![],
+            cursor_index: 0,
+        };
 
-            // Test command-level completion
-            let parsed_command = ParsedCommandLine {
-                command: command.to_string(),
-                subcommand_path: vec![],
-                args: vec![],
-                options: vec![],
-                current_token: "".to_string(),
-                current_arg: Some("".to_string()),
-                completion_context: CompletionContext::Command,
-                specified_options: vec![],
-                specified_arguments: vec![],
-                raw_args: vec![],
-                cursor_index: 0,
-            };
+        let candidates = generator.generate_candidates(&parsed_command).unwrap();
+        assert!(
+            !candidates.is_empty(),
+            "expected completion candidates for command '{command}'"
+        );
 
-            let candidates = generator.generate_candidates(&parsed_command).unwrap();
-            assert!(
-                !candidates.is_empty(),
-                "Expected completion candidates for command '{}'",
-                command
-            );
+        // If the command has subcommands, filtering by the first letter of
+        // one should return at least that candidate.
+        let Ok(Some(cmd_completion)) = loader.load_command_completion(command) else {
+            continue;
+        };
+        let Some(first_subcommand) = cmd_completion.subcommands.first() else {
+            continue;
+        };
 
-            println!(
-                "  ✓ Generated {} command candidates for '{}'",
-                candidates.len(),
-                command
-            );
+        let first_letter: String = first_subcommand.name.chars().take(1).collect();
+        let parsed_subcommand = ParsedCommandLine {
+            command: command.to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: first_letter.clone(),
+            current_arg: Some(first_letter),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            raw_args: vec![],
+            cursor_index: 0,
+        };
 
-            // Test subcommand completion for commands that have subcommands
-            if generator.has_command_completion(command) {
-                // Use the loader to get the original completion for verification
-                let loader_for_test = JsonCompletionLoader::new();
-                if let Ok(Some(cmd_completion)) = loader_for_test.load_command_completion(command)
-                    && !cmd_completion.subcommands.is_empty()
-                {
-                    let first_subcommand = &cmd_completion.subcommands[0];
-                    println!(
-                        "  Testing subcommands for '{}', first subcommand: '{}'",
-                        command, first_subcommand.name
-                    );
-
-                    let parsed_subcommand = ParsedCommandLine {
-                        command: command.to_string(),
-                        subcommand_path: vec![],
-                        args: vec![],
-                        options: vec![],
-                        current_token: first_subcommand.name.chars().take(1).collect::<String>(), // Use first letter to test filtering
-                        current_arg: Some(
-                            first_subcommand.name.chars().take(1).collect::<String>(),
-                        ),
-                        completion_context: CompletionContext::SubCommand,
-                        specified_options: vec![],
-                        specified_arguments: vec![],
-                        raw_args: vec![],
-                        cursor_index: 0,
-                    };
-
-                    let subcommand_candidates =
-                        generator.generate_candidates(&parsed_subcommand).unwrap();
-                    assert!(
-                        !subcommand_candidates.is_empty(),
-                        "Expected subcommand candidates for '{}'",
-                        command
-                    );
-
-                    println!(
-                        "  ✓ Generated {} subcommand candidates for '{}'",
-                        subcommand_candidates.len(),
-                        command
-                    );
-                }
-            }
-        }
+        let subcommand_candidates = generator.generate_candidates(&parsed_subcommand).unwrap();
+        assert!(
+            !subcommand_candidates.is_empty(),
+            "expected subcommand candidates for '{command}'"
+        );
     }
 }
 
@@ -851,91 +805,51 @@ fn test_completion_files_display_candidates_correctly() {
     let database = loader.load_database().expect("Failed to load database");
     let generator = CompletionGenerator::new(&database);
 
-    // Test specific commands to make sure they can produce displayable candidates
-    let test_commands = ["git", "cargo"];
+    // The command-level candidate generation itself is already covered by
+    // test_completion_candidates_generation_from_json; this test checks the
+    // step after it, converting EnhancedCandidate into the display-facing
+    // Candidate enum, which that one does not.
+    for command in ["git", "cargo"] {
+        assert!(
+            generator.has_command_completion(command),
+            "test fixture expects a completion for '{command}'"
+        );
 
-    for command in &test_commands {
-        if generator.has_command_completion(command) {
-            println!(
-                "Testing display candidate generation for command: {}",
-                command
-            );
+        let parsed_command = ParsedCommandLine {
+            command: command.to_string(),
+            subcommand_path: vec![],
+            args: vec![],
+            options: vec![],
+            current_token: "".to_string(),
+            current_arg: Some("".to_string()),
+            completion_context: CompletionContext::SubCommand,
+            specified_options: vec![],
+            specified_arguments: vec![],
+            raw_args: vec![],
+            cursor_index: 0,
+        };
 
-            // Generate candidates for subcommands
-            let parsed_command = ParsedCommandLine {
-                command: command.to_string(),
-                subcommand_path: vec![],
-                args: vec![],
-                options: vec![],
-                current_token: "".to_string(),
-                current_arg: Some("".to_string()),
-                completion_context: CompletionContext::SubCommand,
-                specified_options: vec![],
-                specified_arguments: vec![],
-                raw_args: vec![],
-                cursor_index: 0,
-            };
+        let enhanced_candidates = generator.generate_candidates(&parsed_command).unwrap();
+        let display_candidates: Vec<DisplayCandidate> = enhanced_candidates
+            .into_iter()
+            .map(|c| match c.completion_type {
+                super::super::command::CompletionType::SubCommand => DisplayCandidate::Command {
+                    name: c.text,
+                    description: c.description.unwrap_or_default(),
+                },
+                super::super::command::CompletionType::LongOption
+                | super::super::command::CompletionType::ShortOption => DisplayCandidate::Option {
+                    name: c.text,
+                    description: c.description.unwrap_or_default(),
+                },
+                _ => DisplayCandidate::Item(c.text, c.description.unwrap_or_default()),
+            })
+            .collect();
 
-            let enhanced_candidates = generator.generate_candidates(&parsed_command).unwrap();
-            assert!(
-                !enhanced_candidates.is_empty(),
-                "Expected completion candidates for command '{}'",
-                command
-            );
-
-            // Convert to display candidates and ensure they're formatted correctly
-            let display_candidates: Vec<DisplayCandidate> = enhanced_candidates
-                .into_iter()
-                .map(|c| match c.completion_type {
-                    super::super::command::CompletionType::SubCommand => {
-                        DisplayCandidate::Command {
-                            name: c.text,
-                            description: c.description.unwrap_or_default(),
-                        }
-                    }
-                    super::super::command::CompletionType::LongOption
-                    | super::super::command::CompletionType::ShortOption => {
-                        DisplayCandidate::Option {
-                            name: c.text,
-                            description: c.description.unwrap_or_default(),
-                        }
-                    }
-                    _ => DisplayCandidate::Item(c.text, c.description.unwrap_or_default()),
-                })
-                .collect();
-
-            assert!(
-                !display_candidates.is_empty(),
-                "Expected display candidates for command '{}'",
-                command
-            );
-
-            println!(
-                "  ✓ Generated {} display candidates for '{}'",
-                display_candidates.len(),
-                command
-            );
-
-            // Verify that descriptions are properly set
-            for candidate in &display_candidates {
-                match candidate {
-                    DisplayCandidate::Command { name, description } => {
-                        println!("    Subcommand: {} - {}", name, description);
-                        // Verify that the subcommand is from our JSON file
-                        // We can't directly access the database, so just verify they exist
-                        assert!(
-                            generator.has_command_completion(command),
-                            "Command '{}' is not available in completion database",
-                            command
-                        );
-                    }
-                    DisplayCandidate::Option { name, description } => {
-                        println!("    Option: {} - {}", name, description);
-                    }
-                    _ => {}
-                }
-            }
-        }
+        assert!(
+            !display_candidates.is_empty(),
+            "expected display candidates for command '{command}'"
+        );
     }
 }
 

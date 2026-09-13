@@ -228,116 +228,38 @@ fn alt_slash_redoes() {
 
 // === Cursor movement tests ===
 
+/// Single-key, default-context dispatch: each `(key, modifiers)` maps to
+/// exactly one `KeyAction` with no other context in play. Consolidates what
+/// used to be 15 near-identical tests (cursor movement, deletion, character
+/// input, and a few control keys) that differed only in the row below.
 #[test]
-fn test_ctrl_a_moves_to_begin() {
-    let k = key(KeyCode::Char('a'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorToBegin
-    );
-}
+fn single_key_default_context_dispatch() {
+    let cases = [
+        (KeyCode::Char('a'), CTRL, KeyAction::CursorToBegin),
+        (KeyCode::Char('e'), CTRL, KeyAction::CursorToEnd),
+        (KeyCode::Left, NONE, KeyAction::CursorLeft),
+        (KeyCode::Right, NONE, KeyAction::CursorRight),
+        (KeyCode::Left, CTRL, KeyAction::CursorWordLeft),
+        (KeyCode::Right, CTRL, KeyAction::CursorWordRight),
+        (KeyCode::Backspace, NONE, KeyAction::Backspace),
+        (KeyCode::Char('w'), CTRL, KeyAction::DeleteWordBackward),
+        (KeyCode::Char('k'), CTRL, KeyAction::DeleteToEnd),
+        (KeyCode::Char('u'), CTRL, KeyAction::DeleteToBeginning),
+        (KeyCode::Char('a'), NONE, KeyAction::InsertChar('a')),
+        (KeyCode::Char('A'), SHIFT, KeyAction::InsertChar('A')),
+        (KeyCode::Char('c'), CTRL, KeyAction::Interrupt),
+        (KeyCode::Char('l'), CTRL, KeyAction::ClearScreen),
+        (KeyCode::Char('v'), CTRL, KeyAction::Paste),
+    ];
 
-#[test]
-fn test_ctrl_e_moves_to_end() {
-    let k = key(KeyCode::Char('e'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorToEnd
-    );
-}
-
-#[test]
-fn test_left_arrow_moves_cursor_left() {
-    let k = key(KeyCode::Left, NONE);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorLeft
-    );
-}
-
-#[test]
-fn test_right_arrow_moves_cursor_right() {
-    let k = key(KeyCode::Right, NONE);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorRight
-    );
-}
-
-#[test]
-fn test_ctrl_left_moves_word_left() {
-    let k = key(KeyCode::Left, CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorWordLeft
-    );
-}
-
-#[test]
-fn test_ctrl_right_moves_word_right() {
-    let k = key(KeyCode::Right, CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::CursorWordRight
-    );
-}
-
-// === Editing operations tests ===
-
-#[test]
-fn test_backspace() {
-    let k = key(KeyCode::Backspace, NONE);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::Backspace
-    );
-}
-
-#[test]
-fn test_ctrl_w_deletes_word() {
-    let k = key(KeyCode::Char('w'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::DeleteWordBackward
-    );
-}
-
-#[test]
-fn test_ctrl_k_deletes_to_end() {
-    let k = key(KeyCode::Char('k'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::DeleteToEnd
-    );
-}
-
-#[test]
-fn test_ctrl_u_deletes_to_beginning() {
-    let k = key(KeyCode::Char('u'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::DeleteToBeginning
-    );
-}
-
-// === Character input tests ===
-
-#[test]
-fn test_regular_char_inserts() {
-    let k = key(KeyCode::Char('a'), NONE);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::InsertChar('a')
-    );
-}
-
-#[test]
-fn test_shift_char_inserts() {
-    let k = key(KeyCode::Char('A'), SHIFT);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::InsertChar('A')
-    );
+    for (code, modifiers, expected) in cases {
+        let k = key(code, modifiers);
+        assert_eq!(
+            determine_key_action(&k, &ctx_default()),
+            expected,
+            "{code:?}+{modifiers:?}"
+        );
+    }
 }
 
 #[test]
@@ -513,30 +435,6 @@ fn test_alt_bracket_rotates_suggestion() {
 }
 
 // === Other tests ===
-
-#[test]
-fn test_ctrl_c_interrupt() {
-    let k = key(KeyCode::Char('c'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::Interrupt
-    );
-}
-
-#[test]
-fn test_ctrl_l_clear_screen() {
-    let k = key(KeyCode::Char('l'), CTRL);
-    assert_eq!(
-        determine_key_action(&k, &ctx_default()),
-        KeyAction::ClearScreen
-    );
-}
-
-#[test]
-fn test_ctrl_v_paste() {
-    let k = key(KeyCode::Char('v'), CTRL);
-    assert_eq!(determine_key_action(&k, &ctx_default()), KeyAction::Paste);
-}
 
 #[test]
 fn test_esc_cancels_completion_when_active() {

@@ -284,6 +284,48 @@ fn test_deduplicate_and_sort_merges_trailing_slash_duplicate() {
     assert_eq!(result[0].text, "src");
 }
 
+/// `collect_project_candidates` carries its most-recently-used order in
+/// `priority`, because this sort is the only thing that decides what the user
+/// sees and its last tiebreak is the candidate text. If candidates that share a
+/// priority and a type stopped coming back alphabetical the encoding would be
+/// unnecessary -- and if descending priorities stopped being honoured, `pj
+/// <TAB>` would silently go back to alphabetical with nothing to notice it.
+#[test]
+fn descending_priority_outranks_the_alphabetical_tiebreak() {
+    let engine = IntegratedCompletionEngine::new(Environment::new());
+    let argument = |text: &str, priority: u32| EnhancedCandidate {
+        text: text.to_string(),
+        description: None,
+        candidate_type: CandidateType::Argument,
+        priority,
+    };
+
+    // Equal priority: the text tiebreak decides, which is the behaviour that
+    // made a plain recency-ordered Vec useless.
+    let flat = engine.deduplicate_and_sort(
+        vec![argument("zulu", 90), argument("alpha", 90)],
+        50,
+        None,
+        None,
+    );
+    assert_eq!(
+        flat.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+        vec!["alpha", "zulu"]
+    );
+
+    // Descending priority: the collection order survives instead.
+    let ranked = engine.deduplicate_and_sort(
+        vec![argument("zulu", 90), argument("alpha", 89)],
+        50,
+        None,
+        None,
+    );
+    assert_eq!(
+        ranked.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+        vec!["zulu", "alpha"]
+    );
+}
+
 #[test]
 fn test_deduplicate_and_sort_keeps_unrelated_types_with_same_trimmed_text() {
     // A Directory candidate "src/" trims to the same text as an unrelated

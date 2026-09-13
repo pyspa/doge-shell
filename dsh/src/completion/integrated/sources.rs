@@ -82,7 +82,22 @@ impl IntegratedCompletionEngine {
         self.collect_project_candidates(current_token)
     }
 
+    /// Projects, most recently used first.
+    ///
+    /// The order has to travel in `priority`. `deduplicate_and_sort` re-sorts
+    /// every candidate before the user sees it, and its last tiebreak is the
+    /// candidate text, so a `Vec` that is merely *in* recency order comes back
+    /// alphabetical and the sort above is dead code. `collect_shell_job_candidates`
+    /// encodes `%+`/`%-`/`%N` the same way.
+    ///
+    /// Only the first `RECENCY_RANKS + 1` projects get a distinct priority: the
+    /// steps have to stay inside this group's band, and 80 is where option
+    /// candidates sit, which a project must never sort below. Everything past
+    /// that ties at the floor and falls back to alphabetical.
     pub(super) fn collect_project_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
+        const BASE_PRIORITY: u32 = 90;
+        const RECENCY_RANKS: u32 = 9;
+
         let Ok(mut projects) = project::list_projects() else {
             return Vec::new();
         };
@@ -91,11 +106,14 @@ impl IntegratedCompletionEngine {
         projects
             .into_iter()
             .filter(|project| matches_prefix(current_token, &project.name))
-            .map(|project| EnhancedCandidate {
+            // Rank what the user will actually see, so the filter cannot leave
+            // a gap at the top of the list.
+            .enumerate()
+            .map(|(rank, project)| EnhancedCandidate {
                 text: project.name,
                 description: Some(project.path.display().to_string()),
                 candidate_type: CandidateType::Argument,
-                priority: 90,
+                priority: BASE_PRIORITY - (rank as u32).min(RECENCY_RANKS),
             })
             .collect()
     }

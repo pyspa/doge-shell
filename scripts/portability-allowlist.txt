@@ -18,13 +18,7 @@ dsh-builtin/src/output_gen.rs	/sbin/init
 dsh-types/src/output_text.rs	/sbin/init
 dsh/src/command_timing.rs	/usr/bin/ls
 dsh/src/completion/commands.rs	/usr/bin/ls
-dsh/src/completion/dynamic.rs	/etc/wireguard
-dsh/src/completion/dynamic.rs	/lib/modules
-dsh/src/completion/dynamic.rs	/proc
-dsh/src/completion/dynamic.rs	/proc/modules
-dsh/src/completion/dynamic.rs	/proc/sys
-dsh/src/completion/dynamic.rs	/run/blkid
-dsh/src/completion/dynamic.rs	/sys/class/net
+dsh/src/completion/dynamic/collectors.rs	/proc
 dsh/src/completion/dynamic/linux.rs	/usr/bin/fish
 dsh/src/completion/dynamic/linux/collectors.rs	/etc/mkinitcpio.d
 dsh/src/completion/dynamic/linux/collectors.rs	/etc/selinux
@@ -56,6 +50,12 @@ dsh/src/completion/dynamic/system.rs	/proc/filesystems
 dsh/src/completion/dynamic/system.rs	/proc/swaps
 dsh/src/completion/dynamic/system.rs	/proc/sys
 dsh/src/completion/dynamic/tests.rs	/etc/fstab
+dsh/src/completion/dynamic/value_collectors.rs	/etc/wireguard
+dsh/src/completion/dynamic/value_collectors.rs	/lib/modules
+dsh/src/completion/dynamic/value_collectors.rs	/proc/modules
+dsh/src/completion/dynamic/value_collectors.rs	/proc/sys
+dsh/src/completion/dynamic/value_collectors.rs	/run/blkid
+dsh/src/completion/dynamic/value_collectors.rs	/sys/class/net
 dsh/src/completion/generators/group.rs	/etc/group
 dsh/src/completion/generators/interface.rs	/sys/class/net
 dsh/src/completion/generators/process.rs	/proc

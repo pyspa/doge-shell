@@ -22,7 +22,6 @@ no-doc	dsh-builtin/src/glog.rs
 no-doc	dsh-builtin/src/help.rs
 no-doc	dsh-builtin/src/lib.rs
 no-doc	dsh-builtin/src/markdown/mod.rs
-no-doc	dsh-builtin/src/project.rs
 no-doc	dsh-builtin/src/project_context.rs
 no-doc	dsh-builtin/src/safe_run.rs
 no-doc	dsh-builtin/src/serve/handlers.rs
@@ -78,7 +77,6 @@ oversized	dsh-builtin/src/chatgpt/tool/mod.rs
 oversized	dsh-builtin/src/comp_gen.rs
 oversized	dsh-builtin/src/gwt.rs
 oversized	dsh-builtin/src/output_gen.rs
-oversized	dsh-builtin/src/project.rs
 oversized	dsh-builtin/src/project_context.rs
 oversized	dsh-builtin/src/task.rs
 oversized	dsh-openai/src/client.rs

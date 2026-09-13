@@ -1,6 +1,12 @@
 //! `ShellProxy for Shell`: the one trait implementation builtins and the agent runtime dispatch through, so their tests can double it out.
 //! One giant `impl` block - Rust allows only one per trait per type -
 //! grouped here by the shape of what each method touches (environment state, history, snippets/bookmarks/dir-aliases in `dsh.db`, MCP, AI).
+//!
+//! This is why the file stays on `file-budget-allowlist.txt` while every other
+//! oversized file was split: a trait impl cannot be spread across files, so
+//! shrinking it means moving method *bodies* out and leaving delegating stubs.
+//! That is a restructuring, not a relocation, and it belongs with the
+//! bookmark/dir-alias/snippet CRUD dedup rather than with a mechanical split.
 use super::*;
 
 impl ShellProxy for Shell {

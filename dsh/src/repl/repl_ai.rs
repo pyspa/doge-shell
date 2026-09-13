@@ -1,8 +1,22 @@
+//! AI-adjacent `Repl` methods that don't belong in the main event loop:
+//! failure auto-fix (deterministic and AI), inline ghost-text suggestions,
+//! the `|?`/`|!`/`??` pipe patterns (detect + run), and `!sudo` toggling.
 use super::Repl;
-use super::{AiEvent, AutoFixKind, AutoFixSuggestion};
+use super::input_analysis;
+use super::terminal_state;
+use super::{AI_PIPE_OUTPUT_CHARS, AiEvent, AutoFixKind, AutoFixSuggestion};
 
+use crate::ai_features;
 use crate::completion::shell_token::{self, SeparatorMode};
+use crate::terminal::renderer::TerminalRenderer;
+use anyhow::Result;
+use crossterm::queue;
+use crossterm::style::Print;
+use crossterm::terminal::{Clear, ClearType};
+use dsh_builtin::execute_chat_message;
+use dsh_types::Context;
 use dsh_types::quick_fix::{DeterministicQuickFixProvider, QuickFixProvider};
+use nix::unistd::getpid;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -285,6 +299,169 @@ impl<'a> Repl<'a> {
 
         self.ai_ui.suggestion_manager.active.is_some()
     }
+
+    pub(super) async fn toggle_sudo(&mut self) -> Result<()> {
+        input_analysis::toggle_sudo(self).await
+    }
+
+    /// Get directory listing for AI context
+    pub(super) fn get_directory_listing(&self) -> String {
+        get_directory_listing_content(std::path::Path::new(".")).join("\n")
+    }
+
+    pub(super) async fn expand_smart_pipe(&self, query: String) -> Result<String> {
+        let service = self
+            .services
+            .ai
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
+        ai_features::expand_smart_pipe(service.as_ref(), &query).await
+    }
+
+    pub(super) async fn run_generative_command(&self, query: &str) -> Result<String> {
+        let service = self
+            .services
+            .ai
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
+        ai_features::run_generative_command(service.as_ref(), query).await
+    }
+
+    pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
+        let input = self.input.as_str();
+        if let Some(idx) = input.rfind("|?") {
+            let query = input[idx + 2..].trim();
+            if !query.is_empty() {
+                return Some(query.to_string());
+            }
+        }
+        None
+    }
+
+    pub(crate) fn detect_generative_command(&self) -> Option<String> {
+        let input = self.input.as_str().trim_start();
+        if let Some(query) = input.strip_prefix("??") {
+            let query = query.trim();
+            if !query.is_empty() {
+                return Some(query.to_string());
+            }
+        }
+        None
+    }
+
+    /// Detect AI Output Pipe pattern: `command |! "query"`
+    /// Returns (command, query) if pattern is found
+    pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
+        let input = self.input.as_str();
+        if let Some(idx) = input.rfind("|!") {
+            let command = input[..idx].trim().to_string();
+            let query_part = input[idx + 2..].trim();
+
+            // Extract query from quotes or as plain text
+            let query = if (query_part.starts_with('"') && query_part.ends_with('"')
+                || query_part.starts_with('\'') && query_part.ends_with('\''))
+                && query_part.len() > 1
+            {
+                query_part[1..query_part.len() - 1].to_string()
+            } else {
+                query_part.to_string()
+            };
+
+            if !command.is_empty() && !query.is_empty() {
+                return Some((command, query));
+            }
+        }
+        None
+    }
+
+    /// Execute command, capture output, and send to AI for analysis
+    pub(super) async fn run_ai_pipe(&mut self, command: String, query: String) -> Result<()> {
+        use std::process::Command;
+
+        let mut renderer = TerminalRenderer::new();
+        queue!(renderer, Print("\r\n🔄 Running command...\r\n")).ok();
+        renderer.flush().ok();
+
+        // Execute the command and capture output
+        let output = Command::new("sh").arg("-c").arg(&command).output();
+
+        let (stdout, stderr, exit_code) = match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let exit_code = out.status.code().unwrap_or(-1);
+                (stdout, stderr, exit_code)
+            }
+            Err(e) => {
+                queue!(
+                    renderer,
+                    Print(format!("❌ Failed to execute command: {}\r\n", e))
+                )
+                .ok();
+                renderer.flush().ok();
+                return Ok(());
+            }
+        };
+
+        // Combine stdout and stderr for analysis
+        let combined_output = if stderr.is_empty() {
+            stdout
+        } else if stdout.is_empty() {
+            stderr
+        } else {
+            format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
+        };
+
+        // Check if AI service is available
+        let Some(_service) = self.services.ai.clone() else {
+            queue!(
+                renderer,
+                Print(format!(
+                    "❌ AI service is not configured. {}\r\n",
+                    dsh_openai::API_KEY_SETUP_HINT
+                ))
+            )
+            .ok();
+            renderer.flush().ok();
+            return Ok(());
+        };
+
+        queue!(renderer, Print("🤖 Analyzing output...\r\n")).ok();
+        renderer.flush().ok();
+
+        // Call unified AI entry point
+        queue!(renderer, Print("\r")).ok();
+        queue!(renderer, Clear(ClearType::CurrentLine)).ok();
+
+        // The captured output is unbounded; keep both ends so an error at the
+        // tail of a long log still reaches the model.
+        let bounded_output =
+            dsh_openai::turn::truncate_middle(&combined_output, AI_PIPE_OUTPUT_CHARS);
+        let message = format!(
+            "Shell command: `{}`\n\nOutput:\n```\n{}\n```\n\nQuery: {}",
+            command, bounded_output, query
+        );
+
+        let ctx = Context::new_safe(getpid(), getpid(), true);
+        // Unlike the `!` prefix path in `eval_str`, nothing on this route
+        // disables raw mode before the chat call - streaming's incremental
+        // `write_stdout` calls need cooked mode for their newlines to land
+        // as real line breaks instead of a staircase.
+        let raw_mode_pause = terminal_state::RawModePause::new();
+        let lifecycle = crate::agent_lifecycle::current(self.shell);
+        let _turn = lifecycle.begin_turn();
+        execute_chat_message(&ctx, &mut *self.shell, &message, None);
+        drop(raw_mode_pause);
+
+        self.state.last_status = exit_code;
+        self.state.last_command_string = command;
+
+        renderer.flush().ok();
+        self.print_prompt(&mut renderer);
+        renderer.flush().ok();
+
+        Ok(())
+    }
 }
 
 fn is_auto_fix_blocked(input: &str) -> bool {
@@ -333,5 +510,217 @@ mod tests {
         assert!(listing.contains(&"b_dir/".to_string()));
         assert!(listing.contains(&"a_file.txt".to_string()));
         assert_eq!(listing[0], "b_dir/");
+    }
+
+    use crate::ai_features::AiService;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+    use async_trait::async_trait;
+    use serde_json::Value; // Add missing imports if needed
+
+    struct MockAiService {
+        response: String,
+    }
+
+    impl MockAiService {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AiService for MockAiService {
+        async fn send_request(
+            &self,
+            _messages: Vec<Value>,
+            _temperature: Option<f64>,
+        ) -> Result<String> {
+            Ok(self.response.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_trigger_auto_fix_success() {
+        use crate::environment::Environment;
+
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        // Setup mock AI service
+        let service = Arc::new(MockAiService::new(r#"{"command": "ls", "args": ["-la"]}"#));
+        repl.services.ai = Some(service);
+
+        // Setup failed state
+        repl.state.last_command_string = "lss -la".to_string();
+        repl.state.last_status = 127;
+
+        // Enable auto_fix
+        repl.ai_ui.input_preferences.auto_fix = true;
+
+        repl.trigger_auto_fix();
+
+        // Wait for the background task to complete and send the result
+        if let Some(AiEvent::AutoFix(fix)) = repl.event_loop.recv_ai().await {
+            repl.ai_ui.auto_fix_suggestion = Some(fix);
+        }
+
+        let fix = repl
+            .ai_ui
+            .auto_fix_suggestion
+            .take()
+            .expect("auto fix expected");
+        assert_eq!(fix.replacement, "ls -la");
+        assert_eq!(fix.kind, crate::repl::AutoFixKind::AiFix);
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_double_quoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("ls -la |! \"show largest files\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "ls -la");
+        assert_eq!(query, "show largest files");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_single_quoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("docker ps |! 'find running containers'".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "docker ps");
+        assert_eq!(query, "find running containers");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_with_unquoted_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("cat file.txt |! summarize".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "cat file.txt");
+        assert_eq!(query, "summarize");
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_empty_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls -la |! ".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_empty_command() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("|! \"query\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_no_pattern() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls -la | grep foo".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detect_ai_pipe_complex_command() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("kubectl get pods -n default |! \"問題のあるPodを見つけて\"".to_string());
+        let result = repl.detect_ai_pipe();
+        assert!(result.is_some());
+        let (command, query) = result.unwrap();
+        assert_eq!(command, "kubectl get pods -n default");
+        assert_eq!(query, "問題のあるPodを見つけて");
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_valid() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |? filter directories".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, Some("filter directories".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_no_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |?".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_empty_query() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls |?   ".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_no_pattern() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input.reset("ls | grep foo".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn test_detect_smart_pipe_multiple_pipes() {
+        let environment = Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+
+        repl.input
+            .reset("cat file.txt | head -10 |? find errors".to_string());
+        let result = repl.detect_smart_pipe();
+        assert_eq!(result, Some("find errors".to_string()));
     }
 }

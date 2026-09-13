@@ -98,7 +98,6 @@ oversized	dsh/src/lisp/model/table.rs
 oversized	dsh/src/parser/expansion.rs
 oversized	dsh/src/prompt/mod.rs
 oversized	dsh/src/proxy/mod.rs
-oversized	dsh/src/repl/mod.rs
 oversized	dsh/src/safety/mod.rs
 oversized	dsh/src/shell/eval.rs
 oversized	dsh/src/suggestion.rs

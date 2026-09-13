@@ -10,6 +10,7 @@
 - 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
 - `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
 - 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
+- 400 行を超える非テストファイルには `//!` でモジュール doc を書く（手本: `dsh/src/completion/dynamic/local.rs`）。800 行を超えたら分割を検討する。両方 `scripts/check-file-budget.py` が検査する（既存の超過は allowlist で追跡中、新規の超過は失敗する）。
 
 ## 作業タイプ別の最初の一手
 - 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
@@ -33,6 +34,7 @@
 - 広いビルド確認が必要なら: `cargo check --workspace`
 - OS 依存のコード・テスト・ビルド設定を触ったとき: `scripts/check-portability.py`
 - `Cargo.toml` / `README.md` / `LICENSE` を触ったとき: `scripts/check-project-consistency.py`
+- 400 行超のファイルを新規作成・分割したとき、`docs/ai/` の reference や `AGENTS.md`/`CLAUDE.md` のパス参照を変えたとき: `scripts/check-file-budget.py`
 - 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
 
 ## 設計境界

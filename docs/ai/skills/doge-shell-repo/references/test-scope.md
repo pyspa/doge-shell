@@ -10,6 +10,7 @@
 - `cargo test`: cross-crate changes only
 - `cargo check --workspace`: broad compile check when behavior spans many crates
 - `scripts/check-portability.py`: `target_os` arms, OS-specific paths, absolute command paths in tests, or `.cargo/config.toml` changes
+- `scripts/check-file-budget.py`: a new or split `.rs` file over 400/800 lines, or path references inside `AGENTS.md`/`CLAUDE.md`/`docs/ai/`
 - `scripts/check-ai-guidance.sh`: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, Skill, runtime skill installer, or `.claude/` changes
 - `scripts/check-project-consistency.py`: workspace `Cargo.toml`, crate manifests, `README.md`, or `LICENSE` changes
 - `scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core`: Codex runtime profile changes

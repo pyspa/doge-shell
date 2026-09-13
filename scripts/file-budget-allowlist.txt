@@ -1,0 +1,113 @@
+# Files this repository still accepts over the token-budget limits in
+# scripts/check-file-budget.py, as category<TAB>path.
+#
+# An entry is tracked debt, not an endorsement: Phase 2 of the AI-agent
+# refactor splits `oversized` files along their existing seams and adds a
+# `//!` module doc to `no-doc` files. A file dropping out of a category
+# should leave this list; a *new* file entering one should not be added
+# here without first checking whether it can be split or documented
+# instead of merely allowlisted.
+#
+# Regenerate with: scripts/check-file-budget.py --update
+doc-path-ok	docs/ai/skills/doge-shell-repo/references/invariants/completion.md::dsh/completions
+no-doc	dsh-builtin/src/blocks.rs
+no-doc	dsh-builtin/src/chatgpt.rs
+no-doc	dsh-builtin/src/chatgpt/mcp/mod.rs
+no-doc	dsh-builtin/src/chatgpt/tool/execute.rs
+no-doc	dsh-builtin/src/chatgpt/tool/mod.rs
+no-doc	dsh-builtin/src/chatgpt/tool/search.rs
+no-doc	dsh-builtin/src/comp_gen.rs
+no-doc	dsh-builtin/src/dmv.rs
+no-doc	dsh-builtin/src/doctor.rs
+no-doc	dsh-builtin/src/gh_notify.rs
+no-doc	dsh-builtin/src/glog.rs
+no-doc	dsh-builtin/src/help.rs
+no-doc	dsh-builtin/src/lib.rs
+no-doc	dsh-builtin/src/markdown/mod.rs
+no-doc	dsh-builtin/src/project.rs
+no-doc	dsh-builtin/src/project_context.rs
+no-doc	dsh-builtin/src/safe_run.rs
+no-doc	dsh-builtin/src/serve/handlers.rs
+no-doc	dsh-builtin/src/serve/scanner.rs
+no-doc	dsh-builtin/src/task.rs
+no-doc	dsh-builtin/src/test_support.rs
+no-doc	dsh-openai/src/client.rs
+no-doc	dsh-openai/src/config.rs
+no-doc	dsh-types/src/safety_policy.rs
+no-doc	dsh/src/completion/commands.rs
+no-doc	dsh/src/completion/context.rs
+no-doc	dsh/src/completion/display.rs
+no-doc	dsh/src/completion/dynamic.rs
+no-doc	dsh/src/completion/dynamic/dev.rs
+no-doc	dsh/src/completion/dynamic/platform.rs
+no-doc	dsh/src/completion/extra_tests/new_completions.rs
+no-doc	dsh/src/completion/integrated.rs
+no-doc	dsh/src/completion/json_loader.rs
+no-doc	dsh/src/completion/parser.rs
+no-doc	dsh/src/completion/path.rs
+no-doc	dsh/src/completion/selection.rs
+no-doc	dsh/src/input/editor.rs
+no-doc	dsh/src/lib.rs
+no-doc	dsh/src/lisp/builtin.rs
+no-doc	dsh/src/lisp/default_environment.rs
+no-doc	dsh/src/lisp/interpreter.rs
+no-doc	dsh/src/lisp/mod.rs
+no-doc	dsh/src/lisp/model/value.rs
+no-doc	dsh/src/lisp/stdlib/table.rs
+no-doc	dsh/src/parser/expansion.rs
+no-doc	dsh/src/perf_probes.rs
+no-doc	dsh/src/process/io.rs
+no-doc	dsh/src/process/job.rs
+no-doc	dsh/src/process/job_process.rs
+no-doc	dsh/src/process/job_pty.rs
+no-doc	dsh/src/process/job_wait.rs
+no-doc	dsh/src/process/process.rs
+no-doc	dsh/src/prompt/mod.rs
+no-doc	dsh/src/repl/background_io.rs
+no-doc	dsh/src/repl/handler.rs
+no-doc	dsh/src/repl/input_analysis.rs
+no-doc	dsh/src/repl/key_handlers/completion.rs
+no-doc	dsh/src/repl/key_handlers/execution.rs
+no-doc	dsh/src/repl/mod.rs
+no-doc	dsh/src/repl/render.rs
+no-doc	dsh/src/safety/mod.rs
+no-doc	dsh/src/shell/eval.rs
+no-doc	dsh/src/shell/mod.rs
+no-doc	dsh/src/shell/parse.rs
+no-doc	dsh/src/suggestion.rs
+oversized	dsh-builtin/src/blocks.rs
+oversized	dsh-builtin/src/chatgpt.rs
+oversized	dsh-builtin/src/chatgpt/hooks/config.rs
+oversized	dsh-builtin/src/chatgpt/mcp/mod.rs
+oversized	dsh-builtin/src/chatgpt/skills/mod.rs
+oversized	dsh-builtin/src/chatgpt/tool/execute.rs
+oversized	dsh-builtin/src/chatgpt/tool/mod.rs
+oversized	dsh-builtin/src/comp_gen.rs
+oversized	dsh-builtin/src/doctor.rs
+oversized	dsh-builtin/src/gwt.rs
+oversized	dsh-builtin/src/lib.rs
+oversized	dsh-builtin/src/output_gen.rs
+oversized	dsh-builtin/src/project.rs
+oversized	dsh-builtin/src/project_context.rs
+oversized	dsh-builtin/src/task.rs
+oversized	dsh-openai/src/client.rs
+oversized	dsh-types/src/safety_policy.rs
+oversized	dsh/src/completion/context.rs
+oversized	dsh/src/completion/display.rs
+oversized	dsh/src/completion/dynamic.rs
+oversized	dsh/src/completion/dynamic/dev.rs
+oversized	dsh/src/completion/dynamic/linux.rs
+oversized	dsh/src/completion/integrated.rs
+oversized	dsh/src/history/command_history.rs
+oversized	dsh/src/input/editor.rs
+oversized	dsh/src/lib.rs
+oversized	dsh/src/lisp/builtin.rs
+oversized	dsh/src/lisp/interpreter.rs
+oversized	dsh/src/lisp/model/table.rs
+oversized	dsh/src/parser/expansion.rs
+oversized	dsh/src/prompt/mod.rs
+oversized	dsh/src/proxy/mod.rs
+oversized	dsh/src/repl/mod.rs
+oversized	dsh/src/safety/mod.rs
+oversized	dsh/src/shell/eval.rs
+oversized	dsh/src/suggestion.rs

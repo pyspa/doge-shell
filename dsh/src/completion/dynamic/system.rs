@@ -1,8 +1,17 @@
 //! Reading the running system for candidates: the per-tool output parsers
 //! (screen, pip, blkid, busctl, loginctl, losetup, nmcli, lsblk) and the
 //! loaders for filesystem types, fstab mountpoints, sysctl keys, kernel
-//! modules, network interfaces, swap devices and WireGuard configs, each with
-//! its macOS arm beside the Linux one.
+//! modules, network interfaces, swap devices and WireGuard configs.
+//!
+//! Only `load_filesystem_types` and `load_sysctl_keys` carry a paired macOS
+//! arm. Of the rest: `load_fstab_mountpoints` needs none, because macOS reads
+//! `/etc/fstab` at the same path and an absent file just yields nothing. The
+//! three kernel/swap loaders (`/proc/swaps`, `/proc/modules`, `/lib/modules`)
+//! are Linux-only and currently return an empty list on macOS, which is
+//! tracked debt rather than a decision: macOS lists loaded extensions through
+//! `kmutil showloaded`/`kextstat`, so a second arm is possible and missing.
+//! Anything added here needs that arm from the start -- see
+//! `docs/ai/skills/doge-shell-repo/references/platform-support.md`.
 use super::*;
 
 pub(super) fn parse_screen_sessions(lines: &[String]) -> Vec<String> {
@@ -38,7 +47,7 @@ pub(super) fn parse_pip_freeze_packages(lines: &[String]) -> Vec<String> {
     dedup_sorted(
         lines
             .iter()
-            .filter_map(|line| line.split("==").next().map(str::to_string))
+            .map(|line| line.split("==").next().unwrap_or(line).to_string())
             .collect(),
     )
 }
@@ -59,10 +68,9 @@ pub(super) fn parse_first_fields_excluding(lines: &[String], excluded: &[&str]) 
             .iter()
             .filter_map(|line| {
                 let first = line.split_whitespace().next()?;
-                if first.is_empty()
-                    || excluded
-                        .iter()
-                        .any(|header| first.eq_ignore_ascii_case(header))
+                if excluded
+                    .iter()
+                    .any(|header| first.eq_ignore_ascii_case(header))
                 {
                     None
                 } else {

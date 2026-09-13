@@ -52,7 +52,8 @@ impl McpManager {
                     None
                 };
 
-            futures.push(async move {
+            let probes_transport = cached_tools.is_none();
+            futures.push((probes_transport, async move {
                 if let Some(tools) = cached_tools {
                     Ok((config, tools, false)) // false = not new
                 } else {
@@ -61,18 +62,20 @@ impl McpManager {
                         Err(e) => Err((config.label, e)),
                     }
                 }
-            });
+            }));
         }
 
-        // Execute sequentially logic is replaced by parallel logic below
-        // Execute sequentially to prevent process storm
-        // Execute sequentially to prevent process storm
+        // Run sequentially, with a small delay between server loads so a long
+        // list does not start every process at once. The delay is paid only
+        // between real probes: a cache hit spawns nothing, so making it wait
+        // just added 200ms per configured server to the shell's startup.
         let mut results = Vec::new();
-        for (i, future) in futures.into_iter().enumerate() {
-            // Add a small delay between server loads to yield CPU/IO to the main thread
-            if i > 0 {
+        let mut probed_before = false;
+        for (probes_transport, future) in futures {
+            if probes_transport && probed_before {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
+            probed_before |= probes_transport;
             results.push(future.await);
         }
 
@@ -116,7 +119,6 @@ impl McpManager {
         }
 
         let mut bindings = BTreeMap::new();
-        let mut used_names = HashSet::new();
 
         for server in &servers {
             for tool in &server.tools {
@@ -126,7 +128,6 @@ impl McpManager {
                     sanitize_identifier(tool.name.as_ref())
                 );
                 let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
-                used_names.insert(function_name.clone());
                 bindings.insert(
                     function_name.clone(),
                     ToolBinding {
@@ -302,8 +303,6 @@ impl McpManager {
         }
 
         // Update bindings
-        let mut used_names: HashSet<String> = self.bindings.keys().cloned().collect();
-
         for tool in &tools {
             let base_name = format!(
                 "mcp__{}__{}",
@@ -311,7 +310,6 @@ impl McpManager {
                 sanitize_identifier(tool.name.as_ref())
             );
             let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
-            used_names.insert(function_name.clone());
             self.bindings.insert(
                 function_name.clone(),
                 ToolBinding {

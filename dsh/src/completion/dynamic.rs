@@ -353,75 +353,6 @@ impl DynamicCompletionProvider {
         registration.collect(self, &request)
     }
 
-    pub(crate) fn collect_task_candidates(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cache_policy: CachePolicy,
-    ) -> Vec<EnhancedCandidate> {
-        let cached_only = cache_policy.is_cached_only();
-        let current_token = parsed_command_line.current_token.as_str();
-        let tasks = if cached_only {
-            self.lookup_project_tasks(current_dir)
-        } else {
-            match self.load_project_tasks(current_dir) {
-                Ok(tasks) => tasks,
-                Err(e) => {
-                    warn!("Failed to load task completions: {}", e);
-                    return Vec::new();
-                }
-            }
-        };
-
-        tasks
-            .into_iter()
-            .filter(|task| matches_prefix(current_token, &task.name))
-            .map(|task| EnhancedCandidate {
-                text: task.name,
-                description: Some(format_task_description(&task.source, &task.command)),
-                candidate_type: CandidateType::Argument,
-                priority: 90,
-            })
-            .collect()
-    }
-
-    fn collect_shell_alias_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
-        let values = self
-            .environment
-            .read()
-            .variable_state
-            .alias
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        shell_state_candidates(values, current_token, "shell alias")
-    }
-
-    fn collect_shell_abbr_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
-        let values = self
-            .environment
-            .read()
-            .variable_state
-            .abbreviations
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        shell_state_candidates(values, current_token, "shell abbreviation")
-    }
-
-    fn collect_shell_env_var_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
-        let mut values = self
-            .environment
-            .read()
-            .variable_state
-            .system_env_vars
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        values.extend(std::env::vars().map(|(key, _)| key));
-        shell_state_candidates(values, current_token, "environment variable")
-    }
-
     pub(crate) fn collect_fish_fallback_candidates(
         &self,
         current_dir: &Path,
@@ -503,58 +434,6 @@ impl DynamicCompletionProvider {
             "systemd unit",
             cached_only,
         )
-    }
-
-    pub(crate) fn collect_ssh_host_candidates(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        _current_dir: &Path,
-        command_name: &str,
-        cache_policy: CachePolicy,
-    ) -> Vec<EnhancedCandidate> {
-        let cached_only = cache_policy.is_cached_only();
-        if !matches!(
-            parsed_command_line.completion_context,
-            CompletionContext::SubCommand | CompletionContext::Argument { .. }
-        ) {
-            return Vec::new();
-        }
-        let current_token = parsed_command_line.current_token.as_str();
-        if current_token.contains(':') {
-            return Vec::new();
-        }
-
-        let scope = ssh_config_scope();
-        let loader = move || Ok(load_ssh_hosts());
-        let values = self.load_or_lookup_command_values(
-            command_name,
-            "ssh-host",
-            scope,
-            cached_only,
-            CommandQueryPolicy::LOCAL,
-            loader,
-        );
-        let user_prefix = current_token
-            .rsplit_once('@')
-            .map(|(user, _)| user.to_string());
-        let host_token = current_token
-            .rsplit_once('@')
-            .map_or(current_token, |(_, host)| host);
-
-        values
-            .into_iter()
-            .filter(|host| matches_prefix(host_token, host))
-            .map(|host| {
-                let text =
-                    format_ssh_host_candidate_text(command_name, user_prefix.as_deref(), host);
-                EnhancedCandidate {
-                    text,
-                    description: Some("ssh host".to_string()),
-                    candidate_type: CandidateType::Argument,
-                    priority: 130,
-                }
-            })
-            .collect()
     }
 
     pub(crate) fn collect_tmux_candidates(
@@ -1249,28 +1128,6 @@ impl DynamicCompletionProvider {
         candidates
     }
 
-    fn collect_man_page_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let configured_manpath = self.environment.read().get_var("MANPATH");
-        let roots = man_page_roots(configured_manpath.as_deref());
-        let scope = roots
-            .first()
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from("/usr/share/man"));
-        self.collect_cached_value_candidates(
-            "man",
-            "page",
-            scope,
-            current_token,
-            "manual page",
-            cached_only,
-            move || Ok(load_man_page_names(&roots)),
-        )
-    }
-
     fn collect_owner_group_candidates(
         &self,
         current_token: &str,
@@ -1285,57 +1142,6 @@ impl DynamicCompletionProvider {
             || Ok(load_owner_group_values()),
         );
         owner_group_candidates(&values, current_token)
-    }
-
-    fn collect_archive_entry_candidates(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_name = parsed_command_line.command.as_str();
-        let archive = match command_name {
-            "tar" if tar_reads_archive(parsed_command_line) => {
-                selected_tar_archive(parsed_command_line, current_dir)
-            }
-            "unzip" => selected_unzip_archive(parsed_command_line, current_dir),
-            _ => None,
-        };
-
-        let Some(archive) = archive else {
-            if cached_only {
-                return Vec::new();
-            }
-            return archive_file_candidates(parsed_command_line.current_token.as_str());
-        };
-
-        let command_path = self.resolve_command_path(command_name);
-        let archive_arg = archive.to_string_lossy().to_string();
-        let current_dir = current_dir.to_path_buf();
-        let executable = if command_name == "tar" {
-            "tar"
-        } else {
-            "unzip"
-        };
-        self.collect_cached_value_candidates(
-            executable,
-            "archive-entry",
-            canonicalize_path(&archive),
-            parsed_command_line.current_token.as_str(),
-            "archive entry",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                let args = if executable == "tar" {
-                    vec!["-tf", archive_arg.as_str()]
-                } else {
-                    vec!["-Z1", archive_arg.as_str()]
-                };
-                run_command_lines(&command_path, &args, &current_dir)
-            },
-        )
     }
 
     #[allow(clippy::too_many_arguments)]

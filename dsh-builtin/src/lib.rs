@@ -497,252 +497,163 @@ impl BuiltinSpec {
 
 /// Immutable registry of all builtin commands.
 pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyLock::new(|| {
-    let mut builtin = HashMap::new();
-
-    // Core shell commands
-    builtin.insert("exit", BuiltinSpec::new(exit, exit_description()));
-    builtin.insert("cd", BuiltinSpec::new(cd::command, cd::description()));
-    builtin.insert(
-        "history",
-        BuiltinSpec::new(history::command, history::description()),
-    );
-
-    // Navigation and directory management
-    builtin.insert("z", BuiltinSpec::new(z::command, z::description()));
-    builtin.insert(
-        "pushd",
-        BuiltinSpec::new(dirstack::pushd_command, dirstack::pushd_description()),
-    );
-    builtin.insert(
-        "popd",
-        BuiltinSpec::new(dirstack::popd_command, dirstack::popd_description()),
-    );
-    builtin.insert(
-        "dirs",
-        BuiltinSpec::new(dirstack::dirs_command, dirstack::dirs_description()),
-    );
-
-    // Job control commands
-    builtin.insert(
-        "sched",
-        BuiltinSpec::new(sched::command, sched::description()),
-    );
-    builtin.insert("jobs", BuiltinSpec::new(jobs::command, jobs::description()));
-    builtin.insert("fg", BuiltinSpec::new(fg::command, fg::description()));
-    builtin.insert("bg", BuiltinSpec::new(bg::command, bg::description()));
-
-    // Include command
-    builtin.insert(
-        "include",
-        BuiltinSpec::new(include::command, include::description()),
-    );
-    // Scripting and configuration
-    builtin.insert("lisp", BuiltinSpec::new(lisp::command, lisp::description()));
-    builtin.insert("set", BuiltinSpec::new(set::command, set::description()));
-    builtin.insert("var", BuiltinSpec::new(var::command, var::description()));
-    builtin.insert("read", BuiltinSpec::new(read::command, read::description()));
-    builtin.insert("abbr", BuiltinSpec::new(abbr::command, abbr::description()));
-    builtin.insert(
-        "alias",
-        BuiltinSpec::new(alias::command, alias::description()),
-    );
-    builtin.insert(
-        "export",
-        BuiltinSpec::new(export::command, export::description()),
-    );
-
-    builtin.insert(
-        "agent",
-        BuiltinSpec::new(
-            agent::command,
-            "Run, resume, inspect or cancel a durable agent task",
+    let new = BuiltinSpec::new;
+    let new_async = BuiltinSpec::new_async;
+    let entries: &[(&str, BuiltinSpec)] = &[
+        // Core shell commands
+        ("exit", new(exit, exit_description())),
+        ("cd", new(cd::command, cd::description())),
+        ("history", new(history::command, history::description())),
+        // Navigation and directory management
+        ("z", new(z::command, z::description())),
+        (
+            "pushd",
+            new(dirstack::pushd_command, dirstack::pushd_description()),
         ),
-    );
-
-    // AI integration commands
-
-    builtin.insert(
-        "chat_prompt",
-        BuiltinSpec::new(chatgpt::chat_prompt, chatgpt::chat_prompt_description()),
-    );
-    builtin.insert(
-        "chat_model",
-        BuiltinSpec::new(chatgpt::chat_model, chatgpt::chat_model_description()),
-    );
-    builtin.insert(
-        "chat_reset",
-        BuiltinSpec::new(chatgpt::chat_reset, chatgpt::chat_reset_description()),
-    );
-    builtin.insert(
-        "chat_status",
-        BuiltinSpec::new(chatgpt::chat_status, chatgpt::chat_status_description()),
-    );
-    builtin.insert(
-        "skill",
-        BuiltinSpec::new(skill::command, skill::description()),
-    );
-
-    // Safety commands
-    builtin.insert(
-        "safe-run",
-        BuiltinSpec::new(safe_run::command, safe_run::description()),
-    );
-    builtin.insert(
-        "ai-watch",
-        BuiltinSpec::new(ai_watch::command, ai_watch::description()),
-    );
-
-    builtin.insert(
-        "comp-gen",
-        BuiltinSpec::new_async(
-            comp_gen::command,
-            comp_gen::command_async,
-            comp_gen::description(),
+        (
+            "popd",
+            new(dirstack::popd_command, dirstack::popd_description()),
         ),
-    );
-    builtin.insert(
-        "output-gen",
-        BuiltinSpec::new_async(
-            output_gen::command,
-            output_gen::command_async,
-            output_gen::description(),
+        (
+            "dirs",
+            new(dirstack::dirs_command, dirstack::dirs_description()),
         ),
-    );
-
-    // Git integration commands
-    builtin.insert(
-        "ai-commit",
-        BuiltinSpec::new(commit_ai::command, commit_ai::description()),
-    );
-    // Alias for ai-commit
-    builtin.insert(
-        "aic",
-        BuiltinSpec::new(commit_ai::command, commit_ai::description()),
-    );
-
-    builtin.insert("glog", BuiltinSpec::new(glog::command, glog::description()));
-    builtin.insert("gco", BuiltinSpec::new(gco::command, gco::description()));
-    builtin.insert("ga", BuiltinSpec::new(ga::command, ga::description()));
-    builtin.insert("gwt", BuiltinSpec::new(gwt::command, gwt::description()));
-    builtin.insert(
-        "gh-notify",
-        BuiltinSpec::new(gh_notify::command, gh_notify::description()),
-    );
-    builtin.insert("gpr", BuiltinSpec::new(gpr::command, gpr::description()));
-
-    // Utility commands
-    builtin.insert(
-        "add_path",
-        BuiltinSpec::new(add_path::command, add_path::description()),
-    );
-    builtin.insert(
-        "serve",
-        BuiltinSpec::new(serve::command, serve::description()),
-    );
-    builtin.insert("uuid", BuiltinSpec::new(uuid::command, uuid::description()));
-    builtin.insert("dmv", BuiltinSpec::new(dmv::command, dmv::description()));
-    builtin.insert(
-        "reload",
-        BuiltinSpec::new(reload::command, reload::description()),
-    );
-    builtin.insert("help", BuiltinSpec::new(help::command, help::description()));
-
-    // Emacs integration commands
-    builtin.insert(
-        "eview",
-        BuiltinSpec::new(eview::command, eview::description()),
-    );
-    builtin.insert(
-        "magit",
-        BuiltinSpec::new(magit::command, magit::description()),
-    );
-    builtin.insert(
-        "eproject",
-        BuiltinSpec::new(eproject::command, eproject::description()),
-    );
-
-    // Notebook commands
-    builtin.insert(
-        "notebook-play",
-        BuiltinSpec::new(notebook_play::command, notebook_play::description()),
-    );
-
-    // Performance and statistics commands
-    builtin.insert(
-        "timing",
-        BuiltinSpec::new(command_timing::command, command_timing::description()),
-    );
-
-    // Output history command
-    builtin.insert("out", BuiltinSpec::new(out::command, out::description()));
-    builtin.insert(
-        "__dsh_print_last_stdout",
-        BuiltinSpec::new(out::print_last_stdout, out::print_last_stdout_description()),
-    );
-
-    builtin.insert("tm", BuiltinSpec::new(tm::command, tm::description()));
-    builtin.insert(
-        "blocks",
-        BuiltinSpec::new_async(
-            blocks::command,
-            blocks::command_async,
-            blocks::description(),
+        // Job control commands
+        ("sched", new(sched::command, sched::description())),
+        ("jobs", new(jobs::command, jobs::description())),
+        ("fg", new(fg::command, fg::description())),
+        ("bg", new(bg::command, bg::description())),
+        // Include command
+        ("include", new(include::command, include::description())),
+        // Scripting and configuration
+        ("lisp", new(lisp::command, lisp::description())),
+        ("set", new(set::command, set::description())),
+        ("var", new(var::command, var::description())),
+        ("read", new(read::command, read::description())),
+        ("abbr", new(abbr::command, abbr::description())),
+        ("alias", new(alias::command, alias::description())),
+        ("export", new(export::command, export::description())),
+        (
+            "agent",
+            new(
+                agent::command,
+                "Run, resume, inspect or cancel a durable agent task",
+            ),
         ),
-    );
+        // AI integration commands
+        (
+            "chat_prompt",
+            new(chatgpt::chat_prompt, chatgpt::chat_prompt_description()),
+        ),
+        (
+            "chat_model",
+            new(chatgpt::chat_model, chatgpt::chat_model_description()),
+        ),
+        (
+            "chat_reset",
+            new(chatgpt::chat_reset, chatgpt::chat_reset_description()),
+        ),
+        (
+            "chat_status",
+            new(chatgpt::chat_status, chatgpt::chat_status_description()),
+        ),
+        ("skill", new(skill::command, skill::description())),
+        // Safety commands
+        ("safe-run", new(safe_run::command, safe_run::description())),
+        ("ai-watch", new(ai_watch::command, ai_watch::description())),
+        (
+            "comp-gen",
+            new_async(
+                comp_gen::command,
+                comp_gen::command_async,
+                comp_gen::description(),
+            ),
+        ),
+        (
+            "output-gen",
+            new_async(
+                output_gen::command,
+                output_gen::command_async,
+                output_gen::description(),
+            ),
+        ),
+        // Git integration commands
+        (
+            "ai-commit",
+            new(commit_ai::command, commit_ai::description()),
+        ),
+        // Alias for ai-commit
+        ("aic", new(commit_ai::command, commit_ai::description())),
+        ("glog", new(glog::command, glog::description())),
+        ("gco", new(gco::command, gco::description())),
+        ("ga", new(ga::command, ga::description())),
+        ("gwt", new(gwt::command, gwt::description())),
+        (
+            "gh-notify",
+            new(gh_notify::command, gh_notify::description()),
+        ),
+        ("gpr", new(gpr::command, gpr::description())),
+        // Utility commands
+        ("add_path", new(add_path::command, add_path::description())),
+        ("serve", new(serve::command, serve::description())),
+        ("uuid", new(uuid::command, uuid::description())),
+        ("dmv", new(dmv::command, dmv::description())),
+        ("reload", new(reload::command, reload::description())),
+        ("help", new(help::command, help::description())),
+        // Emacs integration commands
+        ("eview", new(eview::command, eview::description())),
+        ("magit", new(magit::command, magit::description())),
+        ("eproject", new(eproject::command, eproject::description())),
+        // Notebook commands
+        (
+            "notebook-play",
+            new(notebook_play::command, notebook_play::description()),
+        ),
+        // Performance and statistics commands
+        (
+            "timing",
+            new(command_timing::command, command_timing::description()),
+        ),
+        // Output history command
+        ("out", new(out::command, out::description())),
+        (
+            "__dsh_print_last_stdout",
+            new(out::print_last_stdout, out::print_last_stdout_description()),
+        ),
+        ("tm", new(tm::command, tm::description())),
+        (
+            "blocks",
+            new_async(
+                blocks::command,
+                blocks::command_async,
+                blocks::description(),
+            ),
+        ),
+        // Dashboard command
+        (
+            "dashboard",
+            new(dashboard::command, dashboard::description()),
+        ),
+        ("doctor", new(doctor::command, doctor::description())),
+        // Project Management command
+        ("procs", new(procs::command, procs::description())),
+        ("project", new(project::command, project::description())),
+        ("pm", new(project::command, project::description())),
+        ("pj", new(project::command, project::description())),
+        // MCP management command
+        ("mcp", new(mcp::command, mcp::description())),
+        // Snippet management command
+        ("snippet", new(snippet::command, snippet::description())),
+        // Bookmark management command
+        ("bookmark", new(bookmark::command, bookmark::description())),
+        // Task runner command
+        ("task", new(task::command, task::description())),
+        // Trigger command
+        ("trigger", new(trigger::command, trigger::description())),
+    ];
 
-    // Dashboard command
-    builtin.insert(
-        "dashboard",
-        BuiltinSpec::new(dashboard::command, dashboard::description()),
-    );
-    builtin.insert(
-        "doctor",
-        BuiltinSpec::new(doctor::command, doctor::description()),
-    );
-
-    // Project Management command
-    builtin.insert(
-        "procs",
-        BuiltinSpec::new(procs::command, procs::description()),
-    );
-
-    builtin.insert(
-        "project",
-        BuiltinSpec::new(project::command, project::description()),
-    );
-    builtin.insert(
-        "pm",
-        BuiltinSpec::new(project::command, project::description()),
-    );
-    builtin.insert(
-        "pj",
-        BuiltinSpec::new(project::command, project::description()),
-    );
-
-    // MCP management command
-    builtin.insert("mcp", BuiltinSpec::new(mcp::command, mcp::description()));
-
-    // Snippet management command
-    builtin.insert(
-        "snippet",
-        BuiltinSpec::new(snippet::command, snippet::description()),
-    );
-
-    // Bookmark management command
-    builtin.insert(
-        "bookmark",
-        BuiltinSpec::new(bookmark::command, bookmark::description()),
-    );
-
-    // Task runner command
-    builtin.insert("task", BuiltinSpec::new(task::command, task::description()));
-
-    // Trigger command
-    builtin.insert(
-        "trigger",
-        BuiltinSpec::new(trigger::command, trigger::description()),
-    );
-
+    let mut builtin = HashMap::with_capacity(entries.len());
+    builtin.extend(entries.iter().copied());
     builtin
 });
 

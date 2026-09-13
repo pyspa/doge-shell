@@ -77,7 +77,6 @@ oversized	dsh-builtin/src/chatgpt/tool/execute.rs
 oversized	dsh-builtin/src/chatgpt/tool/mod.rs
 oversized	dsh-builtin/src/comp_gen.rs
 oversized	dsh-builtin/src/gwt.rs
-oversized	dsh-builtin/src/lib.rs
 oversized	dsh-builtin/src/output_gen.rs
 oversized	dsh-builtin/src/project.rs
 oversized	dsh-builtin/src/project_context.rs

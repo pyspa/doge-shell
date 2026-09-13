@@ -94,7 +94,7 @@ pub(super) fn collect(
             cached_only,
         ),
         "wireguard.config" => {
-            collector.collect_wireguard_config_candidates(current_dir, current_token)
+            collector.collect_wireguard_config_candidates(current_dir, current_token, cached_only)
         }
         "sysctl.key" => collector.collect_sysctl_key_candidates(current_token, cached_only),
         "system.process_name" => collector.collect_process_name_candidates(

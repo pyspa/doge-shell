@@ -45,12 +45,12 @@ dsh/src/completion/dynamic/specs.rs	/usr/share/kbd/keymaps
 dsh/src/completion/dynamic/specs.rs	/var/log/journal
 dsh/src/completion/dynamic/system.rs	/System/Library/Filesystems
 dsh/src/completion/dynamic/system.rs	/etc/fstab
+dsh/src/completion/dynamic/system.rs	/etc/wireguard
 dsh/src/completion/dynamic/system.rs	/lib/modules
 dsh/src/completion/dynamic/system.rs	/proc/filesystems
 dsh/src/completion/dynamic/system.rs	/proc/swaps
 dsh/src/completion/dynamic/system.rs	/proc/sys
 dsh/src/completion/dynamic/tests.rs	/etc/fstab
-dsh/src/completion/dynamic/value_collectors.rs	/etc/wireguard
 dsh/src/completion/dynamic/value_collectors.rs	/lib/modules
 dsh/src/completion/dynamic/value_collectors.rs	/proc/modules
 dsh/src/completion/dynamic/value_collectors.rs	/proc/sys

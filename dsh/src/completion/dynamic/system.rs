@@ -4,7 +4,8 @@
 //!
 //! Where each loader stands on the two supported platforms:
 //!
-//! - Paired `#[cfg]` arms: `load_filesystem_types`, `load_sysctl_keys`.
+//! - Paired `#[cfg]` arms: `load_filesystem_types`, `load_sysctl_keys`,
+//!   `wireguard_config_dirs`.
 //! - Delegated to a generator that is itself paired, so no arm belongs here:
 //!   `load_network_interfaces`, `load_process_names`, `load_process_ids`.
 //! - Portable as written: `load_fstab_mountpoints` (macOS reads `/etc/fstab`
@@ -15,11 +16,6 @@
 //!   `load_loaded_kernel_module_names` (`/proc/modules`). This is tracked debt,
 //!   not a decision -- macOS lists loaded extensions through
 //!   `kmutil showloaded`/`kextstat`, so a second arm is possible and missing.
-//!
-//! `collect_wireguard_config_names_from_dirs` takes its directories as an
-//! argument and is portable; the Linux-only `/etc/wireguard` literal its caller
-//! passes lives in `value_collectors.rs` and has no macOS arm either (macOS
-//! keeps those configs under the Homebrew prefix).
 //!
 //! Anything added here needs its second arm from the start -- see
 //! `docs/ai/skills/doge-shell-repo/references/platform-support.md`.
@@ -401,6 +397,25 @@ pub(super) fn collect_kernel_module_names(dir: &Path, values: &mut Vec<String>) 
             values.push(module_name.replace('-', "_"));
         }
     }
+}
+
+/// Where `wg-quick` keeps `<name>.conf`.
+///
+/// Paired because the directory differs between the two supported platforms:
+/// Homebrew builds `wg-quick` with `$(brew --prefix)/etc/wireguard`, and the
+/// binary cannot tell which prefix installed it, so both are offered. Without
+/// the macOS arm this completion was silently empty there.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn wireguard_config_dirs() -> Vec<PathBuf> {
+    vec![PathBuf::from("/etc/wireguard")]
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn wireguard_config_dirs() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/opt/homebrew/etc/wireguard"),
+        PathBuf::from("/usr/local/etc/wireguard"),
+    ]
 }
 
 pub(super) fn collect_wireguard_config_names_from_dirs<'a>(

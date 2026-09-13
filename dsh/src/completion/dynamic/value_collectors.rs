@@ -176,21 +176,34 @@ impl DynamicCompletionProvider {
         )
     }
 
+    /// Goes through the cache engine like every other provider, so the loader
+    /// runs off the calling thread. It used to `read_dir` inline, which the
+    /// ghost-text path reached on every keystroke with `CachePolicy::CachedOnly`
+    /// -- the one policy that promises not to touch the filesystem at all.
     pub(super) fn collect_wireguard_config_candidates(
         &self,
         current_dir: &Path,
         current_token: &str,
+        cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        collect_wireguard_config_names_from_dirs([Path::new("/etc/wireguard"), current_dir])
-            .into_iter()
-            .filter(|value| matches_prefix(current_token, value))
-            .map(|value| EnhancedCandidate {
-                text: value,
-                description: Some("WireGuard config".to_string()),
-                candidate_type: CandidateType::Argument,
-                priority: 130,
-            })
-            .collect()
+        // The cwd is one of the scanned directories, so it has to be part of
+        // the cache key too or two directories would share a single entry.
+        let scope = canonicalize_path(current_dir);
+        let mut dirs = wireguard_config_dirs();
+        dirs.push(scope.clone());
+        self.collect_cached_value_candidates(
+            "wg-quick",
+            "config",
+            scope,
+            current_token,
+            "WireGuard config",
+            cached_only,
+            move || {
+                Ok(collect_wireguard_config_names_from_dirs(
+                    dirs.iter().map(PathBuf::as_path),
+                ))
+            },
+        )
     }
 
     pub(crate) fn collect_tcpdump_candidates(

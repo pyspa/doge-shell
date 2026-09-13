@@ -31,6 +31,7 @@ mod runtime;
 mod specs;
 mod worker;
 
+use external::pacman_sync_mode;
 pub(crate) use runtime::CompletionRuntime;
 use specs::CORE_LOCAL_SPECS;
 
@@ -707,24 +708,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(crate) fn collect_pacman_candidates(
-        &self,
-        parsed_command_line: &ParsedCommandLine,
-        current_dir: &Path,
-        cache_policy: CachePolicy,
-    ) -> Vec<EnhancedCandidate> {
-        let cached_only = cache_policy.is_cached_only();
-        let Some(sync) = pacman_sync_mode(parsed_command_line) else {
-            return Vec::new();
-        };
-        self.collect_pacman_package_candidates(
-            current_dir,
-            parsed_command_line.current_token.as_str(),
-            sync,
-            cached_only,
-        )
-    }
-
     pub(crate) fn collect_mount_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -862,36 +845,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    fn collect_pacman_package_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        sync: bool,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let (kind, args, description) = if sync {
-            ("sync-package", vec!["-Slq"], "pacman sync package")
-        } else {
-            ("installed-package", vec!["-Qq"], "installed pacman package")
-        };
-        let command_path = self.resolve_command_path("pacman");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            "pacman",
-            kind,
-            canonicalize_path(&current_dir),
-            current_token,
-            description,
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                run_command_lines(&command_path, &args, &current_dir)
-            },
-        )
-    }
-
     fn collect_mountpoint_candidates(
         &self,
         current_dir: &Path,
@@ -1001,35 +954,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    fn collect_apt_installed_package_candidates(
-        &self,
-        current_dir: &Path,
-        current_token: &str,
-        command_name: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("dpkg-query");
-        let current_dir = current_dir.to_path_buf();
-        self.collect_cached_value_candidates(
-            command_name,
-            "installed-package",
-            PathBuf::from("/var/lib/dpkg/status"),
-            current_token,
-            "installed deb package",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                Ok(parse_package_lines(&run_command_lines(
-                    &command_path,
-                    &["-W", "-f=${binary:Package}\\n"],
-                    &current_dir,
-                )?))
-            },
-        )
-    }
-
     fn collect_wireguard_config_candidates(
         &self,
         current_dir: &Path,
@@ -1069,40 +993,6 @@ impl DynamicCompletionProvider {
             "network interface",
             cached_only,
             || Ok(load_network_interfaces()),
-        )
-    }
-
-    /// Homebrew-installed formulae and casks (`brew list`), for
-    /// `brew uninstall`/`brew upgrade` completion. Global (no project scope).
-    fn collect_brew_installed_candidates(
-        &self,
-        current_token: &str,
-        cached_only: bool,
-    ) -> Vec<EnhancedCandidate> {
-        let command_path = self.resolve_command_path("brew");
-        // brew is machine-global; use a fixed scope so the cache is shared
-        // across working directories.
-        let scope_dir = PathBuf::from("/");
-        self.collect_cached_value_candidates(
-            "brew",
-            "installed",
-            scope_dir,
-            current_token,
-            "brew installed",
-            cached_only,
-            move || {
-                let Some(command_path) = command_path else {
-                    return Ok(Vec::new());
-                };
-                let mut values =
-                    run_command_lines(&command_path, &["list", "--formula"], Path::new("/"))?;
-                if let Ok(casks) =
-                    run_command_lines(&command_path, &["list", "--cask"], Path::new("/"))
-                {
-                    values.extend(casks);
-                }
-                Ok(dedup_sorted(values))
-            },
         )
     }
 
@@ -1974,53 +1864,6 @@ fn provider_diagnostics_lines(cache: &ProjectDynamicCache) -> Vec<String> {
             )
         })
         .collect()
-}
-
-/// The pacman operation the command line selects, as its single upper-case
-/// letter.
-///
-/// pacman spells operations as short flags that are routinely bundled with
-/// their modifiers (`-Rns`, `-Syu`, `-Qi`) or written out in long form
-/// (`--remove`). Matching `-R`/`-S` literally, as this used to, left every
-/// bundled form with no candidates at all.
-fn pacman_operation(parsed_command_line: &ParsedCommandLine) -> Option<char> {
-    const OPERATIONS: [char; 7] = ['S', 'R', 'Q', 'U', 'F', 'D', 'T'];
-
-    parsed_command_line
-        .subcommand_path
-        .iter()
-        .chain(parsed_command_line.raw_args.iter())
-        // The token under the cursor is still being typed: `pacman -R<TAB>` is
-        // completing the flag itself, not a package name for it.
-        .filter(|token| token.as_str() != parsed_command_line.current_token)
-        .find_map(|token| match token.as_str() {
-            "--sync" => Some('S'),
-            "--remove" => Some('R'),
-            "--query" => Some('Q'),
-            "--upgrade" => Some('U'),
-            "--files" => Some('F'),
-            "--database" => Some('D'),
-            "--deptest" => Some('T'),
-            value if value.starts_with("--") => None,
-            value => value
-                .strip_prefix('-')
-                .and_then(|flags| flags.chars().next())
-                .filter(|flag| OPERATIONS.contains(flag)),
-        })
-}
-
-/// Whether pacman package candidates should come from the sync repositories
-/// (`true`, for installs) or from the local database (`false`).
-///
-/// Only the local database lists AUR/foreign packages, so every operation that
-/// acts on already-installed packages must land on `false`. `None` means the
-/// operation takes no package name and should offer nothing.
-pub(crate) fn pacman_sync_mode(parsed_command_line: &ParsedCommandLine) -> Option<bool> {
-    match pacman_operation(parsed_command_line)? {
-        'S' => Some(true),
-        'R' | 'Q' | 'F' | 'D' | 'T' => Some(false),
-        _ => None,
-    }
 }
 
 fn cached_value_matches(values: Vec<String>, current_token: &str) -> Vec<String> {

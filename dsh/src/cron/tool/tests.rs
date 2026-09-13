@@ -285,3 +285,191 @@ fn ack_needs_a_numeric_incident_id() {
     .unwrap_err();
     assert!(error.to_string().contains("must be a number"));
 }
+
+fn run_a_job_named(store: &SqliteCronStore, name: &str, cwd: &str, stdout: &str) {
+    use dsh_types::cron::job::{RunOutcome, RunState, RunTrigger};
+
+    create(
+        store,
+        &CronToolRequest {
+            name: Some(name.to_string()),
+            schedule: Some("1h".to_string()),
+            command: Some("echo hi".to_string()),
+            cwd: Some(cwd.to_string()),
+            ..request()
+        },
+    )
+    .expect("create");
+    // The tool always registers a job paused (see `create`'s own doc
+    // comment); a paused job is never claimed, `--paused` or not, so it has
+    // to be resumed before this test can drive a run through it.
+    store.set_paused(name, false, 0).expect("resume");
+    store.trigger(name, 0).expect("trigger");
+    let claimed = store
+        .claim_due(0, "owner", 10, RunTrigger::Tick)
+        .expect("claim");
+    store.start(&claimed[0].run_id, 0).expect("start");
+    store
+        .complete(
+            &claimed[0].run_id,
+            &RunOutcome {
+                state: RunState::Succeeded,
+                stdout: stdout.to_string(),
+                stderr: "trouble\n".to_string(),
+                digest: Some(1),
+                ..Default::default()
+            },
+            1,
+        )
+        .expect("complete");
+}
+
+#[test]
+fn logs_returns_the_stored_streams() {
+    let (_dir, store) = store();
+    run_a_job_named(&store, "digest", "/tmp", "hello\n");
+
+    let shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    let value = logs(
+        &shell,
+        &store,
+        &CronToolRequest {
+            job: Some("digest".to_string()),
+            ..request()
+        },
+    )
+    .expect("logs");
+    assert_eq!(value["stdout"], json!("hello\n"));
+    assert_eq!(value["stderr"], json!("trouble\n"));
+}
+
+/// The same boundary a write action's grant check enforces
+/// (`grant_exceeds_task` in `dsh-builtin/src/chatgpt/tool/cron.rs`), applied
+/// here to a read: a task must not be able to read an unrelated job's
+/// output just because it happens to know the job's name.
+#[test]
+fn a_job_outside_the_calling_tasks_grant_is_refused() {
+    use dsh_builtin::agent::AgentRuntime;
+    use dsh_builtin::shell_capabilities::AgentTaskStore;
+    use dsh_types::agent::{AgentTask, TaskGrant, TaskStatus};
+
+    let (_dir, store) = store();
+    run_a_job_named(&store, "digest", "/tmp", "hi\n");
+
+    let agent_dir = tempfile::tempdir().expect("tempdir");
+    // Granted only a narrower directory of its own - "/tmp" (the job's cwd)
+    // is not inside it.
+    let granted_root = agent_dir.path().join("workspace");
+    std::fs::create_dir_all(&granted_root).expect("mkdir");
+
+    let task = AgentTask {
+        id: "task-1".to_string(),
+        goal: "do something unrelated".to_string(),
+        root: granted_root.clone(),
+        status: TaskStatus::Running,
+        grant: TaskGrant {
+            read_roots: vec![granted_root.canonicalize().expect("canonicalize")],
+            ..Default::default()
+        },
+        criteria: vec![],
+        plan: vec![],
+        progress: String::new(),
+        token_budget: 100,
+        tokens_used: 0,
+        time_budget_ms: 1_000,
+        elapsed_ms: 0,
+        stop_reason: None,
+        checkpoint: None,
+        pending_operation: None,
+        created_at: 0,
+    };
+    let task_store = std::sync::Arc::new(
+        crate::agent::SqliteTaskStore::open(&agent_dir.path().join("agent")).expect("open"),
+    );
+    task_store.save(&task, None).expect("save");
+
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    shell.agent_runtime = Some(std::sync::Arc::new(parking_lot::Mutex::new(
+        AgentRuntime::new(task, task_store),
+    )));
+
+    let error = logs(
+        &shell,
+        &store,
+        &CronToolRequest {
+            job: Some("digest".to_string()),
+            ..request()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("outside this task's own"),
+        "{error}"
+    );
+}
+
+/// The regression this guards: `job_cwd_within` used to fail *open*
+/// (`Err(_) => true`) on an unresolvable `cwd`, on the mistaken assumption
+/// that some later step would still catch it - `logs` has no such later
+/// step, so that let a task read any job whose directory happened to be
+/// gone, regardless of its own grant.
+#[test]
+fn a_job_whose_cwd_no_longer_resolves_is_refused_under_a_task() {
+    use dsh_builtin::agent::AgentRuntime;
+    use dsh_builtin::shell_capabilities::AgentTaskStore;
+    use dsh_types::agent::{AgentTask, TaskGrant, TaskStatus};
+
+    let (_dir, store) = store();
+    let gone = tempfile::tempdir().expect("tempdir");
+    let gone_path = gone.path().join("job-cwd");
+    std::fs::create_dir_all(&gone_path).expect("mkdir");
+    run_a_job_named(&store, "digest", &gone_path.to_string_lossy(), "hi\n");
+    // The job's own directory is gone by the time `logs` runs.
+    std::fs::remove_dir_all(&gone_path).expect("rmdir");
+
+    let agent_dir = tempfile::tempdir().expect("tempdir");
+    let task = AgentTask {
+        id: "task-1".to_string(),
+        goal: "do something else".to_string(),
+        root: agent_dir.path().to_path_buf(),
+        status: TaskStatus::Running,
+        // The grant is irrelevant here - an unresolvable `cwd` must be
+        // refused regardless of what is granted, not read as "anything
+        // goes".
+        grant: TaskGrant::default(),
+        criteria: vec![],
+        plan: vec![],
+        progress: String::new(),
+        token_budget: 100,
+        tokens_used: 0,
+        time_budget_ms: 1_000,
+        elapsed_ms: 0,
+        stop_reason: None,
+        checkpoint: None,
+        pending_operation: None,
+        created_at: 0,
+    };
+    let task_store = std::sync::Arc::new(
+        crate::agent::SqliteTaskStore::open(&agent_dir.path().join("agent")).expect("open"),
+    );
+    task_store.save(&task, None).expect("save");
+
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    shell.agent_runtime = Some(std::sync::Arc::new(parking_lot::Mutex::new(
+        AgentRuntime::new(task, task_store),
+    )));
+
+    let error = logs(
+        &shell,
+        &store,
+        &CronToolRequest {
+            job: Some("digest".to_string()),
+            ..request()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("outside this task's own"),
+        "an unresolvable cwd must be refused, not treated as in-grant: {error}"
+    );
+}

@@ -1,5 +1,5 @@
 use super::*;
-use dsh_types::cron::job::{AgentJobSpec, RunOutcome, RunState, RunTrigger};
+use dsh_types::cron::job::{AgentJobSpec, RunOutcome, RunSelector, RunState, RunTrigger};
 use tempfile::TempDir;
 
 const NOW: i64 = 1_717_234_200;
@@ -1159,4 +1159,301 @@ fn editing_only_the_schedule_also_reclamps_an_agent_jobs_stored_time_budget() {
         agent.token_budget, 50_000,
         "the rest of the payload survives"
     );
+}
+
+#[test]
+fn run_output_returns_the_full_stream_not_just_the_preview() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+
+    let long_stdout = "line one\n".to_string() + &"x".repeat(200);
+    let mut result = outcome(RunState::Succeeded);
+    result.stdout = long_stdout.clone();
+    result.stderr = "trouble".to_string();
+    store
+        .complete(&claimed[0].run_id, &result, NOW + 1)
+        .unwrap();
+
+    let output = store
+        .run_output(&RunSelector::Latest("probe".to_string()))
+        .unwrap();
+    assert_eq!(output.stdout, long_stdout);
+    assert_eq!(output.stderr, "trouble");
+    assert_eq!(output.run.state, RunState::Succeeded);
+    // `preview` (what `cron history` shows) is only the first line, capped at
+    // 120 characters - `run_output` must not be limited the same way.
+    assert_ne!(output.run.preview, long_stdout);
+}
+
+#[test]
+fn run_output_by_id_finds_an_older_run_not_just_the_latest() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+
+    make_due(&store, "probe", NOW);
+    let first = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&first[0].run_id, NOW).unwrap();
+    let mut first_outcome = outcome(RunState::Succeeded);
+    first_outcome.stdout = "first\n".to_string();
+    store
+        .complete(&first[0].run_id, &first_outcome, NOW + 1)
+        .unwrap();
+
+    make_due(&store, "probe", NOW + 3600);
+    let second = store
+        .claim_due(NOW + 3600, "owner", 10, RunTrigger::Tick)
+        .unwrap();
+    store.start(&second[0].run_id, NOW + 3600).unwrap();
+    let mut second_outcome = outcome(RunState::Succeeded);
+    second_outcome.stdout = "second\n".to_string();
+    store
+        .complete(&second[0].run_id, &second_outcome, NOW + 3601)
+        .unwrap();
+
+    let latest = store
+        .run_output(&RunSelector::Latest("probe".to_string()))
+        .unwrap();
+    assert_eq!(latest.stdout, "second\n");
+
+    let older = store
+        .run_output(&RunSelector::Id(first[0].run_id.clone()))
+        .unwrap();
+    assert_eq!(older.stdout, "first\n");
+}
+
+#[test]
+fn run_output_accepts_a_unique_prefix_and_refuses_an_ambiguous_one() {
+    let (dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+
+    make_due(&store, "probe", NOW);
+    let first = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&first[0].run_id, NOW).unwrap();
+    store
+        .complete(&first[0].run_id, &outcome(RunState::Succeeded), NOW + 1)
+        .unwrap();
+
+    make_due(&store, "probe", NOW + 3600);
+    let second = store
+        .claim_due(NOW + 3600, "owner", 10, RunTrigger::Tick)
+        .unwrap();
+    store.start(&second[0].run_id, NOW + 3600).unwrap();
+    store
+        .complete(&second[0].run_id, &outcome(RunState::Succeeded), NOW + 3601)
+        .unwrap();
+
+    // Forced to share a prefix - only reachable in practice via an
+    // astronomically unlikely UUID collision, so the test rewrites the ids
+    // directly rather than depending on chance.
+    let connection = raw(&dir);
+    connection
+        .execute(
+            "UPDATE runs SET id = 'shared-aaa' WHERE id = ?1",
+            [&first[0].run_id],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE runs SET id = 'shared-bbb' WHERE id = ?1",
+            [&second[0].run_id],
+        )
+        .unwrap();
+
+    let error = store
+        .run_output(&RunSelector::Id("shared".to_string()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("more than one"), "{error}");
+
+    let unique = store
+        .run_output(&RunSelector::Id("shared-aaa".to_string()))
+        .unwrap();
+    assert_eq!(unique.run.id, "shared-aaa");
+}
+
+#[test]
+fn run_output_clamps_at_the_stream_limit() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    let mut result = outcome(RunState::Succeeded);
+    result.stdout = "x".repeat(20_000);
+    store
+        .complete(&claimed[0].run_id, &result, NOW + 1)
+        .unwrap();
+
+    let output = store
+        .run_output(&RunSelector::Latest("probe".to_string()))
+        .unwrap();
+    assert!(output.stdout.len() < 20_000, "{}", output.stdout.len());
+    assert!(output.stdout.contains("[truncated]"), "{}", output.stdout);
+}
+
+#[test]
+fn run_output_on_a_job_with_no_finished_run_is_a_clear_error() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    let error = store
+        .run_output(&RunSelector::Latest("probe".to_string()))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no finished run"), "{error}");
+}
+
+#[test]
+fn a_legacy_row_with_null_streams_reads_as_empty_not_an_error() {
+    let (dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    store
+        .complete(&claimed[0].run_id, &outcome(RunState::Succeeded), NOW + 1)
+        .unwrap();
+
+    // A row from before `stdout`/`stderr` existed, or one written by an
+    // older `dsh` that never populated them.
+    raw(&dir)
+        .execute(
+            "UPDATE runs SET stdout = NULL, stderr = NULL WHERE id = ?1",
+            [&claimed[0].run_id],
+        )
+        .unwrap();
+
+    let output = store
+        .run_output(&RunSelector::Latest("probe".to_string()))
+        .unwrap();
+    assert_eq!(output.stdout, "");
+    assert_eq!(output.stderr, "");
+}
+
+/// The bug this guards against: `complete_run`'s `agent_task_id = ?9` used to
+/// overwrite whatever `attach_agent_task` had recorded at start with
+/// whatever the outcome carried - `None` for every early-failure path
+/// (config/budget/lock) that never got as far as starting the agent task -
+/// erasing the one thing that would have made a lease-lost run findable.
+#[test]
+fn complete_does_not_clear_an_agent_task_id_recorded_at_start() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    store
+        .attach_agent_task(&claimed[0].run_id, "task-123")
+        .unwrap();
+
+    let mut result = outcome(RunState::Failed);
+    result.agent_task_id = None;
+    store
+        .complete(&claimed[0].run_id, &result, NOW + 1)
+        .unwrap();
+
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    assert_eq!(runs[0].agent_task_id.as_deref(), Some("task-123"));
+}
+
+/// The other half of the watchdog-kill story: a run whose process group was
+/// killed before it could ever call `complete` must still be traceable to
+/// its agent task through `reap_expired_leases`.
+#[test]
+fn a_run_reaped_as_a_lost_lease_keeps_its_agent_task_id() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store
+        .claim_due(NOW, "dead-owner", 10, RunTrigger::Tick)
+        .unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    store
+        .attach_agent_task(&claimed[0].run_id, "task-456")
+        .unwrap();
+
+    let later = NOW + 121;
+    store.reap_expired_leases(later).unwrap();
+
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    assert_eq!(runs[0].agent_task_id.as_deref(), Some("task-456"));
+}
+
+#[test]
+fn attach_agent_task_is_visible_before_the_run_finishes() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    store
+        .attach_agent_task(&claimed[0].run_id, "task-789")
+        .unwrap();
+
+    let runs = store
+        .runs(&RunQuery {
+            finished_only: false,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(runs[0].agent_task_id.as_deref(), Some("task-789"));
+}
+
+/// The bug this guards against: `RunSelector::Id`'s query used to build its
+/// `LIKE` pattern from the caller-supplied prefix with no escaping, so a
+/// literal `%` in it (not a real id prefix - just what someone typed) was
+/// read as a wildcard matching every run in the store instead of failing
+/// with "no run with this id".
+#[test]
+fn run_output_by_id_treats_wildcard_characters_in_the_prefix_literally() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+    store
+        .complete(&claimed[0].run_id, &outcome(RunState::Succeeded), NOW + 1)
+        .unwrap();
+
+    let error = store
+        .run_output(&RunSelector::Id("%".to_string()))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("no run with this id"),
+        "a literal '%' must not match every run: {error}"
+    );
+}
+
+/// The bug this guards against: `attach_agent_task`'s `UPDATE` never checked
+/// its affected-row count, so a mismatched `run_id` would silently succeed
+/// without recording anything - identical, from the caller's side, to a
+/// real success, but quietly losing the one thing that makes a
+/// watchdog-killed run findable again.
+#[test]
+fn attach_agent_task_errors_instead_of_silently_no_opping_on_an_unknown_run_id() {
+    let (_dir, store) = store();
+    assert!(store.attach_agent_task("no-such-run", "task-1").is_err());
 }

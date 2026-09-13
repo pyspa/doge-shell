@@ -95,6 +95,28 @@ cron notepad digest --clear    # 消去
 - grant（`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`）は**呼び出し中のタスク自身の grant を超えられません**。超えるリクエストは確認を挟まず即座に拒否されます。
 - `create` 以外の書き込み系（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は毎回人に確認します。無人タスク中はこれが `TaskStatus::InputRequired` になり、`cron incidents` ではなくタスク自身が保留になります。
 - notepad 用の action はありません — notepad ディレクトリは既にジョブの grant に入っているため、既存の `read_file`/`edit` で足ります。
+- `logs` は他の read 系 action と異なり grant ゲートがあります。無人タスク中に呼ぶと、対象ジョブの `cwd` が呼び出しタスク自身の `read`/`write` grant に含まれない限り拒否されます — `history` は 120 文字の preview しか出しませんが `logs` はジョブの記録済み出力を丸ごと返すため、無関係なジョブの中身を名前だけ知っていれば読めてしまう経路を塞いでいます。`!` チャット（タスクの外）からは制限なく呼べます。
+
+## 実行結果の確認
+
+`runs` テーブルには `stdout`/`stderr` 列（マスク済み、各 8KiB にクランプ）が最初からありましたが、それを読み出す口は `cron logs` を追加するまで存在しませんでした。
+
+```sh
+cron logs digest                # 最新の finished run の stdout/stderr を全文表示
+cron logs digest --run <id>     # 特定の run（history の run 列、一意な prefix でも可）
+cron logs digest --stdout       # stdout だけ（パイプ向け、見出し無し）
+cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "..."}
+```
+
+- `cron history` の `run` 列（先頭8文字）を `--run` にそのまま渡せます。
+- 失敗した run では以前 `reason`/`task <id>` を優先して `preview` が隠れていましたが、いまは両方併記されます。
+- `cron show <job>` は最新 run（state / duration / task id / preview）も表示します。
+
+### AI ジョブの出力
+
+AI ジョブの `runs.stdout` は以前は常に空でした（子プロセスの stdout は `/dev/null` に捨てられるため）。いまは `run_task` 完了後にタスクストアから goal・criteria の合否・進捗・最終アシスタント応答・ツール呼び出しの集計を人間可読なサマリに組み立て、`stdout` に格納します（`digest`＝`--on change` の比較対象はこのサマリ本文ではなく従来通り state/succeeded/reason/pending_skills の組のままで、run ごとに文面が変わっても `--on change` が毎回発火することはありません）。同じサマリは `agent show <task-id> --summary` でも見られます（既定の `agent show`＝生 JSON はそのまま残っています。`--allow-mcp` の承認キーはそちらにしかありません）。
+
+ウォッチドッグに `SIGKILL` されて `complete` に到達しなかった run でも、`agent_task_id` は run 開始時点で記録済みなので消えません。`cron logs` はこの場合 `stdout` が空でも agent ストアから同じサマリをその場で再構成し、`--- reconstructed from the agent store (no output was recorded for this run) ---` の見出し付きで表示します（この見出しは「まだ何も記録されていない」だけを述べており、run がまだ実行中である場合にも同じ文言が出ます — ストアの行だけからは「プロセスが死んで放置された」のか「単に実行中」なのかを区別できないためです）。`cron_manage(action=logs)` チャットツールも同じ再構成を行います。
 
 ## 失敗モードと振る舞い
 

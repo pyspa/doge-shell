@@ -392,6 +392,41 @@
       ]
     },
     {
+      "name": "logs",
+      "description": "Show one run's full recorded stdout/stderr",
+      "options": [
+        {
+          "long": "--run",
+          "description": "A specific run id (or a unique prefix), instead of the latest",
+          "takes_value": true
+        },
+        {
+          "long": "--stdout",
+          "description": "Only stdout"
+        },
+        {
+          "long": "--stderr",
+          "description": "Only stderr"
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "incidents",
       "description": "List things needing a person, or acknowledge one",
       "options": [

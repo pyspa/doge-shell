@@ -37,7 +37,8 @@ use anyhow::{Context as _, Result, bail};
 use dsh_builtin::shell_capabilities::CronStore;
 use dsh_types::cron::job::{
     ClaimedRun, CronHealth, CronIncident, CronJobPatch, CronJobSpec, CronJobView, CronRun,
-    IncidentKind, JobKind, RunOutcome, RunQuery, RunReason, RunState, RunTrigger,
+    IncidentKind, JobKind, RunOutcome, RunOutput, RunQuery, RunReason, RunSelector, RunState,
+    RunTrigger,
 };
 use dsh_types::schedule::{NotifyPolicy, Schedule, parse_schedule};
 use parking_lot::Mutex;

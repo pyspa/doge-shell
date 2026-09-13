@@ -7,18 +7,20 @@
 use anyhow::{Context as _, Result, bail};
 use dsh_builtin::shell_capabilities::CronStore;
 use dsh_types::Context;
-use dsh_types::cron::job::{RunQuery, RunTrigger};
+use dsh_types::cron::job::{RunQuery, RunSelector, RunTrigger};
 use serde_json::json;
 
 use super::cli::{
     build_spec, current_dir_string, parse_add, parse_edit, render_history, render_incidents,
-    render_job_list,
+    render_job_list, render_run_output,
 };
 use super::store::SqliteCronStore;
 use super::tick;
 
 mod doctor;
 pub(in crate::cron) use doctor::{doctor, doctor_report};
+mod logs;
+pub(in crate::cron) use logs::{live_agent_summary, logs, logs_json};
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -81,13 +83,16 @@ pub(super) fn job_json(job: &dsh_types::cron::job::CronJobView) -> serde_json::V
 }
 
 /// The `show`/`cron_manage(action=show)` detail view: [`job_json`] plus the
-/// notepad path and the agent payload `list` leaves out.
+/// notepad path, the agent payload `list` leaves out, and its most recent
+/// run - already loaded by `store.get()` (`job.last`) but, until now, never
+/// actually shown here.
 pub(super) fn job_detail_json(
     job: &dsh_types::cron::job::CronJobView,
     notepad_path: &std::path::Path,
 ) -> serde_json::Value {
     let mut value = job_json(job);
     value["notepad_path"] = json!(notepad_path.to_string_lossy());
+    value["last"] = job.last.as_ref().map(run_json).into();
     if let Some(agent) = &job.agent {
         value["agent"] = json!({
             "grant": agent.grant,
@@ -130,6 +135,27 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
         ))?;
         for criterion in &agent.criteria {
             ctx.write_stdout(&format!("  check: {criterion}\n"))?;
+        }
+    }
+    if let Some(last) = &job.last {
+        ctx.write_stdout(&format!(
+            "  last run: {} {:.1}s (run {})\n",
+            last.state,
+            last.duration_ms as f64 / 1000.0,
+            last.id
+        ))?;
+        if let Some(task) = &last.agent_task_id {
+            ctx.write_stdout(&format!("    task: {task}\n"))?;
+        }
+        if !last.preview.is_empty() {
+            ctx.write_stdout(&format!("    {}\n", last.preview))?;
+        }
+        // `job.last` (from `store.get()`) is not filtered to finished runs,
+        // unlike `cron logs`'s own `RunSelector::Latest` - so this hint
+        // would point at a run `cron logs` then refuses ("no finished run
+        // recorded yet") if it were shown for one still queued/running.
+        if last.finished_at.is_some() {
+            ctx.write_stdout(&format!("  (full output: cron logs {})\n", job.name))?;
         }
     }
     Ok(())
@@ -239,6 +265,10 @@ pub(super) fn run(
         if !latest.preview.is_empty() {
             ctx.write_stdout(&format!("{}\n", latest.preview))?;
         }
+        ctx.write_stdout(&format!(
+            "cron: full output: cron logs {}\n",
+            claimed.job_name
+        ))?;
     }
     Ok(())
 }
@@ -606,5 +636,47 @@ mod tests {
             error.to_string().contains("could not read"),
             "a corrupt payload must be a real error, not a silent None: {error}"
         );
+    }
+
+    /// `store.get()` has always loaded `job.last`; before this, `show` and
+    /// `cron_manage(action=show)` both silently dropped it on the floor.
+    #[test]
+    fn job_detail_json_includes_the_last_run_when_there_is_one() {
+        use dsh_types::cron::job::{RunOutcome, RunState};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SqliteCronStore::open(&dir.path().join("cron")).expect("open");
+        let parsed = parse_add(&args(&["1h", "echo", "hi"])).unwrap();
+        let spec = build_spec(parsed, "/tmp".to_string()).unwrap();
+        store
+            .create(&spec, &std::collections::HashMap::new(), 0, false)
+            .unwrap();
+
+        let job = store.get(&spec.name).unwrap();
+        let notepad_path = store.notepad_path(&job.name);
+        assert!(
+            job_detail_json(&job, &notepad_path)["last"].is_null(),
+            "a job that has never run has no `last`"
+        );
+
+        store.trigger(&spec.name, 0).unwrap();
+        let claimed = store.claim_due(0, "owner", 10, RunTrigger::Tick).unwrap();
+        store.start(&claimed[0].run_id, 0).unwrap();
+        store
+            .complete(
+                &claimed[0].run_id,
+                &RunOutcome {
+                    state: RunState::Succeeded,
+                    stdout: "hi\n".to_string(),
+                    digest: Some(1),
+                    ..Default::default()
+                },
+                1,
+            )
+            .unwrap();
+
+        let job = store.get(&spec.name).unwrap();
+        let value = job_detail_json(&job, &notepad_path);
+        assert_eq!(value["last"]["state"], "succeeded");
     }
 }

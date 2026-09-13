@@ -44,18 +44,22 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Add, edit, run or inspect a doge-shell cron job - a persistent scheduled shell command or unattended agent task, surviving restarts and independent of this conversation. `list`/`show`/`history`/`incidents`/`status`/`doctor` read without asking; `create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` always ask first. A job this tool creates always starts paused - a person resumes it after checking `cron run` once. `run` marks a job due for the next tick (session runner or external `cron tick`, usually within about a minute); it does not run synchronously and does not accept a one-off prompt. An agent job's goal starts a brand-new, self-contained session with no memory of this conversation and cannot ask a question - write it as a complete instruction. Prefer `update` on an existing job over creating a near-duplicate; always `list` first rather than guessing a job's name.",
+            "description": "Add, edit, run or inspect a doge-shell cron job - a persistent scheduled shell command or unattended agent task, surviving restarts and independent of this conversation. `list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` read without asking; `create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` always ask first. A job this tool creates always starts paused - a person resumes it after checking `cron run` once. `run` marks a job due for the next tick (session runner or external `cron tick`, usually within about a minute); it does not run synchronously and does not accept a one-off prompt. `logs` returns one run's full recorded stdout/stderr (an agent job's own summary of what it did, for an agent job) - use it, not `history`'s one-line preview, to actually read what a past run produced; refused if the job's own directory falls outside this task's grant. An agent job's goal starts a brand-new, self-contained session with no memory of this conversation and cannot ask a question - write it as a complete instruction. Prefer `update` on an existing job over creating a near-duplicate; always `list` first rather than guessing a job's name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "show", "history", "incidents", "status", "doctor", "create", "update", "pause", "resume", "remove", "run", "ack"],
-                        "description": "`create` needs `schedule` and (`command` or, with `agent`, `goal`). `show`/`update`/`pause`/`resume`/`remove`/`run` need `job`. `ack` needs `incident_id` (from `incidents`)."
+                        "enum": ["list", "show", "history", "logs", "incidents", "status", "doctor", "create", "update", "pause", "resume", "remove", "run", "ack"],
+                        "description": "`create` needs `schedule` and (`command` or, with `agent`, `goal`). `show`/`update`/`pause`/`resume`/`remove`/`run` need `job`. `logs` needs `job` or `run`. `ack` needs `incident_id` (from `incidents`)."
                     },
                     "job": {
                         "type": "string",
-                        "description": "A job's name or id, from `list`."
+                        "description": "A job's name or id, from `list`. `logs` reads that job's most recently finished run when `run` is not given."
+                    },
+                    "run": {
+                        "type": "string",
+                        "description": "`logs` only: a specific run id (or a unique prefix of one, from `history`), instead of `job`'s latest finished run."
                     },
                     "name": {
                         "type": "string",
@@ -226,6 +230,7 @@ fn parse_request(arguments: &str) -> Result<CronToolRequest, String> {
         limit: opt_str(&parsed, "limit"),
         failed: bool_flag(&parsed, "failed"),
         incident_id: opt_str(&parsed, "incident_id"),
+        run: opt_str(&parsed, "run"),
     })
 }
 
@@ -466,6 +471,15 @@ fn validate_request(action: CronToolAction, request: &CronToolRequest) -> Result
         | CronToolAction::Resume
         | CronToolAction::Remove
         | CronToolAction::Run => need(&request.job, "job"),
+        // Unlike every other job-selector action, `logs` accepts a bare
+        // `run` id in place of `job` - the same as `cron logs --run <id>`
+        // needing no job name either, once the run itself pins it down.
+        CronToolAction::Logs => {
+            if request.job.is_none() && request.run.is_none() {
+                return Err(format!("chat: {NAME} `logs` requires `job` or `run`"));
+            }
+            Ok(())
+        }
         CronToolAction::Ack => need(&request.incident_id, "incident_id"),
         CronToolAction::List
         | CronToolAction::History

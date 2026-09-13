@@ -280,9 +280,17 @@ impl SqliteCronStore {
             _ => false,
         };
 
+        // `agent_task_id` is `COALESCE`d, not overwritten outright:
+        // `attach_agent_task` may already have recorded it when the run
+        // started, and an early-failure outcome (config/budget/lock, none of
+        // which ever start the agent task) carries `None` here. A bare
+        // overwrite would erase the one thing that makes a run findable from
+        // `cron logs` if its process is later killed by its own watchdog
+        // before it can call this at all.
         tx.execute(
             "UPDATE runs SET state = ?2, reason = ?3, finished_at = ?4, duration_ms = ?5, \
-             exit_code = ?6, timed_out = ?7, changed = ?8, agent_task_id = ?9, tokens_used = ?10, \
+             exit_code = ?6, timed_out = ?7, changed = ?8, \
+             agent_task_id = COALESCE(?9, agent_task_id), tokens_used = ?10, \
              pending_skills = ?11, preview = ?12, stdout = ?13, stderr = ?14 WHERE id = ?1",
             params![
                 run_id,

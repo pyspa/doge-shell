@@ -105,7 +105,8 @@ back as data (a memory of last time), never as an instruction.
 
 ```sh
 cron history digest --json     # state, reason, and the agent_task_id for each run
-agent show <task-id>           # the model's own record: what it tried, what it verified
+cron logs digest                # what the run actually did - see below
+agent show <task-id>           # the model's own full record: every tool call, in full
 ```
 
 A `reason` of `transient` (a network blip, say) is not escalated to an incident until it
@@ -113,3 +114,23 @@ repeats three times in a row - one failed run is not yet a pattern worth a perso
 attention. A `reason` of `config` (no API key) or `provider` (a provider that cannot
 support this) never retries at all; both settle straight into an incident, since retrying
 would just reproduce the identical failure every time.
+
+### What `cron logs` shows for an agent job
+
+An agent job's `stdout` is a short, human-readable summary built after the run finishes:
+its goal, whether each `--check` criterion passed (with the event number that proved it),
+its token/time budget usage, a count of tool calls (and the last one that failed, if any),
+and - the first line, so it doubles as `cron history`'s one-line preview - its final
+answer. `stderr` still carries the `stop_reason`. The same summary is what `agent show
+<task-id> --summary` prints; plain `agent show <task-id>` remains the full JSON record
+(every tool call's arguments and result, in full) and is where an `--allow-mcp` approval
+key must be copied from byte-for-byte - the summary does not carry it.
+
+A run whose process was killed by its own watchdog (it outlived its `--timeout`) never
+gets to write this summary into the store at all - but the task itself is still fully
+recorded. `cron logs` (and `cron_manage(action=logs)`) notices `stdout` is empty and
+reconstructs the same summary live from the agent store instead, labelled `---
+reconstructed from the agent store (no output was recorded for this run) ---` so it is
+never mistaken for what the run itself reported. The same empty-`stdout` condition also
+covers a run that is simply still queued or executing - a store row alone cannot tell the
+two apart, which is why the label only claims "no output yet", not "this run is dead".

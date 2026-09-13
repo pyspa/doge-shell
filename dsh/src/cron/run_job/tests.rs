@@ -181,3 +181,120 @@ fn an_empty_notepad_adds_no_block() {
     // The reminder still names where to write, so a first run can start one.
     assert!(goal.contains("/state/n.md"));
 }
+
+fn report(status: TaskStatus, succeeded: bool) -> crate::agent::TaskRunReport {
+    crate::agent::TaskRunReport {
+        id: "task-1".to_string(),
+        status,
+        stop_reason: Some("all criteria verified".to_string()),
+        tokens_used: 42,
+        succeeded,
+    }
+}
+
+/// The regression this guards: hashing the summary text itself (which
+/// differs on every run, by design) would make `--on change` mean `always`
+/// for every AI job.
+#[test]
+fn the_agent_digest_ignores_the_summary_text() {
+    let a = agent_run_outcome(
+        &report(TaskStatus::Completed, true),
+        "completed: answer one",
+        0,
+        100,
+    );
+    let b = agent_run_outcome(
+        &report(TaskStatus::Completed, true),
+        "completed: an entirely different answer, much longer than the first",
+        0,
+        999,
+    );
+    assert_eq!(
+        a.digest, b.digest,
+        "the digest must not depend on the summary text or the duration"
+    );
+}
+
+#[test]
+fn agent_run_outcome_puts_the_summary_in_stdout_and_the_stop_reason_in_stderr() {
+    let outcome = agent_run_outcome(
+        &report(TaskStatus::Completed, true),
+        "completed: did the thing",
+        0,
+        1234,
+    );
+    assert_eq!(outcome.state, RunState::Succeeded);
+    assert_eq!(outcome.stdout, "completed: did the thing");
+    // `stderr` carries the summary's own headline ahead of the raw
+    // `stop_reason` - see `stderr_text`'s own doc comment for why: it is
+    // what keeps the headline reaching `cron history`'s preview column
+    // (which prefers `stderr` over `stdout` whenever it is non-empty).
+    assert_eq!(
+        outcome.stderr,
+        "completed: did the thing: all criteria verified"
+    );
+    assert_eq!(outcome.agent_task_id.as_deref(), Some("task-1"));
+    assert_eq!(outcome.tokens_used, 42);
+    assert_eq!(outcome.duration_ms, 1234);
+}
+
+/// A clean success (as `run_task` itself produces one - `report()`'s own
+/// fixture always sets a `stop_reason`, unlike the real thing) must not
+/// gain a stderr just because `stderr_text` ran: `preview()`'s stderr
+/// preference must still fall through to `stdout` for the case this whole
+/// change exists to surface.
+#[test]
+fn a_run_with_no_stop_reason_has_no_stderr_at_all() {
+    let mut report = report(TaskStatus::Completed, true);
+    report.stop_reason = None;
+    let outcome = agent_run_outcome(&report, "completed: did the thing", 0, 0);
+    assert_eq!(outcome.stderr, "");
+}
+
+#[test]
+fn stderr_text_is_empty_when_there_is_no_stop_reason() {
+    assert_eq!(stderr_text("completed: answer", None), "");
+    assert_eq!(stderr_text("completed: answer", Some("")), "");
+}
+
+#[test]
+fn stderr_text_prepends_only_the_summarys_first_line() {
+    assert_eq!(
+        stderr_text(
+            "failed (criteria 1/2)\ngoal: ...\nmore detail",
+            Some("verification remains incomplete")
+        ),
+        "failed (criteria 1/2): verification remains incomplete"
+    );
+}
+
+#[test]
+fn stderr_text_falls_back_to_the_bare_reason_when_the_summary_is_empty() {
+    assert_eq!(
+        stderr_text("", Some("no API key configured")),
+        "no API key configured"
+    );
+}
+
+#[test]
+fn agent_run_outcome_maps_every_task_status_to_a_run_state() {
+    assert_eq!(
+        agent_run_outcome(&report(TaskStatus::Completed, true), "", 0, 0).state,
+        RunState::Succeeded
+    );
+    assert_eq!(
+        agent_run_outcome(&report(TaskStatus::Completed, false), "", 0, 0).state,
+        RunState::Failed
+    );
+    assert_eq!(
+        agent_run_outcome(&report(TaskStatus::InputRequired, false), "", 0, 0).state,
+        RunState::NeedsApproval
+    );
+    assert_eq!(
+        agent_run_outcome(&report(TaskStatus::Cancelled, false), "", 0, 0).state,
+        RunState::Cancelled
+    );
+    let interrupted = agent_run_outcome(&report(TaskStatus::Interrupted, false), "", 0, 0);
+    assert_eq!(interrupted.state, RunState::Failed);
+    assert!(interrupted.timed_out);
+}

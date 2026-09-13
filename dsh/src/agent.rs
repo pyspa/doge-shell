@@ -18,6 +18,8 @@ use std::{
     sync::Arc,
 };
 
+pub(crate) mod summary;
+
 pub struct SqliteTaskStore {
     connection: Mutex<Connection>,
     root: PathBuf,
@@ -297,7 +299,7 @@ impl AgentTaskStore for SqliteTaskStore {
     }
 }
 
-const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT]\nagent list | show ID | cancel ID | delete ID\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap.\n";
+const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT]\nagent list | show ID [--summary] | cancel ID | delete ID\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap.\n";
 
 /// Whether a turn that just ended needs an explicit
 /// `AgentLifecycleManager::report_blocked` call rather than letting
@@ -417,6 +419,13 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         let id = argv.get(2).context("task ID required")?;
         let task = store.load(id)?;
         match action {
+            // The default stays the full JSON dump: it is what
+            // `docs/ai/skills/dsh-cron/references/troubleshooting.md` tells a
+            // person to copy an exact `--allow-mcp` approval key out of, and
+            // that key lives in `events`, not in `--summary`'s report.
+            "show" if argv.get(3).map(String::as_str) == Some("--summary") => {
+                ctx.write_stdout(&summary::task_summary(&task, &store.events(id)?))?
+            }
             "show" => ctx.write_stdout(&serde_json::to_string_pretty(
                 &json!({"task":task,"events":store.events(id)?}),
             )?)?,

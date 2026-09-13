@@ -21,6 +21,7 @@ pub enum CronToolAction {
     List,
     Show,
     History,
+    Logs,
     Incidents,
     Status,
     Doctor,
@@ -39,6 +40,7 @@ impl CronToolAction {
             Self::List => "list",
             Self::Show => "show",
             Self::History => "history",
+            Self::Logs => "logs",
             Self::Incidents => "incidents",
             Self::Status => "status",
             Self::Doctor => "doctor",
@@ -57,6 +59,7 @@ impl CronToolAction {
             "list" => Self::List,
             "show" => Self::Show,
             "history" => Self::History,
+            "logs" => Self::Logs,
             "incidents" => Self::Incidents,
             "status" => Self::Status,
             "doctor" => Self::Doctor,
@@ -140,6 +143,9 @@ pub struct CronToolRequest {
     pub limit: Option<String>,
     /// `history --failed`.
     pub failed: bool,
+    /// `logs`: a specific run id (or a unique prefix), instead of the job's
+    /// latest finished run.
+    pub run: Option<String>,
     /// `ack`.
     pub incident_id: Option<String>,
 }
@@ -154,6 +160,7 @@ mod tests {
             CronToolAction::List,
             CronToolAction::Show,
             CronToolAction::History,
+            CronToolAction::Logs,
             CronToolAction::Incidents,
             CronToolAction::Status,
             CronToolAction::Doctor,
@@ -180,6 +187,7 @@ mod tests {
             CronToolAction::List,
             CronToolAction::Show,
             CronToolAction::History,
+            CronToolAction::Logs,
             CronToolAction::Incidents,
             CronToolAction::Status,
             CronToolAction::Doctor,

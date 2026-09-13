@@ -215,6 +215,34 @@ fn read_actions_need_no_fields_at_all() {
     }
 }
 
+/// Unlike every other job-selector action, `logs` accepts a bare `run` in
+/// place of `job` - the same as `cron logs --run <id>` needing no job name
+/// either, once the run itself pins it down.
+#[test]
+fn logs_needs_a_job_or_a_run_but_not_both() {
+    let mut proxy = TestShellProxy::default();
+    let error = run(&args(json!({"action": "logs"})), &mut proxy).unwrap_err();
+    assert!(error.contains("job") && error.contains("run"), "{error}");
+
+    let mut proxy = TestShellProxy::default();
+    assert!(
+        run(
+            &args(json!({"action": "logs", "job": "digest"})),
+            &mut proxy
+        )
+        .is_ok()
+    );
+
+    let mut proxy = TestShellProxy::default();
+    assert!(
+        run(
+            &args(json!({"action": "logs", "run": "abc123"})),
+            &mut proxy
+        )
+        .is_ok()
+    );
+}
+
 fn task_proxy(grant: TaskGrant) -> TestShellProxy {
     let mut task = running_task(std::path::Path::new("/tmp"));
     task.grant = grant;

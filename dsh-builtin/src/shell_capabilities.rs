@@ -9,7 +9,7 @@ use crate::{CoreShellAction, ProxyFuture, ShellProxy};
 use anyhow::Result;
 use dsh_types::cron::job::{
     ClaimedRun, CronHealth, CronIncident, CronJobPatch, CronJobSpec, CronJobView, CronRun,
-    IncidentKind, RunOutcome, RunQuery, RunTrigger,
+    IncidentKind, RunOutcome, RunOutput, RunQuery, RunSelector, RunTrigger,
 };
 use dsh_types::cron::tool::CronToolRequest;
 use dsh_types::{
@@ -579,9 +579,21 @@ pub trait CronStore: Send + Sync {
     ) -> Result<ClaimedRun>;
     /// Moves a claimed run to `running` and hands back what to execute.
     fn start(&self, run_id: &str, now: i64) -> Result<ClaimedRun>;
+    /// Records which agent task a run started, before it can possibly finish.
+    ///
+    /// `complete` is the only other writer of `runs.agent_task_id`, and a run
+    /// killed by its own watchdog (an AI job that outlived its lease) never
+    /// reaches it: the process group is gone, and `reap_expired_leases`
+    /// closes the row out as `failed`/`timeout` without knowing what task it
+    /// had started. The task itself is still fully recorded in the agent
+    /// store - this is what makes it findable again from `cron logs`.
+    fn attach_agent_task(&self, run_id: &str, task_id: &str) -> Result<()>;
     /// Records the outcome, releases the claim and opens or closes incidents.
     fn complete(&self, run_id: &str, outcome: &RunOutcome, now: i64) -> Result<()>;
     fn runs(&self, query: &RunQuery) -> Result<Vec<CronRun>>;
+    /// One run's full recorded `stdout`/`stderr`, read on demand - see
+    /// [`RunOutput`]'s own doc comment for why this is not part of `runs`.
+    fn run_output(&self, selector: &RunSelector) -> Result<RunOutput>;
     fn incidents(&self, open_only: bool, limit: usize) -> Result<Vec<CronIncident>>;
     fn open_incident(
         &self,

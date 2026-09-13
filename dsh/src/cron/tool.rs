@@ -18,7 +18,8 @@
 use anyhow::{Context as _, Result};
 use dsh_builtin::config_paths;
 use dsh_builtin::shell_capabilities::{CronStore, CronToolHost};
-use dsh_types::cron::job::RunQuery;
+use dsh_types::agent::TaskGrant;
+use dsh_types::cron::job::{RunQuery, RunSelector};
 use dsh_types::cron::tool::{CronToolAction, CronToolRequest};
 use serde_json::json;
 
@@ -44,6 +45,7 @@ impl CronToolHost for Shell {
             CronToolAction::List => list(&store),
             CronToolAction::Show => show(&store, request),
             CronToolAction::History => history(&store, request),
+            CronToolAction::Logs => logs(self, &store, request),
             CronToolAction::Incidents => incidents(&store),
             CronToolAction::Status => status(&store),
             CronToolAction::Doctor => doctor(self, &store),
@@ -88,6 +90,80 @@ fn history(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_j
         failed_only: request.failed,
     })?;
     Ok(json!(runs.iter().map(run_json).collect::<Vec<_>>()))
+}
+
+/// Whether a job's `cwd` falls under a task's own grant.
+///
+/// The same boundary `grant_exceeds_task`
+/// (`dsh-builtin/src/chatgpt/tool/cron.rs`) enforces for every *write*
+/// action, applied here to a *read* one: `history` only ever shows a
+/// 120-character preview of a run, but `logs` can return a job's full 8 KiB
+/// of recorded output, so a task must not be able to read an unrelated
+/// job's output just because it happens to know (or has guessed) the job's
+/// name. Readable is the weaker claim, so either root list satisfies it -
+/// the same reasoning `grant_exceeds_task` uses for its own `--read` check.
+fn job_cwd_within(cwd: &str, grant: &TaskGrant) -> bool {
+    match std::path::Path::new(cwd).canonicalize() {
+        Ok(path) => grant
+            .read_roots
+            .iter()
+            .chain(&grant.write_roots)
+            .any(|root| path.starts_with(root)),
+        // Unlike `dsh-builtin`'s `path_within` (which fails open on the same
+        // kind of error, for a *write* grant field): there, an unresolvable
+        // path still has to survive `apply_grant_option`'s own "no such
+        // directory" check before anything happens, so failing open there
+        // only defers the report. Here there is no such later step - `logs`
+        // returns the job's output directly - so failing open would let a
+        // job whose `cwd` no longer resolves (deleted, moved) bypass the
+        // grant check entirely. Refuse instead.
+        Err(_) => false,
+    }
+}
+
+fn logs(
+    shell: &Shell,
+    store: &SqliteCronStore,
+    request: &CronToolRequest,
+) -> Result<serde_json::Value> {
+    let selector = match (&request.run, &request.job) {
+        (Some(run), _) => RunSelector::Id(run.clone()),
+        (None, Some(job)) => RunSelector::Latest(job.clone()),
+        (None, None) => anyhow::bail!("`job` or `run` is required"),
+    };
+    let output = store.run_output(&selector)?;
+
+    if let Some(runtime) = &shell.agent_runtime {
+        let grant = runtime.lock().task.grant.clone();
+        let job = store.get(&output.run.job_name)?;
+        if !job_cwd_within(&job.cwd, &grant) {
+            anyhow::bail!(
+                "cron_manage: refused: job `{}` is outside this task's own read/write grant",
+                job.name
+            );
+        }
+    }
+
+    // An AI job's process, killed by its own watchdog before it could ever
+    // call `complete`, never wrote a summary into `stdout` at all - the same
+    // case `cron logs` (`handlers/logs.rs`) reconstructs live from the agent
+    // store rather than showing nothing. Without this, an agent using this
+    // tool to check on its own cron job gets an uninformative empty
+    // `stdout` for exactly the run it most needs to see.
+    let live = output.stdout.is_empty().then_some(()).and_then(|()| {
+        let task_id = output.run.agent_task_id.as_deref()?;
+        let agent_root = config_paths::agent_state_dir();
+        super::handlers::live_agent_summary(&agent_root, task_id)
+            .ok()
+            .flatten()
+    });
+
+    Ok(super::handlers::logs_json(
+        &output,
+        live.as_deref(),
+        true,
+        true,
+    ))
 }
 
 fn incidents(store: &SqliteCronStore) -> Result<serde_json::Value> {

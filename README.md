@@ -860,6 +860,7 @@ cron add --name prs --on change '0 9-17 * * mon-fri' gh pr list
 cron add --quiet 30s 'df -h /'
 cron list                               # id, schedule, state, next run, last result
 cron history fetch                      # recent runs
+cron logs fetch                         # a run's full recorded stdout/stderr
 cron rm prs
 cron pause                              # stop every job, keeping the definitions
 cron resume
@@ -944,6 +945,14 @@ Every run starts a fresh conversation; the one thing that persists between them 
 small per-job **notepad** (`cron notepad digest`) the agent reads and rewrites on its own
 — the closest thing to memory a recurring unattended job has.
 
+`cron logs digest` shows what a run actually did — its goal, which `--check` criteria
+passed, and its final answer, built from the task's own record — rather than
+`history`'s one-line preview. It still works even for a run killed by its own timeout
+before it could report back, reconstructed live from the same record (labelled as such);
+`agent show <task-id> --summary` is the same view from the agent side, and plain
+`agent show <task-id>` remains the full, unabridged record (what `--allow-mcp` approval
+keys are copied from).
+
 #### The agent can manage its own cron jobs
 
 The `!` chat agent (and `agent run`) has a `cron_manage` tool that does everything above
@@ -953,7 +962,10 @@ job it creates always starts paused, and none of its grants (`--read`/`--write`/
 `--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`) may exceed what the
 calling task was itself granted — widening one is refused outright, before anyone is
 asked anything. Every other write (`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
-asks a person first, the same as any other tool that changes something.
+asks a person first, the same as any other tool that changes something. `logs` is the one
+read action with a limit of its own: under a task, it refuses a job whose own directory
+falls outside that task's `read`/`write` grant, so a task cannot read an unrelated job's
+recorded output just by knowing its name.
 
 Full CLI reference, schedule grammar, external-tick setup for each OS, and a
 symptom-to-cause debugging table live in the `dsh-cron` skill

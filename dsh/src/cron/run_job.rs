@@ -21,7 +21,7 @@
 
 use anyhow::{Context as _, Result};
 use dsh_builtin::config_paths;
-use dsh_builtin::shell_capabilities::CronStore;
+use dsh_builtin::shell_capabilities::{AgentTaskStore, CronStore};
 use dsh_types::Context;
 use dsh_types::agent::{AgentTask, TaskGrant, TaskStatus, Verification};
 use dsh_types::cron::job::{ClaimedRun, JobKind, RunOutcome, RunReason, RunState, lease_secs};
@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 
 use super::exec;
 use super::store::SqliteCronStore;
-use crate::agent::SqliteTaskStore;
+use crate::agent::{SqliteTaskStore, TaskRunReport};
 use crate::shell::Shell;
 
 /// The window the per-job token ceiling is measured over.
@@ -218,6 +218,14 @@ fn agent_outcome(
         created_at: now(),
     };
 
+    // Recorded *before* the run, not after: `complete` is the only other
+    // writer of this column, and a run the watchdog below kills never
+    // reaches it - the process group is gone, and `reap_expired_leases`
+    // closes the row out without knowing what task it had started. The task
+    // itself stays fully recorded in the agent store; this is what makes it
+    // findable again from `cron logs`.
+    store.attach_agent_task(&run.run_id, &task.id)?;
+
     let watchdog = arm_watchdog(spec.time_budget_secs);
     let report = crate::agent::run_task(shell, ctx, &task_store, task, None);
     // Disarmed whether the run succeeded or errored - the only thing the
@@ -227,6 +235,55 @@ fn agent_outcome(
     let report = report?;
     let pending_skills = pending_skill_count().saturating_sub(pending_before);
 
+    // A summary that could not be read is a nicety lost, not a run that
+    // failed: `run_task` already returned successfully by this point, so a
+    // store hiccup here must not turn a finished run into a failed one - it
+    // only means `cron logs`/`agent show --summary` will have less to say.
+    let summary = match task_store.load(&report.id) {
+        Ok(task) => crate::agent::summary::task_summary(
+            &task,
+            &task_store.events(&report.id).unwrap_or_default(),
+        ),
+        Err(error) => format!("{}: could not read the finished task: {error}", report.id),
+    };
+
+    Ok(agent_run_outcome(
+        &report,
+        &summary,
+        pending_skills,
+        started.elapsed().as_millis() as u64,
+    ))
+}
+
+/// What `--on change` compares between runs of an AI job. Kept apart from
+/// [`agent_run_outcome`] and named for its own test: an agent's prose differs
+/// every run, so hashing the summary text itself would make `--on change`
+/// mean `always`. The shape of the *result* is what a person actually wants
+/// to hear about changing.
+fn agent_digest_input(
+    state: RunState,
+    succeeded: bool,
+    reason: Option<RunReason>,
+    pending_skills: u32,
+) -> String {
+    format!(
+        "{state}|{succeeded}|{}|{}",
+        reason.map(|reason| reason.to_string()).unwrap_or_default(),
+        pending_skills > 0
+    )
+}
+
+/// Builds the recorded outcome of a finished (or interrupted) agent run. A
+/// pure function of the report and an already-built summary, so both this
+/// mapping and the digest-stability invariant above can be tested without
+/// spawning a real agent task (`agent_outcome` itself needs `&mut Shell` and
+/// cannot be).
+fn agent_run_outcome(
+    report: &TaskRunReport,
+    summary: &str,
+    pending_skills: u32,
+    duration_ms: u64,
+) -> RunOutcome {
     let (state, reason) = match report.status {
         TaskStatus::Completed if report.succeeded => (RunState::Succeeded, None),
         TaskStatus::Completed => (RunState::Failed, Some(RunReason::Transient)),
@@ -236,27 +293,45 @@ fn agent_outcome(
         TaskStatus::Failed | TaskStatus::Running => (RunState::Failed, Some(RunReason::Transient)),
     };
 
-    Ok(RunOutcome {
+    RunOutcome {
         state,
         reason,
         exit_code: i32::from(state != RunState::Succeeded),
         timed_out: report.status == TaskStatus::Interrupted,
-        duration_ms: started.elapsed().as_millis() as u64,
-        stdout: String::new(),
-        stderr: redact_sensitive_text(report.stop_reason.as_deref().unwrap_or_default()),
-        // An agent's prose differs every run, so hashing it would make
-        // `--on change` mean `always`. The shape of the *result* is what a
-        // person actually wants to hear about changing.
-        digest: Some(exec::digest(&format!(
-            "{state}|{}|{}|{}",
+        duration_ms,
+        stdout: redact_sensitive_text(summary),
+        stderr: redact_sensitive_text(&stderr_text(summary, report.stop_reason.as_deref())),
+        digest: Some(exec::digest(&agent_digest_input(
+            state,
             report.succeeded,
-            reason.map(|reason| reason.to_string()).unwrap_or_default(),
-            pending_skills > 0
+            reason,
+            pending_skills,
         ))),
-        agent_task_id: Some(report.id),
+        agent_task_id: Some(report.id.clone()),
         tokens_used: report.tokens_used,
         pending_skills,
-    })
+    }
+}
+
+/// `preview()` (`dsh/src/cron/store/claim.rs`) prefers `stderr` over
+/// `stdout` whenever `stderr` is non-empty - true of every run except a
+/// clean success, since `stop_reason` is `None` only then. Left as a bare
+/// `stop_reason`, `cron history`'s preview column would show only the raw
+/// stop reason and never the crafted headline `summary`'s first line
+/// carries (e.g. `"failed (criteria 2/4)"`) for exactly the runs - failures,
+/// timeouts, interruptions - where a person most wants that at a glance.
+/// Prepending it here keeps both: the headline stays first, and the raw
+/// reason (which `stop_reason` alone used to show, and `cron logs`'s
+/// stderr still shows in full either way) follows it.
+fn stderr_text(summary: &str, stop_reason: Option<&str>) -> String {
+    let reason = stop_reason.unwrap_or_default();
+    if reason.is_empty() {
+        return String::new();
+    }
+    match summary.lines().next() {
+        Some(headline) if !headline.is_empty() => format!("{headline}: {reason}"),
+        _ => reason.to_string(),
+    }
 }
 
 /// Seconds of slack an AI job's watchdog leaves before the lease

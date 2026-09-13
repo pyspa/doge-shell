@@ -7,7 +7,8 @@
 ```sh
 agent run --tokens 50000 --timeout 900 --write . --allow-command 'cargo test -p dsh-types' --check '対象テストが成功する' -- 'テスト失敗を調査し修正して'
 agent list
-agent show TASK_ID
+agent show TASK_ID              # 会話全体・全イベントの生 JSON（--allow-mcp の承認キーはここでしか取れない）
+agent show TASK_ID --summary    # goal・criteria の合否・最終応答・ツール集計の短い要約
 agent resume TASK_ID --tokens 80000 --timeout 1800
 agent cancel TASK_ID
 agent delete TASK_ID
@@ -57,7 +58,7 @@ Tasks対応サーバーが返したハンドルを保存し、`mcp_task_status` 
 
 ## cron からの無人実行
 
-`cron add --agent` は本ドキュメントと同じ `agent run` 入口を、スケジュールから起動するものです。権限モデル・予算・隔離は一切変わりません。無人実行のため承認プロンプトは出ず、付与されていない権限が必要になった run は `TaskStatus::InputRequired` のまま incident として記録され、次回以降も自動では再試行されません。`--check` の完了条件は、無人で判定されることを踏まえてより具体的に書く必要があります。cron 側の run 履歴からこのタスクの id を得て `agent show <id>` に渡せます。grant の一覧やタスクの状態機械はここに複製せず、詳細は `docs/cron.md` を参照してください。
+`cron add --agent` は本ドキュメントと同じ `agent run` 入口を、スケジュールから起動するものです。権限モデル・予算・隔離は一切変わりません。無人実行のため承認プロンプトは出ず、付与されていない権限が必要になった run は `TaskStatus::InputRequired` のまま incident として記録され、次回以降も自動では再試行されません。`--check` の完了条件は、無人で判定されることを踏まえてより具体的に書く必要があります。run が何をしたかは `cron logs <job>` で読めます（AI ジョブの `stdout` にはこの要約が入り、`agent show --summary` と同じ内容です）。全イベントを見たいときだけ、cron 側の run 履歴からこのタスクの id を得て `agent show <id>` に渡してください。grant の一覧やタスクの状態機械はここに複製せず、詳細は `docs/cron.md` を参照してください。
 
 逆方向 — タスク自身が cron ジョブを作る／変える — には `cron_manage` という chat tool があります（`execute` 経由の `cron ...` は builtin には届きません）。作成したジョブは常に paused で登録され、渡せる grant は**呼び出し中のタスク自身の grant を超えられません**。それ以外の変更（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は他の書き込み系ツールと同じく毎回 `InputRequired` になります。詳細は `docs/cron.md` の「エージェント自身によるジョブ管理」を参照してください。
 

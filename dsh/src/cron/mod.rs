@@ -50,6 +50,8 @@ Usage:
   cron pause [<job>...]                                 Pause job(s), or the whole scheduler
   cron resume [<job>...]                                Resume job(s), or the whole scheduler
   cron history [<job>] [--failed] [--json]              Show finished runs
+  cron logs <job> [--run <id>] [--stdout|--stderr] [--json]
+                                                          Show one run's full recorded output
   cron incidents [--json]                               List things needing a person
   cron incidents ack <id>                               Acknowledge one and unblock its job
   cron notepad <job> [--clear]                          Show (or clear) a job's own notes
@@ -107,6 +109,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         "pause" => handlers::set_paused(ctx, &store, rest, true),
         "resume" => handlers::set_paused(ctx, &store, rest, false),
         "history" => handlers::history(ctx, &store, rest),
+        "logs" => handlers::logs(ctx, &store, rest),
         "incidents" if handlers::is_ack(rest) => {
             handlers::ack_incident(ctx, &store, &handlers::ack_args(rest))
         }

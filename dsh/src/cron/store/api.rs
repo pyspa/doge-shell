@@ -12,6 +12,16 @@
 
 use super::*;
 
+/// Escapes `%`, `_` and the escape character itself, so a caller-supplied
+/// run-id prefix is matched literally by `LIKE ?1 || '%' ESCAPE '\'` instead
+/// of having any wildcard characters it happens to contain interpreted as
+/// LIKE syntax.
+fn escape_like_pattern(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 impl CronStore for SqliteCronStore {
     fn create(
         &self,
@@ -310,6 +320,23 @@ impl CronStore for SqliteCronStore {
         self.start_run(run_id, now)
     }
 
+    fn attach_agent_task(&self, run_id: &str, task_id: &str) -> Result<()> {
+        let connection = self.connection.lock();
+        let updated = connection.execute(
+            "UPDATE runs SET agent_task_id = ?2 WHERE id = ?1",
+            params![run_id, task_id],
+        )?;
+        // No realistic caller mismatches `run_id` today - it is the same id
+        // `start` just returned in the same call chain - but silently
+        // no-op'ing on a mismatch would be exactly the wrong failure mode:
+        // it would look identical to success while quietly losing the one
+        // thing that makes a watchdog-killed run findable again.
+        if updated == 0 {
+            bail!("{run_id}: no such run (agent_task_id was not recorded)");
+        }
+        Ok(())
+    }
+
     fn complete(&self, run_id: &str, outcome: &RunOutcome, now: i64) -> Result<()> {
         self.complete_run(run_id, outcome, now)
     }
@@ -477,5 +504,59 @@ impl CronStore for SqliteCronStore {
             [],
             |row| row.get(0),
         )?)
+    }
+
+    fn run_output(&self, selector: &RunSelector) -> Result<RunOutput> {
+        let connection = self.connection.lock();
+        // Two queries on purpose, not a wider `SELECT_RUN`: that constant's
+        // column list and `run_from_row`'s `row.get(n)` calls are one unit
+        // (see `rows.rs`'s own module doc), and `stdout`/`stderr` are read by
+        // exactly one caller. Widening the shared query would make every
+        // `cron list`/`cron history` scan carry two 8 KiB columns it never
+        // uses.
+        let run = match selector {
+            RunSelector::Latest(job) => {
+                let id = resolve(&connection, job)?;
+                connection
+                    .query_row(
+                        &format!(
+                            "{SELECT_RUN} WHERE r.job_id = ?1 AND r.finished_at IS NOT NULL \
+                             ORDER BY r.scheduled_for DESC LIMIT 1"
+                        ),
+                        [id],
+                        run_from_row,
+                    )
+                    .optional()?
+                    .with_context(|| format!("{job}: no finished run recorded yet"))?
+            }
+            RunSelector::Id(prefix) => {
+                // `prefix` is a caller-supplied string (from `--run` or the
+                // `cron_manage` tool), not a trusted id - without escaping,
+                // a literal `%`/`_` in it would be read as a LIKE wildcard
+                // instead of a literal character, letting e.g. `--run '%'`
+                // match every run in the store.
+                let mut statement = connection.prepare(&format!(
+                    "{SELECT_RUN} WHERE r.id LIKE ?1 || '%' ESCAPE '\\' LIMIT 2"
+                ))?;
+                let mut rows = statement
+                    .query_map([escape_like_pattern(prefix)], run_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                match rows.len() {
+                    0 => bail!("{prefix}: no run with this id"),
+                    1 => rows.remove(0),
+                    _ => bail!("{prefix}: matches more than one run; use a longer id"),
+                }
+            }
+        };
+        let (stdout, stderr): (Option<String>, Option<String>) = connection.query_row(
+            "SELECT stdout, stderr FROM runs WHERE id = ?1",
+            [&run.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(RunOutput {
+            run,
+            stdout: stdout.unwrap_or_default(),
+            stderr: stderr.unwrap_or_default(),
+        })
     }
 }

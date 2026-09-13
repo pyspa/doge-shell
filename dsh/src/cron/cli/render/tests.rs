@@ -130,6 +130,74 @@ fn history_includes_the_agent_task_id_when_there_is_one() {
 }
 
 #[test]
+fn a_failed_run_shows_both_its_reason_and_its_preview() {
+    // Before this, the four-way match in `run_row` only showed `preview`
+    // when there was no `reason` and no `agent_task_id` - so a failed AI
+    // job's run (which always has both) never showed its preview at all.
+    let mut r = run(RunState::Failed);
+    r.reason = Some(RunReason::Timeout);
+    r.agent_task_id = Some("task-42".to_string());
+    r.preview = "stop reason: ran out of time".to_string();
+    let table = render_history(&[r]);
+    assert!(table.contains("timeout"), "{table}");
+    assert!(table.contains("task-42"), "{table}");
+    assert!(table.contains("ran out of time"), "{table}");
+}
+
+#[test]
+fn the_history_table_shows_a_run_id_to_pass_to_cron_logs() {
+    let mut r = run(RunState::Succeeded);
+    r.id = "abcdef1234567890".to_string();
+    let table = render_history(&[r]);
+    assert!(table.contains("abcdef12"), "{table}");
+}
+
+#[test]
+fn a_very_long_preview_does_not_widen_the_detail_column() {
+    let mut r = run(RunState::Succeeded);
+    r.preview = "x".repeat(120);
+    let table = render_history(&[r]);
+    assert!(!table.contains(&"x".repeat(120)), "{table}");
+    assert!(table.contains("..."), "{table}");
+}
+
+#[test]
+fn a_run_with_nothing_to_say_shows_a_dash_not_an_empty_cell() {
+    // The fixture's own `preview` ("hello") is non-empty, so clear it to hit
+    // the case where a run has no reason, no task id and no preview.
+    let mut r = run(RunState::Succeeded);
+    r.preview.clear();
+    assert_eq!(run_detail(&r), "-");
+}
+
+#[test]
+fn render_run_output_labels_each_stream_and_says_when_one_is_empty() {
+    let output = dsh_types::cron::job::RunOutput {
+        run: run(RunState::Succeeded),
+        stdout: "hello\n".to_string(),
+        stderr: String::new(),
+    };
+    let text = render_run_output(&output, true, true);
+    assert!(text.contains("--- stdout ---"), "{text}");
+    assert!(text.contains("--- stderr ---"), "{text}");
+    assert!(text.contains("hello"), "{text}");
+    assert!(text.contains("(empty)"), "{text}");
+}
+
+#[test]
+fn render_run_output_with_one_stream_selected_has_no_headers() {
+    let output = dsh_types::cron::job::RunOutput {
+        run: run(RunState::Succeeded),
+        stdout: "hello\n".to_string(),
+        stderr: "oops\n".to_string(),
+    };
+    let text = render_run_output(&output, true, false);
+    assert!(!text.contains("---"), "{text}");
+    assert!(text.contains("hello"), "{text}");
+    assert!(!text.contains("oops"), "{text}");
+}
+
+#[test]
 fn empty_incidents_says_so() {
     assert_eq!(render_incidents(&[]), "No incidents.");
 }

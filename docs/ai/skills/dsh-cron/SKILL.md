@@ -10,7 +10,7 @@ description: Use when adding, editing or debugging a doge-shell cron job - cron 
 - Add an AI job with `--agent`: `cron add --agent --name NAME --tokens N --timeout 10m --write . --check '...' '<schedule>' -- '<goal>'`. Grants work exactly like `agent run`; nothing is asked at tick time, so a missing grant stalls the run instead of prompting.
 - Create new jobs `--paused`, run `cron run NAME --now` once to see the real output, then `cron resume NAME`.
 - Edit one field at a time: `cron edit NAME --schedule '...' | --command '...' | --on failure | --timeout 2m`. Re-adding the same `--name` with `cron add` needs `--force`; it never silently creates a duplicate.
-- Debug in this order: `cron status` -> `cron doctor` -> `cron history NAME --failed` -> `cron run NAME --now`. For an AI job continue with `agent show <task-id>` from the history row.
+- Debug in this order: `cron status` -> `cron doctor` -> `cron history NAME --failed` -> `cron logs NAME` -> `cron run NAME --now`. `cron logs NAME` shows a run's full recorded stdout/stderr - for an AI job this is a summary of its goal, its `--check` criteria, and its final answer (`agent show <task-id> --summary` is the same view from the agent side; plain `agent show <task-id>` stays the full, unabridged record and is where an `--allow-mcp` approval key is copied from).
 - An unattended AI job that needs an approval it was not granted shows up in `cron incidents`, not as a prompt. Add the grant with `cron edit`, then `cron incidents ack <id>`.
 - From inside a `!` chat or an `agent run` task, use the `cron_manage` tool, not `execute` - `cron` is a builtin, not a shell command, so `execute("cron ...")` cannot reach it. A job the tool creates always starts paused, and its grant can never exceed the calling task's own; see [references/ai-jobs.md](references/ai-jobs.md#the-agent-creating-and-managing-its-own-jobs).
 - Schedule grammar, intervals, `@daily`, and timezone behaviour: [references/schedule-syntax.md](references/schedule-syntax.md).
@@ -19,5 +19,5 @@ description: Use when adding, editing or debugging a doge-shell cron job - cron 
 - Budgets, grants and completion criteria for unattended AI jobs, plus the per-job notepad: [references/ai-jobs.md](references/ai-jobs.md).
 - Commands run under `sh -c` from the job's recorded `--cwd`; aliases, abbreviations, builtins and Lisp functions are not available inside them. Write the full command or call a script.
 - Never put a secret on a job's command line - `cron list` and `cron history` show it. Use `--env NAME` on an agent job, or read the secret inside the script.
-- `list`/`show`/`history`/`incidents`/`status`/`doctor` all take `--json` (`notepad` does not - it prints the raw text).
+- `list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` all take `--json` (`notepad` does not - it prints the raw text).
 - Removing a job or acknowledging an incident is a real decision - confirm with the person before running `cron rm` or `cron incidents ack`.

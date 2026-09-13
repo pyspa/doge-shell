@@ -619,3 +619,26 @@ pub struct RunQuery {
     pub finished_only: bool,
     pub failed_only: bool,
 }
+
+/// Which run's recorded output `cron logs` is asking for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunSelector {
+    /// The most recently finished run of this job (name or id).
+    Latest(String),
+    /// One exact run, by its id or a unique prefix of one (git-style).
+    Id(String),
+}
+
+/// One run's full recorded streams, read on demand.
+///
+/// Deliberately not fields on [`CronRun`]: `cron list`/`cron history` read up
+/// to 200 rows at a time, and carrying two 8 KiB columns through every one of
+/// them would make the common path (a table of recent runs) pay for the rare
+/// one (reading a single run's full output). `cron logs` is the only caller
+/// that needs the bytes, so it is the only one that asks for them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOutput {
+    pub run: CronRun,
+    pub stdout: String,
+    pub stderr: String,
+}

@@ -70,7 +70,6 @@ oversized	dsh-builtin/src/chatgpt/skills/mod.rs
 oversized	dsh-builtin/src/chatgpt/tool/execute.rs
 oversized	dsh-builtin/src/comp_gen.rs
 oversized	dsh/src/completion/dynamic.rs
-oversized	dsh/src/completion/dynamic/linux.rs
 oversized	dsh/src/completion/integrated.rs
 oversized	dsh/src/lisp/interpreter.rs
 oversized	dsh/src/proxy/shell_proxy.rs

@@ -369,11 +369,7 @@ impl DynamicCompletionProvider {
             return Vec::new();
         }
         // `modprobe -r` unloads, so only modules already in the kernel apply.
-        let scope = parsed_command_line
-            .raw_args
-            .iter()
-            .any(|arg| matches!(arg.as_str(), "-r" | "--remove"))
-            .then_some("loaded");
+        let scope = modprobe_removes_module(parsed_command_line).then_some("loaded");
         self.collect_kernel_module_candidates(
             scope,
             parsed_command_line.current_token.as_str(),

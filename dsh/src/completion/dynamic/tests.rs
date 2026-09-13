@@ -526,6 +526,43 @@ fn basic_dynamic_value_helpers_preserve_completion_context() {
     );
 }
 
+/// `-r` is what makes `modprobe` unload, and it is routinely bundled with its
+/// modifiers. Matching the whole token offered the full `/lib/modules` list for
+/// every bundled form, when only the loaded modules can actually be removed.
+#[test]
+fn modprobe_removal_is_recognised_bundled_and_long() {
+    for line in [
+        "modprobe -r ",
+        "modprobe -rv ",
+        "modprobe -vr ",
+        "modprobe -nr ",
+        "modprobe --remove ",
+        "modprobe -v -r ",
+    ] {
+        assert!(
+            modprobe_removes_module(&parsed(line)),
+            "{line:?} removes a module"
+        );
+    }
+
+    for line in [
+        "modprobe ",
+        "modprobe -v ",
+        // A long option that merely contains an `r` is not `-r`.
+        "modprobe --dry-run ",
+        // A module named `r` is not the flag.
+        "modprobe r ",
+        // Still typing the flag itself, so there is no module name to scope.
+        "modprobe -r",
+        "modprobe -rv",
+    ] {
+        assert!(
+            !modprobe_removes_module(&parsed(line)),
+            "{line:?} does not remove a module"
+        );
+    }
+}
+
 #[test]
 fn archive_helpers_find_read_archive_without_treating_create_as_read() {
     let dir = Path::new("/work");
@@ -687,6 +724,53 @@ fn wireguard_config_names_strip_conf_suffix_and_ignore_other_files() {
         collect_wireguard_config_names_from_dirs([dir.path()]),
         vec!["wg-dev".to_string(), "wg0".to_string()]
     );
+}
+
+/// This provider used to `read_dir` inline, so the ghost-text path -- which
+/// asks with `CachePolicy::CachedOnly` on every keystroke -- walked the config
+/// directory and the cwd on the key-handling thread. It now goes through the
+/// cache engine like every sibling: cold returns nothing and the answer lands
+/// on the background refresh.
+#[test]
+fn wireguard_config_completion_does_not_block_the_key_handler() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("wg0.conf"), "").unwrap();
+
+    let provider = DynamicCompletionProvider::new(Environment::new());
+
+    let cached_only = provider.collect_declared_dynamic_candidates(
+        "wireguard.config",
+        None,
+        &parsed("wg-quick up wg"),
+        dir.path(),
+        CachePolicy::CachedOnly,
+    );
+    assert!(
+        cached_only.is_empty(),
+        "CachedOnly must not reach the filesystem"
+    );
+
+    let cold = provider.collect_declared_dynamic_candidates(
+        "wireguard.config",
+        None,
+        &parsed("wg-quick up wg"),
+        dir.path(),
+        CachePolicy::RefreshInBackground,
+    );
+    assert!(cold.is_empty(), "cold provider must not block TAB");
+
+    assert!(wait_until(Duration::from_secs(20), || {
+        provider
+            .collect_declared_dynamic_candidates(
+                "wireguard.config",
+                None,
+                &parsed("wg-quick up wg"),
+                dir.path(),
+                CachePolicy::CachedOnly,
+            )
+            .iter()
+            .any(|candidate| candidate.text == "wg0")
+    }));
 }
 
 #[test]

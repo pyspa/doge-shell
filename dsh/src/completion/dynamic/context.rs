@@ -27,6 +27,31 @@ pub(super) fn tar_reads_archive(parsed_command_line: &ParsedCommandLine) -> bool
         })
 }
 
+/// Whether this `modprobe` line unloads rather than loads.
+///
+/// `-r` is routinely bundled with its modifiers (`modprobe -rv`, `-nr`), and
+/// matching the whole token -- as this used to -- left every bundled form
+/// offering the whole `/lib/modules` list instead of the loaded modules `-r`
+/// can actually remove. Same shape as `tar_reads_archive` above.
+///
+/// Long options are excluded from the cluster scan on purpose: `--remove` is
+/// modprobe's only long spelling of this, and `--dry-run` must not match on its
+/// `r`.
+pub(super) fn modprobe_removes_module(parsed_command_line: &ParsedCommandLine) -> bool {
+    completion_words(parsed_command_line)
+        .into_iter()
+        // The token under the cursor is still being typed: `modprobe -r<TAB>`
+        // is completing the flag itself, not a module name for it.
+        .filter(|word| *word != parsed_command_line.current_token)
+        .any(|word| {
+            word == "--remove"
+                || word
+                    .strip_prefix('-')
+                    .filter(|flags| !flags.starts_with('-'))
+                    .is_some_and(|flags| flags.contains('r'))
+        })
+}
+
 pub(super) fn selected_tar_archive(
     parsed_command_line: &ParsedCommandLine,
     current_dir: &Path,

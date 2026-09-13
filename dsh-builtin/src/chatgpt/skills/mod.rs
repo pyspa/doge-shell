@@ -27,10 +27,16 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
+mod frontmatter;
 pub(crate) mod lint;
+mod mentions;
 pub(crate) mod pending;
 pub(crate) mod trust;
 pub(crate) mod usage;
+
+pub(crate) use frontmatter::truncate_chars;
+use frontmatter::{extract_skill_summary, frontmatter_field, is_indented, split_frontmatter};
+pub(crate) use mentions::{note_skill_read, render_mention, split_leading_mentions};
 
 /// FNV-1a over raw bytes, formatted as lowercase hex.
 ///
@@ -482,154 +488,6 @@ struct CachedSkillsFragment {
     fragment: String,
 }
 
-/// Returns `(raw, truncated_for_prompt)`. The raw half is what the trust
-/// digest hashes; the truncated half is what the prompt fragment shows.
-/// Collapsed to one line; not yet truncated for the prompt - `Skill::summary`
-/// does that on demand.
-fn extract_skill_summary(instruction: &str) -> String {
-    let (frontmatter, body) = split_frontmatter(instruction);
-    if let Some(description) = frontmatter_field(frontmatter, "description") {
-        return collapse_whitespace(&description);
-    }
-
-    let body_summary = body
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty() && !line.starts_with('#'))
-        .unwrap_or("No description available.");
-    collapse_whitespace(body_summary)
-}
-
-fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
-    let mut offset = 0usize;
-    let mut lines = content.split_inclusive('\n');
-
-    let Some(first) = lines.next() else {
-        return (None, content);
-    };
-    offset += first.len();
-
-    if first.trim() != "---" {
-        return (None, content);
-    }
-
-    for line in lines {
-        offset += line.len();
-        if line.trim() == "---" {
-            let frontmatter = &content[first.len()..offset - line.len()];
-            let body = &content[offset..];
-            return (Some(frontmatter), body);
-        }
-    }
-
-    (None, content)
-}
-
-/// Whether `line` is indented and therefore not a top-level frontmatter key.
-///
-/// Shared between `frontmatter_field` (which skips such a line) and
-/// `lint::nested_key` (which explains to a writer why it was skipped), so the
-/// two can never disagree about what counts as nested.
-fn is_indented(line: &str) -> bool {
-    line.starts_with([' ', '\t'])
-}
-
-/// Read one top-level scalar out of the frontmatter.
-///
-/// Deliberately not a YAML parser. The only writer that has to round-trip
-/// through it is `skill_manage`, which emits a flat `name`/`description` pair,
-/// and every skill shipped with the repository is flat too. What it does have to
-/// get right is the two shapes that silently produced the wrong answer: an
-/// indented key belonging to some other mapping, and a block scalar whose value
-/// starts on the following line.
-fn frontmatter_field(frontmatter: Option<&str>, key: &str) -> Option<String> {
-    let frontmatter = frontmatter?;
-    let mut lines = frontmatter.lines().peekable();
-
-    while let Some(line) = lines.next() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        // Only top-level keys. Without this a `description:` nested under
-        // `metadata:` was read as if it were the skill's own summary.
-        if is_indented(line) {
-            continue;
-        }
-
-        let Some((field, value)) = trimmed.split_once(':') else {
-            continue;
-        };
-        if field.trim() != key {
-            continue;
-        }
-
-        let value = value.trim();
-        if !value.is_empty() && !matches!(value, ">" | ">-" | ">+" | "|" | "|-" | "|+") {
-            return Some(strip_matching_quotes(value).to_string());
-        }
-
-        // A block scalar, or a key whose value is on the following lines. The
-        // result is only ever rendered as one collapsed line, so the difference
-        // between folding and literal blocks does not matter here.
-        let mut collected = String::new();
-        while let Some(next) = lines.peek() {
-            if next.trim().is_empty() {
-                lines.next();
-                continue;
-            }
-            if !next.starts_with([' ', '\t']) {
-                break;
-            }
-            collected.push(' ');
-            collected.push_str(next.trim());
-            lines.next();
-        }
-
-        let collected = collected.trim().to_string();
-        return (!collected.is_empty()).then_some(collected);
-    }
-
-    None
-}
-
-fn strip_matching_quotes(value: &str) -> &str {
-    if value.len() >= 2 {
-        let bytes = value.as_bytes();
-        let first = bytes[0];
-        let last = bytes[value.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &value[1..value.len() - 1];
-        }
-    }
-
-    value
-}
-
-fn collapse_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Cut `text` to `max_chars`, appending `...` if it did not already fit.
-///
-/// Shared with `skill list` (`crate::skill`), which truncates to a narrower,
-/// terminal-column budget than the prompt's own - two different constraints
-/// on the same description, not two different truncation rules.
-pub(crate) fn truncate_chars(text: &str, max_chars: usize) -> String {
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        return text.to_string();
-    }
-
-    let end = text
-        .char_indices()
-        .nth(max_chars)
-        .map(|(idx, _)| idx)
-        .unwrap_or(text.len());
-    format!("{}...", &text[..end])
-}
-
 pub(crate) struct SkillsManager {
     roots: Vec<SkillRoot>,
 }
@@ -1005,120 +863,6 @@ fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
 pub(crate) fn clear_skills_fragment_cache() {
     if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
         *cache = None;
-    }
-}
-
-/// How many `@name` mentions one message may carry.
-const MAX_MENTIONS: usize = 5;
-/// How many bundled files to list when a skill is invoked by name.
-const MAX_LISTED_RESOURCES: usize = 20;
-
-/// Split leading `@name` mentions off the front of a chat message.
-///
-/// A skill's summary is in the prompt, but whether the model acts on it is its
-/// own judgement, and a shell conversation is often over in one turn - there is
-/// no second chance for it to notice. `@name` is the user saying so outright.
-///
-/// Parsing stops at the first token that is not a known skill, so `@user@host`,
-/// an email address, or a message that merely starts with `@` are left alone.
-/// `@` was chosen over `/` and `$`: one is a path, the other a variable.
-pub(crate) fn split_leading_mentions<'a>(
-    input: &'a str,
-    is_skill: &dyn Fn(&str) -> bool,
-) -> (Vec<String>, &'a str) {
-    let mut names = Vec::new();
-    let mut rest = input.trim_start();
-
-    while names.len() < MAX_MENTIONS {
-        let Some(candidate) = rest.strip_prefix('@') else {
-            break;
-        };
-        let end = candidate
-            .find(char::is_whitespace)
-            .unwrap_or(candidate.len());
-        let name = &candidate[..end];
-        if name.is_empty() || !is_skill(name) || names.iter().any(|seen| seen == name) {
-            break;
-        }
-        names.push(name.to_string());
-        rest = candidate[end..].trim_start();
-    }
-
-    (names, rest)
-}
-
-/// The full text of a skill, with its bundled files named but not read.
-///
-/// Listing `references/`, `scripts/` and `assets/` is the difference between
-/// the model knowing they exist and having to guess that an `ls` might be worth
-/// a turn. They are named, never loaded: that is the whole point of the tier.
-pub(crate) fn render_mention(skill: &Skill) -> Option<String> {
-    let path = skill.instruction_file();
-    let body = std::fs::read_to_string(&path).ok()?;
-
-    let mut rendered = format!(
-        "Skill `{}` ({}), loaded because the user asked for it by name:
-
-{}",
-        skill.name,
-        skill.instruction_path(),
-        body.trim_end()
-    );
-
-    let resources = bundled_resources(skill.dir());
-    if !resources.is_empty() {
-        rendered.push_str(&format!(
-            "
-
-Files bundled with this skill, relative to `{}` - read one with `read_file` only if the instructions above call for it:
-",
-            crate::config_paths::display_path(skill.dir())
-        ));
-        for resource in resources {
-            rendered.push_str(&format!(
-                "- {resource}
-"
-            ));
-        }
-    }
-
-    Some(rendered)
-}
-
-fn bundled_resources(dir: &Path) -> Vec<String> {
-    if !dir.is_dir() {
-        return Vec::new();
-    }
-
-    let mut found = Vec::new();
-    for section in ["references", "scripts", "assets"] {
-        let Ok(entries) = std::fs::read_dir(dir.join(section)) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            if !entry.path().is_file() {
-                continue;
-            }
-            if let Some(name) = entry.file_name().to_str() {
-                found.push(format!("{section}/{name}"));
-            }
-            if found.len() >= MAX_LISTED_RESOURCES {
-                found.push("... (more not listed)".to_string());
-                return found;
-            }
-        }
-    }
-
-    found.sort();
-    found
-}
-
-/// Attribute a successful `read_file` to the skill that owns the path.
-///
-/// A no-op for every path outside a skill root, which is almost all of them.
-pub(crate) fn note_skill_read(path: &Path, current_dir: &Path) {
-    if let Some((dir, scope)) = containing_skill(path, current_dir) {
-        usage::note_read(&dir, scope);
     }
 }
 

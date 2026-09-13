@@ -41,7 +41,6 @@ no-doc	dsh/src/completion/parser.rs
 no-doc	dsh/src/completion/path.rs
 no-doc	dsh/src/completion/selection.rs
 no-doc	dsh/src/input/editor.rs
-no-doc	dsh/src/lisp/builtin.rs
 no-doc	dsh/src/lisp/default_environment.rs
 no-doc	dsh/src/lisp/interpreter.rs
 no-doc	dsh/src/lisp/mod.rs
@@ -78,7 +77,6 @@ oversized	dsh/src/completion/dynamic.rs
 oversized	dsh/src/completion/dynamic/dev.rs
 oversized	dsh/src/completion/dynamic/linux.rs
 oversized	dsh/src/completion/integrated.rs
-oversized	dsh/src/lisp/builtin.rs
 oversized	dsh/src/lisp/interpreter.rs
 oversized	dsh/src/lisp/model/table.rs
 oversized	dsh/src/parser/expansion.rs

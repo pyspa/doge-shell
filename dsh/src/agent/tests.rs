@@ -712,3 +712,52 @@ fn blocked_reason_for_is_none_for_every_terminal_status() {
         );
     }
 }
+
+/// The regression this guards: a criteria-less task (the common case -
+/// `--check` is optional) that finished cleanly must count as succeeded, not
+/// be reported as failed because it "wasn't verified" when there was nothing
+/// to verify in the first place.
+#[test]
+fn a_completed_task_with_no_criteria_counts_as_succeeded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut t = task(dir.path());
+    t.status = TaskStatus::Completed;
+    t.criteria.clear();
+    assert!(task_completed(&t));
+}
+
+#[test]
+fn a_completed_task_with_criteria_needs_them_all_verified() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut t = task(dir.path());
+    t.status = TaskStatus::Completed;
+    t.criteria = vec![Verification {
+        criterion: "a file exists".to_string(),
+        evidence_event: None,
+        passed: false,
+    }];
+    assert!(
+        !task_completed(&t),
+        "unverified criteria must not count as completed"
+    );
+
+    t.criteria[0].passed = true;
+    t.criteria[0].evidence_event = Some(1);
+    assert!(task_completed(&t));
+}
+
+#[test]
+fn only_the_completed_status_can_count_as_completed() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut t = task(dir.path());
+    for status in [
+        TaskStatus::Running,
+        TaskStatus::InputRequired,
+        TaskStatus::Interrupted,
+        TaskStatus::Failed,
+        TaskStatus::Cancelled,
+    ] {
+        t.status = status;
+        assert!(!task_completed(&t), "{status:?}");
+    }
+}

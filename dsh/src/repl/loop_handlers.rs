@@ -61,7 +61,6 @@ impl<'a> Repl<'a> {
             }
             event_loop::LoopEvent::ExplanationIdle => self.handle_explanation_idle(),
             event_loop::LoopEvent::GitRefresh => self.handle_git_refresh_request(),
-            event_loop::LoopEvent::Scheduler(event) => self.handle_scheduler_event(event),
             event_loop::LoopEvent::CompletionRefresh => self.handle_completion_refresh(),
             event_loop::LoopEvent::Ai(event) => self.handle_ai_event(event),
             event_loop::LoopEvent::BackgroundIo(event) => self.handle_background_io_event(event),
@@ -380,7 +379,7 @@ impl<'a> Repl<'a> {
             }
         }
 
-        let scheduler = self.shell.environment.read().scheduler.clone();
+        let cron = self.shell.environment.read().cron_health.clone();
         let job_count = self.shell.wait_jobs.len();
         let (git, github) = {
             let prompt = self.terminal_ui.prompt.read();
@@ -393,8 +392,7 @@ impl<'a> Repl<'a> {
             )
         };
 
-        let content =
-            status_line::compose(&scheduler.read(), job_count, git.as_ref(), github.as_ref());
+        let content = status_line::compose(&cron.read(), job_count, git.as_ref(), github.as_ref());
 
         let mut renderer = TerminalRenderer::new();
         self.terminal_ui
@@ -406,72 +404,6 @@ impl<'a> Repl<'a> {
 
     /// Files a finished scheduled run and, if its policy says so, tells the
     /// user about it.
-    ///
-    /// Runs on the REPL task, so it is never concurrent with a redraw. While a
-    /// foreground command is executing the select loop is not polled at all,
-    /// which is what keeps these notices from landing in the middle of another
-    /// command's output — they queue and appear at the next prompt.
-    fn handle_scheduler_event(&mut self, event: crate::scheduler::SchedulerEvent) {
-        // `out` and `tm` only ever display this string, so it can carry a label
-        // marking the run as scheduled rather than typed.
-        let label = format!("sched:{} {}", event.name, event.command);
-
-        let entry = dsh_types::output_history::OutputEntry::new(
-            label,
-            event.stdout.clone(),
-            event.stderr.clone(),
-            event.exit_code,
-        );
-
-        {
-            let mut environment = self.shell.environment.write();
-            let history = &mut environment.session_output_state.output_history;
-            history.push(entry);
-            // `push` inserts at the front, so index 1 is the entry we just
-            // added. Taking the *last* one would attach some unrelated older
-            // command's output to this block.
-            let recorded: Vec<_> = history.get(1).cloned().into_iter().collect();
-
-            let block = dsh_types::command_block::CommandBlock::new(
-                // The block's command is what `blocks rerun` feeds back to the
-                // evaluator, so it has to stay executable — no `sched:` prefix
-                // here, unlike the output-history entry above.
-                event.command.clone(),
-                Some(event.cwd.clone()),
-                event.exit_code,
-                event.duration.as_millis() as u64,
-                &recorded,
-                None,
-            );
-            environment.session_output_state.command_blocks.push(block);
-        }
-
-        if !event.notify {
-            return;
-        }
-
-        let mut renderer = TerminalRenderer::new();
-        render::print_above_prompt(self, &mut renderer, &[event.notice()]);
-        renderer.flush().ok();
-        // `print_above_prompt` erased the reserved row; repaint now rather than
-        // leaving it blank until the next tick.
-        self.refresh_status_line();
-
-        let prefs = self
-            .shell
-            .environment
-            .read()
-            .completion_state
-            .input_preferences;
-        notify::notify_scheduled_task(
-            &prefs,
-            &event.name,
-            &event.command,
-            event.exit_code,
-            event.timed_out,
-        );
-    }
-
     fn handle_git_refresh_request(&mut self) {
         let now = Instant::now();
         let is_throttled = self.background_tasks.last_git_update.is_some_and(|last| {

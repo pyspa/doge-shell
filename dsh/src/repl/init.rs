@@ -97,15 +97,21 @@ impl<'a> Repl<'a> {
         // Set github_status in shell as well for proxy access
         shell.github_status = Some(status_for_github);
 
-        // The scheduler runner shares the task list with `Environment` and
-        // reports finished runs back over this channel. Spawned here rather
-        // than driven from `handle_background_tick`, because that tick is
-        // awaited inside the key-event select: a slow task would freeze input.
-        let (sched_tx, sched_rx) = tokio::sync::mpsc::unbounded_channel();
-        let sched_task = tokio::spawn(crate::scheduler::runner::scheduler_task(
-            shell.environment.read().scheduler.clone(),
-            sched_tx,
-        ));
+        // The cron store lives on disk, independent of any one session, so a
+        // session merely opens it (or, if that fails, simply runs without an
+        // in-session driver — jobs still fire from an external tick).
+        let cron_task = match crate::cron::store::SqliteCronStore::open(
+            &dsh_builtin::config_paths::cron_state_dir(),
+        ) {
+            Ok(store) => Some(tokio::spawn(crate::cron::runner::cron_runner_task(
+                Arc::new(store),
+                shell.environment.read().cron_health.clone(),
+            ))),
+            Err(error) => {
+                warn!("cron: session driver disabled, could not open its store: {error}");
+                None
+            }
+        };
 
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
@@ -165,7 +171,6 @@ impl<'a> Repl<'a> {
         let event_loop = event_loop::ReplEventLoop::new(
             AI_SUGGESTION_REFRESH_MS,
             git_rx,
-            sched_rx,
             completion_rx,
             ai_rx,
             background_io_rx,
@@ -220,7 +225,7 @@ impl<'a> Repl<'a> {
                 git_task_inflight: Arc::new(AtomicBool::new(false)),
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
-                sched_task: Some(sched_task),
+                cron_task,
                 io: background_io,
             },
             event_loop,

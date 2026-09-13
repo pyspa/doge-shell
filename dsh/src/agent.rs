@@ -92,7 +92,38 @@ impl SqliteTaskStore {
         tx.commit()?;
         Ok(())
     }
-    fn recover_interrupted(&self) -> Result<()> {
+    /// Like [`Self::execution_lock`], but tells "busy" apart from "broken".
+    ///
+    /// cron needs the distinction that `execution_lock` collapses into one
+    /// error: another task holding the lock is an ordinary skip to retry on
+    /// the next tick, while a state directory that cannot be opened at all is
+    /// an incident a person has to clear.
+    /// Adds a value to the set masked out of everything this store writes.
+    ///
+    /// `command` does this for the API key; cron has to do the same before it
+    /// starts an unattended task, because that task's events outlive the
+    /// session that produced them.
+    pub(crate) fn remember_secret(&self, value: &str) {
+        if value.len() >= 4 {
+            self.secrets.lock().push(value.to_string());
+        }
+    }
+    pub(crate) fn try_execution_lock(&self) -> Result<Option<File>> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(self.root.join("active.lock"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(file)),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+        }
+    }
+    pub(crate) fn recover_interrupted(&self) -> Result<()> {
         // A live owner holds the lock. Only recover after proving it is gone.
         let Ok(_lock) = self.execution_lock() else {
             return Ok(());
@@ -279,12 +310,32 @@ const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--wri
 /// this path, "blocked" is a final state the turn ends in - detected here,
 /// after `execute_chat_message` has already returned - not a bracket that
 /// resolves before the turn is over.
+/// Whether a finished task counts as having succeeded.
+///
+/// `AgentTask::verified()` is false whenever no `--check` criteria were ever
+/// given (its `!criteria.is_empty()` guard) - a task run without any is not
+/// thereby unverifiable, it simply has nothing to verify, and `Completed`
+/// alone is the answer. Only a task that *was* given criteria has to have
+/// them all pass.
+fn task_completed(task: &AgentTask) -> bool {
+    task.status == TaskStatus::Completed && (task.criteria.is_empty() || task.verified())
+}
+
 fn blocked_reason_for(status: TaskStatus, stop_reason: Option<&str>) -> Option<String> {
     (status == TaskStatus::InputRequired).then(|| {
         stop_reason
             .map(str::to_string)
             .unwrap_or_else(|| "agent task needs approval".to_string())
     })
+}
+
+/// A setting, shell variable first and process environment second.
+///
+/// The order matters and is the same one `chatgpt::load_openai_config` uses;
+/// a new key that only reads `std::env` would be invisible to `var`.
+fn setting(shell: &mut crate::shell::Shell, key: &str) -> Option<String> {
+    use dsh_builtin::ShellProxy;
+    shell.get_var(key).or_else(|| std::env::var(key).ok())
 }
 
 pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
@@ -399,9 +450,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         bail!("unknown agent action; {HELP}");
     }
     let _lock = store.execution_lock()?;
-    let setting = |shell: &mut crate::shell::Shell, key: &str| {
-        shell.get_var(key).or_else(|| std::env::var(key).ok())
-    };
+
     let root = shell.get_current_dir()?.canonicalize()?;
     let mut task = if action == "resume" {
         store.load(argv.get(2).context("task ID required")?)?
@@ -448,6 +497,15 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         }
         let value = argv.get(index).context("option value required")?;
         index += 1;
+        // Grant-shaped options (`--read`/`--write`/`--allow-command`/
+        // `--allow-mcp`/`--network`/`--env`) are shared with `cron add
+        // --agent`, so an unattended job's grant validates exactly the way
+        // an interactive one does.
+        if matches!(action, "run" | "resume")
+            && dsh_builtin::agent::grant::apply_grant_option(&mut task.grant, option, value)?
+        {
+            continue;
+        }
         match option.as_str() {
             "--tokens" => task.token_budget = value.parse()?,
             "--timeout" => {
@@ -457,32 +515,6 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                     .context("timeout too large")?
             }
             "--reconcile" if action == "resume" => reconcile = Some(value.clone()),
-            "--read" | "--write" if matches!(action, "run" | "resume") => {
-                let path = PathBuf::from(shellexpand::tilde(value).as_ref()).canonicalize()?;
-                if !path.is_dir() {
-                    bail!("grant must name an existing directory");
-                }
-                if option == "--read" {
-                    task.grant.read_roots.push(path);
-                } else {
-                    task.grant.write_roots.push(path);
-                }
-            }
-            "--allow-command" if matches!(action, "run" | "resume") => {
-                task.grant.commands.push(value.clone())
-            }
-            "--allow-mcp" if matches!(action, "run" | "resume") => {
-                task.grant.mcp_calls.push(value.clone())
-            }
-            "--network" if matches!(action, "run" | "resume") => {
-                if value.contains(['/', ':', '*']) || value.trim().is_empty() {
-                    bail!("network grant must be an exact host");
-                }
-                task.grant.network_hosts.push(value.clone());
-            }
-            "--env" if matches!(action, "run" | "resume") => {
-                task.grant.environment.push(value.clone())
-            }
             "--check" if action == "run" => task.criteria.push(Verification {
                 criterion: value.clone(),
                 evidence_event: None,
@@ -491,6 +523,44 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             _ => bail!("unsupported option {option}"),
         }
     }
+    let report = run_task(shell, ctx, &store, task, reconcile)?;
+    if !report.succeeded {
+        bail!("task {} stopped; inspect with agent show", report.id);
+    }
+    Ok(())
+}
+
+/// What one task run ended up doing.
+///
+/// `command` turns a non-success into an error because a person typed
+/// `agent run` and is waiting for an exit code. Cron cannot: an unattended run
+/// that needs a permission is a case to record, not a failure to propagate, so
+/// the shared path reports and lets each caller decide.
+pub(crate) struct TaskRunReport {
+    pub id: String,
+    pub status: TaskStatus,
+    pub stop_reason: Option<String>,
+    pub tokens_used: u64,
+    /// Completed **and** every criterion verified against a recorded result.
+    pub succeeded: bool,
+}
+
+/// Runs one prepared task to a stopping point.
+///
+/// Split out of [`command`] so `cron` can start a task from a stored spec
+/// instead of rebuilding a command line: the goal and the grant travel as
+/// values and never pass through a shell parser. Everything else - the
+/// lifecycle reporting, the working-directory restore, the single
+/// `agent_runtime` slot - is identical, deliberately, so an unattended run is
+/// the same run a person would have got.
+pub(crate) fn run_task(
+    shell: &mut crate::shell::Shell,
+    ctx: &Context,
+    store: &Arc<SqliteTaskStore>,
+    mut task: AgentTask,
+    reconcile: Option<String>,
+) -> Result<TaskRunReport> {
+    use dsh_builtin::ShellProxy;
     for path in task
         .grant
         .read_roots
@@ -545,7 +615,10 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     }
     let goal = task.goal.clone();
     let id = task.id.clone();
-    shell.agent_runtime = Some(Arc::new(Mutex::new(AgentRuntime::new(task, store))));
+    shell.agent_runtime = Some(Arc::new(Mutex::new(AgentRuntime::new(
+        task,
+        Arc::clone(store) as Arc<dyn AgentTaskStore>,
+    ))));
     let lifecycle = crate::agent_lifecycle::current(shell);
     let turn = lifecycle.begin_turn();
     let status = dsh_builtin::execute_chat_message(ctx, shell, &goal, None);
@@ -558,6 +631,9 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     // does. Reported explicitly, before `turn` drops, so `TurnGuard::drop`
     // sees it and skips forcing `Idle` over it.
     let mut blocked_reason = None;
+    let mut final_status = TaskStatus::Interrupted;
+    let mut stop_reason = None;
+    let mut tokens_used = 0;
     let cleanup = if let Some(runtime) = shell.agent_runtime.take() {
         let mut runtime = runtime.lock();
         let result = if runtime.task.status == TaskStatus::Running {
@@ -565,7 +641,10 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         } else {
             Ok(())
         };
-        completed = runtime.task.status == TaskStatus::Completed;
+        completed = task_completed(&runtime.task);
+        final_status = runtime.task.status;
+        stop_reason = runtime.task.stop_reason.clone();
+        tokens_used = runtime.task.tokens_used;
         blocked_reason =
             blocked_reason_for(runtime.task.status, runtime.task.stop_reason.as_deref());
         result.and_then(|()| {
@@ -589,10 +668,17 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     let restored = shell.changepwd(&old_cwd.to_string_lossy());
     cleanup?;
     restored?;
-    if status != dsh_types::ExitStatus::ExitedWith(0) || !completed {
-        bail!("task {id} stopped; inspect with agent show");
-    }
-    Ok(())
+
+    Ok(TaskRunReport {
+        id,
+        status: final_status,
+        stop_reason,
+        tokens_used,
+        // The model saying it is done is not the same as it being done: a task
+        // counts as succeeded only when the chat loop exited cleanly *and*
+        // every criterion was verified against a recorded tool result.
+        succeeded: status == dsh_types::ExitStatus::ExitedWith(0) && completed,
+    })
 }
 
 #[cfg(test)]

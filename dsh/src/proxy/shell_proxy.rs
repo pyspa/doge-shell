@@ -124,62 +124,6 @@ impl ShellProxy for Shell {
         self.environment.write().dir_stack = stack;
     }
 
-    fn sched_add(&mut self, spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
-        // Snapshot the environment now: the task runs detached later, and
-        // should see the PATH and exports that were in effect when it was
-        // registered rather than whatever the session drifts to.
-        let (scheduler, env) = {
-            let environment = self.environment.read();
-            (
-                environment.scheduler.clone(),
-                environment.child_process_env(),
-            )
-        };
-
-        scheduler.write().add(spec, env)
-    }
-
-    fn sched_remove(&mut self, selector: &str) -> Result<String, String> {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.write().remove(selector)
-    }
-
-    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String> {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.write().set_paused(selector, paused)
-    }
-
-    fn sched_trigger(&mut self, selector: &str) -> Result<String, String> {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.write().trigger(selector)
-    }
-
-    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.read().views()
-    }
-
-    fn sched_as_lisp(&self) -> Vec<String> {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.read().as_lisp()
-    }
-
-    fn sched_enabled(&self) -> bool {
-        let scheduler = self.environment.read().scheduler.clone();
-
-        scheduler.read().enabled
-    }
-
-    fn sched_set_enabled(&mut self, enabled: bool) {
-        let scheduler = self.environment.read().scheduler.clone();
-        scheduler.write().set_enabled(enabled);
-    }
-
     fn insert_path(&mut self, idx: usize, path: &str) {
         self.environment
             .write()
@@ -204,6 +148,7 @@ impl ShellProxy for Shell {
     ) -> Result<()> {
         match action {
             CoreShellAction::Agent => crate::agent::command(self, ctx, argv),
+            CoreShellAction::Cron => crate::cron::command(self, ctx, argv),
             CoreShellAction::Exit => builtin::exit::execute(self, ctx, argv),
             CoreShellAction::History => builtin::history::execute(self, ctx, argv),
             CoreShellAction::Reload => builtin::reload::execute(self, ctx, argv),

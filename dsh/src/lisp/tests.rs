@@ -35,6 +35,40 @@ where
     }
 }
 
+/// `cron-add` and friends open the real cron store by way of
+/// `XDG_STATE_HOME`, unlike the old in-memory `sched-add` that each test's
+/// own fresh `Environment` isolated automatically. Without this, a test
+/// exercising them would read and write the developer's actual cron jobs -
+/// or, run in parallel with another such test, race it on the same file.
+fn with_test_state_home<F>(test_fn: F)
+where
+    F: FnOnce(),
+{
+    let _guard = crate::test_env_lock();
+    let previous = std::env::var_os("XDG_STATE_HOME");
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("dsh-test-state-{unique}"));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    unsafe {
+        std::env::set_var("XDG_STATE_HOME", OsString::from(dir));
+    }
+
+    test_fn();
+
+    match previous {
+        Some(value) => unsafe {
+            std::env::set_var("XDG_STATE_HOME", value);
+        },
+        None => unsafe {
+            std::env::remove_var("XDG_STATE_HOME");
+        },
+    }
+}
+
 #[test]
 fn test_run_lisp() {
     init();
@@ -210,55 +244,197 @@ fn bind_and_unbind_update_the_environment() {
 }
 
 #[test]
-fn sched_add_registers_a_task_from_lisp() {
-    init();
-    let env = Environment::new();
-    let engine = LispEngine::new(env.clone());
+fn cron_add_registers_a_job_from_lisp() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
 
-    let res = engine
-        .borrow()
-        .run("(sched-add \"fetch\" \"5m\" \"git fetch --all\" \"change\")");
-    assert!(res.is_ok(), "{res:?}");
+        let res = engine
+            .borrow()
+            .run("(cron-add \"fetch\" \"5m\" \"git fetch --all\" \"change\")");
+        assert!(res.is_ok(), "{res:?}");
 
-    let listed = env.read().sched_descriptions();
-    assert_eq!(
-        listed,
-        vec!["fetch every 5m -> git fetch --all".to_string()]
-    );
+        let listed = engine.borrow().run("(cron-list)");
+        let Ok(Value::List(jobs)) = listed else {
+            panic!("expected a list, got {listed:?}");
+        };
+        let jobs: Vec<Value> = List::into_iter(&jobs).collect();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].to_string(), "fetch 5m -> git fetch --all");
 
-    assert!(engine.borrow().run("(sched-pause \"fetch\")").is_ok());
-    assert!(env.read().sched_descriptions()[0].ends_with("(paused)"));
+        assert!(engine.borrow().run("(cron-pause \"fetch\")").is_ok());
+        let Value::List(jobs) = engine.borrow().run("(cron-list)").unwrap() else {
+            unreachable!()
+        };
+        let jobs: Vec<Value> = List::into_iter(&jobs).collect();
+        assert!(jobs[0].to_string().ends_with("(paused)"));
 
-    assert!(engine.borrow().run("(sched-remove \"fetch\")").is_ok());
-    assert!(env.read().sched_descriptions().is_empty());
+        assert!(engine.borrow().run("(cron-remove \"fetch\")").is_ok());
+        let Value::List(jobs) = engine.borrow().run("(cron-list)").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(List::into_iter(&jobs).count(), 0);
+    });
 }
 
 #[test]
-fn sched_add_rejects_bad_arguments() {
-    init();
-    let env = Environment::new();
-    let engine = LispEngine::new(env);
+fn cron_add_rejects_bad_arguments() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
 
-    // Interval below the 5s floor.
-    assert!(
+        // Interval below the 5s floor.
+        assert!(
+            engine
+                .borrow()
+                .run("(cron-add \"a\" \"1s\" \"true\")")
+                .is_err()
+        );
+        assert!(
+            engine
+                .borrow()
+                .run("(cron-add \"a\" \"5x\" \"true\")")
+                .is_err()
+        );
+        assert!(
+            engine
+                .borrow()
+                .run("(cron-add \"a\" \"5m\" \"true\" \"sometimes\")")
+                .is_err()
+        );
+        assert!(engine.borrow().run("(cron-add \"a\" \"5m\")").is_err());
+    });
+}
+
+/// The bug this guards against: `cron_add` built its `CronJobSpec` by hand
+/// and never applied `cli::parse::parse_add`'s `MAX_NAME_LEN`/non-empty
+/// check on the name - unlike `cron add`, `(cron-add "" ...)` or a wildly
+/// long name reached the store unvalidated, even though the name becomes a
+/// notepad and lease-file name.
+#[test]
+fn cron_add_rejects_a_bad_name() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        assert!(
+            engine
+                .borrow()
+                .run("(cron-add \"\" \"5m\" \"true\")")
+                .is_err(),
+            "an empty name must be refused"
+        );
+        let too_long = "a".repeat(65);
+        assert!(
+            engine
+                .borrow()
+                .run(&format!("(cron-add \"{too_long}\" \"5m\" \"true\")"))
+                .is_err(),
+            "a name over 64 characters must be refused"
+        );
+    });
+}
+
+/// `config.lisp` runs `(cron-add ...)` on every launch; unlike the old
+/// in-memory `sched-add`, this now persists, so a second run must replace
+/// the job rather than erroring or leaving two of it behind.
+#[test]
+fn cron_add_upserts_by_name_rather_than_duplicating() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        for _ in 0..3 {
+            let res = engine
+                .borrow()
+                .run("(cron-add \"fetch\" \"5m\" \"git fetch --all\")");
+            assert!(res.is_ok(), "{res:?}");
+        }
+
+        let Value::List(jobs) = engine.borrow().run("(cron-list)").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(
+            List::into_iter(&jobs).count(),
+            1,
+            "re-running cron-add must not duplicate the job"
+        );
+    });
+}
+
+/// `sched-add` must still work for one release, and it too has to upsert -
+/// otherwise the very config.lisp line meant to ease the transition would
+/// itself start failing on the second launch.
+#[test]
+fn sched_add_still_works_as_a_deprecated_alias() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
+        for _ in 0..2 {
+            let res = engine
+                .borrow()
+                .run("(sched-add \"fetch\" \"5m\" \"git fetch --all\" \"change\")");
+            assert!(res.is_ok(), "{res:?}");
+        }
+
+        let Value::List(jobs) = engine.borrow().run("(cron-list)").unwrap() else {
+            unreachable!()
+        };
+        let jobs: Vec<Value> = List::into_iter(&jobs).collect();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].to_string(), "fetch 5m -> git fetch --all");
+    });
+}
+
+/// `sched-remove`/`sched-pause`/`sched-resume`/`sched-list` must stay defined
+/// for the same reason `sched-add` does: `config.lisp` aborts the rest of the
+/// file on the first undefined symbol, so an existing config calling any one
+/// of these would otherwise lose every alias/abbr/PATH line written after it.
+#[test]
+fn the_other_deprecated_sched_aliases_still_work() {
+    with_test_state_home(|| {
+        init();
+        let env = Environment::new();
+        let engine = LispEngine::new(env);
+
         engine
             .borrow()
-            .run("(sched-add \"a\" \"1s\" \"true\")")
-            .is_err()
-    );
-    assert!(
-        engine
-            .borrow()
-            .run("(sched-add \"a\" \"5x\" \"true\")")
-            .is_err()
-    );
-    assert!(
-        engine
-            .borrow()
-            .run("(sched-add \"a\" \"5m\" \"true\" \"sometimes\")")
-            .is_err()
-    );
-    assert!(engine.borrow().run("(sched-add \"a\" \"5m\")").is_err());
+            .run("(cron-add \"fetch\" \"5m\" \"git fetch --all\")")
+            .unwrap();
+
+        let Value::List(jobs) = engine.borrow().run("(sched-list)").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(List::into_iter(&jobs).count(), 1);
+
+        assert!(
+            engine.borrow().run("(sched-pause \"fetch\")").is_ok(),
+            "sched-pause must still be defined"
+        );
+        assert!(
+            engine.borrow().run("(sched-resume \"fetch\")").is_ok(),
+            "sched-resume must still be defined"
+        );
+        assert!(
+            engine.borrow().run("(sched-remove \"fetch\")").is_ok(),
+            "sched-remove must still be defined"
+        );
+
+        let Value::List(jobs) = engine.borrow().run("(cron-list)").unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(
+            List::into_iter(&jobs).count(),
+            0,
+            "sched-remove must have actually removed the job"
+        );
+    });
 }
 
 #[test]

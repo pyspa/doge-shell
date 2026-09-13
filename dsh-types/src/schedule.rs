@@ -1,12 +1,15 @@
-//! Types shared between the `sched` builtin and the shell's scheduler.
-//!
-//! Scheduled tasks live for the duration of a shell session. Persistence is
-//! deliberately left to `config.lisp`: `sched list --lisp` prints the calls that
-//! recreate the current set.
+//! [`IntervalSpec`], [`NotifyPolicy`] and [`Schedule`]: the pieces of a cron
+//! job's schedule that are not the cron-expression grammar itself (that is
+//! `crate::cron`). Also home to `parse_schedule`, which tells the two grammars
+//! apart. Persistence is `cron`'s own SQLite store
+//! (`dsh/src/cron/store.rs`); nothing here is session-scoped any more - the
+//! session-only `sched` builtin these types once served was replaced by
+//! `cron`, which survives a restart.
 
+use crate::cron::{CronExpr, parse_cron};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// Shortest interval accepted. Below this the shell spends more time spawning
 /// than the task spends working, and the 1-second scan loop cannot honour it
@@ -36,7 +39,7 @@ impl IntervalSpec {
 }
 
 impl fmt::Display for IntervalSpec {
-    /// Renders back to the shortest exact spelling, so `sched list --lisp`
+    /// Renders back to the shortest exact spelling, so a stored schedule
     /// round-trips through [`parse_interval`].
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.secs.is_multiple_of(3600) {
@@ -92,7 +95,7 @@ pub fn parse_interval(spec: &str) -> Result<IntervalSpec, String> {
 /// When a finished run should interrupt the user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NotifyPolicy {
-    /// Never say anything; check `sched log` or `out`.
+    /// Never say anything; check `cron history` instead.
     Never,
     /// Only when the command fails.
     OnFailure,
@@ -138,53 +141,96 @@ impl fmt::Display for NotifyPolicy {
     }
 }
 
-/// Everything needed to register a task.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchedTaskSpec {
-    pub name: String,
-    pub interval: IntervalSpec,
-    pub command: String,
-    pub cwd: String,
-    pub notify: NotifyPolicy,
-    pub timeout: Duration,
+/// Everything the schedule position of `cron add` accepts.
+///
+/// `Every` keeps the `sched` grammar alive so an interval job reads the same
+/// as it always did; the rest is wall-clock. The whole enum is `Copy` because
+/// [`IntervalSpec`] and [`CronExpr`] both are, which lets a job spec stay cheap
+/// to pass around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Schedule {
+    /// `30s` / `5m` / `1h`, measured from the previous run.
+    Every(IntervalSpec),
+    /// A five-field expression or an `@` macro, on the local wall clock.
+    Cron(CronExpr),
+    /// `@reboot`. Fires once when an interactive session's runner starts; an
+    /// external tick has no boot to speak of and ignores it.
+    AtStartup,
+    /// `@manual`. Only an explicit `cron run` fires it.
+    Manual,
 }
 
-/// The outcome of one run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchedRun {
-    pub finished_at: SystemTime,
-    pub duration_ms: u64,
-    pub exit_code: i32,
-    /// Output differed from the previous run.
-    pub changed: bool,
-    pub timed_out: bool,
-    /// First line of output, for `sched list` / `sched log`.
-    pub preview: String,
-}
+impl Schedule {
+    /// The `schedule_kind` column's value. Stored alongside the spelling the
+    /// user typed, so a row can be read back without re-parsing first.
+    pub fn kind_str(self) -> &'static str {
+        match self {
+            Self::Every(_) => "every",
+            Self::Cron(_) => "cron",
+            Self::AtStartup => "startup",
+            Self::Manual => "manual",
+        }
+    }
 
-impl SchedRun {
-    pub fn succeeded(&self) -> bool {
-        self.exit_code == 0 && !self.timed_out
+    /// Whether a due check against the wall clock can ever fire this.
+    ///
+    /// The two `false` arms are why the store keeps `next_run_at` NULL for
+    /// them: a tick asks the database for due rows, so a startup-only or
+    /// manual job is excluded by the query rather than by a special case.
+    pub fn is_wall_clock(self) -> bool {
+        matches!(self, Self::Every(_) | Self::Cron(_))
     }
 }
 
-/// A read-only view of a task, as `sched list` prints it.
-#[derive(Debug, Clone)]
-pub struct SchedTaskView {
-    pub id: u64,
-    pub name: String,
-    pub interval: IntervalSpec,
-    pub command: String,
-    pub cwd: String,
-    pub notify: NotifyPolicy,
-    pub paused: bool,
-    /// Seconds until the next run, or `None` when paused.
-    pub next_in: Option<u64>,
-    pub running: bool,
-    pub run_count: u64,
-    pub fail_count: u64,
-    pub last: Option<SchedRun>,
-    pub history: Vec<SchedRun>,
+impl fmt::Display for Schedule {
+    /// Renders back to something [`parse_schedule`] accepts.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Every(interval) => interval.fmt(f),
+            Self::Cron(expr) => expr.fmt(f),
+            Self::AtStartup => f.write_str("@reboot"),
+            Self::Manual => f.write_str("@manual"),
+        }
+    }
+}
+
+/// Characters that only ever appear in a cron expression, never in an
+/// interval. Used to tell "you meant cron and forgot the quotes" apart from
+/// "that is not an interval".
+const CRON_MARKERS: [char; 4] = ['*', ',', '-', '/'];
+
+/// Reads either grammar from one token.
+///
+/// The split is unambiguous: a cron expression either starts with `@` or has
+/// five whitespace-separated fields, and an interval has neither.
+pub fn parse_schedule(spec: &str) -> Result<Schedule, String> {
+    let trimmed = spec.trim();
+    if trimmed.is_empty() {
+        return Err("empty schedule".to_string());
+    }
+    if trimmed.eq_ignore_ascii_case("@reboot") {
+        return Ok(Schedule::AtStartup);
+    }
+    if trimmed.eq_ignore_ascii_case("@manual") {
+        return Ok(Schedule::Manual);
+    }
+    if trimmed.starts_with('@') || trimmed.contains(char::is_whitespace) {
+        return parse_cron(trimmed).map(Schedule::Cron);
+    }
+
+    parse_interval(trimmed).map_err(|interval_error| {
+        // A single token carrying `*` or `/` is almost always a five-field
+        // expression the shell split apart before dsh saw it. Saying so beats
+        // repeating the interval grammar at someone who never wanted it.
+        if trimmed.contains(CRON_MARKERS) {
+            format!(
+                "{trimmed}: a cron expression needs 5 fields in one argument - quote it, as in '*/5 * * * *'"
+            )
+        } else {
+            interval_error
+        }
+    })
+    .map(Schedule::Every)
 }
 
 #[cfg(test)]
@@ -254,5 +300,70 @@ mod tests {
         assert_eq!(NotifyPolicy::parse("quiet"), Ok(NotifyPolicy::Never));
         assert!(NotifyPolicy::parse("sometimes").is_err());
         assert_eq!(NotifyPolicy::default(), NotifyPolicy::Both);
+    }
+
+    #[test]
+    fn parse_schedule_reads_both_grammars() {
+        assert_eq!(
+            parse_schedule("5m"),
+            Ok(Schedule::Every(parse_interval("5m").unwrap()))
+        );
+        assert_eq!(
+            parse_schedule("*/5 * * * *"),
+            Ok(Schedule::Cron(parse_cron("*/5 * * * *").unwrap()))
+        );
+        assert_eq!(
+            parse_schedule("@daily"),
+            Ok(Schedule::Cron(parse_cron("@daily").unwrap()))
+        );
+        assert_eq!(parse_schedule("@reboot"), Ok(Schedule::AtStartup));
+        assert_eq!(parse_schedule("@REBOOT"), Ok(Schedule::AtStartup));
+        assert_eq!(parse_schedule("@manual"), Ok(Schedule::Manual));
+        assert_eq!(parse_schedule("  1h  "), parse_schedule("1h"));
+    }
+
+    #[test]
+    fn schedule_display_round_trips() {
+        for spec in ["30s", "5m", "1h", "@reboot", "@manual"] {
+            let parsed = parse_schedule(spec).unwrap();
+            assert_eq!(parse_schedule(&parsed.to_string()), Ok(parsed), "{spec}");
+        }
+        // A cron expression normalises rather than echoing, but must still
+        // parse back to the same schedule.
+        for spec in ["*/5 * * * *", "@daily", "0 9-17 * * mon-fri"] {
+            let parsed = parse_schedule(spec).unwrap();
+            assert_eq!(parse_schedule(&parsed.to_string()), Ok(parsed), "{spec}");
+        }
+    }
+
+    /// An unquoted five-field expression reaches dsh as `*` after the shell
+    /// has globbed it. The interval grammar is the wrong thing to explain.
+    #[test]
+    fn an_unquoted_cron_expression_says_to_quote_it() {
+        for fragment in ["*", "*/5", "1,15", "9-17"] {
+            let error = parse_schedule(fragment).unwrap_err();
+            assert!(error.contains("quote it"), "{fragment}: {error}");
+        }
+        // A plain typo still gets the interval message.
+        let error = parse_schedule("5x").unwrap_err();
+        assert!(error.contains("expected s, m or h"), "{error}");
+    }
+
+    #[test]
+    fn schedule_kind_matches_the_stored_column() {
+        assert_eq!(parse_schedule("5m").unwrap().kind_str(), "every");
+        assert_eq!(parse_schedule("@daily").unwrap().kind_str(), "cron");
+        assert_eq!(parse_schedule("@reboot").unwrap().kind_str(), "startup");
+        assert_eq!(parse_schedule("@manual").unwrap().kind_str(), "manual");
+    }
+
+    /// The due query only ever sees wall-clock schedules; the other two are
+    /// excluded by a NULL `next_run_at` rather than by a branch in the tick.
+    #[test]
+    fn only_wall_clock_schedules_are_due_checked() {
+        assert!(parse_schedule("5m").unwrap().is_wall_clock());
+        assert!(parse_schedule("@daily").unwrap().is_wall_clock());
+        assert!(!parse_schedule("@reboot").unwrap().is_wall_clock());
+        assert!(!parse_schedule("@manual").unwrap().is_wall_clock());
     }
 }

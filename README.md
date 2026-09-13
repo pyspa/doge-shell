@@ -54,7 +54,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Job Notifications**: Finished background jobs are reported as `[1]+  Done  <cmd>` above the prompt without disturbing what you are typing
 - **Inline Argument Explainer**: Displays real-time descriptions of command arguments and options below the prompt as you type
 - **Transient Prompt**: Automatically collapses the prompt after command execution to keep the terminal clean
-- **Status Line**: Optional bottom-row line with scheduled tasks, jobs, git and GitHub state (off by default)
+- **Status Line**: Optional bottom-row line with cron jobs, background jobs, git and GitHub state (off by default)
 - **Custom Key Bindings**: Rebind any key or chord from `config.lisp` with `bind`, including to Lisp functions
 
 ### 🛡️ Safety Guard
@@ -209,7 +209,7 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline 
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
 - **Trigger Command**: Monitor file changes matching a glob pattern and automatically execute commands. Results are captured in the [output history](#command-output-history).
-- **Scheduled Tasks**: Run a command every 30s/5m/1h in the background with `sched`, quietly by default and reporting only on failure or changed output
+- **Cron Jobs**: Run a shell command, or an unattended AI agent task, on an interval, a five-field cron expression, or `@daily`-style macro with `cron` — fires while a session is open, and while none is if an external tick is installed
 ### Project Manager
 
 Organize and switch between workspaces efficiently with the integrated Project Manager.
@@ -320,7 +320,7 @@ The shell includes many built-in commands:
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
-| `sched`             | Run a command periodically in the background for this session                                                              |
+| `cron`              | Create, edit and run scheduled jobs — shell commands or unattended agent tasks                                              |
 | `notebook-play`     | Play a notebook file (execute code blocks interactively)                                                                   |
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
@@ -380,14 +380,17 @@ The embedded Lisp interpreter includes many built-in functions:
 - `register-action` - Register a custom action in the Command Palette.
   - Usage: `(register-action "Name" "Description" "function-name")`
 
-### Scheduled Task Functions
+### Cron Functions
 
-- `sched-add` - Register a periodic task
-  - Usage: `(sched-add "<name>" "<interval>" "<command>" ["<notify-policy>"])`
-- `sched-remove` / `sched-pause` / `sched-resume` - Manage a task by name or id
-- `sched-list` - List the registered tasks (the `sched list` command is easier from the prompt)
+- `cron-add` - Register (or replace) a cron job by name
+  - Usage: `(cron-add "<name>" "<schedule>" "<command>" ["<notify-policy>"])`
+  - `<schedule>` accepts an interval (`5m`), a five-field cron expression, or an `@daily`-style macro.
+  - Calling this again with the same name **replaces** the job rather than erroring or duplicating it — safe to leave in `config.lisp`, which runs on every launch.
+- `cron-remove` / `cron-pause` / `cron-resume` - Manage a job by name or id
+- `cron-list` - List the registered jobs (the `cron list` command is easier from the prompt)
+- `sched-add` / `sched-remove` / `sched-pause` / `sched-resume` / `sched-list` - **Deprecated**, kept for one release as aliases for the `cron-*` functions above (same arguments and behavior). Each prints a warning; migrate to `cron-*`.
 
-See [Scheduled Tasks](#scheduled-tasks) for intervals and notify policies.
+See [Cron Jobs](#cron-jobs) for schedule syntax and notify policies.
 
 ### Key Binding Functions
 
@@ -800,7 +803,8 @@ to the complete persistent ledger before `--limit` selects the newest results.
 ### Machine-readable output
 
 `task --json`, `pm status --json`, `doctor --json`, `history --json`,
-`blocks list --json`, and `timing --json` each write exactly one JSON value to
+`blocks list --json`, `timing --json`, and `cron list`/`cron status`/`cron history`
+(each with `--json`) write exactly one JSON value to
 stdout. JSON mode and non-TTY output omit ANSI decoration and interactive
 prompts; diagnostics go to stderr and failures return a non-zero status. Field
 names use `snake_case`, and optional collections are emitted as empty arrays
@@ -846,29 +850,46 @@ Everything shown is read from caches the shell already maintains, so the status 
 never adds work to the prompt. It is off by default because DECSTBM support varies
 between terminals.
 
-### Scheduled Tasks
+### Cron Jobs
 
-`sched` runs a command on a repeating interval in the background:
+`cron` runs a shell command, or an unattended AI agent task, on a schedule:
 
 ```bash
-sched add 5m git fetch --all            # every 5 minutes
-sched add --name prs --on change 10m gh pr list
-sched add --quiet 30s 'df -h /'
-sched list                              # id, interval, next run, last result
-sched log prs                           # recent runs
-sched rm prs
-sched pause                             # stop everything, keeping the task list
-sched resume
+cron add --name fetch 5m git fetch --all
+cron add --name prs --on change '0 9-17 * * mon-fri' gh pr list
+cron add --quiet 30s 'df -h /'
+cron list                               # id, schedule, state, next run, last result
+cron history fetch                      # recent runs
+cron rm prs
+cron pause                              # stop every job, keeping the definitions
+cron resume
 ```
 
-Intervals are `30s` / `5m` / `1h` — between 5 seconds and 24 hours. There is no cron
-syntax: tasks do not outlive the shell, so wall-clock scheduling would be misleading.
+Unlike the old `sched` builtin it replaced, jobs persist across restarts (a SQLite store
+under `$XDG_STATE_HOME/dsh/cron`, not `config.lisp`) and understand real wall-clock
+schedules, not just intervals:
 
-**Nothing is printed on a normal run.** Output goes to the [output history](#command-output-history)
-and [command blocks](#command-blocks), reachable with `out`, `blocks` and `tm`. `out` and `tm`
-label the run `sched:<name> <command>` so it is distinguishable from something you typed;
-the command block keeps the plain command so `blocks rerun` still works. Whether a run
-interrupts you is set by `--on`:
+| Form | Example | Meaning |
+| --- | --- | --- |
+| Interval | `30s` / `5m` / `1h` | Every N seconds/minutes/hours, from the previous run. 5s-24h. |
+| Cron expression | `0 9 * * mon-fri` | Five fields (minute hour day-of-month month day-of-week), on the local wall clock. |
+| Macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | Shorthand for a fixed cron expression. |
+
+**Always quote a cron expression** — `cron add */5 * * * * git fetch` is glob-expanded by
+the shell before dsh ever sees it. `cron add` detects the common shapes of this mistake
+and names the fix.
+
+**Two ways a job fires**, and either is enough on its own:
+
+- **A dsh session is open.** Each interactive session runs its own scan for due jobs and
+  starts them — nothing to install, works the moment you `cron add`. Closing every
+  session pauses that clock until one opens again, unless:
+- **An external tick is installed.** `cron setup` prints a crontab line, a systemd user
+  timer, or a launchd agent (auto-detected, or pick with `--crontab`/`--systemd`/`--launchd`)
+  that calls `dsh -c "cron tick"` on a schedule — this is what makes a job fire while
+  logged out. `cron setup` only prints; it never installs anything itself.
+
+Whether a run is worth reporting is set by `--on`, same meanings as before:
 
 | `--on`      | Reports                                              |
 | ----------- | ---------------------------------------------------- |
@@ -878,29 +899,66 @@ interrupts you is set by `--on`:
 | `both`      | Either of the above — **default**                    |
 | `always`    | Every run                                            |
 
-Failures report on the *transition*, not on every run: a task failing every 30 seconds
-says so once, then again when it recovers.
+Outcomes are recorded either way — `cron history <name>` and `cron status` are the source
+of truth. (A live above-prompt notice and desktop notification, as `sched` had, are not
+yet wired for cron: a run finishes in its own separate process, which the open session is
+not directly watching.)
 
-Notices appear above the prompt without disturbing what you are typing, and a desktop
-notification follows if `pref-auto-notify` is on.
+**Commands run under `sh -c`**, in the directory registered with the job, with stdin on
+`/dev/null` and in their own process group — shell aliases, abbreviations, builtins and
+Lisp functions are **not** available inside them. Write out the full command, or wrap it
+in a script.
 
-**Commands run under `sh -c`**, in the directory where you registered them, with stdin
-on `/dev/null` and in their own process group. So they cannot steal the terminal or be
-hit by `Ctrl+C` at the prompt — but shell aliases, abbreviations, builtins and Lisp
-functions are **not** available inside them. Write out the full command, or wrap it in a
-script.
+A run that overruns its own interval is skipped rather than stacked, and each run is
+killed after its `--timeout` (60s by default, capped to the interval for an interval
+schedule). A job that was due while nothing was running to run it does **not** fire once
+per missed slot on catch-up — everything older than `--catchup` (one hour by default)
+collapses into a single run.
 
-A run that overruns its own interval is skipped rather than stacked, at most two tasks
-run at once, and each run is killed after its timeout (60s by default, capped to the
-interval).
+Two sessions (or a session and an external tick) racing to run the same job is resolved
+by the store itself, not by hoping only one thing is ever watching: whichever claims the
+row first runs it, and the other finds nothing left to do.
 
-Tasks are session-scoped. To make them permanent, put `sched-add` in `config.lisp` —
-`sched list --lisp` prints exactly those lines for the tasks you have now:
+#### Unattended AI jobs
 
-```lisp
-(sched-add "fetch" "5m" "git fetch --all")
-(sched-add "prs" "10m" "gh pr list" "change")
+`--agent` turns a job into a scheduled `agent run` — same entry point, same permission
+model:
+
+```bash
+cron add --agent --name digest --tokens 50000 --timeout 10m \
+  --read . --write out --check "out/digest.md has today's date" \
+  '0 9 * * mon-fri' -- 'summarise open PRs and recent commits into out/digest.md'
 ```
+
+Nobody is watching an unattended run, so a permission it was not granted does not
+prompt — it stalls the job and files an incident instead:
+
+```bash
+cron incidents                # what's blocked, and why
+agent show <task-id>          # exactly what was asked for
+cron edit digest --allow-command 'the command it needed'
+cron incidents ack <id>       # clears the block
+```
+
+Every run starts a fresh conversation; the one thing that persists between them is a
+small per-job **notepad** (`cron notepad digest`) the agent reads and rewrites on its own
+— the closest thing to memory a recurring unattended job has.
+
+#### The agent can manage its own cron jobs
+
+The `!` chat agent (and `agent run`) has a `cron_manage` tool that does everything above
+through a tool call instead of the CLI — `execute` cannot reach `cron` itself, since it is
+a builtin, not a shell command. Two things are enforced rather than merely suggested: a
+job it creates always starts paused, and none of its grants (`--read`/`--write`/
+`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`) may exceed what the
+calling task was itself granted — widening one is refused outright, before anyone is
+asked anything. Every other write (`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
+asks a person first, the same as any other tool that changes something.
+
+Full CLI reference, schedule grammar, external-tick setup for each OS, and a
+symptom-to-cause debugging table live in the `dsh-cron` skill
+(`docs/ai/skills/dsh-cron/`) — install it for the `!` chat agent with
+`scripts/install-runtime-skills.sh --target dsh --profile dsh-user`.
 
 ### Snippets
 
@@ -1603,6 +1661,8 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
     This repository keeps canonical sample skills under `docs/ai/skills/`; install the
     ones you want with `scripts/install-runtime-skills.sh --target dsh --profile dsh-common`.
+    One of them, `dsh-cron`, teaches the `!` agent to add, edit and debug your own
+    [cron jobs](#cron-jobs) — install it on its own with `--profile dsh-user`.
 
 14. **AI chat hooks**:
     Your own checks, run around the `!` agent loop. Distinct from the Lisp

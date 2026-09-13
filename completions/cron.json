@@ -1,0 +1,503 @@
+{
+  "command": "cron",
+  "description": "Create, edit and run scheduled jobs — shell commands or unattended agent tasks",
+  "subcommands": [
+    {
+      "name": "add",
+      "aliases": [
+        "create"
+      ],
+      "description": "Register a job",
+      "options": [
+        {
+          "long": "--name",
+          "description": "Reference name",
+          "takes_value": true
+        },
+        {
+          "long": "--cwd",
+          "description": "Working directory",
+          "takes_value": true
+        },
+        {
+          "long": "--on",
+          "description": "Notify policy",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "never",
+              "failure",
+              "change",
+              "both",
+              "always"
+            ]
+          }
+        },
+        {
+          "long": "--quiet",
+          "description": "Same as --on never"
+        },
+        {
+          "long": "--timeout",
+          "description": "Per-run timeout (seconds or interval)",
+          "takes_value": true
+        },
+        {
+          "long": "--catchup",
+          "description": "How late a missed run may be and still count",
+          "takes_value": true
+        },
+        {
+          "long": "--paused",
+          "description": "Register paused"
+        },
+        {
+          "long": "--force",
+          "description": "Replace an existing job of the same name"
+        },
+        {
+          "long": "--agent",
+          "description": "Register an unattended agent job"
+        },
+        {
+          "long": "--tokens",
+          "description": "Token budget for this run",
+          "takes_value": true
+        },
+        {
+          "long": "--check",
+          "description": "Completion criterion (repeatable)",
+          "takes_value": true
+        },
+        {
+          "long": "--read",
+          "description": "Readable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--write",
+          "description": "Writable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-command",
+          "description": "Exact allowed command",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-mcp",
+          "description": "Exact MCP approval key",
+          "takes_value": true
+        },
+        {
+          "long": "--network",
+          "description": "Allowed sandbox host",
+          "takes_value": true
+        },
+        {
+          "long": "--env",
+          "description": "Inherited environment variable",
+          "takes_value": true
+        },
+        {
+          "long": "--sandbox",
+          "description": "Require pinned SRT isolation"
+        },
+        {
+          "long": "--max-tokens-per-day",
+          "description": "Rolling daily token ceiling",
+          "takes_value": true
+        }
+      ],
+      "arguments": [
+        {
+          "name": "schedule",
+          "description": "30s/5m/1h, a 5-field cron expression, or @daily etc.",
+          "type": {
+            "type": "String"
+          }
+        },
+        {
+          "name": "command",
+          "description": "Command to run, or the goal after -- for an agent job",
+          "multiple": true,
+          "type": {
+            "type": "CommandWithArgs"
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "aliases": [
+        "ls"
+      ],
+      "description": "Show jobs",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "show",
+      "description": "Show one job in full",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "edit",
+      "description": "Change one job's fields",
+      "options": [
+        {
+          "long": "--name",
+          "description": "New name",
+          "takes_value": true
+        },
+        {
+          "long": "--schedule",
+          "description": "New schedule",
+          "takes_value": true
+        },
+        {
+          "long": "--command",
+          "description": "New command",
+          "takes_value": true
+        },
+        {
+          "long": "--goal",
+          "description": "New goal (agent jobs)",
+          "takes_value": true
+        },
+        {
+          "long": "--cwd",
+          "description": "New working directory",
+          "takes_value": true
+        },
+        {
+          "long": "--on",
+          "description": "New notify policy",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "never",
+              "failure",
+              "change",
+              "both",
+              "always"
+            ]
+          }
+        },
+        {
+          "long": "--quiet",
+          "description": "Same as --on never"
+        },
+        {
+          "long": "--timeout",
+          "description": "New per-run timeout",
+          "takes_value": true
+        },
+        {
+          "long": "--catchup",
+          "description": "New catch-up window",
+          "takes_value": true
+        },
+        {
+          "long": "--tokens",
+          "description": "Token budget for this run",
+          "takes_value": true
+        },
+        {
+          "long": "--check",
+          "description": "Completion criterion (repeatable)",
+          "takes_value": true
+        },
+        {
+          "long": "--read",
+          "description": "Readable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--write",
+          "description": "Writable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-command",
+          "description": "Exact allowed command",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-mcp",
+          "description": "Exact MCP approval key",
+          "takes_value": true
+        },
+        {
+          "long": "--network",
+          "description": "Allowed sandbox host",
+          "takes_value": true
+        },
+        {
+          "long": "--env",
+          "description": "Inherited environment variable",
+          "takes_value": true
+        },
+        {
+          "long": "--sandbox",
+          "description": "Require pinned SRT isolation"
+        },
+        {
+          "long": "--max-tokens-per-day",
+          "description": "Rolling daily token ceiling",
+          "takes_value": true
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "rm",
+      "aliases": [
+        "remove"
+      ],
+      "description": "Remove job(s)",
+      "arguments": [
+        {
+          "name": "jobs",
+          "description": "Job names or ids",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "run",
+      "description": "Run on the next tick, or right now",
+      "options": [
+        {
+          "long": "--now",
+          "description": "Run in the foreground immediately"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "description": "Pause job(s), or the whole scheduler",
+      "arguments": [
+        {
+          "name": "jobs",
+          "description": "Job names or ids",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "resume",
+      "description": "Resume job(s), or the whole scheduler",
+      "arguments": [
+        {
+          "name": "jobs",
+          "description": "Job names or ids",
+          "multiple": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "description": "Show finished runs",
+      "options": [
+        {
+          "long": "--limit",
+          "description": "Maximum rows",
+          "takes_value": true
+        },
+        {
+          "long": "--failed",
+          "description": "Only failed runs"
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "incidents",
+      "description": "List things needing a person, or acknowledge one",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "ack",
+          "description": "Acknowledge an incident and unblock its job",
+          "arguments": [
+            {
+              "name": "id",
+              "description": "Incident id",
+              "type": {
+                "type": "String"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "notepad",
+      "description": "Show (or clear) a job's own notes",
+      "options": [
+        {
+          "long": "--clear",
+          "description": "Erase the notepad"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "job",
+          "description": "Job name or id",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "cron.job"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Is a tick arriving? How many jobs?",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "tick",
+      "description": "Run due jobs once and exit",
+      "options": [
+        {
+          "long": "--max",
+          "description": "Maximum jobs to start",
+          "takes_value": true
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show what would run, without running it"
+        },
+        {
+          "long": "--verbose",
+          "description": "Print each job started"
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "doctor",
+      "description": "Check jobs for common misconfiguration",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "setup",
+      "description": "Print external-tick setup text",
+      "options": [
+        {
+          "long": "--crontab",
+          "description": "Print a crontab line"
+        },
+        {
+          "long": "--systemd",
+          "description": "Print a systemd user timer"
+        },
+        {
+          "long": "--launchd",
+          "description": "Print a launchd plist"
+        }
+      ]
+    }
+  ]
+}

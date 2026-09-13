@@ -55,4 +55,10 @@ Tasks対応サーバーが返したハンドルを保存し、`mcp_task_status` 
 - データ処理: 入力件数・形式を確認→新しい出力先へ変換→出力件数・内容を再読→検証。
 - 調査: `tool_search` →許可された検索・取得→URLと取得日を含む文書→出典と文書の再確認。外部サービス更新は下書きを成果物とし、送信には別の許可を得る。
 
+## cron からの無人実行
+
+`cron add --agent` は本ドキュメントと同じ `agent run` 入口を、スケジュールから起動するものです。権限モデル・予算・隔離は一切変わりません。無人実行のため承認プロンプトは出ず、付与されていない権限が必要になった run は `TaskStatus::InputRequired` のまま incident として記録され、次回以降も自動では再試行されません。`--check` の完了条件は、無人で判定されることを踏まえてより具体的に書く必要があります。cron 側の run 履歴からこのタスクの id を得て `agent show <id>` に渡せます。grant の一覧やタスクの状態機械はここに複製せず、詳細は `docs/cron.md` を参照してください。
+
+逆方向 — タスク自身が cron ジョブを作る／変える — には `cron_manage` という chat tool があります（`execute` 経由の `cron ...` は builtin には届きません）。作成したジョブは常に paused で登録され、渡せる grant は**呼び出し中のタスク自身の grant を超えられません**。それ以外の変更（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は他の書き込み系ツールと同じく毎回 `InputRequired` になります。詳細は `docs/cron.md` の「エージェント自身によるジョブ管理」を参照してください。
+
 比較測定は同一モデル・同一入力・初期状態を復元した作業フォルダで各3回以上行い、完遂率、確認回数、累積トークン、所要時間、強制中断後の再開成功率を記録します。現行の `!` と `agent` を比較し、実API測定前に改善率を断定しません。自動検証は `cargo test -p doge-shell --lib agent::tests` と `cargo test -p dsh-builtin --lib agent::`。実隔離試験は `cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored` です。

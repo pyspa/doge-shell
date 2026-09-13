@@ -135,6 +135,20 @@ pub fn agent_state_dir() -> PathBuf {
         .join("agent")
 }
 
+/// Where the cron store, its per-job leases and its notepads live.
+///
+/// A **sibling** of [`agent_state_dir`], not a child, and the distinction is
+/// load-bearing: `SafetyGuard::task_file_allowed` refuses every path under the
+/// agent state directory outright, and a job's notepad has to be writable by
+/// the very agent task that job starts. Nesting it would make the notepad
+/// unreachable by the one process that needs it.
+pub fn cron_state_dir() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("cron")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -19,7 +19,7 @@
 
 - data 不要: `{"type":"String"}` / `Directory` / `Number` / `Command` / `Environment` / `Url` / `Regex` / `Process` / `CommandWithArgs` / `User` / `Group` / `Signal` / `Interface`
 - `{"type":"File","data":{"extensions":[".rs",".toml"]}}`（`extensions` は null 可）
-- `{"type":"Choice","data":["a","b"]}` — **data は文字列の配列**。`{"choices":[...]}` のようにオブジェクトで包むと `invalid type: map, expected a sequence` で定義ごと無効になる（実際に `sched.json` で起きた）
+- `{"type":"Choice","data":["a","b"]}` — **data は文字列の配列**。`{"choices":[...]}` のようにオブジェクトで包むと `invalid type: map, expected a sequence` で定義ごと無効になる（実際に、今は削除済みの旧 `sched.json` で起きた）
 - `{"type":"Dynamic","data":{"provider":"git.branch","scope":"project"}}` — `scope` は任意
 - `Script` は**組み込み定義では使用禁止**（テストが落ちる）。ユーザー生成の定義専用。
 

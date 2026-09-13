@@ -244,8 +244,9 @@ doge-shell-chat-tools"
 doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
+    expect_installer_list "dsh-user" "dsh-cron"
 
-    for profile in codex-core codex-common dsh-common claude-common; do
+    for profile in codex-core codex-common dsh-common claude-common dsh-user; do
         if ! grep -q -- "--profile $profile" "$repo_root/docs/ai/README.md"; then
             fail "docs/ai/README.md does not mention installer profile: $profile"
         fi

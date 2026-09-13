@@ -7,6 +7,19 @@ use super::*;
 /// CLIs, ...). See `local` for what belongs in a table at all.
 pub(super) const CORE_LOCAL_SPECS: &[local::LocalSpec] = &[
     local::LocalSpec {
+        provider: "cron.job",
+        command_name: "cron",
+        value_kind: "job",
+        // Not a real path - `Fixed` only serves as this row's cache key, and
+        // the store's own location depends on `XDG_STATE_HOME` at runtime, so
+        // it cannot be a `&'static str` literal here anyway.
+        scope: local::Scope::Fixed("dsh:cron"),
+        source: local::Source::Fixed {
+            loader: load_cron_job_names,
+        },
+        description: "cron job name",
+    },
+    local::LocalSpec {
         provider: "dbus.service",
         command_name: "busctl",
         value_kind: "service",
@@ -349,3 +362,50 @@ pub(super) const CORE_LOCAL_SPECS: &[local::LocalSpec] = &[
         description: "rustup toolchain",
     },
 ];
+
+/// Job names for `cron`'s completions (`show`/`edit`/`rm`/`run`/`pause`/
+/// `resume`/`history`/`notepad`).
+///
+/// Opens the store read-only and lists names; any failure (store not yet
+/// created, permissions) yields an empty list rather than an error, matching
+/// every other loader in this table.
+fn load_cron_job_names() -> Vec<String> {
+    use dsh_builtin::shell_capabilities::CronStore;
+
+    let Ok(store) =
+        crate::cron::store::SqliteCronStore::open(&dsh_builtin::config_paths::cron_state_dir())
+    else {
+        return Vec::new();
+    };
+    store
+        .list()
+        .map(|jobs| jobs.into_iter().map(|job| job.name).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod cron_job_tests {
+    use super::load_cron_job_names;
+    use std::ffi::OsString;
+
+    /// A no-store environment must yield an empty list, not a panic or an
+    /// error surfaced to the completion popup - every other loader in this
+    /// table treats "nothing to read yet" the same way.
+    #[test]
+    fn no_store_yields_an_empty_list_rather_than_failing() {
+        let _guard = crate::test_env_lock();
+        let previous = std::env::var_os("XDG_STATE_HOME");
+        let dir = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("XDG_STATE_HOME", OsString::from(dir.path()));
+        }
+
+        let names = load_cron_job_names();
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("XDG_STATE_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
+        }
+        assert!(names.is_empty(), "{names:?}");
+    }
+}

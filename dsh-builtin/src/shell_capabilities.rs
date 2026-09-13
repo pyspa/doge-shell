@@ -7,9 +7,14 @@
 use crate::chatgpt::McpManager;
 use crate::{CoreShellAction, ProxyFuture, ShellProxy};
 use anyhow::Result;
+use dsh_types::cron::job::{
+    ClaimedRun, CronHealth, CronIncident, CronJobPatch, CronJobSpec, CronJobView, CronRun,
+    IncidentKind, RunOutcome, RunQuery, RunTrigger,
+};
+use dsh_types::cron::tool::CronToolRequest;
 use dsh_types::{
     Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
-    safety_policy::SafetyLevel, schedule::SchedTaskSpec, schedule::SchedTaskView, snippet::Snippet,
+    safety_policy::SafetyLevel, snippet::Snippet,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -231,52 +236,6 @@ impl<T: ShellProxy + ?Sized> ShellEnvironment for T {
 
     fn safety_level(&mut self) -> SafetyLevel {
         ShellProxy::safety_level(self)
-    }
-}
-
-/// Periodic task registration, control, and persistence views.
-pub trait ShellScheduling {
-    fn sched_add(&mut self, spec: SchedTaskSpec) -> Result<u64, String>;
-    fn sched_remove(&mut self, selector: &str) -> Result<String, String>;
-    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String>;
-    fn sched_trigger(&mut self, selector: &str) -> Result<String, String>;
-    fn sched_list(&self) -> Vec<SchedTaskView>;
-    fn sched_as_lisp(&self) -> Vec<String>;
-    fn sched_enabled(&self) -> bool;
-    fn sched_set_enabled(&mut self, enabled: bool);
-}
-
-impl<T: ShellProxy + ?Sized> ShellScheduling for T {
-    fn sched_add(&mut self, spec: SchedTaskSpec) -> Result<u64, String> {
-        ShellProxy::sched_add(self, spec)
-    }
-
-    fn sched_remove(&mut self, selector: &str) -> Result<String, String> {
-        ShellProxy::sched_remove(self, selector)
-    }
-
-    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String> {
-        ShellProxy::sched_set_paused(self, selector, paused)
-    }
-
-    fn sched_trigger(&mut self, selector: &str) -> Result<String, String> {
-        ShellProxy::sched_trigger(self, selector)
-    }
-
-    fn sched_list(&self) -> Vec<SchedTaskView> {
-        ShellProxy::sched_list(self)
-    }
-
-    fn sched_as_lisp(&self) -> Vec<String> {
-        ShellProxy::sched_as_lisp(self)
-    }
-
-    fn sched_enabled(&self) -> bool {
-        ShellProxy::sched_enabled(self)
-    }
-
-    fn sched_set_enabled(&mut self, enabled: bool) {
-        ShellProxy::sched_set_enabled(self, enabled);
     }
 }
 
@@ -555,14 +514,118 @@ pub trait AgentTaskStore: Send + Sync {
     fn load_artifact(&self, id: &str, name: &str) -> Result<serde_json::Value>;
 }
 
+/// Cron's persistence, owned by the shell.
+///
+/// Split from [`AgentTaskStore`] for the same reason that exists at all:
+/// `rusqlite` is a `dsh` dependency, and a builtin is not where durable state
+/// belongs. The two stores stay separate rather than sharing one database -
+/// the agent store serialises *one* task at a time behind a file lock, while
+/// cron needs row-level claims across several processes at once, and those
+/// want opposite journal modes.
+///
+/// Every method takes `now` instead of reading the clock, so a test can drive
+/// a schedule years forward without sleeping and without a global time hook.
+/// Timestamps are Unix seconds UTC throughout; local time is resolved once,
+/// when a schedule is turned into a `next_run_at`, and never stored.
+pub trait CronStore: Send + Sync {
+    /// Registers a job. Fails on a duplicate name unless `force`, so a typo at
+    /// the prompt cannot silently replace a working job.
+    fn create(
+        &self,
+        spec: &CronJobSpec,
+        env: &HashMap<String, String>,
+        now: i64,
+        force: bool,
+    ) -> Result<i64>;
+    /// Registers or replaces by name, without complaining about a duplicate.
+    ///
+    /// This is what `config.lisp` uses: it is evaluated on every startup, so
+    /// the `create` rule would turn the second launch into an error - and a
+    /// `config.lisp` error aborts the rest of the file.
+    fn upsert(&self, spec: &CronJobSpec, env: &HashMap<String, String>, now: i64) -> Result<i64>;
+    /// Changes only the fields the patch names. Returns the job's name.
+    fn patch(&self, selector: &str, patch: &CronJobPatch, now: i64) -> Result<String>;
+    fn delete(&self, selector: &str) -> Result<String>;
+    fn get(&self, selector: &str) -> Result<CronJobView>;
+    fn list(&self) -> Result<Vec<CronJobView>>;
+    fn set_paused(&self, selector: &str, paused: bool, now: i64) -> Result<String>;
+    /// Pauses or resumes every job. Resuming re-bases `next_run_at` rather than
+    /// letting the slots that elapsed while paused all fire at once.
+    fn set_all_paused(&self, paused: bool, now: i64) -> Result<usize>;
+    /// Makes a job due immediately. Returns its name.
+    fn trigger(&self, selector: &str, now: i64) -> Result<String>;
+    /// Atomically takes ownership of up to `limit` due jobs.
+    ///
+    /// The only thing standing between two sessions, an external tick and a
+    /// double execution. Advances `next_run_at` in the same transaction, so a
+    /// job that is skipped still moves forward instead of spinning.
+    fn claim_due(
+        &self,
+        now: i64,
+        owner: &str,
+        limit: usize,
+        trigger: RunTrigger,
+    ) -> Result<Vec<ClaimedRun>>;
+    /// Claims one named job immediately, ignoring `next_run_at` (but not an
+    /// existing claim): what `cron run --now` and `cron run-job`'s manual
+    /// path use to force a specific job rather than whatever the wall clock
+    /// says is due.
+    fn claim_one(
+        &self,
+        selector: &str,
+        now: i64,
+        owner: &str,
+        trigger: RunTrigger,
+    ) -> Result<ClaimedRun>;
+    /// Moves a claimed run to `running` and hands back what to execute.
+    fn start(&self, run_id: &str, now: i64) -> Result<ClaimedRun>;
+    /// Records the outcome, releases the claim and opens or closes incidents.
+    fn complete(&self, run_id: &str, outcome: &RunOutcome, now: i64) -> Result<()>;
+    fn runs(&self, query: &RunQuery) -> Result<Vec<CronRun>>;
+    fn incidents(&self, open_only: bool, limit: usize) -> Result<Vec<CronIncident>>;
+    fn open_incident(
+        &self,
+        job_id: Option<i64>,
+        kind: IncidentKind,
+        detail: &str,
+        agent_task_id: Option<&str>,
+        now: i64,
+    ) -> Result<i64>;
+    /// Acknowledges an incident and lifts the block it put on its job.
+    fn ack_incident(&self, id: i64, now: i64) -> Result<CronIncident>;
+    fn notepad(&self, selector: &str) -> Result<String>;
+    fn set_notepad(&self, selector: &str, body: &str) -> Result<()>;
+    /// Releases claims whose lease ran out. Cheap enough to call every scan.
+    fn reap_expired_leases(&self, now: i64) -> Result<usize>;
+    fn health(&self, now: i64) -> Result<CronHealth>;
+    /// Tokens this job has spent since `since`, for the rolling daily ceiling.
+    fn tokens_used_since(&self, job_id: i64, since: i64) -> Result<u64>;
+    /// When the next job comes due, so an idle runner can sleep until then.
+    fn next_due_at(&self) -> Result<Option<i64>>;
+}
+
+/// One `cron_manage` chat-tool call, dispatched to `cron`'s own argv parser
+/// and store.
+///
+/// Split from [`CronStore`] rather than folded into it: `CronToolRequest`'s
+/// fields are unparsed strings (a chat tool's JSON, not a typed spec), and
+/// turning them into a [`CronJobSpec`]/[`CronJobPatch`] means calling
+/// `dsh/src/cron/cli/parse.rs`'s `parse_add`/`parse_edit` - which live in
+/// `dsh`, need `rusqlite` to look up a job's existing agent grant before an
+/// edit, and so cannot be reached from `dsh-builtin` any more directly than
+/// [`CronStore`]'s own implementation can.
+pub trait CronToolHost {
+    fn cron_tool_call(&mut self, request: &CronToolRequest) -> Result<serde_json::Value>;
+}
+
 /// Everything a chat tool needs from its host.
 ///
 /// A bundle rather than a new [`ShellProxy`] method, so the frozen facade stays
 /// the size it is. Trait upcasting lets a `&mut dyn ChatToolHost` be passed
 /// wherever a `&mut dyn ShellProxy` is expected.
-pub trait ChatToolHost: ShellProxy + AgentCommandPolicy {}
+pub trait ChatToolHost: ShellProxy + AgentCommandPolicy + CronToolHost {}
 
-impl<T: ShellProxy + AgentCommandPolicy + ?Sized> ChatToolHost for T {}
+impl<T: ShellProxy + AgentCommandPolicy + CronToolHost + ?Sized> ChatToolHost for T {}
 
 #[cfg(test)]
 mod tests {

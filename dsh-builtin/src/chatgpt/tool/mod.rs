@@ -10,6 +10,7 @@ use crate::agent::ToolOutcome;
 use crate::safety_policy::{self, SafetyLevel};
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 
+pub(crate) mod cron;
 mod edit;
 pub(crate) mod execute;
 mod gitignore;
@@ -92,6 +93,7 @@ impl std::fmt::Display for ToolCallError {
 
 pub fn build_tools() -> Vec<Value> {
     vec![
+        cron::definition(),
         edit::definition(),
         execute::definition(),
         ls::definition(),
@@ -386,6 +388,7 @@ fn dispatch_tool(
         )?
     } else {
         match name {
+            cron::NAME => cron::run(arguments, proxy)?,
             edit::NAME => edit::run(arguments, proxy)?,
             execute::NAME => execute::run(arguments, proxy)?,
             ls::NAME => ls::run(arguments, proxy)?,

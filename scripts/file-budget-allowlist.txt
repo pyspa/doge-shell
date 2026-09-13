@@ -10,6 +10,7 @@
 #
 # Regenerate with: scripts/check-file-budget.py --update
 doc-path-ok	docs/ai/skills/doge-shell-repo/references/invariants/completion.md::dsh/completions
+doc-path-ok	docs/ai/skills/doge-shell-repo/references/invariants/cron.md::dsh/src/scheduler
 no-doc	dsh-builtin/src/blocks.rs
 no-doc	dsh-builtin/src/chatgpt/mcp/mod.rs
 no-doc	dsh-builtin/src/chatgpt/tool/execute.rs
@@ -65,4 +66,3 @@ no-doc	dsh/src/shell/eval.rs
 no-doc	dsh/src/shell/mod.rs
 no-doc	dsh/src/shell/parse.rs
 no-doc	dsh/src/suggestion.rs
-oversized	dsh/src/proxy/shell_proxy.rs

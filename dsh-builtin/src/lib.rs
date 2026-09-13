@@ -27,6 +27,7 @@ mod blocks;
 pub mod cd;
 mod chatgpt;
 pub mod config_paths;
+pub mod cron;
 mod dashboard;
 mod doctor;
 mod eproject;
@@ -72,8 +73,8 @@ pub mod procs;
 pub mod project;
 pub mod project_context;
 mod read;
+mod removed_sched;
 mod runbook;
-pub mod sched;
 pub mod shell_capabilities;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -97,6 +98,7 @@ mod z;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreShellAction {
     Agent,
+    Cron,
     Exit,
     History,
     Reload,
@@ -117,6 +119,7 @@ impl CoreShellAction {
     pub const fn command_name(self) -> &'static str {
         match self {
             Self::Agent => "agent",
+            Self::Cron => "cron",
             Self::Exit => "exit",
             Self::History => "history",
             Self::Reload => "reload",
@@ -137,6 +140,7 @@ impl CoreShellAction {
     pub fn from_command_name(command: &str) -> Option<Self> {
         Some(match command {
             "agent" => Self::Agent,
+            "cron" => Self::Cron,
             "exit" => Self::Exit,
             "history" => Self::History,
             "reload" => Self::Reload,
@@ -213,27 +217,6 @@ pub trait ShellProxy {
     /// Callers are expected to route the actual directory change through
     /// [`ShellProxy::changepwd`] so path history and chpwd hooks still fire.
     fn dir_stack_set(&mut self, stack: Vec<String>);
-
-    /// Registers a periodic task, returning its id.
-    fn sched_add(&mut self, spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String>;
-
-    fn sched_remove(&mut self, selector: &str) -> Result<String, String>;
-
-    /// Pauses or resumes one task.
-    fn sched_set_paused(&mut self, selector: &str, paused: bool) -> Result<String, String>;
-
-    /// Makes a task due on the next scan.
-    fn sched_trigger(&mut self, selector: &str) -> Result<String, String>;
-
-    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView>;
-
-    /// `sched list --lisp`: the `sched-add` calls that recreate the task set.
-    fn sched_as_lisp(&self) -> Vec<String>;
-
-    /// Whether the scheduler as a whole is running.
-    fn sched_enabled(&self) -> bool;
-
-    fn sched_set_enabled(&mut self, enabled: bool);
 
     /// Inserts a path at the specified index in the PATH environment variable
     fn insert_path(&mut self, index: usize, path: &str);
@@ -519,7 +502,11 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
             new(dirstack::dirs_command, dirstack::dirs_description()),
         ),
         // Job control commands
-        ("sched", new(sched::command, sched::description())),
+        (
+            "sched",
+            new(removed_sched::command, removed_sched::description()),
+        ),
+        ("cron", new(cron::command, cron::description())),
         ("jobs", new(jobs::command, jobs::description())),
         ("fg", new(fg::command, fg::description())),
         ("bg", new(bg::command, bg::description())),

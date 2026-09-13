@@ -15,8 +15,8 @@
 - insert-last-argument / snippet insert / `{{placeholder}}` stops
   - Read: `dsh/src/repl/last_arg.rs`, `dsh/src/repl/placeholder.rs`, `dsh/src/repl/key_handlers/input_shortcuts.rs`, `dsh/src/snippet.rs`
   - Validate: `cargo test -p doge-shell`
-- scheduled tasks / sched / periodic background work
-  - Read: `dsh/src/scheduler/`, `dsh-builtin/src/sched.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/sched.rs`
+- cron / scheduled jobs / tick / agent job scheduling
+  - Read: `dsh/src/cron/` (store, clock, exec, run_job, tick, runner, cli), `dsh-builtin/src/cron.rs`, `dsh-types/src/cron.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/cron.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` for CLI changes and `cargo test -p dsh-types` for shared types
 - directory stack / pushd / popd / dirs / cd -N
   - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/mod.rs`

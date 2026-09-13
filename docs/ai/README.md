@@ -60,6 +60,11 @@ doctor skills
   `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
 - Skill 自体を書き足すとき: `dsh-skill-authoring`
+- 製品利用者向け: `--profile dsh-user` (`dsh-cron`)
+
+## 製品利用者向け Skill
+
+このディレクトリの Skill は原則「この repo を AI に編集させるための運用ルール」で、`doge-shell-*` は repo 開発者専用。`dsh-cron` だけは例外で、**doge-shell 製品自体の利用者**が `!` チャットから cron ジョブを追加・編集・デバッグするための Skill。開発チェックアウトの `--profile dsh-common` には含めない（無関係な利用者は repo を開発しないし、repo 開発者の毎ターンのプロンプトに無関係な description を乗せたくない）。配布は `--target dsh --profile dsh-user` で明示的に行う。
 
 ## 製品側の AI 機能
 

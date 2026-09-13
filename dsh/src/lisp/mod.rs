@@ -18,6 +18,7 @@ use std::{cell::RefCell, rc::Rc};
 
 mod builtin;
 mod command_palette;
+mod cron;
 mod default_environment;
 mod interpreter;
 mod keybind;
@@ -26,7 +27,6 @@ mod macros;
 mod mcp_tests;
 mod model;
 mod parser;
-mod sched;
 pub mod stdlib;
 mod stdlib_tests;
 mod utils;

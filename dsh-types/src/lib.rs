@@ -17,6 +17,7 @@ pub mod agent;
 pub mod ansi;
 pub mod command_block;
 pub mod completion;
+pub mod cron;
 pub mod mcp;
 pub mod notebook;
 pub mod observed_output;

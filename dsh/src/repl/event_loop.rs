@@ -1,6 +1,5 @@
 use super::AiEvent;
 use super::background_io::BackgroundIoEvent;
-use crate::scheduler::SchedulerEvent;
 use crossterm::event::{Event, EventStream};
 use futures::StreamExt;
 use std::future::pending;
@@ -21,7 +20,6 @@ pub(crate) enum LoopEvent {
     ExplanationRefreshTick,
     ExplanationIdle,
     GitRefresh,
-    Scheduler(SchedulerEvent),
     CompletionRefresh,
     Ai(AiEvent),
     BackgroundIo(BackgroundIoEvent),
@@ -37,7 +35,6 @@ pub(crate) struct ReplEventLoop {
     explanation_refresh: Interval,
     idle_sleep: Pin<Box<Sleep>>,
     git_rx: UnboundedReceiver<()>,
-    sched_rx: UnboundedReceiver<SchedulerEvent>,
     completion_rx: UnboundedReceiver<()>,
     ai_rx: UnboundedReceiver<AiEvent>,
     background_io_rx: UnboundedReceiver<BackgroundIoEvent>,
@@ -47,7 +44,6 @@ impl ReplEventLoop {
     pub fn new(
         ai_refresh_ms: u64,
         git_rx: UnboundedReceiver<()>,
-        sched_rx: UnboundedReceiver<SchedulerEvent>,
         completion_rx: UnboundedReceiver<()>,
         ai_rx: UnboundedReceiver<AiEvent>,
         background_io_rx: UnboundedReceiver<BackgroundIoEvent>,
@@ -61,7 +57,6 @@ impl ReplEventLoop {
                 INITIAL_EXPLANATION_IDLE_SECS,
             ))),
             git_rx,
-            sched_rx,
             completion_rx,
             ai_rx,
             background_io_rx,
@@ -75,7 +70,6 @@ impl ReplEventLoop {
             _ = self.explanation_refresh.tick() => LoopEvent::ExplanationRefreshTick,
             _ = self.idle_sleep.as_mut() => LoopEvent::ExplanationIdle,
             Some(()) = self.git_rx.recv() => LoopEvent::GitRefresh,
-            Some(event) = self.sched_rx.recv() => LoopEvent::Scheduler(event),
             Some(()) = self.completion_rx.recv() => LoopEvent::CompletionRefresh,
             Some(event) = self.ai_rx.recv() => LoopEvent::Ai(event),
             Some(event) = self.background_io_rx.recv() => LoopEvent::BackgroundIo(event),
@@ -127,7 +121,6 @@ mod tests {
     struct EventLoopFixture {
         event_loop: ReplEventLoop,
         git_tx: tokio::sync::mpsc::UnboundedSender<()>,
-        sched_tx: tokio::sync::mpsc::UnboundedSender<SchedulerEvent>,
         completion_tx: tokio::sync::mpsc::UnboundedSender<()>,
         ai_tx: tokio::sync::mpsc::UnboundedSender<AiEvent>,
         background_io_tx: tokio::sync::mpsc::UnboundedSender<BackgroundIoEvent>,
@@ -135,21 +128,12 @@ mod tests {
 
     fn event_loop() -> EventLoopFixture {
         let (git_tx, git_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (sched_tx, sched_rx) = tokio::sync::mpsc::unbounded_channel();
         let (completion_tx, completion_rx) = tokio::sync::mpsc::unbounded_channel();
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_io_tx, background_io_rx) = tokio::sync::mpsc::unbounded_channel();
         EventLoopFixture {
-            event_loop: ReplEventLoop::new(
-                60_000,
-                git_rx,
-                sched_rx,
-                completion_rx,
-                ai_rx,
-                background_io_rx,
-            ),
+            event_loop: ReplEventLoop::new(60_000, git_rx, completion_rx, ai_rx, background_io_rx),
             git_tx,
-            sched_tx,
             completion_tx,
             ai_tx,
             background_io_tx,
@@ -161,7 +145,6 @@ mod tests {
         let EventLoopFixture {
             mut event_loop,
             git_tx,
-            sched_tx,
             completion_tx,
             ai_tx,
             background_io_tx,
@@ -181,28 +164,6 @@ mod tests {
                 .await
                 .unwrap(),
             LoopEvent::CompletionRefresh
-        ));
-
-        sched_tx
-            .send(SchedulerEvent {
-                id: 1,
-                name: "build".to_string(),
-                command: "cargo build".to_string(),
-                cwd: "/work".to_string(),
-                stdout: String::new(),
-                stderr: String::new(),
-                exit_code: 0,
-                duration: Duration::from_millis(10),
-                timed_out: false,
-                changed: false,
-                notify: true,
-            })
-            .unwrap();
-        assert!(matches!(
-            timeout(Duration::from_millis(50), event_loop.next_event())
-                .await
-                .unwrap(),
-            LoopEvent::Scheduler(SchedulerEvent { id: 1, .. })
         ));
 
         ai_tx

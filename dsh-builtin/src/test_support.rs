@@ -97,6 +97,13 @@ pub(crate) struct TestShellProxy {
     /// mutexes guarding the same process-global `std::env` is exactly the
     /// race this flag exists to avoid.
     pub mutate_real_env: bool,
+    /// Every `cron_tool_call` request, in order.
+    pub cron_tool_calls: Vec<dsh_types::cron::tool::CronToolRequest>,
+    /// `cron_tool_call`'s canned reply. `None` answers with an empty object.
+    pub cron_tool_response: Option<serde_json::Value>,
+    /// When set, `cron_tool_call` fails with this message instead of
+    /// returning `cron_tool_response`.
+    pub cron_tool_error: Option<String>,
 }
 
 impl Default for TestShellProxy {
@@ -143,6 +150,9 @@ impl Default for TestShellProxy {
             request_eval_error: None,
             dispatch_error: None,
             mutate_real_env: false,
+            cron_tool_calls: Vec::new(),
+            cron_tool_response: None,
+            cron_tool_error: None,
         }
     }
 }
@@ -498,36 +508,6 @@ impl ShellProxy for TestShellProxy {
         self.output_history.push(entry);
     }
 
-    fn sched_add(&mut self, _spec: dsh_types::schedule::SchedTaskSpec) -> Result<u64, String> {
-        Err("scheduler unavailable".to_string())
-    }
-
-    fn sched_as_lisp(&self) -> Vec<String> {
-        Vec::new()
-    }
-
-    fn sched_enabled(&self) -> bool {
-        false
-    }
-
-    fn sched_list(&self) -> Vec<dsh_types::schedule::SchedTaskView> {
-        Vec::new()
-    }
-
-    fn sched_remove(&mut self, _selector: &str) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
-
-    fn sched_set_enabled(&mut self, _enabled: bool) {}
-
-    fn sched_set_paused(&mut self, _selector: &str, _paused: bool) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
-
-    fn sched_trigger(&mut self, _selector: &str) -> Result<String, String> {
-        Err("scheduler unavailable".to_string())
-    }
-
     fn select_item(&mut self, _items: Vec<String>) -> Result<Option<String>> {
         Err(anyhow::anyhow!("select_item not implemented"))
     }
@@ -578,6 +558,22 @@ impl AgentCommandPolicy for TestShellProxy {
 
     fn agent_mcp_manager(&mut self) -> Arc<RwLock<crate::chatgpt::McpManager>> {
         Arc::clone(&self.mcp_manager)
+    }
+}
+
+impl crate::shell_capabilities::CronToolHost for TestShellProxy {
+    fn cron_tool_call(
+        &mut self,
+        request: &dsh_types::cron::tool::CronToolRequest,
+    ) -> Result<serde_json::Value> {
+        self.cron_tool_calls.push(request.clone());
+        if let Some(message) = &self.cron_tool_error {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
+        Ok(self
+            .cron_tool_response
+            .clone()
+            .unwrap_or_else(|| serde_json::json!({})))
     }
 }
 

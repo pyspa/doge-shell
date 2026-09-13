@@ -65,26 +65,50 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(crate::lisp::keybind::list_bind_actions),
     );
 
-    // Scheduled tasks
+    // Cron jobs
+    env.define(
+        Symbol::from("cron-add"),
+        Value::NativeFunc(crate::lisp::cron::cron_add),
+    );
+    env.define(
+        Symbol::from("cron-remove"),
+        Value::NativeFunc(crate::lisp::cron::cron_remove),
+    );
+    env.define(
+        Symbol::from("cron-pause"),
+        Value::NativeFunc(crate::lisp::cron::cron_pause),
+    );
+    env.define(
+        Symbol::from("cron-resume"),
+        Value::NativeFunc(crate::lisp::cron::cron_resume),
+    );
+    env.define(
+        Symbol::from("cron-list"),
+        Value::NativeFunc(crate::lisp::cron::cron_list),
+    );
+    // Deprecated: replaced by `cron-add`/`cron-remove`/`cron-pause`/
+    // `cron-resume`/`cron-list`. Kept for one release so an existing
+    // `config.lisp` does not stop partway through and drop everything after
+    // it (a `config.lisp` failure aborts the rest of the file).
     env.define(
         Symbol::from("sched-add"),
-        Value::NativeFunc(crate::lisp::sched::sched_add),
+        Value::NativeFunc(crate::lisp::cron::sched_add),
     );
     env.define(
         Symbol::from("sched-remove"),
-        Value::NativeFunc(crate::lisp::sched::sched_remove),
+        Value::NativeFunc(crate::lisp::cron::sched_remove),
     );
     env.define(
         Symbol::from("sched-pause"),
-        Value::NativeFunc(crate::lisp::sched::sched_pause),
+        Value::NativeFunc(crate::lisp::cron::sched_pause),
     );
     env.define(
         Symbol::from("sched-resume"),
-        Value::NativeFunc(crate::lisp::sched::sched_resume),
+        Value::NativeFunc(crate::lisp::cron::sched_resume),
     );
     env.define(
         Symbol::from("sched-list"),
-        Value::NativeFunc(crate::lisp::sched::sched_list),
+        Value::NativeFunc(crate::lisp::cron::sched_list),
     );
 
     env.define(

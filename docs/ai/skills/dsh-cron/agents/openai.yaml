@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH Cron"
+  short_description: "Create, edit and debug doge-shell cron jobs."
+  default_prompt: "Use $dsh-cron to add, edit or debug a doge-shell cron job, including its external tick."

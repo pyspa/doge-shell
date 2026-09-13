@@ -59,7 +59,7 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 |---|---|---|
 | 入口 | `dsh/src/shell/eval.rs` → `dsh-builtin/src/chatgpt.rs` | `dsh/src/ai_features/service.rs` |
 | 実行 | 同期 | 非同期 |
-| ツール | builtin 9 種 + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
+| ツール | builtin 10 種（`cron_manage` 含む）+ MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は

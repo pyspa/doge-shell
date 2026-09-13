@@ -23,6 +23,7 @@ Profiles:
   codex-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
   dsh-common     doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
   claude-common  doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  dsh-user       dsh-cron   (product-user skill: add/edit/debug a cron job; not a repo-dev skill)
 
 Examples:
   scripts/install-runtime-skills.sh --list
@@ -130,6 +131,9 @@ profile_skills() {
                 doge-shell-validation \
                 doge-shell-investigation \
                 doge-shell-chat-tools
+            ;;
+        dsh-user)
+            printf '%s\n' dsh-cron
             ;;
         *)
             echo "unknown profile: $1" >&2

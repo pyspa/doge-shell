@@ -165,8 +165,10 @@ pub(crate) struct BackgroundTasks {
     pub(crate) git_task_inflight: Arc<AtomicBool>,
     pub(crate) history_sync_last_check: Instant,
     pub(crate) github_task: Option<tokio::task::JoinHandle<()>>,
-    /// Finished `sched` runs, reported by the scheduler runner.
-    pub(crate) sched_task: Option<tokio::task::JoinHandle<()>>,
+    /// The in-session cron driver (`dsh/src/cron/runner.rs`). `None` when the
+    /// cron store could not be opened at startup — cron is unavailable for
+    /// this session rather than fatal to it.
+    pub(crate) cron_task: Option<tokio::task::JoinHandle<()>>,
     pub(crate) io: BackgroundIoCoordinator,
 }
 
@@ -188,13 +190,14 @@ pub struct Repl<'a> {
 
 impl<'a> Drop for Repl<'a> {
     fn drop(&mut self) {
-        // Cancel background tasks. Aborting the scheduler is what makes
-        // scheduled work session-scoped; in-flight children die with it
-        // because `exec` sets `kill_on_drop`.
+        // Cancel background tasks. Aborting the cron runner only stops this
+        // session's *scanning* for due jobs - a run already spawned as its
+        // own detached child (`dsh/src/cron/exec.rs`) keeps going, since cron
+        // jobs are meant to survive the session that happened to start them.
         if let Some(handle) = self.background_tasks.github_task.take() {
             handle.abort();
         };
-        if let Some(handle) = self.background_tasks.sched_task.take() {
+        if let Some(handle) = self.background_tasks.cron_task.take() {
             handle.abort();
         };
         // Tests build and drop `Repl` dozens of times; without this gate each

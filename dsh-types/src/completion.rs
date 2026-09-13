@@ -38,6 +38,7 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "cargo.package",
     "cargo.test",
     "code.extension",
+    "cron.job",
     "dbus.service",
     "direnv.rc",
     "dmsetup.device",

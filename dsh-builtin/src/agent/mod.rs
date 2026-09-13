@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Instant};
 
 pub mod files;
+pub mod grant;
 pub mod jobs;
 pub mod sandbox;
 

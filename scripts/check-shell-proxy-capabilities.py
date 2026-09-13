@@ -17,7 +17,6 @@ CAPABILITY_TRAITS = (
     "ShellExecution",
     "ShellNavigation",
     "ShellEnvironment",
-    "ShellScheduling",
     "ShellSessionData",
     "ShellDiagnostics",
     "ShellAiIntegration",
@@ -32,7 +31,7 @@ LEGACY_CAPABILITY_TRAITS = (
     "ExecutionCapability",
     "AiCapability",
 )
-MAX_COMPATIBILITY_METHODS = 73
+MAX_COMPATIBILITY_METHODS = 65
 METHOD_PATTERN = re.compile(r"^\s*fn\s+([A-Za-z_][A-Za-z0-9_]*)\b", re.MULTILINE)
 
 

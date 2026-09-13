@@ -148,12 +148,12 @@ pub struct Environment {
     pub(crate) dir_stack: Vec<String>,
     /// Periodic tasks registered with `sched`.
     ///
-    /// Shared with the background runner, which is why it is an `Arc` rather
-    /// than a plain field. It lives on `Environment` (not on `Repl`) because
-    /// `config.lisp` runs before the REPL is constructed and may register
-    /// tasks. Like [`Environment::dir_stack`], it is runtime state and is not
-    /// rolled back by `EnvironmentSnapshot`.
-    pub(crate) scheduler: crate::scheduler::SharedScheduler,
+    /// Refreshed by the session's cron runner after every scan
+    /// (`dsh/src/cron/runner.rs`) so the status line can show it without any
+    /// I/O of its own. Not rolled back by `EnvironmentSnapshot`: it mirrors
+    /// the cron store's on-disk state, which config.lisp failing does not
+    /// undo.
+    pub(crate) cron_health: Arc<RwLock<dsh_types::cron::job::CronHealth>>,
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub(crate) startup_mode: bool,
 }
@@ -220,7 +220,7 @@ impl Environment {
                 executable_names: Arc::new(RwLock::new(Vec::new())),
             },
             dir_stack: Vec::new(),
-            scheduler: crate::scheduler::SchedulerState::shared(),
+            cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
             startup_mode: false,
         }));
 
@@ -306,9 +306,10 @@ impl Environment {
             // A subshell gets a fresh stack: popping in a subshell must not
             // move the parent shell.
             dir_stack: Vec::new(),
-            // Likewise a fresh scheduler: only the interactive session runs a
-            // task runner, so a subshell's tasks would never fire anyway.
-            scheduler: crate::scheduler::SchedulerState::shared(),
+            // A fresh cache: only the interactive session runs the cron
+            // runner that keeps this one warm, so a subshell would otherwise
+            // show stale numbers instead of simply showing none.
+            cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
             startup_mode: false, // Extended environments (subshells) are not in startup mode
         }))
     }

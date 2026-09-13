@@ -902,7 +902,7 @@ fn test_git_completion_loading() {
 /// the old repository-root mirror and were therefore never embedded.
 #[test]
 fn builtin_completions_are_embedded() {
-    for command in ["dirs", "popd", "pushd", "sched"] {
+    for command in ["dirs", "popd", "pushd", "cron"] {
         assert!(
             CompletionAssets::get(&format!("{command}.json")).is_some(),
             "completion for builtin '{command}' is not embedded"

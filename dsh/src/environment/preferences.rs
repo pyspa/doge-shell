@@ -4,52 +4,6 @@ use super::Environment;
 use crate::suggestion::{InputPreferences, SuggestionMode};
 
 impl Environment {
-    /// Register a periodic task, capturing the current child-process
-    /// environment so the task sees the PATH and exports in effect now.
-    pub(crate) fn sched_add(
-        &mut self,
-        spec: dsh_types::schedule::SchedTaskSpec,
-    ) -> Result<u64, String> {
-        let env = self.child_process_env();
-        let scheduler = self.scheduler.clone();
-
-        scheduler.write().add(spec, env)
-    }
-
-    pub(crate) fn sched_remove(&mut self, selector: &str) -> Result<String, String> {
-        let scheduler = self.scheduler.clone();
-
-        scheduler.write().remove(selector)
-    }
-
-    pub(crate) fn sched_set_paused(
-        &mut self,
-        selector: &str,
-        paused: bool,
-    ) -> Result<String, String> {
-        let scheduler = self.scheduler.clone();
-
-        scheduler.write().set_paused(selector, paused)
-    }
-
-    /// Task summaries as `"name every 5m -> command"`, for `(sched-list)`.
-    pub(crate) fn sched_descriptions(&self) -> Vec<String> {
-        let scheduler = self.scheduler.clone();
-        let views = scheduler.read().views();
-        views
-            .into_iter()
-            .map(|view| {
-                format!(
-                    "{} every {} -> {}{}",
-                    view.name,
-                    view.interval,
-                    view.command,
-                    if view.paused { " (paused)" } else { "" }
-                )
-            })
-            .collect()
-    }
-
     /// Bind a key chord, replacing any existing binding for it.
     pub(crate) fn set_key_binding(
         &mut self,

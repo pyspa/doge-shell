@@ -174,32 +174,33 @@ fn truncate_to_width(content: &str, columns: usize) -> String {
 ///
 /// Everything read here is a cached value maintained by an existing background
 /// task, so composing never does I/O — a status line must not make the prompt
-/// slower.
+/// slower. `cron`'s half is [`dsh_types::cron::job::CronHealth`], refreshed by
+/// the session's cron runner after every scan (`dsh/src/cron/runner.rs`)
+/// rather than queried here.
 pub(crate) fn compose(
-    scheduler: &crate::scheduler::SchedulerState,
+    cron: &dsh_types::cron::job::CronHealth,
     job_count: usize,
     git: Option<&crate::prompt::GitStatus>,
     github: Option<&crate::github::GitHubStatus>,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
 
-    let tasks = scheduler.views();
-    if !tasks.is_empty() {
-        let failing = tasks
-            .iter()
-            .filter(|task| task.last.as_ref().is_some_and(|run| !run.succeeded()))
-            .count();
-        let running = tasks.iter().filter(|task| task.running).count();
-
-        let mut summary = format!("⏱ {}", tasks.len());
-        if running > 0 {
-            summary.push_str(&format!(" running {running}"));
+    if cron.total > 0 {
+        let mut summary = format!("⏱ {}", cron.total);
+        if cron.running > 0 {
+            summary.push_str(&format!(" running {}", cron.running));
         }
-        if failing > 0 {
-            summary.push_str(&format!(" failing {failing}"));
+        if cron.failing > 0 {
+            summary.push_str(&format!(" failing {}", cron.failing));
         }
-        if !scheduler.enabled {
-            summary.push_str(" paused");
+        if cron.paused > 0 {
+            summary.push_str(&format!(" paused {}", cron.paused));
+        }
+        // The one condition that never clears on its own: a job stays
+        // blocked until a person runs `cron incidents ack`, so it earns the
+        // same attention-grabbing mark as GitHub review requests below.
+        if cron.open_incidents > 0 {
+            summary.push_str(&format!(" ⚠{}", cron.open_incidents));
         }
         parts.push(summary);
     }
@@ -297,10 +298,7 @@ impl<W: Write> Drop for StatusLinePause<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scheduler::SchedulerState;
-    use dsh_types::schedule::{NotifyPolicy, SchedTaskSpec, parse_interval};
-    use std::collections::HashMap;
-    use std::time::Duration;
+    use dsh_types::cron::job::CronHealth;
 
     fn status(rows: u16, columns: u16) -> StatusLine {
         let mut status = StatusLine::new(true);
@@ -412,56 +410,75 @@ mod tests {
 
     // --- compose ---
 
-    fn scheduler_with(command: &str, name: &str) -> SchedulerState {
-        let mut state = SchedulerState::new();
-        state
-            .add(
-                SchedTaskSpec {
-                    name: name.to_string(),
-                    interval: parse_interval("5m").unwrap(),
-                    command: command.to_string(),
-                    cwd: "/tmp".to_string(),
-                    notify: NotifyPolicy::Both,
-                    timeout: Duration::from_secs(10),
-                },
-                HashMap::new(),
-            )
-            .unwrap();
-        state
+    fn cron_with(total: usize) -> CronHealth {
+        CronHealth {
+            total,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn an_idle_shell_has_an_empty_status() {
-        assert_eq!(compose(&SchedulerState::new(), 0, None, None), "");
+        assert_eq!(compose(&CronHealth::default(), 0, None, None), "");
     }
 
     #[test]
     fn tasks_and_jobs_are_summarised() {
-        let state = scheduler_with("true", "fetch");
-        let line = compose(&state, 2, None, None);
+        let cron = cron_with(1);
+        let line = compose(&cron, 2, None, None);
         assert!(line.contains("⏱ 1"), "{line}");
         assert!(line.contains("2 jobs"), "{line}");
     }
 
     #[test]
     fn one_job_is_singular() {
-        let line = compose(&SchedulerState::new(), 1, None, None);
+        let line = compose(&CronHealth::default(), 1, None, None);
         assert!(line.contains("1 job"));
         assert!(!line.contains("jobs"));
     }
 
     #[test]
-    fn failing_tasks_are_called_out() {
-        let mut state = scheduler_with("false", "fetch");
-        state.record(1, "", 1, false, Duration::from_millis(1));
-        assert!(compose(&state, 0, None, None).contains("failing 1"));
+    fn failing_jobs_are_called_out() {
+        let cron = CronHealth {
+            total: 1,
+            failing: 1,
+            ..Default::default()
+        };
+        assert!(compose(&cron, 0, None, None).contains("failing 1"));
     }
 
     #[test]
-    fn a_paused_scheduler_says_so() {
-        let mut state = scheduler_with("true", "fetch");
-        state.enabled = false;
-        assert!(compose(&state, 0, None, None).contains("paused"));
+    fn paused_jobs_are_counted_not_just_flagged() {
+        let cron = CronHealth {
+            total: 2,
+            paused: 2,
+            ..Default::default()
+        };
+        assert!(compose(&cron, 0, None, None).contains("paused 2"));
+    }
+
+    /// The one condition that never clears on its own deserves the same
+    /// attention-grabbing mark GitHub review requests get below.
+    #[test]
+    fn open_incidents_are_marked_with_a_warning() {
+        let cron = CronHealth {
+            total: 1,
+            open_incidents: 2,
+            ..Default::default()
+        };
+        assert!(compose(&cron, 0, None, None).contains("⚠2"));
+    }
+
+    #[test]
+    fn no_cron_jobs_means_no_cron_summary_even_with_open_incidents() {
+        // Cannot happen in practice (an incident always names a job), but the
+        // display should still be driven by `total`, not by any one field.
+        let cron = CronHealth {
+            total: 0,
+            open_incidents: 1,
+            ..Default::default()
+        };
+        assert!(!compose(&cron, 0, None, None).contains('⏱'));
     }
 
     #[test]
@@ -472,7 +489,7 @@ mod tests {
             ahead: 1,
             ..Default::default()
         };
-        let line = compose(&SchedulerState::new(), 0, Some(&git), None);
+        let line = compose(&CronHealth::default(), 0, Some(&git), None);
         assert!(line.contains("main"), "{line}");
         assert!(line.contains("●2"), "{line}");
         assert!(line.contains("↑1"), "{line}");
@@ -481,12 +498,12 @@ mod tests {
     #[test]
     fn github_appears_only_when_there_is_something_to_show() {
         let empty = crate::github::GitHubStatus::default();
-        assert!(!compose(&SchedulerState::new(), 0, None, Some(&empty)).contains("🐙"));
+        assert!(!compose(&CronHealth::default(), 0, None, Some(&empty)).contains("🐙"));
 
         let pending = crate::github::GitHubStatus {
             review_count: 3,
             ..Default::default()
         };
-        assert!(compose(&SchedulerState::new(), 0, None, Some(&pending)).contains("🐙 3"));
+        assert!(compose(&CronHealth::default(), 0, None, Some(&pending)).contains("🐙 3"));
     }
 }

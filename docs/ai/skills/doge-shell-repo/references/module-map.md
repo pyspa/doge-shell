@@ -15,7 +15,7 @@
 - user key bindings: `dsh/src/repl/keybind/`, `dsh/src/lisp/keybind.rs`
 - input insert keys (`Alt+.`, snippet, placeholders): `dsh/src/repl/last_arg.rs`, `dsh/src/repl/placeholder.rs`, `dsh/src/repl/key_handlers/input_shortcuts.rs`
 - status line: `dsh/src/repl/status_line.rs`
-- scheduled tasks: `dsh/src/scheduler/`, `dsh-builtin/src/sched.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/sched.rs`
+- cron jobs: `dsh/src/cron/`, `dsh-builtin/src/cron.rs`, `dsh-types/src/cron.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/cron.rs`
 - directory stack: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`
 - process / PTY / jobs: `dsh/src/process/`, `dsh/src/shell/eval.rs`
 - environment and activation: `dsh/src/environment/`, `dsh/src/direnv.rs`
@@ -34,7 +34,7 @@
 - AI / chat / tools: `rg -n "chat|skill|tool_call|MCP" dsh-builtin/src dsh-openai/src`
 - completion issue: `rg -n "completion|candidate|skim|generator" dsh/src`
 - key binding / chord: `rg -n "keybind|Chord|KeyStroke|Resolved|BoundAction|pending_chord" dsh/src/repl dsh/src/lisp`
-- scheduled task: `rg -n "sched|Scheduler|IntervalSpec|NotifyPolicy" dsh/src/scheduler dsh-builtin/src dsh-types/src`
+- cron job: `rg -n "cron|CronStore|CronJob|IntervalSpec|NotifyPolicy" dsh/src/cron dsh-builtin/src dsh-types/src`
 - directory stack: `rg -n "dir_stack|pushd|popd|changepwd" dsh/src dsh-builtin/src`
 - status line: `rg -n "status_line|DECSTBM|StatusLinePause" dsh/src/repl`
 - PTY / process display: `rg -n "pty|PtyMonitor|raw mode|isatty|ANSI|job" dsh/src/process dsh/src/shell dsh/src/terminal`

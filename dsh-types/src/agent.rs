@@ -14,7 +14,7 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskGrant {
     pub read_roots: Vec<PathBuf>,
     pub write_roots: Vec<PathBuf>,

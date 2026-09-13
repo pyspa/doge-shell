@@ -1,16 +1,27 @@
 //! Reading the running system for candidates: the per-tool output parsers
 //! (screen, pip, blkid, busctl, loginctl, losetup, nmcli, lsblk) and the
-//! loaders for filesystem types, fstab mountpoints, sysctl keys, kernel
-//! modules, network interfaces, swap devices and WireGuard configs.
+//! loaders behind them.
 //!
-//! Only `load_filesystem_types` and `load_sysctl_keys` carry a paired macOS
-//! arm. Of the rest: `load_fstab_mountpoints` needs none, because macOS reads
-//! `/etc/fstab` at the same path and an absent file just yields nothing. The
-//! three kernel/swap loaders (`/proc/swaps`, `/proc/modules`, `/lib/modules`)
-//! are Linux-only and currently return an empty list on macOS, which is
-//! tracked debt rather than a decision: macOS lists loaded extensions through
-//! `kmutil showloaded`/`kextstat`, so a second arm is possible and missing.
-//! Anything added here needs that arm from the start -- see
+//! Where each loader stands on the two supported platforms:
+//!
+//! - Paired `#[cfg]` arms: `load_filesystem_types`, `load_sysctl_keys`.
+//! - Delegated to a generator that is itself paired, so no arm belongs here:
+//!   `load_network_interfaces`, `load_process_names`, `load_process_ids`.
+//! - Portable as written: `load_fstab_mountpoints` (macOS reads `/etc/fstab`
+//!   at the same path, and an absent file just yields nothing) and
+//!   `load_package_json_dependencies`.
+//! - Linux-only, returning an empty list on macOS: `load_swap_devices`
+//!   (`/proc/swaps`), `load_kernel_module_names` (`/lib/modules`) and
+//!   `load_loaded_kernel_module_names` (`/proc/modules`). This is tracked debt,
+//!   not a decision -- macOS lists loaded extensions through
+//!   `kmutil showloaded`/`kextstat`, so a second arm is possible and missing.
+//!
+//! `collect_wireguard_config_names_from_dirs` takes its directories as an
+//! argument and is portable; the Linux-only `/etc/wireguard` literal its caller
+//! passes lives in `value_collectors.rs` and has no macOS arm either (macOS
+//! keeps those configs under the Homebrew prefix).
+//!
+//! Anything added here needs its second arm from the start -- see
 //! `docs/ai/skills/doge-shell-repo/references/platform-support.md`.
 use super::*;
 

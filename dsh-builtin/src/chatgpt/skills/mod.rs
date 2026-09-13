@@ -29,6 +29,7 @@ use tracing::{debug, warn};
 
 mod frontmatter;
 pub(crate) mod lint;
+mod loader;
 mod mentions;
 pub(crate) mod pending;
 pub(crate) mod trust;
@@ -36,6 +37,8 @@ pub(crate) mod usage;
 
 pub(crate) use frontmatter::truncate_chars;
 use frontmatter::{extract_skill_summary, frontmatter_field, is_indented, split_frontmatter};
+use loader::load_root;
+pub(crate) use loader::{SkillsManager, clear_skills_fragment_cache};
 pub(crate) use mentions::{note_skill_read, render_mention, split_leading_mentions};
 
 /// FNV-1a over raw bytes, formatted as lowercase hex.
@@ -457,10 +460,6 @@ impl Skill {
 /// runs to 234 characters; 140 cut its trigger mid-sentence. Chosen with room
 /// to spare rather than tuned to that one file.
 pub(crate) const MAX_SKILL_SUMMARY_CHARS: usize = 240;
-
-mod loader;
-use loader::load_root;
-pub(crate) use loader::{SkillsManager, clear_skills_fragment_cache};
 
 #[cfg(test)]
 mod tests;

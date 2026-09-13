@@ -14,7 +14,12 @@ use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolH
 use anyhow::Result;
 use dsh_types::safety_policy::{string_eval_flag, substitution_construct};
 
+mod authorize;
 mod capture;
+use authorize::{Authorization, authorize, program_name};
+#[cfg(test)]
+use authorize::{command_is_allowlisted, load_allowed_commands};
+pub(crate) use authorize::{command_names_any, command_tokens};
 #[cfg(test)]
 use capture::CappedCapture;
 pub(crate) use capture::kill_process_group;
@@ -435,12 +440,6 @@ fn writes_by_redirection(command: &str) -> bool {
 
     false
 }
-
-mod authorize;
-use authorize::{Authorization, authorize, program_name};
-#[cfg(test)]
-use authorize::{command_is_allowlisted, load_allowed_commands};
-pub(crate) use authorize::{command_names_any, command_tokens};
 
 #[cfg(test)]
 pub(crate) mod tests;

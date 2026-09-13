@@ -65,10 +65,17 @@ impl McpManager {
             }));
         }
 
-        // Run sequentially, with a small delay between server loads so a long
-        // list does not start every process at once. The delay is paid only
-        // between real probes: a cache hit spawns nothing, so making it wait
-        // just added 200ms per configured server to the shell's startup.
+        // Each future is awaited to completion before the next starts, and
+        // `list_tools_via_transport` cancels its service before returning, so
+        // only one probe process is ever alive -- the delay is not what
+        // enforces that. What it buys is a pause between consecutive child
+        // spawns so a long server list does not monopolise CPU/IO while the
+        // shell is still coming up. It is therefore paid only between real
+        // probes: a cache hit spawns nothing, and making it wait was adding
+        // 200ms per configured server to startup for no reason.
+        //
+        // If startup latency matters more than the pause, the answer is to run
+        // the probes concurrently under a real limit, not to shorten this.
         let mut results = Vec::new();
         let mut probed_before = false;
         for (probes_transport, future) in futures {

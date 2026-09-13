@@ -18,14 +18,10 @@ dsh-builtin/src/output_gen.rs	/sbin/init
 dsh-types/src/output_text.rs	/sbin/init
 dsh/src/command_timing.rs	/usr/bin/ls
 dsh/src/completion/commands.rs	/usr/bin/ls
-dsh/src/completion/dynamic.rs	/System/Library/Filesystems
-dsh/src/completion/dynamic.rs	/etc/fstab
 dsh/src/completion/dynamic.rs	/etc/wireguard
 dsh/src/completion/dynamic.rs	/lib/modules
 dsh/src/completion/dynamic.rs	/proc
-dsh/src/completion/dynamic.rs	/proc/filesystems
 dsh/src/completion/dynamic.rs	/proc/modules
-dsh/src/completion/dynamic.rs	/proc/swaps
 dsh/src/completion/dynamic.rs	/proc/sys
 dsh/src/completion/dynamic.rs	/run/blkid
 dsh/src/completion/dynamic.rs	/sys/class/net
@@ -53,6 +49,12 @@ dsh/src/completion/dynamic/specs.rs	/sys/block
 dsh/src/completion/dynamic/specs.rs	/sys/class/net
 dsh/src/completion/dynamic/specs.rs	/usr/share/kbd/keymaps
 dsh/src/completion/dynamic/specs.rs	/var/log/journal
+dsh/src/completion/dynamic/system.rs	/System/Library/Filesystems
+dsh/src/completion/dynamic/system.rs	/etc/fstab
+dsh/src/completion/dynamic/system.rs	/lib/modules
+dsh/src/completion/dynamic/system.rs	/proc/filesystems
+dsh/src/completion/dynamic/system.rs	/proc/swaps
+dsh/src/completion/dynamic/system.rs	/proc/sys
 dsh/src/completion/dynamic/tests.rs	/etc/fstab
 dsh/src/completion/generators/group.rs	/etc/group
 dsh/src/completion/generators/interface.rs	/sys/class/net

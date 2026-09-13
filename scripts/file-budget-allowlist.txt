@@ -18,7 +18,6 @@ no-doc	dsh-builtin/src/chatgpt/tool/mod.rs
 no-doc	dsh-builtin/src/chatgpt/tool/search.rs
 no-doc	dsh-builtin/src/comp_gen.rs
 no-doc	dsh-builtin/src/dmv.rs
-no-doc	dsh-builtin/src/doctor.rs
 no-doc	dsh-builtin/src/gh_notify.rs
 no-doc	dsh-builtin/src/glog.rs
 no-doc	dsh-builtin/src/help.rs
@@ -82,7 +81,6 @@ oversized	dsh-builtin/src/chatgpt/skills/mod.rs
 oversized	dsh-builtin/src/chatgpt/tool/execute.rs
 oversized	dsh-builtin/src/chatgpt/tool/mod.rs
 oversized	dsh-builtin/src/comp_gen.rs
-oversized	dsh-builtin/src/doctor.rs
 oversized	dsh-builtin/src/gwt.rs
 oversized	dsh-builtin/src/lib.rs
 oversized	dsh-builtin/src/output_gen.rs

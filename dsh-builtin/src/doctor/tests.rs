@@ -1,9 +1,12 @@
 use super::*;
+use crate::chatgpt::skills::usage;
+use crate::project_context;
 use crate::test_support::TestShellProxy as TestProxy;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
 use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
 use std::collections::HashMap;
 use std::os::fd::IntoRawFd;
+use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 
 fn observed_context() -> (Context, SharedOutputObserver) {

@@ -170,11 +170,13 @@ fn test_parse_arguments_invalid_port_non_numeric() {
     assert!(matches!(result.unwrap_err(), ServeError::ArgumentError(_)));
 }
 
+type FlagCheck = fn(&ServeConfig) -> bool;
+
 /// Each single boolean flag (short or long spelling) sets exactly the field
 /// it names and leaves the rest at their `parse_arguments_default` values.
 #[test]
 fn test_parse_arguments_single_boolean_flags() {
-    let cases: &[(&str, fn(&ServeConfig) -> bool)] = &[
+    let cases: &[(&str, FlagCheck)] = &[
         ("-v", |c| c.verbose),
         ("--verbose", |c| c.verbose),
         ("-o", |c| c.open_browser),

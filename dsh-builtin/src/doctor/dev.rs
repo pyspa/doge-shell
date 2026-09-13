@@ -1,0 +1,215 @@
+//! `doctor dev` / `doctor validate`: suggest validation commands from
+//! changed files, mirroring `scripts/check.sh`'s per-path rules.
+use dsh_types::Context;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub(super) fn check_dev(ctx: &Context, current_dir: &Path) {
+    let Some(repo_root) = find_repo_root(current_dir) else {
+        let _ = ctx.write_stdout("warn repo-root not-found for validation suggestions");
+        return;
+    };
+    let _ = ctx.write_stdout(&format!("ok repo-root {}", repo_root.display()));
+
+    let changed = changed_paths(&repo_root);
+    match changed {
+        Ok(paths) if paths.is_empty() => {
+            let _ = ctx.write_stdout("skip changed-files none");
+        }
+        Ok(paths) => {
+            let _ = ctx.write_stdout(&format!("ok changed-files {}", paths.len()));
+            for path in &paths {
+                let _ = ctx.write_stdout(&format!("ok changed {}", path.display()));
+            }
+            let commands = validation_commands_for_paths(&paths);
+            if commands.is_empty() {
+                let _ = ctx.write_stdout("skip validation no focused command for changed files");
+            } else {
+                for command in commands {
+                    let _ = ctx.write_stdout(&format!("ok validate {command}"));
+                }
+            }
+        }
+        Err(err) => {
+            let _ = ctx.write_stdout(&format!("warn changed-files unavailable {err}"));
+        }
+    }
+}
+
+pub(super) fn find_repo_root(current_dir: &Path) -> Option<PathBuf> {
+    let cwd = current_dir
+        .canonicalize()
+        .unwrap_or_else(|_| current_dir.to_path_buf());
+    for ancestor in cwd.ancestors() {
+        if ancestor.join("Cargo.toml").is_file() && ancestor.join("docs").join("ai").is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+    None
+}
+
+pub(super) fn changed_paths(repo_root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(repo_root)
+        .output()
+        .map_err(|err| err.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(stderr.trim().to_string());
+    }
+    Ok(parse_git_status_short(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+pub(super) fn parse_git_status_short(output: &str) -> Vec<PathBuf> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let path = line.get(3..)?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            let path = path
+                .rsplit_once(" -> ")
+                .map(|(_, new_path)| new_path)
+                .unwrap_or(path);
+            Some(PathBuf::from(path.trim_matches('"')))
+        })
+        .collect()
+}
+
+pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut packages = BTreeSet::new();
+    let mut needs_workspace_check = false;
+    let mut needs_ai_guidance = false;
+    let mut needs_project_consistency = false;
+    let mut needs_shell_proxy_check = false;
+    let mut has_rust = false;
+    let mut needs_portability = false;
+
+    for path in paths {
+        let text = path.to_string_lossy().replace('\\', "/");
+        if text.ends_with(".rs") {
+            has_rust = true;
+        }
+        if text == "Cargo.toml" || text.ends_with("/Cargo.toml") || text == "Cargo.lock" {
+            needs_workspace_check = true;
+        }
+        if text == "Cargo.toml"
+            || text.ends_with("/Cargo.toml")
+            || text == "README.md"
+            || text == "LICENSE"
+            || text == "scripts/check-project-consistency.py"
+        {
+            needs_project_consistency = true;
+        }
+        // `check.sh` runs this on every change, but nothing here suggested it,
+        // so a proxy method added over a `doctor validate` cycle only failed in
+        // CI.
+        if text == "dsh-builtin/src/lib.rs"
+            || text == "dsh-builtin/src/shell_capabilities.rs"
+            || text == "scripts/check-shell-proxy-capabilities.py"
+        {
+            needs_shell_proxy_check = true;
+        }
+        // Linker tuning has to stay scoped to the target that accepts it, and
+        // the workflow is where the macOS side is actually proven.
+        if text.starts_with(".cargo/") || text.starts_with(".github/workflows/") {
+            needs_portability = true;
+        }
+        if text == "AGENTS.md"
+            || text == "CLAUDE.md"
+            || text.starts_with("docs/ai/")
+            || text.starts_with(".claude/")
+            || text == "scripts/install-runtime-skills.sh"
+        {
+            needs_ai_guidance = true;
+        }
+
+        // `completions/` is embedded into the `doge-shell` binary by rust-embed,
+        // and `command-completion-schema.json` is asserted to match the provider
+        // list in `dsh-types`.
+        if text.starts_with("completions/") {
+            packages.insert("doge-shell");
+        }
+        if text == "command-completion-schema.json" {
+            packages.insert("doge-shell");
+            packages.insert("dsh-types");
+        }
+
+        // `output-schemas/` is embedded the same way (rust-embed), and
+        // `command-output-schema.json` mirrors it for `|:`'s output schemas.
+        if text.starts_with("output-schemas/") {
+            packages.insert("doge-shell");
+        }
+        if text == "command-output-schema.json" {
+            packages.insert("doge-shell");
+            packages.insert("dsh-types");
+        }
+
+        if text.starts_with("dsh-builtin/") {
+            packages.insert("dsh-builtin");
+        } else if text.starts_with("dsh-openai/") {
+            packages.insert("dsh-openai");
+        } else if text.starts_with("dsh-types/") {
+            packages.insert("dsh-types");
+        } else if text.starts_with("dsh-frecency/") {
+            packages.insert("dsh-frecency");
+        } else if text.starts_with("dsh/") {
+            packages.insert("doge-shell");
+        }
+    }
+
+    if has_rust {
+        add_command(&mut commands, "cargo fmt --check");
+    }
+    // Every Rust edit is a chance to add a one-armed `#[cfg(target_os = ..)]` or
+    // an unported `/proc` read, and neither fails a build on the host that wrote
+    // it. The lint scans the whole tree either way, so it costs one line.
+    if has_rust || needs_portability {
+        add_command(&mut commands, "scripts/check-portability.py");
+    }
+    for package in [
+        "dsh-builtin",
+        "doge-shell",
+        "dsh-openai",
+        "dsh-types",
+        "dsh-frecency",
+    ] {
+        if packages.contains(package) {
+            add_command(&mut commands, &format!("cargo test -p {package}"));
+        }
+    }
+    if needs_workspace_check || packages.len() > 1 {
+        add_command(&mut commands, "cargo check --workspace");
+    }
+    if packages.contains("doge-shell") {
+        add_command(&mut commands, "cargo clippy -p doge-shell -- -D warnings");
+    }
+    if needs_ai_guidance {
+        add_command(&mut commands, "scripts/check-ai-guidance.sh");
+        add_command(&mut commands, "scripts/install-runtime-skills.sh --list");
+        add_command(
+            &mut commands,
+            "scripts/install-runtime-skills.sh --check-installed --target codex --profile codex-core",
+        );
+    }
+    if needs_project_consistency {
+        add_command(&mut commands, "scripts/check-project-consistency.py");
+    }
+    if needs_shell_proxy_check {
+        add_command(&mut commands, "scripts/check-shell-proxy-capabilities.py");
+    }
+
+    commands
+}
+
+pub(super) fn add_command(commands: &mut Vec<String>, command: &str) {
+    if !commands.iter().any(|existing| existing == command) {
+        commands.push(command.to_string());
+    }
+}

@@ -65,7 +65,6 @@ no-doc	dsh/src/shell/eval.rs
 no-doc	dsh/src/shell/mod.rs
 no-doc	dsh/src/shell/parse.rs
 no-doc	dsh/src/suggestion.rs
-oversized	dsh-builtin/src/chatgpt/skills/mod.rs
 oversized	dsh-builtin/src/chatgpt/tool/execute.rs
 oversized	dsh-builtin/src/comp_gen.rs
 oversized	dsh/src/proxy/shell_proxy.rs

@@ -80,7 +80,6 @@ oversized	dsh/src/completion/dynamic.rs
 oversized	dsh/src/completion/dynamic/dev.rs
 oversized	dsh/src/completion/dynamic/linux.rs
 oversized	dsh/src/completion/integrated.rs
-oversized	dsh/src/input/editor.rs
 oversized	dsh/src/lisp/builtin.rs
 oversized	dsh/src/lisp/interpreter.rs
 oversized	dsh/src/lisp/model/table.rs

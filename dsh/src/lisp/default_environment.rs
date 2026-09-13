@@ -8,8 +8,6 @@ use crate::{
         utils::{require_arg, require_typed_arg},
     },
 };
-use cfg_if::cfg_if;
-
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -400,13 +398,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
         Value::NativeFunc(|_env, args| {
             let list = require_typed_arg::<&List>("length", &args, 0)?;
 
-            cfg_if! {
-                if #[cfg(feature = "bigint")] {
-                    Ok(Value::Int(list.into_iter().len().into()))
-                } else {
-                    Ok(Value::Int(list.into_iter().len() as IntType))
-                }
-            }
+            Ok(Value::Int(list.into_iter().len() as IntType))
         }),
     );
 

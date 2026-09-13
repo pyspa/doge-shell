@@ -10,7 +10,7 @@ use std::sync::Arc;
 const MCP_FORM_SUGGESTIONS: &[&str] =
     &["mcp-add-stdio", "mcp-add-http", "mcp-add-sse", "mcp-clear"];
 #[cfg(test)]
-mod completion_tests;
+mod tests;
 
 pub fn completion_suggestion(
     input_state: &Input,

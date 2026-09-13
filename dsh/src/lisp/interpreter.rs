@@ -678,6 +678,320 @@ mod tests {
     }
 
     #[test]
+    fn test_lambda_creation_and_call() {
+        let env = create_test_env();
+
+        // Create a lambda: (lambda (x) (+ x 1))
+        let lambda_expr = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("lambda")),
+                Value::List(vec![Value::Symbol(Symbol::from("x"))].into_iter().collect()),
+                Value::List(
+                    vec![
+                        Value::Symbol(Symbol::from("+")),
+                        Value::Symbol(Symbol::from("x")),
+                        Value::Int(1.into()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let lambda_result = eval(env.clone(), &lambda_expr).unwrap();
+        assert!(matches!(lambda_result, Value::Lambda(_)));
+
+        // Store the lambda
+        env.borrow_mut().define(Symbol::from("inc"), lambda_result);
+
+        // Call the lambda: (inc 5)
+        let call_expr = Value::List(
+            vec![Value::Symbol(Symbol::from("inc")), Value::Int(5.into())]
+                .into_iter()
+                .collect(),
+        );
+
+        let result = eval(env.clone(), &call_expr).unwrap();
+        assert_eq!(result, Value::Int(6.into()));
+    }
+
+    #[test]
+    fn test_let_binding() {
+        let env = create_test_env();
+
+        // Test let: (let ((x 10) (y 20)) (+ x y))
+        let let_expr = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("let")),
+                Value::List(
+                    vec![
+                        Value::List(
+                            vec![Value::Symbol(Symbol::from("x")), Value::Int(10.into())]
+                                .into_iter()
+                                .collect(),
+                        ),
+                        Value::List(
+                            vec![Value::Symbol(Symbol::from("y")), Value::Int(20.into())]
+                                .into_iter()
+                                .collect(),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                Value::List(
+                    vec![
+                        Value::Symbol(Symbol::from("+")),
+                        Value::Symbol(Symbol::from("x")),
+                        Value::Symbol(Symbol::from("y")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &let_expr).unwrap();
+        assert_eq!(result, Value::Int(30.into()));
+
+        // Verify that let bindings don't leak to outer scope
+        let x_lookup = eval(env.clone(), &Value::Symbol(Symbol::from("x")));
+        assert!(x_lookup.is_err());
+    }
+
+    #[test]
+    fn test_if_conditional() {
+        let env = create_test_env();
+
+        // Test if true: (if T 42 0)
+        let if_true = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("if")),
+                Value::True,
+                Value::Int(42.into()),
+                Value::Int(0.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &if_true).unwrap();
+        assert_eq!(result, Value::Int(42.into()));
+
+        // Test if false: (if F 42 0)
+        let if_false = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("if")),
+                Value::False,
+                Value::Int(42.into()),
+                Value::Int(0.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &if_false).unwrap();
+        assert_eq!(result, Value::Int(0.into()));
+
+        // Test if without else: (if F 42)
+        let if_no_else = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("if")),
+                Value::False,
+                Value::Int(42.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &if_no_else).unwrap();
+        assert_eq!(result, Value::NIL);
+    }
+
+    #[test]
+    fn test_quote() {
+        let env = create_test_env();
+
+        // Test quote: (quote (+ 1 2))
+        let quote_expr = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("quote")),
+                Value::List(
+                    vec![
+                        Value::Symbol(Symbol::from("+")),
+                        Value::Int(1.into()),
+                        Value::Int(2.into()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &quote_expr).unwrap();
+        let expected = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("+")),
+                Value::Int(1.into()),
+                Value::Int(2.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_and_or_logic() {
+        let env = create_test_env();
+
+        // Test and: (and T T)
+        let and_true = Value::List(
+            vec![Value::Symbol(Symbol::from("and")), Value::True, Value::True]
+                .into_iter()
+                .collect(),
+        );
+        let result = eval(env.clone(), &and_true).unwrap();
+        assert_eq!(result, Value::True);
+
+        // Test and: (and T F)
+        let and_false = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("and")),
+                Value::True,
+                Value::False,
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let result = eval(env.clone(), &and_false).unwrap();
+        assert_eq!(result, Value::False);
+
+        // Test or: (or F T)
+        let or_true = Value::List(
+            vec![Value::Symbol(Symbol::from("or")), Value::False, Value::True]
+                .into_iter()
+                .collect(),
+        );
+        let result = eval(env.clone(), &or_true).unwrap();
+        assert_eq!(result, Value::True);
+
+        // Test or: (or F F)
+        let or_false = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("or")),
+                Value::False,
+                Value::False,
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let result = eval(env.clone(), &or_false).unwrap();
+        assert_eq!(result, Value::False);
+    }
+
+    #[test]
+    fn test_nested_environments() {
+        let env = create_test_env();
+
+        // Define outer variable
+        env.borrow_mut()
+            .define(Symbol::from("outer"), Value::Int(100.into()));
+
+        // Test nested let that shadows outer variable
+        let nested_let = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("let")),
+                Value::List(
+                    vec![Value::List(
+                        vec![Value::Symbol(Symbol::from("outer")), Value::Int(200.into())]
+                            .into_iter()
+                            .collect(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+                Value::Symbol(Symbol::from("outer")),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &nested_let).unwrap();
+        assert_eq!(result, Value::Int(200.into()));
+
+        // Verify outer variable is unchanged
+        let outer_lookup = eval(env.clone(), &Value::Symbol(Symbol::from("outer"))).unwrap();
+        assert_eq!(outer_lookup, Value::Int(100.into()));
+    }
+
+    #[test]
+    fn test_function_definition_and_call() {
+        let env = create_test_env();
+
+        // Define function: (defun square (x) (* x x))
+        let defun_expr = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("defun")),
+                Value::Symbol(Symbol::from("square")),
+                Value::List(vec![Value::Symbol(Symbol::from("x"))].into_iter().collect()),
+                Value::List(
+                    vec![
+                        Value::Symbol(Symbol::from("*")),
+                        Value::Symbol(Symbol::from("x")),
+                        Value::Symbol(Symbol::from("x")),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let result = eval(env.clone(), &defun_expr).unwrap();
+        assert_eq!(result, Value::NIL);
+
+        // Call function: (square 5)
+        let call_expr = Value::List(
+            vec![Value::Symbol(Symbol::from("square")), Value::Int(5.into())]
+                .into_iter()
+                .collect(),
+        );
+
+        let result = eval(env.clone(), &call_expr).unwrap();
+        assert_eq!(result, Value::Int(25.into()));
+    }
+
+    #[test]
+    fn test_error_handling() {
+        let env = create_test_env();
+
+        // Test undefined symbol
+        let result = eval(env.clone(), &Value::Symbol(Symbol::from("undefined")));
+        assert!(result.is_err());
+
+        // Test setting undefined variable
+        let set_undefined = Value::List(
+            vec![
+                Value::Symbol(Symbol::from("set")),
+                Value::Symbol(Symbol::from("undefined")),
+                Value::Int(42.into()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let result = eval(env.clone(), &set_undefined);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_performance_no_unnecessary_clones() {
         let env = create_test_env();
 

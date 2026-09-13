@@ -116,13 +116,8 @@ pub fn register(env: &mut Env) {
                     if current == end {
                         None
                     } else {
-                        #[cfg(feature = "bigint")]
-                        let res = Some(current.clone());
-                        #[cfg(not(feature = "bigint"))]
                         let res = Some(current);
-
                         current += IntType::from(1);
-
                         res
                     }
                 })

@@ -15,18 +15,6 @@ name = "dsh"
 name = "latency"
 harness = false
 
-[features]
-default = ["i64", "f64"]
-bigint = ["num-bigint"]
-i128 = []
-i64 = []
-i32 = []
-i16 = []
-i8 = []
-f64 = []
-f32 = []
-
-
 [dependencies]
 dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
@@ -79,7 +67,6 @@ pest_derive = "2.8"
 fuzzy-matcher = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 tabled = { version = "0.21", default-features = false, features = ["std"] }
-num-bigint = { version = "0.5", optional = true }
 num-traits = "0.2"
 rust-embed = "8.5"
 rusqlite = { version = "0.40", features = ["bundled"] }

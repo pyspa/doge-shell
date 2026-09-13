@@ -2,7 +2,6 @@ use crate::lisp::model::{
     CmpValue, Env, IntType, List, RuntimeError, Symbol, Table, TableRc, Value,
 };
 use crate::lisp::utils::{require_arg, require_typed_arg};
-use cfg_if::cfg_if;
 use std::cell::RefCell;
 use std::convert::TryInto;
 
@@ -249,13 +248,7 @@ pub fn register(env: &mut Env) {
             let table_rc = require_table("table-count", &args, 0)?;
             let table = table_rc.borrow();
             let count = table.count();
-            cfg_if! {
-                if #[cfg(feature = "bigint")] {
-                    Ok(Value::Int(IntType::from(count)))
-                } else {
-                    Ok(Value::Int(count as IntType))
-                }
-            }
+            Ok(Value::Int(count as IntType))
         }),
     );
 

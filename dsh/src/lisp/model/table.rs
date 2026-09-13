@@ -3,7 +3,6 @@
 //! This module provides `Table` and `Record` types for handling structured data
 //! like JSON objects and arrays in a tabular format.
 
-use cfg_if::cfg_if;
 use indexmap::IndexMap;
 use serde_json::{self, Value as JsonValue};
 use std::cell::RefCell;
@@ -726,13 +725,7 @@ fn numeric_as_f64(value: &Value) -> Option<f64> {
 }
 
 fn usize_to_int_value(n: usize) -> Value {
-    cfg_if! {
-        if #[cfg(feature = "bigint")] {
-            Value::Int(IntType::from(n))
-        } else {
-            Value::Int(n as IntType)
-        }
-    }
+    Value::Int(n as IntType)
 }
 
 impl Default for Table {
@@ -798,24 +791,7 @@ fn value_to_json(value: &Value) -> JsonValue {
         Value::List(list) if list == &super::List::NIL => JsonValue::Null,
         Value::True => JsonValue::Bool(true),
         Value::False => JsonValue::Bool(false),
-        Value::Int(i) => {
-            cfg_if! {
-                if #[cfg(feature = "bigint")] {
-                    use num_traits::ToPrimitive;
-                    if let Some(i64_val) = i.to_i64() {
-                        JsonValue::Number(i64_val.into())
-                    } else if let Some(f64_val) = i.to_f64() {
-                        serde_json::Number::from_f64(f64_val)
-                            .map(JsonValue::Number)
-                            .unwrap_or(JsonValue::Null)
-                    } else {
-                        JsonValue::String(i.to_string())
-                    }
-                } else {
-                    JsonValue::Number((*i).into())
-                }
-            }
-        }
+        Value::Int(i) => JsonValue::Number((*i).into()),
         Value::Float(f) => serde_json::Number::from_f64(*f)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null),

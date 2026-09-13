@@ -1,15 +1,8 @@
-use cfg_if::cfg_if;
 use std::any::Any;
 use std::ops::{Add, Div, Mul, Sub};
 use std::rc::Rc;
 use std::{cell::RefCell, cmp::Ordering};
 use std::{collections::HashMap, fmt::Debug};
-
-cfg_if::cfg_if! {
-    if #[cfg(feature = "bigint")] {
-        use num_traits::ToPrimitive;
-    }
-}
 
 use super::{Env, FloatType, IntType, Lambda, List, RuntimeError, Symbol, TableRc};
 use crate::lisp;
@@ -117,12 +110,7 @@ impl TryFrom<&Value> for IntType {
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Int(this) => {
-                #[cfg(feature = "bigint")]
-                return Ok(this.clone());
-                #[cfg(not(feature = "bigint"))]
-                return Ok(*this);
-            }
+            Value::Int(this) => Ok(*this),
             _ => Err(RuntimeError {
                 msg: format!("Expected int, got a {value}"),
             }),
@@ -512,19 +500,7 @@ impl Div<Value> for Value {
 
 /// Convert whatever int type we're using to whatever float type we're using
 pub(crate) fn int_type_to_float_type(i: &IntType) -> FloatType {
-    cfg_if! {
-        if #[cfg(feature = "bigint")] {
-            cfg_if! {
-                if #[cfg(feature = "f64")] {
-                    i.to_f64().unwrap_or(f64::NAN)
-                } else {
-                    i.to_f32().unwrap_or(f32::NAN)
-                }
-            }
-        } else {
-            *i as FloatType
-        }
-    }
+    *i as FloatType
 }
 
 impl Ord for Value {

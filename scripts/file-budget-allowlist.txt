@@ -39,7 +39,6 @@ no-doc	dsh/src/completion/display.rs
 no-doc	dsh/src/completion/dynamic.rs
 no-doc	dsh/src/completion/dynamic/dev.rs
 no-doc	dsh/src/completion/dynamic/platform.rs
-no-doc	dsh/src/completion/integrated.rs
 no-doc	dsh/src/completion/json_loader.rs
 no-doc	dsh/src/completion/parser.rs
 no-doc	dsh/src/completion/path.rs

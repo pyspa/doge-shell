@@ -77,4 +77,3 @@ oversized	dsh/src/completion/dynamic/linux.rs
 oversized	dsh/src/completion/integrated.rs
 oversized	dsh/src/lisp/interpreter.rs
 oversized	dsh/src/proxy/shell_proxy.rs
-oversized	dsh/src/safety/mod.rs

@@ -92,6 +92,18 @@ fn history(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_j
     Ok(json!(runs.iter().map(run_json).collect::<Vec<_>>()))
 }
 
+/// [`job_cwd_within`]'s outcome - kept distinct from a plain `bool` so the
+/// caller's refusal message can say *why*: an unresolvable `cwd` (deleted,
+/// moved) is not the same situation as a `cwd` that genuinely falls outside
+/// the grant, and conflating the two into one message sends whoever is
+/// debugging the refusal chasing the wrong fix (widening a grant that was
+/// never the problem).
+enum CwdCheck {
+    InGrant,
+    OutOfGrant,
+    Unresolvable,
+}
+
 /// Whether a job's `cwd` falls under a task's own grant.
 ///
 /// The same boundary `grant_exceeds_task`
@@ -102,13 +114,20 @@ fn history(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_j
 /// job's output just because it happens to know (or has guessed) the job's
 /// name. Readable is the weaker claim, so either root list satisfies it -
 /// the same reasoning `grant_exceeds_task` uses for its own `--read` check.
-fn job_cwd_within(cwd: &str, grant: &TaskGrant) -> bool {
+fn job_cwd_within(cwd: &str, grant: &TaskGrant) -> CwdCheck {
     match std::path::Path::new(cwd).canonicalize() {
-        Ok(path) => grant
-            .read_roots
-            .iter()
-            .chain(&grant.write_roots)
-            .any(|root| path.starts_with(root)),
+        Ok(path) => {
+            let within = grant
+                .read_roots
+                .iter()
+                .chain(&grant.write_roots)
+                .any(|root| path.starts_with(root));
+            if within {
+                CwdCheck::InGrant
+            } else {
+                CwdCheck::OutOfGrant
+            }
+        }
         // Unlike `dsh-builtin`'s `path_within` (which fails open on the same
         // kind of error, for a *write* grant field): there, an unresolvable
         // path still has to survive `apply_grant_option`'s own "no such
@@ -117,7 +136,7 @@ fn job_cwd_within(cwd: &str, grant: &TaskGrant) -> bool {
         // returns the job's output directly - so failing open would let a
         // job whose `cwd` no longer resolves (deleted, moved) bypass the
         // grant check entirely. Refuse instead.
-        Err(_) => false,
+        Err(_) => CwdCheck::Unresolvable,
     }
 }
 
@@ -127,7 +146,14 @@ fn logs(
     request: &CronToolRequest,
 ) -> Result<serde_json::Value> {
     let selector = match (&request.run, &request.job) {
-        (Some(run), _) => RunSelector::Id(run.clone()),
+        // Both given: the run must belong to the named job - see
+        // `RunSelector::JobAndId`'s own doc comment for why `job` cannot
+        // just be dropped once `run` pins down a run by itself.
+        (Some(run), Some(job)) => RunSelector::JobAndId {
+            job: job.clone(),
+            run: run.clone(),
+        },
+        (Some(run), None) => RunSelector::Id(run.clone()),
         (None, Some(job)) => RunSelector::Latest(job.clone()),
         (None, None) => anyhow::bail!("`job` or `run` is required"),
     };
@@ -136,11 +162,21 @@ fn logs(
     if let Some(runtime) = &shell.agent_runtime {
         let grant = runtime.lock().task.grant.clone();
         let job = store.get(&output.run.job_name)?;
-        if !job_cwd_within(&job.cwd, &grant) {
-            anyhow::bail!(
-                "cron_manage: refused: job `{}` is outside this task's own read/write grant",
-                job.name
-            );
+        match job_cwd_within(&job.cwd, &grant) {
+            CwdCheck::InGrant => {}
+            CwdCheck::OutOfGrant => {
+                anyhow::bail!(
+                    "cron_manage: refused: job `{}` is outside this task's own read/write grant",
+                    job.name
+                );
+            }
+            CwdCheck::Unresolvable => {
+                anyhow::bail!(
+                    "cron_manage: refused: job `{}`'s cwd could not be resolved (deleted or moved?), \
+                     so its place inside this task's grant cannot be confirmed",
+                    job.name
+                );
+            }
         }
     }
 

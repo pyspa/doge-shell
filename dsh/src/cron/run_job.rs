@@ -118,7 +118,20 @@ fn notepad_grant(spec_grant: &TaskGrant, notepad_dir: std::path::PathBuf, cwd: &
         ..spec_grant.clone()
     };
     if grant.read_roots.is_empty() {
-        grant.read_roots.push(cwd.into());
+        // Canonicalized, like `apply_grant_option` canonicalizes every
+        // explicit `--read`/`--write`: `cron_manage(action=logs)`'s
+        // `job_cwd_within` canonicalizes the *target* job's `cwd` before
+        // comparing it against this grant's roots, so a raw, symlink-bearing
+        // `cwd` here (e.g. macOS's `/tmp` -> `/private/tmp`) would silently
+        // fail to match even for the job's own run. Falls back to the raw
+        // path on error rather than propagating it - unlike the read-time
+        // check, failing here would break the job's own default grant, not
+        // just a `logs` lookup.
+        grant.read_roots.push(
+            std::path::Path::new(cwd)
+                .canonicalize()
+                .unwrap_or_else(|_| cwd.into()),
+        );
     }
     grant.read_roots.push(notepad_dir.clone());
     grant.write_roots.push(notepad_dir);
@@ -224,7 +237,19 @@ fn agent_outcome(
     // closes the row out without knowing what task it had started. The task
     // itself stays fully recorded in the agent store; this is what makes it
     // findable again from `cron logs`.
-    store.attach_agent_task(&run.run_id, &task.id)?;
+    //
+    // A store hiccup here is a nicety lost, not a run that must not happen:
+    // unlike a failure below (which means the agent never got to try its
+    // goal at all), the only consequence of this one is that a *later*
+    // watchdog kill of this same run would not be traceable back to its
+    // task via `cron logs` - propagating it would abort the whole tick over
+    // a transient error the agent itself never even saw.
+    if let Err(error) = store.attach_agent_task(&run.run_id, &task.id) {
+        tracing::warn!(
+            "cron: could not record {}'s agent task id ({error}); continuing without it",
+            run.run_id
+        );
+    }
 
     let watchdog = arm_watchdog(spec.time_budget_secs);
     let report = crate::agent::run_task(shell, ctx, &task_store, task, None);
@@ -328,9 +353,11 @@ fn stderr_text(summary: &str, stop_reason: Option<&str>) -> String {
     if reason.is_empty() {
         return String::new();
     }
-    match summary.lines().next() {
-        Some(headline) if !headline.is_empty() => format!("{headline}: {reason}"),
-        _ => reason.to_string(),
+    let headline = crate::agent::summary::first_line(summary);
+    if headline.is_empty() {
+        reason.to_string()
+    } else {
+        format!("{headline}: {reason}")
     }
 }
 

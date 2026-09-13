@@ -1228,6 +1228,56 @@ fn run_output_by_id_finds_an_older_run_not_just_the_latest() {
     assert_eq!(older.stdout, "first\n");
 }
 
+/// The bug this guards against: `RunSelector::Id` alone (unlike
+/// `RunSelector::JobAndId`) never checks which job a run belongs to - so
+/// `cron logs <job> --run <id>` used to silently return *any* job's run
+/// matching `<id>`, discarding `<job>` entirely, if `<id>` did not happen to
+/// belong to the named job.
+#[test]
+fn run_output_by_job_and_id_refuses_a_run_that_belongs_to_a_different_job() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    store
+        .create(&spec("other", "1h"), &env(), NOW, false)
+        .unwrap();
+
+    make_due(&store, "probe", NOW);
+    let probe_run = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&probe_run[0].run_id, NOW).unwrap();
+    store
+        .complete(&probe_run[0].run_id, &outcome(RunState::Succeeded), NOW + 1)
+        .unwrap();
+
+    make_due(&store, "other", NOW);
+    let other_run = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&other_run[0].run_id, NOW).unwrap();
+    store
+        .complete(&other_run[0].run_id, &outcome(RunState::Succeeded), NOW + 1)
+        .unwrap();
+
+    // Asking for "other"'s own run under its own name still works.
+    let matched = store
+        .run_output(&RunSelector::JobAndId {
+            job: "other".to_string(),
+            run: other_run[0].run_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(matched.run.job_name, "other");
+
+    // Asking for "probe"'s run while naming "other" must be refused, not
+    // silently answered with probe's data under other's name.
+    let error = store
+        .run_output(&RunSelector::JobAndId {
+            job: "other".to_string(),
+            run: probe_run[0].run_id.clone(),
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("no run with this id under job"), "{error}");
+}
+
 #[test]
 fn run_output_accepts_a_unique_prefix_and_refuses_an_ambiguous_one() {
     let (dir, store) = store();

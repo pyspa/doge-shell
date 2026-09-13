@@ -625,8 +625,18 @@ pub struct RunQuery {
 pub enum RunSelector {
     /// The most recently finished run of this job (name or id).
     Latest(String),
-    /// One exact run, by its id or a unique prefix of one (git-style).
+    /// One exact run, by its id or a unique prefix of one (git-style),
+    /// without regard to which job it belongs to.
     Id(String),
+    /// One exact run (by id or unique prefix), which must belong to the
+    /// named job. `cron logs <job> --run <id>` and `cron_manage(action=logs,
+    /// job=..., run=...)` both give the caller a job name *and* a run
+    /// selector - without this variant, the job name was silently discarded
+    /// and any run id/prefix that happened to match, from any job, was
+    /// accepted, so a stale or mistyped id from a different job's history
+    /// would silently return that other job's recorded output instead of
+    /// erroring.
+    JobAndId { job: String, run: String },
 }
 
 /// One run's full recorded streams, read on demand.

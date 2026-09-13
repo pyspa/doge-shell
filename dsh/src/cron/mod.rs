@@ -50,8 +50,9 @@ Usage:
   cron pause [<job>...]                                 Pause job(s), or the whole scheduler
   cron resume [<job>...]                                Resume job(s), or the whole scheduler
   cron history [<job>] [--failed] [--json]              Show finished runs
-  cron logs <job> [--run <id>] [--stdout|--stderr] [--json]
+  cron logs [<job>] [--run <id>] [--stdout|--stderr] [--json]
                                                           Show one run's full recorded output
+                                                          (needs job, --run, or both)
   cron incidents [--json]                               List things needing a person
   cron incidents ack <id>                               Acknowledge one and unblock its job
   cron notepad <job> [--clear]                          Show (or clear) a job's own notes

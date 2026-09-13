@@ -233,7 +233,13 @@ pub fn render_run_output(output: &RunOutput, show_stdout: bool, show_stderr: boo
     sections.join("\n")
 }
 
-fn stream_section(name: &str, text: &str, labelled: bool) -> String {
+/// `pub(in crate::cron)`, not private: `handlers/logs.rs`'s live-reconstructed
+/// path renders its `stderr` section through this too, so a run whose
+/// `stdout` had to be reconstructed still gets the identical `(empty)`/label
+/// treatment as the ordinary path instead of a hand-rolled variant that
+/// quietly drifts from it (e.g. omitting the section outright when `stderr`
+/// is empty, unlike this function).
+pub(in crate::cron) fn stream_section(name: &str, text: &str, labelled: bool) -> String {
     let body = if text.is_empty() {
         "(empty)".to_string()
     } else {

@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::agent::{SqliteTaskStore, summary};
+use crate::cron::cli::render::stream_section;
 use dsh_builtin::shell_capabilities::AgentTaskStore;
 use dsh_types::cron::job::RunOutput;
 
@@ -87,7 +88,11 @@ pub(in crate::cron) fn logs_json(
 pub(in crate::cron) fn logs(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Result<()> {
     let parsed = parse_logs_args(args).map_err(anyhow::Error::msg)?;
     let selector = match (parsed.run, parsed.job) {
-        (Some(run), _) => RunSelector::Id(run),
+        // Both given: the run must belong to the named job, not just be *a*
+        // run id that happens to exist somewhere - see `RunSelector::JobAndId`'s
+        // own doc comment for what silently accepting any job's run used to do.
+        (Some(run), Some(job)) => RunSelector::JobAndId { job, run },
+        (Some(run), None) => RunSelector::Id(run),
         (None, Some(job)) => RunSelector::Latest(job),
         (None, None) => {
             bail!("expected a job name (or --run <id>); see `cron history` for run ids")
@@ -128,10 +133,15 @@ pub(in crate::cron) fn logs(ctx: &Context, store: &SqliteCronStore, args: &[Stri
         )?;
         ctx.write_stdout(text)?;
         ctx.write_stdout("\n")?;
-        if show_stderr && !output.stderr.is_empty() {
-            ctx.write_stdout("--- stderr ---\n")?;
-            ctx.write_stdout(&output.stderr)?;
-            ctx.write_stdout("\n")?;
+        if show_stderr {
+            // Through `stream_section`, not a hand-rolled `if !is_empty()`:
+            // `live` is only ever computed when `show_stdout` already holds
+            // (see above), so exactly as in the ordinary `render_run_output`
+            // path both streams are selected here whenever `show_stderr`
+            // does - meaning `stderr` must get the same labelled, "(empty)"
+            // on nothing, treatment as it would there, not silently vanish
+            // when this run's `stderr` also happens to be empty.
+            ctx.write_stdout(&stream_section("stderr", &output.stderr, true))?;
         }
         return Ok(());
     }

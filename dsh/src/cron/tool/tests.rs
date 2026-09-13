@@ -324,6 +324,42 @@ fn run_a_job_named(store: &SqliteCronStore, name: &str, cwd: &str, stdout: &str)
         .expect("complete");
 }
 
+/// The bug this guards against: with only `RunSelector::Id` available,
+/// passing both `job` and `run` silently discarded `job` and returned
+/// whichever job the `run` id actually belonged to - so a stale or
+/// mistyped run id from a *different* job's history would silently return
+/// that other job's recorded output instead of erroring.
+#[test]
+fn logs_with_both_job_and_run_refuses_a_run_from_a_different_job() {
+    let (_dir, store) = store();
+    run_a_job_named(&store, "digest", "/tmp", "digest output\n");
+    run_a_job_named(&store, "other", "/tmp", "other output\n");
+
+    let other_run = store
+        .runs(&RunQuery {
+            job: Some("other".to_string()),
+            ..Default::default()
+        })
+        .expect("runs")
+        .remove(0);
+
+    let shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    let error = logs(
+        &shell,
+        &store,
+        &CronToolRequest {
+            job: Some("digest".to_string()),
+            run: Some(other_run.id),
+            ..request()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("no run with this id under job"),
+        "{error}"
+    );
+}
+
 #[test]
 fn logs_returns_the_stored_streams() {
     let (_dir, store) = store();
@@ -469,7 +505,8 @@ fn a_job_whose_cwd_no_longer_resolves_is_refused_under_a_task() {
     )
     .unwrap_err();
     assert!(
-        error.to_string().contains("outside this task's own"),
-        "an unresolvable cwd must be refused, not treated as in-grant: {error}"
+        error.to_string().contains("could not be resolved"),
+        "an unresolvable cwd must be refused, not treated as in-grant, and must say so \
+         distinctly from a genuine out-of-grant refusal: {error}"
     );
 }

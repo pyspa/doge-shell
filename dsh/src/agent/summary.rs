@@ -51,6 +51,16 @@ const CRITERION_CHARS: usize = 150;
 const PROGRESS_CHARS: usize = 800;
 const FAILURE_RESULT_CHARS: usize = 200;
 const FINAL_ANSWER_CHARS: usize = 2000;
+/// `--check` has no upper bound of its own (`dsh/src/cron/cli/parse.rs`), and
+/// each criterion's *text* is clamped only per-line (`CRITERION_CHARS`) - the
+/// *count* was not. A job with enough criteria could push the built-so-far
+/// string past `SUMMARY_BUDGET_BYTES` before the tool-stats and "final
+/// answer" sections (both appended after this one) were ever added, and
+/// `clamp_bytes`'s head-only cut (see this module's own doc comment for why
+/// it must stay head-only) would then silently drop both. Capping the count
+/// shown keeps every later section's byte budget accounted for, the same way
+/// every other section already is.
+const MAX_CRITERIA_SHOWN: usize = 20;
 
 /// The final, byte-based safety net: whatever the fixed-size sections above
 /// add up to, this module's own output must never be the thing that gets
@@ -65,7 +75,10 @@ fn clamp_bytes(text: &str, max_bytes: usize) -> String {
     format!("{}{MARKER}", &text[..cut])
 }
 
-fn first_line(text: &str) -> &str {
+/// `pub(crate)`, not private: `cron::run_job`'s `stderr_text` needs the exact
+/// same "first line, or empty" extraction on a `task_summary`-produced
+/// string, and used to reimplement it inline rather than share this.
+pub(crate) fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
 }
 
@@ -213,7 +226,7 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
 
     if !task.criteria.is_empty() {
         out.push_str("criteria:\n");
-        for criterion in &task.criteria {
+        for criterion in task.criteria.iter().take(MAX_CRITERIA_SHOWN) {
             let mark = if criterion.passed { 'x' } else { ' ' };
             out.push_str(&format!(
                 "  [{mark}] {}",
@@ -223,6 +236,12 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
                 out.push_str(&format!("  (event {event})"));
             }
             out.push('\n');
+        }
+        if task.criteria.len() > MAX_CRITERIA_SHOWN {
+            out.push_str(&format!(
+                "  ... and {} more\n",
+                task.criteria.len() - MAX_CRITERIA_SHOWN
+            ));
         }
     }
 

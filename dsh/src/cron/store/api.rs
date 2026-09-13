@@ -507,7 +507,15 @@ impl CronStore for SqliteCronStore {
     }
 
     fn run_output(&self, selector: &RunSelector) -> Result<RunOutput> {
-        let connection = self.connection.lock();
+        let mut connection = self.connection.lock();
+        // In one transaction, not just one held lock: the lock only rules
+        // out another thread *in this process* racing the two SELECTs below;
+        // a `cron tick`/`cron run-job` running as its own separate process
+        // opens its own connection to the same file and is not blocked by
+        // it. A transaction is what actually keeps "resolve which run" and
+        // "read that run's streams" atomic against a concurrent prune/delete
+        // from such a process.
+        let tx = connection.transaction()?;
         // Two queries on purpose, not a wider `SELECT_RUN`: that constant's
         // column list and `run_from_row`'s `row.get(n)` calls are one unit
         // (see `rows.rs`'s own module doc), and `stdout`/`stderr` are read by
@@ -516,18 +524,17 @@ impl CronStore for SqliteCronStore {
         // uses.
         let run = match selector {
             RunSelector::Latest(job) => {
-                let id = resolve(&connection, job)?;
-                connection
-                    .query_row(
-                        &format!(
-                            "{SELECT_RUN} WHERE r.job_id = ?1 AND r.finished_at IS NOT NULL \
+                let id = resolve(&tx, job)?;
+                tx.query_row(
+                    &format!(
+                        "{SELECT_RUN} WHERE r.job_id = ?1 AND r.finished_at IS NOT NULL \
                              ORDER BY r.scheduled_for DESC LIMIT 1"
-                        ),
-                        [id],
-                        run_from_row,
-                    )
-                    .optional()?
-                    .with_context(|| format!("{job}: no finished run recorded yet"))?
+                    ),
+                    [id],
+                    run_from_row,
+                )
+                .optional()?
+                .with_context(|| format!("{job}: no finished run recorded yet"))?
             }
             RunSelector::Id(prefix) => {
                 // `prefix` is a caller-supplied string (from `--run` or the
@@ -535,7 +542,7 @@ impl CronStore for SqliteCronStore {
                 // a literal `%`/`_` in it would be read as a LIKE wildcard
                 // instead of a literal character, letting e.g. `--run '%'`
                 // match every run in the store.
-                let mut statement = connection.prepare(&format!(
+                let mut statement = tx.prepare(&format!(
                     "{SELECT_RUN} WHERE r.id LIKE ?1 || '%' ESCAPE '\\' LIMIT 2"
                 ))?;
                 let mut rows = statement
@@ -547,12 +554,35 @@ impl CronStore for SqliteCronStore {
                     _ => bail!("{prefix}: matches more than one run; use a longer id"),
                 }
             }
+            // Both a job selector and a run id/prefix - unlike `Id` alone,
+            // the run must actually belong to that job. Without the
+            // `r.job_id = ?1` filter, a run id (or prefix) belonging to a
+            // *different* job than the one named would still resolve, and
+            // the named job would be silently ignored rather than the
+            // mismatch being reported.
+            RunSelector::JobAndId { job, run } => {
+                let id = resolve(&tx, job)?;
+                let mut statement = tx.prepare(&format!(
+                    "{SELECT_RUN} WHERE r.job_id = ?1 AND r.id LIKE ?2 || '%' ESCAPE '\\' LIMIT 2"
+                ))?;
+                let mut rows = statement
+                    .query_map(params![id, escape_like_pattern(run)], run_from_row)?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                match rows.len() {
+                    0 => bail!("{run}: no run with this id under job `{job}`"),
+                    1 => rows.remove(0),
+                    _ => {
+                        bail!("{run}: matches more than one run under job `{job}`; use a longer id")
+                    }
+                }
+            }
         };
-        let (stdout, stderr): (Option<String>, Option<String>) = connection.query_row(
+        let (stdout, stderr): (Option<String>, Option<String>) = tx.query_row(
             "SELECT stdout, stderr FROM runs WHERE id = ?1",
             [&run.id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        tx.commit()?;
         Ok(RunOutput {
             run,
             stdout: stdout.unwrap_or_default(),

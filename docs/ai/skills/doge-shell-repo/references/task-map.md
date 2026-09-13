@@ -25,18 +25,16 @@
   - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
 - chatgpt / MCP / tool / runtime skill / OpenAI config
-  - 先に読む: [ai-architecture.md](ai-architecture.md)（AI 機能の方針。再実装してはいけないものの一覧）
+  - 先に読む: [ai/README.md](ai/README.md)（AI 機能の方針。再実装してはいけないものの一覧）
   - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
 - skill / SKILL.md / skill_manage / project skill / 使用統計
-  - 先に読む: [ai-architecture.md](ai-architecture.md) の「Skill」節
+  - 先に読む: [ai/skill.md](ai/skill.md)（Regression チェックリストは同ファイル末尾）
   - Read: `dsh-builtin/src/chatgpt/skills/`, `dsh-builtin/src/chatgpt/tool/skill.rs`, `dsh-builtin/src/skill.rs`
-  - Regression: skill 一覧は system prompt の identity に**含めない**（含めると skill を書いた瞬間に会話が消える）。skill script は全 root・**stage の全トークン**・`execute` の `cwd` 基準で必ず確認する（program だけ / シェル cwd 基準では `bash <skill>/run.sh` と `cwd` 指定で抜けられた）。**読み取り root は 3 つ**（`.dsh` > `.agents` > user、canonical dedup）だが**書き込みは 2 つ**。`SkillScope` に variant を足さず `SkillOrigin` を使う（`scope == Project` の比較が散在し、3 つ目は全箇所で緩い方向に倒れる）。`describe_project_roots` は `Vec` を返し、gate は root ごとに聞いて root ごとに落とす。prompt fragment は scope ではなく **root 単位**でグループ化する。project root は trust ゲートの内側で、タスクでは聞かずに読まない。ロード時の問題は握り潰さず `SkillDiagnostic` へ。**staging（`AI_CHAT_SKILL_STAGING`）は lint 通過後・`confirm_agent_action` の手前で分岐する**（到達すると `InputRequired` が書かれてしまう）。`skill_manage` の schema（1400 バイト上限）は増やさない — staging も archive も引数やツール結果の外に出さない。**archive フィルタは `render_fragment` だけ**（`load_skills`/`load_reporting` に入れると trust digest が動く）。`skill approve` は `tool::skill::validate_in` / `apply_skill_write` を再利用し、独自のパス解決・書き込みを持たない。
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::skills`; `cargo test -p dsh-builtin --lib chatgpt::tool::skill`; `cargo test -p dsh-builtin --lib chatgpt::reflect`; `cargo test -p dsh-builtin --lib skill::`
 - AI chat hooks / ai-hooks.json / pre-tool-use / 外部コマンド
-  - 先に読む: [ai-architecture.md](ai-architecture.md) の §4（hook は許可を与えられない）
+  - 先に読む: [ai/hooks.md](ai/hooks.md)（Regression チェックリストは同ファイル末尾。hook は許可を与えられない）
   - Read: `dsh-builtin/src/chatgpt/hooks/`
-  - Regression: `HookDecision` に `Allow` を足さない。gate イベントは fail-closed、観測イベントは fail-open。payload は stdin、ただし pipe ではなく一時ファイル（pipe だと孫が read 端を握ったときシェルがハングする）。`command[0]` はロード時に絶対パス化し、相対パスは拒否。権限検査は world-writable のみ。ターン末処理は全離脱経路を通す。`session-start` は checkpoint 再開では鳴らさない。**`match` の照合は redact 前の生の引数で行う**（`-p` マスクで `/etc/**` の hook が発火しなくなる = 許容側に倒れる）。引数が読めないときは一致させる。イベントを足したら `HookEvent::ALL` に入れる。**ターン予算の超過は観測イベントだけスキップし、gate は残り時間まで縮めて必ず実行する**（縮んだ timeout 超過は既存規則で deny）。`programs` は `execute` の allowlist マッチャを再利用するが**極性が逆**なので、片方を厳しくするともう片方のゲートが弱まる。
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
 - agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
   - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`
@@ -65,7 +63,7 @@
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when runtime completion loading changes
 - notebook / markdown rendering / output history
   - Skill: `docs/ai/skills/doge-shell-notebook-markdown/SKILL.md`
-  - Read: `dsh-builtin/src/notebook_play.rs`, `dsh-builtin/src/markdown.rs`, `dsh-builtin/src/out.rs`, `dsh-builtin/src/tm.rs`, `dsh-types/src/notebook.rs`, `dsh-types/src/output_history.rs`
+  - Read: `dsh-builtin/src/notebook_play.rs`, `dsh-builtin/src/markdown/`, `dsh-builtin/src/out.rs`, `dsh-builtin/src/tm.rs`, `dsh-types/src/notebook.rs`, `dsh-types/src/output_history.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared data shapes change
 - safety / guard / command policy
   - Read: `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `dsh/src/proxy/mod.rs` の `AgentCommandPolicy`
@@ -83,7 +81,7 @@
   - Read: `dsh/src/history/`, `dsh/src/db.rs`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`, `dsh-builtin/src/blocks.rs`
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
-  - 先に読む: [ai-architecture.md](ai-architecture.md)
+  - 先に読む: [ai/README.md](ai/README.md)
   - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer

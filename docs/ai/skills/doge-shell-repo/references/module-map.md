@@ -24,7 +24,7 @@
 - command palette and AI actions: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/argument_explainer.rs`
 - builtin commands: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
 - builtin chat: `dsh-builtin/src/chatgpt.rs`
-- builtin tools and skill loading: `dsh-builtin/src/chatgpt/tool/`, `dsh-builtin/src/chatgpt/skills.rs`
+- builtin tools and skill loading: `dsh-builtin/src/chatgpt/tool/`, `dsh-builtin/src/chatgpt/skills/`
 - builtin serve / MCP: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-types/src/mcp.rs`
 - OpenAI config and client: `dsh-openai/src/config.rs`, `dsh-openai/src/client.rs`
 

@@ -1,90 +1,16 @@
-# Invariants
+# Invariants — 索引
 
-短いが破りやすいルール。いずれも実際に事故った箇所だけを載せる。
+短いが破りやすいルール。いずれも実際に事故った箇所だけを載せる。話題別に分割してある。
+**必要な話題のファイルだけ**開く。
 
-## ディレクトリ変更
-- cwd を変えるのは `ShellProxy::changepwd`（`dsh/src/proxy/mod.rs`）だけ。`std::env::set_current_dir` を直接呼ぶと `OLDPWD`・`path_history`（`z`）・`*on-chdir-hooks*`・`dir_stack[0]` が全部ずれる。
-- `changepwd` は **chdir してから** hook / direnv で失敗しうる。`Err` を「何も起きなかった」と扱わないこと。呼び出し側は `get_current_dir()` と突き合わせて判定する（`dsh-builtin/src/dirstack.rs` の `apply` / `push_directory` が実例）。
-- `dir_stack[0]` は常に現在ディレクトリ。`dirs -v` の番号と `cd -N` はこの前提で一致している。
+| 話題 | ファイル |
+|---|---|
+| ディレクトリ変更・`Environment` の状態 | [invariants/environment.md](invariants/environment.md) |
+| キー入力・端末描画・テストと実端末・出力履歴 | [invariants/terminal.md](invariants/terminal.md) |
+| スケジューラ | [invariants/scheduler.md](invariants/scheduler.md) |
+| Completion 定義 | [invariants/completion.md](invariants/completion.md) |
+| プラットフォーム | [invariants/platform.md](invariants/platform.md) |
+| 安全判定 | [invariants/safety.md](invariants/safety.md) |
+| 二重化しているもの（多数派が正解とは限らない） | [invariants/duplication.md](invariants/duplication.md) |
 
-## Environment の状態
-- `EnvironmentSnapshot`（`dsh/src/lisp/mod.rs`）は config.lisp 失敗時のロールバック対象。**設定**（`keybindings`, `alias`, `abbreviations` …）は追加する。**ランタイム状態**（`dir_stack`, `scheduler`）は追加しない。
-- `config.lisp` は `Repl::new` より前に走る。REPL 起動前に登録できる必要があるものは `Environment` に置く。
-
-## キー入力
-- キーを消費しないこと。未定義チョード（`Ctrl-x q`）は prefix を捨てて、**終端キーを通常ディスパッチする**。飲み込むと誤爆 `Ctrl-x` の直後の Enter でコマンドが黙って実行されなくなる。
-- `determine_key_action`（`dsh/src/repl/key_action.rs`）は純粋関数のまま維持する。上書きは `handler.rs` の前段レイヤーで行う。
-- `KeyAction` に variant を足したら `keybind/action_name.rs` の `ACTIONS` にも足す（網羅テストが落ちる）。
-
-## 端末描画
-- `print_prompt` は**新しいプロンプト**（OSC 133 A + pre-prompt hooks）。同じ行を描き直すだけなら `render::redraw_prompt` を使う。取り違えると OSC 133 A が D と対にならず、shell integration 対応端末で偽のコマンドブロックが開く。
-- DECSTBM のスクロール領域は **スクロールしか** 守らない。`Clear(ClearType::FromCursorDown)` / `Clear(All)` は予約行も消すので、消したら `StatusLine::invalidate()` を呼ぶ（差分描画がスキップして空行のまま残る）。
-- 画面を占有するもの（picker、補完グリッド、外部エディタ、前景コマンド）は `StatusLinePause` で囲む。子プロセスが実行され**終わる**まで pause を保持すること。
-- プロンプト上への割り込み出力は `render::print_above_prompt` を通す。
-
-## テストと実端末
-- テストは**開発者の実端末を触ってはいけない**。`cargo test` の test binary は fd 0 にユーザーの tty をそのまま継承するので、そこへの書き込み・termios 変更・`tcsetpgrp` はすべて開発者の端末に届く。しかも test binary は終了時に何も戻さない。
-- 実端末を変更するコードは `crate::terminal::terminal_control_enabled()` を通す（unit test ビルドでは常に false）。`flush_stdout_bytes` / `Drop for Repl` / `job_wait` の `owns_terminal` / PTY input proxy の stdin フォールバックが実例。
-- `ctx.interactive` はガードにならない。`Context::new_safe` はこれを `isatty(STDIN_FILENO)` から作るので、端末から `cargo test` すると **true になる**。テストで `Context::new_safe(.., true)` を使うなら `ctx.interactive = false` を明示する（`dsh/src/shell/mod.rs` の job テストが手本）。
-- 端末へ書く型は writer を引数に取る。`StatusLinePause::with_writer` がその形。`std::io::stdout()` をハードコードすると、テストが DECSTBM のスクロール領域（`ESC[1;Nr`）を開発者の端末に置き去りにする。**実際に起きた**: エコーが消え Enter が効かなくなるが、termios は正常なので `stty` では気付けない。
-- PTY が要るテストは自前の pty slave を開く（`dsh/src/process/async_io.rs` のテストと `setup_pty_with` が手本）。`AsyncStdin::open_tty()` は `ttyname(0)` を解決するので実端末を読む。
-- 端末汚染の検知は「escape sequence が実 stdout に出たか」で見る。termios 差分だけでは DECSTBM を取りこぼす。
-
-## 出力履歴
-- `OutputHistory` は `push_front`。**先頭が最新**。直前に push したものは `get(1)`、`.last()` は最古。
-- `CommandBlock.command` は `blocks rerun` がそのまま評価器へ渡す。ラベルや接頭辞を混ぜない。表示用の加工は `OutputEntry.command`（`out` / `tm` が表示するだけ）に置く。
-
-## スケジューラ
-- `Shell` は `!Send`（`Rc<RefCell<LispEngine>>`）。spawn したタスクから `eval_str` は呼べない。
-- `handle_background_tick` は `tokio::select!` の腕の中で await される。ここで重い処理をするとキー入力が固まる。
-- 履歴同期の SQLite 読み込み・正規化と command timing の JSON 書き込みを REPL イベントループへ戻さない。`repl/background_io.rs` で予約し、完了後は世代を確認してメモリ上の snapshot だけを適用する。
-- command history の reload は SQLite 保存未確認のローカル差分を snapshot へマージする。command timing は一時ファイルから atomic に公開し、`timing --clear` 後の古い snapshot を reset 世代で拒否する。
-- 非ブロッキング性は時間閾値ではなく `repl::background_io::tests` の停止ワーカー・in-flight・完了 channel で検証する。世代競合は `command_timing::tests` と `history::*::background_reload_tests` が入口。
-- REPL 終了時は raw mode と DECSTBM を解除してから background writer の完了を待つ。ファイル I/O 待機中に端末状態を保持しない。
-- pause から resume するときは `next_run` を貼り直す。しないと溜まった分が一斉に発火する。
-
-## Completion 定義
-- 埋め込み元は `completions/` ただ 1 つ（`dsh/src/completion/json_loader.rs` の `#[folder = "../completions/"]`）。ディレクトリを増やさない。以前は `dsh/completions/` との二重管理で、root にだけ足した 4 ファイルが出荷バイナリに載っていなかった。
-- provider 名のタイポは**どのテストも落ちない**。loader は `provider` をただの `String` として通し、`DynamicProviderId::parse` が `None` を返して候補が静かに 0 件になるだけ。`json_loader.rs` の `embedded_completion_definitions_are_valid` が唯一の防波堤なので、ここを弱めない。
-- `ArgumentType` は `#[serde(tag = "type", content = "data")]`。`Choice` は newtype なので `data` は**文字列の配列**（`{"type":"Choice","data":["a","b"]}`）。`{"choices": [...]}` のようなオブジェクトで包むと deserialize が `invalid type: map, expected a sequence` で落ち、その定義だけ丸ごと無効になる。
-- 新しい dynamic provider は 3 箇所を同時に更新する。`dsh-types/src/completion.rs` の `DYNAMIC_COMPLETION_PROVIDERS`（**ソート済み**・`binary_search` 前提）、`command-completion-schema.json` の Dynamic Type enum（**完全一致**で比較される）、そして provider の中身。検証は `cargo test -p dsh-types` と `cargo test -p doge-shell` の両方。
-  - **固定シェイプ**（固定の実行ファイル + 固定引数（または固定パス読み取り）+ パーサ関数）なら 3 箇所目は `dsh/src/completion/dynamic/local.rs` が探す `LocalSpec` テーブルへの 1 行追加だけで済む。行は `dsh/src/completion/dynamic.rs`（`CORE_LOCAL_SPECS`）か、パーサ/ローダー関数と同じ family モジュール（`container.rs`/`dev.rs`/`linux.rs`/`project.rs` の `LOCAL_SPECS`）に置く——**その関数が既に private として住んでいる場所**に置くことで可視性を広げずに済み、Linux 専用パスは所有ファイルを変えないので `scripts/portability-allowlist.txt` も無傷で済む。`registry::ProviderRegistration::collect` が family の match より先にこのテーブルを引くので、`family_for` の prefix も family モジュールの match アームも要らない。
-  - それ以外（動的な引数構築・JSON 応答の解釈・複数コマンドのマージ・ランタイム発見スコープなど）は今まで通り `family_for`（プレフィクス match）+ family collector の match アームを足す。
-- `family_for`（`registry.rs`）の else は無条件 `External`。プレフィクスを足し忘れても「未登録」とは言われない。`dynamic/git.rs` の `_ =>` は `platform::collect` に落ちるので、「match アームが無い = 未対応」でもない。テーブル駆動の provider は `family_for` の分類を経由せず `local::collect` だけで答えが出るので、「match アームが無い」はなおさら「未対応」の証拠にならない——`local.rs` の `every_local_spec_names_a_registered_provider` / `local_spec_providers_are_unique` がテーブル側の誤字・重複だけを防ぐ。
-- 動的補完には経路が 2 つある。宣言的 provider（JSON の `Dynamic`）と、コマンド名直結の `DYNAMIC_PROVIDER_SPECS`（`completion/integrated.rs`）。後者が先に走り、結果に前者が `extend` される。片方だけ直すと候補が重複するか、直したはずが効かない。
-  `git` はこの二重化を畳んだ後の見本: `dynamic/git.rs::collect_git_candidates` は今、JSON では書けない 1 ケース（`git co<TAB>` のサブコマンド位置でのユーザー alias 補完。`argument_type_for_completion_context` は `CompletionContext::SubCommand` を解決しない設計なので JSON へ移せない）だけを直接処理し、それ以外（`Argument`/推定 `SubCommand`/`OptionValue` を含む全位置）は `completions/git.json` の宣言に委ねる。`git restore -s/--source` の option value は最初 Rust 側にも特別扱いが残っていたが、`completions/git.json` がその option 自体に `Dynamic{git.revision}` をとっくに宣言済みだったため**冗長**（コードレビューで指摘され削除）。`DYNAMIC_PROVIDER_SPECS` の `git` エントリ自体は**残す**必要がある — 削除すると subcommand-alias ケースが失われる。他コマンドで同じ畳み込みをする前に、`completion::integrated::tests::every_hand_dispatched_git_argument_case_matches_the_declared_json_provider` と同じ形（削除予定の Rust 分岐が解決する provider と、JSON 側が `argument_type_for_completion_context` で解決する provider が一致することを確認するテスト、**第 1 引数だけでなく複数引数位置も**）を先に書く。JSON の `Argument` は `arguments[]` の要素数を超える位置（2 個目以降）で `"multiple": true` が無いと `None` に解決される（`resolve_argument_definition`）— 旧 Rust 側は `arg_index` を見ずに同じ provider を返す実装だったため、素直に「Rust 分岐を消して JSON に委ねる」だけでは複数引数コマンド（`add`/`restore`/`log`/`diff`/`show`/`reset`/`branch`/`tag` 等）の 2 個目以降の補完が消える。移行時は対象引数に `"multiple": true` を付け忘れない。
-- JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。`output-schemas/` も同じ仕組み（`dsh/src/output_schema/loader.rs`）なので、スキーマ追加時は同様に loader を touch する。
-- `completions/` はクレートディレクトリの外なので `cargo package -p doge-shell` には入らない。path 依存があり現状 publish できないため実害は無いが、crates.io 公開が必要になったら `dsh/` 配下へ戻す。
-
-## プラットフォーム
-- `nix` の Linux 拡張を使わない。`pipe2` は nix が macOS に出しておらず、これで `doge-shell` crate 全体がコンパイル不能だった（`a846e3c`）。cloexec な pipe は `std::io::pipe` が両 OS でくれる。
-- `rustflags` は `[target.'cfg(target_os = "linux")']` の下に置く。`[build]` に書くと macOS の clang が `-fuse-ld=mold` を `invalid linker name` で拒否し、**リンクが全部落ちる**（`f866418`）。
-- `/bin/true` と `/bin/false` は macOS に無い（`/usr/bin` にしかない）。テストからの絶対パス起動は `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `first_existing()` を通す。`/etc/hostname` も macOS に無いので `/etc/hosts` を使う。`/tmp` は macOS で `/private/tmp` に解決されるので `canonicalize` して比べる（`ae2f192`）。
-- macOS の `/etc/passwd` は**実在するのに実質空**。単一ユーザーモード用で、対話ユーザーは Open Directory にいる。ファイルの有無で分岐すると「読めたのに `root` しか出ない」になる（`f45fcc2`）。`/etc/group` は逆に macOS でも埋まっているが、Open Directory が足すグループは持たない。
-- シグナル番号は 1-15 しか共通でない。`SIGUSR1` は Linux 10 / macOS 30、`SIGCHLD` は 17 / 20。番号表を共有せず per-OS に持ち、`libc` と突き合わせるテストを付ける（`59855e1`、`generators/signal.rs`）。
-- `dirs::config_dir()` と `xdg::BaseDirectories` は Linux で同じ、macOS で**別のディレクトリ**（前者は `~/Library/Application Support`）。混ぜると installer が書いた場所を loader が読まない。実際に runtime skill が macOS でエージェントから見えなかった。config パスは `dsh-builtin/src/config_paths.rs`（`dsh` crate 内は `environment::get_config_file`）を通す。`scripts/check-portability.py` が直接呼び出しを禁止している。
-- 片肺の `#[cfg]` は**何も落とさない**。もう一方の OS でその項目が存在しなくなるだけで、コンパイルもテストも通る。`scripts/check-portability.py` がファイル単位で見るのが唯一の自動防波堤で、関数単位は CI の macos ジョブが担う。
-
-## 安全判定
-- `SafetyGuard::check_jobs` は `Job.cmd`（**行全体。パイプラインもまとめて 1 本の文字列**）を見る。先頭トークンだけを分類すると `true | rm -rf ~` は `true`、`sudo rm -rf ~` は `sudo` になり、どちらもルールが無いので**全チェックを素通りする**。オペレータで区切り、ラッパーを覗いてから分類すること（`dsh_types::safety_policy::{split_command_segments, command_candidates}`）。
-- 行の分割は**生文字列**に対してやる。`shell_words::split` は空白でしか切らないので `echo hi; rm -rf ~` は `["echo", "hi;", "rm", ...]` になり、トークン単位の分割では `;` が見えない。
-- ラッパーのオプションは値を取る（`timeout 5 ...`、`nice -n 10 ...`、`chroot /new ...`）。「最初の非オプション引数が中身のコマンド」は**その値を拾う**。`command_candidates` は残りの非オプショントークンを全部候補にして fail-safe に倒している。
-- **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するのに、dsh の文法は grouping・制御構文・heredoc を持たない。`get_jobs` は未消費の末尾を**警告するだけ**なので、安全判定側は `unconsumed_tail` と `compound_statement_keyword` で fail closed にする。`{ rm -rf ~; }` は `{` という名前のコマンドとして完全にパースされてしまう。
-- コマンド置換（`` ` ``、`$(...)`、`<(...)`、`(...)`）は**判定より前に拒否する**。`shell::parse::parse_command` が評価するので、「安全か」を尋ねること自体が実行になる。
-- 文字列をコードとして渡す経路は flag だけではない。stdin から読むシェル（`printf ... | sh`）、入力リダイレクト（`bash < script.sh`）、`eval` は flag を持たない（`execute.rs` の `hidden_code_source`）。`shell_words::split` は `<` を独立トークンにするので「全引数が `-` 始まり」では捕まらない。
-- MCP ツール名はモデルから見ると `mcp__<label>__<tool>`。素の名前で `matches!` すると**分岐が一度も成立しない**（`is_mcp_command_execution_tool` が実際そうだった）。判定は `McpManager::tool_name_for` が引いた実ツール名で行い、allowlist entry と質問文は function name のまま使う。
-- `SafetyResult` は `Allowed | Confirm` の 2 値。拒否は `AgentCommandVerdict::Denied`。常に `None` を返す checker を登録しない（登録の有無が挙動と一致しなくなる）。
-- `mcp disconnect` は bindings に効く（`tool_definitions` / `system_prompt_fragment` / `execute_tool` が disabled サーバを外す）。`session_meta` は明示 `mcp connect` でしか埋まらないので、そこをゲートに使うと起動時ロードだけのサーバが全滅する。
-- `turn::truncate_middle` の予算は**バイト数**（引数名は `max_chars`）。日本語では実効が約 1/3。AI へ渡す文字列を自前で `&s[..n]` しない（`safe_run` がそれで panic していた）。
-- `Path::join` は空パスを与えると区切りを足す。`PathBuf::new()` から接尾辞を積むと `notes.txt/` になり、`fs::write` が ENOENT で落ちる（`resolve_with_existing_ancestor`、`edit` が新規ファイルを作れなかった）。
-
-## 二重化しているもの（多数派が正解とは限らない）
-- builtin の能力 trait は `dsh-builtin/src/shell_capabilities.rs` が**正**（`scripts/check-shell-proxy-capabilities.py` の検査対象）。`dsh-builtin/src/capability.rs` は旧世代で、生き残っているのは `ExecutionCapability` と `AiCapability`（利用 14 ファイル）だけ。`EnvironmentCapability` / `HistoryCapability` / `PersistenceCapability` は呼び出し元 0 件のうえ `add_snippet` 等が `ShellSessionData` と同名だったため削除済み（両方 `use` した瞬間に E0034 で落ちる地雷だった）。新しい依存は `capability.rs` に足さず `shell_capabilities.rs` へ。`check-shell-proxy-capabilities.py` は `capability.rs` に残る 2 trait のメソッド名が `shell_capabilities.rs` の 7 trait と衝突していないかも検査する（同名メソッドを再導入すると失敗する）。
-- `shell_capabilities.rs` の 7 trait（`ShellExecution`…`ShellAiIntegration`）は `ShellProxy` の 73 メソッドを**同じ集合の別の眺め**として写しているだけなので、そのどれかにメソッドを足すなら `ShellProxy` 側にも足す必要があり、73 の上限に縛られる。**新しい能力**（この 7 つが表す既存操作の言い換えではないもの）は、この 7 つを拡張せず `AgentCommandPolicy` に倣って**独立した trait**を作り、host 型（`Shell`）に直接 `impl` する。`ShellProxy` への追加も 73 の上限も要らない。`check-shell-proxy-capabilities.py` は「`ShellProxy` の全メソッドがどれか 1 つの capability trait に分類されていること」だけを見る片方向チェックで、逆方向（capability trait のメソッドは全部 `ShellProxy` にあること）は課さない。
-- `impl ShellProxy` は 2 つだけ。本物の `Shell`（`dsh/src/proxy/mod.rs`）と、共有テストダブル `dsh-builtin/src/test_support.rs` の `TestShellProxy`。以前は builtin ごとに `MockShellProxy` / `TestProxy` を 10 個書いていたので統合した。新しいテストは `TestShellProxy { field: value, ..TestShellProxy::default() }` で必要な差分だけ与える（`allow_dispatch` / `dispatch_error` / `mutate_real_env` などの opt-in フィールドが見本）。**`ShellProxy` はどのメソッドも default 本体を持たない**（この 2 つの実装がどちらも 73 メソッド全部を明示的に実装している）。default を足すと「片方が override し忘れてもコンパイルが通り黙って no-op する」という以前の事故が戻るので、足さない。
-- **AI 機能の方針**は `ai-architecture.md` が正。エージェントループは 2 つだけ、共有方針は `dsh-openai/src/turn.rs`、安全ゲートは `SafetyGuard` 1 つ。新しい AI 経路を足す前にそこを読む。
-- `SafetyLevel` は `dsh-types/src/safety_policy.rs` が**正**。`dsh/src/safety/mod.rs` はそこを re-export しているだけ。以前は 2 つの enum があり、値の読み先も 2 つ（`SAFETY_LEVEL` 変数と `policy_state.safety_level`）だったので、`(safety-level ...)` の二重書きだけが同期を保っていた。**単一ソースは `policy_state.safety_level`**、変数は表示用のコピー。
-- `McpManager` の実体は `Environment.integration_state.mcp_manager` ただ 1 つ。以前 `!` チャットだけが自前の 2 個目を作って 300 秒キャッシュしていたので、`mcp connect` / `mcp disconnect` がチャットに効かず `mcp status` の表示と食い違った。builtin からは `AgentCommandPolicy::agent_mcp_manager` で受け取る。
-- `dsh` と `dsh-builtin` は互いに依存できないので、両方で要る純粋なテキスト処理は `dsh-types` に置く。ANSI ストリップは `dsh-types/src/ansi.rs`、`{{name:default}}` の走査は `dsh-types/src/placeholder.rs` が**正**。以前これを各クレートで書いていて、名前検証のある側と無い側に分かれ、`docker ps --format '{{json .}}'` が片方だけ壊れた。コピーを作らない。
-- `chat_with_tools` の前置き（skill root 解決・system prompt 組み立て・session TTL/scope・hook 読み込み）は `TurnSetup::build` に、ツール呼び出し 1 ラウンドは `run_tool_calls` に出ている（`chatgpt.rs`）。ターンの意味（反復上限、リフレクションの呼び出し位置など）は変えていないので `ai-architecture.md` §2 の記述はそのまま有効。`setup: &TurnSetup` は**参照で**渡す — `session::store` に渡す `scope` は `setup.scope.clone()`（このクロージャは 1 回しか呼ばれない）。値のまま渡すと閉包が `setup` 全体を move し、閉包の外（ターン末の hook fire）で使えなくなる。
-- `ChatClient` trait（chat 送信の抽象）は `dsh-openai` に**正**がある（`dsh-openai/src/chat_client.rs`）。以前は `dsh/src/ai_features/service.rs` にしかなく、`dsh-builtin` はそこへ依存できないため `dsh-builtin/src/chatgpt.rs` の `chat_with_tools` は具象型 `&ChatGptClient` を受け取るしかなく、実プロバイダなしにテストできなかった。`dsh` 側は `pub use dsh_openai::ChatClient;` で再エクスポートするだけ。テストは `chatgpt::tests::ScriptedClient`（応答を順に返すだけの double）が見本。ストリーミング用 `send_chat_streaming` はデフォルト実装で非ストリーミング 1 回に丸めるので、double は `send_chat_request` だけ実装すればよい。cancel クロージャは `&dyn Fn() -> bool`（`Sync` 不要）— `dyn ChatToolHost` は `Sync` ではないので、ここに `+ Sync` を戻すと `chat_with_tools` 側が壊れる。
+cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、スケジューラを触る前に該当ファイルを読む。

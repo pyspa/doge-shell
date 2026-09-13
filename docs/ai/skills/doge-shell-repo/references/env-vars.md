@@ -21,7 +21,7 @@
 
 ## AI 機能の変数
 
-正典の表と既定値は [ai-architecture.md](ai-architecture.md) にある。ここには「探しに行く先」だけ置く。
+正典の表と既定値は [ai/env-vars.md](ai/env-vars.md) にある。ここには「探しに行く先」だけ置く。
 
 | 変数 | 定義位置 | 用途 |
 |---|---|---|

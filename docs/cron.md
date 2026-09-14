@@ -144,7 +144,7 @@ AI ジョブの `runs.stdout` は以前は常に空でした（子プロセス�
 
 `cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dsh -c "cron tick"` や `dsh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd/env を変えたい場合は `cron edit --cwd`（env は手段が無いため `cron rm` して作り直す）を使ってください。
 
-`(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は1リリース限定の非推奨エイリアスとして残っており、対応する `cron-*` へそのまま委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。
+`(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は1リリース限定の非推奨エイリアスとして残っており、対応する `cron-*` へ委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。委譲の前に stderr が tty のときだけ非推奨警告を出します（`cron tick`/`cron run-job` のような無人実行では出しません — `cron tick` は既定で無出力・exit 0 が契約なので、この警告が外部 tick のたびに system cron のメールを起こしては本末転倒です）。
 
 ## 関連ドキュメント
 

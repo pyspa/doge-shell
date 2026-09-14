@@ -53,7 +53,7 @@
 | `delete:<canonical path>` | `skill_manage` の削除を再確認しない。`write:` の always は削除に及ばない |
 | `hook:<hook id>:<subject>` | その hook の `ask` を再確認しない。`execute` や MCP の always とは別の箱で、`agent run --allow-command` / `--allow-mcp` では満たせない |
 - 承認 UI は `ApprovalDecision`（Allow / AllowAlways / Deny）ただ 1 つ。
-  `dsh-builtin/src/chatgpt/tool/mod.rs` の `confirm_agent_action` を通す。
+  `dsh-builtin/src/chatgpt/tool/safety_gates.rs` の `confirm_agent_action` を通す。
   **質問文に "Proceed?" を書かない**。`repl/confirmation.rs` が
   `Proceed? [y/N/a(Always)]:` を付けるので、書くと 2〜3 回出る。
 - `loose` は「コマンド・MCP・機微読み取りを素通りさせる」であって「全部素通り」ではない。

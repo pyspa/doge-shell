@@ -8,7 +8,7 @@
 
 1. `dsh-types/src/completion.rs` の `DYNAMIC_COMPLETION_PROVIDERS` に追加。**アルファベット順を守る**（`DynamicProviderId::parse` が `binary_search`）。順序を崩すと `dynamic_completion_providers_are_sorted_and_unique` が落ちる。
 2. `command-completion-schema.json` の Dynamic Type の `provider` enum に**同じ順序**で追加。`json_loader.rs` の `command_completion_schema_uses_shared_dynamic_provider_list` が配列を完全一致で比較する。
-3. `LocalSpec` の行を 1 つ足す。置き場所は、使うパーサ/ローダー関数と同じファイル——`dsh/src/completion/dynamic.rs`（`CORE_LOCAL_SPECS`）か、`container.rs`/`dev.rs`/`linux.rs`/`project.rs` の `LOCAL_SPECS`。既存の関数が private のまま住んでいる場所に置くことで可視性を広げずに済み、Linux 専用パス文字列は所有ファイルを変えないので `scripts/portability-allowlist.txt` も無傷で済む。パーサ/ローダーが新規なら、それも同じファイルに書く。
+3. `LocalSpec` の行を 1 つ足す。置き場所は、使うパーサ/ローダー関数と同じファイル——`dsh/src/completion/dynamic/specs.rs`（`CORE_LOCAL_SPECS`）か、`container.rs`/`dev.rs`/`linux.rs`/`project.rs` の `LOCAL_SPECS`。既存の関数が private のまま住んでいる場所に置くことで可視性を広げずに済み、Linux 専用パス文字列は所有ファイルを変えないので `scripts/portability-allowlist.txt` も無傷で済む。パーサ/ローダーが新規なら、それも同じファイルに書く。
 4. `completions/<command>.json` の該当引数を `{"type":"Dynamic","data":{"provider":"..."}}` にする。
 5. README の動的補完の一覧を更新（慣習）。
 6. テスト。`local.rs` の `every_local_spec_names_a_registered_provider` / `local_spec_providers_are_unique` は誤字・重複だけを見る——実際に候補が返るかは `dynamic.rs`/family モジュールのテストで確認する。偽 CLI を置くなら `completion/integrated.rs` の `write_executable_script` + `engine_with_path` が手本。
@@ -31,5 +31,5 @@
 検証: `cargo test -p dsh-types` と `cargo test -p doge-shell --lib completion`。OS 固有のソースを足したときは `scripts/check-portability.py` も。
 
 ## 注意
-- 補完には経路が 2 つある。コマンド名直結の `DYNAMIC_PROVIDER_SPECS`（`completion/integrated.rs`）が先に走り、その結果に宣言的 provider の結果が `extend` される。既存コマンドに足すときは、そのコマンドが前者に載っていないか先に確認する。
+- 補完には経路が 2 つある。コマンド名直結の `DYNAMIC_PROVIDER_SPECS`（`completion/integrated/providers.rs`）が先に走り、その結果に宣言的 provider の結果が `extend` される。既存コマンドに足すときは、そのコマンドが前者に載っていないか先に確認する。
 - `dynamic/git.rs` の `_ =>` は `platform::collect` にフォールスルーする。match アームが無いことは未対応を意味しない。テーブル駆動の provider はそもそも family の match まで届かないので、なおさら「アームが無い = 未対応」ではない。

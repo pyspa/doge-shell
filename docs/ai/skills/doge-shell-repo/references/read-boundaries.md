@@ -7,6 +7,16 @@
 - Run `cargo test` for the whole workspace only when the change clearly crosses crate boundaries.
 - Prefer `cargo check --workspace` over `cargo test` when you only need a broad compile confirmation.
 - For investigation or review tasks, avoid editing and avoid broad validation until the likely files are narrowed down.
-- 1000 行を超えるファイルを読む前に `grep -n '^#\[cfg(test)\]' <file>` を 1 回打ち、返った行番号を境界にして offset/limit を決める。`completion/dynamic.rs` は 6927 行中 1833 行、`completion/integrated.rs` は 5108 行中 2516 行がテスト。
-- ただし `#[cfg(test)] mod tests;` は**宣言**でテスト本体は別ファイル（`dsh/src/prompt/mod.rs` が該当し、1174 行すべてが実装）。`#[cfg(test)] use ...` はただの import。行番号を見ずに「テストだから」と読み飛ばさない。
-- `completions/` は 483 個の JSON（2.1MB）。全文検索するときは `rg --glob '!completions/**'` で除外し、特定コマンドの定義が要るときだけ `completions/<command>.json` を開く。
+- refactor の分割シリーズ（`git log --oneline | rg 'refactor.*split'`）で、テストは各モジュールから
+  `<module>/tests.rs` に分離済み。1000 行を超える `.rs` は今のところ**全部**そうした `*/tests.rs`
+  で、非テストの本体側は 1000 行を超えない（超えたら `scripts/check-file-budget.py` の 800 行ルールに
+  先に引っかかる）。読む前に `grep -n '^#\[cfg(test)\]' <file>` を打てば、その行がまだ本体内に
+  テストを抱えているか（`mod tests { ... }` が続く）、単なる宣言（`mod tests;` で本体は別ファイル、
+  例: `dsh/src/completion/dynamic.rs` → `dynamic/tests.rs`）かが分かる。宣言だけなら、その行以降は
+  offset/limit で読み飛ばしてよい。
+- `#[cfg(test)] use ...` はただの import で、モジュール宣言ではない。行番号を見ずに「テストだから」と
+  読み飛ばさない。
+- `completions/` は 500 個超の JSON（2MB 台）。全文検索するときは `rg --glob '!completions/**'` で
+  除外し、特定コマンドの定義が要るときだけ `completions/<command>.json` を開く。正確な件数・サイズは
+  `ls completions/*.json | wc -l` / `du -sh completions/` で確認する（この文書には焼き付けない — 数
+  自体が動く）。

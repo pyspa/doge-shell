@@ -1,7 +1,7 @@
 # Package Map
 
 - `dsh/` -> Cargo package `doge-shell`
-  - lib crate name: `dsh`
+  - lib crate name: `doge_shell`（`dsh/Cargo.toml` に `[lib]` は無く、package 名 `doge-shell` からの既定。`use doge_shell::lib_main;` が `dsh/src/main.rs` の実例）
   - binary target: `dsh`
   - 最小検証: `cargo test -p doge-shell`
 - `dsh-builtin/` -> Cargo package `dsh-builtin`

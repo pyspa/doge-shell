@@ -10,7 +10,7 @@
 - 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
 - `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
 - 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
-- 400 行を超える非テストファイルには `//!` でモジュール doc を書く（手本: `dsh/src/completion/dynamic/local.rs`）。800 行を超えたら分割を検討する。両方 `scripts/check-file-budget.py` が検査する（既存の超過は allowlist で追跡中、新規の超過は失敗する）。
+- 400 行を超える非テストファイルには `//!` でモジュール doc を書く（手本: `dsh-types/src/ansi.rs`）。800 行を超えたら分割を検討する。両方 `scripts/check-file-budget.py` が検査する（既存の超過は allowlist で追跡中、新規の超過は失敗する）。
 
 ## 作業タイプ別の最初の一手
 - 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
@@ -40,7 +40,7 @@
 ## 設計境界
 - AI 機能の設計境界は `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に集約する。エージェントループを 3 つ目にしない。設定解決・レスポンス解釈・切り詰め・応答言語・config ディレクトリ・コマンド危険度判定・MCP マネージャを再実装しない。
 - `dirs::config_dir()` を直接呼ばない。macOS では `~/Library/Application Support` を指し、XDG を使う installer や config ローダと食い違う。`dsh-builtin/src/config_paths.rs`（`dsh` crate では `environment::get_config_file`）を通す。`scripts/check-portability.py` が検査する。
-- 動的補完 provider は `dsh-types` の `DYNAMIC_COMPLETION_PROVIDERS` へ一度だけ登録し、`CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。収集の実装は 2 経路のどちらかで、**混在させない**（両方あるとテーブルが黙って勝つ）。固定シェイプ（固定の実行ファイル + 固定引数、または固定パス読み取り + パーサ関数）は `dsh/src/completion/dynamic/local.rs` の `LocalSpec` テーブルに 1 行足すだけで、`registry.rs` の `family_for` にも family collector にも触らない。動的な引数構築・JSON 解釈・複数コマンドのマージが要るものだけ `family_for` + family collector を使う。詳細は `docs/ai/skills/doge-shell-repo/references/invariants.md` の「Completion 定義」。
+- 動的補完 provider は `dsh-types` の `DYNAMIC_COMPLETION_PROVIDERS` へ一度だけ登録し、`CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。収集の実装は 2 経路のどちらかで、**混在させない**（両方あるとテーブルが黙って勝つ）。固定シェイプ（固定の実行ファイル + 固定引数、または固定パス読み取り + パーサ関数）は `LocalSpec` テーブルに 1 行足すだけで、`registry.rs` の `family_for` にも family collector にも触らない。行は `dsh/src/completion/dynamic/specs.rs`（`CORE_LOCAL_SPECS`）か、パーサ/ローダー関数と同じ family モジュール（`container.rs`/`dev.rs`/`linux.rs`/`project.rs` の `LOCAL_SPECS`）に置く — テーブルの struct と検索ロジック自体は `dsh/src/completion/dynamic/local.rs` にあるが、行そのものはそこには置かない。動的な引数構築・JSON 解釈・複数コマンドのマージが要るものだけ `family_for` + family collector を使う。詳細は `docs/ai/skills/doge-shell-repo/references/invariants.md` の「Completion 定義」。
 - `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
 - `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
 - プラットフォーム分岐は `#[cfg(not(target_os = "macos"))]` と `#[cfg(target_os = "macos")]` の対で書き、共通ロジックは cfg の外の純粋関数に置く（`dsh/src/completion/generators/user.rs`）。片方だけ書くと、もう一方の OS ではその項目が消えるだけでコンパイルもテストも通る。

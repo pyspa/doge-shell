@@ -15,4 +15,4 @@ description: Use for doge-shell validation planning, smallest-test selection, æ¤
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.
 - Add `scripts/check-portability.py` when the change touches a `target_os` arm, an OS-specific source (`/proc`, `/etc/passwd`, `sysctl`), an absolute command path in a test, or `.cargo/config.toml`. `cargo clippy` only ever sees the host's arm.
 - Run `scripts/check-project-consistency.py` for workspace manifest, `README.md`, or `LICENSE` changes.
-- Run `./scripts/check.sh` only at the end of a staged design change or before release; it integrates fmt, guidance, project metadata, ShellProxy capability coverage, Clippy, workspace tests, and diff checks.
+- Run `./scripts/check.sh` only at the end of a staged design change or before release; it integrates fmt, guidance, project metadata, ShellProxy capability coverage, portability, file-budget, Clippy, workspace tests, and diff checks.

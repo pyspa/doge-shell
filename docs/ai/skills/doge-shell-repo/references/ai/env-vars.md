@@ -15,18 +15,18 @@
 | `AI_CHAT_TIMEOUT_SECS` | 180（5〜1800 に clamp） | 同上 |
 | `AI_CHAT_REASONING_EFFORT` | なし（未設定時は `OPENAI_REASONING_MODEL_PREFIXES` 該当モデル＋`tools` 付きリクエストだけ `"none"`、それ以外はプロバイダ既定） | 同上。値は allow-list しない（`none`/`minimal`/`low`/`medium`/`high` などプロバイダ依存）。設定値が `tools` 付きリクエストで拒否された後は、このクライアントの `tools` 付きリクエストで `"none"` に強制される |
 | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | 同上 |
-| `AI_SUMMARY_MODEL` | チャットモデル | `dsh-builtin/src/chatgpt.rs` |
+| `AI_SUMMARY_MODEL` | チャットモデル | `dsh-builtin/src/chatgpt/settings.rs` |
 | `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs`。idle timeout で、時計は成功したターンだけが進める（巻き戻したターンは進めない） |
-| `AI_CHAT_CONTEXT_TOKEN_BUDGET` | 100000 | `dsh-builtin/src/chatgpt.rs` |
+| `AI_CHAT_CONTEXT_TOKEN_BUDGET` | 100000 | `dsh-builtin/src/chatgpt/settings.rs` |
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
 | `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |
 | `AI_CHAT_EXECUTE_ALLOWLIST` | なし | `dsh-builtin/src/chatgpt/tool/execute.rs` |
-| `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt.rs`（`response_language`） |
+| `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt/settings.rs`（`response_language`） |
 | `CHAT_PROMPT` | なし | 同上 |
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |
 | `DSH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
-| `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt.rs` |
-| `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt.rs`（`resolve_skill_staging`）。`task` は agent タスクで `--write` グラントが無い対象だけステージ、`always` は対話も含め常時ステージ、`off` は今日の挙動（`InputRequired`） |
+| `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt/settings.rs` |
+| `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_skill_staging`）。`task` は agent タスクで `--write` グラントが無い対象だけステージ、`always` は対話も含め常時ステージ、`off` は今日の挙動（`InputRequired`） |
 | `AI_CHAT_SKILL_REFLECT` | off | `dsh-builtin/src/chatgpt/reflect.rs`。ターン末の tools 無し単発リクエストで skill 提案を試みる |
 | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | 5 | 同上。このツール呼び出し数未満のターンでは送らない |
 | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL` → チャットモデル | 同上 |

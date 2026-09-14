@@ -98,9 +98,9 @@ def main() -> int:
     # method with a default body compiles fine under the blanket
     # `impl<T: ShellProxy + ?Sized>` and needs no matching ShellProxy method.
     # Requiring the reverse (every capability method must also exist on
-    # ShellProxy) would force every such addition through the 73-method
-    # ceiling below, which contradicts AGENTS.md's instruction to grow
-    # capability traits instead of ShellProxy.
+    # ShellProxy) would force every such addition through the
+    # MAX_COMPATIBILITY_METHODS ceiling below, which contradicts AGENTS.md's
+    # instruction to grow capability traits instead of ShellProxy.
 
     multiply_classified = sorted(
         method for method, count in classified.items() if count > 1

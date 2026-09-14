@@ -329,3 +329,32 @@ fn the_shell_starts_at_the_level_it_inherited() {
         Some(&expected.as_str().to_string())
     );
 }
+
+/// `comp-gen` writes completion overrides to `$XDG_CONFIG_HOME/dsh/completions`
+/// (`dsh-builtin/src/completion_generation.rs`, `xdg::BaseDirectories::place_config_file`).
+/// This function is what `dsh/src/completion/json_loader.rs` and
+/// `dsh/src/output_schema/loader.rs` search to read them back, so its first
+/// (most authoritative) entry must land in the same place a non-default
+/// `XDG_CONFIG_HOME` sends the writer, or a generated completion is written
+/// somewhere this function never looks.
+#[test]
+fn user_asset_override_dirs_honors_xdg_config_home() {
+    init();
+    let _guard = crate::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+
+    let previous = std::env::var_os("XDG_CONFIG_HOME");
+    unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
+
+    let dirs = user_asset_override_dirs("completions");
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+        None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+    }
+
+    assert_eq!(
+        dirs.first(),
+        Some(&dir.path().join(APP_NAME).join("completions"))
+    );
+}

@@ -309,12 +309,12 @@ def check_cargo_config() -> list[str]:
 # on macOS, so it is a platform branch with no `cfg` to notice. Mixing it with
 # `xdg::BaseDirectories` is how an installed runtime skill became invisible to
 # the chat agent on macOS: the installer wrote one directory and the loader read
-# the other. These two files own the resolution; everything else asks them.
+# the other. This file owns the resolution; everything else asks it -
+# including `dsh/src/environment/mod.rs::user_asset_override_dirs`, which
+# used to have its own independent (and driftable) copy of the same
+# fallback/dedup logic.
 CONFIG_DIR_CALL = re.compile(r"\bdirs::config_dir\s*\(")
-CONFIG_DIR_OWNERS = (
-    "dsh-builtin/src/config_paths.rs",
-    "dsh/src/environment/mod.rs",
-)
+CONFIG_DIR_OWNERS = ("dsh-builtin/src/config_paths.rs",)
 
 
 def check_config_dir_resolution() -> list[str]:

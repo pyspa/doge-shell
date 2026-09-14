@@ -343,28 +343,22 @@ impl std::fmt::Debug for Environment {
     }
 }
 
-/// Get the path to a configuration file.
 /// User config directories that may hold overrides for an embedded asset
-/// directory (`completions`, `output-schemas`), most specific first.
+/// directory (`completions`, `output-schemas`), most authoritative first.
 ///
-/// Both the platform config dir and `~/.config/<app>` are returned: on macOS
-/// `dirs::config_dir()` is `~/Library/Application Support`, but users
-/// following the docs put overrides in `~/.config/dsh/`, and both must work.
+/// Delegates to `dsh_builtin::config_paths::config_search_paths` (XDG first,
+/// honoring `$XDG_CONFIG_HOME`; the platform config dir as a fallback so a
+/// macOS user who already has files under `~/Library/Application Support/dsh`
+/// keeps them working) instead of resolving the same order independently -
+/// two copies of this fallback/dedup logic previously had to be kept in sync
+/// by hand, and had already drifted (this one ignored `$XDG_CONFIG_HOME`
+/// entirely; a user with it set had `comp-gen` write completions nowhere
+/// this function would ever look).
 pub fn user_asset_override_dirs(subdir: &str) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-
-    if let Some(config_dir) = dirs::config_dir() {
-        dirs.push(config_dir.join(APP_NAME).join(subdir));
-    }
-
-    if let Some(home_dir) = dirs::home_dir() {
-        let home_config_dir = home_dir.join(".config").join(APP_NAME).join(subdir);
-        if !dirs.contains(&home_config_dir) {
-            dirs.push(home_config_dir);
-        }
-    }
-
-    dirs
+    dsh_builtin::config_paths::config_search_paths()
+        .into_iter()
+        .map(|root| root.join(subdir))
+        .collect()
 }
 
 pub fn get_config_file(name: &str) -> Result<PathBuf> {

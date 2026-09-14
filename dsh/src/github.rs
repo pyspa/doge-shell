@@ -1,4 +1,3 @@
-use crate::environment::Environment;
 use crate::prompt::Prompt;
 use anyhow::Result;
 use futures::StreamExt;
@@ -246,63 +245,6 @@ pub async fn background_github_task(
                     let mut status = github_status.write();
                     status.has_error = true;
                 }
-            }
-        }
-    }
-}
-
-pub async fn background_github_task_dynamic(
-    environment: Arc<RwLock<Environment>>,
-    prompt: Arc<RwLock<Prompt>>,
-    github_status: Arc<RwLock<GitHubStatus>>,
-) {
-    loop {
-        // Read interval first
-        let interval_secs = {
-            let env = environment.read();
-            env.get_var("*github-notify-interval*")
-                .and_then(|s| s.parse::<u64>().ok())
-                .unwrap_or(60)
-        };
-
-        tokio::time::sleep(Duration::from_secs(interval_secs)).await;
-
-        check_github(environment.clone(), prompt.clone(), github_status.clone()).await;
-    }
-}
-
-async fn check_github(
-    environment: Arc<RwLock<Environment>>,
-    prompt: Arc<RwLock<Prompt>>,
-    github_status: Arc<RwLock<GitHubStatus>>,
-) {
-    let should_check = {
-        let p = prompt.read();
-        p.under_git()
-    };
-
-    if !should_check {
-        return;
-    }
-
-    let (pat, filter) = {
-        let env = environment.read();
-        let pat = env.get_var("*github-pat*");
-        let filter = env.get_var("*github-notifications-filter*");
-        (pat, filter)
-    };
-
-    if let Some(pat_str) = pat {
-        let client = GitHubClient::new(pat_str);
-        match client.fetch_notifications(filter.as_deref()).await {
-            Ok(new_status) => {
-                let mut status = github_status.write();
-                *status = new_status;
-            }
-            Err(e) => {
-                error!("Failed to fetch GitHub notifications: {}", e);
-                let mut status = github_status.write();
-                status.has_error = true;
             }
         }
     }

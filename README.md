@@ -247,11 +247,13 @@ Monitor your GitHub notifications directly from the prompt. Grouped by priority:
 - `📬`: Other Notifications (Dimmed)
 
 **Configuration**:
-Set your Personal Access Token (PAT) and update interval in `config.lisp`.
+Set your Personal Access Token (PAT) and update interval in `config.lisp`. The prompt reads
+these as Lisp variables at startup, so use `define` (not `vset`, which only sets a shell
+variable the prompt does not read).
 
 ```lisp
-(vset "*github-pat*" "your_token_here")
-(vset "*github-notify-interval*" "60") ;; seconds
+(define *github-pat* "your_token_here")
+(define *github-notify-interval* "60") ;; seconds
 ```
 
 ### `gh-notify` Command
@@ -554,15 +556,19 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 )
 
 (defun my-pre-exec-func (command)
-  (print (string-append "About to execute: " command))
+  (print "About to execute:")
+  (print command)
 )
 
 (defun my-post-exec-func (command exit-code)
-  (print (string-append "Executed " command " with exit code: " (number->string exit-code)))
+  (print "Executed:")
+  (print command)
+  (print "Exit code:")
+  (print exit-code)
 )
 
 (defun my-chdir-func ()
-  (print (string-append "Changed directory to: " (getenv "PWD")))
+  (print "Changed directory")
 )
 
 ;; Add functions to the appropriate hook lists
@@ -1043,15 +1049,14 @@ for no real gain. A bare `cd -` still means `$OLDPWD`, unchanged.
 
 ### Import History
 
-Import command history from other shells:
+Import command history from another shell (currently fish only):
 
 ```bash
 # Import from fish shell
 dsh import fish
 
-# Import from bash with custom path
-
-dsh import bash --path /path/to/bash_history
+# Import from a non-default fish history path
+dsh import fish --path /path/to/fish_history
 ```
 
 ### `history` Command

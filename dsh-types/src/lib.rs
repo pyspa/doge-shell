@@ -169,6 +169,11 @@ impl Debug for Context {
 }
 
 impl Context {
+    /// Writes `msg` followed by exactly one `\n` (via `writeln!`). `msg`
+    /// itself must not end in `\n` - callers that append their own trailing
+    /// newline before calling this end up with a doubled blank line, which is
+    /// the bug the `dsh/src/cron` "newline sweep" fixed at every call site
+    /// that used to do this.
     pub fn write_stdout(&self, msg: &str) -> Result<()> {
         if let Some(observer) = &self.output_observer
             && let Ok(mut observer) = observer.lock()

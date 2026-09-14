@@ -38,17 +38,20 @@ before turning it loose on a schedule with `cron resume NAME`.
 ## When a permission is missing
 
 The job does **not** prompt - it cannot, nothing is watching. Instead the run ends in
-`needs-approval` state and an incident is filed:
+`needs-approval` state and an incident is filed, and the exact approval key it needed
+is folded into the incident's own detail (and the run's `stderr`, so `cron logs`/
+`cron_manage(action=logs)` shows it too) - copy it from there rather than guessing the
+shape, since `--allow-mcp` must match it byte-for-byte:
 
 ```sh
-cron incidents                      # see it listed, with the job name and an agent task id
-agent show <task-id>                # see exactly what was asked for, in full
+cron incidents                      # detail includes "... [approval_key: mcp:server:tool]"
 cron edit digest --allow-command 'the exact command it needed'
 cron incidents ack <id>              # clears the block; the job resumes on its normal schedule
 ```
 
-`--allow-mcp`'s value has to be the **exact** approval key `agent show` prints - copy it
-rather than guessing the shape, since it must match byte-for-byte.
+A person (not the agent - `agent show` is a builtin, unreachable from `execute` or any
+chat tool) can also run `agent show <task-id>` for the task's full, unabridged record if
+the incident detail alone is not enough context.
 
 `ack` does not check whether the grant was actually fixed - if it was not, the very next
 run simply files the same incident again. This is deliberate: cron's job is to surface

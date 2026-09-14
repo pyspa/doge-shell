@@ -78,7 +78,11 @@ Options for an agent job (`--agent`), matching `agent run`:
 Commands run under `sh -c` from the job's `--cwd`; shell aliases, abbreviations,
 builtins and Lisp functions are not available inside them. An agent job's
 grant works exactly like `agent run`'s: nothing is asked at tick time, so a
-missing grant stalls the run — see `cron incidents` — instead of prompting.";
+missing grant stalls the run — see `cron incidents` — instead of prompting.
+
+`cron run <job>` (no `--now`) refuses a paused or blocked job outright —
+`cron resume <job>` (or `cron incidents ack`) first, or use `--now` to run it
+right now regardless.";
 
 /// The `cron` builtin. Every subcommand but `run-job` opens the store and
 /// returns; `run-job` (and `run --now`) additionally need `&mut Shell` to

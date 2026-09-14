@@ -43,7 +43,7 @@ pub(super) fn add(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Re
     let spec = build_spec(parsed, cwd).map_err(anyhow::Error::msg)?;
     let summary = format!("{} {} -> {}", spec.name, spec.schedule, spec.command);
     let id = store.create(&spec, &std::env::vars().collect(), now(), force)?;
-    ctx.write_stdout(&format!("cron: [{id}] {summary}\n"))?;
+    ctx.write_stdout(&format!("cron: [{id}] {summary}"))?;
     Ok(())
 }
 
@@ -52,11 +52,9 @@ pub(super) fn list(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     if has_flag(args, "--json") {
         let value: Vec<_> = jobs.iter().map(job_json).collect();
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
     ctx.write_stdout(&render_job_list(&jobs, now()))?;
-    ctx.write_stdout("\n")?;
     Ok(())
 }
 
@@ -106,27 +104,31 @@ pub(super) fn job_detail_json(
 }
 
 pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Result<()> {
-    let name = args.first().context("expected a job name")?;
+    // `--json` must be stripped before taking the first positional - unlike
+    // `edit` (whose job name is a documented "always first" convention with
+    // no competing flag), `show` has a real `--json` option, so `cron show
+    // --json probe` would otherwise read `--json` itself as the job name.
+    let rest = without_flags(args, &["--json"]);
+    let name = rest.first().context("expected a job name")?;
     let job = store.get(name)?;
     let notepad_path = store.notepad_path(&job.name);
     if has_flag(args, "--json") {
         let value = job_detail_json(&job, &notepad_path);
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
 
-    ctx.write_stdout(&format!("{}: {}\n", job.name, job.schedule))?;
-    ctx.write_stdout(&format!("  kind: {}\n", job.kind))?;
-    ctx.write_stdout(&format!("  command: {}\n", job.command))?;
-    ctx.write_stdout(&format!("  cwd: {}\n", job.cwd))?;
-    ctx.write_stdout(&format!("  notify: {}\n", job.notify))?;
-    ctx.write_stdout(&format!("  timeout: {}s\n", job.timeout_secs))?;
-    ctx.write_stdout(&format!("  state: {}\n", job.state_label()))?;
-    ctx.write_stdout(&format!("  notepad: {}\n", notepad_path.display()))?;
+    ctx.write_stdout(&format!("{}: {}", job.name, job.schedule))?;
+    ctx.write_stdout(&format!("  kind: {}", job.kind))?;
+    ctx.write_stdout(&format!("  command: {}", job.command))?;
+    ctx.write_stdout(&format!("  cwd: {}", job.cwd))?;
+    ctx.write_stdout(&format!("  notify: {}", job.notify))?;
+    ctx.write_stdout(&format!("  timeout: {}s", job.timeout_secs))?;
+    ctx.write_stdout(&format!("  state: {}", job.state_label()))?;
+    ctx.write_stdout(&format!("  notepad: {}", notepad_path.display()))?;
     if let Some(agent) = &job.agent {
         ctx.write_stdout(&format!(
-            "  agent: tokens={} time_budget={}s max_per_day={}\n",
+            "  agent: tokens={} time_budget={}s max_per_day={}",
             agent.token_budget,
             agent.time_budget_secs,
             agent
@@ -134,28 +136,28 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
                 .map_or("-".to_string(), |n| n.to_string())
         ))?;
         for criterion in &agent.criteria {
-            ctx.write_stdout(&format!("  check: {criterion}\n"))?;
+            ctx.write_stdout(&format!("  check: {criterion}"))?;
         }
     }
     if let Some(last) = &job.last {
         ctx.write_stdout(&format!(
-            "  last run: {} {:.1}s (run {})\n",
+            "  last run: {} {:.1}s (run {})",
             last.state,
             last.duration_ms as f64 / 1000.0,
             last.id
         ))?;
         if let Some(task) = &last.agent_task_id {
-            ctx.write_stdout(&format!("    task: {task}\n"))?;
+            ctx.write_stdout(&format!("    task: {task}"))?;
         }
         if !last.preview.is_empty() {
-            ctx.write_stdout(&format!("    {}\n", last.preview))?;
+            ctx.write_stdout(&format!("    {}", last.preview))?;
         }
         // `job.last` (from `store.get()`) is not filtered to finished runs,
         // unlike `cron logs`'s own `RunSelector::Latest` - so this hint
         // would point at a run `cron logs` then refuses ("no finished run
         // recorded yet") if it were shown for one still queued/running.
         if last.finished_at.is_some() {
-            ctx.write_stdout(&format!("  (full output: cron logs {})\n", job.name))?;
+            ctx.write_stdout(&format!("  (full output: cron logs {})", job.name))?;
         }
     }
     Ok(())
@@ -190,7 +192,7 @@ pub(super) fn edit(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     let existing_agent = existing_agent_for_edit(store, &job_name)?;
     let (name, patch) = parse_edit(args, existing_agent.as_ref()).map_err(anyhow::Error::msg)?;
     let name = store.patch(&name, &patch, now())?;
-    ctx.write_stdout(&format!("cron: {name} updated\n"))?;
+    ctx.write_stdout(&format!("cron: {name} updated"))?;
     Ok(())
 }
 
@@ -200,7 +202,7 @@ pub(super) fn remove(ctx: &Context, store: &SqliteCronStore, args: &[String]) ->
     }
     for selector in args {
         let name = store.delete(selector)?;
-        ctx.write_stdout(&format!("cron: removed {name}\n"))?;
+        ctx.write_stdout(&format!("cron: removed {name}"))?;
     }
     Ok(())
 }
@@ -214,12 +216,12 @@ pub(super) fn set_paused(
     let verb = if paused { "paused" } else { "resumed" };
     if args.is_empty() {
         let count = store.set_all_paused(paused, now())?;
-        ctx.write_stdout(&format!("cron: {count} job(s) {verb}\n"))?;
+        ctx.write_stdout(&format!("cron: {count} job(s) {verb}"))?;
         return Ok(());
     }
     for selector in args {
         let name = store.set_paused(selector, paused, now())?;
-        ctx.write_stdout(&format!("cron: {name} {verb}\n"))?;
+        ctx.write_stdout(&format!("cron: {name} {verb}"))?;
     }
     Ok(())
 }
@@ -236,7 +238,7 @@ pub(super) fn run(
 
     if !foreground {
         let name = store.trigger(name, now())?;
-        ctx.write_stdout(&format!("cron: {name} will run on the next tick\n"))?;
+        ctx.write_stdout(&format!("cron: {name} will run on the next tick"))?;
         return Ok(());
     }
 
@@ -248,7 +250,7 @@ pub(super) fn run(
         .context("cannot wait for the run to finish")?;
     if !output.status.success() {
         ctx.write_stdout(&format!(
-            "cron: run-job exited with {:?}; showing what was recorded\n",
+            "cron: run-job exited with {:?}; showing what was recorded",
             output.status.code()
         ))?;
     }
@@ -261,12 +263,12 @@ pub(super) fn run(
         ..Default::default()
     })?;
     if let Some(latest) = runs.first() {
-        ctx.write_stdout(&format!("cron: {} -> {}\n", claimed.job_name, latest.state))?;
+        ctx.write_stdout(&format!("cron: {} -> {}", claimed.job_name, latest.state))?;
         if !latest.preview.is_empty() {
-            ctx.write_stdout(&format!("{}\n", latest.preview))?;
+            ctx.write_stdout(&latest.preview)?;
         }
         ctx.write_stdout(&format!(
-            "cron: full output: cron logs {}\n",
+            "cron: full output: cron logs {}",
             claimed.job_name
         ))?;
     }
@@ -345,11 +347,9 @@ pub(super) fn history(ctx: &Context, store: &SqliteCronStore, args: &[String]) -
     if json_output {
         let value: Vec<_> = runs.iter().map(run_json).collect();
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
     ctx.write_stdout(&render_history(&runs))?;
-    ctx.write_stdout("\n")?;
     Ok(())
 }
 
@@ -361,7 +361,7 @@ pub(super) fn ack_incident(ctx: &Context, store: &SqliteCronStore, args: &[Strin
         .context("incident id must be a number")?;
     let incident = store.ack_incident(id, now())?;
     ctx.write_stdout(&format!(
-        "cron: incident {} acknowledged ({})\n",
+        "cron: incident {} acknowledged ({})",
         incident.id, incident.kind
     ))?;
     Ok(())
@@ -381,11 +381,9 @@ pub(super) fn incidents(ctx: &Context, store: &SqliteCronStore, args: &[String])
     if json_output {
         let value: Vec<_> = open.iter().map(incident_json).collect();
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
     ctx.write_stdout(&render_incidents(&open))?;
-    ctx.write_stdout("\n")?;
     Ok(())
 }
 
@@ -395,15 +393,17 @@ pub(super) fn notepad(ctx: &Context, store: &SqliteCronStore, args: &[String]) -
     let name = rest.first().context("expected a job name")?;
     if clear {
         store.set_notepad(name, "")?;
-        ctx.write_stdout(&format!("cron: {name}'s notepad cleared\n"))?;
+        ctx.write_stdout(&format!("cron: {name}'s notepad cleared"))?;
         return Ok(());
     }
     let body = store.notepad(name)?;
     if body.is_empty() {
-        ctx.write_stdout(&format!("cron: {name} has no notepad yet\n"))?;
+        ctx.write_stdout(&format!("cron: {name} has no notepad yet"))?;
     } else {
-        ctx.write_stdout(&body)?;
-        ctx.write_stdout("\n")?;
+        // The file itself may or may not already end in a newline;
+        // `write_stdout` always adds exactly one (`writeln!`), so strip any
+        // the file has of its own or this doubles up.
+        ctx.write_stdout(body.trim_end_matches('\n'))?;
     }
     Ok(())
 }
@@ -425,17 +425,16 @@ pub(super) fn status(ctx: &Context, store: &SqliteCronStore, args: &[String]) ->
     if has_flag(args, "--json") {
         let value = health_json(&health, store.root());
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
 
     ctx.write_stdout(&format!(
-        "cron: {} job(s), {} running, {} failing, {} paused, {} blocked\n",
+        "cron: {} job(s), {} running, {} failing, {} paused, {} blocked",
         health.total, health.running, health.failing, health.paused, health.blocked
     ))?;
     if health.open_incidents > 0 {
         ctx.write_stdout(&format!(
-            "cron: {} open incident(s); see `cron incidents`\n",
+            "cron: {} open incident(s); see `cron incidents`",
             health.open_incidents
         ))?;
     }
@@ -443,7 +442,7 @@ pub(super) fn status(ctx: &Context, store: &SqliteCronStore, args: &[String]) ->
         Some(at) => {
             let age = (now() - at).max(0);
             ctx.write_stdout(&format!(
-                "cron: last recorded run finished {} ago\n",
+                "cron: last recorded run finished {} ago",
                 super::cli::format_duration(age as u64)
             ))?;
         }
@@ -451,13 +450,13 @@ pub(super) fn status(ctx: &Context, store: &SqliteCronStore, args: &[String]) ->
             ctx.write_stdout(
                 "cron: no run has ever completed. If you added a job with a wall-clock \
                  schedule, make sure either a dsh session is open or an external tick is \
-                 installed (`cron setup`).\n",
+                 installed (`cron setup`).",
             )?;
         }
     }
     if health.overdue > 0 {
         ctx.write_stdout(&format!(
-            "cron: {} job(s) are overdue; is a tick actually arriving? (`cron setup`)\n",
+            "cron: {} job(s) are overdue; is a tick actually arriving? (`cron setup`)",
             health.overdue
         ))?;
     }
@@ -486,10 +485,9 @@ pub(super) fn tick_cmd(ctx: &Context, store: &SqliteCronStore, args: &[String]) 
             .collect();
         if json_output {
             ctx.write_stdout(&serde_json::to_string_pretty(&json!({"would_run": due}))?)?;
-            ctx.write_stdout("\n")?;
         } else if verbose {
             for name in &due {
-                ctx.write_stdout(&format!("would run: {name}\n"))?;
+                ctx.write_stdout(&format!("would run: {name}"))?;
             }
         }
         return Ok(());
@@ -503,13 +501,12 @@ pub(super) fn tick_cmd(ctx: &Context, store: &SqliteCronStore, args: &[String]) 
     if json_output {
         let value = json!({"ran": report.started, "errors": report.spawn_failed});
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
     } else if verbose {
         for name in &report.started {
-            ctx.write_stdout(&format!("started: {name}\n"))?;
+            ctx.write_stdout(&format!("started: {name}"))?;
         }
         for (name, error) in &report.spawn_failed {
-            ctx.write_stderr(&format!("cron: {name}: {error}\n"))?;
+            ctx.write_stderr(&format!("cron: {name}: {error}"))?;
         }
     }
     Ok(())

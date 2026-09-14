@@ -64,15 +64,14 @@ cron add --agent --name digest --tokens 50000 --timeout 10m \
 無人実行なので**確認は出ません**。付与されていない権限が必要になった run は `needs-approval` 状態で終わり、incident が1件記録されます。
 
 ```sh
-cron incidents                       # 未確認の一覧（job / kind / task id）
-agent show <TASK_ID>                 # 何を求められたか（マスク済み）
+cron incidents                       # 未確認の一覧。detail に "... [approval_key: ...]" が入る
 cron edit digest --allow-command '...'   # 恒久的に許可
 cron incidents ack <ID>              # incident を閉じ、ジョブの blocked を解除
 ```
 
-`--allow-mcp` の値は `agent show` に出る承認キーそのまま（完全一致）です。ゼロから正しいキーを書けると仮定せず、一度実行させて incident から写すのが正しい導線です。
+`--allow-mcp` の値は incident の detail（`cron logs` の stderr にも同じ文言）に出る `approval_key: ...` の中身そのまま（完全一致）です。ゼロから正しいキーを書けると仮定せず、一度実行させて incident から写すのが正しい導線です。`agent show <TASK_ID>` はタスクの生 JSON 全体が要るときの人間向け手段として残っています（builtin なので `cron_manage`/`execute` からは届きません）。
 
-`hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。incident の種別が別（`hook-ask`）に分かれます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
+`hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。`IncidentKind::HookAsk` という種別自体はストアのスキーマに存在しますが、実際に起票されるのは通常の `IncidentKind::Approval` です — hook の ask 拒否も grant 不足も、どちらも `confirm_agent_action` の同じ経路（`TaskStatus::InputRequired`）を通り、cron 側はどちらが原因かを区別する情報を受け取らないためです。区別が付かなくても対処手順は同じで、`agent show <task-id>` の `stop_reason`（`cron incidents`/`cron logs` にも同じ文言が出ます）を見れば hook 由来かどうかは読み取れます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
 
 `--allow-mcp` を持たないジョブは MCP サーバーに接続しません。`dsh -c` は対話サービスを起動しないため（`needs_interactive_services()` が false）、MCP grant を持つジョブだけが `cron run-job` 内で明示的に MCP 接続を張ります。
 
@@ -114,7 +113,7 @@ cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "...
 
 ### AI ジョブの出力
 
-AI ジョブの `runs.stdout` は以前は常に空でした（子プロセスの stdout は `/dev/null` に捨てられるため）。いまは `run_task` 完了後にタスクストアから goal・criteria の合否・進捗・最終アシスタント応答・ツール呼び出しの集計を人間可読なサマリに組み立て、`stdout` に格納します（`digest`＝`--on change` の比較対象はこのサマリ本文ではなく従来通り state/succeeded/reason/pending_skills の組のままで、run ごとに文面が変わっても `--on change` が毎回発火することはありません）。同じサマリは `agent show <task-id> --summary` でも見られます（既定の `agent show`＝生 JSON はそのまま残っています。`--allow-mcp` の承認キーはそちらにしかありません）。
+AI ジョブの `runs.stdout` は以前は常に空でした（子プロセスの stdout は `/dev/null` に捨てられるため）。いまは `run_task` 完了後にタスクストアから goal・criteria の合否・進捗・最終アシスタント応答・ツール呼び出しの集計を人間可読なサマリに組み立て、`stdout` に格納します（`digest`＝`--on change` の比較対象はこのサマリ本文ではなく従来通り state/succeeded/reason/pending_skills の組のままで、run ごとに文面が変わっても `--on change` が毎回発火することはありません）。同じサマリは `agent show <task-id> --summary` でも見られます（既定の `agent show`＝生 JSON はそのまま残っています）。`--allow-mcp` の承認キーは incident の detail / `cron logs` の stderr（`[approval_key: ...]`）にも入るため、`agent show` の生 JSON を開かなくても取得できます。
 
 ウォッチドッグに `SIGKILL` されて `complete` に到達しなかった run でも、`agent_task_id` は run 開始時点で記録済みなので消えません。`cron logs` はこの場合 `stdout` が空でも agent ストアから同じサマリをその場で再構成し、`--- reconstructed from the agent store (no output was recorded for this run) ---` の見出し付きで表示します（この見出しは「まだ何も記録されていない」だけを述べており、run がまだ実行中である場合にも同じ文言が出ます — ストアの行だけからは「プロセスが死んで放置された」のか「単に実行中」なのかを区別できないためです）。`cron_manage(action=logs)` チャットツールも同じ再構成を行います。
 
@@ -142,6 +141,8 @@ AI ジョブの `runs.stdout` は以前は常に空でした（子プロセス�
 ```
 
 対照的に **CLI の `cron add` は同名だとエラー**になり `--force` が必要です — 人がプロンプトで打つ場合はタイプミスの可能性の方が高いためです。
+
+`cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dsh -c "cron tick"` や `dsh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd/env を変えたい場合は `cron edit --cwd`（env は手段が無いため `cron rm` して作り直す）を使ってください。
 
 `(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は1リリース限定の非推奨エイリアスとして残っており、対応する `cron-*` へそのまま委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。
 

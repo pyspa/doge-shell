@@ -192,6 +192,53 @@ fn upserting_an_existing_job_preserves_its_id_and_run_history() {
     assert_eq!(store.runs(&RunQuery::default()).unwrap().len(), 1);
 }
 
+/// The bug this guards against: `config.lisp`'s `(cron-add ...)` always
+/// builds its spec from *this process's* current directory and environment
+/// (`dsh/src/lisp/cron.rs` has no `--cwd`/`--env` of its own) - and
+/// `config.lisp` is evaluated by every process that touches cron, including
+/// `dsh -c "cron tick"` and `dsh -c "cron run-job <uuid>"`. Before this fix,
+/// re-declaring the same job from a different process (a crontab's minimal
+/// environment, say) silently overwrote the job's `cwd`/`env` on every single
+/// tick - the schedule/command a person actually changed had to keep
+/// updating, but the working directory and environment snapshot taken at
+/// first registration must not.
+#[test]
+fn upserting_an_existing_job_keeps_its_original_cwd_and_env() {
+    let (dir, store) = store();
+    let mut first_env = HashMap::new();
+    first_env.insert("FROM".to_string(), "interactive-shell".to_string());
+    let mut first_spec = spec("probe", "5m");
+    first_spec.cwd = "/first/cwd".to_string();
+    store.upsert(&first_spec, &first_env, NOW).unwrap();
+
+    // Re-declare from what looks like a different process: a different cwd,
+    // a near-empty environment - e.g. an external tick's crontab.
+    let mut second_spec = spec("probe", "10m");
+    second_spec.cwd = "/second/cwd".to_string();
+    store
+        .upsert(&second_spec, &HashMap::new(), NOW + 100)
+        .unwrap();
+
+    let job = store.get("probe").unwrap();
+    assert_eq!(
+        job.schedule_spec, "10m",
+        "the new schedule must take effect"
+    );
+    assert_eq!(
+        job.cwd, "/first/cwd",
+        "cwd must stay the one from first registration"
+    );
+    let stored_env: String = raw(&dir)
+        .query_row("SELECT env FROM jobs WHERE name = 'probe'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(
+        stored_env.contains("interactive-shell"),
+        "env must stay the one from first registration, got {stored_env}"
+    );
+}
+
 #[test]
 fn upsert_is_safe_to_repeat() {
     let (_dir, store) = store();
@@ -418,6 +465,41 @@ fn a_paused_or_blocked_job_is_never_claimed() {
     );
     assert_eq!(store.get("paused").unwrap().state_label(), "paused");
     assert_eq!(store.get("blocked").unwrap().state_label(), "blocked");
+}
+
+/// The bug this guards against: `trigger` (`cron run <job>` without `--now`,
+/// and `cron_manage(action=run)`) used to write `next_run_at` unconditionally
+/// and report success, even for a job `claim_due_jobs` (`enabled = 1 AND
+/// blocked = 0`) will never actually pick up - so a paused job's "will run on
+/// the next tick" was a lie it never fulfilled, and its `next_run_at` was
+/// left holding a concrete timestamp despite being paused.
+#[test]
+fn trigger_refuses_a_paused_job() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    store.set_paused("probe", true, NOW).unwrap();
+    assert!(store.trigger("probe", NOW).is_err());
+    assert_eq!(
+        store.get("probe").unwrap().next_run_at,
+        None,
+        "a refused trigger must not touch next_run_at"
+    );
+}
+
+/// See [`trigger_refuses_a_paused_job`] - the same invariant, for a job
+/// blocked by an open incident rather than paused by a person.
+#[test]
+fn trigger_refuses_a_blocked_job() {
+    let (dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    raw(&dir)
+        .execute("UPDATE jobs SET blocked = 1 WHERE name = 'probe'", [])
+        .unwrap();
+    assert!(store.trigger("probe", NOW).is_err());
 }
 
 /// Resuming re-bases rather than restoring the old slot: the point of pausing
@@ -706,7 +788,7 @@ fn a_skipped_run_does_not_count_as_a_failure() {
 /// stops the job rather than burning a budget rediscovering it.
 #[test]
 fn an_approval_incident_blocks_the_job_until_acknowledged() {
-    let (_dir, store) = store();
+    let (dir, store) = store();
     store
         .create(&spec("probe", "1h"), &env(), NOW, false)
         .unwrap();
@@ -725,7 +807,17 @@ fn an_approval_incident_blocks_the_job_until_acknowledged() {
     assert_eq!(open[0].agent_task_id.as_deref(), Some("task-1"));
     assert!(store.get("probe").unwrap().blocked);
 
-    make_due(&store, "probe", NOW + 2);
+    // Not `make_due` (= `trigger`): a blocked job now refuses that call
+    // outright (see `trigger`'s own doc comment) since a person asking to
+    // run one is exactly the case that should error, not silently no-op.
+    // What this assertion actually needs is a blocked job whose schedule
+    // made it due on its own, which only a raw write can simulate here.
+    raw(&dir)
+        .execute(
+            "UPDATE jobs SET next_run_at = ?1 WHERE name = 'probe'",
+            [NOW + 2],
+        )
+        .unwrap();
     assert!(
         store
             .claim_due(NOW + 2, "owner", 10, RunTrigger::Tick)
@@ -737,6 +829,35 @@ fn an_approval_incident_blocks_the_job_until_acknowledged() {
     store.ack_incident(open[0].id, NOW + 3).unwrap();
     assert!(!store.get("probe").unwrap().blocked);
     assert!(store.incidents(true, 20).unwrap().is_empty());
+}
+
+/// The bug this guards against: `run_job::execute`'s catch-all used to map
+/// every AI job failure to `RunReason::StateUnusable` regardless of cause, so
+/// `RunReason::RootChanged` (and its matching `IncidentKind::RootChanged`)
+/// were wired here in `incident_for` but never actually reachable. This
+/// exercises only the store side - that a run recorded with this reason
+/// opens the matching incident kind and blocks the job - the classification
+/// itself is `cron::run_job::tests::failure_reason_reads_the_task_failure_marker_not_the_message_text`'s
+/// job.
+#[test]
+fn a_root_changed_reason_opens_a_root_changed_incident() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+
+    let mut result = outcome(RunState::Failed);
+    result.reason = Some(RunReason::RootChanged);
+    store
+        .complete(&claimed[0].run_id, &result, NOW + 1)
+        .unwrap();
+
+    let open = store.incidents(true, 20).unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].kind, IncidentKind::RootChanged);
+    assert!(store.get("probe").unwrap().blocked);
 }
 
 /// One report per problem. Without the dedupe a stuck job files one incident
@@ -1188,6 +1309,31 @@ fn run_output_returns_the_full_stream_not_just_the_preview() {
     // `preview` (what `cron history` shows) is only the first line, capped at
     // 120 characters - `run_output` must not be limited the same way.
     assert_ne!(output.run.preview, long_stdout);
+}
+
+/// The bug this guards against: `preview` used to build its own first-line
+/// truncation instead of delegating to `exec::preview`, and never stripped
+/// ANSI escapes - a job that coloured its output left raw escape bytes in
+/// `runs.preview`, which broke `tabled`'s column-width math in `cron
+/// history`/`cron list` (byte length, not visible width).
+#[test]
+fn a_colored_runs_preview_has_no_ansi_escapes() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "1h"), &env(), NOW, false)
+        .unwrap();
+    make_due(&store, "probe", NOW);
+    let claimed = store.claim_due(NOW, "owner", 10, RunTrigger::Tick).unwrap();
+    store.start(&claimed[0].run_id, NOW).unwrap();
+
+    let mut result = outcome(RunState::Succeeded);
+    result.stdout = "\u{1b}[31mred-line\u{1b}[0m\n".to_string();
+    store
+        .complete(&claimed[0].run_id, &result, NOW + 1)
+        .unwrap();
+
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    assert_eq!(runs[0].preview, "red-line");
 }
 
 #[test]

@@ -9,6 +9,16 @@
 //! builtin keeps the stricter behaviour (refuses a duplicate name without
 //! `--force`) because a person typing that command a second time is far more
 //! likely to have mistyped than to be idempotently re-declaring one.
+//!
+//! The upsert does **not** touch `cwd`/`env`, unlike every other field: this
+//! function always builds them from *this process's* current directory and
+//! environment (there is no `--cwd`/`--env` argument here), and `config.lisp`
+//! is evaluated by every process that touches cron - including `dsh -c "cron
+//! tick"` and `dsh -c "cron run-job <uuid>"`, whose environment is usually
+//! whatever a crontab or systemd timer gave it. Re-applying that snapshot on
+//! every tick would silently swap a job's working directory and environment
+//! out from under it; the store (`insert_job`'s `preserve_run_state`) keeps
+//! the one taken at first registration instead.
 
 use crate::cron::cli::parse_schedule_arg;
 use crate::lisp::model::{Env, List, RuntimeError, Value};

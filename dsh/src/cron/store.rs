@@ -269,18 +269,28 @@ impl SqliteCronStore {
     /// `created_at` - is left exactly as it was.
     ///
     /// `preserve_run_state` keeps `enabled`/`next_run_at`/`individually_paused`
-    /// out of that update too, when set. `config.lisp`'s `(cron-add ...)`
-    /// (`upsert`, which always passes `true` here) has no way to say "and
-    /// leave whatever pause state this job is already in alone" - its spec's
-    /// `paused` field is always `false`, simply because `CronJobSpec` has to
-    /// carry *some* value. Without this, every single relaunch (every
-    /// `config.lisp` re-run) would silently resume a job the user had paused
-    /// with `cron pause`, individually or globally - the exact "run it again
-    /// on every launch" property this function exists for would quietly undo
-    /// a person's own pause. `cron add --force` (`create`, which passes
-    /// `false` here) keeps the older, more literal meaning: a person who
-    /// explicitly re-declared a job most likely meant its `--paused`/no
-    /// `--paused` spelling to take effect.
+    /// **and now also `cwd`/`env`** out of that update too, when set.
+    /// `config.lisp`'s `(cron-add ...)` (`upsert`, which always passes `true`
+    /// here) has no way to say "and leave whatever pause state this job is
+    /// already in alone" - its spec's `paused` field is always `false`, simply
+    /// because `CronJobSpec` has to carry *some* value. Without this, every
+    /// single relaunch (every `config.lisp` re-run) would silently resume a
+    /// job the user had paused with `cron pause`, individually or globally -
+    /// the exact "run it again on every launch" property this function exists
+    /// for would quietly undo a person's own pause.
+    ///
+    /// `cwd`/`env` join that list for a related reason: `cron_add`
+    /// (`dsh/src/lisp/cron.rs`) always builds its spec from *this process's*
+    /// current directory and environment, which for `dsh -c "cron run-job
+    /// <uuid>"` (config.lisp is evaluated there too) is the tick's own -
+    /// often a crontab's near-empty one. Updating them on every relaunch
+    /// would mean a job declared once from an interactive shell drifts to
+    /// whatever ran the *first* external tick, silently and permanently
+    /// (`docs/cron.md`/`lisp/cron.rs`'s doc comment cover the resulting "cwd
+    /// and env are the ones at first registration" contract). `cron add
+    /// --force` (`create`, which passes `false` here) keeps the older, more
+    /// literal meaning: a person who explicitly re-declared a job most likely
+    /// meant every field - `--paused` spelling included - to take effect.
     fn insert_job(
         &self,
         spec: &CronJobSpec,
@@ -297,19 +307,22 @@ impl SqliteCronStore {
             super::clock::next_run_at(spec.schedule, now)
         };
         let on_conflict = if replace {
-            let run_state_columns = if preserve_run_state {
-                ""
+            let (run_state_columns, runtime_context_columns) = if preserve_run_state {
+                ("", "")
             } else {
-                ", enabled=excluded.enabled, next_run_at=excluded.next_run_at, \
-                 individually_paused=excluded.individually_paused"
+                (
+                    ", enabled=excluded.enabled, next_run_at=excluded.next_run_at, \
+                     individually_paused=excluded.individually_paused",
+                    ", cwd=excluded.cwd, env=excluded.env",
+                )
             };
             format!(
                 "ON CONFLICT(name) DO UPDATE SET \
                  kind=excluded.kind, schedule_spec=excluded.schedule_spec, \
                  schedule_kind=excluded.schedule_kind, command=excluded.command, \
-                 payload=excluded.payload, cwd=excluded.cwd, env=excluded.env, \
+                 payload=excluded.payload, \
                  notify=excluded.notify, timeout_secs=excluded.timeout_secs, \
-                 catchup_secs=excluded.catchup_secs{run_state_columns}, \
+                 catchup_secs=excluded.catchup_secs{run_state_columns}{runtime_context_columns}, \
                  updated_at=excluded.updated_at"
             )
         } else {

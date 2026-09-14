@@ -228,6 +228,10 @@ fn run_marks_the_job_due_without_spawning_anything() {
         },
     )
     .expect("create");
+    // `create` always registers paused (see its own doc comment); `trigger`
+    // now refuses a paused job outright, so this has to resume it first to
+    // exercise what the test actually cares about.
+    store.set_paused("fetch", false, 0).expect("resume");
 
     let value = run(
         &store,
@@ -238,6 +242,35 @@ fn run_marks_the_job_due_without_spawning_anything() {
     )
     .expect("run");
     assert_eq!(value["action"], json!("run"));
+}
+
+/// See `trigger`'s own doc comment: a paused job (every job `create`
+/// registers, and any job a person has not yet resumed) must not report
+/// success for a `run` it will never actually perform.
+#[test]
+fn run_refuses_a_job_that_is_still_paused() {
+    let (_dir, store) = store();
+    create(
+        &store,
+        &CronToolRequest {
+            name: Some("fetch".to_string()),
+            schedule: Some("@manual".to_string()),
+            command: Some("git fetch".to_string()),
+            ..request()
+        },
+    )
+    .expect("create");
+
+    let error = run(
+        &store,
+        &CronToolRequest {
+            job: Some("fetch".to_string()),
+            ..request()
+        },
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("paused"), "{error}");
 }
 
 #[test]

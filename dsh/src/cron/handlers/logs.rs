@@ -123,16 +123,18 @@ pub(in crate::cron) fn logs(ctx: &Context, store: &SqliteCronStore, args: &[Stri
     if parsed.json {
         let value = logs_json(&output, live.as_deref(), show_stdout, show_stderr);
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
 
     if let Some(text) = &live {
         ctx.write_stdout(
-            "--- reconstructed from the agent store (no output was recorded for this run) ---\n",
+            "--- reconstructed from the agent store (no output was recorded for this run) ---",
         )?;
-        ctx.write_stdout(text)?;
-        ctx.write_stdout("\n")?;
+        // `text` (an agent summary) manages its own line breaks and already
+        // ends in one - stripped here for the same reason `stream_section`
+        // strips a stream's own trailing newline: `write_stdout` supplies
+        // exactly one via `writeln!`, so leaving this one in doubles it.
+        ctx.write_stdout(text.trim_end_matches('\n'))?;
         if show_stderr {
             // Through `stream_section`, not a hand-rolled `if !is_empty()`:
             // `live` is only ever computed when `show_stdout` already holds

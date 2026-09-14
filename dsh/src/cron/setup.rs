@@ -96,7 +96,10 @@ pub fn command(ctx: &Context, args: &[String]) -> Result<()> {
             systemd_unit()
         )
     };
-    ctx.write_stdout(&text)?;
+    // The branches disagree among themselves on a trailing newline (some end
+    // in one, `crontab_line` does not); trim it here rather than fix each,
+    // so `write_stdout`'s own `writeln!` is the only thing that adds one.
+    ctx.write_stdout(text.trim_end_matches('\n'))?;
     Ok(())
 }
 

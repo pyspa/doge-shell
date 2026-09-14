@@ -20,6 +20,60 @@ use std::{
 
 pub(crate) mod summary;
 
+/// Why [`run_task`] failed before it could even produce a [`TaskRunReport`],
+/// tagged on the returned `anyhow::Error` so a caller that needs to act on
+/// *which* kind of failure this was - `cron`'s `run_job::execute`, mapping to
+/// a [`dsh_types::cron::job::RunReason`] - can recover it without matching on
+/// message text.
+///
+/// Attached via `.context(...)`: `anyhow::Error::new(TaskFailure::X).context("human
+/// message")` keeps the human-readable message on top (what `{}`/`to_string()`
+/// show, unchanged from before this existed) while this marker sits one link
+/// down the chain, found with
+/// `error.chain().find_map(|c| c.downcast_ref::<TaskFailure>())`. Never
+/// matched on directly here - `agent run`'s own error reporting is exactly
+/// the display text, untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskFailure {
+    /// The task's root, or a granted read/write root, no longer resolves to
+    /// what it did when the task was created - deleted, or a symlink now
+    /// pointing elsewhere.
+    RootChanged,
+    /// A previous operation's outcome was never confirmed and no
+    /// `--reconcile` was given to settle it.
+    Reconcile,
+    /// A prerequisite the task cannot supply for itself - a missing sandbox
+    /// runtime, an empty goal, or an exhausted budget - not something a
+    /// retry would fix on its own.
+    Config,
+    /// The task store itself could not be read or written - the one case
+    /// where continuing to retry is not obviously safe.
+    StateUnusable,
+}
+
+impl std::fmt::Display for TaskFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::RootChanged => "task root changed",
+            Self::Reconcile => "unreconciled previous operation",
+            Self::Config => "task misconfigured",
+            Self::StateUnusable => "task store unusable",
+        })
+    }
+}
+
+impl std::error::Error for TaskFailure {}
+
+/// Tags `error` as a [`TaskFailure`] of kind `failure`, keeping `error`'s own
+/// `Display` text as the human-readable context - the same shape every
+/// `run_task` call site used to spell out by hand (`anyhow::Error::new(TaskFailure::X)
+/// .context(error.to_string())`). Only fits the plain "wrap this error
+/// as-is" case; a call site that needs to prepend its own message keeps
+/// writing that out directly instead of forcing a description parameter here.
+fn tag_failure<E: std::fmt::Display>(failure: TaskFailure, error: E) -> anyhow::Error {
+    anyhow::Error::new(failure).context(error.to_string())
+}
+
 pub struct SqliteTaskStore {
     connection: Mutex<Connection>,
     root: PathBuf,
@@ -577,12 +631,18 @@ pub(crate) fn run_task(
         .chain(&task.grant.write_roots)
         .chain(std::iter::once(&task.root))
     {
-        if path.canonicalize()? != *path {
-            bail!("task root changed identity; inspect and start a new task");
+        let canonical = path.canonicalize().map_err(|error| {
+            anyhow::Error::new(TaskFailure::RootChanged)
+                .context(format!("task root no longer resolves: {error}"))
+        })?;
+        if canonical != *path {
+            return Err(anyhow::Error::new(TaskFailure::RootChanged)
+                .context("task root changed identity; inspect and start a new task"));
         }
     }
     if task.grant.sandbox {
-        dsh_builtin::agent::sandbox::find_runtime()?;
+        dsh_builtin::agent::sandbox::find_runtime()
+            .map_err(|error| tag_failure(TaskFailure::Config, error))?;
     }
     for name in &task.grant.environment {
         if dsh_types::safety_policy::is_sensitive_key(name)
@@ -593,34 +653,48 @@ pub(crate) fn run_task(
         }
     }
     if task.goal.trim().is_empty() {
-        bail!("goal required after --");
+        return Err(anyhow::Error::new(TaskFailure::Config).context("goal required after --"));
     }
     if task.token_budget <= task.tokens_used || task.time_budget_ms <= task.elapsed_ms {
-        bail!("positive remaining --tokens and --timeout budgets are required");
+        return Err(anyhow::Error::new(TaskFailure::Config)
+            .context("positive remaining --tokens and --timeout budgets are required"));
     }
     if task.pending_operation.is_some() && reconcile.is_none() {
-        bail!(
+        return Err(anyhow::Error::new(TaskFailure::Reconcile).context(format!(
             "previous operation has an unknown outcome; inspect `agent show {}` and the actual files/service, then resume with --reconcile describing the observed result",
             task.id
-        );
+        )));
     }
     if let Some(note) = reconcile {
         task.pending_operation = None;
         task.progress = format!("User reconciled interrupted operation: {note}");
-        store.save(&task, Some(("reconciled", &json!(note))))?;
+        store
+            .save(&task, Some(("reconciled", &json!(note))))
+            .map_err(|error| tag_failure(TaskFailure::StateUnusable, error))?;
     }
     // Explicit resume is the only path that may clear a cancellation.
     task.status = TaskStatus::Running;
     task.stop_reason = None;
-    task = store.resume(&task, Some(("started", &Value::Null)))?.task;
+    task = store
+        .resume(&task, Some(("started", &Value::Null)))
+        .map_err(|error| tag_failure(TaskFailure::StateUnusable, error))?
+        .task;
     let old_cwd = shell.get_current_dir()?;
     ctx.write_stdout(&format!("Task {}\n", task.id))?;
     if let Err(error) = shell.changepwd(&task.root.to_string_lossy()) {
         task.status = TaskStatus::Failed;
         task.stop_reason = Some(error.to_string());
-        store.save(&task, None)?;
+        // Tagged `StateUnusable`, not left as a bare `?`: an untagged error
+        // here would make `run_job::failure_reason` default this to
+        // `RunReason::Transient` instead of blocking the job, even though a
+        // task store that cannot even record "the root changed" is exactly
+        // the "continuing to retry is not obviously safe" case
+        // `TaskFailure::StateUnusable` exists for.
+        store
+            .save(&task, None)
+            .map_err(|save_error| tag_failure(TaskFailure::StateUnusable, save_error))?;
         let _ = shell.changepwd(&old_cwd.to_string_lossy());
-        return Err(error);
+        return Err(anyhow::Error::new(TaskFailure::RootChanged).context(format!("{error}")));
     }
     let goal = task.goal.clone();
     let id = task.id.clone();

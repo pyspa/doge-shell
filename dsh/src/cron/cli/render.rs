@@ -109,6 +109,14 @@ impl Tabled for JobRow {
     }
 }
 
+/// Longest a `command` cell may run before the table itself becomes the
+/// wrong tool - same length as `DETAIL_PREVIEW_CHARS` below, so a cell in
+/// either table follows one rule. An agent job's `command` is its goal in
+/// full, which otherwise blows the table out to hundreds of columns; the
+/// full text stays reachable through `cron show <job>` and `--json`, neither
+/// of which clamps it.
+const JOB_LIST_COMMAND_CHARS: usize = 60;
+
 fn job_row(job: &CronJobView, now: i64) -> JobRow {
     JobRow {
         id: job.id.to_string(),
@@ -123,7 +131,7 @@ fn job_row(job: &CronJobView, now: i64) -> JobRow {
         } else {
             job.run_count.to_string()
         },
-        command: job.command.clone(),
+        command: clamp_chars(&job.command, JOB_LIST_COMMAND_CHARS),
     }
 }
 
@@ -221,6 +229,9 @@ pub fn render_history(runs: &[CronRun]) -> String {
 /// With both streams selected (the default) each is labelled, so the split
 /// is unambiguous; a single stream is printed bare, on purpose, so `cron logs
 /// job --stdout | …` pipes exactly what the job printed and nothing else.
+/// Carries no trailing newline of its own - `Context::write_stdout` always
+/// adds exactly one (`writeln!`), so a section ending in `\n` here would
+/// double it, exactly the bug this was written to fix.
 pub fn render_run_output(output: &RunOutput, show_stdout: bool, show_stderr: bool) -> String {
     let mut sections = Vec::new();
     let labelled = show_stdout && show_stderr;
@@ -239,16 +250,22 @@ pub fn render_run_output(output: &RunOutput, show_stdout: bool, show_stderr: boo
 /// treatment as the ordinary path instead of a hand-rolled variant that
 /// quietly drifts from it (e.g. omitting the section outright when `stderr`
 /// is empty, unlike this function).
+///
+/// Never carries a trailing newline: `text` is a job's recorded stream and
+/// almost always ends in one already (its own last `println`/`echo`), so
+/// appending another here - on top of `write_stdout`'s own `writeln!` - is
+/// exactly how `cron logs job --stdout` used to end up with two or three
+/// blank lines for one line of actual output.
 pub(in crate::cron) fn stream_section(name: &str, text: &str, labelled: bool) -> String {
     let body = if text.is_empty() {
-        "(empty)".to_string()
+        "(empty)"
     } else {
-        text.to_string()
+        text.trim_end_matches('\n')
     };
     if labelled {
-        format!("--- {name} ---\n{body}\n")
+        format!("--- {name} ---\n{body}")
     } else {
-        format!("{body}\n")
+        body.to_string()
     }
 }
 

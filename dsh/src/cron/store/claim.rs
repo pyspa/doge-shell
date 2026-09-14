@@ -552,24 +552,20 @@ fn incident_detail(outcome: &RunOutcome) -> String {
     }
 }
 
-/// The first non-empty line, preferring stderr - which is where the reason a
-/// run failed usually is.
+/// Picks which stream `exec::preview` reads from - stderr, preferring it
+/// since that is where the reason a run failed usually is - then defers the
+/// actual first-line/ANSI-strip/length-clamp work to that single primitive
+/// rather than a second copy of it. `exec::preview`'s own tests
+/// (`exec/tests.rs`) pin the exact truncation shape (`PREVIEW_CHARS`, the
+/// trailing `…`), so this must stay a thin wrapper, not grow logic of its
+/// own that could drift from them.
 fn preview(stdout: &str, stderr: &str) -> String {
-    const PREVIEW_CHARS: usize = 120;
     let source = if stderr.trim().is_empty() {
         stdout
     } else {
         stderr
     };
-    let line = source
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
-    let line = line.trim();
-    if line.chars().count() <= PREVIEW_CHARS {
-        return line.to_string();
-    }
-    line.chars().take(PREVIEW_CHARS).collect::<String>() + "..."
+    super::super::exec::preview(source)
 }
 
 /// Trims a job's history, on a fraction of runs rather than every one.

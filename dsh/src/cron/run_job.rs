@@ -57,7 +57,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, run_id: &str) -> Result<()> {
         JobKind::Ai => agent_outcome(shell, ctx, &store, &run).unwrap_or_else(|error| {
             stopped(
                 RunState::Failed,
-                RunReason::StateUnusable,
+                failure_reason(&error),
                 &error.to_string(),
                 started,
             )
@@ -65,6 +65,31 @@ pub fn execute(shell: &mut Shell, ctx: &Context, run_id: &str) -> Result<()> {
     };
 
     store.complete(run_id, &outcome, now())
+}
+
+/// Classifies an `agent_outcome` failure into the [`RunReason`] `cron`
+/// history/incidents show, from the [`crate::agent::TaskFailure`] marker
+/// `run_task` (and this file's own setup steps before it) tag their errors
+/// with - never from `error.to_string()`, which is for a person to read, not
+/// for this to pattern-match. An error with no marker (a `SqliteTaskStore`
+/// hiccup this file's own `?` propagated without tagging, say) defaults to
+/// [`RunReason::Transient`]: three of those in a row still escalate to an
+/// incident (`STREAK_TO_INCIDENT`), but one alone does not stop the job the
+/// way [`RunReason::StateUnusable`] (`blocks_the_job() == true`) would - and
+/// most of what reaches here is exactly that kind of one-off hiccup, not a
+/// broken store.
+fn failure_reason(error: &anyhow::Error) -> RunReason {
+    use crate::agent::TaskFailure;
+    match error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<TaskFailure>())
+    {
+        Some(TaskFailure::RootChanged) => RunReason::RootChanged,
+        Some(TaskFailure::Reconcile) => RunReason::Reconcile,
+        Some(TaskFailure::Config) => RunReason::Config,
+        Some(TaskFailure::StateUnusable) => RunReason::StateUnusable,
+        None => RunReason::Transient,
+    }
 }
 
 fn shell_outcome(run: &ClaimedRun) -> RunOutcome {
@@ -138,6 +163,47 @@ fn notepad_grant(spec_grant: &TaskGrant, notepad_dir: std::path::PathBuf, cwd: &
     grant
 }
 
+/// Applies the job's environment snapshot (`ClaimedRun.env`, taken at
+/// `cron add`/`cron-add` time) to this process, the same guarantee
+/// `exec::run_command` gives a shell job via `Command::env_clear`/`envs` -
+/// just without a child process to scope it to, since an agent job runs
+/// in-process rather than under `sh -c`.
+///
+/// Merges rather than clears: this *is* the process that already resolved
+/// `config_paths::cron_state_dir()` (and is about to resolve
+/// `agent_state_dir()`) - wiping `XDG_STATE_HOME`/`HOME`/etc. out from under
+/// it would make this run's own store lookups inconsistent with the ones
+/// already done, unlike a brand-new `sh -c` child that never had them.
+///
+/// Writes two places, not one: `sandbox`/`execute`'s `--env` grant reads the
+/// *process* environment directly (`std::env::var_os`), which
+/// `std::env::set_var` alone covers. `resolved_config`'s API-key lookup goes
+/// through `Environment::get_var` first, though, which is a boot-time
+/// snapshot that only falls through to a live `std::env::var` when it has no
+/// entry for the key at all - so a key the snapshot already held a stale,
+/// tick-inherited value for would otherwise never see this job's own value.
+/// `set_system_env_var` closes that gap by updating the snapshot itself.
+///
+/// Must run before this call spawns any other thread (the watchdog,
+/// `connect_mcp`) - `std::env::set_var` racing a concurrent reader of the
+/// process environment is unsound, and at this point in `agent_outcome`
+/// nothing else in this single-purpose process has spawned one yet.
+fn apply_job_environment(shell: &mut Shell, env: &std::collections::HashMap<String, String>) {
+    if env.is_empty() {
+        return;
+    }
+    let mut environment = shell.environment.write();
+    for (key, value) in env {
+        // SAFETY: called at the top of `agent_outcome`, before this run has
+        // spawned any thread that could read the process environment
+        // concurrently (see the doc comment above).
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        environment.set_system_env_var(key.clone(), value.clone());
+    }
+}
+
 fn agent_outcome(
     shell: &mut Shell,
     ctx: &Context,
@@ -145,6 +211,7 @@ fn agent_outcome(
     run: &ClaimedRun,
 ) -> Result<RunOutcome> {
     let started = Instant::now();
+    apply_job_environment(shell, &run.env);
     let spec = run
         .agent
         .clone()
@@ -207,7 +274,12 @@ fn agent_outcome(
     let task = AgentTask {
         id: uuid::Uuid::new_v4().to_string(),
         goal: compose_goal(&notepad, &run.command, &notepad_path.to_string_lossy()),
-        root: std::path::PathBuf::from(&run.cwd).canonicalize()?,
+        root: std::path::PathBuf::from(&run.cwd)
+            .canonicalize()
+            .map_err(|error| {
+                anyhow::Error::new(crate::agent::TaskFailure::RootChanged)
+                    .context(format!("job cwd {:?} no longer resolves: {error}", run.cwd))
+            })?,
         status: TaskStatus::Interrupted,
         grant,
         criteria: spec

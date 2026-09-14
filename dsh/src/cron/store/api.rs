@@ -287,11 +287,31 @@ impl CronStore for SqliteCronStore {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let id = resolve(&tx, selector)?;
+        // A paused or blocked job is never picked up by `claim_due_jobs`
+        // (`enabled = 1 AND blocked = 0`), so writing `next_run_at` here for
+        // one would leave the row with a concrete future timestamp it can
+        // never reach on its own - the same "paused implies NULL" invariant
+        // `set_paused`/`patch` protect - while telling the caller it "will
+        // run on the next tick", which it never will. `claim_one` (`cron run
+        // --now`) is the one place allowed to ignore both, since it claims
+        // the job directly instead of waiting for a scan to find it due.
+        let (name, enabled, blocked): (String, bool, bool) = tx.query_row(
+            "SELECT name, enabled, blocked FROM jobs WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        if !enabled {
+            bail!("{name}: paused; run `cron resume {name}` first, or `cron run {name} --now`");
+        }
+        if blocked {
+            bail!(
+                "{name}: blocked by an open incident; see `cron incidents`, or `cron run {name} --now`"
+            );
+        }
         tx.execute(
             "UPDATE jobs SET next_run_at = ?2, updated_at = ?2 WHERE id = ?1",
             params![id, now],
         )?;
-        let name = job_name(&tx, id)?;
         tx.commit()?;
         Ok(name)
     }

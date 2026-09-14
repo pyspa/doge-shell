@@ -276,6 +276,47 @@ fn stderr_text_falls_back_to_the_bare_reason_when_the_summary_is_empty() {
     );
 }
 
+/// The bug this guards against: an AI job's `ClaimedRun.env` (its own
+/// snapshot, taken at `cron add`/`cron-add` time) was never applied anywhere.
+/// `spawn_run_child` starts the `cron run-job` child with no env handling of
+/// its own, unlike `exec::run_command`'s `env_clear`/`envs` for a shell job,
+/// so the job silently ran with whatever environment the tick that picked it
+/// up happened to be carrying (an external tick's near-empty one, say)
+/// instead of its own snapshot.
+///
+/// Checks both consumers `--env` grants and API-key resolution actually
+/// read: raw `std::env::var` (what `sandbox`/`execute` use) and
+/// `Environment::get_var` (what `resolved_config`'s API-key lookup tries
+/// first) - see `apply_job_environment`'s own doc comment for why both are
+/// needed. Uses a name distinctive enough that no other test could plausibly
+/// read or write it, and restores it afterward since `std::env` is
+/// process-global and this suite's tests run concurrently.
+#[test]
+fn apply_job_environment_reaches_both_std_env_and_the_shell_snapshot() {
+    const KEY: &str = "DSH_CRON_TEST_APPLY_JOB_ENVIRONMENT_VAR";
+    let previous = std::env::var_os(KEY);
+
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    let env = HashMap::from([(KEY.to_string(), "from-the-job".to_string())]);
+    apply_job_environment(&mut shell, &env);
+
+    assert_eq!(std::env::var(KEY).as_deref(), Ok("from-the-job"));
+    assert_eq!(
+        shell.environment.read().get_var(KEY).as_deref(),
+        Some("from-the-job")
+    );
+
+    // SAFETY: restoring this test's own variable to what it was before,
+    // single-threaded with respect to itself (no other test touches this
+    // name).
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(KEY, value),
+            None => std::env::remove_var(KEY),
+        }
+    }
+}
+
 #[test]
 fn agent_run_outcome_maps_every_task_status_to_a_run_state() {
     assert_eq!(
@@ -297,4 +338,42 @@ fn agent_run_outcome_maps_every_task_status_to_a_run_state() {
     let interrupted = agent_run_outcome(&report(TaskStatus::Interrupted, false), "", 0, 0);
     assert_eq!(interrupted.state, RunState::Failed);
     assert!(interrupted.timed_out);
+}
+
+/// The bug this guards against: every `agent_outcome`/`run_task` failure -
+/// root changed, an unreconciled operation, a genuinely broken task store, or
+/// a one-off hiccup - used to collapse into `RunReason::StateUnusable`, which
+/// blocks the job on a single occurrence. `failure_reason` reads the
+/// `TaskFailure` marker those call sites tag their errors with instead of
+/// guessing from `to_string()`.
+#[test]
+fn failure_reason_reads_the_task_failure_marker_not_the_message_text() {
+    use crate::agent::TaskFailure;
+
+    let tagged = |failure: TaskFailure| anyhow::Error::new(failure).context("some human text");
+    assert_eq!(
+        failure_reason(&tagged(TaskFailure::RootChanged)),
+        RunReason::RootChanged
+    );
+    assert_eq!(
+        failure_reason(&tagged(TaskFailure::Reconcile)),
+        RunReason::Reconcile
+    );
+    assert_eq!(
+        failure_reason(&tagged(TaskFailure::Config)),
+        RunReason::Config
+    );
+    assert_eq!(
+        failure_reason(&tagged(TaskFailure::StateUnusable)),
+        RunReason::StateUnusable
+    );
+}
+
+/// An error nobody tagged - a plain `?` from some other library - must not
+/// block the job the way `StateUnusable` would; it is treated as one-off
+/// noise until it repeats (`STREAK_TO_INCIDENT`).
+#[test]
+fn failure_reason_defaults_an_untagged_error_to_transient() {
+    let error = anyhow::anyhow!("some ordinary io error");
+    assert_eq!(failure_reason(&error), RunReason::Transient);
 }

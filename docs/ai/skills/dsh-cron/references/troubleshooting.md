@@ -1,23 +1,27 @@
 # Troubleshooting: symptom to cause
 
 Work through `cron status`, then the relevant row below, before guessing. Re-running
-`cron run NAME --now` after each change is the fastest way to confirm a fix - it claims
-and executes the job immediately and in the foreground, bypassing the schedule (and,
-for an agent job, bypassing any approval prompt just as an ordinary tick would).
+`cron run NAME --now` after each change is the fastest way for a **person** to confirm a
+fix - it claims and executes the job immediately and in the foreground, bypassing the
+schedule (and, for an agent job, bypassing any approval prompt just as an ordinary tick
+would). `cron_manage`'s `run` action cannot do this (it only marks the job due for the
+next tick, same as `cron run NAME` with no `--now`) - from a chat tool, ask a person to
+run `--now` and report back, or use `cron history`/`cron logs` to see the outcome of
+whatever the job's own schedule or the next tick already produced.
 
 | Symptom | Likely cause | Check |
 |---|---|---|
 | Job never fires at all | No session open and no external tick installed | `cron status` - it names this explicitly. Install one: [external-tick.md](external-tick.md) |
 | Job fires late, not on time | The session runner scans on a schedule capped at 60 seconds when idle | Expected for a slow-interval or cron-expression job; only matters for a sub-minute interval job with nothing else due |
-| `cron run NAME` (no `--now`) seems to do nothing for a while | It only marks the job due; the session runner or next external tick picks it up, up to ~60s later | Use `cron run NAME --now` for an instant result instead |
+| `cron run NAME` (no `--now`) seems to do nothing for a while | It only marks the job due; the session runner or next external tick picks it up, up to ~60s later. It also refuses outright on a paused or blocked job (nothing would ever pick it up) | A person can use `cron run NAME --now` for an instant result instead; `cron resume NAME` first if it was paused |
 | Job fires twice for what looks like one moment | Actually two different scheduled slots close together, or a DST overlap that resolved to the earlier instant on purpose | `cron history NAME` - each row's `scheduled_for` is a distinct slot; the store refuses two runs for the same slot |
 | Command works when typed at the prompt, fails only from cron | cron jobs run under a plain `sh -c`, not an interactive shell: aliases, abbreviations, shell functions and Lisp functions are not available; `PATH` and other exports are whatever was in effect *when the job was registered*, not the shell's current state | Write the full command, or call a script; re-`cron edit` (or re-`cron add --force`) after changing exports so the job picks up the new snapshot |
 | Command fails only when run via the external tick, not interactively | The tick runs outside any login/interactive shell, so `PATH` may be shorter and env files may not be sourced | Use absolute paths in the command, or a wrapper script that sets up its own environment |
 | A shell job's exit code is always the timeout code | The command outlived `--timeout` and was killed | `cron edit NAME --timeout <longer>`, or fix the command |
 | An agent job just sits there / never seems to complete | Check `cron history NAME` for its state, not just "is it still running" - a run past its budget is force-killed by the outer deadline built from `--timeout` | `cron history NAME --json` to see `state`/`reason`; a `timeout` reason means the model needed more time or a larger `--tokens` budget. `cron logs NAME` still shows a summary reconstructed from the agent store even for this run, labelled as such, since it was killed before it could report back |
-| An agent job fails the same way every single run | Missing API key, or a provider that cannot support unattended runs (no `--allow-mcp`/tool support, or it omits usage accounting) | `cron incidents` - these settle into a `config` or `provider` incident rather than retrying forever |
-| An agent job needed a permission and now never runs again | It hit a grant it was not given (`--allow-command`, `--allow-mcp`, `--write`, ...); a blocked job does not retry on its own | `cron incidents` -> `agent show <task-id>` to see exactly what was asked for -> `cron edit NAME --allow-command '...'` (or the matching grant) -> `cron incidents ack <id>` |
-| An agent job's tools are missing / it reports it "could not" do something involving an MCP server | The job's process never connected MCP - only a job with a non-empty `--allow-mcp` grant does | Add the specific `--allow-mcp` entry the job needs (copy the exact key from `agent show`) |
+| An agent job fails the same way every single run | Missing API key, an empty goal, an exhausted budget, or its sandbox runtime is unavailable | `cron incidents` - these settle into a `config` incident rather than retrying forever. A provider that genuinely cannot support unattended runs is not specially detected - it shows up as an ordinary failure, escalating to a `Failing` incident after three in a row |
+| An agent job needed a permission and now never runs again | It hit a grant it was not given (`--allow-command`, `--allow-mcp`, `--write`, ...); a blocked job does not retry on its own | `cron incidents` - the exact approval key it needed is folded into the incident's own detail (`[approval_key: ...]`) - `cron edit NAME --allow-command '...'` (or the matching grant) -> `cron incidents ack <id>` |
+| An agent job's tools are missing / it reports it "could not" do something involving an MCP server | The job's process never connected MCP - only a job with a non-empty `--allow-mcp` grant does | Add the specific `--allow-mcp` entry the job needs - copy the exact key from the incident's detail or `cron logs`' stderr (`[approval_key: ...]`) |
 | Desktop/above-prompt notification never appears for a finished run | Per-run REPL notices are not wired for cron yet - a run finishes in its own separate process, not the session that is watching the prompt | Check the outcome with `cron history` (and the run's full output with `cron logs NAME`) instead; this is a known current gap, not a misconfiguration. `cron doctor` reports it as a `note` whenever any job's `--on` is not `never` |
 | A job has been `running` for a suspiciously long time | Either it is a genuinely slow run, or its process died without releasing the claim | `cron doctor` flags any currently-`running` job with how long it has held its claim; if that keeps growing across repeated `cron doctor` calls, wait for the lease to expire (see the row above) |
 | `cron history` shows nothing at all for a job that should have run | The claim never succeeded - check for a stuck lease from a crashed process | Wait for the lease to expire (twice the job's `--timeout`, minimum 60s) and it self-recovers on the next scan; `cron status` will show it as no longer running once reclaimed |

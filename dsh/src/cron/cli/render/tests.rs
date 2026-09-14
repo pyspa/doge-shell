@@ -95,6 +95,19 @@ fn the_job_table_includes_every_job_by_name() {
     assert!(table.contains("beta"));
 }
 
+/// The bug this guards against: an agent job's `command` is its goal in
+/// full, which had no clamp at all - one such job blew the table out to
+/// hundreds of columns. `cron show <job>`/`--json` still carry the untruncated
+/// text, so nothing is lost, just not shown in the list.
+#[test]
+fn a_very_long_command_does_not_widen_the_list_table() {
+    let mut j = job("probe");
+    j.command = "x".repeat(200);
+    let table = render_job_list(&[j], 0);
+    assert!(!table.contains(&"x".repeat(200)), "{table}");
+    assert!(table.contains("..."), "{table}");
+}
+
 #[test]
 fn last_run_is_a_dash_when_there_is_none() {
     assert_eq!(describe_last(None), "-");

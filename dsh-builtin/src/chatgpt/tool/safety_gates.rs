@@ -161,7 +161,15 @@ pub(crate) fn confirm_agent_action(
         }
         let mut runtime = runtime.lock();
         runtime.task.status = dsh_types::agent::TaskStatus::InputRequired;
-        runtime.task.stop_reason = Some(message.to_string());
+        // The approval key itself is folded into `stop_reason` alongside the
+        // human message - not just the message - because it is the exact,
+        // byte-for-byte string an `--allow-mcp`/`--allow-command` grant has
+        // to match, and until now the only place it was ever recorded was
+        // the full task JSON (`agent show <task-id>`, no chat-tool
+        // equivalent). `cron logs`/`cron incidents`/`cron_manage` all
+        // surface `stop_reason`, so a person no longer needs a tool-less
+        // path to `agent show` just to copy this back into `cron edit`.
+        runtime.task.stop_reason = Some(format!("{message} [approval_key: {approval_key}]"));
         runtime.save(None).map_err(|e| e.to_string())?;
         return Err(format!("agent: permission required: {message}"));
     }

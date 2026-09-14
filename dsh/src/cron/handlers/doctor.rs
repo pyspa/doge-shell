@@ -191,12 +191,12 @@ pub(in crate::cron) fn doctor(
 
     if json_output {
         ctx.write_stdout(&serde_json::to_string_pretty(&report.to_json())?)?;
-        ctx.write_stdout("\n")?;
         return Ok(());
     }
     for line in &report.lines {
-        ctx.write_stdout(&format!("{line}\n"))?;
+        ctx.write_stdout(line)?;
     }
+    ctx.write_stdout(&format!("{} ok, {} warn", report.ok, report.warn))?;
     Ok(())
 }
 

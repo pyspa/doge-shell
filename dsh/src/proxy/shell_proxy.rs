@@ -762,3 +762,28 @@ impl ShellProxy for Shell {
         }
     }
 }
+
+impl dsh_builtin::shell_capabilities::AiJsonRequest for Shell {
+    /// Same request as [`ShellProxy::ask_ai_async`], but with
+    /// `AiRequestOptions::as_json_object()` set: the provider's JSON mode is
+    /// requested rather than relied on through `strip_code_fence`, and
+    /// `AI_MESSAGE_LANG` is not applied (`run_tool_loop` skips
+    /// `with_response_language` whenever `options.json_object` is set).
+    fn ask_ai_json_async<'a>(
+        &'a mut self,
+        messages: Vec<serde_json::Value>,
+    ) -> dsh_builtin::ProxyFuture<'a, String> {
+        let service = self.environment.read().integration_state.ai_service.clone();
+        Box::pin(async move {
+            let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
+            service
+                .send_request_with(
+                    messages,
+                    crate::ai_features::AiRequestOptions::new(Some(0.7))
+                        .without_tools()
+                        .as_json_object(),
+                )
+                .await
+        })
+    }
+}

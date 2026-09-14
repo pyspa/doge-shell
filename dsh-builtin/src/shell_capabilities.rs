@@ -400,6 +400,26 @@ impl<T: ShellProxy + ?Sized> ShellAiIntegration for T {
     }
 }
 
+/// A prompt whose response must parse as a single JSON object, unlike
+/// [`ShellAiIntegration::ask_ai_async`]'s prose.
+///
+/// A new independent trait rather than a `ShellAiIntegration`/`ShellProxy`
+/// method: `ShellProxy::ask_ai_async` is used by three prose callers
+/// (`blocks::ai`, `blocks::export`) that must keep getting `AI_MESSAGE_LANG`
+/// applied to their system prompt, so the JSON-mode request needs its own
+/// path rather than a parameter that would force a choice on every caller.
+/// `output-gen`'s AI-generated output-schema is the one caller: its system
+/// prompt asks for a JSON object whose `type`/`parse`/`separator` fields are
+/// enum values, and `AI_MESSAGE_LANG` translating those broke the parse
+/// (`docs/ai/skills/doge-shell-repo/references/ai/env-vars.md` §6: "JSON を
+/// 返させるリクエストに `apply_language` を付けない").
+pub trait AiJsonRequest {
+    fn ask_ai_json_async<'a>(
+        &'a mut self,
+        messages: Vec<serde_json::Value>,
+    ) -> ProxyFuture<'a, String>;
+}
+
 /// What the shell's safety policy says about a command the agent wants to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCommandVerdict {

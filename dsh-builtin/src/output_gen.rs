@@ -17,7 +17,6 @@
 //!        output-gen --check <command...>
 //!        output-gen --audit [output-schema-dir]
 
-use crate::capability::AiCapability;
 use crate::completion_generation::CompletionGenerationService;
 use crate::config_paths;
 use crate::{BuiltinFuture, ShellProxy};
@@ -53,13 +52,13 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
 
     match parse_args(&argv[1..]) {
         Ok(OutputGenAction::Generate { .. }) => {
-            ctx.write_stderr("output-gen: AI generation requires foreground async execution\n")
+            ctx.write_stderr("output-gen: AI generation requires foreground async execution")
                 .ok();
             ExitStatus::ExitedWith(1)
         }
         Ok(action) => run_non_generate_action(ctx, action),
         Err(e) => {
-            ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+            ctx.write_stderr(&format!("Error: {:#}", e)).ok();
             ctx.write_stderr(usage()).ok();
             ExitStatus::ExitedWith(1)
         }
@@ -80,7 +79,7 @@ pub fn command_async<'a>(
         let action = match parse_args(&argv[1..]) {
             Ok(parsed) => parsed,
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 ctx.write_stderr(usage()).ok();
                 return ExitStatus::ExitedWith(1);
             }
@@ -97,18 +96,18 @@ pub fn command_async<'a>(
         let outcome = match generate_async(ctx, proxy, &command_line, options.stdout).await {
             Ok(outcome) => outcome,
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 return ExitStatus::ExitedWith(1);
             }
         };
 
         for warning in &outcome.warnings {
-            ctx.write_stderr(&format!("output-gen: warning: {warning}\n"))
+            ctx.write_stderr(&format!("output-gen: warning: {warning}"))
                 .ok();
         }
 
         if options.stdout {
-            ctx.write_stdout(&format!("{}\n", outcome.json)).ok();
+            ctx.write_stdout(&outcome.json).ok();
             return ExitStatus::ExitedWith(0);
         }
 
@@ -116,7 +115,7 @@ pub fn command_async<'a>(
         match write_schema_atomic(&path, &outcome.json, options.force) {
             Ok(()) => {
                 ctx.write_stdout(&format!(
-                    "output-schema for '{}' generated and saved to {} ({} sample row(s) parsed)\n",
+                    "output-schema for '{}' generated and saved to {} ({} sample row(s) parsed)",
                     outcome.command,
                     path.display(),
                     outcome.row_count
@@ -125,7 +124,7 @@ pub fn command_async<'a>(
                 ExitStatus::ExitedWith(0)
             }
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 ExitStatus::ExitedWith(1)
             }
         }
@@ -136,21 +135,21 @@ fn run_non_generate_action(ctx: &Context, action: OutputGenAction) -> ExitStatus
     match action {
         OutputGenAction::Check { command_line } => match run_check(&command_line) {
             Ok(report) => {
-                ctx.write_stdout(&format!("{report}\n")).ok();
+                ctx.write_stdout(&report).ok();
                 ExitStatus::ExitedWith(0)
             }
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 ExitStatus::ExitedWith(1)
             }
         },
         OutputGenAction::Audit { dir } => match audit_output_schema_dir(&dir) {
             Ok(output) => {
-                ctx.write_stdout(&format!("{output}\n")).ok();
+                ctx.write_stdout(&output).ok();
                 ExitStatus::ExitedWith(0)
             }
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 ExitStatus::ExitedWith(1)
             }
         },
@@ -279,7 +278,7 @@ struct GenerateOutcome {
 
 async fn generate_async(
     ctx: &Context,
-    proxy: &mut (impl AiCapability + ?Sized),
+    proxy: &mut (impl crate::shell_capabilities::AiJsonRequest + ?Sized),
     command_line: &str,
     log_to_stderr: bool,
 ) -> Result<GenerateOutcome> {
@@ -341,16 +340,16 @@ async fn generate_async(
 
 fn log(ctx: &Context, to_stderr: bool, message: &str) {
     if to_stderr {
-        let _ = ctx.write_stderr(&format!("{message}\n"));
+        let _ = ctx.write_stderr(message);
     } else {
-        let _ = ctx.write_stdout(&format!("{message}\n"));
+        let _ = ctx.write_stdout(message);
     }
 }
 
 const MAX_SAMPLE_CHARS_IN_PROMPT: usize = 4000;
 
 async fn ask_for_schema(
-    proxy: &mut (impl AiCapability + ?Sized),
+    proxy: &mut (impl crate::shell_capabilities::AiJsonRequest + ?Sized),
     command_name: &str,
     command_line: &str,
     sample: &str,
@@ -393,7 +392,7 @@ Rules:
         json!({"role": "system", "content": system}),
         json!({"role": "user", "content": user}),
     ];
-    proxy.ask(messages).await.with_context(|| {
+    proxy.ask_ai_json_async(messages).await.with_context(|| {
         format!("AI request failed while generating a schema for '{command_name}'")
     })
 }

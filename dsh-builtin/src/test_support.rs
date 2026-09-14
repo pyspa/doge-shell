@@ -561,6 +561,18 @@ impl AgentCommandPolicy for TestShellProxy {
     }
 }
 
+impl crate::shell_capabilities::AiJsonRequest for TestShellProxy {
+    fn ask_ai_json_async<'a>(
+        &'a mut self,
+        _messages: Vec<serde_json::Value>,
+    ) -> ProxyFuture<'a, String> {
+        let response = self.ai_response.clone();
+        Box::pin(
+            async move { response.ok_or_else(|| anyhow::anyhow!("no ai response configured")) },
+        )
+    }
+}
+
 impl crate::shell_capabilities::CronToolHost for TestShellProxy {
     fn cron_tool_call(
         &mut self,

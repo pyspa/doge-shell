@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
+use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision};
 use dsh_openai::apply_language_to_field;
 use dsh_openai::turn::{answer_text, truncate_middle};
 use dsh_openai::{ChatGptClient, ChatRequestOptions, json_object_format, strip_code_fence};
@@ -13,6 +14,138 @@ fn verdict_options() -> ChatRequestOptions {
     ChatRequestOptions::new()
         .with_temperature(Some(0.1))
         .with_response_format(Some(json_object_format()))
+}
+
+/// A risk verdict from an LLM safety review.
+///
+/// The JSON shape both the command-intention check and the captured-output
+/// audit ask for; `recommend_inspection` is unused by the latter (its prompt
+/// never asks for it), and defaults to `false` there.
+struct Verdict {
+    risk: String,
+    explanation: String,
+    recommend_inspection: bool,
+}
+
+/// Ask the model to review `subject` against `system_prompt` and parse the
+/// verdict.
+///
+/// Shared between `command()`'s command-intention check and
+/// `inspect_and_run()`'s captured-content audit: same request shape
+/// (`verdict_options`), same `risk_level`/`explanation` JSON parse, same
+/// fallback. A transport failure, a stalled/truncated answer, or malformed
+/// JSON never silently reads as `SAFE` - each becomes an explicit `UNKNOWN`
+/// verdict whose explanation names the failure, which the caller's confirm
+/// prompt surfaces to the user before anything executes.
+fn request_verdict(
+    proxy: &mut dyn ShellProxy,
+    client: &ChatGptClient,
+    system_prompt: &str,
+    subject: &str,
+) -> Verdict {
+    // Scoped to the one field a person reads. The blanket instruction reached
+    // `risk_level` too, and a verdict answered as "危険" matches none of the
+    // three values callers compare against.
+    let language = crate::chatgpt::response_language(proxy);
+    let messages = vec![
+        json!({
+            "role": "system",
+            "content": apply_language_to_field(system_prompt, "explanation", language.as_deref())
+        }),
+        json!({"role": "user", "content": subject}),
+    ];
+
+    let content = match client.send_chat(&messages, &verdict_options(), None) {
+        Ok(res) => match answer_text(&res) {
+            Ok(content) => content,
+            Err(err) => {
+                return Verdict {
+                    risk: "UNKNOWN".to_string(),
+                    explanation: format!("Analysis failed: {err}"),
+                    recommend_inspection: true,
+                };
+            }
+        },
+        Err(err) => {
+            return Verdict {
+                risk: "UNKNOWN".to_string(),
+                explanation: format!("Analysis failed: {err:?}"),
+                recommend_inspection: true,
+            };
+        }
+    };
+
+    let cleaned_content = strip_code_fence(&content);
+    match serde_json::from_str::<serde_json::Value>(&cleaned_content) {
+        Ok(json) => Verdict {
+            risk: json
+                .get("risk_level")
+                .and_then(|s| s.as_str())
+                .unwrap_or("UNKNOWN")
+                .to_string(),
+            explanation: json
+                .get("explanation")
+                .and_then(|s| s.as_str())
+                .unwrap_or("No explanation provided")
+                .to_string(),
+            recommend_inspection: json
+                .get("recommend_inspection")
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false),
+        },
+        Err(_) => Verdict {
+            risk: "UNKNOWN".to_string(),
+            explanation: format!("Failed to parse AI response: {content}"),
+            recommend_inspection: true,
+        },
+    }
+}
+
+/// Whether `full_command` may run, judged by the same `SafetyGuard` that a
+/// typed command goes through - `Ok(true)` to proceed, `Ok(false)` if the
+/// user (or the guard) refused.
+///
+/// Before this, everything past this point (`ShellProxy::dispatch` /
+/// `capture_command`) ran the command directly with no `SafetyGuard`
+/// involvement at all: `SAFETY_LEVEL=strict`, the configured allowlist, and
+/// the substitution/compound-statement/unconsumed-tail refusals in
+/// `evaluate_agent_command` were all silently skipped for anything spelled
+/// `safe-run <cmd>` instead of typed directly. safe-run's own LLM verdict is
+/// a *different* judgement (an AI opinion on intent) and does not replace
+/// this one (a deterministic policy decision) - both apply, same as a
+/// skill-script command already gets both an allowlist check and a guard
+/// verdict in the chat `execute` tool.
+fn confirm_with_safety_guard(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    full_command: &str,
+) -> bool {
+    match proxy.evaluate_agent_command(full_command) {
+        AgentCommandVerdict::Allowed => true,
+        AgentCommandVerdict::Denied(reason) => {
+            ctx.write_stderr(&format!("safe-run: refused by the safety guard: {reason}"))
+                .ok();
+            false
+        }
+        AgentCommandVerdict::Confirm(reason) => {
+            match proxy.request_agent_approval(&format!("safe-run: {full_command}: {reason}")) {
+                Ok(ApprovalDecision::Allow) => true,
+                Ok(ApprovalDecision::AllowAlways) => {
+                    proxy.remember_agent_approval(full_command);
+                    true
+                }
+                Ok(ApprovalDecision::Deny) => {
+                    ctx.write_stderr("Aborted.").ok();
+                    false
+                }
+                Err(e) => {
+                    ctx.write_stderr(&format!("Error getting confirmation: {}", e))
+                        .ok();
+                    false
+                }
+            }
+        }
+    }
 }
 
 pub fn description() -> &'static str {
@@ -94,63 +227,15 @@ Format your response as valid JSON:
 }
 "#;
 
-    // Scoped to the one field a person reads. The blanket instruction reached
-    // `risk_level` too, and a verdict answered as "危険" matches none of the
-    // three values the code below compares against.
-    let language = crate::chatgpt::response_language(proxy);
-    let messages = vec![
-        json!({
-            "role": "system",
-            "content": apply_language_to_field(system_prompt, "explanation", language.as_deref())
-        }),
-        json!({"role": "user", "content": format!("Check safety of:\n```\n{}\n```", full_command)}),
-    ];
-
-    let analysis_result = match client.send_chat(&messages, &verdict_options(), None) {
-        Ok(res) => res,
-        Err(err) => {
-            ctx.write_stderr(&format!("safe-run: Analysis failed: {err:?}"))
-                .ok();
-            return ExitStatus::ExitedWith(1);
-        }
-    };
-
-    // Shared with the chat runtime. A verdict the provider cut short must not
-    // be read as "SAFE" by way of a failed JSON parse falling through to
-    // UNKNOWN: this is the one request whose truncation the user has to see.
-    let content = match answer_text(&analysis_result) {
-        Ok(content) => content,
-        Err(err) => {
-            ctx.write_stderr(&format!("safe-run: Analysis failed: {err}"))
-                .ok();
-            return ExitStatus::ExitedWith(1);
-        }
-    };
-
-    // Parse JSON response
-    // If parsing fails, fall back to simple text warning and high caution
-    let cleaned_content = strip_code_fence(&content);
-    let (risk, explanation, recommend_inspection) =
-        match serde_json::from_str::<serde_json::Value>(&cleaned_content) {
-            Ok(json) => (
-                json.get("risk_level")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("UNKNOWN")
-                    .to_string(),
-                json.get("explanation")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("No explanation provided")
-                    .to_string(),
-                json.get("recommend_inspection")
-                    .and_then(|b| b.as_bool())
-                    .unwrap_or(false),
-            ),
-            Err(_) => (
-                "UNKNOWN".to_string(),
-                format!("Failed to parse AI response: {}", content),
-                true, // Default to inspection on error
-            ),
-        };
+    let verdict = request_verdict(
+        proxy,
+        &client,
+        system_prompt,
+        &format!("Check safety of:\n```\n{}\n```", full_command),
+    );
+    let risk = verdict.risk;
+    let explanation = verdict.explanation;
+    let recommend_inspection = verdict.recommend_inspection;
 
     // Styling helpers
     let bold = "\x1b[1m";
@@ -168,14 +253,14 @@ Format your response as valid JSON:
     };
 
     ctx.write_stderr(&format!(
-        "\n{bold}Safety Analysis:{reset}\nRate: {}{}{reset}\nExplanation: {}\n",
+        "\n{bold}Safety Analysis:{reset}\nRate: {}{}{reset}\nExplanation: {}",
         risk_color, risk, explanation
     ))
     .ok();
 
     if recommend_inspection {
         ctx.write_stderr(&format!(
-            "\n{}[!] Remote content execution detected or specific risk identified.{}\n",
+            "\n{}[!] Remote content execution detected or specific risk identified.{}",
             yellow, reset
         ))
         .ok();
@@ -241,6 +326,9 @@ Format your response as valid JSON:
     }
 
     // 4. Execution (if approved)
+    if !confirm_with_safety_guard(ctx, proxy, &full_command) {
+        return ExitStatus::ExitedWith(1);
+    }
     let dispatch_command = request.dispatch_command.clone();
     let dispatch_argv = request.dispatch_argv.clone();
     match proxy.dispatch(ctx, &dispatch_command, dispatch_argv) {
@@ -253,13 +341,6 @@ Format your response as valid JSON:
     }
 }
 
-/// The static pre-check, before a token is spent on the AI review.
-///
-/// Every judgement here comes from `dsh_types::safety_policy`, which is also
-/// what `SafetyGuard` uses. The previous version matched substrings - it looked
-/// for the literal `"curl "` next to `"| sh"` and for `"rm -rf /"` - so it
-/// missed `/usr/bin/curl`, `wget`, `rm -fr /`, `mkfs.ext4` and every extra
-/// space, while flagging a filename that happened to contain `mkfs`.
 /// The static pre-check, before a token is spent on the AI review.
 ///
 /// Every judgement here comes from `dsh_types::safety_policy`, which is also
@@ -314,6 +395,75 @@ fn deterministic_command_warning(command: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell_capabilities::AgentCommandPolicy;
+    use crate::test_support::TestShellProxy;
+
+    fn ctx() -> Context {
+        let pid = nix::unistd::getpid();
+        Context::new_safe(pid, pid, false)
+    }
+
+    /// A command the guard denies outright (e.g. a compound statement or a
+    /// substitution it cannot judge before it runs) must never reach
+    /// `dispatch`/`capture_command`, no matter what safe-run's own LLM
+    /// verdict said.
+    #[test]
+    fn a_denied_verdict_blocks_execution() {
+        let ctx = ctx();
+        let mut proxy = TestShellProxy {
+            agent_verdict: AgentCommandVerdict::Denied("refused by policy".to_string()),
+            ..TestShellProxy::default()
+        };
+
+        assert!(!confirm_with_safety_guard(&ctx, &mut proxy, "rm -rf ~"));
+        // Denied is a hard refusal - the user is never even asked.
+        assert_eq!(proxy.confirm_calls, 0);
+    }
+
+    /// A command the guard is unsure about goes through the same
+    /// confirm-with-Always flow as a directly typed command; declining stops
+    /// execution.
+    #[test]
+    fn declining_a_guard_confirmation_blocks_execution() {
+        let ctx = ctx();
+        let mut proxy = TestShellProxy {
+            agent_verdict: AgentCommandVerdict::Confirm("looks risky".to_string()),
+            confirm_result: false,
+            ..TestShellProxy::default()
+        };
+
+        assert!(!confirm_with_safety_guard(&ctx, &mut proxy, "rm -rf ~"));
+        assert_eq!(proxy.confirm_calls, 1);
+    }
+
+    /// Accepting a guard confirmation with "always" both proceeds and
+    /// remembers the command for the rest of the session, same as a typed
+    /// command would.
+    #[test]
+    fn always_approving_a_guard_confirmation_proceeds_and_remembers() {
+        let ctx = ctx();
+        let mut proxy = TestShellProxy {
+            agent_verdict: AgentCommandVerdict::Confirm("looks risky".to_string()),
+            approval_decision: Some(ApprovalDecision::AllowAlways),
+            ..TestShellProxy::default()
+        };
+
+        assert!(confirm_with_safety_guard(&ctx, &mut proxy, "rm -rf /tmp/x"));
+        assert_eq!(proxy.agent_session_approvals(), vec!["rm -rf /tmp/x"]);
+    }
+
+    /// A command the guard is happy with proceeds without ever asking.
+    #[test]
+    fn an_allowed_verdict_proceeds_without_asking() {
+        let ctx = ctx();
+        let mut proxy = TestShellProxy {
+            agent_verdict: AgentCommandVerdict::Allowed,
+            ..TestShellProxy::default()
+        };
+
+        assert!(confirm_with_safety_guard(&ctx, &mut proxy, "echo hi"));
+        assert_eq!(proxy.confirm_calls, 0);
+    }
 
     /// The preview used to be a byte slice, so an 8000th byte inside a
     /// multi-byte character panicked the shell mid-audit.
@@ -492,6 +642,13 @@ fn inspect_and_run(
     let yellow = "\x1b[33m";
     let cyan = "\x1b[36m";
 
+    // `capture_command` actually runs `full_command` (via `sh -c`) to collect
+    // its output - the same real execution as the dispatch below, just with
+    // stdout held back for review. It needs the same gate.
+    if !confirm_with_safety_guard(ctx, proxy, full_command) {
+        return ExitStatus::ExitedWith(1);
+    }
+
     ctx.write_stderr("Capturing output for inspection...").ok();
 
     // Capture the output
@@ -505,12 +662,12 @@ fn inspect_and_run(
     };
 
     if !stderr.is_empty() {
-        ctx.write_stderr(&format!("\n--- STDERR ---\n{}\n", stderr))
+        ctx.write_stderr(&format!("\n--- STDERR ---\n{}", stderr))
             .ok();
     }
 
     if stdout.is_empty() {
-        ctx.write_stderr(&format!("\n{yellow}--- No STDOUT captured ---{reset}\n"))
+        ctx.write_stderr(&format!("\n{yellow}--- No STDOUT captured ---{reset}"))
             .ok();
         ExitStatus::ExitedWith(exit_code)
     } else {
@@ -546,11 +703,11 @@ fn inspect_and_run(
 
         if !static_warnings.is_empty() {
             ctx.write_stderr(&format!(
-                 "\n{yellow}[!] Static Analysis Warning: Potential dangerous patterns detected in content:{reset}\n",
+                 "\n{yellow}[!] Static Analysis Warning: Potential dangerous patterns detected in content:{reset}",
                  yellow=yellow, reset=reset
              )).ok();
             for warn in &static_warnings {
-                ctx.write_stderr(&format!(" - {}\n", warn)).ok();
+                ctx.write_stderr(&format!(" - {}", warn)).ok();
             }
         }
 
@@ -564,50 +721,14 @@ Format your response as valid JSON:
   "explanation": "Concise analysis of the content"
 }
 "#;
-        let language = crate::chatgpt::response_language(proxy);
-        let messages = vec![
-            json!({
-                "role": "system",
-                "content": apply_language_to_field(system_prompt, "explanation", language.as_deref())
-            }),
-            json!({"role": "user", "content": format!("Analyze this content:\n```\n{}\n```", preview)}),
-        ];
-
-        let analysis_result = match client.send_chat(&messages, &verdict_options(), None) {
-            Ok(res) => res,
-            Err(err) => {
-                ctx.write_stderr(&format!("safe-run: Content analysis failed: {err:?}"))
-                    .ok();
-                json!({"choices": [{"message": {"content": "{\"risk_level\": \"UNKNOWN\", \"explanation\": \"Content analysis failed.\"}"}}]})
-            }
-        };
-
-        // A truncated audit is an unknown verdict, not a clean one; the caller
-        // below treats UNKNOWN as something to ask the user about.
-        let content = answer_text(&analysis_result).unwrap_or_else(|err| {
-            ctx.write_stderr(&format!("safe-run: Content analysis failed: {err}"))
-                .ok();
-            r#"{"risk_level": "UNKNOWN", "explanation": "Content analysis failed."}"#.to_string()
-        });
-
-        let cleaned_content = strip_code_fence(&content);
-        let (risk, explanation) = match serde_json::from_str::<serde_json::Value>(&cleaned_content)
-        {
-            Ok(json) => (
-                json.get("risk_level")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("UNKNOWN")
-                    .to_string(),
-                json.get("explanation")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("No explanation")
-                    .to_string(),
-            ),
-            Err(_) => (
-                "UNKNOWN".to_string(),
-                format!("Analysis failed: {}", content),
-            ),
-        };
+        let verdict = request_verdict(
+            proxy,
+            client,
+            system_prompt,
+            &format!("Analyze this content:\n```\n{}\n```", preview),
+        );
+        let risk = verdict.risk;
+        let explanation = verdict.explanation;
 
         let risk_color = match risk.to_uppercase().as_str() {
             "SAFE" => green,
@@ -617,14 +738,14 @@ Format your response as valid JSON:
         };
 
         ctx.write_stderr(&format!(
-            "\n{cyan}--- Content Preview ({} chars) ---{reset}\n{}\n{cyan}--- End Preview ---{reset}\n",
+            "\n{cyan}--- Content Preview ({} chars) ---{reset}\n{}\n{cyan}--- End Preview ---{reset}",
              preview.len(),
              truncate_middle(&preview, 2000),
              cyan=cyan, reset=reset
         )).ok();
 
         ctx.write_stderr(&format!(
-            "\n{bold}Content Analysis:{reset}\nRate: {}{}{reset}\nExplanation: {}\n",
+            "\n{bold}Content Analysis:{reset}\nRate: {}{}{reset}\nExplanation: {}",
             risk_color, risk, explanation
         ))
         .ok();
@@ -644,9 +765,13 @@ Format your response as valid JSON:
         match proxy.confirm_action(&prompt_msg) {
             Ok(true) => {
                 if !stdout.is_empty() {
-                    print!("{}", stdout);
-                    use std::io::Write;
-                    std::io::stdout().flush().ok();
+                    // Through `ctx`, not the real stdout directly: a raw
+                    // `print!` here skipped the output observer and any
+                    // redirect/pipe target, so a captured, approved script's
+                    // output never reached `out`/`tm`, `OutputHistory`, or
+                    // `safe-run ... > file`. `write_stdout` appends its own
+                    // `\n`, so trim what `sh -c` already left on the end.
+                    ctx.write_stdout(stdout.trim_end_matches('\n')).ok();
                 }
                 ExitStatus::ExitedWith(exit_code)
             }

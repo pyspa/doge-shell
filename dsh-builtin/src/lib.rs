@@ -170,7 +170,24 @@ impl CoreShellAction {
 /// every method explicitly. A default body would let either one silently
 /// fall back to a no-op if a method were forgotten after a signature change;
 /// requiring every method keeps that a compile error instead.
-pub trait ShellProxy {
+///
+/// `: AgentCommandPolicy` is a supertrait bound, not a new `ShellProxy`
+/// method - it adds no entry to `MAX_COMPATIBILITY_METHODS` and both
+/// implementors already satisfy it via their own `impl AgentCommandPolicy`.
+/// It exists so a plain `&mut dyn ShellProxy` (what every sync builtin
+/// receives) can call `evaluate_agent_command`/`request_agent_approval`
+/// without the caller having to know about `AgentCommandPolicy` by name.
+/// `safe_run.rs` uses this so a command it is about to execute is judged by
+/// the same `SafetyGuard` as a command typed directly - previously the
+/// dispatch below it (`proxy::external::execute`) never consulted the guard
+/// at all.
+///
+/// `: ... + AiJsonRequest` is the same kind of addition, for the same
+/// reason: `output_gen.rs` needs `ask_ai_json_async` reachable through a
+/// plain `&mut dyn ShellProxy`.
+pub trait ShellProxy:
+    shell_capabilities::AgentCommandPolicy + shell_capabilities::AiJsonRequest
+{
     /// Initiates shell exit process
     fn exit_shell(&mut self);
 

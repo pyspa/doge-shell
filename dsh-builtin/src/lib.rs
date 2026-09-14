@@ -85,6 +85,7 @@ mod set;
 mod skim_runner;
 mod snippet;
 pub mod task;
+mod text;
 pub mod tm;
 mod trigger;
 mod uuid;

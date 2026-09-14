@@ -411,10 +411,15 @@ pub fn extract_command_name(input: &str) -> Option<String> {
     Some(command.to_string())
 }
 
-/// Get the path to the timing data file
+/// Get the path to the timing data file.
+///
+/// Delegates to `dsh_builtin::command_timing`, which every other read/write
+/// of `timing.json` in this file already goes through (`timing_reset_epoch`,
+/// `write_timing_json_if_epoch`, `CommandTiming::load_from_file`) - keeping a
+/// second `xdg::BaseDirectories` resolution here let the two drift apart
+/// silently if either one's prefix or filename ever changed.
 pub fn get_timing_file_path() -> Option<PathBuf> {
-    let xdg_dir = xdg::BaseDirectories::with_prefix("dsh");
-    xdg_dir.place_data_file("timing.json").ok()
+    dsh_builtin::command_timing::get_timing_file_path()
 }
 
 /// Global shared timing instance for the shell

@@ -248,7 +248,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     let timing_file = match get_timing_file_path() {
         Some(path) => path,
         None => {
-            eprintln!("Error: Could not determine timing file path");
+            let _ = ctx.write_stderr("Error: Could not determine timing file path");
             return ExitStatus::ExitedWith(1);
         }
     };
@@ -295,233 +295,297 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     match args.first() {
         None => {
             // Show summary
-            print_summary(&timing);
+            let _ = ctx.write_stdout(&summary_text(&timing));
         }
         Some(&"--slow") => {
-            print_slowest(&timing);
+            let _ = ctx.write_stdout(&slowest_text(&timing));
         }
         Some(&"--frequent") => {
-            print_frequent(&timing);
+            let _ = ctx.write_stdout(&frequent_text(&timing));
         }
         Some(&"--failures") => {
-            print_failures(&timing);
+            let _ = ctx.write_stdout(&failures_text(&timing));
         }
         Some(&"--clear") => {
             timing.clear();
             if let Err(e) = timing.save_to_file(&timing_file) {
-                eprintln!("Error saving timing data: {}", e);
+                let _ = ctx.write_stderr(&format!("Error saving timing data: {}", e));
                 return ExitStatus::ExitedWith(1);
             }
-            println!("Command timing statistics cleared.");
+            let _ = ctx.write_stdout("Command timing statistics cleared.");
         }
         Some(&"--help") | Some(&"-h") => {
-            print_help();
+            let _ = ctx.write_stdout(&help_text());
         }
         Some(cmd) => {
             // Show statistics for a specific command
-            print_command_stats(&timing, cmd);
+            let _ = ctx.write_stdout(&command_stats_text(&timing, cmd));
         }
     }
 
     ExitStatus::ExitedWith(0)
 }
 
-fn print_summary(timing: &CommandTiming) {
+fn summary_text(timing: &CommandTiming) -> String {
+    let mut lines = Vec::new();
+
     if timing.stats.is_empty() {
-        println!("No command timing data collected yet.");
-        println!("Execute some commands to start collecting statistics.");
-        return;
+        lines.push("No command timing data collected yet.".to_string());
+        lines.push("Execute some commands to start collecting statistics.".to_string());
+        return lines.join("\n");
     }
 
-    println!();
-    println!("╔══════════════════════════════════════════════════════════════════╗");
-    println!("║           Command Execution Statistics                           ║");
-    println!("╚══════════════════════════════════════════════════════════════════╝");
-    println!();
+    lines.push(String::new());
+    lines.push("╔══════════════════════════════════════════════════════════════════╗".to_string());
+    lines.push("║           Command Execution Statistics                           ║".to_string());
+    lines.push("╚══════════════════════════════════════════════════════════════════╝".to_string());
+    lines.push(String::new());
 
     if let Some(started) = timing.collection_started {
         let duration = Utc::now().signed_duration_since(started);
         let days = duration.num_days();
-        println!("  Collection period: {} days", days.max(1));
+        lines.push(format!("  Collection period: {} days", days.max(1)));
     }
 
     let total_commands = timing.stats.len();
     let total_calls: u64 = timing.stats.values().map(|s| s.total_calls).sum();
     let total_failures: u64 = timing.stats.values().map(|s| s.failures).sum();
 
-    println!("  Unique commands tracked: {}", total_commands);
-    println!("  Total executions: {}", total_calls);
-    println!(
+    lines.push(format!("  Unique commands tracked: {}", total_commands));
+    lines.push(format!("  Total executions: {}", total_calls));
+    lines.push(format!(
         "  Overall success rate: {:.1}%",
         if total_calls > 0 {
             ((total_calls - total_failures) as f64 / total_calls as f64) * 100.0
         } else {
             100.0
         }
-    );
-    println!();
+    ));
+    lines.push(String::new());
 
     // Show top 5 slowest
-    println!("  ── Top 5 Slowest Commands ──────────────────────────────────────");
+    lines.push("  ── Top 5 Slowest Commands ──────────────────────────────────────".to_string());
     for (i, stats) in timing.top_slowest(5).iter().enumerate() {
-        println!(
+        lines.push(format!(
             "  {}. {:20} avg: {:>10}  max: {:>10}  calls: {}",
             i + 1,
             stats.command,
             format_duration(stats.average_duration_ms()),
             format_duration(stats.max_duration_ms),
             stats.total_calls
-        );
+        ));
     }
-    println!();
+    lines.push(String::new());
 
     // Show top 5 most frequent
-    println!("  ── Top 5 Most Frequent Commands ────────────────────────────────");
+    lines.push("  ── Top 5 Most Frequent Commands ────────────────────────────────".to_string());
     for (i, stats) in timing.top_frequent(5).iter().enumerate() {
-        println!(
+        lines.push(format!(
             "  {}. {:20} calls: {:>6}  avg: {:>10}",
             i + 1,
             stats.command,
             stats.total_calls,
             format_duration(stats.average_duration_ms())
-        );
+        ));
     }
-    println!();
+    lines.push(String::new());
 
     // Show recent failures if any
     let failures = timing.recent_failures(24);
     if !failures.is_empty() {
-        println!("  ── Recent Failures (last 24 hours) ─────────────────────────────");
+        lines
+            .push("  ── Recent Failures (last 24 hours) ─────────────────────────────".to_string());
         for stats in failures.iter().take(5) {
-            println!(
+            lines.push(format!(
                 "     {:20} {} failures (success rate: {:.1}%)",
                 stats.command,
                 stats.failures,
                 stats.success_rate()
-            );
+            ));
         }
-        println!();
+        lines.push(String::new());
     }
+
+    lines.join("\n")
 }
 
-fn print_slowest(timing: &CommandTiming) {
-    println!();
-    println!("Top 10 Slowest Commands:");
-    println!("─────────────────────────────────────────────────────────────────────");
+fn slowest_text(timing: &CommandTiming) -> String {
+    let mut lines = vec![
+        String::new(),
+        "Top 10 Slowest Commands:".to_string(),
+        "─────────────────────────────────────────────────────────────────────".to_string(),
+    ];
     for (i, stats) in timing.top_slowest(10).iter().enumerate() {
-        println!(
+        lines.push(format!(
             "  {}. {:25} avg: {:>10}  max: {:>10}  calls: {}",
             i + 1,
             stats.command,
             format_duration(stats.average_duration_ms()),
             format_duration(stats.max_duration_ms),
             stats.total_calls
-        );
+        ));
     }
-    println!();
+    lines.push(String::new());
+    lines.join("\n")
 }
 
-fn print_frequent(timing: &CommandTiming) {
-    println!();
-    println!("Top 10 Most Frequent Commands:");
-    println!("─────────────────────────────────────────────────────────────────────");
+fn frequent_text(timing: &CommandTiming) -> String {
+    let mut lines = vec![
+        String::new(),
+        "Top 10 Most Frequent Commands:".to_string(),
+        "─────────────────────────────────────────────────────────────────────".to_string(),
+    ];
     for (i, stats) in timing.top_frequent(10).iter().enumerate() {
-        println!(
+        lines.push(format!(
             "  {}. {:25} calls: {:>6}  avg: {:>10}  success: {:.1}%",
             i + 1,
             stats.command,
             stats.total_calls,
             format_duration(stats.average_duration_ms()),
             stats.success_rate()
-        );
+        ));
     }
-    println!();
+    lines.push(String::new());
+    lines.join("\n")
 }
 
-fn print_failures(timing: &CommandTiming) {
-    println!();
-    println!("Recently Failed Commands (last 24 hours):");
-    println!("─────────────────────────────────────────────────────────────────────");
+fn failures_text(timing: &CommandTiming) -> String {
+    let mut lines = vec![
+        String::new(),
+        "Recently Failed Commands (last 24 hours):".to_string(),
+        "─────────────────────────────────────────────────────────────────────".to_string(),
+    ];
     let failures = timing.recent_failures(24);
     if failures.is_empty() {
-        println!("  No failed commands in the last 24 hours. 🎉");
+        lines.push("  No failed commands in the last 24 hours. 🎉".to_string());
     } else {
         for stats in failures {
-            println!(
+            lines.push(format!(
                 "  {:25} {} failures out of {} calls (success: {:.1}%)",
                 stats.command,
                 stats.failures,
                 stats.total_calls,
                 stats.success_rate()
-            );
+            ));
         }
     }
-    println!();
+    lines.push(String::new());
+    lines.join("\n")
 }
 
-fn print_command_stats(timing: &CommandTiming, cmd: &str) {
+fn command_stats_text(timing: &CommandTiming, cmd: &str) -> String {
     match timing.get(cmd) {
         Some(stats) => {
-            println!();
-            println!("Statistics for '{}':", cmd);
-            println!("─────────────────────────────────────────────────────────────────────");
-            println!("  Total calls:       {}", stats.total_calls);
-            println!(
-                "  Average duration:  {}",
-                format_duration(stats.average_duration_ms())
-            );
-            println!(
-                "  Minimum duration:  {}",
-                format_duration(stats.min_duration_ms)
-            );
-            println!(
-                "  Maximum duration:  {}",
-                format_duration(stats.max_duration_ms)
-            );
-            println!(
-                "  Total time spent:  {}",
-                format_duration(stats.total_duration_ms)
-            );
-            println!(
-                "  Successful calls:  {}",
-                stats.total_calls - stats.failures
-            );
-            println!("  Failed calls:      {}", stats.failures);
-            println!("  Success rate:      {:.1}%", stats.success_rate());
-            println!(
-                "  Last executed:     {}",
-                stats.last_executed.format("%Y-%m-%d %H:%M:%S UTC")
-            );
-            println!();
+            let lines = vec![
+                String::new(),
+                format!("Statistics for '{}':", cmd),
+                "─────────────────────────────────────────────────────────────────────".to_string(),
+                format!("  Total calls:       {}", stats.total_calls),
+                format!(
+                    "  Average duration:  {}",
+                    format_duration(stats.average_duration_ms())
+                ),
+                format!(
+                    "  Minimum duration:  {}",
+                    format_duration(stats.min_duration_ms)
+                ),
+                format!(
+                    "  Maximum duration:  {}",
+                    format_duration(stats.max_duration_ms)
+                ),
+                format!(
+                    "  Total time spent:  {}",
+                    format_duration(stats.total_duration_ms)
+                ),
+                format!(
+                    "  Successful calls:  {}",
+                    stats.total_calls - stats.failures
+                ),
+                format!("  Failed calls:      {}", stats.failures),
+                format!("  Success rate:      {:.1}%", stats.success_rate()),
+                format!(
+                    "  Last executed:     {}",
+                    stats.last_executed.format("%Y-%m-%d %H:%M:%S UTC")
+                ),
+                String::new(),
+            ];
+            lines.join("\n")
         }
-        None => {
-            println!("No statistics found for command '{}'.", cmd);
-            println!("Execute the command to start collecting statistics.");
-        }
+        None => format!(
+            "No statistics found for command '{cmd}'.\nExecute the command to start collecting statistics."
+        ),
     }
 }
 
-fn print_help() {
-    println!("Usage: timing [OPTIONS] [COMMAND]");
-    println!();
-    println!("Show command execution statistics.");
-    println!();
-    println!("Options:");
-    println!("  --slow       Show top 10 slowest commands by average execution time");
-    println!("  --frequent   Show top 10 most frequently executed commands");
-    println!("  --failures   Show commands that failed in the last 24 hours");
-    println!("  --clear      Clear all timing statistics");
-    println!("  -h, --help   Show this help message");
-    println!();
-    println!("Examples:");
-    println!("  timing              Show summary of all statistics");
-    println!("  timing git          Show statistics for 'git' command");
-    println!("  timing --slow       Show slowest commands");
+fn help_text() -> String {
+    [
+        "Usage: timing [OPTIONS] [COMMAND]",
+        "",
+        "Show command execution statistics.",
+        "",
+        "Options:",
+        "  --slow       Show top 10 slowest commands by average execution time",
+        "  --frequent   Show top 10 most frequently executed commands",
+        "  --failures   Show commands that failed in the last 24 hours",
+        "  --clear      Clear all timing statistics",
+        "  -h, --help   Show this help message",
+        "",
+        "Examples:",
+        "  timing              Show summary of all statistics",
+        "  timing git          Show statistics for 'git' command",
+        "  timing --slow       Show slowest commands",
+    ]
+    .join("\n")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy as TestProxy;
+    use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
+    use std::os::fd::IntoRawFd;
+
+    fn observed_context() -> (Context, SharedOutputObserver) {
+        let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
+        let observer = ObservedOutput::shared(8192);
+        ctx.output_observer = Some(observer.clone());
+        ctx.outfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        ctx.errfile = std::fs::File::create("/dev/null").unwrap().into_raw_fd();
+        (ctx, observer)
+    }
+
+    /// `timing`'s human-readable output used to go straight to the real
+    /// stdout via `println!`, bypassing `ctx` entirely - invisible to the
+    /// output observer, so it never reached `OutputHistory`, a captured
+    /// `tm`/`out` block, or a redirect/pipe target. Every case here must
+    /// route through `ctx.write_stdout` instead.
+    #[test]
+    fn every_output_mode_is_observable_through_ctx() {
+        let (ctx, observer) = observed_context();
+        let mut proxy = TestProxy::default();
+
+        let result = command(
+            &ctx,
+            vec!["timing".to_string(), "--help".to_string()],
+            &mut proxy,
+        );
+        assert_eq!(result, ExitStatus::ExitedWith(0));
+        let stdout = observer.lock().unwrap().snapshot().stdout;
+        assert!(
+            stdout.contains("Usage: timing"),
+            "help text should be observable, got: {stdout:?}"
+        );
+    }
+
+    #[test]
+    fn summary_of_empty_timing_says_so() {
+        // `command()`'s summary case reads real `timing.json` state from
+        // disk (`get_timing_file_path` is not test-isolated in this crate),
+        // so this goes straight at the pure formatter instead of asserting
+        // on a developer machine's actual timing history.
+        let text = summary_text(&CommandTiming::default());
+        assert!(text.contains("No command timing data collected yet."));
+    }
 
     #[test]
     fn test_format_duration() {

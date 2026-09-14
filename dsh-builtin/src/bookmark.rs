@@ -1,4 +1,5 @@
 use super::ShellProxy;
+use crate::text::truncate_preview;
 use dsh_types::{Context, ExitStatus};
 use std::borrow::Cow;
 use tabled::{Table, Tabled};
@@ -112,15 +113,6 @@ Examples:
   bookmark list"#;
     ctx.write_stdout(help).ok();
     ExitStatus::ExitedWith(0)
-}
-
-fn truncate_preview(text: &str, max_chars: usize) -> String {
-    if text.chars().count() > 50 {
-        let prefix: String = text.chars().take(max_chars).collect();
-        format!("{prefix}...")
-    } else {
-        text.to_string()
-    }
 }
 
 fn list_all_bookmarks(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
@@ -285,12 +277,5 @@ mod tests {
                 vec!["-c".to_string(), "echo hello".to_string()]
             )]
         );
-    }
-
-    #[test]
-    fn truncate_preview_judges_multibyte_text_by_char_count() {
-        let text = "あ".repeat(17);
-        assert_eq!(text.len(), 51);
-        assert_eq!(truncate_preview(&text, 47), text);
     }
 }

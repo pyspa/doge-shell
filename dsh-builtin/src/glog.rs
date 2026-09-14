@@ -1,5 +1,6 @@
 use super::ShellProxy;
 use crate::interactive_input;
+use dsh_types::ansi::strip_ansi;
 use dsh_types::{Context, ExitStatus};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -304,7 +305,7 @@ fn selector_status_is_cancelled(status: &std::process::ExitStatus) -> bool {
 /// Extract commit hash from a git log line
 fn extract_commit_hash(log_line: &str) -> Option<String> {
     // Remove ANSI color codes and graph characters
-    let cleaned = strip_ansi_codes(log_line);
+    let cleaned = strip_ansi(log_line);
 
     // Find the first word that looks like a commit hash (7+ hex characters)
     for word in cleaned.split_whitespace() {
@@ -317,28 +318,6 @@ fn extract_commit_hash(log_line: &str) -> Option<String> {
     None
 }
 
-/// Strip ANSI color codes from a string
-fn strip_ansi_codes(input: &str) -> String {
-    let mut result = String::new();
-    let mut chars = input.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            // Skip ANSI escape sequence
-            chars.next(); // consume '['
-            for ch in chars.by_ref() {
-                if ch.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-
-    result
-}
-
 /// Fallback numbered selection when interactive tools are not available
 fn numbered_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<String> {
     use std::io::{self, Write};
@@ -347,7 +326,7 @@ fn numbered_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<St
     println!();
 
     for (i, entry) in log_entries.iter().enumerate() {
-        let cleaned = strip_ansi_codes(entry);
+        let cleaned = strip_ansi(entry);
         println!("  {}: {}", i + 1, cleaned);
     }
 
@@ -490,16 +469,6 @@ mod tests {
         // Test invalid line
         let line = "No commit hash here";
         assert_eq!(extract_commit_hash(line), None);
-    }
-
-    #[test]
-    fn test_strip_ansi_codes() {
-        let input = "\x1b[33mHello\x1b[0m \x1b[32mWorld\x1b[0m";
-        let expected = "Hello World";
-        assert_eq!(strip_ansi_codes(input), expected);
-
-        let input = "No ANSI codes here";
-        assert_eq!(strip_ansi_codes(input), input);
     }
 
     #[test]

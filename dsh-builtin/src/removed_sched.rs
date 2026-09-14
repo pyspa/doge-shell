@@ -15,6 +15,6 @@ pub fn command(
     _argv: Vec<String>,
     _proxy: &mut dyn crate::ShellProxy,
 ) -> dsh_types::ExitStatus {
-    let _ = ctx.write_stderr("sched: replaced by cron. Try: cron --help\n");
+    let _ = ctx.write_stderr("sched: replaced by cron. Try: cron --help");
     dsh_types::ExitStatus::ExitedWith(1)
 }

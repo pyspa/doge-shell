@@ -15,7 +15,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     match proxy.dispatch_core(ctx, CoreShellAction::Read, argv) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("read: {}\n", e));
+            let _ = ctx.write_stderr(&format!("read: {}", e));
             ExitStatus::ExitedWith(1)
         }
     }

@@ -69,11 +69,11 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // 3. User Review Loop
     loop {
-        ctx.write_stdout("\nGenerated Commit Message:\n").ok();
-        ctx.write_stdout("----------------------------------------\n")
+        ctx.write_stdout("\nGenerated Commit Message:").ok();
+        ctx.write_stdout("----------------------------------------")
             .ok();
         ctx.write_stdout(&message).ok();
-        ctx.write_stdout("\n----------------------------------------\n")
+        ctx.write_stdout("\n----------------------------------------")
             .ok();
         ctx.write_stdout("Commit with this message? [y/n/e(dit)]: ")
             .ok();

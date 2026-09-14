@@ -75,7 +75,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     let options = match build_ga_skim_options() {
         Ok(o) => o,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("ga: {}\n", e));
+            let _ = ctx.write_stderr(&format!("ga: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };

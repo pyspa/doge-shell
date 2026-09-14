@@ -185,7 +185,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let options = match options {
         Ok(o) => o,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("gh-notify: {}\n", e));
+            let _ = ctx.write_stderr(&format!("gh-notify: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };

@@ -38,7 +38,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     let action = match parse_args(args) {
         Ok(parsed) => parsed,
         Err(e) => {
-            ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+            ctx.write_stderr(&format!("Error: {:#}", e)).ok();
             ctx.write_stderr(usage()).ok();
             return ExitStatus::ExitedWith(1);
         }
@@ -83,7 +83,7 @@ pub fn command_async<'a>(
         let action = match parse_args(&argv[1..]) {
             Ok(parsed) => parsed,
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}\n", e)).ok();
+                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
                 ctx.write_stderr(usage()).ok();
                 return ExitStatus::ExitedWith(1);
             }
@@ -107,11 +107,11 @@ pub fn command_async<'a>(
         };
 
         if options.check_only {
-            ctx.write_stdout("OK\n").ok();
+            ctx.write_stdout("OK").ok();
             return ExitStatus::ExitedWith(0);
         }
         if options.stdout {
-            ctx.write_stdout(&format!("{json}\n")).ok();
+            ctx.write_stdout(&json).ok();
             return ExitStatus::ExitedWith(0);
         }
 

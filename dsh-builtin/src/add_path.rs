@@ -11,7 +11,7 @@ pub fn description() -> &'static str {
 /// Supports tilde expansion for home directory references
 pub fn command(ctx: &Context, args: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let Some(arg) = args.get(1) else {
-        ctx.write_stderr("usage: add_path <directory>\n").ok();
+        ctx.write_stderr("usage: add_path <directory>").ok();
         return ExitStatus::ExitedWith(1);
     };
     // Expand tilde (~) to home directory path if present

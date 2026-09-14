@@ -29,10 +29,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     let _ = ctx.write_stdout(&format!(
-        "trigger: Watching for changes matching '{}' to run '{}'\n",
+        "trigger: Watching for changes matching '{}' to run '{}'",
         pattern_str, cmd_line
     ));
-    let _ = ctx.write_stdout("Press Ctrl+C to stop.\n");
+    let _ = ctx.write_stdout("Press Ctrl+C to stop.");
 
     let (tx, rx) = channel();
 
@@ -56,7 +56,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     loop {
         if proxy.is_canceled() {
-            let _ = ctx.write_stdout("\ntrigger: stopped\n");
+            let _ = ctx.write_stdout("\ntrigger: stopped");
             break;
         }
 
@@ -82,7 +82,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                             }
 
                             let _ = ctx.write_stdout(&format!(
-                                "\n[trigger] Change detected. Running: {}\n",
+                                "\n[trigger] Change detected. Running: {}",
                                 cmd_line
                             ));
                             last_run = Instant::now();
@@ -100,7 +100,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                                     let status_msg =
                                         if exit_code == 0 { "Success" } else { "Failed" };
                                     let _ = ctx.write_stdout(&format!(
-                                        "[trigger] {} (Exit: {})\n",
+                                        "[trigger] {} (Exit: {})",
                                         status_msg, exit_code
                                     ));
 
@@ -115,7 +115,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                                 }
                                 Err(e) => {
                                     let _ = ctx.write_stderr(&format!(
-                                        "trigger: failed to execute command: {}\n",
+                                        "trigger: failed to execute command: {}",
                                         e
                                     ));
                                 }
@@ -123,7 +123,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                         }
                     }
                     Err(e) => {
-                        let _ = ctx.write_stderr(&format!("trigger: watch error: {:?}\n", e));
+                        let _ = ctx.write_stderr(&format!("trigger: watch error: {:?}", e));
                     }
                 }
             }
@@ -131,7 +131,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 // Continue checking cancellation
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = ctx.write_stderr("trigger: watcher disconnected\n");
+                let _ = ctx.write_stderr("trigger: watcher disconnected");
                 break;
             }
         }

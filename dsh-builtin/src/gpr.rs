@@ -206,7 +206,7 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     let options = match options {
         Ok(o) => o,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("gpr: {}\n", e));
+            let _ = ctx.write_stderr(&format!("gpr: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };

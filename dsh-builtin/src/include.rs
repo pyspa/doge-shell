@@ -17,7 +17,7 @@ pub fn description() -> &'static str {
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.len() < 2 {
-        let _ = ctx.write_stderr("usage: include <script-file> [args...]\n");
+        let _ = ctx.write_stderr("usage: include <script-file> [args...]");
         return ExitStatus::ExitedWith(1);
     }
 
@@ -125,7 +125,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             ExitStatus::ExitedWith(0)
         }
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("include: failed to execute bash: {}\n", e));
+            let _ = ctx.write_stderr(&format!("include: failed to execute bash: {}", e));
             ExitStatus::ExitedWith(1)
         }
     }

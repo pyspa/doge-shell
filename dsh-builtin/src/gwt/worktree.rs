@@ -97,7 +97,7 @@ pub(super) fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitSta
     let options = match options {
         Ok(o) => o,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("gwt: {}\n", e));
+            let _ = ctx.write_stderr(&format!("gwt: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };

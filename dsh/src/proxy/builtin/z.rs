@@ -114,7 +114,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
     // Handle "z -" for previous directory
     if query == "-" {
         if let Some(old_pwd) = shell.get_var("OLDPWD") {
-            ctx.write_stdout(&format!("z: jumping to {}\n", old_pwd))?;
+            ctx.write_stdout(&format!("z: jumping to {}", old_pwd))?;
             shell.changepwd(&old_pwd)?;
             return Ok(());
         } else {
@@ -147,7 +147,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
                     } else {
                         item.match_score as f32
                     };
-                    ctx.write_stdout(&format!("{:<.1}   {}\n", score, item.item))?;
+                    ctx.write_stdout(&format!("{:<.1}   {}", score, item.item))?;
                 }
             }
         } else if interactive || query.is_empty() {
@@ -184,7 +184,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
             if !results.is_empty() {
                 let target = &results[0].item;
                 // Echo the target directory
-                ctx.write_stdout(&format!("z: jumping to {}\n", target))?;
+                ctx.write_stdout(&format!("z: jumping to {}", target))?;
                 shell.changepwd(target)?;
             } else {
                 ctx.write_stderr("z: no matching history found")?;

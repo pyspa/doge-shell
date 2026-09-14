@@ -417,7 +417,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     if action == "list" {
         for task in store.list()? {
             ctx.write_stdout(&format!(
-                "{} {:?} {} / {} tokens {}\n",
+                "{} {:?} {} / {} tokens {}",
                 task.id, task.status, task.tokens_used, task.token_budget, task.goal
             ))?;
         }
@@ -680,7 +680,7 @@ pub(crate) fn run_task(
         .map_err(|error| tag_failure(TaskFailure::StateUnusable, error))?
         .task;
     let old_cwd = shell.get_current_dir()?;
-    ctx.write_stdout(&format!("Task {}\n", task.id))?;
+    ctx.write_stdout(&format!("Task {}", task.id))?;
     if let Err(error) = shell.changepwd(&task.root.to_string_lossy()) {
         task.status = TaskStatus::Failed;
         task.stop_reason = Some(error.to_string());
@@ -732,7 +732,7 @@ pub(crate) fn run_task(
             blocked_reason_for(runtime.task.status, runtime.task.stop_reason.as_deref());
         result.and_then(|()| {
             ctx.write_stdout(&format!(
-                "Task {id}: {:?} — {}\n",
+                "Task {id}: {:?} — {}",
                 runtime.task.status,
                 runtime
                     .task

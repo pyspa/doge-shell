@@ -15,8 +15,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let args = match parse_args(&argv[1..]) {
         Ok(args) => args,
         Err(err) => {
-            let _ = ctx.write_stderr(&format!("notebook-play: {err}\n"));
-            let _ = ctx.write_stderr("Usage: notebook-play <file> [--var name=value ...]\n");
+            let _ = ctx.write_stderr(&format!("notebook-play: {err}"));
+            let _ = ctx.write_stderr("Usage: notebook-play <file> [--var name=value ...]");
             return ExitStatus::ExitedWith(1);
         }
     };
@@ -24,7 +24,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     match run_play(ctx, &args, proxy) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("notebook-play: {}\n", e));
+            let _ = ctx.write_stderr(&format!("notebook-play: {}", e));
             ExitStatus::ExitedWith(1)
         }
     }
@@ -117,7 +117,7 @@ fn run_play(ctx: &Context, args: &PlayArgs, proxy: &mut dyn ShellProxy) -> Resul
         .collect();
 
     if blocks.is_empty() {
-        let _ = ctx.write_stdout("No executable blocks found in notebook.\n");
+        let _ = ctx.write_stdout("No executable blocks found in notebook.");
         return Ok(());
     }
 
@@ -148,8 +148,8 @@ fn run_play(ctx: &Context, args: &PlayArgs, proxy: &mut dyn ShellProxy) -> Resul
 
     for (i, block) in blocks.iter().enumerate() {
         let code = runbook::substitute_placeholders(&block.raw_content(), &values);
-        let _ = ctx.write_stdout(&format!("\n--- Block {} ---\n", i + 1));
-        let _ = ctx.write_stdout(&format!("{}\n", code.trim()));
+        let _ = ctx.write_stdout(&format!("\n--- Block {} ---", i + 1));
+        let _ = ctx.write_stdout(code.trim());
         let _ = ctx.write_stdout("Execute? [Y/n/q] ");
         let _ = io::stdout().flush();
 
@@ -169,7 +169,7 @@ fn run_play(ctx: &Context, args: &PlayArgs, proxy: &mut dyn ShellProxy) -> Resul
                     continue;
                 }
 
-                let _ = ctx.write_stdout(&format!("> {}\n", line));
+                let _ = ctx.write_stdout(&format!("> {}", line));
 
                 // Currently dsh-builtin's dispatch is limited (assumes command + args),
                 // but real execution needs full evaluation which is in dsh::shell::eval.

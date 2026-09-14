@@ -148,7 +148,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let tasks = match detect_tasks(proxy) {
         Ok(t) => t,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("Failed to detect tasks: {}\n", e));
+            let _ = ctx.write_stderr(&format!("Failed to detect tasks: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };
@@ -225,7 +225,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let options = match options {
         Ok(opt) => opt,
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("Error: {}\n", e));
+            let _ = ctx.write_stderr(&format!("Error: {}", e));
             return ExitStatus::ExitedWith(1);
         }
     };
@@ -244,12 +244,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         // Downcast back to Task - but SkimItem logic handles output()
         let command = item.output().to_string();
         // Print what we run
-        let _ = ctx.write_stdout(&format!("Running: {}\n", command));
+        let _ = ctx.write_stdout(&format!("Running: {}", command));
 
         match crate::dispatch_shell_command(ctx, proxy, command) {
             Ok(_) => ExitStatus::ExitedWith(0),
             Err(e) => {
-                let _ = ctx.write_stderr(&format!("Execution failed: {}\n", e));
+                let _ = ctx.write_stderr(&format!("Execution failed: {}", e));
                 ExitStatus::ExitedWith(1)
             }
         }
@@ -437,13 +437,13 @@ fn execute_task(
 ) -> ExitStatus {
     let command = task_execution_command(task, forward_args);
     let _ = ctx.write_stdout(&format!(
-        "Running [{}] {} -> {}\n",
+        "Running [{}] {} -> {}",
         task.source, task.name, command
     ));
     match crate::dispatch_shell_command(ctx, proxy, command) {
         Ok(_) => ExitStatus::ExitedWith(0),
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("Execution failed: {}\n", e));
+            let _ = ctx.write_stderr(&format!("Execution failed: {}", e));
             ExitStatus::ExitedWith(1)
         }
     }

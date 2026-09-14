@@ -169,6 +169,31 @@ mod tests {
         assert!(missed, "a language change must not reuse the old answer");
     }
 
+    /// `answer_scope` reads `AI_CHAT_MODEL`/`OPENAI_MODEL` from the process
+    /// environment, which cannot see a shell variable set without export.
+    /// Switching models with `(vset "AI_CHAT_MODEL" ...)` (or `set`,
+    /// unexported) must still stop old-model answers from being served -
+    /// via `Environment::set_shell_var` wiping the cache explicitly, the
+    /// same way `AI_MESSAGE_LANG` already does.
+    #[test]
+    fn changing_the_model_as_a_shell_variable_invalidates_the_cache() {
+        let _guard = blocking_test_guard();
+        clear();
+
+        store("explain", &["ls"], "gpt-5-mini's answer");
+        assert!(lookup("explain", &["ls"]).is_some());
+
+        let env = crate::environment::Environment::new();
+        env.write()
+            .set_shell_var("AI_CHAT_MODEL".to_string(), "gpt-4".to_string());
+
+        assert!(
+            lookup("explain", &["ls"]).is_none(),
+            "switching models via an unexported shell variable must not reuse \
+             the previous model's cached answer"
+        );
+    }
+
     #[test]
     fn the_cache_stays_bounded() {
         let _guard = blocking_test_guard();

@@ -127,6 +127,15 @@ impl Environment {
             "PATH" => self.reload_path(),
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
+            // `ai_features::cache::answer_scope` keys a read-only answer by
+            // `std::env::var("AI_CHAT_MODEL")`/`OPENAI_MODEL`, which cannot
+            // see a shell variable set here without export - the same reason
+            // `AI_MESSAGE_LANG` above wipes the cache rather than trusting
+            // the key to change. Without this, switching models with `vset`
+            // (or `set`, unexported) kept serving the old model's cached
+            // answer to `explain`/`diagnose`/`check_safety` for up to the
+            // cache's 60s TTL.
+            "AI_CHAT_MODEL" | "OPENAI_MODEL" => crate::ai_features::invalidate_read_only_cache(),
             _ => {}
         }
     }

@@ -1,43 +1,98 @@
 {
   "command": "history",
-  "description": "Display or manipulate the history list",
-  "subcommands": [],
+  "description": "Search and filter command history",
   "global_options": [
     {
-      "long": "--help",
-      "description": "Display help for this builtin"
-    },
-    {
-      "short": "-c",
-      "description": "Clear the history list by deleting all of the entries"
-    },
-    {
-      "short": "-d",
-      "description": "Delete the history entry at position OFFSET"
-    },
-    {
-      "short": "-a",
-      "description": "Append the new history lines to the history file"
-    },
-    {
-      "short": "-n",
-      "description": "Read the history lines not already read from the history file"
-    },
-    {
-      "short": "-r",
-      "description": "Read the contents of the history file and use them as the current history"
-    },
-    {
-      "short": "-w",
-      "description": "Write the current history to the history file, overwriting the history file's contents"
-    },
-    {
-      "short": "-p",
-      "description": "Perform history substitution on the following ARGS and display the result on the standard output"
+      "short": "-q",
+      "long": "--query",
+      "description": "Match command text explicitly",
+      "takes_value": true
     },
     {
       "short": "-s",
-      "description": "Store the ARGS in the history list as a single entry"
+      "long": "--scope",
+      "description": "Restrict search scope",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "global",
+          "session",
+          "cwd",
+          "project"
+        ]
+      }
+    },
+    {
+      "long": "--status",
+      "description": "Filter by exit status",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "any",
+          "success",
+          "failure"
+        ]
+      }
+    },
+    {
+      "long": "--slow",
+      "description": "Show commands with duration >= ms",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-n",
+      "long": "--limit",
+      "description": "Limit result count (default: 200)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Show timestamp, status, duration, and cwd"
+    },
+    {
+      "long": "--author",
+      "description": "Filter by who ran the command",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "human",
+          "dsh-ai",
+          "agent",
+          "all"
+        ]
+      }
+    },
+    {
+      "long": "--json",
+      "description": "Emit one JSON value without decoration"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show this help message"
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "record",
+      "description": "Append an externally captured command event",
+      "options": [
+        {
+          "long": "--json",
+          "description": "The event as a single JSON payload",
+          "takes_value": true
+        }
+      ]
     }
   ]
 }

@@ -27,6 +27,7 @@ use dsh_builtin::config_paths;
 use dsh_builtin::shell_capabilities::CronStore;
 use dsh_types::cron::job::{CronJobSpec, JobKind};
 use dsh_types::schedule::NotifyPolicy;
+use std::io::IsTerminal;
 use std::{cell::RefCell, rc::Rc};
 
 fn open_store() -> Result<crate::cron::store::SqliteCronStore, RuntimeError> {
@@ -169,14 +170,30 @@ pub fn cron_list(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runt
     Ok(Value::List(lines.into_iter().collect::<List>()))
 }
 
+/// Prints a `sched-*` deprecation warning only when a human can see it.
+///
+/// `config.lisp` is evaluated by every process that touches cron, including
+/// `dsh -c "cron tick"` and `dsh -c "cron run-job <uuid>"` invoked from a
+/// crontab or systemd timer with no tty attached to stderr. `cron tick`'s own
+/// contract is silence on success (`invariants/cron.md`: system cron must not
+/// turn every tick into a mail), and a `config.lisp` that still has `sched-*`
+/// in it would otherwise defeat that on every single tick. `cron doctor`
+/// already reports `sched-*` residue for the person who owns the config; this
+/// only holds back the interactive-only reminder, not that detection.
+fn warn_sched_deprecated(message: &str) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("{message}");
+    }
+}
+
 /// `(sched-add "<name>" "<interval>" "<command>" ["<notify-policy>"])` —
 /// deprecated, kept for one release so an existing `config.lisp` does not
 /// stop partway through and silently drop the aliases and exports that used
 /// to come after it. Forwards straight to [`cron_add`]'s upsert.
 pub fn sched_add(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    eprintln!(
+    warn_sched_deprecated(
         "warning: sched-add is deprecated; replace with cron-add in your config.lisp \
-         (same arguments, and it upserts by name the same way)"
+         (same arguments, and it upserts by name the same way)",
     );
     cron_add(env, args)
 }
@@ -187,25 +204,33 @@ pub fn sched_add(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runti
 /// rest of `config.lisp`, silently dropping every alias/abbr/PATH line after
 /// it, not just this one call.
 pub fn sched_remove(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    eprintln!("warning: sched-remove is deprecated; replace with cron-remove in your config.lisp");
+    warn_sched_deprecated(
+        "warning: sched-remove is deprecated; replace with cron-remove in your config.lisp",
+    );
     cron_remove(env, args)
 }
 
 /// `(sched-pause "<name-or-id>")` — deprecated, forwards to [`cron_pause`].
 pub fn sched_pause(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    eprintln!("warning: sched-pause is deprecated; replace with cron-pause in your config.lisp");
+    warn_sched_deprecated(
+        "warning: sched-pause is deprecated; replace with cron-pause in your config.lisp",
+    );
     cron_pause(env, args)
 }
 
 /// `(sched-resume "<name-or-id>")` — deprecated, forwards to [`cron_resume`].
 pub fn sched_resume(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    eprintln!("warning: sched-resume is deprecated; replace with cron-resume in your config.lisp");
+    warn_sched_deprecated(
+        "warning: sched-resume is deprecated; replace with cron-resume in your config.lisp",
+    );
     cron_resume(env, args)
 }
 
 /// `(sched-list)` — deprecated, forwards to [`cron_list`].
 pub fn sched_list(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
-    eprintln!("warning: sched-list is deprecated; replace with cron-list in your config.lisp");
+    warn_sched_deprecated(
+        "warning: sched-list is deprecated; replace with cron-list in your config.lisp",
+    );
     cron_list(env, args)
 }
 

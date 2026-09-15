@@ -178,13 +178,17 @@ impl JobProcess {
     }
 
     pub(crate) fn is_stopped(&self) -> bool {
-        if self.get_state() == ProcessState::Running {
-            return false;
+        match self.get_state() {
+            ProcessState::Stopped(_, _) => true,
+            ProcessState::Running => false,
+            _ => {
+                if let Some(p) = self.next() {
+                    p.is_stopped()
+                } else {
+                    false
+                }
+            }
         }
-        if let Some(p) = self.next() {
-            return p.is_stopped();
-        }
-        true
     }
 
     pub(crate) fn is_completed(&self) -> bool {
@@ -546,6 +550,15 @@ mod tests {
 
         // But the pipeline is not fully completed since cat is still running
         assert!(!cat_job_process.is_completed());
+    }
+
+    #[test]
+    fn completed_process_is_not_stopped() {
+        init();
+        let mut process = Process::new("test".to_string(), vec![]);
+        process.state = ProcessState::Completed(0, None);
+
+        assert!(!JobProcess::Command(process).is_stopped());
     }
 
     #[test]

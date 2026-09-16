@@ -416,7 +416,11 @@ mod tests {
             .write_batch(vec![
                 ("git status".to_string(), 1),
                 ("cargo test".to_string(), 2),
-                ("docker status".to_string(), 3),
+                // `history` is a shell builtin, so the recalled command is
+                // highlighted as CommandExists on every OS. An external like
+                // `docker` would make this test depend on the runner's PATH
+                // (no docker CLI on the macOS runner).
+                ("history status".to_string(), 3),
             ])
             .unwrap();
         shell.cmd_history = Some(Arc::new(ParkingMutex::new(history)));
@@ -428,13 +432,13 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(up_result, ReplControlFlow::Continue));
-        assert_eq!(repl.input.as_str(), "docker status");
+        assert_eq!(repl.input.as_str(), "history status");
         assert_eq!(
             repl.input.color_ranges.as_deref(),
             Some(
                 &[
-                    (0, 6, ColorType::CommandExists),
-                    (7, 13, ColorType::HistoryMatch)
+                    (0, 7, ColorType::CommandExists),
+                    (8, 14, ColorType::HistoryMatch)
                 ][..]
             )
         );

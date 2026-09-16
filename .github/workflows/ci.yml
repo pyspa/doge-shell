@@ -62,7 +62,10 @@ jobs:
 
       - name: Install Linux sandbox dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get install --no-install-recommends -y bubblewrap socat
+        # bubblewrap/socat drive the OS sandbox; ripgrep is required by the
+        # pinned sandbox runtime (it fails startup with "ripgrep (rg) not
+        # found" without it).
+        run: sudo apt-get install --no-install-recommends -y bubblewrap socat ripgrep
 
       - name: Agent OS sandbox boundary
         run: cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored

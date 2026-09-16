@@ -1,5 +1,5 @@
 //! Legacy capability traits, kept only while `ExecutionCapability` and
-//! `AiCapability` still have consumers (14 files, `rg -l "capability::"`).
+//! `AiCapability` still have consumers (16 files, `rg -l "capability::"`).
 //!
 //! `EnvironmentCapability`, `HistoryCapability`, and `PersistenceCapability`
 //! used to live here too; they were deleted because they had zero consumers
@@ -10,7 +10,7 @@
 //! from each side.
 //!
 //! Do not add new traits here. A new builtin dependency belongs in
-//! [`crate::shell_capabilities`] - either as a method on one of the seven
+//! [`crate::shell_capabilities`] - either as a method on one of the six
 //! traits that mirror [`ShellProxy`] one-to-one, or, if it has no equivalent
 //! on `ShellProxy`, as its own standalone trait implemented directly per host
 //! type (the pattern `AgentCommandPolicy` already uses). See

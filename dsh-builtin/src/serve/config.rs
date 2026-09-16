@@ -12,8 +12,6 @@ pub struct ServeConfig {
     pub directory: PathBuf,
     /// Enable verbose request logging
     pub verbose: bool,
-    /// Automatically open browser after server starts
-    pub open_browser: bool,
     /// Enable CORS headers for cross-origin requests
     pub enable_cors: bool,
     /// Serve index.html files in directories (when false, always show directory listing)
@@ -28,7 +26,6 @@ impl Default for ServeConfig {
             port: 8000,
             directory: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             verbose: false,
-            open_browser: false,
             enable_cors: false,
             serve_index: true,
             host: "127.0.0.1".to_string(),
@@ -77,11 +74,6 @@ pub fn parse_arguments(argv: &[String]) -> Result<ServeConfig, ServeError> {
     // Define command-line options
     opts.optopt("p", "port", "Port to bind to (default: 8000)", "PORT");
     opts.optflag("v", "verbose", "Enable verbose request logging");
-    opts.optflag(
-        "o",
-        "open",
-        "Open browser automatically after server starts",
-    );
     opts.optflag("", "cors", "Enable CORS headers for cross-origin requests");
     opts.optflag(
         "",
@@ -129,7 +121,6 @@ pub fn parse_arguments(argv: &[String]) -> Result<ServeConfig, ServeError> {
 
     // Parse boolean flags
     config.verbose = matches.opt_present("v");
-    config.open_browser = matches.opt_present("o");
     config.enable_cors = matches.opt_present("cors");
     config.serve_index = !matches.opt_present("no-index");
 

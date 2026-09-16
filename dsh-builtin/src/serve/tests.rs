@@ -44,7 +44,6 @@ fn test_serve_config_default() {
     assert_eq!(config.port, 8000);
     assert_eq!(config.host, "127.0.0.1");
     assert!(!config.verbose);
-    assert!(!config.open_browser);
     assert!(!config.enable_cors);
     assert!(config.serve_index);
     assert!(config.directory.exists());
@@ -108,7 +107,6 @@ fn test_parse_arguments_default() {
     let config = result.unwrap();
     assert_eq!(config.port, 8000);
     assert!(!config.verbose);
-    assert!(!config.open_browser);
     assert!(!config.enable_cors);
     assert!(config.serve_index);
 }
@@ -179,7 +177,6 @@ fn test_parse_arguments_single_boolean_flags() {
     let cases: &[(&str, FlagCheck)] = &[
         ("-v", |c| c.verbose),
         ("--verbose", |c| c.verbose),
-        ("-o", |c| c.open_browser),
         ("--cors", |c| c.enable_cors),
         ("--no-index", |c| !c.serve_index),
     ];
@@ -225,7 +222,6 @@ fn test_parse_arguments_multiple_flags() {
     let argv = vec![
         "serve".to_string(),
         "-v".to_string(),
-        "-o".to_string(),
         "--cors".to_string(),
         "--no-index".to_string(),
         "-p".to_string(),
@@ -238,7 +234,6 @@ fn test_parse_arguments_multiple_flags() {
     let config = result.unwrap();
     assert_eq!(config.port, 3000);
     assert!(config.verbose);
-    assert!(config.open_browser);
     assert!(config.enable_cors);
     assert!(!config.serve_index);
     assert_eq!(config.directory, temp_dir.path());

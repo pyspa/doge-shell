@@ -102,6 +102,12 @@ pub(crate) struct IntegrationState {
     /// of the environment, and giving it the environment back would make a
     /// reference cycle - the environment holds the service.
     pub(crate) response_language: Arc<RwLock<Option<String>>>,
+    /// `AI_CHAT_MODEL`/`OPENAI_MODEL`, shared with `LiveAiService` and the
+    /// ghost-text backend. `None` means "leave it to the client's own
+    /// default", which is what `OpenAiConfig` already resolved at startup.
+    /// Same slot-not-lookup shape as `response_language`, and for the same
+    /// reason.
+    pub(crate) chat_model: Arc<RwLock<Option<String>>>,
     pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
     /// Agent lifecycle reporting (idle/working/blocked), forwarded to
     /// whatever external backend `agent_lifecycle::activate` chose. Always a
@@ -207,6 +213,7 @@ impl Environment {
                 mcp_servers: Vec::new(),
                 mcp_manager: Arc::new(RwLock::new(McpManager::default())),
                 response_language: Arc::new(RwLock::new(None)),
+                chat_model: Arc::new(RwLock::new(None)),
                 ai_service: None,
                 lifecycle: crate::agent_lifecycle::AgentLifecycleManager::null(),
             },
@@ -241,9 +248,10 @@ impl Environment {
                 .variables
                 .insert("SAFETY_LEVEL".to_string(), level.as_str().to_string());
 
-            // Publish the inherited `AI_MESSAGE_LANG` once; after this the
-            // variable setters keep the slot in step.
+            // Publish the inherited `AI_MESSAGE_LANG`/`AI_CHAT_MODEL` once;
+            // after this the variable setters keep the slots in step.
             env.reload_response_language();
+            env.reload_chat_model();
         }
 
         env_arc
@@ -275,6 +283,7 @@ impl Environment {
                     mcp_servers: parent.integration_state.mcp_servers.clone(),
                     mcp_manager: parent.integration_state.mcp_manager.clone(),
                     response_language: parent.integration_state.response_language.clone(),
+                    chat_model: parent.integration_state.chat_model.clone(),
                     ai_service: parent.integration_state.ai_service.clone(),
                     lifecycle: parent.integration_state.lifecycle.clone(),
                 },

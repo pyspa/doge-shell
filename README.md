@@ -292,7 +292,7 @@ The shell includes many built-in commands:
 | `snippet`           | Snippet management command                                                                                                 |
 | `bookmark`          | Bookmark management command                                                                                                |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
-| `chat_model`        | Set AI model                                                                                                               |
+| `chat_model`        | Show or set the AI model (`chat_model ""` clears the override); takes effect immediately, everywhere                      |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
 | `chat_status`       | Show the carried AI chat conversation                                                                                      |
 | `skill`             | List, review and manage the skills the AI chat runtime reads (see "Skills" above)                                          |
@@ -1336,7 +1336,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
    | Variable | Default | Purpose |
    | --- | --- | --- |
-   | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions |
+   | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions. Also settable at runtime with `chat_model <model>` (or `chat_model ""` to clear it); the change reaches every AI path immediately - `!` chat, command palette actions, ghost text, `ai-watch`, `blocks explain\|fix`, `output-gen` - no restart needed |
    | `AI_SUMMARY_MODEL` | chat model | Model used to summarize a long conversation |
    | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible endpoint |
    | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |

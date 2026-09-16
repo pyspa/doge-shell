@@ -127,15 +127,7 @@ impl Environment {
             "PATH" => self.reload_path(),
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
-            // `ai_features::cache::answer_scope` keys a read-only answer by
-            // `std::env::var("AI_CHAT_MODEL")`/`OPENAI_MODEL`, which cannot
-            // see a shell variable set here without export - the same reason
-            // `AI_MESSAGE_LANG` above wipes the cache rather than trusting
-            // the key to change. Without this, switching models with `vset`
-            // (or `set`, unexported) kept serving the old model's cached
-            // answer to `explain`/`diagnose`/`check_safety` for up to the
-            // cache's 60s TTL.
-            "AI_CHAT_MODEL" | "OPENAI_MODEL" => crate::ai_features::invalidate_read_only_cache(),
+            "AI_CHAT_MODEL" | "OPENAI_MODEL" => self.reload_chat_model(),
             _ => {}
         }
     }
@@ -152,6 +144,31 @@ impl Environment {
             .filter(|value| !value.is_empty());
         let changed = self.integration_state.response_language.read().as_ref() != value.as_ref();
         *self.integration_state.response_language.write() = value;
+        if changed {
+            crate::ai_features::invalidate_read_only_cache();
+        }
+    }
+
+    /// Republish `AI_CHAT_MODEL`/`OPENAI_MODEL` to the shell-side AI clients.
+    ///
+    /// `LiveAiService` and the ghost-text backend read this slot, not the
+    /// variable map, so setting the variable has to push the new value across.
+    /// Without this, `chat_model`/`vset "AI_CHAT_MODEL"` reached the `!`
+    /// runtime alone (which reloads its config on every message) and every
+    /// other AI path - command palette actions, ghost text, `ai-watch` -
+    /// kept using the model resolved at startup.
+    ///
+    /// `None` means "leave it to the client's own default"
+    /// (`dsh_openai::DEFAULT_MODEL`), the same meaning `OpenAiConfig` gives an
+    /// absent/blank value.
+    pub fn reload_chat_model(&mut self) {
+        let value = self
+            .lookup_variable("AI_CHAT_MODEL")
+            .or_else(|| self.lookup_variable("OPENAI_MODEL"))
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let changed = self.integration_state.chat_model.read().as_ref() != value.as_ref();
+        *self.integration_state.chat_model.write() = value;
         if changed {
             crate::ai_features::invalidate_read_only_cache();
         }

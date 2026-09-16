@@ -33,6 +33,11 @@ struct AiBackendInner {
     state: ParkingMutex<AiBackendState>,
     settings: AiBackendSettings,
     notify: Notify,
+    /// `AI_CHAT_MODEL`/`OPENAI_MODEL`, shared with the shell's `Environment`.
+    /// Same slot `LiveAiService` reads, so `chat_model` reaches ghost text too
+    /// instead of staying pinned to the model resolved when this backend was
+    /// built.
+    chat_model: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -72,16 +77,21 @@ impl Default for AiBackendSettings {
 }
 
 impl AiSuggestionBackend {
-    pub fn new(client: ChatGptClient) -> Self {
-        Self::with_settings(client, AiBackendSettings::default())
+    pub fn new(client: ChatGptClient, chat_model: Arc<RwLock<Option<String>>>) -> Self {
+        Self::with_settings(client, chat_model, AiBackendSettings::default())
     }
 
-    fn with_settings(client: ChatGptClient, settings: AiBackendSettings) -> Self {
+    fn with_settings(
+        client: ChatGptClient,
+        chat_model: Arc<RwLock<Option<String>>>,
+        settings: AiBackendSettings,
+    ) -> Self {
         let inner = Arc::new(AiBackendInner {
             client: Arc::new(client),
             state: ParkingMutex::new(AiBackendState::default()),
             settings,
             notify: Notify::new(),
+            chat_model,
         });
         let backend = Self {
             inner: inner.clone(),
@@ -235,8 +245,9 @@ impl AiSuggestionBackend {
         // No `max_completion_tokens`: on a reasoning model that budget also
         // covers hidden reasoning, and a capped ghost-text request comes back
         // empty with finish_reason=length.
-        let options =
-            ChatRequestOptions::new().with_temperature(Some(self.inner.settings.temperature));
+        let options = ChatRequestOptions::new()
+            .with_temperature(Some(self.inner.settings.temperature))
+            .with_model(self.inner.chat_model.read().clone());
         let response = match self.inner.client.send_chat(&messages, &options, None) {
             Ok(value) => value,
             Err(err) => {

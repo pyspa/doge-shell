@@ -309,6 +309,75 @@ fn setting_the_message_language_publishes_it_to_the_ai_service() {
     }
 }
 
+/// Setting `AI_CHAT_MODEL` has to reach the slot `LiveAiService` and the
+/// ghost-text backend read, not just the variable map - the same gap
+/// `AI_MESSAGE_LANG` had before `reload_response_language` existed. An empty
+/// value clears the override (falls back to the client's own default).
+#[test]
+fn setting_the_chat_model_publishes_it_to_the_ai_service() {
+    init();
+    let env = Environment::new();
+
+    {
+        let mut guard = env.write();
+        assert!(guard.integration_state.chat_model.read().is_none());
+
+        guard.set_shell_var("AI_CHAT_MODEL".to_string(), "  gpt-4o-mini  ".to_string());
+        assert_eq!(
+            guard.integration_state.chat_model.read().clone(),
+            Some("gpt-4o-mini".to_string())
+        );
+
+        guard.set_shell_var("AI_CHAT_MODEL".to_string(), "".to_string());
+        assert!(guard.integration_state.chat_model.read().is_none());
+    }
+}
+
+/// The legacy `OPENAI_MODEL` alias is honored, the same way `OpenAiConfig`
+/// honors it - but only as a fallback when `AI_CHAT_MODEL` was never set at
+/// all: a *blank* `AI_CHAT_MODEL` does not fall through to `OPENAI_MODEL`
+/// either here or in `OpenAiConfig::from_getter` (`getter("AI_CHAT_MODEL")
+/// .or_else(|| getter("OPENAI_MODEL"))` short-circuits on `Some("")`). A
+/// fresh environment - rather than blanking `AI_CHAT_MODEL` on the one from
+/// the previous test - is what keeps this test exercising that fallback
+/// instead of that quirk.
+#[test]
+fn the_legacy_model_variable_is_honored_as_a_fallback() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("OPENAI_MODEL".to_string(), "gpt-4".to_string());
+
+    assert_eq!(
+        env.read().integration_state.chat_model.read().clone(),
+        Some("gpt-4".to_string())
+    );
+}
+
+/// The model slot is shared, not copied: a subshell changing `AI_CHAT_MODEL`
+/// must be visible to the parent's AI service too, the same property
+/// `mcp_manager`/`response_language` already have (`extend_copies_shares_and_resets_state_by_group`).
+#[test]
+fn extend_shares_the_chat_model_slot() {
+    init();
+    let parent = Environment::new();
+    let child = Environment::extend(parent.clone());
+
+    assert!(Arc::ptr_eq(
+        &parent.read().integration_state.chat_model,
+        &child.read().integration_state.chat_model
+    ));
+
+    child
+        .write()
+        .set_shell_var("AI_CHAT_MODEL".to_string(), "gpt-4o-mini".to_string());
+
+    assert_eq!(
+        parent.read().integration_state.chat_model.read().clone(),
+        Some("gpt-4o-mini".to_string())
+    );
+}
+
 /// `SAFETY_LEVEL` is read from the policy state, and the policy state is what
 /// an inherited value has to reach: seeding the variable map with "normal"
 /// unconditionally shadowed the environment the shell was started from.

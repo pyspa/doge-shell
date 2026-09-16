@@ -170,9 +170,9 @@ const HELP_TOPICS: &[HelpTopic] = &[
     HelpTopic {
         name: "chat_model",
         category: "ai",
-        summary: "Show or set the AI chat model.",
+        summary: "Show or set the AI chat model (takes effect immediately, everywhere).",
         usage: "chat_model [model-name]",
-        examples: &["chat_model", "chat_model gpt-5-mini"],
+        examples: &["chat_model", "chat_model gpt-5-mini", "chat_model \"\""],
         related: &["chat_prompt", "doctor"],
     },
     HelpTopic {

@@ -140,12 +140,14 @@ impl<'a> Repl<'a> {
                 .integration_state
                 .response_language
                 .clone();
+            let chat_model = envronment.read().integration_state.chat_model.clone();
             let service = Arc::new(LiveAiService::new(
                 client,
                 envronment.read().integration_state.mcp_manager.clone(),
                 policy,
                 Some(confirmation::ReplConfirmationHandler::new()),
                 response_language,
+                chat_model,
             ));
 
             // Store in environment so ShellProxy can access it
@@ -248,7 +250,11 @@ impl<'a> Repl<'a> {
 
         match ChatGptClient::try_from_config(&config) {
             Ok(client) => {
-                let backend = Arc::new(crate::suggestion::AiSuggestionBackend::new(client.clone()));
+                let chat_model = environment.read().integration_state.chat_model.clone();
+                let backend = Arc::new(crate::suggestion::AiSuggestionBackend::new(
+                    client.clone(),
+                    chat_model,
+                ));
                 Some((backend, client))
             }
             Err(err) => {

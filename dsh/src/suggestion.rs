@@ -3,6 +3,7 @@ use crate::completion::shell_token::{self, SeparatorMode};
 use crate::history::History;
 use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use parking_lot::Mutex as ParkingMutex;
+use parking_lot::RwLock;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::thread;

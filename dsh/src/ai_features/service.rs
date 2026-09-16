@@ -183,6 +183,11 @@ pub struct LiveAiService {
     /// `AI_MESSAGE_LANG`. Applied here rather than at each of the twenty-odd
     /// call sites, which is why the setting used to reach `!` and nothing else.
     response_language: Arc<RwLock<Option<String>>>,
+    /// `AI_CHAT_MODEL`/`OPENAI_MODEL`. Same reasoning as `response_language`:
+    /// applied here so every call site picks up a `chat_model` change without
+    /// having to opt in, instead of staying pinned to whatever model was
+    /// configured when this service was constructed.
+    chat_model: Arc<RwLock<Option<String>>>,
 }
 
 impl LiveAiService {
@@ -193,6 +198,7 @@ impl LiveAiService {
         policy: AgentPolicyHandles,
         confirmation_handler: Option<Arc<dyn ConfirmationHandler>>,
         response_language: Arc<RwLock<Option<String>>>,
+        chat_model: Arc<RwLock<Option<String>>>,
     ) -> Self {
         Self {
             client: Arc::new(client),
@@ -201,6 +207,7 @@ impl LiveAiService {
             policy,
             confirmation_handler,
             response_language,
+            chat_model,
         }
     }
 
@@ -343,7 +350,9 @@ impl LiveAiService {
             self.with_response_language(messages_in)
         };
         let tools = self.mcp_manager.read().tool_definitions();
-        let chat_options = options.to_chat_options((!tools.is_empty()).then(|| tools.clone()));
+        let chat_options = options
+            .to_chat_options((!tools.is_empty()).then(|| tools.clone()))
+            .with_model(self.chat_model.read().clone());
 
         let mut iterations = 0;
         // Rounds where the model produced neither a tool call nor an answer.

@@ -120,7 +120,12 @@ pub fn chat_model_description() -> &'static str {
 ///
 /// Usage:
 ///   chat_model                - Show current default model
-///   chat_model <model>        - Set default model
+///   chat_model <model>        - Set default model, effective for every AI
+///                               path (`!` chat, ghost text, command palette
+///                               actions, `ai-watch`, `blocks explain|fix`,
+///                               ...) as soon as it is set - no restart needed
+///   chat_model ""             - Clear the override and fall back to the
+///                               provider's default model
 pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     match argv.len() {
         1 => {
@@ -132,11 +137,24 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             ExitStatus::ExitedWith(0)
         }
         2 => {
-            // Set new model
-            let new_model = &argv[1];
+            // Set new model. An empty (or whitespace-only) value clears the
+            // override, falling back to the provider's default model. Trim
+            // once and store the trimmed value, so `$AI_CHAT_MODEL` itself
+            // never ends up holding stray whitespace that every reader has
+            // to trim around again.
+            let new_model = argv[1].trim();
             proxy.set_var(MODEL_KEY.to_string(), new_model.to_string());
-            ctx.write_stdout(&format!("OpenAI model set to: {new_model}"))
+            if new_model.is_empty() {
+                let config = load_openai_config(proxy);
+                ctx.write_stdout(&format!(
+                    "OpenAI model reset to default: {}",
+                    config.default_model()
+                ))
                 .ok();
+            } else {
+                ctx.write_stdout(&format!("OpenAI model set to: {new_model}"))
+                    .ok();
+            }
             ExitStatus::ExitedWith(0)
         }
         _ => {
@@ -209,4 +227,67 @@ pub fn chat_status(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy)
 /// Describe the carried conversation, for `doctor ai`.
 pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
     session::session_description(resolve_session_ttl(proxy))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestShellProxy;
+    use nix::unistd::getpid;
+
+    fn test_ctx() -> Context {
+        let pid = getpid();
+        Context::new_safe(pid, pid, false)
+    }
+
+    #[test]
+    fn chat_model_sets_the_shell_variable() {
+        let mut proxy = TestShellProxy::default();
+        let ctx = test_ctx();
+
+        let result = chat_model(
+            &ctx,
+            vec!["chat_model".to_string(), "gpt-4o-mini".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(result, ExitStatus::ExitedWith(0));
+        assert_eq!(proxy.vars.get(MODEL_KEY), Some(&"gpt-4o-mini".to_string()));
+    }
+
+    /// `chat_model ""` clears the override. `Environment::reload_chat_model`
+    /// (the live path) and `OpenAiConfig` both treat a blank value as unset,
+    /// so this only has to check the variable itself lands empty - the
+    /// resolved-model display already goes through `load_openai_config`.
+    #[test]
+    fn chat_model_with_an_empty_argument_clears_the_override() {
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert(MODEL_KEY.to_string(), "gpt-4o".to_string());
+        let ctx = test_ctx();
+
+        let result = chat_model(
+            &ctx,
+            vec!["chat_model".to_string(), "".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(result, ExitStatus::ExitedWith(0));
+        assert_eq!(proxy.vars.get(MODEL_KEY), Some(&String::new()));
+    }
+
+    #[test]
+    fn chat_model_rejects_extra_arguments() {
+        let mut proxy = TestShellProxy::default();
+        let ctx = test_ctx();
+
+        let result = chat_model(
+            &ctx,
+            vec!["chat_model".to_string(), "a".to_string(), "b".to_string()],
+            &mut proxy,
+        );
+
+        assert_eq!(result, ExitStatus::ExitedWith(1));
+    }
 }

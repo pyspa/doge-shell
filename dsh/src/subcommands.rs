@@ -69,12 +69,14 @@ pub async fn handle_completion_command(
     };
 
     let response_language = env.read().integration_state.response_language.clone();
+    let chat_model = env.read().integration_state.chat_model.clone();
     let service = crate::ai_features::LiveAiService::new(
         client,
         mcp_manager,
         policy,
         None,
         response_language,
+        chat_model,
     );
 
     // Generate completion JSON using AI

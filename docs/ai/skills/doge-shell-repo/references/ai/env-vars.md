@@ -11,7 +11,7 @@
 |---|---|---|
 | `AI_CHAT_API_KEY` → `OPENAI_API_KEY` → `OPEN_AI_API_KEY` | なし | `dsh-openai/src/config.rs` |
 | `AI_CHAT_BASE_URL` → `OPENAI_BASE_URL` | `https://api.openai.com/v1/` | 同上 |
-| `AI_CHAT_MODEL` → `OPENAI_MODEL` | `DEFAULT_MODEL` | 同上 |
+| `AI_CHAT_MODEL` → `OPENAI_MODEL` | `DEFAULT_MODEL` | 同上。`chat_model` / `(vset "AI_CHAT_MODEL" ...)` によるセッション中の変更は `Environment::reload_chat_model`（`dsh/src/environment/variables.rs`）が `integration_state.chat_model` slot へ即座に反映し、`!` チャットだけでなくコマンドパレットの AI アクション・ゴーストテキスト・`ai-watch`・`blocks explain\|fix`・`output-gen` にも再起動なしで効く |
 | `AI_CHAT_TIMEOUT_SECS` | 180（5〜1800 に clamp） | 同上 |
 | `AI_CHAT_REASONING_EFFORT` | なし（未設定時は `OPENAI_REASONING_MODEL_PREFIXES` 該当モデル＋`tools` 付きリクエストだけ `"none"`、それ以外はプロバイダ既定） | 同上。値は allow-list しない（`none`/`minimal`/`low`/`medium`/`high` などプロバイダ依存）。設定値が `tools` 付きリクエストで拒否された後は、このクライアントの `tools` 付きリクエストで `"none"` に強制される |
 | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | 同上 |
@@ -66,5 +66,8 @@
 
 シェル側の `AiRequestOptions` は tools を既定で送らない。MCP が必要なリクエストだけ
 `with_tools()` で opt-in し、未知の MCP binding は成功ではなく tool error として返す。
-`AI_MESSAGE_LANG` の shell 変数が変わったときは read-only answer cache を破棄する。
+`AI_MESSAGE_LANG` または `AI_CHAT_MODEL`/`OPENAI_MODEL` の shell 変数が変わったときは
+read-only answer cache（`dsh/src/ai_features/cache.rs`）を破棄する。cache のキーは
+`AI_MESSAGE_LANG` だけを含み、モデルは含めない（`std::env::var` はシェル変数を見えないので
+キーに混ぜても常に空になるだけ）。モデルの区別は変更時の全消しだけで足りている。
 API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` が正典。

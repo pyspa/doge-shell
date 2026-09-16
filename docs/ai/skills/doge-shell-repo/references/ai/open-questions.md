@@ -13,12 +13,24 @@
   「使う」方向に配線するか、使わないと決めて周辺コードを削るかは未決定。
 - **`ask_ai_async` は temperature 0.7 固定**。`blocks fix`（「修正コマンドを 1 行だけ」）にも
   同じ値が使われる。
-- **シェル側 client は起動時に固定**。`AI_CHAT_API_KEY` / `AI_CHAT_MODEL` /
-  `AI_CHAT_BASE_URL` / `AI_CHAT_TIMEOUT_SECS` を後から変えても `!` チャットにしか届かない。
+- **シェル側 client は起動時に固定**。`AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` /
+  `AI_CHAT_TIMEOUT_SECS` を後から変えても `!` チャットにしか届かない。
   起動時にキーが無いと `integration_state.ai_service` は `None` のままで、後から設定しても
-  コマンドパレットと `Alt+d` は「未設定」と言い続ける。`AI_MESSAGE_LANG` だけは
-  `refresh_derived_state` が押し出す。モデルを動的にしたときは read-only cache scope も
-  同じ解決済みモデルを受け取る形へ同時に変更する。
+  コマンドパレットと `Alt+d` は「未設定」と言い続ける。
+  `AI_MESSAGE_LANG`（`refresh_derived_state` → `response_language` slot）と
+  `AI_CHAT_MODEL`/`OPENAI_MODEL`（同様に `chat_model` slot、
+  `Environment::reload_chat_model`）はこの制約の**外**: どちらも `IntegrationState` の
+  `Arc<RwLock<Option<String>>>` を経由し、`LiveAiService::run_tool_loop` が毎リクエスト
+  読んで `with_model`/`with_response_language` を被せるので、client の再構築なしに
+  全経路（`!` チャット・コマンドパレットの AI アクション・ゴーストテキスト・`ai-watch`・
+  `blocks explain|fix`・`output-gen`）へ届く。read-only cache（`ai_features::cache`）は
+  モデルを scope に含めず、`reload_chat_model` が変更のたびに明示的に全消しする形にした
+  （`answer_scope` が `std::env::var` 直読みで export しないシェル変数を見られない問題を、
+  scope 化ではなく invalidate 側で解決）。ゴーストテキストの `AiSuggestionBackend` は
+  `LiveAiService` を通らないので同じ slot を自分でも保持し、`ChatRequestOptions::with_model`
+  を直接呼ぶ。**残る制約**: ゴーストテキストの 8 秒 TTL キャッシュ
+  （`AiBackendState.cached`/`context_cached`）はモデル変更時に明示的なクリアをしないので、
+  切り替え直後の最大 8 秒だけ旧モデルの候補が出うる（体感以下として許容）。
 
 ## プロバイダ API（調査済み・未着手）
 
@@ -47,7 +59,12 @@
   ではない**。`perform_summary`（`dsh-builtin/src/chatgpt.rs`）は `AI_SUMMARY_MODEL` が本体と
   違っても同じ `ChatGptClient` を使い回す。セッション寿命の client（`dsh/src/repl/mod.rs`、
   ゴーストテキストの suggestion backend とコマンドパレットの `LiveAiService` が clone を共有）も
-  同じ弱点を持つ。`unsupported` Vec 自体は元々モデル非依存の設計（他の droppable フィールドは
+  同じ弱点を持つ。`chat_model` を実行中に切り替えられるようになった分、この弱点は**広がった**:
+  1 つのセッション寿命 client が実際に複数モデルを跨ぐ運用がこれで正当な使い方になったため、
+  ある `tools` 付きリクエストで学んだ `reasoning_effort: none` 強制やフィールド drop が、
+  その後 `chat_model` で切り替えた別モデルにも誤って適用され続けうる。今回は対処しない
+  （`RecoveryState` をモデルごとに分けるのは §1 の「2 つの仕組みで済ませる」を破る）。
+  `unsupported` Vec 自体は元々モデル非依存の設計（他の droppable フィールドは
   純粋に optional なので無害）だが、**`reasoning_effort` だけは `tools` 会話の生命線**（ときに
   「修正」そのもの）なので、`recover()` は `reasoning_effort` の `remember_unsupported` を
   **`tools` 付きリクエストで学んだときだけ**永続化し、`tools` を持たないリクエスト（要約など）の

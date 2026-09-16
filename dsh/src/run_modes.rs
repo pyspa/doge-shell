@@ -320,12 +320,14 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
                 .integration_state
                 .response_language
                 .clone();
+            let chat_model = env_handle.read().integration_state.chat_model.clone();
             let service = Arc::new(crate::ai_features::LiveAiService::new(
                 client,
                 mcp_manager,
                 policy,
                 None,
                 response_language,
+                chat_model,
             ));
             shell.environment.write().integration_state.ai_service = Some(service);
         }

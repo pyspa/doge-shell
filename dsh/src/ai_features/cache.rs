@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 /// How long an answer stays usable.
 ///
 /// Deliberately short: process-environment changes outside the shell's variable
-/// setters are not observable here. Shell-side `AI_MESSAGE_LANG` changes clear
-/// the cache explicitly before another answer can be reused.
+/// setters are not observable here. Shell-side `AI_MESSAGE_LANG` and
+/// `AI_CHAT_MODEL` changes clear the cache explicitly before another answer
+/// can be reused.
 const TTL: Duration = Duration::from_secs(60);
 /// Upper bound on retained answers, evicted oldest-first.
 const MAX_ENTRIES: usize = 64;
@@ -26,20 +27,23 @@ struct Entry {
 static CACHE: LazyLock<Mutex<HashMap<u64, Entry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Settings that change what a correct answer looks like.
-fn answer_scope() -> (String, String) {
-    let model = std::env::var("AI_CHAT_MODEL")
-        .or_else(|_| std::env::var("OPENAI_MODEL"))
-        .unwrap_or_default();
-    let language = std::env::var("AI_MESSAGE_LANG").unwrap_or_default();
-    (model, language)
+///
+/// `AI_CHAT_MODEL`/`OPENAI_MODEL` used to be hashed in here too, read via
+/// `std::env::var`. That call cannot see an unexported shell variable, so a
+/// `chat_model`/`vset "AI_CHAT_MODEL"` change (the common case) always hashed
+/// to the same empty string and never changed the key on its own - the model
+/// switch only worked because `Environment::reload_chat_model` separately
+/// wipes the whole cache on a change (`environment/variables.rs`). That wipe
+/// makes a model entry in the key redundant, so it is dropped here rather
+/// than kept in a form that cannot actually distinguish models.
+fn answer_scope() -> String {
+    std::env::var("AI_MESSAGE_LANG").unwrap_or_default()
 }
 
 fn key(kind: &str, inputs: &[&str]) -> u64 {
     let mut hasher = DefaultHasher::new();
     kind.hash(&mut hasher);
-    let (model, language) = answer_scope();
-    model.hash(&mut hasher);
-    language.hash(&mut hasher);
+    answer_scope().hash(&mut hasher);
     for input in inputs {
         input.hash(&mut hasher);
     }
@@ -154,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_model_or_language_misses() {
+    fn a_changed_language_misses() {
         let _guard = blocking_test_guard();
         clear();
 
@@ -169,12 +173,11 @@ mod tests {
         assert!(missed, "a language change must not reuse the old answer");
     }
 
-    /// `answer_scope` reads `AI_CHAT_MODEL`/`OPENAI_MODEL` from the process
-    /// environment, which cannot see a shell variable set without export.
-    /// Switching models with `(vset "AI_CHAT_MODEL" ...)` (or `set`,
-    /// unexported) must still stop old-model answers from being served -
-    /// via `Environment::set_shell_var` wiping the cache explicitly, the
-    /// same way `AI_MESSAGE_LANG` already does.
+    /// `answer_scope` no longer hashes the model at all (see its doc comment):
+    /// switching models with `(vset "AI_CHAT_MODEL" ...)` (or `set`,
+    /// unexported) must still stop old-model answers from being served, via
+    /// `Environment::set_shell_var` → `reload_chat_model` wiping the cache
+    /// explicitly, the same way `AI_MESSAGE_LANG` already does.
     #[test]
     fn changing_the_model_as_a_shell_variable_invalidates_the_cache() {
         let _guard = blocking_test_guard();

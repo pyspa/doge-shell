@@ -44,6 +44,27 @@ impl ChatClient for EchoClient {
     }
 }
 
+/// Echoes the requested model back, so a test can see what was actually sent.
+struct ModelEchoClient;
+
+impl ChatClient for ModelEchoClient {
+    fn send_chat_request(
+        &self,
+        _messages: &[Value],
+        options: &ChatRequestOptions,
+    ) -> Result<Value> {
+        Ok(json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": format!("model={:?}", options.model)
+                },
+                "finish_reason": "stop"
+            }]
+        }))
+    }
+}
+
 fn test_policy(level: SafetyLevel) -> AgentPolicyHandles {
     AgentPolicyHandles {
         safety_level: Arc::new(RwLock::new(level)),
@@ -60,6 +81,18 @@ fn service(client: impl ChatClient + 'static) -> LiveAiService {
         test_policy(SafetyLevel::Normal),
         None,
         Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(None)),
+    )
+}
+
+fn service_with_model(client: impl ChatClient + 'static, model: Option<&str>) -> LiveAiService {
+    LiveAiService::new(
+        client,
+        Arc::new(RwLock::new(McpManager::default())),
+        test_policy(SafetyLevel::Normal),
+        None,
+        Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(model.map(str::to_string))),
     )
 }
 
@@ -109,6 +142,34 @@ async fn a_bounded_request_forwards_its_token_cap() {
     assert_eq!(answer, "cap=Some(64) json=true");
 }
 
+/// `chat_model` (via `Environment::reload_chat_model`) has to reach every AI
+/// request, not just the `!` runtime - this is `LiveAiService`'s half of that:
+/// whatever is in the shared slot at request time overrides the client's own
+/// default model, and an unset slot leaves the client's default alone.
+#[tokio::test]
+async fn a_configured_model_overrides_the_clients_default() {
+    let service = service_with_model(ModelEchoClient, Some("gpt-4o-mini"));
+
+    let answer = service
+        .send_request(vec![json!({"role": "user", "content": "hi"})], Some(0.1))
+        .await
+        .unwrap();
+
+    assert_eq!(answer, "model=Some(\"gpt-4o-mini\")");
+}
+
+#[tokio::test]
+async fn an_unset_model_slot_leaves_the_clients_default_alone() {
+    let service = service_with_model(ModelEchoClient, None);
+
+    let answer = service
+        .send_request(vec![json!({"role": "user", "content": "hi"})], Some(0.1))
+        .await
+        .unwrap();
+
+    assert_eq!(answer, "model=None");
+}
+
 fn service_speaking(client: impl ChatClient + 'static, language: &str) -> LiveAiService {
     LiveAiService::new(
         client,
@@ -116,6 +177,7 @@ fn service_speaking(client: impl ChatClient + 'static, language: &str) -> LiveAi
         test_policy(SafetyLevel::Normal),
         None,
         Arc::new(RwLock::new(Some(language.to_string()))),
+        Arc::new(RwLock::new(None)),
     )
 }
 
@@ -246,6 +308,7 @@ async fn an_unknown_mcp_tool_is_reported_as_an_error() {
         test_policy(SafetyLevel::Normal),
         None,
         Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(None)),
     );
 
     service
@@ -337,6 +400,7 @@ async fn an_always_answer_lands_in_the_session_store() {
         Arc::new(RwLock::new(McpManager::default())),
         policy,
         Some(Arc::new(AlwaysAllowHandler)),
+        Arc::new(RwLock::new(None)),
         Arc::new(RwLock::new(None)),
     );
 

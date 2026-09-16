@@ -265,7 +265,8 @@ fn test_mcp_tool_check() {
             "list_files",
             "{}",
             &SafetyLevel::Normal,
-            &[]
+            &[],
+            None
         ),
         SafetyResult::Allowed
     );
@@ -276,7 +277,14 @@ fn test_mcp_tool_check() {
     })
     .to_string();
 
-    match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+    match guard.check_mcp_tool(
+        "mcp__ops__bash",
+        "bash",
+        &args,
+        &SafetyLevel::Normal,
+        &[],
+        None,
+    ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk")),
         _ => panic!("Should have detected dangerous command in MCP tool"),
     }
@@ -288,7 +296,7 @@ fn test_mcp_tool_check() {
             "delete_file",
             "{}",
             &SafetyLevel::Normal,
-            &[]
+            &[], None
         ),
         SafetyResult::Confirm(msg) if msg.contains("may have side effects")
     ));
@@ -304,7 +312,14 @@ fn a_namespaced_shell_tool_is_judged_as_its_command() {
     let guard = SafetyGuard::new();
     let args = serde_json::json!({ "command": "rm -rf /" }).to_string();
 
-    match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+    match guard.check_mcp_tool(
+        "mcp__ops__bash",
+        "bash",
+        &args,
+        &SafetyLevel::Normal,
+        &[],
+        None,
+    ) {
         SafetyResult::Confirm(msg) => {
             assert!(msg.contains("High Risk"), "{msg}");
             assert!(!msg.contains("may have side effects"), "{msg}");
@@ -324,7 +339,14 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_wrapper() {
     let guard = SafetyGuard::new();
 
     let args = serde_json::json!({ "command": "sudo rm -rf /" }).to_string();
-    match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+    match guard.check_mcp_tool(
+        "mcp__ops__bash",
+        "bash",
+        &args,
+        &SafetyLevel::Normal,
+        &[],
+        None,
+    ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
         other => panic!("sudo-wrapped rm -rf / should have been confirmed, got {other:?}"),
     }
@@ -335,7 +357,14 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_separator() {
     let guard = SafetyGuard::new();
 
     let args = serde_json::json!({ "command": "true; rm -rf /" }).to_string();
-    match guard.check_mcp_tool("mcp__ops__bash", "bash", &args, &SafetyLevel::Normal, &[]) {
+    match guard.check_mcp_tool(
+        "mcp__ops__bash",
+        "bash",
+        &args,
+        &SafetyLevel::Normal,
+        &[],
+        None,
+    ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
         other => panic!("`true; rm -rf /` should have been confirmed, got {other:?}"),
     }
@@ -416,7 +445,8 @@ fn read_only_classification_ignores_the_server_label() {
             "get_logs",
             "{}",
             &SafetyLevel::Normal,
-            &[]
+            &[],
+            None
         ),
         SafetyResult::Allowed
     );
@@ -427,7 +457,8 @@ fn read_only_classification_ignores_the_server_label() {
             "deploy",
             "{}",
             &SafetyLevel::Normal,
-            &[]
+            &[],
+            None
         ),
         SafetyResult::Confirm(_)
     ));
@@ -444,6 +475,7 @@ fn an_mcp_prompt_names_the_function_the_model_called() {
         "{}",
         &SafetyLevel::Strict,
         &[],
+        None,
     ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("mcp__files__delete_file"), "{msg}"),
         other => panic!("expected a confirmation, got {other:?}"),
@@ -462,7 +494,8 @@ fn test_mcp_tool_strict_and_allowlist() {
             "read_file",
             &args,
             &SafetyLevel::Strict,
-            &[]
+            &[],
+            None
         ),
         SafetyResult::Confirm(_)
     ));
@@ -479,7 +512,8 @@ fn test_mcp_tool_strict_and_allowlist() {
             "read_file",
             &args,
             &SafetyLevel::Strict,
-            &allow
+            &allow,
+            None
         ),
         SafetyResult::Allowed
     );
@@ -658,4 +692,60 @@ fn test_sanitize_ai_input() {
     let with_zwc = "hello\u{200B}world"; // Zero-width space
     let sanitized = SafetyGuard::sanitize_ai_input(with_zwc, 1000);
     assert!(!sanitized.contains('\u{200B}'));
+}
+
+/// A tool name is a guess at what a tool does. `search_and_replace` matches
+/// the "search" read marker and none of the mutating ones, so the name
+/// heuristic waves it through at Normal - and a server that declares
+/// `readOnlyHint: false` is the one party that actually knows.
+#[test]
+fn a_server_declaring_side_effects_is_believed_over_the_name() {
+    let guard = SafetyGuard::new();
+    let args = "{}";
+
+    // What the name alone says.
+    assert_eq!(
+        guard.check_mcp_tool(
+            "mcp__ops__search_and_replace",
+            "search_and_replace",
+            args,
+            &SafetyLevel::Normal,
+            &[],
+            None
+        ),
+        SafetyResult::Allowed
+    );
+
+    // What the server says about itself, when it says it has side effects.
+    assert!(matches!(
+        guard.check_mcp_tool(
+            "mcp__ops__search_and_replace",
+            "search_and_replace",
+            args,
+            &SafetyLevel::Normal,
+            &[],
+            Some(false)
+        ),
+        SafetyResult::Confirm(_)
+    ));
+}
+
+/// The reverse must not hold. A server calling its own tool harmless is the
+/// party this confirmation exists to protect against, so `readOnlyHint: true`
+/// buys nothing: a tool the name says mutates still asks.
+#[test]
+fn a_server_calling_itself_read_only_cannot_open_the_gate() {
+    let guard = SafetyGuard::new();
+
+    assert!(matches!(
+        guard.check_mcp_tool(
+            "mcp__ops__delete_everything",
+            "delete_everything",
+            "{}",
+            &SafetyLevel::Normal,
+            &[],
+            Some(true)
+        ),
+        SafetyResult::Confirm(_)
+    ));
 }

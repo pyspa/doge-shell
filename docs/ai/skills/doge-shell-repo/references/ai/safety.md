@@ -22,6 +22,14 @@
   オペレータで区切り、ラッパー（`sudo` / `timeout` / `env` …）を覗いてから
   各段を分類する（`split_command_segments` + `command_candidates`）。
   先頭トークンだけを見ると `true | rm -rf ~` も `sudo rm -rf ~` も素通りする。
+- **サーバの `readOnlyHint` は「厳しくする方向」にだけ信じる**（`is_read_only_mcp_tool` の
+  第 2 引数、`McpManager::declared_read_only_for` が引く）。ツール名は推測でしかなく
+  （`search_and_replace` は "search" にマッチして read 扱いになる）、`readOnlyHint: false` を
+  宣言したサーバはそれを知っている唯一の当事者なので名前より優先する。**逆は成り立たない** —
+  `readOnlyHint: true` で確認を飛ばさない。サーバは確認が守ろうとしている相手そのもので、
+  自分についての自己申告でゲートを開けられてはいけない。`false` を信じても閉じる方向にしか
+  動かない。両経路（`AgentCommandPolicy` と `LiveAiService::authorize_mcp_tool`）が同じ
+  マネージャに訊く。
 - MCP ツールの危険度は **function name ではなく実ツール名**で判定する。モデルが呼ぶ名前は
   `mcp__<label>__<tool>` なので、`"bash"` との完全一致は**一度も成立しない**。
   `check_mcp_tool(function_name, tool_name, ...)` の第 2 引数がそれで、

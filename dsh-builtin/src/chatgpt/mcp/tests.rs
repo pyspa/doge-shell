@@ -147,6 +147,7 @@ fn a_binding_reports_the_tool_name_behind_the_namespaced_one() {
             server_label: "ops".to_string(),
             tool_name: "bash".to_string(),
             function_name: "mcp__ops__bash".to_string(),
+            declared_read_only: None,
         },
     );
 
@@ -175,6 +176,7 @@ fn a_disconnected_server_stops_offering_its_tools() {
             server_label: "ops".to_string(),
             tool_name: "bash".to_string(),
             function_name: "mcp__ops__bash".to_string(),
+            declared_read_only: None,
         },
     );
 
@@ -230,6 +232,7 @@ fn test_remove_server_cleans_related_state() {
             server_label: "alpha".to_string(),
             tool_name: "tool".to_string(),
             function_name: "mcp__alpha__tool".to_string(),
+            declared_read_only: None,
         },
     );
     manager.bindings.insert(
@@ -238,6 +241,7 @@ fn test_remove_server_cleans_related_state() {
             server_label: "beta".to_string(),
             tool_name: "tool".to_string(),
             function_name: "mcp__beta__tool".to_string(),
+            declared_read_only: None,
         },
     );
 

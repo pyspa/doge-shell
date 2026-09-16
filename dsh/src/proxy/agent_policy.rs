@@ -26,6 +26,16 @@ impl Shell {
     ///
     /// Falls back to the namespaced name when no binding matches, so an
     /// unknown call is still judged rather than skipped.
+    /// What the server said about this tool, for the guard to tighten on.
+    fn agent_mcp_declared_read_only(&self, function_name: &str) -> Option<bool> {
+        self.environment
+            .read()
+            .integration_state
+            .mcp_manager
+            .read()
+            .declared_read_only_for(function_name)
+    }
+
     fn agent_mcp_tool_name(&self, function_name: &str) -> String {
         self.environment
             .read()
@@ -182,10 +192,14 @@ impl AgentCommandPolicy for Shell {
         let level = self.safety_level_snapshot();
         let tool_name = self.agent_mcp_tool_name(name);
 
-        match self
-            .safety_guard
-            .check_mcp_tool(name, &tool_name, arguments, &level, &allowlist)
-        {
+        match self.safety_guard.check_mcp_tool(
+            name,
+            &tool_name,
+            arguments,
+            &level,
+            &allowlist,
+            self.agent_mcp_declared_read_only(name),
+        ) {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
             SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),
         }

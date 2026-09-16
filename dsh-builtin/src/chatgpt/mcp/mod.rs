@@ -191,11 +191,23 @@ fn hash_server_config(config: &McpServerConfig) -> u64 {
     s.finish()
 }
 
+/// `annotations.readOnlyHint` from a listed tool, if the server set it.
+fn read_only_hint(tool: &rmcp::model::Tool) -> Option<bool> {
+    tool.annotations
+        .as_ref()
+        .and_then(|annotations| annotations.read_only_hint)
+}
+
 #[derive(Debug, Clone)]
 struct ToolBinding {
     server_label: String,
     tool_name: String,
     function_name: String,
+    /// `annotations.readOnlyHint` as the server declared it, if it did.
+    ///
+    /// Only ever read to make the gate *stricter* - see
+    /// `McpManager::declared_read_only_for`.
+    declared_read_only: Option<bool>,
 }
 
 /// Cached session metadata (session ownership is managed separately)
@@ -570,6 +582,7 @@ impl McpManager {
                         server_label: label.clone(),
                         tool_name: tool.name.to_string(),
                         function_name: name,
+                        declared_read_only: read_only_hint(tool),
                     },
                 );
             }

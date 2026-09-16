@@ -141,6 +141,7 @@ impl McpManager {
                         server_label: server.label.clone(),
                         tool_name: tool.name.to_string(),
                         function_name,
+                        declared_read_only: super::read_only_hint(tool),
                     },
                 );
             }
@@ -322,6 +323,7 @@ impl McpManager {
                 ToolBinding {
                     server_label: server.label.clone(),
                     tool_name: tool.name.to_string(),
+                    declared_read_only: super::read_only_hint(tool),
                     function_name,
                 },
             );

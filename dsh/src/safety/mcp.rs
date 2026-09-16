@@ -4,6 +4,9 @@
 use super::*;
 
 impl SafetyGuard {
+    /// `declared_read_only` is `annotations.readOnlyHint` from the server's own
+    /// tool listing. It is believed only when it says `false` - see
+    /// [`Self::is_read_only_mcp_tool`].
     pub fn check_mcp_tool(
         &self,
         function_name: &str,
@@ -11,6 +14,7 @@ impl SafetyGuard {
         args_json: &str,
         level: &SafetyLevel,
         allowlist: &[String],
+        declared_read_only: Option<bool>,
     ) -> SafetyResult {
         if matches!(level, SafetyLevel::Loose) {
             return SafetyResult::Allowed;
@@ -65,7 +69,7 @@ impl SafetyGuard {
             ));
         }
 
-        if Self::is_read_only_mcp_tool(tool_name) {
+        if Self::is_read_only_mcp_tool(tool_name, declared_read_only) {
             SafetyResult::Allowed
         } else {
             SafetyResult::Confirm(format!(
@@ -112,7 +116,19 @@ impl SafetyGuard {
             .map(|s| s.to_string())
     }
 
-    fn is_read_only_mcp_tool(tool_name: &str) -> bool {
+    /// Whether this tool may run at Normal without asking.
+    ///
+    /// The name is a guess - `list_and_prune` reads as a listing - so a server
+    /// that declares `readOnlyHint: false` is believed over it. The reverse is
+    /// not true: `readOnlyHint: true` is *not* enough to skip the question,
+    /// because the server is the party this confirmation exists to protect
+    /// against, and a description a server writes about itself must never be
+    /// able to open the gate. Believing `false` only ever closes it.
+    fn is_read_only_mcp_tool(tool_name: &str, declared_read_only: Option<bool>) -> bool {
+        if declared_read_only == Some(false) {
+            return false;
+        }
+
         let name = tool_name.to_ascii_lowercase();
         let mutating_markers = [
             "write",

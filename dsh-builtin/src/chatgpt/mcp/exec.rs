@@ -122,6 +122,21 @@ impl McpManager {
             .map(|binding| binding.tool_name.clone())
     }
 
+    /// What the server said about this tool's side effects, if anything.
+    ///
+    /// **Only safe to act on when it says `false`.** A `readOnlyHint` is the
+    /// server's description of itself, and the server is exactly the party the
+    /// confirmation exists to protect against: believing `true` would let any
+    /// server open the gate by naming its own tool harmless. Believing `false`
+    /// only ever closes it, which a server has no reason to lie about - and
+    /// catches what the name heuristic cannot, such as a tool called
+    /// `list_and_prune`.
+    pub fn declared_read_only_for(&self, function_name: &str) -> Option<bool> {
+        self.bindings
+            .get(function_name)
+            .and_then(|binding| binding.declared_read_only)
+    }
+
     #[cfg(test)]
     pub(crate) fn insert_test_tool_binding(&mut self, function_name: &str) {
         let server_label = "test".to_string();
@@ -148,6 +163,7 @@ impl McpManager {
                 server_label,
                 tool_name,
                 function_name: function_name.to_string(),
+                declared_read_only: None,
             },
         );
     }

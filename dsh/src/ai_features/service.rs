@@ -237,12 +237,19 @@ impl LiveAiService {
     ) -> Result<Option<&'static str>> {
         let allowlist = self.agent_allowlist();
         let level = *self.policy.safety_level.read();
+        // The same manager the `!` runtime asks, so one server's declaration
+        // cannot tighten the gate on one entry point and not the other.
+        let declared_read_only = self
+            .mcp_manager
+            .read()
+            .declared_read_only_for(function_name);
         let result = self.policy.safety_guard.check_mcp_tool(
             function_name,
             tool_name,
             args,
             &level,
             &allowlist,
+            declared_read_only,
         );
         let SafetyResult::Confirm(message) = result else {
             return Ok(None);

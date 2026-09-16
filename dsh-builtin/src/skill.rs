@@ -392,7 +392,7 @@ fn diff(ctx: &Context, proxy: &mut dyn ShellProxy, id: &str) -> ExitStatus {
 
     match std::fs::read_to_string(&request.target) {
         Ok(before) => {
-            let _ = ctx.write_stdout(&sanitize_display(&unified_lines(
+            let _ = ctx.write_stdout(&sanitize_display(&crate::diff::unified_lines(
                 &before,
                 &proposal.contents,
             )));
@@ -606,79 +606,6 @@ fn sanitize_display(text: &str) -> String {
     text.chars()
         .filter(|ch| !ch.is_control() || *ch == '\n' || *ch == '\t')
         .collect()
-}
-
-/// Above this many lines on either side, the LCS table below (`O(n*m)`
-/// `usize` cells) stops being a review command's problem to allocate.
-/// A skill body this large was never going to be reviewed line by line
-/// anyway; 2000 lines is already generous headroom over the handful a
-/// `SKILL.md` normally holds.
-const MAX_DIFF_LINES: usize = 2000;
-
-/// A minimal line diff: shared lines once, `old`-only lines prefixed `-`,
-/// `new`-only lines prefixed `+`. Not a real diff algorithm - a proposal is
-/// SKILL.md-sized, and pulling in a dependency for this would cost more than
-/// it saves.
-///
-/// Falls back to showing the new content whole past `MAX_DIFF_LINES` on
-/// either side: the target on disk has no size cap of its own (unlike a
-/// staged proposal's body, which `skill_manage`'s lint already bounds), so
-/// without this an unusually large file made the O(n*m) table below - not
-/// just this function's input - the thing that could hang or OOM the shell.
-fn unified_lines(old: &str, new: &str) -> String {
-    let old_lines: Vec<&str> = old.lines().collect();
-    let new_lines: Vec<&str> = new.lines().collect();
-    let (n, m) = (old_lines.len(), new_lines.len());
-
-    if n > MAX_DIFF_LINES || m > MAX_DIFF_LINES {
-        return format!(
-            "(too large to diff line by line: {n} existing lines vs {m} proposed lines; showing the proposed content in full)\n\n{new}"
-        );
-    }
-
-    let mut lcs = vec![vec![0usize; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            lcs[i][j] = if old_lines[i] == new_lines[j] {
-                lcs[i + 1][j + 1] + 1
-            } else {
-                lcs[i + 1][j].max(lcs[i][j + 1])
-            };
-        }
-    }
-
-    let mut out = String::new();
-    let (mut i, mut j) = (0usize, 0usize);
-    while i < n && j < m {
-        if old_lines[i] == new_lines[j] {
-            out.push_str("  ");
-            out.push_str(old_lines[i]);
-            out.push('\n');
-            i += 1;
-            j += 1;
-        } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-            out.push_str("- ");
-            out.push_str(old_lines[i]);
-            out.push('\n');
-            i += 1;
-        } else {
-            out.push_str("+ ");
-            out.push_str(new_lines[j]);
-            out.push('\n');
-            j += 1;
-        }
-    }
-    for line in &old_lines[i..] {
-        out.push_str("- ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    for line in &new_lines[j..] {
-        out.push_str("+ ");
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
 }
 
 /// Every project root this shell would ask about.

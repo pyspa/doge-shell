@@ -56,6 +56,16 @@
   `dsh-builtin/src/chatgpt/tool/safety_gates.rs` の `confirm_agent_action` を通す。
   **質問文に "Proceed?" を書かない**。`repl/confirmation.rs` が
   `Proceed? [y/N/a(Always)]:` を付けるので、書くと 2〜3 回出る。
+- **書き込みは差分を見せてから訊く**（`confirm_agent_action_with_preview`）。ファイル名だけの
+  質問は人が答えられないので、合理的な反応は「読むのをやめて `a` を押す」になり、そこでゲートが
+  ゲートでなくなる。差分は `dsh-builtin/src/diff.rs` の `preview`（`skill diff` と同じ
+  `unified_lines` を共有。2 本目の diff 実装を作らない）で、変更のない行は畳み、長い行は切り、
+  `MAX_PREVIEW_LINES` で打ち切り、`redact_sensitive_text` を通す。質問文には `+3 -1` の要約が入る。
+  **プレビューを出すのは「実際に人に訊く枝」だけ** — タスクの `stop_reason` に入れると保存レコードと
+  `cron logs` の incident 本文が膨らみ、セッションの "always" 済みなら訊かないのだから出す意味がない。
+  対象は `edit` / `str_replace` / `skill_manage` の書き込み。`!` チャットの間は raw mode が
+  off（`shell/eval.rs`）なので素の `\n` でよい。`confirm_action` 側は raw mode で描くので
+  `crlf()` で改行を正規化する。
 - `loose` は「コマンド・MCP・機微読み取りを素通りさせる」であって「全部素通り」ではない。
   **ファイル書き込み（`edit` / `str_replace` / `skill_manage`）と skill script はレベルに関係なく必ず確認する。**
   skill script の判定は user scope だけでなく **project scope（`<project>/.dogesh/skills`）も含む**

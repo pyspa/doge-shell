@@ -525,8 +525,19 @@ fn confirm_and_write(
     }
 
     // The same key `edit` and `str_replace` use: the user is deciding about a
-    // file, not about which tool happens to write it.
-    if !super::confirm_agent_action(proxy, &super::write_approval_key(&request.target), message)? {
+    // file, not about which tool happens to write it. And the same preview -
+    // a skill is prose the model wrote for itself to read later, which is
+    // exactly the kind of change worth seeing before agreeing to it.
+    let change = crate::diff::preview(
+        std::fs::read_to_string(&request.target).ok().as_deref(),
+        contents,
+    );
+    if !super::confirm_agent_action_with_preview(
+        proxy,
+        &super::write_approval_key(&request.target),
+        message,
+        Some(&change.body),
+    )? {
         return Ok("Skill change cancelled by user.".to_string());
     }
 

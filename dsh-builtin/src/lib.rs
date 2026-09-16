@@ -29,6 +29,7 @@ mod chatgpt;
 pub mod config_paths;
 pub mod cron;
 mod dashboard;
+pub(crate) mod diff;
 mod doctor;
 mod eproject;
 mod eview;

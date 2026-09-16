@@ -85,6 +85,28 @@ The Safety Guard protects against unintended execution of potentially destructiv
   ```
 - **Environment Variable**: `SAFETY_LEVEL` reports the current level ("normal", "strict", "loose") and seeds it at startup, so `SAFETY_LEVEL=strict dogesh` starts hardened. After startup it is a readable copy: change the level with `(safety-level ...)`.
 
+### Seeing what the assistant is about to change
+
+A write asks first, and shows the change while it asks - the file, a `+3 -1`
+summary, and the diff itself with unchanged runs collapsed:
+
+```text
+🛡️  SAFETY GUARD: AI wants to write to file: `src/main.rs` (+2 -1).
+  ⋮ 27 unchanged line(s)
+  line 28
+  line 29
+- let x = compute(a);
++ let x = compute(a)?;
++ debug!("x = {x}");
+  line 31
+Proceed? [y/N/a(Always)]:
+```
+
+Secrets are masked, long lines are clipped, and a large change stops after 40
+lines saying how many are left. `edit`, `str_replace` and `skill_manage` all go
+through it. An unattended `agent run` shows nothing - it has nobody to show it
+to, and stops for a permission it was not granted instead.
+
 ### 🔒 Secret Management
 
 Protection of sensitive information from history and display.

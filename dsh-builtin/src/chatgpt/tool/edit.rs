@@ -73,14 +73,24 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     } else {
         ""
     };
-    let confirm_msg = format!(
-        "AI wants to write to file: `{}`.{}",
-        path_value, sensitive_note
+    // Read back before writing, so the question can say what changes rather
+    // than only which file. A file that is not there yet is a new file, not a
+    // diff against nothing.
+    let change = crate::diff::preview(
+        fs::read_to_string(&normalized_abs_path).ok().as_deref(),
+        contents,
     );
-    if !super::confirm_agent_action(
+    let confirm_msg = format!(
+        "AI wants to write to file: `{}` ({}).{}",
+        path_value,
+        change.summary(),
+        sensitive_note
+    );
+    if !super::confirm_agent_action_with_preview(
         proxy,
         &super::write_approval_key(&normalized_abs_path),
         &confirm_msg,
+        Some(&change.body),
     )? {
         return Ok("File modification cancelled by user.".to_string());
     }

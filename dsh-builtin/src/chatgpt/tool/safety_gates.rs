@@ -153,6 +153,26 @@ pub(crate) fn confirm_agent_action(
     approval_key: &str,
     message: &str,
 ) -> Result<bool, String> {
+    confirm_agent_action_with_preview(proxy, approval_key, message, None)
+}
+
+/// The same gate, showing what the change actually is before it asks.
+///
+/// A question naming only the file is one a person cannot answer, so the
+/// rational response to a run of them is to stop reading and press "always" -
+/// which is how this gate stops being one. `preview` is what makes the answer
+/// informed.
+///
+/// It is written to stderr on the branch that is about to ask, and only there:
+/// never into a task's `stop_reason` (it would bloat the stored record and the
+/// incident text `cron logs` prints), and never when the session already
+/// carries an "always" for this key.
+pub(crate) fn confirm_agent_action_with_preview(
+    proxy: &mut dyn ChatToolHost,
+    approval_key: &str,
+    message: &str,
+    preview: Option<&str>,
+) -> Result<bool, String> {
     if let Some(runtime) = proxy.agent_runtime() {
         if let Some(path) = approval_key.strip_prefix("write:")
             && agent_write_granted(proxy, Path::new(path))
@@ -179,6 +199,10 @@ pub(crate) fn confirm_agent_action(
         .any(|approved| approved == approval_key)
     {
         return Ok(true);
+    }
+
+    if let Some(preview) = preview.filter(|preview| !preview.trim().is_empty()) {
+        eprint!("{preview}");
     }
 
     match proxy

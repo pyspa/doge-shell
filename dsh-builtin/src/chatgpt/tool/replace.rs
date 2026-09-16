@@ -143,14 +143,19 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     } else {
         ""
     };
+    let change = crate::diff::preview(Some(&contents), &updated);
     let confirm_msg = format!(
-        "AI wants to replace {} occurrence(s) in file: `{}`.{}",
-        matches, path_value, sensitive_note
+        "AI wants to replace {} occurrence(s) in file: `{}` ({}).{}",
+        matches,
+        path_value,
+        change.summary(),
+        sensitive_note
     );
-    if !super::confirm_agent_action(
+    if !super::confirm_agent_action_with_preview(
         proxy,
         &super::write_approval_key(&normalized_abs_path),
         &confirm_msg,
+        Some(&change.body),
     )? {
         return Ok("File modification cancelled by user.".to_string());
     }

@@ -32,9 +32,10 @@ pub(crate) use paths::{
     workspace_root,
 };
 pub(crate) use safety_gates::{
-    agent_write_granted, confirm_agent_action, confirm_sensitive_access, reject_broken_skill_md,
-    reject_gitignored_path, reject_gitignored_read_path, reject_skill_path_while_staging_always,
-    sensitive_path_reason, write_approval_key,
+    agent_write_granted, confirm_agent_action, confirm_agent_action_with_preview,
+    confirm_sensitive_access, reject_broken_skill_md, reject_gitignored_path,
+    reject_gitignored_read_path, reject_skill_path_while_staging_always, sensitive_path_reason,
+    write_approval_key,
 };
 
 /// Global backstop for the size of a single tool result. Individual tools apply

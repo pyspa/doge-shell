@@ -16,6 +16,14 @@ pub enum ConfirmationAction {
     AlwaysAllow,
 }
 
+/// Every newline as the terminal needs it in raw mode.
+///
+/// Idempotent: a message that already carries `\r\n` is left alone rather than
+/// given a second carriage return.
+fn crlf(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\n', "\r\n")
+}
+
 /// Synchronous confirmation helper that handles raw mode switching
 pub fn confirm_action(message: &str) -> Result<ConfirmationAction> {
     let mut stdout = stdout();
@@ -27,13 +35,15 @@ pub fn confirm_action(message: &str) -> Result<ConfirmationAction> {
         enable_raw_mode()?;
     }
 
-    // Print message
+    // Print message. Raw mode is on by the time this draws, so a bare `\n`
+    // would leave the cursor mid-column and stair-step anything multi-line -
+    // which a diff preview is.
     queue!(
         stdout,
         Print("\r\n"),
         SetForegroundColor(Color::Yellow),
         Print("🛡️  SAFETY GUARD: "),
-        Print(message),
+        Print(crlf(message)),
         Print("\r\n"),
         Print("Proceed? [y/N/a(Always)]: "),
         ResetColor

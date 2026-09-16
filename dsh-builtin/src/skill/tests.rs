@@ -431,22 +431,3 @@ fn a_summary_at_the_prompt_budget_is_still_cut_for_the_terminal() {
     assert!(shown.ends_with("..."));
     assert!(shown.chars().count() <= MAX_LIST_SUMMARY_CHARS + 3);
 }
-
-#[test]
-fn unified_lines_diffs_a_small_change_line_by_line() {
-    let diff = unified_lines("a\nb\nc\n", "a\nx\nc\n");
-    assert!(diff.contains("- b"), "{diff}");
-    assert!(diff.contains("+ x"), "{diff}");
-    assert!(diff.contains("  a"), "{diff}");
-}
-
-/// An on-disk file has no size cap the way a staged proposal's body
-/// does, so an unusually large one must fall back rather than build an
-/// `O(n*m)` table sized by it.
-#[test]
-fn unified_lines_falls_back_instead_of_building_an_unbounded_table() {
-    let huge = "line\n".repeat(MAX_DIFF_LINES + 1);
-    let diff = unified_lines(&huge, "new content\n");
-    assert!(diff.contains("too large to diff"), "{diff}");
-    assert!(diff.contains("new content"), "{diff}");
-}

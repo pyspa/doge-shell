@@ -337,6 +337,7 @@ fn touching_the_proxy_facade_requests_the_capability_check() {
     for path in [
         "dsh-builtin/src/lib.rs",
         "dsh-builtin/src/shell_capabilities.rs",
+        "dsh-builtin/src/capability.rs",
     ] {
         let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
         assert!(
@@ -354,6 +355,54 @@ fn touching_the_proxy_facade_requests_the_capability_check() {
             .any(|cmd| cmd == "scripts/check-shell-proxy-capabilities.py"),
         "{unrelated:?}"
     );
+}
+
+#[test]
+fn rust_and_guidance_changes_request_the_file_budget_check() {
+    for path in [
+        "dsh/src/repl/mod.rs",
+        "dsh-builtin/src/task.rs",
+        "docs/ai/skills/doge-shell-repo/references/task-map.md",
+        "AGENTS.md",
+        "CLAUDE.md",
+    ] {
+        let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-file-budget.py"),
+            "{path}: {commands:?}"
+        );
+    }
+}
+
+#[test]
+fn completion_definitions_do_not_request_the_file_budget_check() {
+    // The suggestion list stays short for the most frequent task; the
+    // touch reminder below (notes, not commands) covers the real risk.
+    for path in ["completions/git.json", "output-schemas/ps.json"] {
+        let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+        assert!(
+            !commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-file-budget.py"),
+            "{path}: {commands:?}"
+        );
+    }
+}
+
+#[test]
+fn embedded_json_changes_note_the_loader_touch() {
+    for path in ["completions/git.json", "output-schemas/ps.json"] {
+        let notes = notes_for_paths(&[PathBuf::from(path)]);
+        assert!(
+            notes.iter().any(|note| note.contains("touch")),
+            "{path}: {notes:?}"
+        );
+    }
+
+    let unrelated = notes_for_paths(&[PathBuf::from("dsh/src/repl/mod.rs")]);
+    assert!(unrelated.is_empty(), "{unrelated:?}");
 }
 
 #[test]

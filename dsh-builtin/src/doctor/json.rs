@@ -218,7 +218,8 @@ pub(super) fn json_dev_details(current_dir: &Path) -> serde_json::Value {
         Ok(paths) => json!({
             "repo_root": repo_root,
             "changed_files": paths,
-            "commands": validation_commands_for_paths(&paths)
+            "commands": validation_commands_for_paths(&paths),
+            "notes": notes_for_paths(&paths)
         }),
         Err(err) => json!({"repo_root": repo_root, "error": err}),
     }

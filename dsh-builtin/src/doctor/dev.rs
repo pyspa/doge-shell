@@ -30,6 +30,9 @@ pub(super) fn check_dev(ctx: &Context, current_dir: &Path) {
                     let _ = ctx.write_stdout(&format!("ok validate {command}"));
                 }
             }
+            for note in notes_for_paths(&paths) {
+                let _ = ctx.write_stdout(&format!("ok note {note}"));
+            }
         }
         Err(err) => {
             let _ = ctx.write_stdout(&format!("warn changed-files unavailable {err}"));
@@ -90,6 +93,7 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut needs_shell_proxy_check = false;
     let mut has_rust = false;
     let mut needs_portability = false;
+    let mut needs_file_budget = false;
 
     for path in paths {
         let text = path.to_string_lossy().replace('\\', "/");
@@ -112,6 +116,7 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         // CI.
         if text == "dsh-builtin/src/lib.rs"
             || text == "dsh-builtin/src/shell_capabilities.rs"
+            || text == "dsh-builtin/src/capability.rs"
             || text == "scripts/check-shell-proxy-capabilities.py"
         {
             needs_shell_proxy_check = true;
@@ -128,6 +133,16 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
             || text == "scripts/install-runtime-skills.sh"
         {
             needs_ai_guidance = true;
+        }
+        // New or split `.rs` files over the 400/800-line budget and stale
+        // backtick paths in guidance docs only fail in CI, so surface the
+        // lint whenever Rust or guidance files change.
+        if text.ends_with(".rs")
+            || text.starts_with("docs/ai/")
+            || text == "AGENTS.md"
+            || text == "CLAUDE.md"
+        {
+            needs_file_budget = true;
         }
 
         // `completions/` is embedded into the `doge-shell` binary by rust-embed,
@@ -201,6 +216,9 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     if needs_project_consistency {
         add_command(&mut commands, "scripts/check-project-consistency.py");
     }
+    if needs_file_budget {
+        add_command(&mut commands, "scripts/check-file-budget.py");
+    }
     if needs_shell_proxy_check {
         add_command(&mut commands, "scripts/check-shell-proxy-capabilities.py");
     }
@@ -212,4 +230,26 @@ pub(super) fn add_command(commands: &mut Vec<String>, command: &str) {
     if !commands.iter().any(|existing| existing == command) {
         commands.push(command.to_string());
     }
+}
+
+/// Display-only reminders that are not runnable commands, so they stay out
+/// of `validation_commands_for_paths` and ride alongside it instead.
+pub(super) fn notes_for_paths(paths: &[PathBuf]) -> Vec<String> {
+    let mut notes = Vec::new();
+    let embedded_json = paths.iter().any(|path| {
+        let text = path.to_string_lossy().replace('\\', "/");
+        text.starts_with("completions/") || text.starts_with("output-schemas/")
+    });
+    // rust-embed only rebuilds on files it already knows: editing an
+    // existing definition rebuilds on its own, but a newly added file ships
+    // silently without a `touch` of its loader.
+    if embedded_json {
+        notes.push(
+            "if you added (not edited) a file, touch its loader so rust-embed rebuilds: \
+             `touch dsh/src/completion/json_loader.rs` for completions/, \
+             `touch dsh/src/output_schema/loader.rs` for output-schemas/"
+                .to_string(),
+        );
+    }
+    notes
 }

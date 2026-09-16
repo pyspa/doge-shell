@@ -98,6 +98,11 @@ pub fn false_path() -> &'static str {
     first_existing(&["/bin/false", "/usr/bin/false"])
 }
 
+/// Absolute path to an external `tr`. See [`true_path`].
+pub fn tr_path() -> &'static str {
+    first_existing(&["/bin/tr", "/usr/bin/tr"])
+}
+
 fn first_existing(candidates: &'static [&'static str]) -> &'static str {
     candidates
         .iter()

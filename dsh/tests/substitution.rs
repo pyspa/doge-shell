@@ -195,11 +195,18 @@ fn the_body_of_a_substitution_is_expanded() {
 }
 
 /// Expanding the body must not cost it its operators.
+///
+/// Uses a fixed `aaa` input so the expectation does not depend on `$HOME`:
+/// neither `/home/runner` nor `/Users/runner` contains an `a`, so the old
+/// `$HOME | tr a A` assertion could never see an `A` on CI runners.
 #[test]
 fn an_expanded_substitution_body_keeps_its_pipeline() {
-    let stdout = stdout_of("/bin/echo $(/bin/echo $HOME | /usr/bin/tr a A)");
+    let stdout = stdout_of(&format!(
+        "/bin/echo $(/bin/echo aaa | {} a A)",
+        common::tr_path()
+    ));
     assert!(
-        stdout.contains('A'),
+        stdout.lines().any(|line| line.trim() == "AAA"),
         "the pipeline inside the substitution did not run: {stdout:?}"
     );
     assert!(

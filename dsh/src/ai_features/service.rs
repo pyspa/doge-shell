@@ -244,12 +244,14 @@ impl LiveAiService {
             .read()
             .declared_read_only_for(function_name);
         let result = self.policy.safety_guard.check_mcp_tool(
-            function_name,
-            tool_name,
-            args,
+            crate::safety::McpToolCall {
+                function_name,
+                tool_name,
+                args_json: args,
+                declared_read_only,
+            },
             &level,
             &allowlist,
-            declared_read_only,
         );
         let SafetyResult::Confirm(message) = result else {
             return Ok(None);

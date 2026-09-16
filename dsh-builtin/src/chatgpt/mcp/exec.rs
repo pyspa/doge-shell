@@ -122,6 +122,18 @@ impl McpManager {
             .map(|binding| binding.tool_name.clone())
     }
 
+    /// The real tool name and the server's own side-effect declaration, from
+    /// one lookup.
+    ///
+    /// The two are always used together to judge one call, and reading them
+    /// separately lets a concurrent `mcp connect` or tool-list refresh replace
+    /// the binding in between.
+    pub fn tool_facts_for(&self, function_name: &str) -> Option<(String, Option<bool>)> {
+        self.bindings
+            .get(function_name)
+            .map(|binding| (binding.tool_name.clone(), binding.declared_read_only))
+    }
+
     /// What the server said about this tool's side effects, if anything.
     ///
     /// **Only safe to act on when it says `false`.** A `readOnlyHint` is the

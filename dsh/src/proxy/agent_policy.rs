@@ -22,28 +22,21 @@ impl Shell {
         *self.environment.read().policy_state.safety_level.read()
     }
 
-    /// The tool's own name behind the namespaced one the model called.
+    /// The tool's own name behind the namespaced one the model called, and
+    /// what the server declared about its side effects.
     ///
     /// Falls back to the namespaced name when no binding matches, so an
     /// unknown call is still judged rather than skipped.
-    /// What the server said about this tool, for the guard to tighten on.
-    fn agent_mcp_declared_read_only(&self, function_name: &str) -> Option<bool> {
-        self.environment
-            .read()
-            .integration_state
-            .mcp_manager
-            .read()
-            .declared_read_only_for(function_name)
-    }
-
-    fn agent_mcp_tool_name(&self, function_name: &str) -> String {
-        self.environment
-            .read()
-            .integration_state
-            .mcp_manager
-            .read()
-            .tool_name_for(function_name)
-            .unwrap_or_else(|| function_name.to_string())
+    ///
+    /// Both halves come from one lookup under one guard. Fetched separately
+    /// they could straddle an `mcp connect` or a tool-list refresh and hand
+    /// the guard one server's tool name with another's declaration.
+    fn agent_mcp_tool_facts(&self, function_name: &str) -> (String, Option<bool>) {
+        let environment = self.environment.read();
+        let manager = environment.integration_state.mcp_manager.read();
+        manager
+            .tool_facts_for(function_name)
+            .unwrap_or_else(|| (function_name.to_string(), None))
     }
 }
 
@@ -190,15 +183,17 @@ impl AgentCommandPolicy for Shell {
         let mut allowlist = self.agent_allowlist_snapshot();
         allowlist.extend(self.agent_session_approvals());
         let level = self.safety_level_snapshot();
-        let tool_name = self.agent_mcp_tool_name(name);
+        let (tool_name, declared_read_only) = self.agent_mcp_tool_facts(name);
 
         match self.safety_guard.check_mcp_tool(
-            name,
-            &tool_name,
-            arguments,
+            crate::safety::McpToolCall {
+                function_name: name,
+                tool_name: &tool_name,
+                args_json: arguments,
+                declared_read_only,
+            },
             &level,
             &allowlist,
-            self.agent_mcp_declared_read_only(name),
         ) {
             SafetyResult::Allowed => AgentCommandVerdict::Allowed,
             SafetyResult::Confirm(reason) => AgentCommandVerdict::Confirm(reason),

@@ -3,19 +3,43 @@
 //! approval is recorded under.
 use super::*;
 
+/// One MCP tool call, as the guard needs to see it.
+///
+/// A struct rather than a run of arguments because two of its fields are
+/// `&str` that mean different things and read alike at a call site. Swapping
+/// `function_name` and `tool_name` compiles and silently changes the verdict -
+/// `mcp__ops__bash` never matches `"bash"`, so a shell tool stops being judged
+/// as the command it runs. That regression has already happened once.
+pub struct McpToolCall<'a> {
+    /// The namespaced name the model called, e.g. `mcp__ops__bash`. What an
+    /// allowlist entry and the question shown to the user are keyed on.
+    pub function_name: &'a str,
+    /// The tool's own name on its server, e.g. `bash`. What the danger
+    /// classification looks at.
+    pub tool_name: &'a str,
+    pub args_json: &'a str,
+    /// What the server's own listing said about side effects
+    /// (`readOnlyHint: false` or `destructiveHint: true`).
+    ///
+    /// Believed only when it says `false`, i.e. only ever to close the gate:
+    /// the server is the party this confirmation exists to protect against, so
+    /// a claim it makes about itself must not be able to open it.
+    pub declared_read_only: Option<bool>,
+}
+
 impl SafetyGuard {
-    /// `declared_read_only` is `annotations.readOnlyHint` from the server's own
-    /// tool listing. It is believed only when it says `false` - see
-    /// [`Self::is_read_only_mcp_tool`].
     pub fn check_mcp_tool(
         &self,
-        function_name: &str,
-        tool_name: &str,
-        args_json: &str,
+        call: McpToolCall<'_>,
         level: &SafetyLevel,
         allowlist: &[String],
-        declared_read_only: Option<bool>,
     ) -> SafetyResult {
+        let McpToolCall {
+            function_name,
+            tool_name,
+            args_json,
+            declared_read_only,
+        } = call;
         if matches!(level, SafetyLevel::Loose) {
             return SafetyResult::Allowed;
         }
@@ -118,12 +142,25 @@ impl SafetyGuard {
 
     /// Whether this tool may run at Normal without asking.
     ///
-    /// The name is a guess - `list_and_prune` reads as a listing - so a server
-    /// that declares `readOnlyHint: false` is believed over it. The reverse is
+    /// The name is a guess - `search_and_replace` reads as a search - so a
+    /// server that declares side effects is believed over it. The reverse is
     /// not true: `readOnlyHint: true` is *not* enough to skip the question,
     /// because the server is the party this confirmation exists to protect
     /// against, and a description a server writes about itself must never be
-    /// able to open the gate. Believing `false` only ever closes it.
+    /// able to open the gate. A declaration only ever closes it.
+    ///
+    /// The two marker lists are matched differently on purpose, and the
+    /// asymmetry is the safety property:
+    ///
+    /// - **mutating markers match as substrings** - over-inclusive, so the
+    ///   worst case is a question nobody needed.
+    /// - **read markers match whole words** - under-inclusive, so the worst
+    ///   case is again a question nobody needed.
+    ///
+    /// Matching read markers as substrings is what made this dangerous:
+    /// `ls` occurs inside `emails`, `labels`, `channels` and `urls`, so
+    /// `send_emails`, `add_labels` and `notify_channels` were all classified
+    /// read-only and ran at Normal without asking.
     fn is_read_only_mcp_tool(tool_name: &str, declared_read_only: Option<bool>) -> bool {
         if declared_read_only == Some(false) {
             return false;
@@ -153,6 +190,23 @@ impl SafetyGuard {
             "connect",
             "disconnect",
             "submit",
+            // Verbs a tool can be named for that the list above missed. Each
+            // is a whole word in practice, so substring matching costs nothing
+            // here beyond the occasional extra question.
+            "replace",
+            "send",
+            "publish",
+            "upload",
+            "purge",
+            "prune",
+            "rotate",
+            "provision",
+            "revoke",
+            "truncate",
+            "rename",
+            "sync",
+            "drop",
+            "clear",
         ];
         if mutating_markers.iter().any(|marker| name.contains(marker)) {
             return false;
@@ -162,6 +216,51 @@ impl SafetyGuard {
             "list", "get", "read", "search", "find", "show", "status", "describe", "fetch",
             "query", "view", "ls", "stat",
         ];
-        read_markers.iter().any(|marker| name.contains(marker))
+        Self::words(tool_name)
+            .iter()
+            .any(|word| read_markers.contains(&word.as_str()))
+    }
+
+    /// The words in a tool name, lowercased, for markers that must not match
+    /// inside one.
+    ///
+    /// Splits on the separators tool names use and on camelCase boundaries, so
+    /// `listTools`, `list_tools`, `list-tools` and `getHTTPStatus` all yield
+    /// their verb while `emails` yields only `emails`. Takes the original
+    /// spelling: lowercasing first would erase the case boundary that makes
+    /// `getFile` two words.
+    pub(crate) fn words(name: &str) -> Vec<String> {
+        let chars: Vec<char> = name.chars().collect();
+        let mut words = Vec::new();
+        let mut current = String::new();
+
+        for (index, &c) in chars.iter().enumerate() {
+            if !c.is_ascii_alphanumeric() {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+                continue;
+            }
+
+            // A new word starts at lower→upper (`getFile`) and at the last
+            // capital of an acronym run followed by a lowercase letter
+            // (`getHTTPStatus` → `http`, `status`).
+            let starts_word = c.is_ascii_uppercase()
+                && !current.is_empty()
+                && (chars[index - 1].is_ascii_lowercase()
+                    || chars[index - 1].is_ascii_digit()
+                    || chars
+                        .get(index + 1)
+                        .is_some_and(|next| next.is_ascii_lowercase()));
+            if starts_word {
+                words.push(std::mem::take(&mut current));
+            }
+            current.push(c.to_ascii_lowercase());
+        }
+
+        if !current.is_empty() {
+            words.push(current);
+        }
+        words
     }
 }

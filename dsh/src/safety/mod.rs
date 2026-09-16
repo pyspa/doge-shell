@@ -5,6 +5,7 @@ mod ai_input;
 mod checks;
 mod mcp;
 pub use ai_input::PromptInjectionResult;
+pub use mcp::McpToolCall;
 
 #[derive(Debug, Clone, PartialEq)]
 /// What the guard decided about a command or a tool call.

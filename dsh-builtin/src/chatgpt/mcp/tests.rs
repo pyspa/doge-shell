@@ -378,3 +378,71 @@ async fn test_load_blocking_inside_runtime_does_not_panic() {
     assert!(result.is_ok(), "load_blocking panicked inside runtime");
     assert!(result.expect("panic check").is_empty());
 }
+
+/// The gate's judgement now depends on a field that travels from the server's
+/// tool listing, through `bind_tool`, to `tool_facts_for`. Every binding in
+/// these tests is built by hand, so without this the whole path could stop
+/// being wired and every test would still pass.
+#[test]
+fn a_binding_carries_what_the_server_declared_about_side_effects() {
+    use rmcp::model::ToolAnnotations;
+
+    let annotated = |annotations: Option<ToolAnnotations>| {
+        let mut tool = Tool::new("sync", "sync things", Arc::new(serde_json::Map::new()));
+        tool.annotations = annotations;
+        let (function_name, binding) = super::bind_tool("ops", &tool);
+        assert_eq!(function_name, "mcp__ops__sync");
+        assert_eq!(binding.tool_name, "sync");
+        binding.declared_read_only
+    };
+
+    // Nothing said is not a declaration: `ToolAnnotations` skips serializing
+    // `None`, so anything we see the server chose to send.
+    assert_eq!(annotated(None), None);
+    assert_eq!(annotated(Some(ToolAnnotations::default())), None);
+
+    // `ToolAnnotations` is `#[non_exhaustive]`, so it is built and then set.
+    let with = |set: fn(&mut ToolAnnotations)| {
+        let mut annotations = ToolAnnotations::new();
+        set(&mut annotations);
+        Some(annotations)
+    };
+
+    // Both of these say "this tool modifies its environment".
+    assert_eq!(
+        annotated(with(|a| a.read_only_hint = Some(false))),
+        Some(false)
+    );
+    assert_eq!(
+        annotated(with(|a| a.destructive_hint = Some(true))),
+        Some(false)
+    );
+
+    // And this one is passed through for the guard to refuse to act on.
+    assert_eq!(
+        annotated(with(|a| a.read_only_hint = Some(true))),
+        Some(true)
+    );
+}
+
+/// The two halves of one judgement come from one lookup.
+#[test]
+fn tool_facts_report_the_name_and_the_declaration_together() {
+    let mut manager = McpManager::default();
+    manager.servers.push(mock_server("ops"));
+    manager.bindings.insert(
+        "mcp__ops__sync".to_string(),
+        ToolBinding {
+            server_label: "ops".to_string(),
+            tool_name: "sync".to_string(),
+            function_name: "mcp__ops__sync".to_string(),
+            declared_read_only: Some(false),
+        },
+    );
+
+    assert_eq!(
+        manager.tool_facts_for("mcp__ops__sync"),
+        Some(("sync".to_string(), Some(false)))
+    );
+    assert_eq!(manager.tool_facts_for("mcp__ops__missing"), None);
+}

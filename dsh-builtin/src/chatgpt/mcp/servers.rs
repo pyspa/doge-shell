@@ -129,21 +129,8 @@ impl McpManager {
 
         for server in &servers {
             for tool in &server.tools {
-                let base_name = format!(
-                    "mcp__{}__{}",
-                    sanitize_identifier(&server.label),
-                    sanitize_identifier(tool.name.as_ref())
-                );
-                let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
-                bindings.insert(
-                    function_name.clone(),
-                    ToolBinding {
-                        server_label: server.label.clone(),
-                        tool_name: tool.name.to_string(),
-                        function_name,
-                        declared_read_only: super::read_only_hint(tool),
-                    },
-                );
+                let (function_name, binding) = super::bind_tool(&server.label, tool);
+                bindings.insert(function_name, binding);
             }
         }
 
@@ -312,21 +299,8 @@ impl McpManager {
 
         // Update bindings
         for tool in &tools {
-            let base_name = format!(
-                "mcp__{}__{}",
-                sanitize_identifier(&server.label),
-                sanitize_identifier(tool.name.as_ref())
-            );
-            let function_name = stable_name(&base_name, &server.label, tool.name.as_ref());
-            self.bindings.insert(
-                function_name.clone(),
-                ToolBinding {
-                    server_label: server.label.clone(),
-                    tool_name: tool.name.to_string(),
-                    declared_read_only: super::read_only_hint(tool),
-                    function_name,
-                },
-            );
+            let (function_name, binding) = super::bind_tool(&server.label, tool);
+            self.bindings.insert(function_name, binding);
         }
 
         // A re-registered label starts in service again: the disconnect the

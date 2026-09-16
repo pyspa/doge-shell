@@ -22,14 +22,29 @@
   オペレータで区切り、ラッパー（`sudo` / `timeout` / `env` …）を覗いてから
   各段を分類する（`split_command_segments` + `command_candidates`）。
   先頭トークンだけを見ると `true | rm -rf ~` も `sudo rm -rf ~` も素通りする。
-- **サーバの `readOnlyHint` は「厳しくする方向」にだけ信じる**（`is_read_only_mcp_tool` の
-  第 2 引数、`McpManager::declared_read_only_for` が引く）。ツール名は推測でしかなく
-  （`search_and_replace` は "search" にマッチして read 扱いになる）、`readOnlyHint: false` を
-  宣言したサーバはそれを知っている唯一の当事者なので名前より優先する。**逆は成り立たない** —
-  `readOnlyHint: true` で確認を飛ばさない。サーバは確認が守ろうとしている相手そのもので、
-  自分についての自己申告でゲートを開けられてはいけない。`false` を信じても閉じる方向にしか
-  動かない。両経路（`AgentCommandPolicy` と `LiveAiService::authorize_mcp_tool`）が同じ
-  マネージャに訊く。
+- **read marker は語単位、mutating marker は部分一致**（`is_read_only_mcp_tool`）。この非対称が
+  安全性そのもの: mutating は過剰包含（余計な質問が出るだけ）、read は過小包含（同上）。
+  read を部分一致にしていたせいで `ls` が `emails` / `labels` / `channels` / `urls` に当たり、
+  `send_emails` や `add_labels` が Normal で無確認実行されていた。語の切り出しは
+  `SafetyGuard::words`（区切り文字 + camelCase、`getHTTPStatus` → `get`/`http`/`status`）。
+- **サーバの側作用宣言は「厳しくする方向」にだけ信じる**（`McpToolCall::declared_read_only`、
+  `McpManager::tool_facts_for` が引く）。`readOnlyHint: false` と `destructiveHint: true` の
+  どちらも「副作用がある」の意で、仕様上 `readOnlyHint` の既定が false なので後者だけを送る
+  サーバがある。`ToolAnnotations` は `None` を serialize しないので、**見えた値はサーバが
+  送ることを選んだ値**であって既定値ではない。**逆は成り立たない** — `readOnlyHint: true` で
+  確認を飛ばさない。サーバは確認が守ろうとしている相手そのもので、自分についての自己申告で
+  ゲートを開けられてはいけない。両経路（`AgentCommandPolicy` と
+  `LiveAiService::authorize_mcp_tool`）が同じマネージャに訊き、名前と宣言は
+  `tool_facts_for` の**1 回のロック**で揃える（別々に引くと `mcp connect` やツール一覧更新を
+  跨いで、あるサーバのツール名に別のサーバの宣言が付きうる）。
+- **`McpToolCall` は struct で渡す**。`function_name` と `tool_name` は隣り合う `&str` で
+  取り違えてもコンパイルが通り、判定だけが静かに変わる（`mcp__ops__bash` は `"bash"` に
+  一度も一致しないので、シェルツールが実行するコマンドとして判定されなくなる）。
+  一度実際に起きた退行なので型で塞ぐ。
+- ツール一覧からバインディングを作るのは **`mcp::bind_tool` 1 箇所**。以前は起動時・リフレッシュ時・
+  `mcp add` の 3 箇所に手書きの複製があり、`ToolBinding` にフィールドを足すと 2 箇所にだけ届いて
+  残り 1 箇所が静かに欠ける、という形のバグを許していた（テストは手書きのバインディングを使うので
+  全部通る）。
 - MCP ツールの危険度は **function name ではなく実ツール名**で判定する。モデルが呼ぶ名前は
   `mcp__<label>__<tool>` なので、`"bash"` との完全一致は**一度も成立しない**。
   `check_mcp_tool(function_name, tool_name, ...)` の第 2 引数がそれで、

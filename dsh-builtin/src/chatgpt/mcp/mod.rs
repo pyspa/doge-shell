@@ -191,15 +191,49 @@ fn hash_server_config(config: &McpServerConfig) -> u64 {
     s.finish()
 }
 
-/// `annotations.readOnlyHint` from a listed tool, if the server set it.
+/// The function name the model calls a tool by, and the binding behind it.
+///
+/// The one place a listed tool becomes a binding. There were three copies of
+/// this (startup, refresh, and `mcp add`), which is how a field added to
+/// `ToolBinding` could reach two of them and be silently missing from the
+/// third - with every test still passing, because a binding built by hand in a
+/// test carries whatever the test wrote.
+pub(super) fn bind_tool(label: &str, tool: &rmcp::model::Tool) -> (String, ToolBinding) {
+    let base = format!(
+        "mcp__{}__{}",
+        sanitize_identifier(label),
+        sanitize_identifier(tool.name.as_ref())
+    );
+    let function_name = stable_name(&base, label, tool.name.as_ref());
+    let binding = ToolBinding {
+        server_label: label.to_string(),
+        tool_name: tool.name.to_string(),
+        function_name: function_name.clone(),
+        declared_read_only: read_only_hint(tool),
+    };
+    (function_name, binding)
+}
+
+/// What a listed tool's annotations say about its side effects, if anything.
+///
+/// `Some(false)` means "this tool modifies its environment" - the only
+/// direction the guard acts on. Both `readOnlyHint: false` and
+/// `destructiveHint: true` say it, and a server may send either: per the spec
+/// `readOnlyHint` already *defaults* to false, so annotating destructiveness
+/// alone is idiomatic and would otherwise be ignored.
+///
+/// A missing field is `None`, not a default: `ToolAnnotations` skips
+/// serializing `None`, so anything we see here the server chose to send.
 fn read_only_hint(tool: &rmcp::model::Tool) -> Option<bool> {
-    tool.annotations
-        .as_ref()
-        .and_then(|annotations| annotations.read_only_hint)
+    let annotations = tool.annotations.as_ref()?;
+    if annotations.destructive_hint == Some(true) {
+        return Some(false);
+    }
+    annotations.read_only_hint
 }
 
 #[derive(Debug, Clone)]
-struct ToolBinding {
+pub(super) struct ToolBinding {
     server_label: String,
     tool_name: String,
     function_name: String,
@@ -570,21 +604,8 @@ impl McpManager {
             self.bindings
                 .retain(|_, binding| binding.server_label != label);
             for tool in &tools {
-                let base = format!(
-                    "mcp__{}__{}",
-                    sanitize_identifier(&label),
-                    sanitize_identifier(&tool.name)
-                );
-                let name = stable_name(&base, &label, &tool.name);
-                self.bindings.insert(
-                    name.clone(),
-                    ToolBinding {
-                        server_label: label.clone(),
-                        tool_name: tool.name.to_string(),
-                        function_name: name,
-                        declared_read_only: read_only_hint(tool),
-                    },
-                );
+                let (name, binding) = bind_tool(&label, tool);
+                self.bindings.insert(name, binding);
             }
             self.servers[index].tools = tools;
             connection.mark_refreshed();

@@ -261,12 +261,14 @@ fn test_mcp_tool_check() {
     // Safe read-only tool
     assert_eq!(
         guard.check_mcp_tool(
-            "mcp__files__list_files",
-            "list_files",
-            "{}",
+            crate::safety::McpToolCall {
+                function_name: "mcp__files__list_files",
+                tool_name: "list_files",
+                args_json: "{}",
+                declared_read_only: None,
+            },
             &SafetyLevel::Normal,
             &[],
-            None
         ),
         SafetyResult::Allowed
     );
@@ -278,12 +280,14 @@ fn test_mcp_tool_check() {
     .to_string();
 
     match guard.check_mcp_tool(
-        "mcp__ops__bash",
-        "bash",
-        &args,
+        crate::safety::McpToolCall {
+            function_name: "mcp__ops__bash",
+            tool_name: "bash",
+            args_json: &args,
+            declared_read_only: None,
+        },
         &SafetyLevel::Normal,
         &[],
-        None,
     ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk")),
         _ => panic!("Should have detected dangerous command in MCP tool"),
@@ -292,11 +296,14 @@ fn test_mcp_tool_check() {
     // Non-read-only tools require confirmation in Normal mode
     assert!(matches!(
         guard.check_mcp_tool(
-            "mcp__files__delete_file",
-            "delete_file",
-            "{}",
+            crate::safety::McpToolCall {
+                function_name: "mcp__files__delete_file",
+                tool_name: "delete_file",
+                args_json: "{}",
+                declared_read_only: None,
+            },
             &SafetyLevel::Normal,
-            &[], None
+            &[],
         ),
         SafetyResult::Confirm(msg) if msg.contains("may have side effects")
     ));
@@ -313,12 +320,14 @@ fn a_namespaced_shell_tool_is_judged_as_its_command() {
     let args = serde_json::json!({ "command": "rm -rf /" }).to_string();
 
     match guard.check_mcp_tool(
-        "mcp__ops__bash",
-        "bash",
-        &args,
+        crate::safety::McpToolCall {
+            function_name: "mcp__ops__bash",
+            tool_name: "bash",
+            args_json: &args,
+            declared_read_only: None,
+        },
         &SafetyLevel::Normal,
         &[],
-        None,
     ) {
         SafetyResult::Confirm(msg) => {
             assert!(msg.contains("High Risk"), "{msg}");
@@ -340,12 +349,14 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_wrapper() {
 
     let args = serde_json::json!({ "command": "sudo rm -rf /" }).to_string();
     match guard.check_mcp_tool(
-        "mcp__ops__bash",
-        "bash",
-        &args,
+        crate::safety::McpToolCall {
+            function_name: "mcp__ops__bash",
+            tool_name: "bash",
+            args_json: &args,
+            declared_read_only: None,
+        },
         &SafetyLevel::Normal,
         &[],
-        None,
     ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
         other => panic!("sudo-wrapped rm -rf / should have been confirmed, got {other:?}"),
@@ -358,12 +369,14 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_separator() {
 
     let args = serde_json::json!({ "command": "true; rm -rf /" }).to_string();
     match guard.check_mcp_tool(
-        "mcp__ops__bash",
-        "bash",
-        &args,
+        crate::safety::McpToolCall {
+            function_name: "mcp__ops__bash",
+            tool_name: "bash",
+            args_json: &args,
+            declared_read_only: None,
+        },
         &SafetyLevel::Normal,
         &[],
-        None,
     ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("High Risk"), "{msg}"),
         other => panic!("`true; rm -rf /` should have been confirmed, got {other:?}"),
@@ -441,24 +454,28 @@ fn read_only_classification_ignores_the_server_label() {
 
     assert_eq!(
         guard.check_mcp_tool(
-            "mcp__runner__get_logs",
-            "get_logs",
-            "{}",
+            crate::safety::McpToolCall {
+                function_name: "mcp__runner__get_logs",
+                tool_name: "get_logs",
+                args_json: "{}",
+                declared_read_only: None,
+            },
             &SafetyLevel::Normal,
             &[],
-            None
         ),
         SafetyResult::Allowed
     );
 
     assert!(matches!(
         guard.check_mcp_tool(
-            "mcp__search__deploy",
-            "deploy",
-            "{}",
+            crate::safety::McpToolCall {
+                function_name: "mcp__search__deploy",
+                tool_name: "deploy",
+                args_json: "{}",
+                declared_read_only: None,
+            },
             &SafetyLevel::Normal,
             &[],
-            None
         ),
         SafetyResult::Confirm(_)
     ));
@@ -470,12 +487,14 @@ fn an_mcp_prompt_names_the_function_the_model_called() {
     let guard = SafetyGuard::new();
 
     match guard.check_mcp_tool(
-        "mcp__files__delete_file",
-        "delete_file",
-        "{}",
+        crate::safety::McpToolCall {
+            function_name: "mcp__files__delete_file",
+            tool_name: "delete_file",
+            args_json: "{}",
+            declared_read_only: None,
+        },
         &SafetyLevel::Strict,
         &[],
-        None,
     ) {
         SafetyResult::Confirm(msg) => assert!(msg.contains("mcp__files__delete_file"), "{msg}"),
         other => panic!("expected a confirmation, got {other:?}"),
@@ -490,12 +509,14 @@ fn test_mcp_tool_strict_and_allowlist() {
     // Strict mode asks confirmation even for read-only tools by default
     assert!(matches!(
         guard.check_mcp_tool(
-            "mcp__docs__read_file",
-            "read_file",
-            &args,
+            crate::safety::McpToolCall {
+                function_name: "mcp__docs__read_file",
+                tool_name: "read_file",
+                args_json: &args,
+                declared_read_only: None,
+            },
             &SafetyLevel::Strict,
             &[],
-            None
         ),
         SafetyResult::Confirm(_)
     ));
@@ -508,12 +529,14 @@ fn test_mcp_tool_strict_and_allowlist() {
     )];
     assert_eq!(
         guard.check_mcp_tool(
-            "mcp__docs__read_file",
-            "read_file",
-            &args,
+            crate::safety::McpToolCall {
+                function_name: "mcp__docs__read_file",
+                tool_name: "read_file",
+                args_json: &args,
+                declared_read_only: None,
+            },
             &SafetyLevel::Strict,
             &allow,
-            None
         ),
         SafetyResult::Allowed
     );
@@ -694,40 +717,92 @@ fn test_sanitize_ai_input() {
     assert!(!sanitized.contains('\u{200B}'));
 }
 
-/// A tool name is a guess at what a tool does. `search_and_replace` matches
-/// the "search" read marker and none of the mutating ones, so the name
-/// heuristic waves it through at Normal - and a server that declares
-/// `readOnlyHint: false` is the one party that actually knows.
+/// `ls` occurs inside `emails`, `labels`, `channels` and `urls`. Matching read
+/// markers as substrings meant `send_emails` and `add_labels` were classified
+/// read-only and ran at Normal with no prompt.
+#[test]
+fn a_read_marker_inside_a_longer_word_does_not_make_a_tool_read_only() {
+    let guard = SafetyGuard::new();
+
+    for tool in [
+        "send_emails",
+        "add_labels",
+        "notify_channels",
+        "purge_urls",
+        "sendEmails",
+    ] {
+        assert!(
+            matches!(
+                guard.check_mcp_tool(
+                    crate::safety::McpToolCall {
+                        function_name: &format!("mcp__ops__{tool}"),
+                        tool_name: tool,
+                        args_json: "{}",
+                        declared_read_only: None,
+                    },
+                    &SafetyLevel::Normal,
+                    &[],
+                ),
+                SafetyResult::Confirm(_)
+            ),
+            "{tool} ran without asking"
+        );
+    }
+}
+
+/// The narrowing must not cost the tools it was always right about.
+#[test]
+fn a_genuine_read_tool_still_runs_without_asking() {
+    let guard = SafetyGuard::new();
+
+    for tool in [
+        "list_issues",
+        "getFile",
+        "read-file",
+        "ls",
+        "stat",
+        "search_code",
+    ] {
+        assert_eq!(
+            guard.check_mcp_tool(
+                crate::safety::McpToolCall {
+                    function_name: &format!("mcp__docs__{tool}"),
+                    tool_name: tool,
+                    args_json: "{}",
+                    declared_read_only: None,
+                },
+                &SafetyLevel::Normal,
+                &[],
+            ),
+            SafetyResult::Allowed,
+            "{tool} now asks when it never had to"
+        );
+    }
+}
+
+/// A tool name is a guess at what a tool does, and a server that declares side
+/// effects knows better. Asserted as the *difference* the declaration makes,
+/// not as "this tool is allowed" - the second shape would freeze whichever
+/// hole in the name heuristic the example happened to sit in.
 #[test]
 fn a_server_declaring_side_effects_is_believed_over_the_name() {
     let guard = SafetyGuard::new();
-    let args = "{}";
 
-    // What the name alone says.
-    assert_eq!(
+    let judge = |declared| {
         guard.check_mcp_tool(
-            "mcp__ops__search_and_replace",
-            "search_and_replace",
-            args,
+            crate::safety::McpToolCall {
+                function_name: "mcp__docs__search_index",
+                tool_name: "search_index",
+                args_json: "{}",
+                declared_read_only: declared,
+            },
             &SafetyLevel::Normal,
             &[],
-            None
-        ),
-        SafetyResult::Allowed
-    );
+        )
+    };
 
-    // What the server says about itself, when it says it has side effects.
-    assert!(matches!(
-        guard.check_mcp_tool(
-            "mcp__ops__search_and_replace",
-            "search_and_replace",
-            args,
-            &SafetyLevel::Normal,
-            &[],
-            Some(false)
-        ),
-        SafetyResult::Confirm(_)
-    ));
+    assert_eq!(judge(None), SafetyResult::Allowed);
+    assert!(matches!(judge(Some(false)), SafetyResult::Confirm(_)));
 }
 
 /// The reverse must not hold. A server calling its own tool harmless is the
@@ -739,13 +814,32 @@ fn a_server_calling_itself_read_only_cannot_open_the_gate() {
 
     assert!(matches!(
         guard.check_mcp_tool(
-            "mcp__ops__delete_everything",
-            "delete_everything",
-            "{}",
+            crate::safety::McpToolCall {
+                function_name: "mcp__ops__delete_everything",
+                tool_name: "delete_everything",
+                args_json: "{}",
+                declared_read_only: Some(true),
+            },
             &SafetyLevel::Normal,
             &[],
-            Some(true)
         ),
         SafetyResult::Confirm(_)
     ));
+}
+
+/// The splitting is what makes whole-word matching work on the names tools
+/// actually have, so pin the shapes rather than only their verdicts.
+#[test]
+fn a_tool_name_splits_into_the_words_a_marker_must_match() {
+    for (name, expected) in [
+        ("list_tools", vec!["list", "tools"]),
+        ("getFile", vec!["get", "file"]),
+        ("read-file", vec!["read", "file"]),
+        ("getHTTPStatus", vec!["get", "http", "status"]),
+        ("ls", vec!["ls"]),
+        ("emails", vec!["emails"]),
+        ("mcp__ops__send_v2", vec!["mcp", "ops", "send", "v2"]),
+    ] {
+        assert_eq!(SafetyGuard::words(name), expected, "{name}");
+    }
 }

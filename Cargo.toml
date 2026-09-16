@@ -5,9 +5,10 @@ readme = "README.md"
 license = "MIT"
 edition = "2024"
 version = "0.0.1"
-# The real floor: str::{floor,ceil}_char_boundary (dsh-openai) landed in 1.91,
+# The real floor: sysinfo 0.39.6 requires 1.95. Previous floors kept for
+# reference: str::{floor,ceil}_char_boundary (dsh-openai) landed in 1.91,
 # and std::io::pipe, which gives cloexec pipes on every platform, in 1.87.
-rust-version = "1.91"
+rust-version = "1.95"
 
 [workspace]
 resolver = "2"

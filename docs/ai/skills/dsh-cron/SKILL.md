@@ -5,8 +5,8 @@ description: Use when adding, editing or debugging a doge-shell cron job - cron 
 
 # DSH Cron
 
-- Run `cron status` first. It says whether an external tick is arriving; without one, jobs only fire while a dsh session is open.
-- Add with `cron add --name NAME '<schedule>' <command...>`. Quote the schedule - an unquoted five-field expression is glob-expanded by the shell before dsh sees it.
+- Run `cron status` first. It says whether an external tick is arriving; without one, jobs only fire while a dogesh session is open.
+- Add with `cron add --name NAME '<schedule>' <command...>`. Quote the schedule - an unquoted five-field expression is glob-expanded by the shell before dogesh sees it.
 - Add an AI job with `--agent`: `cron add --agent --name NAME --tokens N --timeout 10m --write . --check '...' '<schedule>' -- '<goal>'`. Grants work exactly like `agent run`; nothing is asked at tick time, so a missing grant stalls the run instead of prompting.
 - Create new jobs `--paused`. `cron run NAME --now` (CLI only - `cron_manage`'s `run` cannot run synchronously) runs it right away to see the real output before `cron resume NAME`; from a chat tool, ask a person to run that once instead.
 - Edit one field at a time: `cron edit NAME --schedule '...' | --command '...' | --on failure | --timeout 2m`. Re-adding the same `--name` with `cron add` needs `--force`; it never silently creates a duplicate.

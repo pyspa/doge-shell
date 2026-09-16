@@ -15,7 +15,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     }
 
     let _ = ctx.write_stderr(
-        "ai-watch: run this command from the interactive dsh REPL so it can use the normal execution path and command block recording.",
+        "ai-watch: run this command from the interactive dogesh REPL so it can use the normal execution path and command block recording.",
     );
     let _ = ctx.write_stderr(help_text());
     ExitStatus::ExitedWith(1)

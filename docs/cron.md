@@ -1,17 +1,17 @@
 # 永続 cron ジョブ
 
-`cron` はシェルコマンドと無人 AI エージェントタスクの両方を、壁時計スケジュールで実行する永続的なジョブスケジューラです。旧 `sched`（セッション限り・インターバルのみ）を置き換えました。ジョブ定義は `$XDG_STATE_HOME/dsh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
+`cron` はシェルコマンドと無人 AI エージェントタスクの両方を、壁時計スケジュールで実行する永続的なジョブスケジューラです。旧 `sched`（セッション限り・インターバルのみ）を置き換えました。ジョブ定義は `$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
 
 ## 実行モデル: 二系統駆動
 
 ジョブは次の2つの経路のどちらか（両方でも構わない）で発火します。
 
 1. **対話セッションが開いている**: 各セッションが自分の cron runner を持ち、次に due になるジョブまでの秒数だけ sleep しては due ジョブを claim します（アイドル時は最大60秒間隔でポーリング）。セッションを開くだけで有効で、追加のインストールは不要です。
-2. **外部 tick**: `dsh -c "cron tick"` を crontab / systemd timer / launchd から定期実行します。これがログアウト中もジョブを回す唯一の経路です。`cron setup`（`--crontab` / `--systemd` / `--launchd`、無指定なら OS を自動判定）が貼り付け可能な設定テキストを標準出力に印字します。**何もインストールしません** — 印字するだけです。
+2. **外部 tick**: `dogesh -c "cron tick"` を crontab / systemd timer / launchd から定期実行します。これがログアウト中もジョブを回す唯一の経路です。`cron setup`（`--crontab` / `--systemd` / `--launchd`、無指定なら OS を自動判定）が貼り付け可能な設定テキストを標準出力に印字します。**何もインストールしません** — 印字するだけです。
 
 二系統が同時に同じジョブを見つけても二重実行しません。claim は SQLite の `BEGIN IMMEDIATE` トランザクション内で行う条件付き `UPDATE`（`claimed_by`/`claimed_until` 列）で、どちらか一方だけが成功します。claim と同時に `next_run_at` を次のスロットへ進めるので、claim に失敗した側は「due な仕事が無い」と判断してスキップします。
 
-**1 run = 1 子プロセス**です。claim した runner（セッション内 runner または `cron tick`）は `dsh -c "cron run-job <UUID>"` という別プロセスを起動するだけで、実行結果を待ちません。`Shell` が `!Send`（`Rc<RefCell<LispEngine>>` を持つ）なので AI ジョブの実行には `&mut Shell` が要り、tokio task から直接は呼べないためです。子プロセスに渡すのは run の UUID だけで、goal・grant・コマンド行はすべて SQLite 経由で渡ります — シェルのパーサにも `sh -c` にも一度も入りません。
+**1 run = 1 子プロセス**です。claim した runner（セッション内 runner または `cron tick`）は `dogesh -c "cron run-job <UUID>"` という別プロセスを起動するだけで、実行結果を待ちません。`Shell` が `!Send`（`Rc<RefCell<LispEngine>>` を持つ）なので AI ジョブの実行には `&mut Shell` が要り、tokio task から直接は呼べないためです。子プロセスに渡すのは run の UUID だけで、goal・grant・コマンド行はすべて SQLite 経由で渡ります — シェルのパーサにも `sh -c` にも一度も入りません。
 
 ## スケジュール構文
 
@@ -35,9 +35,9 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 
 ## ジョブの永続化とストア
 
-- 置き場所: `$XDG_STATE_HOME/dsh/cron/`（`agent_state_dir()` の**兄弟**であり子ではない — `SafetyGuard::task_file_allowed` が `agent_state_dir()` 配下を無条件拒否するため、notepad をそちらには置けない）。
+- 置き場所: `$XDG_STATE_HOME/dogesh/cron/`（`agent_state_dir()` の**兄弟**であり子ではない — `SafetyGuard::task_file_allowed` が `agent_state_dir()` 配下を無条件拒否するため、notepad をそちらには置けない）。
 - SQLite（WAL + `synchronous=NORMAL`）。`jobs` / `runs` / `incidents` の3テーブル。`runs` と `history` はテーブルを分けない — 1 fire = 1 attempt なので状態列（`queued`/`running`/`succeeded`/`failed`/`skipped`/`needs-approval`/`cancelled`）で区別すれば足ります。
-- マイグレーションは `PRAGMA user_version` + 番号付きステップ。**store が既知の最大バージョンより新しければ開くのを拒否**します（古い `dsh` バイナリが新しいスキーマを壊さないため — 外部 tick は dsh のアップグレードより長生きしうる）。
+- マイグレーションは `PRAGMA user_version` + 番号付きステップ。**store が既知の最大バージョンより新しければ開くのを拒否**します（古い `dogesh` バイナリが新しいスキーマを壊さないため — 外部 tick は dogesh のアップグレードより長生きしうる）。
 - `runs` はジョブあたり200行・30日を超えた分を定期的に刈り込みます。
 
 ## `cron tick` の終了コードと出力
@@ -73,7 +73,7 @@ cron incidents ack <ID>              # incident を閉じ、ジョブの blocked
 
 `hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。`IncidentKind::HookAsk` という種別自体はストアのスキーマに存在しますが、実際に起票されるのは通常の `IncidentKind::Approval` です — hook の ask 拒否も grant 不足も、どちらも `confirm_agent_action` の同じ経路（`TaskStatus::InputRequired`）を通り、cron 側はどちらが原因かを区別する情報を受け取らないためです。区別が付かなくても対処手順は同じで、`agent show <task-id>` の `stop_reason`（`cron incidents`/`cron logs` にも同じ文言が出ます）を見れば hook 由来かどうかは読み取れます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
 
-`--allow-mcp` を持たないジョブは MCP サーバーに接続しません。`dsh -c` は対話サービスを起動しないため（`needs_interactive_services()` が false）、MCP grant を持つジョブだけが `cron run-job` 内で明示的に MCP 接続を張ります。
+`--allow-mcp` を持たないジョブは MCP サーバーに接続しません。`dogesh -c` は対話サービスを起動しないため（`needs_interactive_services()` が false）、MCP grant を持つジョブだけが `cron run-job` 内で明示的に MCP 接続を張ります。
 
 ### notepad — ジョブ固有の記憶
 
@@ -142,12 +142,12 @@ AI ジョブの `runs.stdout` は以前は常に空でした（子プロセス�
 
 対照的に **CLI の `cron add` は同名だとエラー**になり `--force` が必要です — 人がプロンプトで打つ場合はタイプミスの可能性の方が高いためです。
 
-`cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dsh -c "cron tick"` や `dsh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd/env を変えたい場合は `cron edit --cwd`（env は手段が無いため `cron rm` して作り直す）を使ってください。
+`cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dogesh -c "cron tick"` や `dogesh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd/env を変えたい場合は `cron edit --cwd`（env は手段が無いため `cron rm` して作り直す）を使ってください。
 
 `(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は1リリース限定の非推奨エイリアスとして残っており、対応する `cron-*` へ委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。委譲の前に stderr が tty のときだけ非推奨警告を出します（`cron tick`/`cron run-job` のような無人実行では出しません — `cron tick` は既定で無出力・exit 0 が契約なので、この警告が外部 tick のたびに system cron のメールを起こしては本末転倒です）。
 
 ## 関連ドキュメント
 
 - CLI の使用例は README の「Cron Jobs」節。
-- AI エージェント自身が cron ジョブを追加・編集・デバッグするための手順は runtime skill `docs/ai/skills/dsh-cron/`（`scripts/install-runtime-skills.sh --target dsh --profile dsh-user` で導入）。
+- AI エージェント自身が cron ジョブを追加・編集・デバッグするための手順は runtime skill `docs/ai/skills/dsh-cron/`（`scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user` で導入）。
 - 無人タスクの権限モデル・予算・SRT サンドボックスの詳細は `docs/agent.md`。

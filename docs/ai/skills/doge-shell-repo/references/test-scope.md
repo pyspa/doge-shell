@@ -27,4 +27,4 @@ Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/j
 
 Never use `cargo test -p dsh`; the `dsh/` directory is the `doge-shell` package.
 
-Use `cargo test -p doge-shell --lib` only as a fallback for library-scoped edits when package-level tests are blocked by known macOS sandbox child-`dsh` tracing failures.
+Use `cargo test -p doge-shell --lib` only as a fallback for library-scoped edits when package-level tests are blocked by known macOS sandbox child-`dogesh` tracing failures.

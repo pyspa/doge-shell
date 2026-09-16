@@ -24,7 +24,7 @@
 | `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt/settings.rs`（`response_language`） |
 | `CHAT_PROMPT` | なし | 同上 |
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |
-| `DSH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
+| `DOGESH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
 | `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt/settings.rs` |
 | `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_skill_staging`）。`task` は agent タスクで `--write` グラントが無い対象だけステージ、`always` は対話も含め常時ステージ、`off` は今日の挙動（`InputRequired`） |
 | `AI_CHAT_SKILL_REFLECT` | off | `dsh-builtin/src/chatgpt/reflect.rs`。ターン末の tools 無し単発リクエストで skill 提案を試みる |
@@ -33,8 +33,8 @@
 | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off（0 または未設定） | `dsh-builtin/src/chatgpt/skills/usage.rs`（`sweep`）。`created_by == "agent"` かつ unpinned かつ user scope の skill だけを、指定日数未読で archive する |
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
 | `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
-| `DSH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
-| `DSH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**唯一の例外 |
+| `DOGESH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
+| `DOGESH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**唯一の例外 |
 
 `AI_MESSAGE_LANG` は**散文にだけ**効く。JSON を返させるリクエスト
 （`AiRequestOptions::json_object`）に `apply_language` を付けない。フィールド名と

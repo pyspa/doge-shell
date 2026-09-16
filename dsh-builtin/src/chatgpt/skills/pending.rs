@@ -181,7 +181,7 @@ pub(crate) fn staged_this_process() -> usize {
 /// Serializes `stage()`'s count-then-write against every other process
 /// doing the same thing, not just other threads in this one.
 ///
-/// `dsh` runs each `agent run` as its own process, so an in-process `Mutex`
+/// `dogesh` runs each `agent run` as its own process, so an in-process `Mutex`
 /// would not have stopped two of them racing near `MAX_PENDING`: both could
 /// read the same count before either writes, and both proceed. Best-effort -
 /// a filesystem that cannot lock still lets staging work, just without the

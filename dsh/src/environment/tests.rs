@@ -399,7 +399,7 @@ fn the_shell_starts_at_the_level_it_inherited() {
     );
 }
 
-/// `comp-gen` writes completion overrides to `$XDG_CONFIG_HOME/dsh/completions`
+/// `comp-gen` writes completion overrides to `$XDG_CONFIG_HOME/dogesh/completions`
 /// (`dsh-builtin/src/completion_generation.rs`, `xdg::BaseDirectories::place_config_file`).
 /// This function is what `dsh/src/completion/json_loader.rs` and
 /// `dsh/src/output_schema/loader.rs` search to read them back, so its first

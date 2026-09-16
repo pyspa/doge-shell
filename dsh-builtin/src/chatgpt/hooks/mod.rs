@@ -192,7 +192,7 @@ impl HookContext {
             .map(|runtime| runtime.lock().task.id.clone());
 
         // Only when there is something to budget. `config::load` has already
-        // returned empty for `AI_CHAT_HOOKS=off` and for a nested `dsh`, and a
+        // returned empty for `AI_CHAT_HOOKS=off` and for a nested `dogesh`, and a
         // malformed budget must not refuse the chat in either case - the
         // documented way out of a broken hook setup is that switch.
         let turn_budget_ms = if hooks.is_empty() {
@@ -282,7 +282,7 @@ impl HookContext {
             return HookOutcome::default();
         }
 
-        // Belt and braces alongside `DSH_HOOK_DEPTH`: that flag stops a hook's
+        // Belt and braces alongside `DOGESH_HOOK_DEPTH`: that flag stops a hook's
         // child shell, this stops a re-entry inside this process.
         let Some(_guard) = ReentryGuard::acquire() else {
             debug!("skipping {} hooks: already inside a hook", event.as_str());
@@ -470,31 +470,37 @@ impl HookContext {
         // need a JSON parser to answer "which tool is this?".
         let state = self.loop_state.get();
         let mut env = vec![
-            ("DSH_HOOK_EVENT".to_string(), event.as_str().to_string()),
-            ("DSH_HOOK_ID".to_string(), hook.id.clone()),
-            ("DSH_HOOK_SESSION_ID".to_string(), self.session_id.clone()),
-            ("DSH_HOOK_TURN_ID".to_string(), self.turn_id.clone()),
-            ("DSH_HOOK_CWD".to_string(), self.cwd.display().to_string()),
+            ("DOGESH_HOOK_EVENT".to_string(), event.as_str().to_string()),
+            ("DOGESH_HOOK_ID".to_string(), hook.id.clone()),
             (
-                "DSH_HOOK_ITERATION".to_string(),
+                "DOGESH_HOOK_SESSION_ID".to_string(),
+                self.session_id.clone(),
+            ),
+            ("DOGESH_HOOK_TURN_ID".to_string(), self.turn_id.clone()),
+            (
+                "DOGESH_HOOK_CWD".to_string(),
+                self.cwd.display().to_string(),
+            ),
+            (
+                "DOGESH_HOOK_ITERATION".to_string(),
                 state.iteration.to_string(),
             ),
             (
-                "DSH_HOOK_MAX_ITERATIONS".to_string(),
+                "DOGESH_HOOK_MAX_ITERATIONS".to_string(),
                 state.max_iterations.to_string(),
             ),
             (
-                "DSH_HOOK_TURN_TOKENS".to_string(),
+                "DOGESH_HOOK_TURN_TOKENS".to_string(),
                 state.total_tokens().to_string(),
             ),
             // The effective value, which the turn budget may have shortened.
             (
-                "DSH_HOOK_TIMEOUT_MS".to_string(),
+                "DOGESH_HOOK_TIMEOUT_MS".to_string(),
                 timeout.as_millis().to_string(),
             ),
         ];
         if let Some(tool) = tool {
-            env.push(("DSH_HOOK_TOOL".to_string(), tool.to_string()));
+            env.push(("DOGESH_HOOK_TOOL".to_string(), tool.to_string()));
         }
         env
     }
@@ -574,7 +580,7 @@ thread_local! {
     /// dispatch", which can only happen on the call stack that is already in
     /// one. A process-wide flag would additionally make two concurrent agent
     /// loops silently skip each other's hooks - the failure mode this guard
-    /// exists to avoid. The cross-process case is `DSH_HOOK_DEPTH`.
+    /// exists to avoid. The cross-process case is `DOGESH_HOOK_DEPTH`.
     static IN_HOOK: Cell<bool> = const { Cell::new(false) };
 }
 

@@ -25,7 +25,7 @@ use std::sync::{
 use std::{cell::RefCell, rc::Rc};
 use tracing::{debug, warn};
 
-pub const APP_NAME: &str = "dsh";
+pub const APP_NAME: &str = "dogesh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 pub struct Shell {
@@ -76,7 +76,7 @@ impl Drop for Shell {
 impl Shell {
     pub fn new(environment: Arc<RwLock<Environment>>) -> Self {
         let pid = getpid();
-        // The real process group, not `pid`: dsh never calls `setpgid(0, 0)`,
+        // The real process group, not `pid`: dogesh never calls `setpgid(0, 0)`,
         // so when it is started from another shell (or from a test binary) the
         // two differ, and `job_wait` would try to hand the terminal back to a
         // process group that does not exist.
@@ -317,7 +317,7 @@ impl Shell {
             session_id: Some(self.session_id.clone()),
             hostname,
             started_at: chrono::Utc::now().timestamp() - duration.as_secs() as i64,
-            author: std::env::var("DSH_COMMAND_AUTHOR")
+            author: std::env::var("DOGESH_COMMAND_AUTHOR")
                 .ok()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or_else(|| "human".to_string()),

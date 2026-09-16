@@ -88,9 +88,9 @@ fn a_command_that_cannot_start_is_reported_not_panicked() {
 /// process that happened to tick it is carrying.
 #[test]
 fn the_environment_is_the_jobs_own() {
-    unsafe { std::env::set_var("DSH_CRON_TEST_LEAK", "leaked") };
-    let outcome = run_command(&run("echo \"[$DSH_CRON_TEST_LEAK]\"", 10));
-    unsafe { std::env::remove_var("DSH_CRON_TEST_LEAK") };
+    unsafe { std::env::set_var("DOGESH_CRON_TEST_LEAK", "leaked") };
+    let outcome = run_command(&run("echo \"[$DOGESH_CRON_TEST_LEAK]\"", 10));
+    unsafe { std::env::remove_var("DOGESH_CRON_TEST_LEAK") };
     assert_eq!(outcome.stdout.trim(), "[]");
 }
 

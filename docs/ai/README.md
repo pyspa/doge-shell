@@ -10,10 +10,10 @@
 ## 配置
 - canonical Skill source: `docs/ai/skills/`
 - Codex runtime skills: `~/.codex/skills/`
-- doge-shell runtime skills: `~/.config/dsh/skills/`
+- doge-shell runtime skills: `~/.config/dogesh/skills/`
 - Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
 - Claude Code project skills: `<repo>/.claude/skills/` (`../docs/ai/skills` への symlink。全 Skill がそのまま見える)
-- doge-shell project skills: `<project>/.dsh/skills/` (dsh の `!` チャットだけが読む。installer の対象外で、リポジトリが自分で持つ)
+- doge-shell project skills: `<project>/.dogesh/skills/` (dogesh の `!` チャットだけが読む。installer の対象外で、リポジトリが自分で持つ)
 - cross-agent project skills: `<project>/.agents/skills/` (**読み取り専用**の相互運用 root。installer の対象外 — 他ツールと共有するディレクトリを installer が `rm -rf` するのは越権)
 
 ## 使い分け
@@ -26,7 +26,7 @@
 - `both` を指定すると Codex と doge-shell の両方へ入れる。
 - 普段は `--list` / `--dry-run` / `--status` で対象を確認してから、必要な Skill だけ入れる。
 - Codex runtime は原則 `--profile codex-core` で `doge-shell-repo` だけ入れ、領域別 Skill は repo-local source を必要時に読む。
-- Skill を更新したら `--status` で状態を表示し、`--check-installed` を整合性ゲートに使う。stale なら同じ profile を再インストールする。`doctor skills` でも Codex/dsh runtime の stale/missing を確認できる。
+- Skill を更新したら `--status` で状態を表示し、`--check-installed` を整合性ゲートに使う。stale なら同じ profile を再インストールする。`doctor skills` でも Codex/dogesh runtime の stale/missing を確認できる。
 
 ```bash
 scripts/install-runtime-skills.sh --list
@@ -46,25 +46,25 @@ doctor skills
 - バリエーションごとの詳細は `references/` に逃がす。
 - shell / Rust / reference で済むなら、新しい長文ドキュメントを増やさない。
 - 失敗しやすい実装パターンを見つけたら、`task-map.md` か該当 Skill の `references/` へ短く戻す。
-- `description` は dsh のプロンプトでは 240 字で切られる（`skill_manage` が書き込める上限は 300 字）。trigger を先頭に置く。
-- `allowed-tools` などの他ツール向け frontmatter キーは dsh では無視される（強制しない）。
+- `description` は dogesh のプロンプトでは 240 字で切られる（`skill_manage` が書き込める上限は 300 字）。trigger を先頭に置く。
+- `allowed-tools` などの他ツール向け frontmatter キーは dogesh では無視される（強制しない）。
 - `skill_manage` は書く内容を検査する。frontmatter が無い / `name`/`description` が読めない / `description` が空、のいずれかは確認を出す前に拒否される。既存の canonical skill はこの検査の corpus テストを兼ねる（`cargo test -p dsh-builtin the_repositorys_own_skills_pass_the_lint`）。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill
 - Codex 最小: `--profile codex-core` (`doge-shell-repo`)
 - Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
-- dsh runtime 用: `--profile dsh-common`
+- dogesh runtime 用: `--profile dogesh-common`
 - Claude Code 用: プロジェクト内では `.claude/skills` の symlink で全件が入るので導入不要。
   symlink が使えない環境だけ `--target claude-project`（リポジトリ内へコピー）か `--target claude`（`~/.claude/skills/` へコピー）を使う。
   `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
 - Skill 自体を書き足すとき: `dsh-skill-authoring`
-- 製品利用者向け: `--profile dsh-user` (`dsh-cron`)
+- 製品利用者向け: `--profile dogesh-user` (`dsh-cron`)
 
 ## 製品利用者向け Skill
 
-このディレクトリの Skill は原則「この repo を AI に編集させるための運用ルール」で、`doge-shell-*` は repo 開発者専用。`dsh-cron` だけは例外で、**doge-shell 製品自体の利用者**が `!` チャットから cron ジョブを追加・編集・デバッグするための Skill。開発チェックアウトの `--profile dsh-common` には含めない（無関係な利用者は repo を開発しないし、repo 開発者の毎ターンのプロンプトに無関係な description を乗せたくない）。配布は `--target dsh --profile dsh-user` で明示的に行う。
+このディレクトリの Skill は原則「この repo を AI に編集させるための運用ルール」で、`doge-shell-*` は repo 開発者専用。`dsh-cron` だけは例外で、**doge-shell 製品自体の利用者**が `!` チャットから cron ジョブを追加・編集・デバッグするための Skill。開発チェックアウトの `--profile dogesh-common` には含めない（無関係な利用者は repo を開発しないし、repo 開発者の毎ターンのプロンプトに無関係な description を乗せたくない）。配布は `--target dogesh --profile dogesh-user` で明示的に行う。
 
 ## 製品側の AI 機能
 

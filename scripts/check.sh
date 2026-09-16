@@ -6,9 +6,9 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$repo_root"
 
-base_ref=${DSH_CHECK_BASE_REF:-develop}
+base_ref=${DOGESH_CHECK_BASE_REF:-develop}
 if ! git rev-parse --verify --quiet "${base_ref}^{commit}" >/dev/null; then
-    if [[ -z ${DSH_CHECK_BASE_REF:-} ]] \
+    if [[ -z ${DOGESH_CHECK_BASE_REF:-} ]] \
         && git rev-parse --verify --quiet "origin/develop^{commit}" >/dev/null; then
         base_ref=origin/develop
     else

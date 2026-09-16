@@ -76,7 +76,7 @@ of this turn is worth saving, respond {"save": false}."#;
 ///
 /// Scope travels with it (not just name + body) so a "replace" can target
 /// the skill's *actual* scope: a project skill replaced through this must
-/// still land in `.dsh/skills`, not silently in the personal root.
+/// still land in `.dogesh/skills`, not silently in the personal root.
 struct OpenedSkill {
     name: String,
     scope: SkillScope,
@@ -529,7 +529,7 @@ mod tests {
     }
 
     /// A "replace" against a project-scope skill must stage into
-    /// `.dsh/skills`, not silently into the personal root - the scope comes
+    /// `.dogesh/skills`, not silently into the personal root - the scope comes
     /// from the skill this turn actually opened, never a fresh guess.
     #[test]
     fn a_replace_of_a_project_skill_keeps_its_project_scope() {
@@ -572,7 +572,7 @@ mod tests {
             assert_eq!(proposal.scope, "project");
             assert_eq!(
                 proposal.project_root,
-                Some(root.join(".dsh/skills")),
+                Some(root.join(".dogesh/skills")),
                 "{:?}",
                 proposal.project_root
             );

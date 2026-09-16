@@ -216,7 +216,7 @@ mod tests {
             format_worktree_dir("myrepo", "feature/foo"),
             "myrepo-feature-foo"
         );
-        assert_eq!(format_worktree_dir("dsh", "fix/bug"), "dsh-fix-bug");
+        assert_eq!(format_worktree_dir("dogesh", "fix/bug"), "dogesh-fix-bug");
         assert_eq!(format_worktree_dir("proj", "main"), "proj-main");
     }
 

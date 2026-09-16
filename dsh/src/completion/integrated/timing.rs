@@ -1,10 +1,10 @@
-//! Per-stage completion latency instrumentation, enabled by `DSH_COMPLETION_TIMING`.
+//! Per-stage completion latency instrumentation, enabled by `DOGESH_COMPLETION_TIMING`.
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tracing::debug;
 
 pub(super) static COMPLETION_STAGE_TIMING_ENABLED: LazyLock<bool> = LazyLock::new(|| {
-    std::env::var("DSH_COMPLETION_TIMING")
+    std::env::var("DOGESH_COMPLETION_TIMING")
         .ok()
         .map(|value| value.trim().to_ascii_lowercase())
         .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))

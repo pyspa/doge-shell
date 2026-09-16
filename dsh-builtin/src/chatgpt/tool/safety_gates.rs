@@ -20,7 +20,7 @@ pub(crate) fn reject_gitignored_path(
 }
 /// The same rule for the tools that only read, with skills exempted.
 ///
-/// A repository that ignores `.dsh/` would otherwise have its project skills
+/// A repository that ignores `.dogesh/` would otherwise have its project skills
 /// advertised in the prompt and then refused by every `read_file`. The
 /// exemption is read-only on purpose: the justification is "the prompt already
 /// pointed the model here", which says nothing about writing. `skill_manage` is

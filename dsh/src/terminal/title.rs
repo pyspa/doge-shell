@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
-const DEFAULT_TITLE: &str = "dsh";
+const DEFAULT_TITLE: &str = "dogesh";
 const MAX_TITLE_CHARS: usize = 64;
 
 pub fn set_running_title(job: &Job) -> io::Result<()> {

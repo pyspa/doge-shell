@@ -1,6 +1,6 @@
 # Installing the external tick
 
-A dsh session that is open drives its own cron jobs automatically - nothing else to
+A dogesh session that is open drives its own cron jobs automatically - nothing else to
 install. To have jobs fire while **no session is open** (overnight, after logout), an
 external tick has to call `cron tick` on a schedule. `cron setup` prints the exact text
 to install; it never installs anything itself, so review it before pasting it in.
@@ -23,7 +23,7 @@ The simplest option, and works even where systemd user services are not set up:
 ```sh
 crontab -e
 # then paste the line cron setup --crontab printed, e.g.:
-# * * * * * /path/to/dsh -c "cron tick" >/dev/null 2>&1
+# * * * * * /path/to/dogesh -c "cron tick" >/dev/null 2>&1
 ```
 
 Verify it is actually firing: check `cron status` a few minutes later, or watch
@@ -34,14 +34,14 @@ Verify it is actually firing: check `cron status` a few minutes later, or watch
 Two files, then one command:
 
 ```sh
-# ~/.config/systemd/user/dsh-cron.service and dsh-cron.timer,
+# ~/.config/systemd/user/dogesh-cron.service and dogesh-cron.timer,
 # exact contents from: cron setup --systemd
-systemctl --user enable --now dsh-cron.timer
+systemctl --user enable --now dogesh-cron.timer
 loginctl enable-linger "$(whoami)"   # so it keeps running without a login session
 ```
 
-Verify: `systemctl --user list-timers dsh-cron.timer` shows a `NEXT` time in the near
-future, and `systemctl --user status dsh-cron.service` shows successful past runs.
+Verify: `systemctl --user list-timers dogesh-cron.timer` shows a `NEXT` time in the near
+future, and `systemctl --user status dogesh-cron.service` shows successful past runs.
 
 ## macOS: launchd
 

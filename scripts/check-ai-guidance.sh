@@ -236,7 +236,7 @@ check_installer_profiles() {
 doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
-    expect_installer_list "dsh-common" "doge-shell-repo
+    expect_installer_list "dogesh-common" "doge-shell-repo
 doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
@@ -244,9 +244,9 @@ doge-shell-chat-tools"
 doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
-    expect_installer_list "dsh-user" "dsh-cron"
+    expect_installer_list "dogesh-user" "dsh-cron"
 
-    for profile in codex-core codex-common dsh-common claude-common dsh-user; do
+    for profile in codex-core codex-common dogesh-common claude-common dogesh-user; do
         if ! grep -q -- "--profile $profile" "$repo_root/docs/ai/README.md"; then
             fail "docs/ai/README.md does not mention installer profile: $profile"
         fi

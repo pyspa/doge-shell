@@ -2,16 +2,16 @@
 
 [README.md](README.md) の §10。AI 機能の設計方針全体の索引はそちらを見る。
 
-`dsh/src/agent_lifecycle/` が唯一の実装(`dsh` crate に閉じる。`dsh-builtin`/`dsh-types`/
+`dsh/src/agent_lifecycle/` が唯一の実装(`dogesh` crate に閉じる。`dsh-builtin`/`dsh-types`/
 `ShellProxy` は変更しない)。
 
 - Herdr は「custom source が lifecycle authority を握っている間、そのペインでは組み込みの画面
-  検出を止める」仕様(herdr.dev の integrations ガイド)。つまり dsh が
-  `custom:doge-shell` を握り続けると、dsh の中で `codex`/`claude` を起動しても Herdr 側は
-  `dsh` のまま変わらない。
+  検出を止める」仕様(herdr.dev の integrations ガイド)。つまり dogesh が
+  `custom:doge-shell` を握り続けると、dogesh の中で `codex`/`claude` を起動しても Herdr 側は
+  `dogesh` のまま変わらない。
 - そこで `AgentLifecycleManager::begin_yield`/`YieldGuard`
   (`agent_lifecycle::yield_to_foreground_agent` がエントリポイント)が、認識済みエージェント
-  CLI(既定リストは `agent_lifecycle/agent_command.rs`、`DSH_HERDR_AGENT_COMMANDS` で追加/除外)
+  CLI(既定リストは `agent_lifecycle/agent_command.rs`、`DOGESH_HERDR_AGENT_COMMANDS` で追加/除外)
   が **前景** で実行されている間だけ `release-agent` で authority を明け渡し、終了時に
   `report-agent` で取り戻す。フック位置は `shell/eval.rs`(通常実行)と
   `proxy/builtin/jobs.rs::execute_fg`(`fg` での再開)の 2 箇所だけ。

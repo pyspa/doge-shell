@@ -1,14 +1,14 @@
-# doge-shell (dsh)
+# doge-shell (dogesh)
 
 A modern, feature-rich shell written in Rust with an integrated Lisp interpreter and AI-powered command completion.
 
 ## 🐕 Overview
 
-doge-shell (dsh) is a simple yet powerful shell that combines traditional shell capabilities with modern features like AI-assisted command completion, frecency-based history, and an embedded Lisp scripting environment.
+doge-shell (dogesh) is a simple yet powerful shell that combines traditional shell capabilities with modern features like AI-assisted command completion, frecency-based history, and an embedded Lisp scripting environment.
 
 ## 💻 Supported Platforms
 
-dsh targets **Linux** (x86_64 / aarch64) and **macOS** (Apple Silicon / Intel). Both are
+dogesh targets **Linux** (x86_64 / aarch64) and **macOS** (Apple Silicon / Intel). Both are
 first-class: the shell, its tests and its host-aware completions are expected to behave the
 same on either. Windows is not supported.
 
@@ -83,7 +83,7 @@ The Safety Guard protects against unintended execution of potentially destructiv
   (safety-level 'loose)  ; Disable safety checks
   (safety-level)         ; Get current safety level
   ```
-- **Environment Variable**: `SAFETY_LEVEL` reports the current level ("normal", "strict", "loose") and seeds it at startup, so `SAFETY_LEVEL=strict dsh` starts hardened. After startup it is a readable copy: change the level with `(safety-level ...)`.
+- **Environment Variable**: `SAFETY_LEVEL` reports the current level ("normal", "strict", "loose") and seeds it at startup, so `SAFETY_LEVEL=strict dogesh` starts hardened. After startup it is a readable copy: change the level with `(safety-level ...)`.
 
 ### 🔒 Secret Management
 
@@ -109,7 +109,7 @@ Protection of sensitive information from history and display.
 ### Lisp Interpreter
 
 - **Embedded Lisp**: Built-in Lisp interpreter for shell scripting
-- **Configuration**: Shell configuration in Lisp with `~/.config/dsh/config.lisp`
+- **Configuration**: Shell configuration in Lisp with `~/.config/dogesh/config.lisp`
 - **Custom Commands**: Define custom shell commands using Lisp
 - **Extensibility**: Extend shell functionality with Lisp functions
 
@@ -135,7 +135,7 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline 
   `free`, `docker ps`/`images`, `git log`/`status`, `kubectl get`), `|:`
   parses the output into a typed table automatically — no hand-written
   parsing. Column types are declared in `output-schemas/*.json` (embedded;
-  `~/.config/dsh/output-schemas/` overrides, meta schema in
+  `~/.config/dogesh/output-schemas/` overrides, meta schema in
   `command-output-schema.json`), so `%CPU` is a number and `-h` sizes are
   bytes (unsuffixed `df`/`free` columns keep their native units and say so in
   the column name, e.g. `avail_1k`, `total_kib`). `output-gen <command...>`
@@ -220,11 +220,11 @@ Organize and switch between workspaces efficiently with the integrated Project M
 - **`pm list`**: List registered projects (sorted by last access).
 - **`pm work <name>`**: Switch to a project and trigger hooks.
 - **`pm jump` / `pj`**: Interactively select and switch to a project.
-- **`pm activate --provider auto|native|mise`**: Apply safe native activation and, for trusted or conservatively classified safe mise projects, overlay `mise --no-hooks env --json`. dsh never runs `mise trust`, installs tools, or executes hooks automatically.
+- **`pm activate --provider auto|native|mise`**: Apply safe native activation and, for trusted or conservatively classified safe mise projects, overlay `mise --no-hooks env --json`. dogesh never runs `mise trust`, installs tools, or executes hooks automatically.
 - **`pm activate --dry-run`**: Preview `.env`, allowed `.envrc`, venv, and PATH changes with sensitive values masked before applying them.
 - **Hooks**: Define `*on-project-switch-hooks*` in Lisp to automate environment setup.
   - Automatically triggered when entering a project directory (via `pm work`, `pj`, or `cd`).
-  - Sets `DSH_PROJECT` environment variable to the current project name.
+  - Sets `DOGESH_PROJECT` environment variable to the current project name.
 
 ### Task Catalog
 
@@ -457,13 +457,13 @@ Some interactive commands may require disabling the built-in PTY. You have two o
   ```bash
   nopty trizen -S google-chrome
   ```
-- **`DSH_NO_PTY` environment variable**: Set `DSH_NO_PTY=1` to globally disable PTY.
+- **`DOGESH_NO_PTY` environment variable**: Set `DOGESH_NO_PTY=1` to globally disable PTY.
 
 ## 📁 Configuration
 
 ### config.lisp
 
-Create a `~/.config/dsh/config.lisp` file to configure your shell:
+Create a `~/.config/dogesh/config.lisp` file to configure your shell:
 
 > **Note**: the whole file is evaluated as a single `(begin ...)` form. If any expression fails,
 > the shell rolls the environment back and **none** of the configuration takes effect, so keep an
@@ -581,7 +581,7 @@ Create a `~/.config/dsh/config.lisp` file to configure your shell:
 
 ### tmux title integration
 
-`dsh` updates the terminal title while a foreground command is running. To let tmux reflect that in the window name, add this to `~/.tmux.conf`:
+`dogesh` updates the terminal title while a foreground command is running. To let tmux reflect that in the window name, add this to `~/.tmux.conf`:
 
 ```tmux
 set -g allow-rename on
@@ -694,14 +694,21 @@ You can also manage MCP servers interactively using the `mcp` command:
 
 ```bash
 # Start the shell interactively
-dsh
+dogesh
 
 # Execute a single command
-dsh -c "echo 'Hello, World!'"
+dogesh -c "echo 'Hello, World!'"
 
 # Execute a Lisp script
-dsh -l "(print \"Hello from Lisp!\")"
+dogesh -l "(print \"Hello from Lisp!\")"
 ```
+
+> **Renamed from `dsh`:** the binary is now `dogesh`, the config directory is
+> `~/.config/dogesh`, project skills live in `<project>/.dogesh/skills`, and
+> `DSH_*` environment variables are now `DOGESH_*` (old names are not read).
+> Migrating from an older checkout:
+> `mv ~/.config/dsh ~/.config/dogesh`, rename each project's `.dsh` to
+> `.dogesh`, and replace `DSH_` with `DOGESH_` in your hook scripts and settings.
 
 ### Smart Pipe
 
@@ -843,7 +850,7 @@ git state and GitHub notifications:
 (pref-status-line t)
 ```
 
-`DSH_STATUS_LINE=0` forces it off regardless, and it stays off on a non-terminal or a
+`DOGESH_STATUS_LINE=0` forces it off regardless, and it stays off on a non-terminal or a
 terminal shorter than three rows.
 
 It works by reserving a scroll region (DECSTBM) so the bottom row sits outside the
@@ -873,7 +880,7 @@ cron resume
 ```
 
 Unlike the old `sched` builtin it replaced, jobs persist across restarts (a SQLite store
-under `$XDG_STATE_HOME/dsh/cron`, not `config.lisp`) and understand real wall-clock
+under `$XDG_STATE_HOME/dogesh/cron`, not `config.lisp`) and understand real wall-clock
 schedules, not just intervals:
 
 | Form | Example | Meaning |
@@ -883,17 +890,17 @@ schedules, not just intervals:
 | Macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | Shorthand for a fixed cron expression. |
 
 **Always quote a cron expression** — `cron add */5 * * * * git fetch` is glob-expanded by
-the shell before dsh ever sees it. `cron add` detects the common shapes of this mistake
+the shell before dogesh ever sees it. `cron add` detects the common shapes of this mistake
 and names the fix.
 
 **Two ways a job fires**, and either is enough on its own:
 
-- **A dsh session is open.** Each interactive session runs its own scan for due jobs and
+- **A dogesh session is open.** Each interactive session runs its own scan for due jobs and
   starts them — nothing to install, works the moment you `cron add`. Closing every
   session pauses that clock until one opens again, unless:
 - **An external tick is installed.** `cron setup` prints a crontab line, a systemd user
   timer, or a launchd agent (auto-detected, or pick with `--crontab`/`--systemd`/`--launchd`)
-  that calls `dsh -c "cron tick"` on a schedule — this is what makes a job fire while
+  that calls `dogesh -c "cron tick"` on a schedule — this is what makes a job fire while
   logged out. `cron setup` only prints; it never installs anything itself.
 
 Whether a run is worth reporting is set by `--on`, same meanings as before:
@@ -976,7 +983,7 @@ recorded output just by knowing its name.
 Full CLI reference, schedule grammar, external-tick setup for each OS, and a
 symptom-to-cause debugging table live in the `dsh-cron` skill
 (`docs/ai/skills/dsh-cron/`) — install it for the `!` chat agent with
-`scripts/install-runtime-skills.sh --target dsh --profile dsh-user`.
+`scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user`.
 
 ### Snippets
 
@@ -1053,10 +1060,10 @@ Import command history from another shell (currently fish only):
 
 ```bash
 # Import from fish shell
-dsh import fish
+dogesh import fish
 
 # Import from a non-default fish history path
-dsh import fish --path /path/to/fish_history
+dogesh import fish --path /path/to/fish_history
 ```
 
 ### `history` Command
@@ -1085,7 +1092,7 @@ only when captured output should be inspected, redacted, and retained (64 KiB
 per event, at most 10,000 events, 90-day retention). The default `"off"` and
 `"metadata"` modes do not inspect or store command output. External agents can
 record provenance with `history record --json '<event>'`. Optional Atuin
-dual-write is enabled with `DSH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
+dual-write is enabled with `DOGESH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
 path and never block a command.
 
 ### `doctor` Command
@@ -1124,7 +1131,7 @@ help --search ai
 
 ### Project Onboarding
 
-Register the current project and inspect what dsh can activate or run.
+Register the current project and inspect what dogesh can activate or run.
 
 ```bash
 pm init
@@ -1252,11 +1259,11 @@ metadata of its most recent execution. `scope:cwd` therefore means "commands who
 run was in this directory", not "every command ever run here", and the exit status and
 duration shown are those of that last run.
 
-Set `DSH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
+Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 
 ### Fish Completion Fallback
 
-TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DSH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
+TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
 
 Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents. Additional providers cover 1Password (`op item get/edit/delete`), Vagrant installed boxes (`vagrant box remove/repackage`, `vagrant init`), and `.envrc` files plus their containing directories discovered from the working directory chain for `direnv allow/deny/edit`.
 
@@ -1278,7 +1285,7 @@ Access all shell capabilities through a unified fuzzy-search interface, similar 
 
 ## Command Suggestions
 
-When a command is not found, dsh can suggest close command names. If the current directory exposes tasks through the built-in task runner, task suggestions may also appear as `task <name>` candidates.
+When a command is not found, dogesh can suggest close command names. If the current directory exposes tasks through the built-in task runner, task suggestions may also appear as `task <name>` candidates.
 
 After a failed command, `Alt+f` first uses the local deterministic Quick Fix
 engine (command/Git typos, missing upstream, occupied port, local execute bit,
@@ -1289,7 +1296,7 @@ failures through `blocks fix <N> [--json] [--ai]`. Port fixes require an
 explicit `:PORT` or `port PORT` diagnostic so version, PID, and errno numbers do
 not become accidental kill suggestions.
 
-Inside VS Code, dsh emits each OSC 633 command marker once in A/B/E/C/D order,
+Inside VS Code, dogesh emits each OSC 633 command marker once in A/B/E/C/D order,
 plus Cwd and HasRichCommandDetection properties. Prompt redraws do not duplicate
 the B marker. Other terminals keep the existing OSC 133 and OSC 7 integration.
 
@@ -1346,11 +1353,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
    | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
-   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dsh/openai-execute-tool.json` |
-   | `DSH_EXECUTE_TOOL_CONFIG` | `~/.config/dsh/openai-execute-tool.json` | Path of that JSON allowlist file |
+   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dogesh/openai-execute-tool.json` |
+   | `DOGESH_EXECUTE_TOOL_CONFIG` | `~/.config/dogesh/openai-execute-tool.json` | Path of that JSON allowlist file |
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
-   | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dsh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
+   | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dogesh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
    | `AI_CHAT_SKILL_STAGING` | `task` | Whether `skill_manage` writes land immediately or wait in `skill pending`: `task` (only when an `agent run` has no `--write` grant for the target) / `always` / `off` |
    | `AI_CHAT_SKILL_REFLECT` | off | Send one tool-free request after a long turn proposing a skill from what it did; never writes directly |
    | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | `5` | Tool calls a turn needs before the reflection reviewer considers it |
@@ -1358,7 +1365,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off | Archive an agent-written, unpinned personal skill once unread this many days; unset or `0` disables it |
    | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
    | `AI_CHAT_HOOK_TURN_BUDGET_MS` | unset | Ceiling on the wall time one `!` turn waits for hooks; `0` removes it |
-   | `DSH_AI_HOOKS_CONFIG` | `~/.config/dsh/ai-hooks.json` | Path of the hook configuration |
+   | `DOGESH_AI_HOOKS_CONFIG` | `~/.config/dogesh/ai-hooks.json` | Path of the hook configuration |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
    `Retry-After`. An optional request field the endpoint rejects outright is
@@ -1409,7 +1416,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    git status
    ```
 
-   **Proactive failure hints** (on by default): when a command fails, dsh
+   **Proactive failure hints** (on by default): when a command fails, dogesh
    automatically shows the deterministic quick-fix as ghost text with a short
    reason next to the prompt — accept it with `Tab` or `Alt+f`. No AI request
    is sent unless `set-auto-fix-enabled` is on. Interrupted commands
@@ -1505,13 +1512,13 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       command line.
     - Tools can read and write within the project root and the skills directories.
       `.gitignore` is honoured the way git honours it, nested files included. Reading a
-      skill is the one exception, so a repository that ignores `.dsh/` can still carry
+      skill is the one exception, so a repository that ignores `.dogesh/` can still carry
       project skills the assistant reads; writing one still goes through `skill_manage`.
     - Long tool output is truncated in the middle, so the end of a build or test log -
       where the error is - still reaches the model.
     - `edit`, `str_replace`, `skill_manage` and skill scripts always ask for
       confirmation, at every safety level. That includes scripts under a project's
-      `.dsh/skills/`. Answering "always" applies to that file for the rest of the
+      `.dogesh/skills/`. Answering "always" applies to that file for the rest of the
       session, so a long editing run is one question per file rather than one per
       edit. Deleting a skill is asked separately: an "always" given for writing a
       file does not authorise removing it.
@@ -1565,26 +1572,26 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
     | Scope | Directory | What belongs there |
     |---|---|---|
-    | Project | `<project>/.dsh/skills/` | procedures tied to this repository |
+    | Project | `<project>/.dogesh/skills/` | procedures tied to this repository |
     | Project, shared | `<project>/.agents/skills/` | the same, kept where every agent working in the checkout can find them |
-    | Personal | `~/.config/dsh/skills/` (`$XDG_CONFIG_HOME/dsh/skills` when set) | anything portable |
+    | Personal | `~/.config/dogesh/skills/` (`$XDG_CONFIG_HOME/dogesh/skills` when set) | anything portable |
 
     A more specific root shadows a less specific one of the same name, so
-    `.dsh/skills` wins over `.agents/skills`, which wins over your personal root.
+    `.dogesh/skills` wins over `.agents/skills`, which wins over your personal root.
     Only the name, the path and the frontmatter `description` reach the system
     prompt; the body is read on demand, so keep the description a trigger
-    ("Use when …") and move long detail into `references/`. Frontmatter keys dsh
+    ("Use when …") and move long detail into `references/`. Frontmatter keys dogesh
     does not use - `allowed-tools`, `license` and the rest - are ignored rather
-    than rejected, so a skill written for another agent loads as it is; dsh does
+    than rejected, so a skill written for another agent loads as it is; dogesh does
     not enforce `allowed-tools`, and a skill cannot narrow what the assistant may
     do any more than it can widen it.
 
     **`.agents/skills/` is read, never written.** It is shared with other tools,
     and a directory this shell does not own is not a place for it to leave files,
-    so `skill_manage` with `scope: "project"` always writes to `.dsh/skills/`.
+    so `skill_manage` with `scope: "project"` always writes to `.dogesh/skills/`.
     There is no personal equivalent: if you keep portable skills in
     `~/.agents/skills`, point the personal root at them
-    (`ln -s ~/.agents/skills ~/.config/dsh/skills`) and they load with one trust
+    (`ln -s ~/.agents/skills ~/.config/dogesh/skills`) and they load with one trust
     story rather than two.
 
     ```bash
@@ -1644,14 +1651,14 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     gone unread that many days - the same staleness `skill list` and `doctor skills`
     already report, just acted on instead of only mentioned.
 
-    **The first time you use `!` in a repository that ships skills, dsh asks.** Their
+    **The first time you use `!` in a repository that ships skills, dogesh asks.** Their
     descriptions would otherwise be in every prompt before you had decided anything,
     and the assistant on the other side of that prompt can run commands. Answer `y`
     for this shell session or `a` to remember the repository; adding a skill, or
-    rewording one, asks again - as does dsh itself widening how much of a
+    rewording one, asks again - as does dogesh itself widening how much of a
     description it keeps, which happens rarely and re-asks every trusted
     repository once. You are asked once per directory, so a checkout
-    carrying both `.dsh/skills/` and `.agents/skills/` asks twice and refusing one
+    carrying both `.dogesh/skills/` and `.agents/skills/` asks twice and refusing one
     leaves the other alone. `skill trust` shows the current answers and
     `skill untrust` takes them back. Under `agent run` nothing is asked and an
     untrusted repository is simply not read - an unattended run should be the more
@@ -1677,15 +1684,15 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     project roots off entirely.
 
     This repository keeps canonical sample skills under `docs/ai/skills/`; install the
-    ones you want with `scripts/install-runtime-skills.sh --target dsh --profile dsh-common`.
+    ones you want with `scripts/install-runtime-skills.sh --target dogesh --profile dogesh-common`.
     One of them, `dsh-cron`, teaches the `!` agent to add, edit and debug your own
-    [cron jobs](#cron-jobs) — install it on its own with `--profile dsh-user`.
+    [cron jobs](#cron-jobs) — install it on its own with `--profile dogesh-user`.
 
 14. **AI chat hooks**:
     Your own checks, run around the `!` agent loop. Distinct from the Lisp
     [hook system](#hook-system-functions), which fires around ordinary command execution.
 
-    Put them in `~/.config/dsh/ai-hooks.json` (`DSH_AI_HOOKS_CONFIG` points elsewhere):
+    Put them in `~/.config/dogesh/ai-hooks.json` (`DOGESH_AI_HOOKS_CONFIG` points elsewhere):
 
     ```json
     {
@@ -1698,7 +1705,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
             "tools": ["edit", "str_replace", "execute"],
             "paths": ["/etc/**"]
           },
-          "command": ["python3", "/home/me/.config/dsh/hooks/block-etc.py"],
+          "command": ["python3", "/home/me/.config/dogesh/hooks/block-etc.py"],
           "timeout_ms": 3000
         }
       ]
@@ -1716,11 +1723,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
 
     `pre-compact` fires when the conversation has grown past
     `AI_CHAT_CONTEXT_TOKEN_BUDGET` (or the internal buffer limit), after the free
-    rule-based pass and before dsh pays a model to summarize - its
+    rule-based pass and before dogesh pays a model to summarize - its
     `will_summarize` says which. It cannot refuse: without the shortening the
     request would simply be too large to send.
 
-    **Which calls a hook wants** is the `match` clause. dsh puts every command
+    **Which calls a hook wants** is the `match` clause. dogesh puts every command
     through the one `execute` tool, so `{"tools": ["execute"]}` means *every
     command* and a hook watching `rm` would pay its timeout on every `ls`. The
     other three kinds narrow that. Kinds are ANDed; entries within a kind are ORed.
@@ -1793,11 +1800,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     moves only if a key changes meaning or goes away.
 
     A short hook should not need a JSON parser, so the same facts arrive as
-    environment variables: `DSH_HOOK_EVENT`, `DSH_HOOK_ID`, `DSH_HOOK_SESSION_ID`,
-    `DSH_HOOK_TURN_ID`, `DSH_HOOK_CWD`, `DSH_HOOK_TOOL`, `DSH_HOOK_ITERATION`,
-    `DSH_HOOK_MAX_ITERATIONS`, `DSH_HOOK_TURN_TOKENS` and `DSH_HOOK_TIMEOUT_MS`
-    (the timeout that actually applies). `DSH_HOOK_DEPTH` is set too, and is what
-    stops a hook that starts `dsh` from running hooks of its own.
+    environment variables: `DOGESH_HOOK_EVENT`, `DOGESH_HOOK_ID`, `DOGESH_HOOK_SESSION_ID`,
+    `DOGESH_HOOK_TURN_ID`, `DOGESH_HOOK_CWD`, `DOGESH_HOOK_TOOL`, `DOGESH_HOOK_ITERATION`,
+    `DOGESH_HOOK_MAX_ITERATIONS`, `DOGESH_HOOK_TURN_TOKENS` and `DOGESH_HOOK_TIMEOUT_MS`
+    (the timeout that actually applies). `DOGESH_HOOK_DEPTH` is set too, and is what
+    stops a hook that starts `dogesh` from running hooks of its own.
 
     `additional_context` lands next to the thing it is about, on the three events
     that have somewhere to put it: `user-prompt-submit` (beside your message),
@@ -1813,7 +1820,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     put any pipeline in a script file. The first element must be an **absolute path** or
     a bare name found on `PATH` - a relative one like `./hook.sh` is refused, because it
     would resolve against whatever directory the chat happens to be in when the hook
-    runs, which is the very thing that keeps `.dsh/hooks.json` unread. A bare name is
+    runs, which is the very thing that keeps `.dogesh/hooks.json` unread. A bare name is
     looked up once, at load time.
 
     The configuration file (and its directory) must not be world-writable; it is a list
@@ -1846,10 +1853,10 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     An unknown event name, an unknown `match` field or an unknown key anywhere in the
     file is a load error, and a load error refuses the chat rather than running without
     the checks. That also means a configuration using the newer `match` kinds will not
-    load on an older `dsh` - deliberately, and for the same reason: a typo must not be
+    load on an older `dogesh` - deliberately, and for the same reason: a typo must not be
     a way for a gate to disappear quietly.
 
-    Project-local `.dsh/hooks.json` is deliberately **not** read: cloning a repository
+    Project-local `.dogesh/hooks.json` is deliberately **not** read: cloning a repository
     should not be enough to run its commands.
 
 For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.

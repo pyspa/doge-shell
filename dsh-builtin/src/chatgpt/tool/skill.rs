@@ -676,7 +676,7 @@ fn refresh_project_trust(scope: SkillScope, skill_dir: &Path) {
     let Some(root) = skill_dir.parent() else {
         return;
     };
-    // `.dsh/skills` by construction: `skill_dir` came from
+    // `.dogesh/skills` by construction: `skill_dir` came from
     // `skills::project_skills_root`, the only project root writes may reach.
     let manager = skills::SkillsManager::with_roots(vec![skills::SkillRoot {
         scope: SkillScope::Project,

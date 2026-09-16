@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Command Output Schema",
-  "description": "Declarative description of a command's stdout layout, used by the |: structured pipe to parse output into a typed table. Files live in output-schemas/ (one per command) and are embedded into the dsh binary; ~/.config/dsh/output-schemas/ overrides them.",
+  "description": "Declarative description of a command's stdout layout, used by the |: structured pipe to parse output into a typed table. Files live in output-schemas/ (one per command) and are embedded into the dogesh binary; ~/.config/dogesh/output-schemas/ overrides them.",
   "type": "object",
   "required": ["command", "outputs"],
   "additionalProperties": false,

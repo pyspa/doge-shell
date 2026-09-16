@@ -1,7 +1,7 @@
 # Module Map
 
 ## Crates
-- `doge-shell` package (`dsh` lib / binary): shell runtime, parser, repl, completion, prompt, lisp
+- `doge-shell` package (`dsh` dir / `dogesh` binary): shell runtime, parser, repl, completion, prompt, lisp
 - `dsh-builtin`: builtin commands, AI chat tools, MCP plumbing
 - `dsh-openai`: OpenAI-compatible client and config loading
 - `dsh-types`: shared types

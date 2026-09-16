@@ -292,7 +292,7 @@ fn parse_fix_supports_json_and_ai_flags() {
 #[test]
 fn fix_json_uses_deterministic_engine_without_running_command() {
     let mut failed = block("gti status", 127, false);
-    failed.stderr = "dsh: command not found: gti".to_string();
+    failed.stderr = "dogesh: command not found: gti".to_string();
     let mut proxy = blocks_proxy(vec![failed]);
     let (status, snapshot) = run_with_observer(
         vec![

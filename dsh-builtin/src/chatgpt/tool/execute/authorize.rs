@@ -35,7 +35,7 @@ pub(super) fn authorize(
 
     // The shell's runtime list plus the JSON config and the environment
     // variable; dropping this merge would have quietly disabled
-    // `~/.config/dsh/openai-execute-tool.json`.
+    // `~/.config/dogesh/openai-execute-tool.json`.
     let allowlist = load_allowed_commands(
         proxy.agent_allowlist(),
         proxy.get_var(EXECUTE_TOOL_ENV_ALLOWLIST),
@@ -223,7 +223,7 @@ pub(super) fn readable_stages(command: &str) -> Option<Vec<CommandStage>> {
 ///
 /// Every skill root counts, the project one included. A skill arrives with a
 /// `git clone` and the prompt actively points the model at it, so a file under
-/// `<project>/.dsh/skills` is exactly the case that must not fall through to
+/// `<project>/.dogesh/skills` is exactly the case that must not fall through to
 /// the ordinary command policy and run unasked under `loose`.
 ///
 /// Judged over **every token of every stage**, not just the program. Only the

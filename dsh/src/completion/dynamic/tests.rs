@@ -959,7 +959,7 @@ fn shell_state_dynamic_providers_read_environment_maps() {
             .insert("gco".to_string(), "git checkout".to_string());
         env.variable_state
             .system_env_vars
-            .insert("DSH_TEST_ENV".to_string(), "1".to_string());
+            .insert("DOGESH_TEST_ENV".to_string(), "1".to_string());
     }
     let provider = DynamicCompletionProvider::new(environment);
 
@@ -992,12 +992,12 @@ fn shell_state_dynamic_providers_read_environment_maps() {
             .collect_declared_dynamic_candidates(
                 "shell.env_var",
                 None,
-                &parsed("unset DSH_TEST"),
+                &parsed("unset DOGESH_TEST"),
                 Path::new("/tmp"),
                 CachePolicy::RefreshInBackground,
             )
             .iter()
-            .any(|candidate| candidate.text == "DSH_TEST_ENV")
+            .any(|candidate| candidate.text == "DOGESH_TEST_ENV")
     );
 }
 
@@ -1649,10 +1649,10 @@ fn external_completer_parses_filters_and_receives_context() {
         &script,
         "#!/bin/sh\n\
              {\n\
-             printf 'input=%s\\n' \"$DSH_COMPLETION_INPUT\"\n\
-             printf 'cursor=%s\\n' \"$DSH_COMPLETION_CURSOR\"\n\
-             printf 'command=%s\\n' \"$DSH_COMPLETION_COMMAND\"\n\
-             printf 'token=%s\\n' \"$DSH_COMPLETION_CURRENT_TOKEN\"\n\
+             printf 'input=%s\\n' \"$DOGESH_COMPLETION_INPUT\"\n\
+             printf 'cursor=%s\\n' \"$DOGESH_COMPLETION_CURSOR\"\n\
+             printf 'command=%s\\n' \"$DOGESH_COMPLETION_COMMAND\"\n\
+             printf 'token=%s\\n' \"$DOGESH_COMPLETION_CURRENT_TOKEN\"\n\
              } > external-env.txt\n\
              printf 'zzext-alpha\\tExternal alpha\\n'\n\
              printf 'other-candidate\\tOther candidate\\n'\n",
@@ -1660,7 +1660,7 @@ fn external_completer_parses_filters_and_receives_context() {
 
     let environment = Environment::new();
     environment.write().variable_state.variables.insert(
-        "DSH_EXTERNAL_COMPLETER".to_string(),
+        "DOGESH_EXTERNAL_COMPLETER".to_string(),
         script.display().to_string(),
     );
     let provider = DynamicCompletionProvider::new(environment);
@@ -1760,9 +1760,10 @@ fn fish_fallback_auto_requires_fish_command_and_respects_disable() {
     {
         let mut env = environment.write();
         env.variable_state.paths = vec![];
-        env.variable_state
-            .variables
-            .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
+        env.variable_state.variables.insert(
+            "DOGESH_COMPLETION_FISH_FALLBACK".to_string(),
+            "1".to_string(),
+        );
         env.clear_command_cache();
     }
     let provider = DynamicCompletionProvider::new(environment);
@@ -1783,9 +1784,10 @@ fn fish_fallback_auto_requires_fish_command_and_respects_disable() {
     {
         let mut env = disabled_environment.write();
         env.variable_state.paths = vec![bin_dir.display().to_string()];
-        env.variable_state
-            .variables
-            .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "0".to_string());
+        env.variable_state.variables.insert(
+            "DOGESH_COMPLETION_FISH_FALLBACK".to_string(),
+            "0".to_string(),
+        );
         env.clear_command_cache();
     }
     let provider = DynamicCompletionProvider::new(disabled_environment);
@@ -1850,9 +1852,10 @@ fn fish_fallback_runs_with_cursor_prefix_and_timeout() {
     {
         let mut env = slow_environment.write();
         env.variable_state.paths = vec![slow_bin.display().to_string()];
-        env.variable_state
-            .variables
-            .insert("DSH_COMPLETION_FISH_FALLBACK".to_string(), "1".to_string());
+        env.variable_state.variables.insert(
+            "DOGESH_COMPLETION_FISH_FALLBACK".to_string(),
+            "1".to_string(),
+        );
         env.clear_command_cache();
     }
     let slow_provider = DynamicCompletionProvider::new(slow_environment);
@@ -1905,7 +1908,7 @@ fn external_completer_failure_returns_empty_candidates() {
 
     let environment = Environment::new();
     environment.write().variable_state.variables.insert(
-        "DSH_EXTERNAL_COMPLETER".to_string(),
+        "DOGESH_EXTERNAL_COMPLETER".to_string(),
         script.display().to_string(),
     );
     let provider = DynamicCompletionProvider::new(environment);
@@ -1943,7 +1946,7 @@ fn external_completer_returns_stale_candidates_while_refreshing() {
 
     let environment = Environment::new();
     environment.write().variable_state.variables.insert(
-        "DSH_EXTERNAL_COMPLETER".to_string(),
+        "DOGESH_EXTERNAL_COMPLETER".to_string(),
         script.display().to_string(),
     );
     let provider = DynamicCompletionProvider::new(environment);
@@ -1993,12 +1996,12 @@ fn external_completion_cache_prunes_oldest_entries() {
     let script = dir.path().join("external-completer-cache.sh");
     write_executable_script(
         &script,
-        "#!/bin/sh\nprintf '%s-candidate\\n' \"$DSH_COMPLETION_CURRENT_TOKEN\"\n",
+        "#!/bin/sh\nprintf '%s-candidate\\n' \"$DOGESH_COMPLETION_CURRENT_TOKEN\"\n",
     );
 
     let environment = Environment::new();
     environment.write().variable_state.variables.insert(
-        "DSH_EXTERNAL_COMPLETER".to_string(),
+        "DOGESH_EXTERNAL_COMPLETER".to_string(),
         script.display().to_string(),
     );
     let provider = DynamicCompletionProvider::new(environment);

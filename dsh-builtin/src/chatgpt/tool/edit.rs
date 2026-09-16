@@ -236,7 +236,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let skill_dir = root.join(".dsh/skills/demo");
+        let skill_dir = root.join(".dogesh/skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
         fs::write(skill_dir.join("SKILL.md"), original).unwrap();
@@ -250,7 +250,7 @@ mod tests {
         };
 
         let result = run(
-            r#"{"path":".dsh/skills/demo/SKILL.md","contents":"no frontmatter here"}"#,
+            r#"{"path":".dogesh/skills/demo/SKILL.md","contents":"no frontmatter here"}"#,
             &mut proxy,
         );
 
@@ -271,7 +271,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let skill_dir = root.join(".dsh/skills/demo");
+        let skill_dir = root.join(".dogesh/skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
@@ -291,7 +291,7 @@ mod tests {
         };
 
         let err = run(
-            r#"{"path":".dsh/skills/demo/SKILL.md","contents":"bypassing the queue"}"#,
+            r#"{"path":".dogesh/skills/demo/SKILL.md","contents":"bypassing the queue"}"#,
             &mut proxy,
         )
         .expect_err("a skill path must not bypass staging through edit");
@@ -328,7 +328,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let skill_dir = root.join(".dsh/skills/demo");
+        let skill_dir = root.join(".dogesh/skills/demo");
         fs::create_dir_all(skill_dir.join("references")).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
@@ -338,7 +338,7 @@ mod tests {
         let mut proxy = proxy(root);
 
         run(
-            r#"{"path":".dsh/skills/demo/references/notes.md","contents":"anything at all"}"#,
+            r#"{"path":".dogesh/skills/demo/references/notes.md","contents":"anything at all"}"#,
             &mut proxy,
         )
         .unwrap();

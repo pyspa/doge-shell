@@ -10,11 +10,11 @@ pub(super) fn run_external_completer_for_key(
     let mut command = runner::shell_command(&key.command_template);
     command
         .current_dir(&key.current_dir)
-        .env("DSH_COMPLETION_INPUT", &key.input)
-        .env("DSH_COMPLETION_CURSOR", key.cursor_pos.to_string())
-        .env("DSH_COMPLETION_COMMAND", &key.command)
-        .env("DSH_COMPLETION_CURRENT_TOKEN", &key.current_token)
-        .env("DSH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path);
+        .env("DOGESH_COMPLETION_INPUT", &key.input)
+        .env("DOGESH_COMPLETION_CURSOR", key.cursor_pos.to_string())
+        .env("DOGESH_COMPLETION_COMMAND", &key.command)
+        .env("DOGESH_COMPLETION_CURRENT_TOKEN", &key.current_token)
+        .env("DOGESH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path);
 
     let lines = collect_command_lines(command)?;
     Ok(lines

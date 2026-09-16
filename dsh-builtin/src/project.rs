@@ -1,4 +1,4 @@
-//! `pm`/`pj`: project registry (init/add/list/remove/work/jump) backed by `~/.config/dsh/projects.json`. Subcommand implementations live in
+//! `pm`/`pj`: project registry (init/add/list/remove/work/jump) backed by `~/.config/dogesh/projects.json`. Subcommand implementations live in
 //! `project/status.rs` (`pm status`) and `project/activate.rs` (`pm activate`); this file keeps the dispatcher, storage CRUD, and the
 //! remaining small subcommands.
 use super::ShellProxy;
@@ -142,7 +142,7 @@ fn help_text() -> &'static str {
 
 fn get_config_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
-    Ok(home.join(".config").join("dsh").join(PROJECTS_FILE))
+    Ok(home.join(".config").join("dogesh").join(PROJECTS_FILE))
 }
 
 fn load_projects() -> Result<Vec<Project>> {

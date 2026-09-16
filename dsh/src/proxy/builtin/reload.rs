@@ -23,7 +23,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Result<(
                     // Fallback to generic message if path resolution fails
                     shell.reload_mcp_config();
                     ctx.write_stdout(
-                        "Configuration reloaded successfully from ~/.config/dsh/config.lisp",
+                        "Configuration reloaded successfully from ~/.config/dogesh/config.lisp",
                     )?;
                 }
             }
@@ -46,28 +46,28 @@ pub fn format_reload_error(err: &anyhow::Error) -> String {
     if error_string.contains("No such file or directory")
         || error_string.contains("Failed to read config file")
     {
-        if let Some(path_start) = error_string.find("~/.config/dsh/config.lisp") {
-            let path_end = path_start + "~/.config/dsh/config.lisp".len();
+        if let Some(path_start) = error_string.find("~/.config/dogesh/config.lisp") {
+            let path_end = path_start + "~/.config/dogesh/config.lisp".len();
             let config_path = &error_string[path_start..path_end];
             return format!("reload: file not found: {config_path}");
         } else if let Some(path_start) = error_string.rfind('/') {
             // Extract just the filename if full path is shown
             if let Some(path_end) = error_string[path_start..].find(' ') {
                 let filename = &error_string[path_start + 1..path_start + path_end];
-                return format!("reload: file not found: ~/.config/dsh/{filename}");
+                return format!("reload: file not found: ~/.config/dogesh/{filename}");
             }
         }
-        return "reload: file not found: ~/.config/dsh/config.lisp".to_string();
+        return "reload: file not found: ~/.config/dogesh/config.lisp".to_string();
     }
 
     // Handle permission denied errors
     if error_string.contains("Permission denied") {
-        return "reload: permission denied: cannot read ~/.config/dsh/config.lisp".to_string();
+        return "reload: permission denied: cannot read ~/.config/dogesh/config.lisp".to_string();
     }
 
     // Handle XDG directory errors
     if error_string.contains("failed get xdg directory") {
-        return "reload: configuration directory error: unable to access ~/.config/dsh/"
+        return "reload: configuration directory error: unable to access ~/.config/dogesh/"
             .to_string();
     }
 
@@ -116,7 +116,7 @@ mod tests {
         let formatted = format_reload_error(&err);
         assert_eq!(
             formatted,
-            "reload: file not found: ~/.config/dsh/config.lisp"
+            "reload: file not found: ~/.config/dogesh/config.lisp"
         );
     }
 
@@ -126,7 +126,7 @@ mod tests {
         let formatted = format_reload_error(&err);
         assert_eq!(
             formatted,
-            "reload: permission denied: cannot read ~/.config/dsh/config.lisp"
+            "reload: permission denied: cannot read ~/.config/dogesh/config.lisp"
         );
     }
 
@@ -136,7 +136,7 @@ mod tests {
         let formatted = format_reload_error(&err);
         assert_eq!(
             formatted,
-            "reload: configuration directory error: unable to access ~/.config/dsh/"
+            "reload: configuration directory error: unable to access ~/.config/dogesh/"
         );
     }
 

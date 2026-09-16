@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 
 pub(super) const CODEX_CORE_SKILLS: &[&str] = &["doge-shell-repo"];
-pub(super) const DSH_COMMON_SKILLS: &[&str] = &[
+pub(super) const DOGESH_COMMON_SKILLS: &[&str] = &[
     "doge-shell-repo",
     "doge-shell-validation",
     "doge-shell-investigation",
@@ -56,11 +56,11 @@ pub(super) fn check_skills(ctx: &Context, proxy: &mut dyn ShellProxy, current_di
 
     check_skill_profile(
         ctx,
-        "dsh",
-        "dsh-common",
+        "dogesh",
+        "dogesh-common",
         &source_root,
         &crate::config_paths::skills_dir(),
-        DSH_COMMON_SKILLS,
+        DOGESH_COMMON_SKILLS,
     );
 
     check_claude_project_skills(ctx, &repo_root, &source_root, canonical_count);

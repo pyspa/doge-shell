@@ -33,7 +33,7 @@ pub fn get_prompt_and_input_for_completion() -> (String, String) {
 }
 
 pub fn default_completion_framework() -> CompletionFrameworkKind {
-    match std::env::var("DSH_COMPLETION_FRAMEWORK") {
+    match std::env::var("DOGESH_COMPLETION_FRAMEWORK") {
         Ok(value) if value.eq_ignore_ascii_case("skim") => CompletionFrameworkKind::Skim,
         Ok(value) if value.eq_ignore_ascii_case("inline") => CompletionFrameworkKind::Inline,
         _ => CompletionFrameworkKind::Inline,
@@ -599,9 +599,9 @@ mod tests {
     #[test]
     fn default_framework_switches_to_skim_via_env() {
         let _guard = crate::test_env_lock();
-        let original = std::env::var("DSH_COMPLETION_FRAMEWORK").ok();
+        let original = std::env::var("DOGESH_COMPLETION_FRAMEWORK").ok();
         unsafe {
-            std::env::set_var("DSH_COMPLETION_FRAMEWORK", "skim");
+            std::env::set_var("DOGESH_COMPLETION_FRAMEWORK", "skim");
         }
         assert_eq!(
             super::default_completion_framework(),
@@ -609,10 +609,10 @@ mod tests {
         );
         match original {
             Some(value) => unsafe {
-                std::env::set_var("DSH_COMPLETION_FRAMEWORK", value);
+                std::env::set_var("DOGESH_COMPLETION_FRAMEWORK", value);
             },
             None => unsafe {
-                std::env::remove_var("DSH_COMPLETION_FRAMEWORK");
+                std::env::remove_var("DOGESH_COMPLETION_FRAMEWORK");
             },
         }
     }

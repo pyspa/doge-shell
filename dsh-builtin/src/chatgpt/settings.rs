@@ -47,7 +47,7 @@ pub(super) const PROMPT_CACHE_KEY: &str = "dsh-chat-agent";
 pub(super) const STREAM_KEY: &str = "AI_CHAT_STREAM";
 /// Environment key turning off skills carried by the current repository.
 ///
-/// A `.dsh/skills` directory arrives with a `git clone`, so its summaries reach
+/// A `.dogesh/skills` directory arrives with a `git clone`, so its summaries reach
 /// the model the first time `!` is used in that checkout. Personal skills stay
 /// available when this is off.
 pub(super) const PROJECT_SKILLS_KEY: &str = "AI_CHAT_PROJECT_SKILLS";

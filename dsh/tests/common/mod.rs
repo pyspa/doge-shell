@@ -32,7 +32,7 @@ where
 {
     let _guard = child_process_lock();
     let temp = TempDir::new().expect("failed to create isolated dsh test directory");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_dsh"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_dogesh"))
         .args(args)
         .env("XDG_STATE_HOME", temp.path())
         .env("XDG_DATA_HOME", temp.path())

@@ -7,30 +7,30 @@
 - **書き込み可能な root は 2 つ、読み取り root は最大 3 つ**。`skill_roots` が唯一の解決経路。
   | root | scope / origin | 書ける |
   |---|---|---|
-  | `<project>/.dsh/skills` | Project / Dsh | ○ |
+  | `<project>/.dogesh/skills` | Project / Dsh | ○ |
   | `<project>/.agents/skills` | Project / Agents | × |
   | `config_paths::skills_dir()` | User / Dsh | ○ |
-  project 側は `workspace_root` が project marker を持つときだけ。precedence は表の順（`.dsh` >
+  project 側は `workspace_root` が project marker を持つときだけ。precedence は表の順（`.dogesh` >
   `.agents` > user）で、同名は上が勝ち下は shadow 診断になる。**canonical path で dedup する** —
-  `.agents/skills` が `.dsh/skills` への symlink のとき、二重掲載と二重 trust 質問になる。
+  `.agents/skills` が `.dogesh/skills` への symlink のとき、二重掲載と二重 trust 質問になる。
   `AI_CHAT_PROJECT_SKILLS=0` は project の 2 つを両方落とす（新しい環境変数を増やさない）。
 - **`SkillScope` に variant を足さない。`SkillOrigin` を足す。** `scope == SkillScope::Project`
   の比較は「checkout と一緒に降ってきたか」を意味し、trust ゲート・`doctor`・`skill_manage` に
   散在する。3 つ目の variant はそれら全てに `false` を返す = ゲートにとって緩い方向で、しかも
   何もコンパイルエラーにならない。どのディレクトリかは `SkillRoot.origin`。
 - **`.agents/skills` へは書かない。** 他ツールと共有するディレクトリに、このシェルが勝手に
-  ファイルを置く筋合いはない。`skill_manage` の `scope: "project"` は常に `.dsh/skills`。
-  `project_skills_root` の意味を `.dsh` 固定のまま変えないことがその保証（`tool/skill.rs` と
+  ファイルを置く筋合いはない。`skill_manage` の `scope: "project"` は常に `.dogesh/skills`。
+  `project_skills_root` の意味を `.dogesh` 固定のまま変えないことがその保証（`tool/skill.rs` と
   `doctor` が「書ける root」としてこれを呼ぶ）。
 - **他ツールの frontmatter キー（`allowed-tools` / `license` / `version`）は無視する。**
   自前パーサは top-level の `name` / `description` しか読まないので互換対応は不要。
   `allowed-tools` を**強制しないと決めた**理由は 3 つ: 名前空間が違う（慣習は `Bash`/`Read`、
-  dsh は `execute`/`read_file`）のでマッピングは推測になり両側の変更ごとに腐る。narrowing は
+  dogesh は `execute`/`read_file`）のでマッピングは推測になり両側の変更ごとに腐る。narrowing は
   escalation ではないが **availability 攻撃**になる（未信頼 repo のファイルが `task_plan` を
   消せると `agent run` の完了条件記録が原因不明で壊れる）。効くのは `@mention` したターンだけ。
 - **`~/.agents/skills` は 4 つ目の root にしない。** user scope に trust ゲートは無く、ユーザーが
   知らないディレクトリの description が全プロンプトに無言で入る。`skills_dir()` は `is_dir()` =
-  symlink 追従なので `ln -s ~/.agents/skills ~/.config/dsh/skills` が今日そのまま動く。
+  symlink 追従なので `ln -s ~/.agents/skills ~/.config/dogesh/skills` が今日そのまま動く。
 - **プロンプトに載るのは name / path / `description` の 1 行だけ**。本文はモデルが `read_file` で読む。
   frontmatter は自前パーサで、読むのは `description` のみ。YAML crate は入れない
   — 書き手（`skill_manage`）が読み手の分かる平坦な部分集合だけを出すことで整合を保証している。
@@ -124,7 +124,7 @@
   1 scope = 1 ディレクトリの間だけ正しく、project root が 2 つになると同じ skill を両方の
   ブロックに出す。
 - **project root には trust ゲートがある**（`skills/trust.rs`、`chatgpt::gate_project_skills`）。
-  `.dsh/hooks.json` を読まない理由と同じものが skills にも当てはまる — description は
+  `.dogesh/hooks.json` を読まない理由と同じものが skills にも当てはまる — description は
   ユーザーが何も決める前に system prompt へ入り、その prompt を読むエージェントは `execute`
   を持つ。信頼の単位は **root + (name, description) 集合の digest**。body は `read_file`
   としてユーザーの目に触れるので digest に含めない。skill を足す / 文言を変えると再確認する。
@@ -159,7 +159,7 @@ skill / SKILL.md / skill_manage / project skill / 使用統計を触るときに
 skill 一覧は system prompt の identity に**含めない**（含めると skill を書いた瞬間に会話が消える）。
 skill script は全 root・**stage の全トークン**・`execute` の `cwd` 基準で必ず確認する
 （program だけ / シェル cwd 基準では `bash <skill>/run.sh` と `cwd` 指定で抜けられた）。
-**読み取り root は 3 つ**（`.dsh` > `.agents` > user、canonical dedup）だが**書き込みは 2 つ**。
+**読み取り root は 3 つ**（`.dogesh` > `.agents` > user、canonical dedup）だが**書き込みは 2 つ**。
 `SkillScope` に variant を足さず `SkillOrigin` を使う（`scope == Project` の比較が散在し、
 3 つ目は全箇所で緩い方向に倒れる）。`describe_project_roots` は `Vec` を返し、gate は root
 ごとに聞いて root ごとに落とす。prompt fragment は scope ではなく **root 単位**でグループ化

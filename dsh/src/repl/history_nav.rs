@@ -103,7 +103,7 @@ impl<'a> Repl<'a> {
     /// Ctrl-R: search history interactively.
     ///
     /// Uses the dedicated picker, which exposes the scope/status/duration
-    /// filters and the per-entry metadata. `DSH_HISTORY_PICKER=skim` selects the
+    /// filters and the per-entry metadata. `DOGESH_HISTORY_PICKER=skim` selects the
     /// previous skim-based flow for one release.
     pub fn select_history(&mut self) -> Result<ReplControlFlow> {
         if history_picker_backend_is_skim() {
@@ -153,7 +153,7 @@ impl<'a> Repl<'a> {
         })))
     }
 
-    /// The pre-picker skim flow, kept behind `DSH_HISTORY_PICKER=skim`.
+    /// The pre-picker skim flow, kept behind `DOGESH_HISTORY_PICKER=skim`.
     fn select_history_with_skim(&mut self) -> Result<ReplControlFlow> {
         let query = self.input.as_str();
         if let Some(ref mut history) = self.shell.cmd_history {

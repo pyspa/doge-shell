@@ -37,7 +37,7 @@ fn project(dir: &Path) -> PathBuf {
 }
 
 fn write_project_skill(root: &Path, name: &str, description: &str) -> PathBuf {
-    let dir = root.join(".dsh/skills").join(name);
+    let dir = root.join(".dogesh/skills").join(name);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("SKILL.md"),
@@ -78,7 +78,7 @@ fn stage_project_proposal(
             "create"
         }
         .to_string(),
-        project_root: Some(root.join(".dsh/skills")),
+        project_root: Some(root.join(".dogesh/skills")),
         contents: contents.to_string(),
         base_digest,
         created_ms: usage::now_ms(),
@@ -105,14 +105,14 @@ fn approve_writes_through_the_same_path_as_the_tool() {
 
         assert_eq!(status, ExitStatus::ExitedWith(0));
         assert_eq!(
-            std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap(),
+            std::fs::read_to_string(root.join(".dogesh/skills/demo/SKILL.md")).unwrap(),
             contents
         );
         assert!(pending::list().0.is_empty());
 
         let records = usage::load();
         let record = records
-            .get(&usage::key(&root.join(".dsh/skills/demo")))
+            .get(&usage::key(&root.join(".dogesh/skills/demo")))
             .expect("a write records usage");
         assert_eq!(record.created_by, "agent");
     });
@@ -137,9 +137,9 @@ fn approve_refuses_a_create_that_would_collide_with_a_file_skill_staged_after_it
         // A file-skill named `demo.md` appears after staging but before
         // approval - through a different tool call, a hand edit, or a
         // second approved proposal.
-        std::fs::create_dir_all(root.join(".dsh/skills")).unwrap();
+        std::fs::create_dir_all(root.join(".dogesh/skills")).unwrap();
         std::fs::write(
-            root.join(".dsh/skills/demo.md"),
+            root.join(".dogesh/skills/demo.md"),
             "---\nname: demo\ndescription: unrelated file skill\n---\n",
         )
         .unwrap();
@@ -150,7 +150,7 @@ fn approve_refuses_a_create_that_would_collide_with_a_file_skill_staged_after_it
 
         assert_eq!(status, ExitStatus::ExitedWith(1));
         assert!(
-            !root.join(".dsh/skills/demo").exists(),
+            !root.join(".dogesh/skills/demo").exists(),
             "the colliding directory must never be created"
         );
         assert_eq!(
@@ -177,15 +177,15 @@ fn approve_refuses_a_create_whose_directory_appeared_after_it_was_staged() {
         // The skill directory exists (created some other way), but not
         // yet `SKILL.md` itself - so `base_digest` (keyed on the target
         // file, not the directory) still reads as unchanged.
-        std::fs::create_dir_all(root.join(".dsh/skills/demo")).unwrap();
-        std::fs::write(root.join(".dsh/skills/demo/notes.txt"), "unrelated").unwrap();
+        std::fs::create_dir_all(root.join(".dogesh/skills/demo")).unwrap();
+        std::fs::write(root.join(".dogesh/skills/demo/notes.txt"), "unrelated").unwrap();
 
         let context = ctx();
         let mut p = proxy(root.clone());
         let status = approve(&context, &mut p, &id);
 
         assert_eq!(status, ExitStatus::ExitedWith(1));
-        assert!(!root.join(".dsh/skills/demo/SKILL.md").exists());
+        assert!(!root.join(".dogesh/skills/demo/SKILL.md").exists());
         assert_eq!(pending::list().0.len(), 1);
     });
 }
@@ -201,8 +201,8 @@ fn approve_refuses_a_proposal_whose_target_changed_since_it_was_staged() {
 
     with_homes(config.path(), state.path(), || {
         let original = "---\nname: demo\ndescription: original\n---\n\nbody\n".to_string();
-        std::fs::create_dir_all(root.join(".dsh/skills/demo")).unwrap();
-        std::fs::write(root.join(".dsh/skills/demo/SKILL.md"), &original).unwrap();
+        std::fs::create_dir_all(root.join(".dogesh/skills/demo")).unwrap();
+        std::fs::write(root.join(".dogesh/skills/demo/SKILL.md"), &original).unwrap();
 
         // Staged against a digest that does not match what is on disk -
         // as if the file had been edited since.
@@ -221,7 +221,7 @@ fn approve_refuses_a_proposal_whose_target_changed_since_it_was_staged() {
 
         assert_eq!(status, ExitStatus::ExitedWith(1));
         assert_eq!(
-            std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap(),
+            std::fs::read_to_string(root.join(".dogesh/skills/demo/SKILL.md")).unwrap(),
             original,
             "a stale approval must not overwrite what is actually there"
         );
@@ -252,7 +252,7 @@ fn approve_refuses_a_project_proposal_from_another_repository() {
             name: "demo".to_string(),
             file: "SKILL.md".to_string(),
             action: "create".to_string(),
-            project_root: Some(other_root.join(".dsh/skills")),
+            project_root: Some(other_root.join(".dogesh/skills")),
             contents,
             base_digest: None,
             created_ms: usage::now_ms(),
@@ -266,7 +266,7 @@ fn approve_refuses_a_project_proposal_from_another_repository() {
         let status = approve(&context, &mut p, &id);
 
         assert_eq!(status, ExitStatus::ExitedWith(1));
-        assert!(!root.join(".dsh/skills/demo").exists());
+        assert!(!root.join(".dogesh/skills/demo").exists());
         assert_eq!(pending::list().0.len(), 1);
     });
 }
@@ -288,7 +288,7 @@ fn reject_removes_the_proposal_without_writing_anything() {
 
         assert_eq!(status, ExitStatus::ExitedWith(0));
         assert!(pending::list().0.is_empty());
-        assert!(!root.join(".dsh/skills/demo").exists());
+        assert!(!root.join(".dogesh/skills/demo").exists());
     });
 }
 
@@ -328,7 +328,7 @@ fn archive_refuses_a_project_skill() {
 
         assert_eq!(status, ExitStatus::ExitedWith(1));
         assert!(!usage::is_archived(
-            usage::load().get(&usage::key(&root.join(".dsh/skills/demo")))
+            usage::load().get(&usage::key(&root.join(".dogesh/skills/demo")))
         ),);
     });
 }
@@ -341,7 +341,7 @@ fn archive_and_unarchive_round_trip_for_a_personal_skill() {
     let cwd_path = std::fs::canonicalize(cwd.path()).unwrap();
 
     with_homes(config.path(), state.path(), || {
-        let skill_dir = config.path().join("dsh/skills/demo");
+        let skill_dir = config.path().join("dogesh/skills/demo");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
@@ -375,7 +375,7 @@ fn pin_prevents_a_skill_from_being_reported_as_pinned_is_false_by_default() {
     let cwd_path = std::fs::canonicalize(cwd.path()).unwrap();
 
     with_homes(config.path(), state.path(), || {
-        let skill_dir = config.path().join("dsh/skills/demo");
+        let skill_dir = config.path().join("dogesh/skills/demo");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),

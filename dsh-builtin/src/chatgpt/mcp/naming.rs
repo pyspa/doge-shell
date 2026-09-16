@@ -98,7 +98,7 @@ pub(super) fn mcp_server_stderr(command: &str) -> Stdio {
 }
 
 pub(super) fn mcp_server_log_path(command: &str) -> Option<PathBuf> {
-    BaseDirectories::with_prefix("dsh")
+    BaseDirectories::with_prefix("dogesh")
         .place_cache_file(format!(
             "mcp_server_{}.log",
             sanitized_command_name(command)

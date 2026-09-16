@@ -20,7 +20,7 @@ use wait_timeout::ChildExt;
 /// Process-visible marker a nested `dsh` checks for. Not a shell setting:
 /// see `dsh/src/agent_lifecycle/mod.rs::activate` for how the owning
 /// process publishes it to children.
-pub(super) const OWNER_ENV: &str = "DSH_HERDR_OWNER_PID";
+pub(super) const OWNER_ENV: &str = "DOGESH_HERDR_OWNER_PID";
 
 /// How long a single `herdr` invocation is allowed to run before it's
 /// killed. Mirrors the timeout+killpg idiom already used for AI chat hooks
@@ -39,7 +39,7 @@ impl HerdrEnv {
     /// order (`dsh-builtin`'s `resolve_setting`). `HERDR_ENV`/`HERDR_PANE_ID`/
     /// `HERDR_BIN_PATH` are ambient facts about how this process was
     /// launched, not user-configurable dsh settings - the same reasoning
-    /// `DSH_HOOK_DEPTH` already uses (`dsh-builtin/src/chatgpt/hooks/config.rs`):
+    /// `DOGESH_HOOK_DEPTH` already uses (`dsh-builtin/src/chatgpt/hooks/config.rs`):
     /// a shell variable must not be able to spoof "running under Herdr" or
     /// suppress it.
     pub(crate) fn detect() -> Option<Self> {
@@ -444,7 +444,13 @@ mod tests {
 
     #[test]
     fn report_args_for_idle() {
-        let args = build_report_args("w1:p1", "custom:doge-shell", "dsh", &AgentState::Idle, 42);
+        let args = build_report_args(
+            "w1:p1",
+            "custom:doge-shell",
+            "dogesh",
+            &AgentState::Idle,
+            42,
+        );
         assert_eq!(
             args,
             vec![
@@ -454,7 +460,7 @@ mod tests {
                 "--source",
                 "custom:doge-shell",
                 "--agent",
-                "dsh",
+                "dogesh",
                 "--state",
                 "idle",
                 "--seq",
@@ -465,7 +471,13 @@ mod tests {
 
     #[test]
     fn report_args_for_working() {
-        let args = build_report_args("w1:p1", "custom:doge-shell", "dsh", &AgentState::Working, 1);
+        let args = build_report_args(
+            "w1:p1",
+            "custom:doge-shell",
+            "dogesh",
+            &AgentState::Working,
+            1,
+        );
         assert!(args.iter().any(|a| a == "working"));
         assert!(!args.iter().any(|a| a == "--message"));
     }
@@ -475,7 +487,7 @@ mod tests {
         let args = build_report_args(
             "w1:p1",
             "custom:doge-shell",
-            "dsh",
+            "dogesh",
             &AgentState::Blocked("needs approval to delete files".to_string()),
             7,
         );
@@ -489,7 +501,7 @@ mod tests {
 
     #[test]
     fn release_args_omit_state_and_message() {
-        let args = build_release_args("w1:p1", "custom:doge-shell", "dsh", 9);
+        let args = build_release_args("w1:p1", "custom:doge-shell", "dogesh", 9);
         assert_eq!(args[0], "pane");
         assert_eq!(args[1], "release-agent");
         assert_eq!(args[2], "w1:p1");

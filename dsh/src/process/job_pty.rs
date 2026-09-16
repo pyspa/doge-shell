@@ -12,7 +12,7 @@ use libc::{STDIN_FILENO, STDOUT_FILENO};
 use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
 use tracing::{debug, error, warn};
 
-const DSH_NO_PTY_ENV: &str = "DSH_NO_PTY";
+const DOGESH_NO_PTY_ENV: &str = "DOGESH_NO_PTY";
 
 #[derive(Debug)]
 pub(crate) struct ForegroundPtyRawModeGuard {
@@ -121,7 +121,11 @@ pub(crate) async fn setup_pty_with<F>(
 where
     F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
 {
-    if !should_create_pty(ctx, job.disable_pty, std::env::var(DSH_NO_PTY_ENV).is_ok()) {
+    if !should_create_pty(
+        ctx,
+        job.disable_pty,
+        std::env::var(DOGESH_NO_PTY_ENV).is_ok(),
+    ) {
         return Ok(None);
     }
 

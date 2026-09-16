@@ -9,7 +9,7 @@ version = "0.0.1"
 
 [[bin]]
 path = "src/main.rs"
-name = "dsh"
+name = "dogesh"
 
 [[bench]]
 name = "latency"

@@ -564,7 +564,7 @@ fn run_does_not_let_a_path_qualified_program_ride_a_basename_allowlist() {
 
 /// A project skill arrives with a `git clone` and the prompt points the
 /// model straight at it. Judging only the personal skills root let a script
-/// under `<project>/.dsh/skills` fall through to the ordinary command
+/// under `<project>/.dogesh/skills` fall through to the ordinary command
 /// policy and run unasked wherever that policy said yes.
 #[test]
 fn a_script_under_the_project_skills_directory_always_asks() {
@@ -575,7 +575,7 @@ fn a_script_under_the_project_skills_directory_always_asks() {
     let project = tempdir().unwrap();
     let project_dir = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(project_dir.join(".git")).unwrap();
-    let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+    let skills_dir = project_dir.join(".dogesh/skills/deploy/scripts");
     std::fs::create_dir_all(&skills_dir).unwrap();
     let script_path = skills_dir.join("run.sh");
     std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
@@ -646,7 +646,7 @@ fn a_skill_script_is_not_covered_by_an_agent_grant() {
     let project = tempdir().unwrap();
     let project_dir = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(project_dir.join(".git")).unwrap();
-    let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+    let skills_dir = project_dir.join(".dogesh/skills/deploy/scripts");
     std::fs::create_dir_all(&skills_dir).unwrap();
     let script_path = skills_dir.join("run.sh");
     std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();
@@ -677,14 +677,14 @@ fn a_skill_script_run_through_an_interpreter_still_asks() {
     let project = tempdir().unwrap();
     let project_dir = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(project_dir.join(".git")).unwrap();
-    let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+    let skills_dir = project_dir.join(".dogesh/skills/deploy/scripts");
     std::fs::create_dir_all(&skills_dir).unwrap();
     std::fs::write(skills_dir.join("run.sh"), "echo hello\n").unwrap();
 
     for command in [
-        "bash .dsh/skills/deploy/scripts/run.sh",
-        "python3 .dsh/skills/deploy/scripts/run.sh",
-        "sh ./.dsh/skills/deploy/scripts/run.sh",
+        "bash .dogesh/skills/deploy/scripts/run.sh",
+        "python3 .dogesh/skills/deploy/scripts/run.sh",
+        "sh ./.dogesh/skills/deploy/scripts/run.sh",
     ] {
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut proxy = TestProxy {
@@ -718,7 +718,7 @@ fn a_skill_script_reached_through_the_cwd_argument_still_asks() {
     let project = tempdir().unwrap();
     let project_dir = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(project_dir.join(".git")).unwrap();
-    let skills_dir = project_dir.join(".dsh/skills/deploy/scripts");
+    let skills_dir = project_dir.join(".dogesh/skills/deploy/scripts");
     std::fs::create_dir_all(&skills_dir).unwrap();
     std::fs::write(skills_dir.join("run.sh"), "echo hello\n").unwrap();
 
@@ -732,7 +732,7 @@ fn a_skill_script_reached_through_the_cwd_argument_still_asks() {
     };
 
     let result = run(
-        r#"{"command":"./run.sh","cwd":".dsh/skills/deploy/scripts"}"#,
+        r#"{"command":"./run.sh","cwd":".dogesh/skills/deploy/scripts"}"#,
         &mut proxy,
     )
     .unwrap();
@@ -807,7 +807,7 @@ fn run_skips_confirmation_for_allowlisted_command() {
 fn run_requires_confirmation_for_skill_script() {
     let _lock = env_lock();
     let config_root = tempdir().unwrap();
-    let skills_dir = config_root.path().join("dsh/skills");
+    let skills_dir = config_root.path().join("dogesh/skills");
     std::fs::create_dir_all(&skills_dir).unwrap();
     let script_path = skills_dir.join("script.sh");
     std::fs::write(&script_path, "#!/usr/bin/env bash\necho hello\n").unwrap();

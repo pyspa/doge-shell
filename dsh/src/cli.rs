@@ -38,7 +38,7 @@ pub enum SubCommand {
         /// Command to generate completion for
         command: String,
 
-        /// Output file path (default: ~/.config/dsh/completions/<command>.json)
+        /// Output file path (default: ~/.config/dogesh/completions/<command>.json)
         #[arg(short, long)]
         output: Option<String>,
 

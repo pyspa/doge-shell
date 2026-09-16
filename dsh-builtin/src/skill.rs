@@ -115,7 +115,7 @@ fn print_help(ctx: &Context) {
            pin <name>       Exempt a personal skill from auto-archiving\n  \
            unpin <name>     Undo `pin`\n\
          \n\
-         Project skills come from `.dsh/skills` in the enclosing project and take\n\
+         Project skills come from `.dogesh/skills` in the enclosing project and take\n\
          precedence over personal ones of the same name. They are only read once\n\
          you have agreed to them, because their descriptions go into every prompt.\n\
          \n\

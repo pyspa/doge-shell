@@ -1,7 +1,7 @@
 //! System prompt assembly: the fixed tool-use instructions
 //! (`TOOL_SYSTEM_PROMPT`), folding in skills/MCP/operator-prompt/language
 //! (`build_system_prompt`), `@name` skill mentions, and the project-skill
-//! trust gate (a repository's own `.dsh/skills` must be agreed to before its
+//! trust gate (a repository's own `.dogesh/skills` must be agreed to before its
 //! descriptions reach a prompt).
 use super::*;
 
@@ -155,8 +155,8 @@ pub(super) fn resolve_skill_mentions<'a>(
 
 /// Drop the project skill root unless the user has agreed to this repository.
 ///
-/// The descriptions of `<project>/.dsh/skills` go into the system prompt, and
-/// the agent reading that prompt has `execute`. `.dsh/hooks.json` is not read
+/// The descriptions of `<project>/.dogesh/skills` go into the system prompt, and
+/// the agent reading that prompt has `execute`. `.dogesh/hooks.json` is not read
 /// for the same reason; this holds skills to the same bar.
 ///
 /// Under a persistent task nothing is asked: an unattended run must not stall

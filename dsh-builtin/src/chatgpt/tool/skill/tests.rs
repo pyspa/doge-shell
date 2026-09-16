@@ -76,7 +76,7 @@ fn a_task_without_a_write_grant_stages_instead_of_stalling() {
             .expect("staging must not return an error");
 
         assert!(result.contains("\"staged\""), "{result}");
-        assert!(!root.join(".dsh/skills/demo").exists());
+        assert!(!root.join(".dogesh/skills/demo").exists());
         assert_eq!(
             runtime.lock().task.status,
             dsh_types::agent::TaskStatus::Running,
@@ -108,7 +108,7 @@ fn an_interactive_turn_is_unchanged_by_the_default_staging_mode() {
             .unwrap();
 
         assert!(!result.contains("\"staged\""), "{result}");
-        assert!(root.join(".dsh/skills/demo/SKILL.md").is_file());
+        assert!(root.join(".dogesh/skills/demo/SKILL.md").is_file());
         assert!(skills::pending::list().0.is_empty());
     });
 }
@@ -140,7 +140,7 @@ fn staging_always_queues_an_interactive_write_without_touching_disk() {
             .unwrap();
 
         assert!(result.contains("\"staged\""), "{result}");
-        assert!(!root.join(".dsh/skills/demo").exists());
+        assert!(!root.join(".dogesh/skills/demo").exists());
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -242,7 +242,7 @@ fn delete_is_never_staged() {
         assert!(err.contains("agent: permission required"), "{err}");
         assert!(skills::pending::list().0.is_empty());
         assert!(
-            root.join(".dsh/skills/demo").exists(),
+            root.join(".dogesh/skills/demo").exists(),
             "nothing must actually be deleted"
         );
     });
@@ -274,7 +274,7 @@ fn create_writes_skill_md_with_generated_frontmatter() {
         )
         .unwrap();
 
-    let path = root.join(".dsh/skills/rust-bisect/SKILL.md");
+    let path = root.join(".dogesh/skills/rust-bisect/SKILL.md");
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.starts_with("---\nname: rust-bisect\n"));
     assert!(
@@ -300,7 +300,7 @@ fn a_created_description_with_a_colon_round_trips_through_the_frontmatter_reader
     let manager = skills::SkillsManager::with_roots(vec![skills::SkillRoot {
         scope: SkillScope::Project,
         origin: skills::SkillOrigin::Dsh,
-        path: root.join(".dsh/skills"),
+        path: root.join(".dogesh/skills"),
     }]);
     let loaded = manager.load_skills();
     assert_eq!(loaded.len(), 1);
@@ -361,7 +361,7 @@ fn a_symlink_inside_the_skill_directory_cannot_escape_it() {
     let dir = tempdir().unwrap();
     let root = project(dir.path());
     let outside = tempdir().unwrap();
-    let skill = root.join(".dsh/skills/demo");
+    let skill = root.join(".dogesh/skills/demo");
     std::fs::create_dir_all(&skill).unwrap();
     symlink(outside.path(), skill.join("refs")).unwrap();
     let mut p = proxy(root);
@@ -395,7 +395,7 @@ fn a_denied_answer_writes_nothing() {
 
     assert_eq!(result, "Skill change cancelled by user.");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert!(!root.join(".dsh/skills/demo").exists());
+    assert!(!root.join(".dogesh/skills/demo").exists());
 }
 
 /// One "always" per file, shared with `edit`: the user approved the file,
@@ -424,11 +424,11 @@ fn an_always_answer_uses_the_same_write_key_as_edit() {
         .unwrap();
 
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let written = std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap();
+    let written = std::fs::read_to_string(root.join(".dogesh/skills/demo/SKILL.md")).unwrap();
     assert!(written.contains("two"));
 
     let key = super::super::write_approval_key(
-        &std::fs::canonicalize(root.join(".dsh/skills/demo/SKILL.md")).unwrap(),
+        &std::fs::canonicalize(root.join(".dogesh/skills/demo/SKILL.md")).unwrap(),
     );
     assert!(p.agent_session_allowlist.contains(&key), "{key}");
 }
@@ -461,7 +461,7 @@ fn delete_uses_its_own_key_so_a_write_always_does_not_cover_it() {
     .unwrap();
 
     assert_eq!(calls.load(Ordering::SeqCst), 2, "delete must ask again");
-    assert!(!root.join(".dsh/skills/demo").exists());
+    assert!(!root.join(".dogesh/skills/demo").exists());
 }
 
 #[test]
@@ -497,7 +497,7 @@ fn a_patch_that_removes_the_description_is_refused() {
             &mut p,
         )
         .unwrap();
-    let before = std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap();
+    let before = std::fs::read_to_string(root.join(".dogesh/skills/demo/SKILL.md")).unwrap();
     let calls_before = p.confirm_calls;
 
     let err = run(
@@ -509,7 +509,7 @@ fn a_patch_that_removes_the_description_is_refused() {
 
     // Refused before anyone was asked, and before anything on disk moved.
     assert_eq!(p.confirm_calls, calls_before);
-    let after = std::fs::read_to_string(root.join(".dsh/skills/demo/SKILL.md")).unwrap();
+    let after = std::fs::read_to_string(root.join(".dogesh/skills/demo/SKILL.md")).unwrap();
     assert_eq!(before, after);
 }
 
@@ -592,7 +592,7 @@ fn a_long_description_is_written_but_warned_about() {
     });
     let result = run(&args.to_string(), &mut p).unwrap();
     assert!(result.contains("warnings"), "{result}");
-    assert!(root.join(".dsh/skills/demo/SKILL.md").exists());
+    assert!(root.join(".dogesh/skills/demo/SKILL.md").exists());
 }
 
 /// `references/`, `scripts/` and `assets/` are never parsed for
@@ -618,7 +618,10 @@ fn a_bundled_reference_file_is_not_linted_as_a_skill() {
         "contents": "just some notes, no frontmatter here",
     });
     run(&args.to_string(), &mut p).unwrap();
-    assert!(root.join(".dsh/skills/demo/references/notes.md").exists());
+    assert!(
+        root.join(".dogesh/skills/demo/references/notes.md")
+            .exists()
+    );
 }
 
 #[test]
@@ -651,7 +654,7 @@ fn project_scope_writes_to_dsh_skills_and_never_to_the_agents_root() {
     )
     .expect("create");
 
-    assert!(root.join(".dsh/skills/demo/SKILL.md").is_file());
+    assert!(root.join(".dogesh/skills/demo/SKILL.md").is_file());
     assert!(!root.join(".agents/skills/demo").exists());
     // The tool takes no third scope, so there is no spelling that reaches
     // the shared root at all.
@@ -673,7 +676,7 @@ fn a_failed_create_leaves_no_directory_behind() {
 
     let dir = tempdir().unwrap();
     let root = project(dir.path());
-    let skills = root.join(".dsh/skills");
+    let skills = root.join(".dogesh/skills");
     std::fs::create_dir_all(&skills).unwrap();
     // Nothing can be created underneath, so the write fails after the
     // request has been validated and approved.
@@ -700,7 +703,7 @@ fn a_failed_create_leaves_no_directory_behind() {
 fn create_refuses_to_shadow_an_existing_file_skill() {
     let dir = tempdir().unwrap();
     let root = project(dir.path());
-    let skills = root.join(".dsh/skills");
+    let skills = root.join(".dogesh/skills");
     std::fs::create_dir_all(&skills).unwrap();
     std::fs::write(skills.join("deploy.md"), "---\ndescription: d\n---\n").unwrap();
     let mut p = proxy(root);
@@ -747,7 +750,12 @@ fn user_scope_writes_into_the_configuration_directory() {
         .unwrap();
     });
 
-    assert!(config.path().join("dsh/skills/portable/SKILL.md").is_file());
+    assert!(
+        config
+            .path()
+            .join("dogesh/skills/portable/SKILL.md")
+            .is_file()
+    );
 }
 
 #[test]

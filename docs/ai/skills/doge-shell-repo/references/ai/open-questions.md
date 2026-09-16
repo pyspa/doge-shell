@@ -102,7 +102,7 @@
   `SkillUsage` に追加し `STATE_VERSION` は上げていない。archive は「ファイルを動かす」ではなく
   state フラグなので `install-runtime-skills.sh --check-installed` と `doctor skills` の
   drift 検査に影響しない。CLI 限定（`skill archive`/`unarchive`/`pin`/`unpin`）で
-  `skill_manage` に action は増やしていない。**残る既知の制約**: 旧バージョンの dsh が
+  `skill_manage` に action は増やしていない。**残る既知の制約**: 旧バージョンの dogesh が
   `usage::flush()` を一度でも実行すると（serde の未知フィールド読み捨てにより）
   `archived_ms`/`pinned` が消える — 破壊的ではない（archive が解除されプロンプトに戻るだけ）が
   再発しうる。`flush_to` の「存在しないディレクトリのレコードを消す」規則により、

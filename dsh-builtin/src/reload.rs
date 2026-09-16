@@ -58,7 +58,7 @@ DESCRIPTION:
     This allows you to apply configuration changes during your shell session.
 
     The command re-reads and re-executes the config.lisp file from the
-    standard configuration directory (~/.config/dsh/config.lisp).
+    standard configuration directory (~/.config/dogesh/config.lisp).
 
 OPTIONS:
     -h, --help    Show this help message
@@ -205,7 +205,7 @@ mod tests {
         let ctx = Context::new_safe(pid, pgid, false);
         let mut proxy = TestShellProxy {
             dispatch_error: Some(
-                "Failed to read config file: ~/.config/dsh/config.lisp: No such file or directory"
+                "Failed to read config file: ~/.config/dogesh/config.lisp: No such file or directory"
                     .to_string(),
             ),
             ..TestShellProxy::default()

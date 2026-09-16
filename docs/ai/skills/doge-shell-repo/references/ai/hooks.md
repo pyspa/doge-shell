@@ -33,7 +33,7 @@
 - **`response-complete` に「継続を強制する」機能は入れない**。継続の強制は「もっと副作用を使う許可」で、
   §4 の方針に真っ向から反する。
 - **`match` は 4 種類**（`tools` / `programs` / `paths` / `arguments`）。**種類間は AND、
-  種類内は OR**。dsh はコマンドを全部 `execute` に通すので `{"tools":["execute"]}` は事実上
+  種類内は OR**。dogesh はコマンドを全部 `execute` に通すので `{"tools":["execute"]}` は事実上
   「毎コマンド」で、hook を 1 本入れたユーザーが最初にぶつかるのがそれ。正規表現は入れない
   — `programs` は `AI_CHAT_EXECUTE_ALLOWLIST` と同じ語プレフィックス、`paths` は glob。
   - `programs` は `execute` 専用で `command_names_any`（`tool/execute.rs`）を再利用する。
@@ -115,17 +115,17 @@
   発火は `compact_buffer()` の**後**・要約 `while` の**前**にする。規則圧縮だけで足りたケースでも
   鳴り、「これから金を払うか」が `will_summarize` として payload に載る。
   **1 ターンに最大 `MAX_TOOL_ITERATIONS`(100) 回鳴りうるので、ターン予算と組で入れる。**
-- **project-local `.dsh/hooks.json` は読まない**。`git clone` して `cd` して `!` と打っただけで
+- **project-local `.dogesh/hooks.json` は読まない**。`git clone` して `cd` して `!` と打っただけで
   任意コマンドが走るのは direnv（`direnv allow` を要求）より弱い。将来入れるなら
   ユーザー自身の設定に許可ルートを書く形（`(allow-direnv ...)` と同型）にする。
 - 設定ファイルが group/other writable ならロードを拒否する。存在するのにパースできないときも
   チャットを拒否する。タイポで静かにゲートが消えるのを許さない。
-- 再帰防止は `DSH_HOOK_DEPTH`（プロセス間）とスレッドローカルの再入ガード（プロセス内）の 2 段。
+- 再帰防止は `DOGESH_HOOK_DEPTH`（プロセス間）とスレッドローカルの再入ガード（プロセス内）の 2 段。
   前者を `resolve_setting` で読まないこと。シェル変数で消せると無限再帰する。
 - **`command[0]` はロード時に正規化する**。絶対パスはそのまま、裸の名前はその場で PATH から
   解決、相対パス（`./x` / `a/b`）は**ロードエラー**。runner は `current_dir` を設定するので、
   Unix では相対 program が chdir の**後**に解決される — `["./hook.sh"]` は「cd した先の
-  リポジトリの ./hook.sh」を意味してしまい、`.dsh/hooks.json` を読まない理由と矛盾する。
+  リポジトリの ./hook.sh」を意味してしまい、`.dogesh/hooks.json` を読まない理由と矛盾する。
 - **設定ファイルの権限は world-writable だけを拒否する**（親ディレクトリも見る）。
   group-writable も拒否していたが、`umask 002` の既定では新規ファイルが 664 になり、
   普通に `ai-hooks.json` を作っただけで `!` 全体が動かなくなった。そこでのグループは

@@ -15,7 +15,7 @@ use dsh_types::Context;
 fn current_exe() -> String {
     std::env::current_exe()
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "dsh".to_string())
+        .unwrap_or_else(|_| "dogesh".to_string())
 }
 
 pub fn crontab_line() -> String {
@@ -28,13 +28,13 @@ pub fn crontab_line() -> String {
 pub fn systemd_unit() -> String {
     let exe = current_exe();
     format!(
-        "# ~/.config/systemd/user/dsh-cron.service\n\
+        "# ~/.config/systemd/user/dogesh-cron.service\n\
          [Unit]\n\
          Description=doge-shell cron tick\n\n\
          [Service]\n\
          Type=oneshot\n\
          ExecStart={exe} -c \"cron tick\"\n\n\
-         # ~/.config/systemd/user/dsh-cron.timer\n\
+         # ~/.config/systemd/user/dogesh-cron.timer\n\
          [Unit]\n\
          Description=Run doge-shell cron tick every minute\n\n\
          [Timer]\n\
@@ -43,10 +43,10 @@ pub fn systemd_unit() -> String {
          [Install]\n\
          WantedBy=timers.target\n\n\
          # Then, once both files are in place:\n\
-         #   systemctl --user enable --now dsh-cron.timer\n\
+         #   systemctl --user enable --now dogesh-cron.timer\n\
          #   loginctl enable-linger \"$USER\"   # so it runs without a login session\n\
          # Verify it is firing:\n\
-         #   systemctl --user list-timers dsh-cron.timer\n"
+         #   systemctl --user list-timers dogesh-cron.timer\n"
     )
 }
 

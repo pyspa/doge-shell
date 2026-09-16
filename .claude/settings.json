@@ -10,7 +10,7 @@
       "Bash(cargo metadata:*)",
       "Bash(cargo run -p doge-shell -- --help)",
       "Bash(rustfmt:*)",
-      "Bash(./target/release/dsh -c:*)",
+      "Bash(./target/release/dogesh -c:*)",
       "Bash(rg:*)",
       "Bash(fd:*)",
       "Bash(ls:*)",

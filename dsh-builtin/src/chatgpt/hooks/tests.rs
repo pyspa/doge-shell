@@ -236,7 +236,7 @@ fn the_loop_state_reaches_a_hook_as_an_env_var() {
         &dir,
         r#"["post-tool-use"]"#,
         &format!(
-            "printf '%s/%s %s' \"$DSH_HOOK_ITERATION\" \"$DSH_HOOK_MAX_ITERATIONS\" \"$DSH_HOOK_TURN_TOKENS\" > {}\n",
+            "printf '%s/%s %s' \"$DOGESH_HOOK_ITERATION\" \"$DOGESH_HOOK_MAX_ITERATIONS\" \"$DOGESH_HOOK_TURN_TOKENS\" > {}\n",
             marker.display()
         ),
     );

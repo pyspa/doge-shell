@@ -4,26 +4,26 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/install-runtime-skills.sh [--target codex|dsh|claude|claude-project|both] [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh [codex|dsh|claude|claude-project|both]
+Usage: scripts/install-runtime-skills.sh [--target codex|dogesh|claude|claude-project|both] [--profile name] [skill-name ...]
+       scripts/install-runtime-skills.sh [codex|dogesh|claude|claude-project|both]
        scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh --status [--target codex|dsh|claude|claude-project|both] [--profile name]
-       scripts/install-runtime-skills.sh --check-installed [--target codex|dsh|claude|claude-project|both] [--profile name]
+       scripts/install-runtime-skills.sh --status [--target codex|dogesh|claude|claude-project|both] [--profile name]
+       scripts/install-runtime-skills.sh --check-installed [--target codex|dogesh|claude|claude-project|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex  -> ~/.codex/skills
-  dsh    -> ~/.config/dsh/skills
+  dogesh -> ~/.config/dogesh/skills
   claude -> ~/.claude/skills   (Claude Code user-level skills; CLAUDE_CONFIG_DIR overrides ~/.claude)
   claude-project -> <repo>/.claude/skills   (project-level fallback; only needed if the
             .claude/skills -> ../docs/ai/skills symlink is not followed)
-  both   -> codex and dsh destinations
+  both   -> codex and dogesh destinations
 
 Profiles:
   codex-core     doge-shell-repo
   codex-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
-  dsh-common     doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
+  dogesh-common     doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
   claude-common  doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
-  dsh-user       dsh-cron   (product-user skill: add/edit/debug a cron job; not a repo-dev skill)
+  dogesh-user       dsh-cron   (product-user skill: add/edit/debug a cron job; not a repo-dev skill)
 
 Examples:
   scripts/install-runtime-skills.sh --list
@@ -34,7 +34,7 @@ Examples:
   scripts/install-runtime-skills.sh --target claude --profile claude-common
   scripts/install-runtime-skills.sh
   scripts/install-runtime-skills.sh --target codex doge-shell-repo
-  scripts/install-runtime-skills.sh dsh
+  scripts/install-runtime-skills.sh dogesh
 EOF
 }
 
@@ -79,7 +79,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             continue
             ;;
-        codex|dsh|claude|claude-project|both)
+        codex|dogesh|claude|claude-project|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
                 mode="$1"
             else
@@ -103,7 +103,7 @@ if [ -n "$profile" ] && [ "${#requested_skills[@]}" -gt 0 ]; then
 fi
 
 case "$mode" in
-    codex|dsh|claude|claude-project|both)
+    codex|dogesh|claude|claude-project|both)
         ;;
     *)
         usage >&2
@@ -125,14 +125,14 @@ profile_skills() {
         codex-core)
             printf '%s\n' doge-shell-repo
             ;;
-        codex-common|dsh-common|claude-common)
+        codex-common|dogesh-common|claude-common)
             printf '%s\n' \
                 doge-shell-repo \
                 doge-shell-validation \
                 doge-shell-investigation \
                 doge-shell-chat-tools
             ;;
-        dsh-user)
+        dogesh-user)
             printf '%s\n' dsh-cron
             ;;
         *)
@@ -248,8 +248,8 @@ if [ "$status_only" -eq 1 ]; then
         fi
     fi
 
-    if [ "$mode" = "dsh" ] || [ "$mode" = "both" ]; then
-        if ! skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills" dsh; then
+    if [ "$mode" = "dogesh" ] || [ "$mode" = "both" ]; then
+        if ! skill_list | status_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dogesh/skills" dogesh; then
             status_failures=1
         fi
     fi
@@ -276,8 +276,8 @@ if [ "$mode" = "codex" ] || [ "$mode" = "both" ]; then
     skill_list | install_selected "${CODEX_HOME:-$HOME/.codex}/skills"
 fi
 
-if [ "$mode" = "dsh" ] || [ "$mode" = "both" ]; then
-    skill_list | install_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dsh/skills"
+if [ "$mode" = "dogesh" ] || [ "$mode" = "both" ]; then
+    skill_list | install_selected "${XDG_CONFIG_HOME:-$HOME/.config}/dogesh/skills"
 fi
 
 if [ "$mode" = "claude" ]; then

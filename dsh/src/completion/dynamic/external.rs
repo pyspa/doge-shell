@@ -1,6 +1,6 @@
 //! Completion for miscellaneous external CLI tools with no family of their
 //! own: package managers (apt/pacman/brew), cloud CLIs (aws/az/gcloud),
-//! ansible, btrfs, dmsetup, and the `DSH_EXTERNAL_COMPLETER` escape hatch.
+//! ansible, btrfs, dmsetup, and the `DOGESH_EXTERNAL_COMPLETER` escape hatch.
 use super::super::integrated::{CandidateType, EnhancedCandidate, matches_prefix};
 use super::super::shell_path::normalize_path_token;
 use super::{
@@ -81,7 +81,7 @@ impl DynamicCompletionProvider {
         let Some(command_template) = self
             .environment
             .read()
-            .get_var("DSH_EXTERNAL_COMPLETER")
+            .get_var("DOGESH_EXTERNAL_COMPLETER")
             .filter(|value| !value.trim().is_empty())
         else {
             return Vec::new();

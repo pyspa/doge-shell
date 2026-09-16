@@ -1,7 +1,7 @@
 use std::env;
 
 fn main() {
-    let iterations = env::var("DSH_PERF_ITERS")
+    let iterations = env::var("DOGESH_PERF_ITERS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(1_000);

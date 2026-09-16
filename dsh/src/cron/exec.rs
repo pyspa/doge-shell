@@ -159,7 +159,7 @@ fn kill_group(child: &Child) {
 /// store by the child.
 pub fn spawn_run_child(run_id: &str) -> Result<Child> {
     uuid::Uuid::parse_str(run_id).context("run id is not a UUID")?;
-    let program = std::env::current_exe().context("cannot find this dsh binary")?;
+    let program = std::env::current_exe().context("cannot find this dogesh binary")?;
 
     Command::new(program)
         .arg("-c")

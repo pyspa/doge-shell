@@ -645,13 +645,13 @@ mod tests {
 
     #[test]
     fn schema_args_go_to_the_last_external_command() {
-        let mut job = pipeline_of(&[argv(&["ps", "aux"]), argv(&["grep", "dsh"])]);
-        assert_eq!(job.last_external_argv(), Some(argv(&["grep", "dsh"])));
+        let mut job = pipeline_of(&[argv(&["ps", "aux"]), argv(&["grep", "dogesh"])]);
+        assert_eq!(job.last_external_argv(), Some(argv(&["grep", "dogesh"])));
 
         job.append_args_to_last_external(&argv(&["--color=never"]));
         assert_eq!(
             job.last_external_argv(),
-            Some(argv(&["grep", "dsh", "--color=never"]))
+            Some(argv(&["grep", "dogesh", "--color=never"]))
         );
     }
 

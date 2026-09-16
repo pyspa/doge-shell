@@ -27,7 +27,7 @@ impl Sandbox {
     /// Runs one `dsh -c "<command>"` against this sandbox's store, returning
     /// stdout with the leading `-c`-mode `\r\n` stripped.
     fn run(&self, command: &str) -> String {
-        let child = Command::new(env!("CARGO_BIN_EXE_dsh"))
+        let child = Command::new(env!("CARGO_BIN_EXE_dogesh"))
             .args(["-c", command])
             .env("XDG_STATE_HOME", self.dir.path())
             .env("XDG_DATA_HOME", self.dir.path())

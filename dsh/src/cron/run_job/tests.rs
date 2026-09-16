@@ -293,7 +293,7 @@ fn stderr_text_falls_back_to_the_bare_reason_when_the_summary_is_empty() {
 /// process-global and this suite's tests run concurrently.
 #[test]
 fn apply_job_environment_reaches_both_std_env_and_the_shell_snapshot() {
-    const KEY: &str = "DSH_CRON_TEST_APPLY_JOB_ENVIRONMENT_VAR";
+    const KEY: &str = "DOGESH_CRON_TEST_APPLY_JOB_ENVIRONMENT_VAR";
     let previous = std::env::var_os(KEY);
 
     let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());

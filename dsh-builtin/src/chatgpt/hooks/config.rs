@@ -24,16 +24,16 @@ pub(crate) use load::{
 #[cfg(test)]
 pub(crate) use load::{clear_cache, parse};
 
-/// The configuration file, looked up like every other `dsh` config file.
+/// The configuration file, looked up like every other `dogesh` config file.
 pub(crate) const HOOKS_CONFIG_FILE: &str = "ai-hooks.json";
 /// Points at a different file. Resolved shell-variable first, like every other
 /// AI setting.
-pub(crate) const HOOKS_CONFIG_KEY: &str = "DSH_AI_HOOKS_CONFIG";
+pub(crate) const HOOKS_CONFIG_KEY: &str = "DOGESH_AI_HOOKS_CONFIG";
 /// `0` / `false` / `off` / `no` stops the file from being read at all.
 pub(crate) const HOOKS_ENABLED_KEY: &str = "AI_CHAT_HOOKS";
-/// Set on every hook process. A hook that starts another `dsh` must not have
+/// Set on every hook process. A hook that starts another `dogesh` must not have
 /// that shell run hooks of its own.
-pub(crate) const HOOK_DEPTH_ENV: &str = "DSH_HOOK_DEPTH";
+pub(crate) const HOOK_DEPTH_ENV: &str = "DOGESH_HOOK_DEPTH";
 /// A ceiling on the wall time one turn may spend waiting for hooks.
 ///
 /// Opt-in, and unlimited when unset, the same shape as
@@ -125,7 +125,7 @@ impl HookEvent {
 
 /// Which calls a hook actually wants.
 ///
-/// `dsh` funnels every command through the one `execute` tool, so
+/// `dogesh` funnels every command through the one `execute` tool, so
 /// `{"tools":["execute"]}` means "every command" and a hook written to watch
 /// `rm` paid its timeout on every `ls`. The extra kinds below let a hook say
 /// what it is really watching.
@@ -643,7 +643,7 @@ fn validate_matcher(id: &str, matcher: &HookMatch) -> Result<(), String> {
 /// relative program is resolved *after* that. `["/opt/dsh-hooks/hook.sh"]` therefore ran
 /// whatever `./hook.sh` happened to sit in the repository the user had cd'd
 /// into - which is exactly the "cloning a repository should not be enough to
-/// run its commands" case that keeps `.dsh/hooks.json` unread.
+/// run its commands" case that keeps `.dogesh/hooks.json` unread.
 ///
 /// - absolute path: kept as is
 /// - bare name (no `/`): resolved against `PATH` **now**, so the lookup cannot

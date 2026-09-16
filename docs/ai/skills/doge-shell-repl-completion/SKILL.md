@@ -15,4 +15,4 @@ description: Use for doge-shell completion, ghost text, suggestion, skim, fuzzy,
 - Key dispatch is a separate concern: user bindings resolve in `dsh/src/repl/keybind/` before `determine_key_action`, and the insert keys (`Alt+.`, snippet, `{{placeholder}}` stops) are in `dsh/src/repl/key_handlers/input_shortcuts.rs`. Read [../doge-shell-repo/references/invariants.md](../doge-shell-repo/references/invariants.md) before changing how a key is consumed.
 - The inline grid draws at the bottom of the screen, so anything that reuses it must pause the status line first (`StatusLinePause`).
 - Validate with `cargo test -p doge-shell` unless the change clearly crosses crate boundaries.
-- If package-level tests fail only from macOS sandbox child-`dsh` tracing initialization and the edit is library-scoped, rerun a focused `cargo test -p doge-shell --lib` and report the environment-dependent failure.
+- If package-level tests fail only from macOS sandbox child-`dogesh` tracing initialization and the edit is library-scoped, rerun a focused `cargo test -p doge-shell --lib` and report the environment-dependent failure.

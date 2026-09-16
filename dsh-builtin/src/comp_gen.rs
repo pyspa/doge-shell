@@ -27,7 +27,7 @@ pub fn description() -> &'static str {
 ///
 /// This command fetches the help text for the specified command (using `man` or `--help`),
 /// sends it to the AI service to generate a JSON completion definition,
-/// and saves the result to `~/.config/dsh/completions/<command_name>.json`.
+/// and saves the result to `~/.config/dogesh/completions/<command_name>.json`.
 pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.iter().any(|arg| arg == "--help" || arg == "-h") {
         ctx.write_stdout(usage()).ok();

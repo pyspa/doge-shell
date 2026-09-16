@@ -43,7 +43,7 @@ pub fn init_tracing() -> Result<()> {
             .open(log_path)?,
     );
 
-    let env_filter = tracing_subscriber::EnvFilter::try_from_env("DSH_LOG")
+    let env_filter = tracing_subscriber::EnvFilter::try_from_env("DOGESH_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
     tracing_subscriber::fmt()

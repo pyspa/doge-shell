@@ -58,7 +58,7 @@
   `Proceed? [y/N/a(Always)]:` を付けるので、書くと 2〜3 回出る。
 - `loose` は「コマンド・MCP・機微読み取りを素通りさせる」であって「全部素通り」ではない。
   **ファイル書き込み（`edit` / `str_replace` / `skill_manage`）と skill script はレベルに関係なく必ず確認する。**
-  skill script の判定は user scope だけでなく **project scope（`<project>/.dsh/skills`）も含む**
+  skill script の判定は user scope だけでなく **project scope（`<project>/.dogesh/skills`）も含む**
   （`execute.rs` の `touches_skill_file`）。project skill は `git clone` で降ってくるので、
   そこだけ通常のコマンドポリシーに落ちると `loose` で無確認実行になる。
   判定は `resolve_tool_path` を**通さない**。あれはアクセス判定で、タスクでは grant 外のパスを

@@ -115,7 +115,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             for (key, _) in std::env::vars() {
                 if !new_env.contains_key(&key)
                     && !PROTECTED_ENV_VARS.contains(&key.as_str())
-                    && !key.starts_with("DSH_")
+                    && !key.starts_with("DOGESH_")
                 {
                     // It was removed in the subshell
                     proxy.unset_env_var(&key);

@@ -1,10 +1,10 @@
-//! One resolution of the user's `dsh` configuration directory.
+//! One resolution of the user's `dogesh` configuration directory.
 //!
 //! `dirs::config_dir()` and `xdg::BaseDirectories` name the *same* directory on
 //! Linux and different ones on macOS, where the former is
 //! `~/Library/Application Support`. Mixing them is how the runtime skills ended
-//! up written by the installer to `~/.config/dsh/skills`, read by the skill
-//! loader from `~/Library/Application Support/dsh/skills`, and advertised to the
+//! up written by the installer to `~/.config/dogesh/skills`, read by the skill
+//! loader from `~/Library/Application Support/dogesh/skills`, and advertised to the
 //! model as a third thing: on macOS an installed skill was simply never seen.
 //!
 //! Everything under `dsh-builtin` that needs a configuration path goes through
@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-const APP: &str = "dsh";
+const APP: &str = "dogesh";
 
 /// Where new configuration is written.
 ///
@@ -33,7 +33,7 @@ pub fn config_home() -> PathBuf {
 /// Every directory that may hold configuration, most authoritative first.
 ///
 /// The platform directory is included as a fallback so a macOS user who already
-/// has files under `~/Library/Application Support/dsh` keeps them working. It is
+/// has files under `~/Library/Application Support/dogesh` keeps them working. It is
 /// never written to.
 pub fn config_search_paths() -> Vec<PathBuf> {
     let mut paths = vec![config_home()];
@@ -77,7 +77,7 @@ pub fn skills_dir() -> PathBuf {
 
 /// Render a path for a prompt or a message, shortening `$HOME` to `~`.
 ///
-/// The skills fragment used to hard-code `~/.config/dsh/skills/`, which was
+/// The skills fragment used to hard-code `~/.config/dogesh/skills/`, which was
 /// wrong for anyone with `XDG_CONFIG_HOME` set and wrong on macOS.
 pub fn display_path(path: &Path) -> String {
     let Some(home) = dirs::home_dir() else {
@@ -187,7 +187,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = XdgGuard::set(dir.path());
 
-        assert_eq!(config_home(), dir.path().join("dsh"));
+        assert_eq!(config_home(), dir.path().join("dogesh"));
     }
 
     #[test]
@@ -196,7 +196,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = XdgGuard::set(dir.path());
 
-        assert_eq!(skills_dir(), dir.path().join("dsh").join("skills"));
+        assert_eq!(skills_dir(), dir.path().join("dogesh").join("skills"));
     }
 
     #[test]
@@ -204,7 +204,7 @@ mod tests {
         let _lock = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let _guard = XdgGuard::set(dir.path());
-        let expected = dir.path().join("dsh").join("skills");
+        let expected = dir.path().join("dogesh").join("skills");
         std::fs::create_dir_all(&expected).unwrap();
 
         assert_eq!(skills_dir(), expected);
@@ -231,7 +231,7 @@ mod tests {
 
         assert_eq!(
             config_file("config.lisp"),
-            dir.path().join("dsh").join("config.lisp")
+            dir.path().join("dogesh").join("config.lisp")
         );
     }
 
@@ -240,7 +240,7 @@ mod tests {
         let _lock = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let _guard = XdgGuard::set(dir.path());
-        let root = dir.path().join("dsh");
+        let root = dir.path().join("dogesh");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("config.lisp"), ";; test\n").unwrap();
 

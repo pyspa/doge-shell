@@ -40,7 +40,7 @@ pub(super) fn check_runtimes(ctx: &Context) {
     let herdr_env = std::env::var("HERDR_ENV").ok();
     let pane_id = non_empty_env_for_doctor("HERDR_PANE_ID");
     let bin_path = non_empty_env_for_doctor("HERDR_BIN_PATH");
-    let nested_owner = std::env::var_os("DSH_HERDR_OWNER_PID").is_some();
+    let nested_owner = std::env::var_os("DOGESH_HERDR_OWNER_PID").is_some();
     match (herdr_env.as_deref(), pane_id, bin_path, nested_owner) {
         (Some("1"), Some(pane_id), Some(_), false) => {
             let _ = ctx.write_stdout(&format!("ok herdr-pane active pane={pane_id}"));

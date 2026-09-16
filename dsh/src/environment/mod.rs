@@ -357,7 +357,7 @@ impl std::fmt::Debug for Environment {
 ///
 /// Delegates to `dsh_builtin::config_paths::config_search_paths` (XDG first,
 /// honoring `$XDG_CONFIG_HOME`; the platform config dir as a fallback so a
-/// macOS user who already has files under `~/Library/Application Support/dsh`
+/// macOS user who already has files under `~/Library/Application Support/dogesh`
 /// keeps them working) instead of resolving the same order independently -
 /// two copies of this fallback/dedup logic previously had to be kept in sync
 /// by hand, and had already drifted (this one ignored `$XDG_CONFIG_HOME`

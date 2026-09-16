@@ -1,6 +1,6 @@
 //! Whether a repository's skills may reach the prompt.
 //!
-//! A `.dsh/hooks.json` is not read at all, on the grounds that cloning a
+//! A `.dogesh/hooks.json` is not read at all, on the grounds that cloning a
 //! repository should not be enough to run its commands. Project skills were
 //! read unconditionally, which opened the same door one room over: a skill's
 //! `description` goes into the system prompt before the user has decided

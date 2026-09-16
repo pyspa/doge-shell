@@ -128,7 +128,7 @@ struct McpToolCache {
 
 impl McpToolCache {
     fn load() -> Self {
-        let dirs = BaseDirectories::with_prefix("dsh");
+        let dirs = BaseDirectories::with_prefix("dogesh");
         if let Some(path) = dirs.find_cache_file("mcp_tools.json")
             && let Ok(file) = std::fs::File::open(path)
             && let Ok(cache) = serde_json::from_reader(file)
@@ -139,7 +139,7 @@ impl McpToolCache {
     }
 
     fn save(&self) {
-        let dirs = BaseDirectories::with_prefix("dsh");
+        let dirs = BaseDirectories::with_prefix("dogesh");
         if let Ok(path) = dirs.place_cache_file("mcp_tools.json")
             && let Ok(file) = std::fs::File::create(path)
         {

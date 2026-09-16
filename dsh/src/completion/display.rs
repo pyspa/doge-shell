@@ -21,7 +21,7 @@ enum DisplayMode {
 
 // Completion display configuration
 const MAX_COMPLETION_ITEMS: usize = 30;
-const COMPLETION_MAX_ITEMS_ENV: &str = "DSH_COMPLETION_MAX_ITEMS";
+const COMPLETION_MAX_ITEMS_ENV: &str = "DOGESH_COMPLETION_MAX_ITEMS";
 
 fn default_max_completion_items() -> usize {
     std::env::var(COMPLETION_MAX_ITEMS_ENV)

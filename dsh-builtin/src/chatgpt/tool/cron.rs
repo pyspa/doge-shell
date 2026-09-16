@@ -71,7 +71,7 @@ pub(crate) fn definition() -> Value {
                     },
                     "command": {
                         "type": "string",
-                        "description": "A shell job's full command line, run under `sh -c` from `cwd` - no aliases, abbreviations or dsh builtins. Required for `create` unless `agent` is set; `update`'s equivalent of the shell command."
+                        "description": "A shell job's full command line, run under `sh -c` from `cwd` - no aliases, abbreviations or dogesh builtins. Required for `create` unless `agent` is set; `update`'s equivalent of the shell command."
                     },
                     "agent": {
                         "type": "boolean",

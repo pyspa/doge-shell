@@ -13,10 +13,10 @@ fn the_crontab_line_runs_cron_tick_every_minute() {
 #[test]
 fn the_systemd_unit_has_both_files_and_an_enable_command() {
     let text = systemd_unit();
-    assert!(text.contains("dsh-cron.service"));
-    assert!(text.contains("dsh-cron.timer"));
+    assert!(text.contains("dogesh-cron.service"));
+    assert!(text.contains("dogesh-cron.timer"));
     assert!(text.contains("OnCalendar=*-*-* *:*:00"));
-    assert!(text.contains("systemctl --user enable --now dsh-cron.timer"));
+    assert!(text.contains("systemctl --user enable --now dogesh-cron.timer"));
     assert!(text.contains("enable-linger"));
     assert!(text.contains("cron tick"));
 }

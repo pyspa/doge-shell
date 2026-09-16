@@ -3,9 +3,9 @@ use super::*;
 
 /// Whether Ctrl-R should use the pre-picker skim flow.
 ///
-/// An escape hatch for one release, following `DSH_COMPLETION_FRAMEWORK`.
+/// An escape hatch for one release, following `DOGESH_COMPLETION_FRAMEWORK`.
 pub(super) fn history_picker_backend_is_skim() -> bool {
-    matches!(std::env::var("DSH_HISTORY_PICKER"), Ok(value) if value.eq_ignore_ascii_case("skim"))
+    matches!(std::env::var("DOGESH_HISTORY_PICKER"), Ok(value) if value.eq_ignore_ascii_case("skim"))
 }
 
 impl<'a> Repl<'a> {

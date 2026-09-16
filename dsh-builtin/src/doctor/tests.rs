@@ -436,7 +436,7 @@ fn doctor_skills_labels_each_root_separately() {
     let project = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(root.join(".git")).unwrap();
-    for (dir, name) in [(".dsh/skills", "deploy"), (".agents/skills", "review")] {
+    for (dir, name) in [(".dogesh/skills", "deploy"), (".agents/skills", "review")] {
         let skill = root.join(dir).join(name);
         std::fs::create_dir_all(&skill).unwrap();
         std::fs::write(
@@ -470,7 +470,7 @@ fn doctor_skills_reports_a_lint_rejection_as_an_error() {
     let project = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(root.join(".git")).unwrap();
-    let skill = root.join(".dsh/skills/broken");
+    let skill = root.join(".dogesh/skills/broken");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(skill.join("SKILL.md"), "---\nname: broken\n---\n\nbody\n").unwrap();
 
@@ -495,7 +495,7 @@ fn doctor_skills_reports_archived_and_pending_separately() {
     let project = tempfile::tempdir().unwrap();
     let root = std::fs::canonicalize(project.path()).unwrap();
     std::fs::create_dir_all(root.join(".git")).unwrap();
-    let skill = root.join(".dsh/skills/demo");
+    let skill = root.join(".dogesh/skills/demo");
     std::fs::create_dir_all(&skill).unwrap();
     std::fs::write(
         skill.join("SKILL.md"),
@@ -516,7 +516,7 @@ fn doctor_skills_reports_archived_and_pending_separately() {
         name: "other".to_string(),
         file: "SKILL.md".to_string(),
         action: "create".to_string(),
-        project_root: Some(root.join(".dsh/skills")),
+        project_root: Some(root.join(".dogesh/skills")),
         contents: "---\nname: other\ndescription: d\n---\n".to_string(),
         base_digest: None,
         created_ms: usage::now_ms(),
@@ -568,7 +568,7 @@ fn doctor_hooks_reports_a_missing_config_as_skip() {
     let missing = dir.path().join("ai-hooks.json");
     let mut proxy = hooks_proxy(
         dir.path(),
-        &[("DSH_AI_HOOKS_CONFIG", missing.to_str().unwrap())],
+        &[("DOGESH_AI_HOOKS_CONFIG", missing.to_str().unwrap())],
     );
 
     let output = run_doctor_hooks(&mut proxy);
@@ -588,7 +588,7 @@ fn doctor_hooks_flags_an_unresolvable_command() {
         .unwrap();
     let mut proxy = hooks_proxy(
         dir.path(),
-        &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        &[("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
     );
 
     let output = run_doctor_hooks(&mut proxy);
@@ -616,7 +616,7 @@ fn doctor_hooks_shows_every_match_kind() {
     .unwrap();
     let mut proxy = hooks_proxy(
         dir.path(),
-        &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        &[("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
     );
 
     let output = run_doctor_hooks(&mut proxy);
@@ -641,7 +641,7 @@ fn doctor_hooks_warns_about_a_match_that_cannot_be_satisfied() {
     .unwrap();
     let mut proxy = hooks_proxy(
         dir.path(),
-        &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        &[("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
     );
 
     let output = run_doctor_hooks(&mut proxy);
@@ -669,7 +669,7 @@ fn doctor_hooks_json_reports_the_turn_budget_and_the_matcher() {
     let mut proxy = hooks_proxy(
         dir.path(),
         &[
-            ("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
+            ("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
             ("AI_CHAT_HOOK_TURN_BUDGET_MS", "2500"),
         ],
     );
@@ -694,7 +694,7 @@ fn doctor_hooks_says_nothing_runs_when_the_switch_is_off() {
     let mut proxy = hooks_proxy(
         dir.path(),
         &[
-            ("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
+            ("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap()),
             ("AI_CHAT_HOOKS", "off"),
         ],
     );
@@ -718,7 +718,7 @@ fn doctor_hooks_flags_a_world_writable_config() {
     std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o666)).unwrap();
     let mut proxy = hooks_proxy(
         dir.path(),
-        &[("DSH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
+        &[("DOGESH_AI_HOOKS_CONFIG", config.to_str().unwrap())],
     );
 
     let output = run_doctor_hooks(&mut proxy);

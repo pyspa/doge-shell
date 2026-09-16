@@ -15,9 +15,9 @@ use std::sync::OnceLock;
 /// from `isatty(STDIN_FILENO)`, which is true when tests run from a terminal.
 /// This is the explicit gate instead.
 ///
-/// Always false in unit-test builds. `DSH_NO_TERMINAL_CONTROL` disables it for
+/// Always false in unit-test builds. `DOGESH_NO_TERMINAL_CONTROL` disables it for
 /// manual debugging and for harnesses that drive dsh as a subprocess.
 pub(crate) fn terminal_control_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| !cfg!(test) && std::env::var_os("DSH_NO_TERMINAL_CONTROL").is_none())
+    *ENABLED.get_or_init(|| !cfg!(test) && std::env::var_os("DOGESH_NO_TERMINAL_CONTROL").is_none())
 }

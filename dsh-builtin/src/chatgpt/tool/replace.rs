@@ -318,7 +318,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let skill_dir = root.join(".dsh/skills/demo");
+        let skill_dir = root.join(".dogesh/skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
         fs::write(skill_dir.join("SKILL.md"), original).unwrap();
@@ -332,7 +332,7 @@ mod tests {
         };
 
         let args = serde_json::json!({
-            "path": ".dsh/skills/demo/SKILL.md",
+            "path": ".dogesh/skills/demo/SKILL.md",
             "old_string": "description: Use when demoing\n",
             "new_string": "",
         });
@@ -354,7 +354,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
         fs::create_dir_all(root.join(".git")).unwrap();
-        let skill_dir = root.join(".dsh/skills/demo");
+        let skill_dir = root.join(".dogesh/skills/demo");
         fs::create_dir_all(&skill_dir).unwrap();
         let original = "---\nname: demo\ndescription: Use when demoing\n---\n\nbody\n";
         fs::write(skill_dir.join("SKILL.md"), original).unwrap();
@@ -371,7 +371,7 @@ mod tests {
         };
 
         let args = serde_json::json!({
-            "path": ".dsh/skills/demo/SKILL.md",
+            "path": ".dogesh/skills/demo/SKILL.md",
             "old_string": "body",
             "new_string": "bypassing the queue",
         });

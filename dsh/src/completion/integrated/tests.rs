@@ -155,7 +155,7 @@ async fn skill_subcommands_complete_project_skill_names() {
     let dir = tempdir().unwrap();
     let root = dir.path();
     fs::create_dir_all(root.join(".git")).unwrap();
-    let skill = root.join(".dsh/skills/deploy-staging");
+    let skill = root.join(".dogesh/skills/deploy-staging");
     fs::create_dir_all(&skill).unwrap();
     fs::write(
         skill.join("SKILL.md"),
@@ -214,7 +214,7 @@ async fn skill_review_subcommands_complete_pending_proposal_ids() {
     // Written directly rather than through `dsh-builtin`'s own
     // `pending::stage`, which is crate-private: this only needs the
     // file on disk in the shape `pending_proposal_ids()` reads back.
-    let pending_dir = state.path().join("dsh/skills-pending");
+    let pending_dir = state.path().join("dogesh/skills-pending");
     fs::create_dir_all(&pending_dir).unwrap();
     fs::write(
         pending_dir.join("project.deploy-staging.json"),
@@ -225,7 +225,7 @@ async fn skill_review_subcommands_complete_pending_proposal_ids() {
             "name": "deploy-staging",
             "file": "SKILL.md",
             "action": "create",
-            "project_root": root.join(".dsh/skills"),
+            "project_root": root.join(".dogesh/skills"),
             "contents": "---\nname: deploy-staging\ndescription: d\n---\n",
             "base_digest": null,
             "created_ms": 1,
@@ -402,8 +402,8 @@ fn engine_with_variable(name: &str, value: &str) -> IntegratedCompletionEngine {
 
 #[tokio::test]
 async fn dollar_token_completes_shell_variables_with_prefix_kept() {
-    let engine = engine_with_variable("DSH_SPECIAL_VAR", "1");
-    let input = "echo $DSH_SPEC";
+    let engine = engine_with_variable("DOGESH_SPECIAL_VAR", "1");
+    let input = "echo $DOGESH_SPEC";
     let dir = tempdir().unwrap();
     let result = engine
         .complete(input, input.chars().count(), dir.path(), 50, None)
@@ -413,8 +413,8 @@ async fn dollar_token_completes_shell_variables_with_prefix_kept() {
         result
             .candidates
             .iter()
-            .any(|c| c.text == "$DSH_SPECIAL_VAR"),
-        "expected `$DSH_SPECIAL_VAR` among {:?}",
+            .any(|c| c.text == "$DOGESH_SPECIAL_VAR"),
+        "expected `$DOGESH_SPECIAL_VAR` among {:?}",
         result
             .candidates
             .iter()
@@ -422,20 +422,20 @@ async fn dollar_token_completes_shell_variables_with_prefix_kept() {
             .collect::<Vec<_>>()
     );
     // The replacement range must cover the whole `$...` token so the
-    // inserted value replaces it (rather than appending after `$DSH_SPEC`).
+    // inserted value replaces it (rather than appending after `$DOGESH_SPEC`).
     let range = result.replacement_range.expect("replacement range");
     let replaced: String = input
         .chars()
         .skip(range.start)
         .take(range.end - range.start)
         .collect();
-    assert_eq!(replaced, "$DSH_SPEC");
+    assert_eq!(replaced, "$DOGESH_SPEC");
 }
 
 #[tokio::test]
 async fn brace_variable_token_completes_with_brace_form() {
-    let engine = engine_with_variable("DSH_BRACE_VAR", "1");
-    let input = "echo ${DSH_BRACE";
+    let engine = engine_with_variable("DOGESH_BRACE_VAR", "1");
+    let input = "echo ${DOGESH_BRACE";
     let dir = tempdir().unwrap();
     let result = engine
         .complete(input, input.chars().count(), dir.path(), 50, None)
@@ -445,8 +445,8 @@ async fn brace_variable_token_completes_with_brace_form() {
         result
             .candidates
             .iter()
-            .any(|c| c.text == "${DSH_BRACE_VAR}"),
-        "expected `${{DSH_BRACE_VAR}}` among {:?}",
+            .any(|c| c.text == "${DOGESH_BRACE_VAR}"),
+        "expected `${{DOGESH_BRACE_VAR}}` among {:?}",
         result
             .candidates
             .iter()
@@ -934,7 +934,7 @@ async fn git_dynamic_value_candidates_skip_fallback_collectors() {
         let mut env = environment.write();
         env.variable_state.paths = vec![bin_dir.display().to_string()];
         env.variable_state.variables.insert(
-            "DSH_EXTERNAL_COMPLETER".to_string(),
+            "DOGESH_EXTERNAL_COMPLETER".to_string(),
             format!(
                 "printf 'external-branch\\tExternal completer\\n'; printf called > {}",
                 external_marker.display()
@@ -1842,7 +1842,7 @@ async fn external_completer_runs_as_fallback() {
     let dir = tempdir().unwrap();
     let environment = Environment::new();
     environment.write().variable_state.variables.insert(
-            "DSH_EXTERNAL_COMPLETER".to_string(),
+            "DOGESH_EXTERNAL_COMPLETER".to_string(),
             "printf 'zzint-alpha\\tExternal completer\\n'; printf 'unrelated-candidate\\tExternal completer\\n'"
                 .to_string(),
         );

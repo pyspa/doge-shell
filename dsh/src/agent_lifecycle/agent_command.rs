@@ -15,7 +15,7 @@
 /// collide with unrelated tool names on some systems. That's an acceptable
 /// false positive: the only cost is that pane authority is on loan to
 /// Herdr's own (empty) detection for the duration of that one command, which
-/// self-heals the moment the command exits. `DSH_HERDR_AGENT_COMMANDS` lets a
+/// self-heals the moment the command exits. `DOGESH_HERDR_AGENT_COMMANDS` lets a
 /// user drop one of these (`-pi`) or replace the whole list.
 const BUILTIN_AGENT_COMMANDS: &[&str] = &[
     "agy",
@@ -46,15 +46,15 @@ const BUILTIN_AGENT_COMMANDS: &[&str] = &[
 
 /// Extends (or, with a leading `-name` entry, excludes from) the builtin
 /// agent command list. `:`-separated, like `PATH`/`Z_EXCLUDE`.
-pub(crate) const AGENT_COMMANDS_KEY: &str = "DSH_HERDR_AGENT_COMMANDS";
+pub(crate) const AGENT_COMMANDS_KEY: &str = "DOGESH_HERDR_AGENT_COMMANDS";
 
 /// Set to `0`/`false`/`off`/`no` to disable the whole handoff feature, even
 /// when Herdr is active.
-pub(crate) const HANDOFF_KEY: &str = "DSH_HERDR_AGENT_HANDOFF";
+pub(crate) const HANDOFF_KEY: &str = "DOGESH_HERDR_AGENT_HANDOFF";
 
 /// Whether `name` (already a basename, e.g. `codex` not `/usr/bin/codex`)
 /// should trigger a pane authority handoff. `configured` is the raw
-/// `DSH_HERDR_AGENT_COMMANDS` value, if any.
+/// `DOGESH_HERDR_AGENT_COMMANDS` value, if any.
 pub(crate) fn is_agent_command(name: &str, configured: Option<&str>) -> bool {
     let (additions, exclusions) = split_configured(configured.unwrap_or(""));
     if exclusions.iter().any(|excluded| eq(excluded, name)) {
@@ -65,7 +65,7 @@ pub(crate) fn is_agent_command(name: &str, configured: Option<&str>) -> bool {
 }
 
 /// Whether the handoff feature itself is enabled. `configured` is the raw
-/// `DSH_HERDR_AGENT_HANDOFF` value, if any.
+/// `DOGESH_HERDR_AGENT_HANDOFF` value, if any.
 pub(crate) fn handoff_enabled(configured: Option<&str>) -> bool {
     match configured {
         None => true,
@@ -80,7 +80,7 @@ fn eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
-/// Splits a `:`-separated `DSH_HERDR_AGENT_COMMANDS` value into additions and
+/// Splits a `:`-separated `DOGESH_HERDR_AGENT_COMMANDS` value into additions and
 /// exclusions (a `-`-prefixed entry). Blank entries (repeated `:`, leading or
 /// trailing whitespace, or a bare `-` with nothing after it) are dropped
 /// rather than matching everything or nothing by accident.

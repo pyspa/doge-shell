@@ -57,7 +57,7 @@
 
 ## Skill 運用
 - canonical source は `docs/ai/skills/` に置く。
-- runtime 配置先は `~/.codex/skills/`、`~/.config/dsh/skills/`、`~/.claude/skills/`、`<repo>/.claude/skills`（`docs/ai/skills` への symlink）の 4 つ。詳細は `docs/ai/README.md`。
+- runtime 配置先は `~/.codex/skills/`、`~/.config/dogesh/skills/`、`~/.claude/skills/`、`<repo>/.claude/skills`（`docs/ai/skills` への symlink）の 4 つ。詳細は `docs/ai/README.md`。
 - 導入や更新は `scripts/install-runtime-skills.sh` を使う。
 - 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
 - Codex runtime へ常時入れる Skill は原則 `doge-shell-repo` のみにし、領域別 Skill は `docs/ai/skills/<skill>/SKILL.md` を必要時に読む。

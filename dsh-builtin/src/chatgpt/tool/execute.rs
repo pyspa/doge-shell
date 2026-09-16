@@ -30,8 +30,8 @@ pub(crate) const NAME: &str = "execute";
 
 const EXECUTE_TOOL_CONFIG_FILE: &str = "openai-execute-tool.json";
 pub(crate) const EXECUTE_TOOL_ENV_ALLOWLIST: &str = "AI_CHAT_EXECUTE_ALLOWLIST";
-const EXECUTE_TOOL_CONFIG_OVERRIDE_ENV: &str = "DSH_EXECUTE_TOOL_CONFIG";
-const CONFIG_DIR_PREFIX: &str = "dsh";
+const EXECUTE_TOOL_CONFIG_OVERRIDE_ENV: &str = "DOGESH_EXECUTE_TOOL_CONFIG";
+const CONFIG_DIR_PREFIX: &str = "dogesh";
 
 /// Wall-clock budget for a single `execute` call when the caller does not ask
 /// for one. Without a timeout a build or a dev server wedges the whole shell.

@@ -54,7 +54,7 @@ GUIDANCE_DIR = REPO_ROOT / "docs/ai"
 # Only a backtick span starting with one of these is unambiguously a
 # repo-root-relative path. Prose elsewhere routinely writes crate-relative
 # fragments ("completion/integrated.rs", meaning dsh/src/completion/...) or
-# runtime paths a project owns (".dsh/hooks.json"), and neither resolves from
+# runtime paths a project owns (".dogesh/hooks.json"), and neither resolves from
 # the repo root - flagging those would be false positives, not real staleness.
 ROOT_PREFIXES = tuple(f"{crate}/" for crate in CRATE_DIRS) + (
     "docs/",

@@ -368,7 +368,7 @@ fn execute_call(command: &str) -> Value {
     })
 }
 
-/// `dsh` puts every command through `execute`, so a hook watching `rm` used
+/// `dogesh` puts every command through `execute`, so a hook watching `rm` used
 /// to pay its timeout on every `ls`. `programs` is what makes it not.
 #[test]
 fn a_hook_matching_on_the_command_narrows_to_one_call() {
@@ -522,7 +522,7 @@ fn post_tool_use_deny_marks_the_result_failed() {
     let dir = tempdir().unwrap();
     let hooks = hook_context(
         &dir,
-        r#"[ "$DSH_HOOK_EVENT" = post-tool-use ] && echo '{"decision":"deny","reason":"leaked a path"}'
+        r#"[ "$DOGESH_HOOK_EVENT" = post-tool-use ] && echo '{"decision":"deny","reason":"leaked a path"}'
 exit 0"#,
     );
     let mut proxy = TestShellProxy {
@@ -552,7 +552,7 @@ fn post_tool_use_additional_context_reaches_the_model() {
     let dir = tempdir().unwrap();
     let hooks = hook_context(
         &dir,
-        r#"[ "$DSH_HOOK_EVENT" = post-tool-use ] && echo '{"additional_context":"repo policy applies"}'
+        r#"[ "$DOGESH_HOOK_EVENT" = post-tool-use ] && echo '{"additional_context":"repo policy applies"}'
 exit 0"#,
     );
     let mut proxy = TestShellProxy {
@@ -579,7 +579,7 @@ fn pre_tool_use_additional_context_reaches_the_model() {
     let dir = tempdir().unwrap();
     let hooks = hook_context(
         &dir,
-        r#"[ "$DSH_HOOK_EVENT" = pre-tool-use ] && echo '{"additional_context":"read-only day"}'
+        r#"[ "$DOGESH_HOOK_EVENT" = pre-tool-use ] && echo '{"additional_context":"read-only day"}'
 exit 0"#,
     );
     let mut proxy = TestShellProxy {
@@ -607,7 +607,7 @@ fn post_tool_use_fires_for_a_failing_tool() {
     let log = dir.path().join("seen.log");
     let hooks = hook_context(
         &dir,
-        &format!("printf '%s\\n' \"$DSH_HOOK_EVENT\" >> {}", log.display()),
+        &format!("printf '%s\\n' \"$DOGESH_HOOK_EVENT\" >> {}", log.display()),
     );
     let mut proxy = TestShellProxy {
         current_dir: dir.path().to_path_buf(),
@@ -629,7 +629,7 @@ fn post_tool_use_fires_for_a_failing_tool() {
     assert!(seen.contains("post-tool-use"), "{seen}");
 }
 
-/// The exemption exists so a repository that ignores `.dsh/` can still have
+/// The exemption exists so a repository that ignores `.dogesh/` can still have
 /// its project skills read. It stops there: writing one goes through
 /// `skill_manage`, which validates what plain `edit` would not.
 #[test]
@@ -639,11 +639,11 @@ fn a_gitignored_skill_directory_is_readable_but_not_writable() {
     std::fs::create_dir_all(root.join(".git")).unwrap();
     std::fs::write(
         root.join(".gitignore"),
-        ".dsh/
+        ".dogesh/
 ",
     )
     .unwrap();
-    let skill = root.join(".dsh/skills/demo");
+    let skill = root.join(".dogesh/skills/demo");
     std::fs::create_dir_all(&skill).unwrap();
     let file = skill.join("SKILL.md");
     std::fs::write(&file, "---\ndescription: d\n---\n").unwrap();

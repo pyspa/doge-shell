@@ -2,7 +2,7 @@
 //!
 //! Mirrors `completion/json_loader.rs`: the repository-root `output-schemas/`
 //! directory is the single canonical source, embedded via rust-embed and
-//! cached in a `OnceLock`. `~/.config/dsh/output-schemas/` overrides embedded
+//! cached in a `OnceLock`. `~/.config/dogesh/output-schemas/` overrides embedded
 //! definitions per command. NOTE: rust-embed tracks files, not the directory
 //! — after *adding* a schema JSON, `touch` this file so release builds
 //! re-embed (same caveat as `completions/`).
@@ -58,7 +58,7 @@ impl OutputSchemaDatabase {
         }
 
         // User overrides win over embedded definitions. Same directory set the
-        // completion loader uses, so `~/.config/dsh/` works everywhere.
+        // completion loader uses, so `~/.config/dogesh/` works everywhere.
         // Applied back to front because later inserts win and the list is
         // most-specific first.
         for dir in crate::environment::user_asset_override_dirs("output-schemas")

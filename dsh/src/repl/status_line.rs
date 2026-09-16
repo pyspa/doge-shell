@@ -15,7 +15,7 @@
 //! # Why it is off by default
 //!
 //! DECSTBM support varies, and a terminal left with a stale margin looks
-//! broken. Enable with `(pref-status-line t)`; `DSH_STATUS_LINE=0` forces it
+//! broken. Enable with `(pref-status-line t)`; `DOGESH_STATUS_LINE=0` forces it
 //! off regardless.
 
 use crate::input::display_width;
@@ -136,9 +136,9 @@ impl StatusLine {
     }
 }
 
-/// `DSH_STATUS_LINE=0` (or `false`/`no`/`off`) hard-disables the feature.
+/// `DOGESH_STATUS_LINE=0` (or `false`/`no`/`off`) hard-disables the feature.
 fn env_allows() -> bool {
-    match std::env::var("DSH_STATUS_LINE") {
+    match std::env::var("DOGESH_STATUS_LINE") {
         Ok(value) => !matches!(
             value.trim().to_ascii_lowercase().as_str(),
             "0" | "false" | "no" | "off"

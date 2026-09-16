@@ -39,7 +39,7 @@ fn truncate_ledger_output(output: &str) -> String {
 }
 
 fn enqueue_atuin_dual_write(event: CommandEvent) {
-    let enabled = std::env::var("DSH_ATUIN_DUAL_WRITE").ok().as_deref() == Some("1");
+    let enabled = std::env::var("DOGESH_ATUIN_DUAL_WRITE").ok().as_deref() == Some("1");
     enqueue_atuin_dual_write_with(enabled, std::path::PathBuf::from("atuin"), event);
 }
 

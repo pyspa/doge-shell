@@ -56,7 +56,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// a builtin agent and any other agent CLI started from inside the same
 /// pane never contend over the same identity.
 pub(crate) const SOURCE: &str = "custom:doge-shell";
-pub(crate) const AGENT_LABEL: &str = "dsh";
+pub(crate) const AGENT_LABEL: &str = "dogesh";
 
 /// A human-readable state message is capped so a very long safety-guard
 /// reason (or a pathological tool-call payload) never turns into a
@@ -678,8 +678,8 @@ pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
 /// A complete no-op (`None`, no lock taken beyond
 /// [`AgentLifecycleManager::is_active`]) whenever Herdr isn't active, the
 /// job isn't a foreground external command, the handoff feature is disabled
-/// (`DSH_HERDR_AGENT_HANDOFF`), or the job's last pipeline stage isn't a
-/// recognized agent CLI (`DSH_HERDR_AGENT_COMMANDS`).
+/// (`DOGESH_HERDR_AGENT_HANDOFF`), or the job's last pipeline stage isn't a
+/// recognized agent CLI (`DOGESH_HERDR_AGENT_COMMANDS`).
 pub fn yield_to_foreground_agent(
     shell: &crate::shell::Shell,
     job: &crate::process::Job,

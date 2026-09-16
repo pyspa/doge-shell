@@ -9,13 +9,13 @@
 //! Skills are **read** from up to three roots and **written** to two.
 //!
 //! The personal one is the user's own configuration directory. A project can
-//! carry its own procedures in `.dsh/skills`, and - because the same files are
+//! carry its own procedures in `.dogesh/skills`, and - because the same files are
 //! useful to whichever agent the user is driving - in the vendor-neutral
 //! `.agents/skills` other tools have settled on. More specific wins a name
-//! clash, so `.dsh/skills` shadows `.agents/skills`, which shadows the personal
+//! clash, so `.dogesh/skills` shadows `.agents/skills`, which shadows the personal
 //! root.
 //!
-//! `skill_manage` still only ever writes to `.dsh/skills` or the personal root.
+//! `skill_manage` still only ever writes to `.dogesh/skills` or the personal root.
 //! `.agents/skills` is shared with other tools, and a directory this shell does
 //! not own is not a place for it to leave files.
 
@@ -83,7 +83,7 @@ pub(crate) enum SkillScope {
 /// Which directory of a scope, where a scope has more than one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SkillOrigin {
-    /// This shell's own directory: `.dsh/skills`, or the personal root.
+    /// This shell's own directory: `.dogesh/skills`, or the personal root.
     Dsh,
     /// The cross-agent convention: `<project>/.agents/skills`.
     Agents,
@@ -138,9 +138,9 @@ impl SkillRoot {
 
 /// The project-relative skills directory.
 ///
-/// `.dsh` rather than `.doge`: the binary, the configuration directory and
-/// `config_paths::APP` all spell it `dsh`.
-pub(crate) const PROJECT_SKILLS_DIR: &str = ".dsh/skills";
+/// `.dogesh` rather than `.doge`: the binary, the configuration directory and
+/// `config_paths::APP` all spell it `dogesh`.
+pub(crate) const PROJECT_SKILLS_DIR: &str = ".dogesh/skills";
 
 /// The cross-agent project skills directory.
 ///
@@ -160,7 +160,7 @@ fn project_marker_root(current_dir: &Path) -> Option<PathBuf> {
 
 /// The project skills root for `current_dir`, when there is a project at all.
 ///
-/// **This keeps meaning `.dsh/skills` specifically.** `skill_manage` and
+/// **This keeps meaning `.dogesh/skills` specifically.** `skill_manage` and
 /// `doctor` call it to answer "where would a write go", so leaving it alone is
 /// what guarantees the interop root stays read-only.
 pub(crate) fn project_skills_root(current_dir: &Path) -> Option<PathBuf> {
@@ -181,7 +181,7 @@ pub(crate) fn skill_roots(current_dir: Option<&Path>, allow_project: bool) -> Ve
     let mut roots = Vec::with_capacity(3);
 
     if allow_project && let Some(cwd) = current_dir {
-        // `.dsh` first: the tool-specific answer beats the shared one.
+        // `.dogesh` first: the tool-specific answer beats the shared one.
         if let Some(path) = project_skills_root(cwd) {
             roots.push(SkillRoot {
                 scope: SkillScope::Project,
@@ -209,7 +209,7 @@ pub(crate) fn skill_roots(current_dir: Option<&Path>, allow_project: bool) -> Ve
 
 /// Drop roots that are the same directory reached two ways.
 ///
-/// `.agents/skills` symlinked to `.dsh/skills` is a reasonable thing for a
+/// `.agents/skills` symlinked to `.dogesh/skills` is a reasonable thing for a
 /// repository to do, and without this it would list every skill twice and ask
 /// for trust twice for one set of files.
 fn dedupe_roots(roots: Vec<SkillRoot>) -> Vec<SkillRoot> {
@@ -235,7 +235,7 @@ pub(crate) struct ProjectSkillDecision {
 ///
 /// A project skills directory arrives with a `git clone`, and its descriptions
 /// enter the system prompt before the user has decided anything. This is the
-/// same bar `.dsh/hooks.json` is held to.
+/// same bar `.dogesh/hooks.json` is held to.
 ///
 /// **A `Vec`, not an `Option`.** The single-root version took
 /// `roots.iter().find(scope == Project)`, so a repository whose first project

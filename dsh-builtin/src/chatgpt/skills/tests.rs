@@ -224,7 +224,7 @@ fn system_prompt_fragment_cache_invalidates_when_skills_change() {
 fn project_skills_are_listed_before_user_skills() {
     clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
-    let project = dir.path().join("proj/.dsh/skills");
+    let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
     write_skill(&project, "deploy", "repo deploy steps");
     write_skill(&user, "bisect", "personal bisect notes");
@@ -246,7 +246,7 @@ fn project_skills_are_listed_before_user_skills() {
 fn a_project_skill_shadows_a_user_skill_with_the_same_name() {
     clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
-    let project = dir.path().join("proj/.dsh/skills");
+    let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
     write_skill(&project, "deploy", "repo version");
     write_skill(&user, "deploy", "personal version");
@@ -294,9 +294,9 @@ fn the_cache_invalidates_when_only_the_project_root_changes() {
     let dir = tempdir().unwrap();
     let user = dir.path().join("home/skills");
     write_skill(&user, "shared", "always here");
-    let first_project = dir.path().join("a/.dsh/skills");
+    let first_project = dir.path().join("a/.dogesh/skills");
     write_skill(&first_project, "alpha", "project a");
-    let second_project = dir.path().join("b/.dsh/skills");
+    let second_project = dir.path().join("b/.dogesh/skills");
     write_skill(&second_project, "beta", "project b");
 
     let first = SkillsManager::with_roots(vec![project_root(&first_project), user_root(&user)])
@@ -434,7 +434,7 @@ fn a_skills_path_that_is_a_file_is_reported_as_such() {
 fn a_shadowed_personal_skill_is_reported() {
     clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
-    let project = dir.path().join("proj/.dsh/skills");
+    let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
     write_skill(&project, "deploy", "repo version");
     write_skill(&user, "deploy", "personal version");
@@ -536,7 +536,7 @@ fn a_reference_file_is_attributed_to_its_skill_directory() {
     assert!(containing_skill_in(&roots, Path::new("/etc/hosts")).is_none());
 }
 
-/// A project root with no project marker must not be invented: `.dsh/skills`
+/// A project root with no project marker must not be invented: `.dogesh/skills`
 /// under an arbitrary directory is not a project skill root.
 #[test]
 fn project_root_is_skipped_without_a_project_marker() {
@@ -559,7 +559,7 @@ fn a_project_marker_makes_a_project_skills_root() {
 
     assert_eq!(
         project_skills_root(&project),
-        Some(project.join(".dsh").join("skills"))
+        Some(project.join(".dogesh").join("skills"))
     );
 }
 
@@ -595,7 +595,7 @@ fn the_agents_root_needs_a_project_marker_like_the_dsh_one() {
     );
 }
 
-/// `.dsh` is this shell's own answer, so it beats the shared one, which in
+/// `.dogesh` is this shell's own answer, so it beats the shared one, which in
 /// turn beats the personal root.
 #[test]
 fn skill_root_precedence_is_dsh_then_agents_then_user() {
@@ -608,7 +608,7 @@ fn skill_root_precedence_is_dsh_then_agents_then_user() {
     assert_eq!(
         paths[..2],
         [
-            project.join(".dsh").join("skills").as_path(),
+            project.join(".dogesh").join("skills").as_path(),
             project.join(".agents").join("skills").as_path()
         ]
     );
@@ -618,7 +618,7 @@ fn skill_root_precedence_is_dsh_then_agents_then_user() {
 
     // Same name in all three: the most specific one is what loads, and the
     // others are reported as shadowed rather than silently gone.
-    let dsh = project.join(".dsh/skills");
+    let dsh = project.join(".dogesh/skills");
     let agents = project.join(".agents/skills");
     let personal = project.join("personal");
     for root in [&dsh, &agents, &personal] {
@@ -649,7 +649,7 @@ fn skill_root_precedence_is_dsh_then_agents_then_user() {
 #[test]
 fn an_agents_skill_is_listed_in_its_own_block() {
     let dir = tempdir().unwrap();
-    let dsh = dir.path().join(".dsh/skills");
+    let dsh = dir.path().join(".dogesh/skills");
     let agents = dir.path().join(".agents/skills");
     std::fs::create_dir_all(&dsh).unwrap();
     std::fs::create_dir_all(&agents).unwrap();
@@ -683,10 +683,13 @@ fn an_agents_root_symlinked_to_the_dsh_root_is_deduplicated() {
     let dir = tempdir().unwrap();
     let project = std::fs::canonicalize(dir.path()).unwrap();
     std::fs::create_dir_all(project.join(".git")).unwrap();
-    std::fs::create_dir_all(project.join(".dsh/skills")).unwrap();
+    std::fs::create_dir_all(project.join(".dogesh/skills")).unwrap();
     std::fs::create_dir_all(project.join(".agents")).unwrap();
-    std::os::unix::fs::symlink(project.join(".dsh/skills"), project.join(".agents/skills"))
-        .unwrap();
+    std::os::unix::fs::symlink(
+        project.join(".dogesh/skills"),
+        project.join(".agents/skills"),
+    )
+    .unwrap();
 
     let roots = skill_roots(Some(&project), true);
     let project_roots = roots

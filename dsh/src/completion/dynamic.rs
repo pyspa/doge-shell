@@ -260,7 +260,7 @@ pub(crate) fn fish_fallback_mode_label(environment: &Environment) -> &'static st
 
 fn fish_fallback_mode_from_env(environment: &Environment) -> FishFallbackMode {
     match environment
-        .get_var("DSH_COMPLETION_FISH_FALLBACK")
+        .get_var("DOGESH_COMPLETION_FISH_FALLBACK")
         .as_deref()
         .map(str::trim)
         .map(str::to_ascii_lowercase)
@@ -417,7 +417,7 @@ impl DynamicCompletionProvider {
     pub(crate) fn has_async_fallback(&self) -> bool {
         let environment = self.environment.read();
         let has_external = environment
-            .get_var("DSH_EXTERNAL_COMPLETER")
+            .get_var("DOGESH_EXTERNAL_COMPLETER")
             .is_some_and(|value| !value.trim().is_empty());
         let has_fish = fish_fallback_mode_from_env(&environment) != FishFallbackMode::Disabled
             && environment.lookup("fish").is_some();

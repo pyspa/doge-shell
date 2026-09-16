@@ -534,7 +534,7 @@ exit 0",
         let out = dir.path().join("depth.txt");
         let path = script(
             &dir,
-            &format!("printf '%s' \"$DSH_HOOK_DEPTH\" > {}", out.display()),
+            &format!("printf '%s' \"$DOGESH_HOOK_DEPTH\" > {}", out.display()),
         );
         let hook = definition(vec!["sh".to_string(), path.display().to_string()], 5000);
 

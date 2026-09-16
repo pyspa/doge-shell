@@ -3,7 +3,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Shared boundary for completion generation used by both `dsh completion`
+/// Shared boundary for completion generation used by both `dogesh completion`
 /// and the `comp-gen` builtin.
 pub struct CompletionGenerationService;
 
@@ -73,7 +73,7 @@ impl CompletionGenerationService {
 
     pub fn default_output_path(command_name: &str) -> Result<PathBuf> {
         Self::validate_command_name(command_name)?;
-        let xdg_dirs = xdg::BaseDirectories::with_prefix("dsh");
+        let xdg_dirs = xdg::BaseDirectories::with_prefix("dogesh");
         xdg_dirs
             .place_config_file(format!("completions/{command_name}.json"))
             .context("Failed to resolve the completion output path")

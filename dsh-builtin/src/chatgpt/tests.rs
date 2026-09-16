@@ -566,7 +566,7 @@ fn with_state_home<R>(dir: &std::path::Path, f: impl FnOnce() -> R) -> R {
 fn project_with_a_skill(dir: &std::path::Path) -> std::path::PathBuf {
     let root = std::fs::canonicalize(dir).unwrap();
     std::fs::create_dir_all(root.join(".git")).unwrap();
-    write_project_skill(&root.join(".dsh/skills"), "deploy", "repo deploy steps");
+    write_project_skill(&root.join(".dogesh/skills"), "deploy", "repo deploy steps");
     root
 }
 
@@ -594,7 +594,7 @@ fn has_root(roots: &[SkillRoot], path: &std::path::Path) -> bool {
 }
 
 fn dsh_root(project: &std::path::Path) -> std::path::PathBuf {
-    project.join(".dsh").join("skills")
+    project.join(".dogesh").join("skills")
 }
 
 fn agents_root(project: &std::path::Path) -> std::path::PathBuf {
@@ -602,7 +602,7 @@ fn agents_root(project: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// A cloned repository's descriptions must not reach the prompt before the
-/// user has agreed - the same bar `.dsh/hooks.json` is held to.
+/// user has agreed - the same bar `.dogesh/hooks.json` is held to.
 #[test]
 fn an_untrusted_project_is_dropped_when_the_user_declines() {
     let state = tempfile::tempdir().unwrap();
@@ -664,7 +664,7 @@ fn an_always_answer_is_remembered_and_a_new_skill_asks_again() {
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         // A skill added afterwards changes what the prompt would carry.
-        let added = root.join(".dsh/skills/sneaky");
+        let added = root.join(".dogesh/skills/sneaky");
         std::fs::create_dir_all(&added).unwrap();
         std::fs::write(
             added.join("SKILL.md"),
@@ -694,7 +694,7 @@ fn an_untrusted_agents_root_is_dropped_while_a_trusted_dsh_root_stays() {
     write_project_skill(&agents_root(&root), "shared", "someone else's notes");
 
     with_state_home(state.path(), || {
-        // `.dsh` was agreed to on disk; `.agents` has never been seen.
+        // `.dogesh` was agreed to on disk; `.agents` has never been seen.
         let mut roots = project_roots(&root);
         let dsh = skills::describe_project_roots(&roots)
             .into_iter()

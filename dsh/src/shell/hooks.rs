@@ -46,7 +46,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
     let current_project_name = project_opt.as_ref().map(|p| p.name.clone());
 
     // We need to read the old variable first
-    let old_project_name = shell.environment.read().get_var("DSH_PROJECT");
+    let old_project_name = shell.environment.read().get_var("DOGESH_PROJECT");
 
     if current_project_name != old_project_name {
         if let Some(name) = &current_project_name {
@@ -55,7 +55,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
                 .write()
                 .variable_state
                 .variables
-                .insert("DSH_PROJECT".to_string(), name.clone());
+                .insert("DOGESH_PROJECT".to_string(), name.clone());
             debug!("Entered project: {}", name);
 
             let lisp_code = format!(
@@ -71,7 +71,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
                 .write()
                 .variable_state
                 .variables
-                .remove("DSH_PROJECT");
+                .remove("DOGESH_PROJECT");
             debug!("Left project");
         }
     }

@@ -1,12 +1,15 @@
 # Task Map
 
 - completion / suggestion / ghost text / TAB
+  - Skill: `docs/ai/skills/doge-shell-repl-completion/SKILL.md`（JSON 定義の追加/編集は `doge-shell-completion-spec` へ）
   - Read: `dsh/src/completion/`, `dsh/src/repl/completion/`, `dsh/src/repl/input_analysis.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` when `DYNAMIC_COMPLETION_PROVIDERS` changes
 - parser / AST / redirect / expansion / brace
+  - Skill: `docs/ai/skills/doge-shell-parser-shell/SKILL.md`
   - Read: `dsh/src/parser/`
   - Validate: `cargo test -p doge-shell`
 - prompt / right prompt / transient / terminal UI / status line
+  - Skill: `docs/ai/skills/doge-shell-prompt-terminal-ui/SKILL.md`
   - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`, `dsh/src/repl/status_line.rs`, `dsh/src/repl/shell_integration.rs`
   - Validate: `cargo test -p doge-shell`
 - key bindings / chords / bind / KeyAction
@@ -16,31 +19,39 @@
   - Read: `dsh/src/repl/last_arg.rs`, `dsh/src/repl/placeholder.rs`, `dsh/src/repl/key_handlers/input_shortcuts.rs`, `dsh/src/snippet.rs`
   - Validate: `cargo test -p doge-shell`
 - cron / scheduled jobs / tick / agent job scheduling
+  - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`（`dsh-cron` は製品利用者向け。repo 開発はこちら）
   - Read: `dsh/src/cron/` (store, clock, exec, run_job, tick, runner, cli), `dsh-builtin/src/cron.rs`, `dsh-types/src/cron.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/cron.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` for CLI changes and `cargo test -p dsh-types` for shared types
 - directory stack / pushd / popd / dirs / cd -N
+  - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/mod.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when `changepwd` behavior changes
 - process / PTY / job / raw terminal / colored output
+  - Skill: `docs/ai/skills/doge-shell-process-pty/SKILL.md`
   - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
 - chatgpt / MCP / tool / runtime skill / OpenAI config
+  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
   - 先に読む: [ai/README.md](ai/README.md)（AI 機能の方針。再実装してはいけないものの一覧）
   - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
   - Validate: `cargo test -p dsh-builtin`
 - skill / SKILL.md / skill_manage / project skill / 使用統計
+  - Skill: `docs/ai/skills/dsh-skill-authoring/SKILL.md`
   - 先に読む: [ai/skill.md](ai/skill.md)（Regression チェックリストは同ファイル末尾）
   - Read: `dsh-builtin/src/chatgpt/skills/`, `dsh-builtin/src/chatgpt/tool/skill.rs`, `dsh-builtin/src/skill.rs`
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::skills`; `cargo test -p dsh-builtin --lib chatgpt::tool::skill`; `cargo test -p dsh-builtin --lib chatgpt::reflect`; `cargo test -p dsh-builtin --lib skill::`
 - AI chat hooks / ai-hooks.json / pre-tool-use / 外部コマンド
+  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
   - 先に読む: [ai/hooks.md](ai/hooks.md)（Regression チェックリストは同ファイル末尾。hook は許可を与えられない）
   - Read: `dsh-builtin/src/chatgpt/hooks/`
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
 - agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
+  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
   - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`
   - Regression: 要約後にも予算を保存・判定する。取消は最新レコードの状態だけを原子的に更新する。MCP一覧更新はサーバー障害を分離し、各待機とサーバー間に取消を伝播する。
   - Validate: `cargo test -p doge-shell --lib agent::tests`; `cargo test -p dsh-builtin --lib discovery_`
 - serve / MCP server / shared MCP types
+  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`（静的ファイル配信は `doge-shell-serve-web`）
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change
 - serve / static files / HTTP handlers / CORS / path validation
@@ -48,17 +59,21 @@
   - Read: `dsh-builtin/src/serve/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` only for shared wire-shape changes
 - builtin command / help / doctor outside chat/MCP
+  - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes
 - GitHub builtins / PR notification / git helpers
+  - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: `dsh-builtin/src/g*.rs`, `dsh-builtin/src/github_client.rs`, `dsh-builtin/src/gh_notify.rs`, `dsh-builtin/src/commit_ai.rs`
   - Validate: `cargo test -p dsh-builtin`
 - completion JSON spec の追加/編集（このリポジトリで最も多い作業）
   - Skill: `docs/ai/skills/doge-shell-completion-spec/SKILL.md`
-  - Read: `completions/<command>.json`, `command-completion-schema.json`
+  - Read: `completions/<command>.json`（形と制約は Skill の `docs/ai/skills/doge-shell-completion-spec/references/schema.md`。`command-completion-schema.json` の全文読みはしない）
   - Validate: `cargo test -p doge-shell --lib completion::json_loader`
+  - 新規追加のときは `touch dsh/src/completion/json_loader.rs` が要る（rust-embed は新規ファイルを検知しない）
   - 新しい dynamic provider を足すときは `dsh-types/src/completion.rs` と `command-completion-schema.json` も同時に更新し、`cargo test -p dsh-types` も実行する
 - completion JSON generation / comp-gen
+  - Skill: `docs/ai/skills/doge-shell-completion-spec/SKILL.md`
   - Read: `dsh-builtin/src/comp_gen.rs`, `dsh/src/completion/json_loader.rs`, `dsh/src/completion/generators/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when runtime completion loading changes
 - notebook / markdown rendering / output history
@@ -66,30 +81,38 @@
   - Read: `dsh-builtin/src/notebook_play.rs`, `dsh-builtin/src/markdown/`, `dsh-builtin/src/out.rs`, `dsh-builtin/src/tm.rs`, `dsh-types/src/notebook.rs`, `dsh-types/src/output_history.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared data shapes change
 - safety / guard / command policy
+  - Skill: `docs/ai/skills/doge-shell-safety-policy/SKILL.md`
   - Read: `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `dsh/src/proxy/mod.rs` の `AgentCommandPolicy`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` and `cargo test -p dsh-builtin` when shared判定や tool 側の適用を触ったとき
 - safe-run / ai-watch / AI から実行するコマンドの承認
+  - Skill: `docs/ai/skills/doge-shell-safety-policy/SKILL.md`
   - Read: `dsh-builtin/src/safe_run.rs`, `dsh-builtin/src/ai_watch.rs`, `dsh/src/repl/ai_watch.rs`, `dsh-builtin/src/chatgpt/tool/execute.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when the REPL side changes
 - lisp / config loader / startup behavior
+  - Skill: `docs/ai/skills/doge-shell-lisp-config/SKILL.md`
   - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`, `dsh-builtin/src/lisp.rs`, `dsh-builtin/src/include.rs`, `dsh-builtin/src/reload.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` when builtin include/reload/lisp changes
 - environment / project context / direnv / path activation
+  - Skill: `docs/ai/skills/doge-shell-env-startup/SKILL.md`
   - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project.rs`, `dsh-builtin/src/project_context.rs`, `dsh-builtin/src/task.rs`
   - Validate: package for touched files; use `cargo test -p doge-shell` for `dsh/` and `cargo test -p dsh-builtin` for builtin project context
 - history / frecency / command timing
+  - Skill: `docs/ai/skills/doge-shell-history-frecency/SKILL.md`
   - Read: `dsh/src/history/`, `dsh/src/db.rs`, `dsh-frecency/src/`, `dsh/src/command_timing.rs`, `dsh-builtin/src/command_timing.rs`, `dsh-builtin/src/blocks.rs`
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
+  - Skill: `docs/ai/skills/doge-shell-command-palette-ai/SKILL.md`
   - 先に読む: [ai/README.md](ai/README.md)
   - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
+  - Skill: `docs/ai/skills/dsh-skill-authoring/SKILL.md`
   - Read: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`, `.claude/`
   - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks (`--status` is informational)
 - validation command selection / changed-file checks
+  - Skill: `docs/ai/skills/doge-shell-validation/SKILL.md`
   - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
-  - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available
+  - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available (`doctor validate` は提案のみで実行はしない)
 - プラットフォーム分岐 / macOS 移植 / OS 固有のソース
   - Read: `docs/ai/skills/doge-shell-repo/references/platform-support.md`, `dsh/src/completion/generators/`, `dsh/src/process/`
   - Validate: `scripts/check-portability.py`; 触った package の `cargo test`; macOS 側の腕の実証は CI の macos ジョブ（Linux からのクロスコンパイルは Apple SDK が要るので不可）

@@ -412,6 +412,10 @@ mod tests {
         );
     }
 
+    // macOS-only ignore: timing-sensitive (`sleep 0.05` output interleaving).
+    // Passes alone and on Linux, but flakes under full-suite load on macOS.
+    // Under investigation; kept running on Linux so the regression signal stays.
+    #[cfg_attr(target_os = "macos", ignore)]
     #[tokio::test]
     async fn foreground_output_observer_captures_stdout_and_stderr() {
         use dsh_types::observed_output::ObservedOutput;

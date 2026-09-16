@@ -75,8 +75,10 @@ dsh/src/safety/tests.rs	/etc/shadow
 dsh/src/terminal/title.rs	/bin/codex
 dsh/src/terminal/title.rs	/usr/bin/nvim
 dsh/tests/common/mod.rs	/bin/false
+dsh/tests/common/mod.rs	/bin/tr
 dsh/tests/common/mod.rs	/bin/true
 dsh/tests/common/mod.rs	/usr/bin/false
+dsh/tests/common/mod.rs	/usr/bin/tr
 dsh/tests/common/mod.rs	/usr/bin/true
 dsh/tests/export.rs	/usr/bin/env
 dsh/tests/fd_ownership.rs	/usr/bin/wc
@@ -85,5 +87,4 @@ dsh/tests/quoting.rs	/usr/bin/printf
 dsh/tests/redirection.rs	/usr/bin/grep
 dsh/tests/redirection.rs	/usr/bin/wc
 dsh/tests/substitution.rs	/usr/bin/printf
-dsh/tests/substitution.rs	/usr/bin/tr
 dsh/tests/variables.rs	/usr/bin/env

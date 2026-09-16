@@ -20,7 +20,7 @@
 - 共通ロジックは cfg の外の純粋関数に置く。手本は `dsh/src/completion/generators/user.rs` の `is_offered`: OS ごとに違うのは「どこから読むか」と定数だけで、判定は 1 つ。
 - OS ごとに違う定数表には `libc` に突き合わせるテストを付ける。手本は `dsh/src/completion/generators/signal.rs` の `the_table_uses_this_platforms_signal_numbers`。ただしこのテストは**走ったホストの側だけ**を検証するので、CI の両ジョブが揃って初めて完全になる。
 - per-OS の依存は `[target.'cfg(target_os = "macos")'.dependencies]` へ。`dsh/Cargo.toml` の `sysinfo` と `nix` の `net` feature が唯一の実例。追加する前に他 crate で既に無条件依存になっていないか確認する (`sysinfo` は `dsh-builtin` では全 OS で入っているので、`dsh` 側を macOS 限定にした節約効果は限定的)。
-- テストから外部コマンドを絶対パスで呼ぶときは `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `first_existing()` を使う。`/bin/true` と `/bin/false` は macOS に無く `/usr/bin` にしかない。`/bin/sh` `/bin/echo` `/bin/ls` `/bin/cat` は両方にある。
+- テストから外部コマンドを絶対パスで呼ぶときは `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `tr_path()` / `first_existing()` を使う。`/bin/true` と `/bin/false` は macOS に無く `/usr/bin` にしかない。`/bin/sh` `/bin/echo` `/bin/ls` `/bin/cat` は両方にある。
 
 ## macOS 側の腕を Linux ホストで確認する
 

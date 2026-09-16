@@ -603,3 +603,33 @@ fn run_config_lisp_rolls_back_state_on_error() {
         assert!(!has_broken_action);
     });
 }
+
+/// `auto_diagnose` had a field, two readers and no way to set it, so the
+/// `Alt-f fix · Alt-d diagnose` hint it gates could never appear: a failure
+/// with no deterministic quick fix said nothing at all.
+#[test]
+fn diagnose_hint_can_be_turned_on_and_read_back() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env.clone());
+
+    assert_eq!(
+        engine.borrow().run("(pref-diagnose-hint)").unwrap(),
+        Value::False,
+        "off by default, like the rest of the automatic AI path"
+    );
+
+    engine.borrow().run("(pref-diagnose-hint t)").unwrap();
+
+    assert!(
+        env.read().completion_state.input_preferences.auto_diagnose,
+        "the setter did not reach the preference the hint reads"
+    );
+    assert_eq!(
+        engine.borrow().run("(pref-diagnose-hint)").unwrap(),
+        Value::True
+    );
+
+    engine.borrow().run("(pref-diagnose-hint nil)").unwrap();
+    assert!(!env.read().completion_state.input_preferences.auto_diagnose);
+}

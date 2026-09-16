@@ -383,6 +383,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `pref-ai-explanation` - Configure AI-powered command explanations
 - `pref-status-line` - Enable the bottom-row [status line](#status-line) (off by default)
 - `pref-failure-hint` - Show a one-line proactive hint after a failed command (on by default; off also disables automatic AI fixes)
+- `pref-diagnose-hint` - When a failed command has no deterministic quick fix, point at `Alt-f`/`Alt-d` (off by default; costs no AI request, and only shown when AI is configured)
 - `set-auto-fix-enabled` - Enable or disable AI auto-fix
 - `safety-level` - Configure safety level (`loose`, `normal`, `strict`)
 - `set-notify-config` - Configure notification behavior
@@ -1449,7 +1450,9 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    to its last segment, so `cat f | grep x` finding nothing stays quiet too.
    `(pref-failure-hint nil)` in `config.lisp` turns off the whole automatic
    path, automatic AI fixes included — `Alt+f` and `Alt+d` keep working on
-   demand.
+   demand. When nothing deterministic applies the shell says nothing, unless
+   `(pref-diagnose-hint t)` asks it to point at `Alt+f`/`Alt+d` instead; that
+   hint is a line of text, not an AI request.
 
 5. **Smart Git Commit (`Alt+c`)**:
    Stage your changes, then press `Alt+c` to invoke the `aic` command, which analyzes the diff and generates a conventional commit message.

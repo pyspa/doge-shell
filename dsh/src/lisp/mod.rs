@@ -373,6 +373,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
         Value::NativeFunc(builtin::pref_failure_hint),
     );
     env.borrow_mut().define(
+        Symbol::from("pref-diagnose-hint"),
+        Value::NativeFunc(builtin::pref_diagnose_hint),
+    );
+    env.borrow_mut().define(
         Symbol::from("pref-command-ledger"),
         Value::NativeFunc(builtin::pref_command_ledger),
     );

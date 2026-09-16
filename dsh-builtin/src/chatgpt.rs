@@ -40,7 +40,10 @@ use turn_support::*;
 use ui::*;
 
 mod mcp;
-pub use mcp::{McpConnectionStatus, McpManager, McpRuntimeStateSnapshot, McpServerStatus};
+pub use mcp::{
+    LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
+    McpServerStatus,
+};
 pub(crate) mod tool;
 
 use tool::{build_tools, execute_tool_call};

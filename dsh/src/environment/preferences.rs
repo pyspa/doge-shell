@@ -104,6 +104,10 @@ impl Environment {
         self.completion_state.input_preferences.failure_hint = enabled;
     }
 
+    pub fn set_diagnose_hint_enabled(&mut self, enabled: bool) {
+        self.completion_state.input_preferences.auto_diagnose = enabled;
+    }
+
     /// Get the current input preferences.
     pub fn input_preferences(&self) -> InputPreferences {
         self.completion_state.input_preferences

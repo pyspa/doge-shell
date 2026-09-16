@@ -56,6 +56,15 @@ pub fn register(env: &mut Env) {
             let description_value = args.get(2).cloned().unwrap_or(Value::NIL);
             let description = optional_string("mcp-add-sse", &description_value)?;
 
+            // Registered so `mcp list` and `doctor mcp` still show it, but said
+            // out loud here: every connection to it fails, and the error
+            // otherwise arrives when the model reaches for a tool - long after
+            // the person who wrote this line could do anything about it.
+            eprintln!(
+                "mcp-add-sse: `{label}` will not connect. {}",
+                dsh_builtin::LEGACY_SSE_UNSUPPORTED_MESSAGE
+            );
+
             env.borrow()
                 .shell_env
                 .write()

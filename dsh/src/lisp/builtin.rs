@@ -22,8 +22,8 @@ mod secret;
 use exec::sh_core;
 pub use exec::{block_sh, block_sh_no_cap, command};
 pub use prefs::{
-    pref_ai_explanation, pref_auto_notify, pref_auto_pair, pref_command_ledger, pref_failure_hint,
-    pref_status_line,
+    pref_ai_explanation, pref_auto_notify, pref_auto_pair, pref_command_ledger, pref_diagnose_hint,
+    pref_failure_hint, pref_status_line,
 };
 pub use secret::{
     secret_add_keyword, secret_add_pattern, secret_clear, secret_get, secret_history_mode,

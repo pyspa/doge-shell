@@ -74,6 +74,35 @@ pub fn pref_status_line(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value
     Ok(Value::NIL)
 }
 
+/// `(pref-diagnose-hint [t])` — read or set whether a failed command with no
+/// deterministic quick fix points at `Alt-f`/`Alt-d`.
+///
+/// Costs nothing: the hint is a line of text, not an AI request, and it is
+/// only offered when an AI service is configured. Off by default like the rest
+/// of the automatic AI path, and only reachable at all once `pref-failure-hint`
+/// is on - it is the branch that runs when nothing else had anything to say.
+pub fn pref_diagnose_hint(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Ok(Value::from(
+            env.borrow()
+                .shell_env
+                .read()
+                .completion_state
+                .input_preferences
+                .auto_diagnose,
+        ));
+    }
+
+    let enabled = bool::from(&args[0]);
+
+    debug!("setting diagnose-hint to {:?}", enabled);
+    env.borrow()
+        .shell_env
+        .write()
+        .set_diagnose_hint_enabled(enabled);
+    Ok(Value::NIL)
+}
+
 /// `(pref-failure-hint [t])` — read or set whether a failed command shows a
 /// one-line proactive hint (deterministic quick fix ghost text, or a pointer
 /// to Alt-f/Alt-d). On by default; the automatic path never sends an AI

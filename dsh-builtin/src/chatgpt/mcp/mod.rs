@@ -32,7 +32,11 @@ use xdg::BaseDirectories;
 
 /// Default timeout for MCP tool calls (30 seconds)
 const DEFAULT_TOOL_TIMEOUT: Duration = Duration::from_secs(30);
-const LEGACY_SSE_UNSUPPORTED_MESSAGE: &str = "Legacy SSE MCP transport is configuration-only; rmcp 1.7 removed the legacy SSE client transport. Use streamable HTTP via mcp-add-http instead.";
+/// Shown both where a connection fails and where the server is configured.
+///
+/// The connection error alone arrives when the model tries to use a tool -
+/// long after the person who wrote `mcp-add-sse` could act on it.
+pub const LEGACY_SSE_UNSUPPORTED_MESSAGE: &str = "Legacy SSE MCP transport is configuration-only; rmcp 1.7 removed the legacy SSE client transport. Use streamable HTTP via mcp-add-http instead.";
 
 #[derive(Debug)]
 pub struct McpCallError {

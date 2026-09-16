@@ -1,3 +1,14 @@
+//! `ai-commit` / `aic`: a commit message for what is already staged.
+//!
+//! Three steps, in order: read the staged diff (bounded by `MAX_DIFF_CHARS`,
+//! falling back to `--stat` plus an excerpt when it does not fit), ask the
+//! model for a Conventional Commits subject and body, then put it in front of
+//! the person as `y` / `n` / `e` before anything is committed.
+//!
+//! Builds its own `ChatGptClient` rather than going through `AiService`: it
+//! runs as a builtin from the shell's eval path, where SIGINT already reaches
+//! it, and takes an optional model name as its one argument.
+
 use super::ShellProxy;
 use crate::chatgpt::load_openai_config;
 use crate::interactive_input;
@@ -11,7 +22,34 @@ pub fn description() -> &'static str {
     "Generate git commit message using AI"
 }
 
+const USAGE: &str = "Usage: ai-commit [MODEL]\n\nWrites a commit message for the staged changes, then asks whether to commit,\nedit it, or stop. MODEL overrides AI_CHAT_MODEL for this one request.";
+
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // The one positional argument is a model name, so anything option-shaped
+    // was a person expecting options - answering it by sending `--help` to the
+    // provider as a model name is the worst of both.
+    if let Some(flag) = argv.get(1).filter(|arg| arg.starts_with('-')) {
+        return match flag.as_str() {
+            "-h" | "--help" => {
+                ctx.write_stdout(USAGE).ok();
+                ExitStatus::ExitedWith(0)
+            }
+            other => {
+                ctx.write_stderr(&format!("ai-commit: unknown option `{other}`\n{USAGE}"))
+                    .ok();
+                ExitStatus::ExitedWith(1)
+            }
+        };
+    }
+    if argv.len() > 2 {
+        ctx.write_stderr(&format!(
+            "ai-commit: expected at most one model name, got {}\n{USAGE}",
+            argv.len() - 1
+        ))
+        .ok();
+        return ExitStatus::ExitedWith(1);
+    }
+
     // 1. Check for staged changes
     let diff = match get_staged_diff(None) {
         Ok(d) if d.trim().is_empty() => {
@@ -324,5 +362,51 @@ mod tests {
 
         let msg = String::from_utf8_lossy(&output.stdout);
         assert_eq!(msg.trim(), "feat: test commit");
+    }
+
+    /// The single positional argument is a model name, so `aic --help` used to
+    /// be sent to the provider as one - a request that costs money to be told
+    /// the model does not exist.
+    #[test]
+    fn an_option_is_answered_rather_than_sent_as_a_model_name() {
+        use crate::test_support::TestShellProxy;
+        use nix::unistd::getpid;
+
+        let pid = getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+
+        for (argv, expected) in [
+            (vec!["ai-commit".to_string(), "--help".to_string()], 0),
+            (vec!["ai-commit".to_string(), "-h".to_string()], 0),
+            (vec!["ai-commit".to_string(), "--nope".to_string()], 1),
+        ] {
+            let mut proxy = TestShellProxy::default();
+            assert_eq!(
+                command(&ctx, argv.clone(), &mut proxy),
+                ExitStatus::ExitedWith(expected),
+                "{argv:?}"
+            );
+        }
+    }
+
+    /// Two model names is a mistake worth naming, not a silently ignored
+    /// second argument.
+    #[test]
+    fn more_than_one_model_name_is_refused() {
+        use crate::test_support::TestShellProxy;
+        use nix::unistd::getpid;
+
+        let pid = getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+        let mut proxy = TestShellProxy::default();
+
+        assert_eq!(
+            command(
+                &ctx,
+                vec!["ai-commit".into(), "one".into(), "two".into()],
+                &mut proxy
+            ),
+            ExitStatus::ExitedWith(1)
+        );
     }
 }

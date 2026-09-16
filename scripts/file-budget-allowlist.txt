@@ -13,7 +13,6 @@ doc-path-ok	docs/ai/skills/doge-shell-repo/references/invariants/completion.md::
 doc-path-ok	docs/ai/skills/doge-shell-repo/references/invariants/cron.md::dsh/src/scheduler
 no-doc	dsh-builtin/src/blocks.rs
 no-doc	dsh-builtin/src/chatgpt/mcp/mod.rs
-no-doc	dsh-builtin/src/chatgpt/tool/execute.rs
 no-doc	dsh-builtin/src/chatgpt/tool/mod.rs
 no-doc	dsh-builtin/src/chatgpt/tool/search.rs
 no-doc	dsh-builtin/src/comp_gen.rs

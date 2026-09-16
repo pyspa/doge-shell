@@ -45,6 +45,9 @@ pub(crate) mod tool;
 
 use tool::{build_tools, execute_tool_call};
 
+mod jobs;
+pub use jobs::shutdown as chat_jobs_shutdown;
+
 mod session;
 
 pub(crate) mod hooks;
@@ -136,7 +139,22 @@ fn chat_with_tools(
             }
             session::Claim::Fresh(reason) => {
                 if let Some(reason) = &reason {
-                    eprintln!("\x1b[2msession: new conversation ({reason})\x1b[0m");
+                    // Whatever the previous conversation left running, nothing
+                    // can reach any more: the model that knew the ids is gone,
+                    // and an unreachable process group is not a job, it is a
+                    // leak. Only a `!` turn owns that registry - a task's jobs
+                    // live in its own `AgentRuntime`.
+                    let orphaned = if setup.runtime.is_none() {
+                        jobs::retain_session(setup.hook_ctx.session_id())
+                    } else {
+                        0
+                    };
+                    let note = if orphaned > 0 {
+                        format!("; {orphaned} job(s) cancelled")
+                    } else {
+                        String::new()
+                    };
+                    eprintln!("\x1b[2msession: new conversation ({reason}){note}\x1b[0m");
                 }
                 // A new conversation starts exactly here, which is what
                 // `session-start` means. Observation only: its answer is ignored.
@@ -186,8 +204,25 @@ fn chat_with_tools(
                 set_system_prompt(&mut manager, &setup.prompt.text);
             }
         }
+        // The interactive registry belongs to `!` alone. A task polls
+        // `runtime.jobs`, so naming its session here - or telling it about jobs
+        // whose ids resolve to nothing in its own runtime - would only send it
+        // after handles it cannot use.
+        let owns_chat_jobs = setup.runtime.is_none();
+        if owns_chat_jobs {
+            // Jobs started from here on belong to this conversation, so a later
+            // turn that starts a different one knows to clean them up.
+            jobs::set_session(setup.hook_ctx.session_id());
+        }
+
         for text in &mentioned {
             manager.add_message(json!({ "role": "system", "content": text }));
+        }
+        // Deliberately a message rather than part of the environment snapshot:
+        // that is cached on `(cwd, .git/HEAD mtime)` and a value changing every
+        // second would defeat the cache for everything else in it.
+        if owns_chat_jobs && let Some(note) = jobs::carried_notice() {
+            manager.add_message(json!({ "role": "system", "content": note }));
         }
         // A hook that answered `user-prompt-submit` with `additional_context` is
         // telling the model something about this request, so it lands next to it.
@@ -209,8 +244,14 @@ fn chat_with_tools(
         if setup.runtime.is_some() {
             tools.extend(crate::agent::definitions());
             tools.extend(tool::agent_definitions());
+        } else {
+            // Only the job tools: `tool_search` would be a second way to reach
+            // MCP definitions that are already in this prompt in full, and the
+            // task tools record against a task that does not exist here.
+            tools.extend(tool::job_definitions());
         }
         iterations = 0;
+        let turn_started = Instant::now();
         let mut unverified_answers = 0;
         let mut dynamic_context = DynamicContext::default();
         // Rounds where the model produced neither a tool call nor an answer.
@@ -229,10 +270,26 @@ fn chat_with_tools(
                     break Err("agent: task stopped or budget exhausted".into());
                 }
             }
-            if proxy.is_canceled() {
+            if task_cancelled(proxy) {
                 break Err(CANCELLED_MESSAGE.to_string());
             }
             iterations += 1;
+            // A hundred rounds is otherwise a wall of `[Tool]` lines with no
+            // sense of how far in they are or what is still running. Costs no
+            // tokens: it never reaches the model.
+            let running_jobs = if owns_chat_jobs {
+                jobs::running_count()
+            } else {
+                0
+            };
+            eprintln!(
+                "\x1b[2m[{iterations}/{MAX_TOOL_ITERATIONS}] {}s{}\x1b[0m",
+                turn_started.elapsed().as_secs(),
+                match running_jobs {
+                    0 => String::new(),
+                    n => format!(" · {n} job(s) running"),
+                }
+            );
             if iterations > MAX_TOOL_ITERATIONS {
                 break Err("chat: exceeded maximum number of tool interactions".to_string());
             }
@@ -547,6 +604,31 @@ fn chat_with_tools(
                 // it from now.
                 if rewound { carried_stored_at } else { None },
             );
+        }
+
+        // A job may only outlive its turn when some later turn can still name
+        // it. That means the conversation was actually stored - which needs
+        // both a surviving outcome *and* a session TTL, because `store` is a
+        // no-op without one. Checking the outcome alone left a job running with
+        // nothing able to poll it whenever `AI_CHAT_SESSION_TTL_SECS=0`.
+        if owns_chat_jobs {
+            let carried_forward = setup.session_ttl.is_some() && (outcome.is_ok() || rewound);
+            if carried_forward {
+                // Kept, so say so: a process group nobody mentioned is one
+                // nobody remembers to stop.
+                for line in jobs::describe_running() {
+                    eprintln!(
+                        "\x1b[2mchat: job still running - {line}. chat_status to inspect, chat_reset to stop.\x1b[0m"
+                    );
+                }
+            } else {
+                let orphaned = jobs::cancel_session(setup.hook_ctx.session_id());
+                if orphaned > 0 {
+                    eprintln!(
+                        "\x1b[2mchat: {orphaned} job(s) cancelled (this conversation is not carried forward)\x1b[0m"
+                    );
+                }
+            }
         }
 
         outcome

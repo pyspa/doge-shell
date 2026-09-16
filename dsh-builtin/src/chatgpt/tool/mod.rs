@@ -14,6 +14,7 @@ pub(crate) mod cron;
 mod edit;
 pub(crate) mod execute;
 mod gitignore;
+mod jobs;
 mod ls;
 mod paths;
 mod read;
@@ -256,16 +257,17 @@ fn dispatch_tool(
     mcp: &Arc<RwLock<McpManager>>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, ToolCallError> {
-    let result = if matches!(
+    // The job tools work under either entry point: a task polls its own
+    // runtime, an interactive turn polls the process-wide registry. Everything
+    // else here needs a task - `task_verify` records against its criteria,
+    // `mcp_task_*` against its event log, and `tool_search` only earns its
+    // place where MCP definitions are *not* already in the prompt.
+    let result = if matches!(name, "job_status" | "job_output" | "job_cancel") {
+        let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
+        jobs::dispatch(name, &args, proxy)?
+    } else if matches!(
         name,
-        "task_plan"
-            | "task_verify"
-            | "job_status"
-            | "job_output"
-            | "job_cancel"
-            | "tool_search"
-            | "mcp_task_status"
-            | "mcp_task_cancel"
+        "task_plan" | "task_verify" | "tool_search" | "mcp_task_status" | "mcp_task_cancel"
     ) {
         let runtime = proxy.agent_runtime().ok_or("tool requires an agent task")?;
         let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
@@ -329,46 +331,6 @@ fn dispatch_tool(
                     runtime.save(None).map_err(|e| e.to_string())?;
                 }
                 result.to_string()
-            }
-            "job_status" | "job_output" | "job_cancel" => {
-                let id = args["job_id"].as_str().ok_or("job_id required")?;
-                let mut runtime = runtime.lock();
-                if name == "job_cancel" {
-                    runtime.jobs.cancel(id).map_err(|e| e.to_string())?;
-                }
-                runtime
-                    .jobs
-                    .snapshot(
-                        id,
-                        args["offset"].as_u64().unwrap_or(0) as usize,
-                        args["limit"].as_u64().unwrap_or(4096) as usize,
-                    )
-                    .or_else(|error| {
-                        if name == "job_cancel" {
-                            return Err(error);
-                        }
-                        let mut archived = runtime.store.load_artifact(&runtime.task.id, id)?;
-                        archived["archived"] = serde_json::json!(true);
-                        archived["job_id"] = serde_json::json!(id);
-                        for stream in ["stdout", "stderr"] {
-                            let text = archived[stream].as_str().unwrap_or_default();
-                            let start = text.ceil_char_boundary(
-                                (args["offset"].as_u64().unwrap_or(0) as usize).min(text.len()),
-                            );
-                            let end = text.floor_char_boundary(
-                                start
-                                    .saturating_add(
-                                        (args["limit"].as_u64().unwrap_or(4096) as usize)
-                                            .min(65536),
-                                    )
-                                    .min(text.len()),
-                            );
-                            archived[stream] = serde_json::json!(&text[start..end]);
-                        }
-                        Ok(archived)
-                    })
-                    .map_err(|e| e.to_string())?
-                    .to_string()
             }
             _ => crate::agent::task_tool(&mut runtime.lock(), name, &args)
                 .map_err(|e| e.to_string())?,
@@ -607,6 +569,26 @@ fn truncate_output(output: String) -> String {
     dsh_openai::turn::truncate_middle(&output, MAX_OUTPUT_LENGTH)
 }
 
+/// The job tools, which both entry points carry.
+///
+/// `wait_ms` defaults to 0, so a caller that does not ask for it sees exactly
+/// the behaviour that existed before: answer now. Asking for it turns a run of
+/// polls - one API round trip each - into a single request that waits.
+pub(crate) fn job_definitions() -> Vec<Value> {
+    use crate::agent::definition;
+    ["job_status", "job_output", "job_cancel"]
+        .into_iter()
+        .map(|name| {
+            definition(
+                name,
+                "Inspect output/status or cancel an existing managed job. Never relaunch it to poll.",
+                serde_json::json!({"job_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536},"wait_ms":{"type":"integer","minimum":0,"maximum":60000,"description":"Wait up to this long for the job to finish before answering."}}),
+                &["job_id"],
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn agent_definitions() -> Vec<Value> {
     use crate::agent::definition;
     let mut tools = vec![definition(
@@ -615,9 +597,7 @@ pub(crate) fn agent_definitions() -> Vec<Value> {
         serde_json::json!({"query":{"type":"string"}}),
         &["query"],
     )];
-    for name in ["job_status", "job_output", "job_cancel"] {
-        tools.push(definition(name,"Inspect output/status or cancel an existing managed job. Never relaunch it to poll.", serde_json::json!({"job_id":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}), &["job_id"]));
-    }
+    tools.extend(job_definitions());
     for name in ["mcp_task_status", "mcp_task_cancel"] {
         tools.push(definition(name,"Poll or request cancellation of a remote task created by this agent. Cancellation does not guarantee the remote action stopped.",serde_json::json!({"server":{"type":"string"},"task_id":{"type":"string"}}), &["server","task_id"]));
     }

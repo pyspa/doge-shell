@@ -39,6 +39,9 @@ impl TurnSetup {
         mcp_manager: &Arc<RwLock<McpManager>>,
         proxy: &mut dyn ChatToolHost,
     ) -> Result<Self, String> {
+        // A previous turn's interrupt must not cancel this one.
+        clear_turn_cancelled();
+
         let cwd = proxy.get_current_dir().ok();
         let mut skill_roots =
             skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
@@ -194,8 +197,28 @@ pub(super) fn maybe_auto_archive_skills(proxy: &mut dyn ChatToolHost) {
     }
 }
 
+/// Set for the rest of a turn once anything observes a Ctrl-C.
+///
+/// `ShellProxy::is_canceled` reads a flag and *clears* it (`check_and_clear_sigint`),
+/// so whichever poller happens to look first consumes the interrupt and every
+/// other check that turn sees `false`. That already meant a Ctrl-C during
+/// `execute` killed the command but left the loop running; with managed jobs
+/// polling as well there are more places to lose it. Latching here keeps the
+/// question "was this turn interrupted?" answerable by all of them.
+///
+/// One turn is one thread, the same assumption `hooks`' re-entry guard makes.
+static TURN_CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(super) fn clear_turn_cancelled() {
+    TURN_CANCELLED.store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The one place a turn asks whether it has been interrupted.
 pub(super) fn task_cancelled(proxy: &dyn ChatToolHost) -> bool {
-    proxy.is_canceled()
+    if proxy.is_canceled() {
+        TURN_CANCELLED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    TURN_CANCELLED.load(std::sync::atomic::Ordering::SeqCst)
         || proxy
             .agent_runtime()
             .is_some_and(|runtime| runtime.lock().stopped())

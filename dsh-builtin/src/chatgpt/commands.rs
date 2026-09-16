@@ -181,12 +181,18 @@ pub fn chat_reset(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
     let ttl = resolve_session_ttl(proxy);
     let detail = session::session_description(ttl);
     let cleared = session::session_reset();
+    // Forgetting the conversation orphans anything it started: the ids the
+    // model would have polled go with it.
+    let cancelled = jobs::cancel_all();
 
-    let message = match (cleared, detail) {
+    let mut message = match (cleared, detail) {
         (true, Some(detail)) => format!("chat session cleared ({detail})"),
         (true, None) => "chat session cleared".to_string(),
         (false, _) => "no chat session to clear".to_string(),
     };
+    if cancelled > 0 {
+        message.push_str(&format!(" ({cancelled} job(s) cancelled)"));
+    }
     ctx.write_stdout(&message).ok();
     ExitStatus::ExitedWith(0)
 }
@@ -221,6 +227,20 @@ pub fn chat_status(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy)
         None => "no chat session carried".to_string(),
     };
     ctx.write_stdout(&message).ok();
+
+    // Jobs are reported whether or not a conversation is carried: a running
+    // process group is worth naming even when the turn that started it is
+    // gone, since `chat_reset` is how a person stops it.
+    let running = jobs::describe_running();
+    if !running.is_empty() {
+        ctx.write_stdout(&format!("{} job(s) running:", running.len()))
+            .ok();
+        for line in running {
+            ctx.write_stdout(&format!("  {line}")).ok();
+        }
+        ctx.write_stdout("  stop them with chat_reset, or kill -- -<pid> for one")
+            .ok();
+    }
     ExitStatus::ExitedWith(0)
 }
 

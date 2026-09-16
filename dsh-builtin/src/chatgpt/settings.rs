@@ -38,6 +38,19 @@ pub(super) const RECENT_BUFFER_MESSAGES_KEPT: usize = 8;
 pub(super) const MIN_ELIDABLE_TOOL_CHARS: usize = 400;
 /// Cache-routing hint for providers that support it.
 pub(super) const PROMPT_CACHE_KEY: &str = "dsh-chat-agent";
+/// Environment key for how long an interactive `execute` waits before handing
+/// the model a job handle instead of a result.
+pub(crate) const EXECUTE_YIELD_MS_KEY: &str = "AI_CHAT_EXECUTE_YIELD_MS";
+/// Long enough that the ordinary command still answers in one round trip,
+/// short enough that a build does not hold the shell.
+const DEFAULT_EXECUTE_YIELD_MS: u64 = 10_000;
+/// The schema advertises this as `yield_time_ms`'s maximum, and both the
+/// environment default and the model-supplied argument are clamped to it -
+/// providers violate a schema routinely, and an unclamped value would hold the
+/// shell for as long as the command runs.
+pub(crate) const MAX_EXECUTE_YIELD_MS: u64 = 60_000;
+/// Environment key overriding the interactive `execute` timeout.
+pub(crate) const EXECUTE_TIMEOUT_MS_KEY: &str = "AI_CHAT_EXECUTE_TIMEOUT_MS";
 /// Environment key toggling incremental Markdown rendering for `!` chat.
 ///
 /// Streaming is opt-out, not opt-in: the escape hatch exists for a server
@@ -72,6 +85,24 @@ pub(super) const REWIND_NOTICE: &str = "The previous turn was removed from this 
 ///
 /// `proxy.set_var` (and `(vset ...)`) writes into the shell `Environment`, not
 /// the process env, so an env-only lookup silently ignores it.
+/// How long an interactive `execute` waits for the command before yielding.
+///
+/// `0` is allowed and means "always hand back a handle", which is what an
+/// agent task effectively does with its 1s ceiling.
+pub(crate) fn resolve_execute_yield_ms(proxy: &mut dyn ShellProxy) -> u64 {
+    resolve_setting(proxy, EXECUTE_YIELD_MS_KEY)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_EXECUTE_YIELD_MS)
+        .min(MAX_EXECUTE_YIELD_MS)
+}
+
+/// The default `timeout_ms` for an interactive `execute`.
+pub(crate) fn resolve_execute_timeout_ms(proxy: &mut dyn ShellProxy, default: u64) -> u64 {
+    resolve_setting(proxy, EXECUTE_TIMEOUT_MS_KEY)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
 pub(super) fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
     proxy
         .get_var(key)

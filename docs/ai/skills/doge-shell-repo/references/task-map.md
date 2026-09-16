@@ -86,7 +86,7 @@
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` and `cargo test -p dsh-builtin` when shared判定や tool 側の適用を触ったとき
 - safe-run / ai-watch / AI から実行するコマンドの承認
   - Skill: `docs/ai/skills/doge-shell-safety-policy/SKILL.md`
-  - Read: `dsh-builtin/src/safe_run.rs`, `dsh-builtin/src/ai_watch.rs`, `dsh/src/repl/ai_watch.rs`, `dsh-builtin/src/chatgpt/tool/execute.rs`
+  - Read: `dsh-builtin/src/safe_run.rs`, `dsh-builtin/src/ai_watch.rs`, `dsh/src/repl/ai_watch.rs`, `dsh-builtin/src/chatgpt/tool/execute.rs`（ジョブ化は `execute/jobs.rs`、対話レジストリは `dsh-builtin/src/chatgpt/jobs.rs`）
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when the REPL side changes
 - lisp / config loader / startup behavior
   - Skill: `docs/ai/skills/doge-shell-lisp-config/SKILL.md`

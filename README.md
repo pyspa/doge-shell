@@ -1354,6 +1354,8 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
    | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
    | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dogesh/openai-execute-tool.json` |
+   | `AI_CHAT_EXECUTE_YIELD_MS` | `10000` | How long a `!` chat waits for a command before handing the model a job handle to poll instead of a result. `0` yields immediately; 60000 is the ceiling |
+   | `AI_CHAT_EXECUTE_TIMEOUT_MS` | `600000` | Default `timeout_ms` for a `!` chat command. An `agent run` keeps its own two-minute default |
    | `DOGESH_EXECUTE_TOOL_CONFIG` | `~/.config/dogesh/openai-execute-tool.json` | Path of that JSON allowlist file |
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
@@ -1547,6 +1549,37 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     `AI_CHAT_TURN_TOKEN_BUDGET` - is removed from the conversation, but everything before it
     is kept: only that one turn is lost, not the whole conversation. The carried conversation
     lives in memory only, so it does not survive the shell exiting.
+
+### Long-running commands in `!` chat
+
+A command the assistant runs is a managed job. If it finishes within
+`AI_CHAT_EXECUTE_YIELD_MS` (10 seconds by default) you get what you always got: the exit
+code, stdout and stderr, in one round trip. If it does not - a cold `cargo build`, a long
+test run - the assistant gets a job handle instead and follows it with `job_status` /
+`job_output` / `job_cancel`, while the command's output keeps appearing on your screen as
+it is produced.
+
+```sh
+! build this in release mode and tell me what breaks
+#  [1/100] 0s
+#  🔧 [Tool] execute ({"command":"cargo build --release"})
+#     Compiling dsh-builtin v0.1.0
+#  job 8f3a2c1d still running (cargo build --release); the assistant can follow it with job_status
+#  [2/100] 11s · 1 job(s) running
+```
+
+Jobs outlive the turn that started them, so the assistant can start a build, answer you,
+and check on it next turn. They do not outlive the conversation: `chat_reset`, a change of
+project, or a turn the shell cannot carry forward all stop them, as does leaving the shell.
+
+```sh
+chat_status    # lists running jobs with their pid and elapsed time
+chat_reset     # forgets the conversation and stops its jobs
+kill -- -12345 # stop one job by the process group `chat_status` shows
+```
+
+The shell's own `jobs` and `kill` builtins do not list these - those manage the jobs *you*
+started, and these belong to the assistant.
 
 11. **Token usage**:
     Each `!` turn prints what it cost (`tokens: N req / in X (cached Y) / out Z`), and

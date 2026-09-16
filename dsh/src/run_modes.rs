@@ -169,10 +169,27 @@ pub async fn run_shell() -> ExitCode {
 
     let mut ctx = create_context(&shell);
 
+    // Covers all three modes, including `-c`, which a `!` chat can reach.
+    let _chat_jobs_shutdown = ChatJobsShutdown;
+
     match run_mode {
         RunMode::Lisp(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
         RunMode::Command(command) => execute_command(&mut shell, &mut ctx, &command).await,
         RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
+    }
+}
+
+/// Kills every managed `!` chat command when the shell leaves.
+///
+/// The registry behind it is a `LazyLock`, which is never dropped, so nothing
+/// else runs `AgentJobs`' own `Drop` and the process groups would outlive the
+/// shell. `std::process::exit` skips this, which is why the signal watcher in
+/// `bootstrap.rs` calls the same function before exiting.
+struct ChatJobsShutdown;
+
+impl Drop for ChatJobsShutdown {
+    fn drop(&mut self) {
+        dsh_builtin::chat_jobs_shutdown();
     }
 }
 

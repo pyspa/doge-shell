@@ -704,3 +704,73 @@ fn resolve_tool_path_rejects_symlink_escape() {
     let result = resolve_tool_path("inside/link_out/pwned.txt", &mut proxy);
     assert!(result.is_err());
 }
+
+/// The job tools are the half of the task toolbox an interactive turn needs:
+/// a `!` chat starts managed commands too, and without these it could start
+/// one and never hear how it went.
+#[test]
+fn job_status_works_without_an_agent_task() {
+    let mut proxy = NoopProxy::default();
+    let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
+    let tool_call = json!({
+        "function": {
+            "name": "job_status",
+            "arguments": "{\"job_id\":\"no-such-job\"}"
+        }
+    });
+
+    let error = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy)
+        .expect_err("an unknown job is still an error");
+
+    // The point is *which* error: "unknown job" means the interactive registry
+    // answered, where "requires an agent task" would mean the gate refused.
+    let error = error.to_string();
+    assert!(error.contains("unknown job"), "{error}");
+    assert!(!error.contains("agent task"), "{error}");
+}
+
+/// The rest of the task toolbox stays behind the gate: `task_verify` records
+/// against criteria and `tool_search` exists to find MCP definitions that an
+/// interactive prompt already carries in full.
+#[test]
+fn the_task_only_tools_still_require_an_agent_task() {
+    let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
+
+    for (name, arguments) in [
+        (
+            "task_verify",
+            "{\"criterion\":0,\"evidence_event\":1,\"explanation\":\"x\"}",
+        ),
+        ("task_plan", "{\"plan\":[\"x\"],\"progress\":\"x\"}"),
+        ("tool_search", "{\"query\":\"x\"}"),
+    ] {
+        let mut proxy = NoopProxy::default();
+        let tool_call = json!({ "function": { "name": name, "arguments": arguments } });
+        let error = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy)
+            .expect_err("{name} should need a task")
+            .to_string();
+        assert!(error.contains("requires an agent task"), "{name}: {error}");
+    }
+}
+
+/// Both entry points advertise the same three tools under the same names, so
+/// a skill or a habit learned in one keeps working in the other.
+#[test]
+fn the_job_tools_are_spelled_the_same_in_both_toolboxes() {
+    let interactive: Vec<String> = job_definitions()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+    let task: Vec<String> = agent_definitions()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+
+    assert_eq!(interactive, ["job_status", "job_output", "job_cancel"]);
+    for name in &interactive {
+        assert!(
+            task.contains(name),
+            "{name} is missing from the task toolbox"
+        );
+    }
+}

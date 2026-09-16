@@ -21,6 +21,8 @@
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
 | `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |
 | `AI_CHAT_EXECUTE_ALLOWLIST` | なし | `dsh-builtin/src/chatgpt/tool/execute.rs` |
+| `AI_CHAT_EXECUTE_YIELD_MS` | 10000（0〜60000 に clamp） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_execute_yield_ms`）。対話 `execute` がジョブハンドルを返すまでの待ち時間。ツール引数 `yield_time_ms` が優先。**agent タスクには効かない**（あちらは 1000ms 上限のまま） |
+| `AI_CHAT_EXECUTE_TIMEOUT_MS` | 600000（1000〜3600000 に clamp） | 同上（`resolve_execute_timeout_ms`）。**対話のみ**の既定 timeout。agent タスクは `DEFAULT_TIMEOUT_MS`(120000) のまま |
 | `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt/settings.rs`（`response_language`） |
 | `CHAT_PROMPT` | なし | 同上 |
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |

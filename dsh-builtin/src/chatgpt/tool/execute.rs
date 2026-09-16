@@ -1,13 +1,23 @@
+//! The `execute` tool: its schema, the checks that run before a command line
+//! becomes a process, and the two ways it is run.
+//!
+//! The order here is the contract. A line is refused outright (command
+//! substitution, string-as-code, hidden code sources), then `authorize`
+//! puts it through the shell's safety guard and allowlists, and only then does
+//! it reach [`capture::shell_command`]. Nothing below `authorize` may widen
+//! what runs; see `ai/safety.md`.
+//!
+//! Both entry points run the command as a managed job
+//! ([`crate::agent::jobs::AgentJobs`]). A task's jobs belong to its
+//! `AgentRuntime`; an interactive turn's belong to
+//! [`crate::chatgpt::jobs`] and can outlive the turn that started them.
 use serde::Deserialize;
 use serde_json::{Value, json};
 use shell_words::split;
 use std::env;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-#[cfg(test)]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use xdg::BaseDirectories;
 
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
@@ -16,15 +26,13 @@ use dsh_types::safety_policy::{string_eval_flag, substitution_construct};
 
 mod authorize;
 mod capture;
+mod jobs;
 use authorize::{Authorization, authorize, program_name};
 #[cfg(test)]
 use authorize::{command_is_allowlisted, load_allowed_commands};
 pub(crate) use authorize::{command_names_any, command_tokens};
-#[cfg(test)]
-use capture::CappedCapture;
 pub(crate) use capture::kill_process_group;
 use capture::render_result;
-use capture::run_with_timeout_cancel;
 
 pub(crate) const NAME: &str = "execute";
 
@@ -33,36 +41,48 @@ pub(crate) const EXECUTE_TOOL_ENV_ALLOWLIST: &str = "AI_CHAT_EXECUTE_ALLOWLIST";
 const EXECUTE_TOOL_CONFIG_OVERRIDE_ENV: &str = "DOGESH_EXECUTE_TOOL_CONFIG";
 const CONFIG_DIR_PREFIX: &str = "dogesh";
 
-/// Wall-clock budget for a single `execute` call when the caller does not ask
-/// for one. Without a timeout a build or a dev server wedges the whole shell.
+/// Wall-clock budget for one agent-task `execute` when the caller does not ask
+/// for one. Unchanged: a task is unattended, and a runaway command there has
+/// nobody watching it.
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+/// The same budget for an interactive `!`, where a person is watching and can
+/// interrupt. The old shared value killed `cargo build` from a cold target
+/// directory whenever the model did not think to ask for more.
+const DEFAULT_INTERACTIVE_TIMEOUT_MS: u64 = 600_000;
 const MIN_TIMEOUT_MS: u64 = 1_000;
-const MAX_TIMEOUT_MS: u64 = 600_000;
-const TIMEOUT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// Ceiling for an agent task. Unchanged: `chat_status` and `chat_reset` do not
+/// reach `runtime.jobs`, so a cron-driven run has nobody to notice a command
+/// that asked for an hour.
+const MAX_TASK_TIMEOUT_MS: u64 = 600_000;
+/// Ceiling for an interactive `!`. Raised now that a long command no longer
+/// blocks the shell: it becomes a job the user can see in `chat_status` and
+/// stop with `chat_reset`, so this only has to bound a forgotten process.
+const MAX_INTERACTIVE_TIMEOUT_MS: u64 = 3_600_000;
 /// Per-stream budget applied before the global tool-output cap, so a chatty
 /// stdout can never push stderr out of the result.
 const MAX_STREAM_CHARS: usize = 3072;
 /// Floor for that budget when the serialized result still does not fit.
 const MIN_STREAM_CHARS: usize = 256;
-/// How long to wait for the output readers once the child is gone.
+
+/// How long this call waits before handing back a job handle.
 ///
-/// A killed child that left a grandchild behind keeps the write end of the pipe
-/// open, so waiting for EOF can never finish; that would defeat the timeout
-/// this whole path exists for.
-const DRAIN_GRACE: Duration = Duration::from_secs(2);
-/// How often the drain wait re-checks whether the readers are still making
-/// progress.
-const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(20);
-/// Hard ceiling on what one stream may buffer. `render_result` trims to a few
-/// kilobytes anyway, so anything beyond this could only cost memory.
-const MAX_CAPTURED_BYTES: usize = 1 << 20;
+/// The argument wins over the operator's setting, but is **clamped, not
+/// trusted**: the schema advertises `maximum: 60000` and providers violate a
+/// schema routinely, so an unclamped value would hold the shell for as long as
+/// the command runs - which is now up to an hour.
+fn resolve_yield_ms(requested: Option<u64>, configured: impl FnOnce() -> u64) -> u64 {
+    match requested {
+        Some(requested) => requested.min(crate::chatgpt::MAX_EXECUTE_YIELD_MS),
+        None => configured(),
+    }
+}
 
 pub(crate) fn definition() -> Value {
     json!({
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Run a shell command and return its exit code, stdout, and stderr. Pipes, redirections and `&&` are supported. A command the shell's safety policy considers risky asks the user first, so prefer one clear command over a long chain. Long output is truncated in the middle, so the end of a build or test log is preserved.",
+            "description": "Run a shell command and return its exit code, stdout, and stderr. Pipes, redirections and `&&` are supported. A command the shell's safety policy considers risky asks the user first, so prefer one clear command over a long chain. Long output is truncated in the middle, so the end of a build or test log is preserved. If the command is still running when the wait expires, the result is a job handle (`job_id`, `status:\"running\"`) instead of an exit code - follow it with `job_status`/`job_output`, and never re-run the command to check on it.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -74,7 +94,7 @@ pub(crate) fn definition() -> Value {
                         "type": "string",
                         "description": "Directory to run in, relative to the current directory. Defaults to the current directory."
                     },
-                    "yield_time_ms": {"type":"integer","minimum":0,"maximum":1000,"description":"Agent tasks: return a managed job handle after this wait."},
+                    "yield_time_ms": {"type":"integer","minimum":0,"maximum":60000,"description":"How long to wait for the command before returning a job handle instead of a result."},
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1000,
@@ -148,11 +168,23 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Ok("Execution cancelled by user.".to_string());
     }
 
+    let is_task = proxy.agent_runtime().is_some();
+    // A task keeps the old two-minute default and ten-minute ceiling: nobody is
+    // watching it. An interactive turn gets longer ones because a person is,
+    // and can stop the job.
+    let (default_timeout_ms, max_timeout_ms) = if is_task {
+        (DEFAULT_TIMEOUT_MS, MAX_TASK_TIMEOUT_MS)
+    } else {
+        (
+            crate::chatgpt::resolve_execute_timeout_ms(proxy, DEFAULT_INTERACTIVE_TIMEOUT_MS),
+            MAX_INTERACTIVE_TIMEOUT_MS,
+        )
+    };
     let timeout_ms = parsed
         .get("timeout_ms")
         .and_then(|v| v.as_u64())
-        .unwrap_or(DEFAULT_TIMEOUT_MS)
-        .clamp(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
+        .unwrap_or(default_timeout_ms)
+        .clamp(MIN_TIMEOUT_MS, max_timeout_ms);
 
     if let Some(runtime) = proxy.agent_runtime() {
         let (mut builder, config) = {
@@ -193,55 +225,19 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    let run_result = run_with_timeout_cancel(
+    // The explicit argument wins; otherwise the operator's setting decides how
+    // long the shell is willing to wait before the command becomes a job.
+    let yield_ms = resolve_yield_ms(parsed.get("yield_time_ms").and_then(|v| v.as_u64()), || {
+        crate::chatgpt::resolve_execute_yield_ms(proxy)
+    });
+
+    jobs::run_as_job(
         command,
         cwd.as_deref(),
         Duration::from_millis(timeout_ms),
-        &|| proxy.is_canceled(),
+        yield_ms,
+        proxy,
     )
-    .map_err(|err| format!("chat: failed to execute `{command}`: {err}"))?;
-
-    let stdout_text = String::from_utf8_lossy(&run_result.stdout).to_string();
-    let stderr_text = String::from_utf8_lossy(&run_result.stderr).to_string();
-
-    if !stdout_text.is_empty() {
-        let mut stdout = io::stdout();
-        stdout
-            .write_all(stdout_text.as_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-
-    if !stderr_text.is_empty() {
-        let mut stderr = io::stderr();
-        stderr
-            .write_all(stderr_text.as_bytes())
-            .map_err(|e| e.to_string())?;
-    }
-
-    let exit_code = run_result
-        .status
-        .and_then(|status| status.code())
-        .unwrap_or(-1);
-
-    let note = if run_result.cancelled {
-        Some("command cancelled; output may be partial".into())
-    } else {
-        match (run_result.timed_out, run_result.drain_incomplete) {
-            (true, _) => Some(format!(
-                "command exceeded timeout_ms={timeout_ms} and was killed; output below is partial"
-            )),
-            // Saying nothing here would present a truncated capture as the whole
-            // output, which is exactly the mistake the timeout note exists to avoid.
-            (false, true) => Some(
-                "output capture stopped early; a background process still holds the pipe, so the \
-             output below may be incomplete"
-                    .to_string(),
-            ),
-            (false, false) => None,
-        }
-    };
-
-    Ok(render_result(exit_code, &stdout_text, &stderr_text, note))
 }
 
 /// Where the command runs.

@@ -932,8 +932,10 @@ fn run_returns_even_while_a_grandchild_holds_the_pipe() {
 
     let parsed: Value = serde_json::from_str(&result).unwrap();
     assert_eq!(parsed["exit_code"].as_i64().unwrap(), 0);
+    // `AgentJobs`' worker gives the readers two seconds to catch up once the
+    // child is gone; anything beyond that means we waited for the grandchild.
     assert!(
-        elapsed < DRAIN_GRACE + Duration::from_secs(1),
+        elapsed < Duration::from_secs(3),
         "waited for the grandchild: {elapsed:?}"
     );
     // Returning is not enough: the script's own output has to survive the
@@ -945,33 +947,141 @@ fn run_returns_even_while_a_grandchild_holds_the_pipe() {
     );
 }
 
-/// The end of a long output is where the compiler error is, so a capture
-/// that overflows its cap has to keep the tail, not just the head.
+/// The end of a long output is where the compiler error is, so a capture that
+/// overflows its cap has to keep the tail.
+///
+/// The interactive path used to keep both ends (`CappedCapture`: 512KiB of
+/// head, 512KiB of tail, with a note in between). `AgentJobs`' ring keeps the
+/// last 1MiB only - the trade recorded in `ai/open-questions.md` for having
+/// one capture engine instead of two. The tail is the half that matters.
 #[test]
 fn a_capture_over_the_cap_keeps_the_tail() {
-    let mut capture = CappedCapture::default();
-    capture.push(b"HEAD-MARKER");
-    capture.push(&vec![b'x'; MAX_CAPTURED_BYTES * 2]);
-    capture.push(b"TAIL-MARKER");
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "printf");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec!["printf".to_string()],
+        current_dir: std::env::current_dir().unwrap(),
+        confirm_result: true,
+        ..TestProxy::default()
+    };
 
-    let snapshot = String::from_utf8_lossy(&capture.snapshot()).into_owned();
-    assert!(snapshot.starts_with("HEAD-MARKER"), "lost the head");
-    assert!(snapshot.ends_with("TAIL-MARKER"), "lost the tail");
+    let result = run(
+        "{\"command\":\"printf HEAD-MARKER; head -c 1200000 /dev/zero | tr '\\\\0' x; printf TAIL-MARKER\"}",
+        &mut proxy,
+    )
+    .unwrap();
+
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+    let stdout = parsed["stdout"].as_str().unwrap();
+    assert!(stdout.ends_with("TAIL-MARKER"), "lost the tail: {stdout:?}");
     assert!(
-        snapshot.contains("dropped"),
-        "the omission is not reported: {}",
-        &snapshot[..80.min(snapshot.len())]
+        !stdout.starts_with("HEAD-MARKER"),
+        "the ring is tail-only; keeping the head would mean two capture engines again"
     );
+}
+
+/// The common case has to look exactly as it did before jobs existed: one
+/// round trip, `{exit_code, stdout, stderr}`, and the output on the screen.
+#[test]
+fn a_command_finishing_within_the_yield_returns_the_same_shape_as_before() {
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "printf");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec!["printf".to_string()],
+        current_dir: std::env::current_dir().unwrap(),
+        confirm_result: true,
+        ..TestProxy::default()
+    };
+
+    let result = run("{\"command\":\"printf done\"}", &mut proxy).unwrap();
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+
+    assert_eq!(parsed["exit_code"].as_i64().unwrap(), 0);
+    assert_eq!(parsed["stdout"].as_str().unwrap(), "done");
+    assert_eq!(parsed["stderr"].as_str().unwrap(), "");
+    assert!(parsed.get("job_id").is_none(), "{result}");
+    assert!(!super::super::result_failed(&result), "{result}");
+}
+
+/// Past the wait the model gets a handle, and the turn is not a failure -
+/// `result_failed` treating `status:"running"` as an error would make the
+/// model apologise for a build that is going fine.
+#[test]
+fn a_command_outliving_the_yield_returns_a_job_handle() {
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "sleep");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec!["sleep".to_string()],
+        current_dir: std::env::current_dir().unwrap(),
+        confirm_result: true,
+        ..TestProxy::default()
+    };
+
+    let result = run(
+        "{\"command\":\"sleep 30\",\"yield_time_ms\":100}",
+        &mut proxy,
+    )
+    .unwrap();
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+
+    assert_eq!(parsed["status"], "running");
+    let id = parsed["job_id"].as_str().expect("a handle to poll");
+    assert!(!super::super::result_failed(&result), "{result}");
+
+    assert_eq!(crate::chatgpt::jobs::cancel_all(), 1);
+    assert!(
+        crate::chatgpt::jobs::describe_running().is_empty(),
+        "job {id} outlived the test"
+    );
+}
+
+/// A provider that ignores the schema's `maximum` must not be able to hold the
+/// shell for the whole command: an unclamped `yield_time_ms` is a one-hour
+/// freeze wearing the name of a ten-second wait.
+#[test]
+fn an_oversized_yield_time_is_clamped_rather_than_trusted() {
+    let ceiling = crate::chatgpt::MAX_EXECUTE_YIELD_MS;
+
+    assert_eq!(super::resolve_yield_ms(Some(3_600_000), || 10_000), ceiling);
+    // Under the ceiling the argument still wins over the setting.
+    assert_eq!(super::resolve_yield_ms(Some(250), || 10_000), 250);
+    // Absent, the operator's setting decides.
+    assert_eq!(super::resolve_yield_ms(None, || 10_000), 10_000);
+
+    // And the number the model is shown is the number that is enforced.
+    let schema = super::definition();
+    assert_eq!(
+        schema["function"]["parameters"]["properties"]["yield_time_ms"]["maximum"]
+            .as_u64()
+            .unwrap(),
+        ceiling
+    );
+}
+
+/// An unattended task has nobody to notice a command that asked for an hour,
+/// and neither `chat_status` nor `chat_reset` reaches `runtime.jobs`.
+#[test]
+fn the_interactive_timeout_ceiling_does_not_apply_to_a_task() {
+    assert_eq!(MAX_TASK_TIMEOUT_MS, 600_000);
+    assert_eq!(MAX_INTERACTIVE_TIMEOUT_MS, 3_600_000);
 }
 
 /// Under the cap nothing is rewritten, marker included.
 #[test]
 fn a_capture_under_the_cap_is_verbatim() {
-    let mut capture = CappedCapture::default();
-    capture.push(b"one\n");
-    capture.push(b"two\n");
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "printf");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec!["printf".to_string()],
+        current_dir: std::env::current_dir().unwrap(),
+        confirm_result: true,
+        ..TestProxy::default()
+    };
 
-    assert_eq!(capture.snapshot(), b"one\ntwo\n");
+    let result = run("{\"command\":\"printf 'one\\\\ntwo\\\\n'\"}", &mut proxy).unwrap();
+
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["stdout"].as_str().unwrap(), "one\ntwo\n");
 }
 
 #[test]

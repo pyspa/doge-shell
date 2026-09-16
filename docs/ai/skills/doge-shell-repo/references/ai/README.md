@@ -59,11 +59,32 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 |---|---|---|
 | 入口 | `dsh/src/shell/eval.rs` → `dsh-builtin/src/chatgpt.rs` | `dsh/src/ai_features/service.rs` |
 | 実行 | 同期 | 非同期 |
-| ツール | builtin 10 種（`cron_manage` 含む）+ MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
+| ツール | builtin 10 種（`cron_manage` 含む）+ `job_status`/`job_output`/`job_cancel` + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は
 ループを持たず、`turn::answer_text` で応答を読む。
+
+**コマンドは両経路とも managed job として走る**（`dsh-builtin/src/agent/jobs.rs` の
+`AgentJobs`）。タスクのジョブは `AgentRuntime` が持ち SQLite に artifact を残す。経路 A の
+ジョブは `dsh-builtin/src/chatgpt/jobs.rs` のプロセス内レジストリが持ち、**ターンを跨いで
+残りうる**。`execute` が待つ時間は `AI_CHAT_EXECUTE_YIELD_MS`。
+
+触るときの不変条件:
+
+- **対話レジストリは経路 A だけのもの**。`chat_with_tools` の job 呼び出しは全て
+  `setup.runtime.is_none()` の内側に置く。epilogue は両経路で共有されているので、外に出すと
+  失敗した `agent run` が対話の `!` チャットのビルドを SIGKILL する。タスクの `job_status` は
+  `runtime.jobs` を引くので、対話ジョブの id を prompt に載せても解決できない。
+- **ジョブを残してよいのは「後のターンが名前を呼べるとき」だけ**。判定は
+  `session_ttl.is_some() && (outcome.is_ok() || rewound)` — `store` は ttl が無いと no-op なので、
+  outcome だけ見ると `AI_CHAT_SESSION_TTL_SECS=0` でポーリング不能なジョブが残る。
+  片付けは `cancel_session`（自分の会話分だけ）で、`cancel_all` は `chat_reset` と shutdown 用。
+- **モデルに渡す id は短縮しない**。`AgentJobs` は完全一致で引く。`describe_running` は人向けの
+  短縮 id、`carried_notice` は完全な id、という対で保つ。
+- **ライブ出力は `echo_pending` 1 本**（`chatgpt/jobs.rs`）。`execute` の待ちループと
+  `job_status`/`job_output` のポーリングの両方から呼ぶ。片方だけにすると、yield を超えた
+  ジョブの出力が画面に出なくなる。
 
 `dsh-builtin/src/chatgpt/reflect.rs`（ターン末の skill リフレクション、既定 OFF）も単発リクエストの
 一種。3 つ目のループではない根拠は 4 点: (1) `tools` を送らない → `tool_calls` が返り得ないので

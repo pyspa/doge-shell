@@ -196,6 +196,9 @@ pub(crate) fn spawn_herdr_shutdown_signal_watcher(
             _ = hup.recv() => nix::sys::signal::Signal::SIGHUP,
         };
         lifecycle.shutdown();
+        // `process::exit` runs no destructors, so the managed `!` chat
+        // commands have to be killed here rather than by `ChatJobsShutdown`.
+        dsh_builtin::chat_jobs_shutdown();
         let _ = crossterm::terminal::disable_raw_mode();
         std::process::exit(128 + received as i32);
     });

@@ -338,23 +338,39 @@ async fn summarize_ai_watch(
     .to_string();
 
     let mut renderer = TerminalRenderer::new();
-    queue!(
-        renderer,
-        Print("\r\nai-watch: analyzing command output...\r\n")
-    )
-    .ok();
+    queue!(renderer, Print("\r\n")).ok();
     renderer.flush().ok();
 
-    match crate::ai_features::summarize_watch(
+    // The command has already run; this is the summary afterwards, and it is
+    // the only thing between the user and their prompt. Waiting for it on the
+    // REPL's own task is what made a slow provider look like a hung shell.
+    let summary = crate::ai_features::await_with_progress(
+        "ai-watch: analyzing command output...",
         service.as_ref(),
-        command,
-        request.goal.as_deref(),
-        output,
-        exit_code,
-        elapsed.as_millis() as u64,
+        crate::ai_features::summarize_watch(
+            service.as_ref(),
+            command,
+            request.goal.as_deref(),
+            output,
+            exit_code,
+            elapsed.as_millis() as u64,
+        ),
     )
-    .await
-    {
+    .await;
+
+    let Some(summary) = summary else {
+        queue!(renderer, Print("ai-watch: analysis cancelled\r\n")).ok();
+        renderer.flush().ok();
+        return Some(AiWatchSummary {
+            goal: request.goal.clone(),
+            status: "analysis-cancelled".to_string(),
+            notes: vec!["analysis cancelled".to_string()],
+            suggested_commands: Vec::new(),
+            raw_response: None,
+        });
+    };
+
+    match summary {
         Ok(response) => {
             queue!(renderer, Print(format!("ai-watch:\r\n{}\r\n", response))).ok();
             renderer.flush().ok();

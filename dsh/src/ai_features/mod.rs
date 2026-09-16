@@ -17,6 +17,7 @@
 //! - [`suggestion`] - Command suggestions and completion generation
 
 mod analysis;
+pub mod await_ui;
 mod cache;
 mod command;
 mod directory;
@@ -33,6 +34,7 @@ pub use analysis::{
     check_safety, diagnose_output, diagnose_output_with_history, explain_command,
     explain_command_inline, send_followup_question, suggest_improvement, summarize_watch,
 };
+pub use await_ui::await_with_progress;
 pub use command::{expand_smart_pipe, fix_command, run_generative_command};
 pub use directory::{describe_directory, directory_listing_entries};
 pub use last_failure::{LastFailure, combine_streams, resolve as resolve_last_failure};

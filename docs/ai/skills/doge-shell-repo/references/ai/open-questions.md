@@ -4,8 +4,38 @@
 
 いずれも調査済みで根拠がある。着手する前にここを更新すること。
 
-## 経路 A / B の非対称（調査済み・未着手）
+## 経路 A / B の非対称（一部解決）
 
+**解決済み — 経路 B は REPL を止めない**。`ChatClient` は同期 API なので、`run_tool_loop`
+（`dsh/src/ai_features/service.rs`）がそれを直接 await すると task 自体が進まなくなり、
+REPL はキーハンドラを `tokio::select!` と同じ task から回すため、`Alt+d`・コマンドパレットの
+AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が一切読まれなかった。
+`cancel_requests()` は実装済みでも、唯一の呼び出し元 `handle_interrupt` がそのキー入力経由
+でしか到達しないため、**実装されていて到達不能**という状態だった（`safety.md` が別の文脈で
+禁じている「登録されていることと効いていることの区別がつかない」と同型）。
+
+直したのは 2 段:
+1. `send_chat_cancellable` の呼び出しを `spawn_blocking` に移した。`cancellation_generation`
+   は `Arc<AtomicU64>` になった（クロージャが `'static + Send` である必要があるため）。
+   これが無いと下の `select!` はそもそも動かない。
+2. `dsh/src/ai_features/await_ui.rs` の `await_with_progress` が待ち方を持つ。経過秒の 1 行
+   再描画と、Esc / Ctrl-C での `cancel_requests()`。呼び出し元は spawn しない — コマンド
+   パレットの `Action` は `#[async_trait(?Send)]` で `&mut Shell` を取るため spawn できない。
+   **呼び出し規約**: REPL の `EventStream` が polled されていない区間でのみ呼ぶこと。型では
+   表現できないので doc コメントに書いてある。端末が無いとき（`isatty` false / テスト）は
+   UI ごと畳んで素の `.await` になる（`EventStream::new()` は tty 無しで panic する）。
+
+残る制約:
+
+- **経路 B はストリーミング非対応のまま**。`send_chat_streaming` は `ChatClient` にあるが
+  `LiveAiService` は使っていない。配線するには `-> Result<String>` の呼び出し元 15 箇所以上を
+  変えることになる。
+- **待っている間にコマンドを打つことはできない**。`await_with_progress` は待ちを中断可能に
+  するだけで、キー入力は Esc / Ctrl-C 以外読み捨てる（そのプロンプトに属するキーに答えて
+  しまわないため）。
+- **`Alt+s` はまだポーリング**（`repl_ai.rs` の `force_ai_suggestion`）。`AiSuggestionBackend`
+  の `Notify` は**要求キューのドアベルであって結果通知ではない**ので、待てる signal が無い。
+  中断可能・進捗表示付きにはなり、タイムアウト時に無言で諦めるのもやめた。
 - **経路 B は `with_tools()` を本番で一度も呼ばない**（`AiRequestOptions::with_tools`
   `dsh/src/ai_features/service.rs:50`）。コマンドパレットの各アクション・ゴーストテキスト等は
   すべて `without_tools()` を使うため、`LiveAiService::run_tool_loop` の MCP 実行ブロック・

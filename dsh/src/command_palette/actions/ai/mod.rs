@@ -1,6 +1,12 @@
-use crate::ai_features::AiService;
+use crate::ai_features::{self, AiService};
 use crate::shell::Shell;
+use anyhow::Result;
+use crossterm::queue;
+use crossterm::style::Print;
+use std::future::Future;
 use std::sync::Arc;
+
+use crate::terminal::renderer::TerminalRenderer;
 
 pub mod describe_dir;
 pub mod diagnose;
@@ -37,4 +43,43 @@ pub fn get_recent_commands(shell: &Shell, count: usize) -> Vec<String> {
         return history.get_recent_context(count);
     }
     Vec::new()
+}
+
+/// Run one AI action's request and print what comes back.
+///
+/// Every action in this directory had the same body: a static
+/// "🔄 Processing..." line, an `.await` that made the terminal deaf for as
+/// long as the provider took, and a loop printing the answer. The wait now
+/// goes through [`ai_features::await_with_progress`], so the elapsed time is
+/// visible and Esc gives up on it - the palette runs inside the REPL's key
+/// handling, which is exactly where that helper is meant to be used.
+pub(super) async fn run_and_render(
+    service: &dyn AiService,
+    fut: impl Future<Output = Result<String>>,
+) -> Result<()> {
+    let mut renderer = TerminalRenderer::new();
+    queue!(renderer, Print("\r\n")).ok();
+    renderer.flush().ok();
+
+    // `None` is the user having pressed Esc; `await_with_progress` has already
+    // said so and cancelled the request.
+    let Some(result) = ai_features::await_with_progress("🔄 Processing...", service, fut).await
+    else {
+        return Ok(());
+    };
+
+    match result {
+        Ok(response) => {
+            for line in response.lines() {
+                queue!(renderer, Print(format!("{}\r\n", line))).ok();
+            }
+            queue!(renderer, Print("\r\n")).ok();
+        }
+        Err(e) => {
+            queue!(renderer, Print(format!("❌ Error: {}\r\n", e))).ok();
+        }
+    }
+    renderer.flush().ok();
+
+    Ok(())
 }

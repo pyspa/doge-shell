@@ -267,34 +267,61 @@ impl<'a> Repl<'a> {
 
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(15);
+        let service = self.services.ai.clone();
+        let last_status = self.state.last_status;
+        let engine = &self.ai_ui.suggestion_manager.engine;
 
         tracing::debug!("force_ai_suggestion: waiting for response...");
-        loop {
-            if let Some(state) = self
-                .ai_ui
-                .suggestion_manager
-                .engine
-                .ai_suggestion_with_context(
+
+        // The backend fills a cache from its own worker, and there is no
+        // "ready" signal to await - `AiSuggestionBackend`'s `Notify` is the
+        // request doorbell, not a result one - so this still polls. What
+        // changed is that it no longer polls *deaf*: fifteen seconds used to
+        // pass with the REPL reading no keys and then giving up silently.
+        let poll = async {
+            loop {
+                if let Some(state) = engine.ai_suggestion_with_context(
                     &current_input,
                     cursor_pos,
                     history_ref,
                     cwd.clone(),
                     files.clone(),
-                    Some(self.state.last_status),
-                )
-            {
+                    Some(last_status),
+                ) {
+                    return Some(state);
+                }
+                if start.elapsed() > timeout {
+                    return None;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        };
+
+        let outcome = match &service {
+            Some(service) => {
+                crate::ai_features::await_with_progress("🤖 Thinking...", service.as_ref(), poll)
+                    .await
+            }
+            // Without a service there is nothing to cancel and nothing to
+            // wait for; the poll falls through to its timeout immediately.
+            None => Some(poll.await),
+        };
+
+        match outcome {
+            Some(Some(state)) => {
                 tracing::debug!("force_ai_suggestion: got state {:?}", state);
-                let candidates = vec![state];
-                self.ai_ui.suggestion_manager.update_candidates(candidates);
+                self.ai_ui.suggestion_manager.update_candidates(vec![state]);
                 return true;
             }
-
-            if start.elapsed() > timeout {
+            Some(None) => {
                 tracing::warn!("force_ai_suggestion: timeout");
-                break;
+                // Saying nothing looked like a broken key.
+                let mut renderer = TerminalRenderer::new();
+                queue!(renderer, Print("no AI suggestion within 15s\r\n")).ok();
+                renderer.flush().ok();
             }
-
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Cancelled: `await_with_progress` has already said so.
+            None => {}
         }
 
         self.ai_ui.suggestion_manager.active.is_some()

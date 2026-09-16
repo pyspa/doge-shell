@@ -175,7 +175,12 @@ pub struct AgentPolicyHandles {
 
 /// Live implementation of AiService using OpenAI API and MCP tools.
 pub struct LiveAiService {
-    cancellation_generation: std::sync::atomic::AtomicU64,
+    /// Bumped by `cancel_requests`; a request whose generation no longer
+    /// matches stops at its next check.
+    ///
+    /// Behind an `Arc` so the closure that reads it can be handed to
+    /// `spawn_blocking`, which needs `'static`.
+    cancellation_generation: Arc<std::sync::atomic::AtomicU64>,
     client: Arc<dyn ChatClient>,
     mcp_manager: Arc<RwLock<McpManager>>,
     policy: AgentPolicyHandles,
@@ -202,7 +207,7 @@ impl LiveAiService {
     ) -> Self {
         Self {
             client: Arc::new(client),
-            cancellation_generation: std::sync::atomic::AtomicU64::new(0),
+            cancellation_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             mcp_manager,
             policy,
             confirmation_handler,
@@ -337,10 +342,11 @@ impl LiveAiService {
         let generation = self
             .cancellation_generation
             .load(std::sync::atomic::Ordering::SeqCst);
-        let cancelled = || {
-            self.cancellation_generation
-                .load(std::sync::atomic::Ordering::SeqCst)
-                != generation
+        // Owned rather than borrowing `self`: this closure crosses into
+        // `spawn_blocking` below, which requires `'static + Send`.
+        let cancelled = {
+            let counter = Arc::clone(&self.cancellation_generation);
+            move || counter.load(std::sync::atomic::Ordering::SeqCst) != generation
         };
         // A request that asks for a JSON object is parsed, not read: a language
         // instruction there risks the format, and nobody reads the field names.
@@ -364,9 +370,24 @@ impl LiveAiService {
                 anyhow::bail!("AI request exceeded maximum number of tool interactions");
             }
 
-            let response =
-                self.client
-                    .send_chat_cancellable(&messages, &chat_options, &cancelled)?;
+            // `ChatClient` is a synchronous API, so awaiting it directly stalls
+            // the task it runs on - and the REPL drives its key handlers from
+            // the same task as its `tokio::select!` over terminal input. That
+            // is what made a `Alt+d` or a command-palette AI action freeze the
+            // shell for up to `AI_CHAT_TIMEOUT_SECS` with Ctrl-C not working:
+            // `handle_interrupt`, the only caller of `cancel_requests`, is
+            // reached through the very events that were no longer being read.
+            let response = {
+                let client = Arc::clone(&self.client);
+                let messages = messages.clone();
+                let options = chat_options.clone();
+                let cancelled = cancelled.clone();
+                tokio::task::spawn_blocking(move || {
+                    client.send_chat_cancellable(&messages, &options, &cancelled)
+                })
+                .await
+                .map_err(|err| anyhow::anyhow!("AI request panicked: {err}"))??
+            };
 
             // Shared with the `!` chat runtime so the two loops cannot drift.
             let interpreted = turn::interpret_response(&response)

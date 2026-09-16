@@ -1448,6 +1448,11 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     # "The command 'gti' was not found. Did you mean 'git'?"
     ```
 
+    While it is waiting you see how long it has been going, and `Esc` (or `Ctrl+C`) gives up
+    on it. The same is true of the AI actions in the command palette, `Alt+s`, and
+    `ai-watch`'s summary: the shell stays responsive instead of going quiet until the
+    provider answers.
+
 7. **Safe Run (`safe-run`)**:
     Execute commands with deterministic prechecks and AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
 

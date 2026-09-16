@@ -9,6 +9,13 @@ use std::sync::Mutex;
 struct MockAiService {
     response: String,
     last_messages: Mutex<Vec<Value>>,
+    /// How many times something asked for the in-flight request to stop.
+    ///
+    /// `cancel_requests` was unreachable for as long as it existed: the only
+    /// caller is `handle_interrupt`, and the key event that reaches it was not
+    /// being read while a request was in flight. Counting it here is how the
+    /// tests below say "and this time it was actually called".
+    cancels: std::sync::atomic::AtomicUsize,
 }
 
 impl MockAiService {
@@ -16,7 +23,12 @@ impl MockAiService {
         Self {
             response: response.to_string(),
             last_messages: Mutex::new(Vec::new()),
+            cancels: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    fn cancels(&self) -> usize {
+        self.cancels.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -29,6 +41,11 @@ impl AiService for MockAiService {
     ) -> Result<String> {
         *self.last_messages.lock().unwrap() = messages;
         Ok(self.response.clone())
+    }
+
+    fn cancel_requests(&self) {
+        self.cancels
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -352,4 +369,32 @@ async fn changing_shell_response_language_invalidates_read_only_cache() {
         explain_command(&second, "pwd").await.unwrap(),
         "new language"
     );
+}
+
+/// A request that finishes on its own is not cancelled, and its value comes
+/// back unchanged.
+#[tokio::test]
+async fn await_with_progress_returns_the_value_and_cancels_nothing() {
+    let service = MockAiService::new("");
+
+    let value = await_with_progress("test", &service, async { 41 + 1 }).await;
+
+    assert_eq!(value, Some(42));
+    assert_eq!(service.cancels(), 0);
+}
+
+/// The helper owns an `EventStream`, which needs a terminal. Without one it
+/// must still deliver the answer rather than hanging or losing it - `dogesh -c`
+/// and CI both run without a tty.
+#[tokio::test]
+async fn await_with_progress_works_without_a_terminal() {
+    let service = MockAiService::new("");
+
+    let value = await_with_progress("test", &service, async {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        "done"
+    })
+    .await;
+
+    assert_eq!(value, Some("done"));
 }

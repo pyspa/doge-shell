@@ -1,3 +1,10 @@
+//! Lisp bindings for MCP servers, tools, and tool groups.
+//!
+//! Thin printers over `McpManager`: server registration (`mcp-add-*`),
+//! connection control (`mcp-connect` / `mcp-disconnect`), tool listings
+//! (`mcp-list-tools*`, `mcp-group-tools`), group exposure control
+//! (`mcp-groups`, `mcp-group-show/enable/disable`), and the `mcp-status`
+//! report. The `mcp` builtin command dispatches here.
 use crate::lisp::model::{Env, List, Symbol, Value};
 use crate::lisp::utils::{
     list_of_pairs, list_of_strings, optional_bool, optional_string, require_typed_arg,
@@ -146,43 +153,206 @@ pub fn register(env: &mut Env) {
             let env_borrow = env.borrow();
             let env_read = env_borrow.shell_env.read();
             let manager = env_read.integration_state.mcp_manager.read();
-            let tools = manager.tool_definitions();
+            // Registered tools, including hidden and disconnected ones: the
+            // diagnostic view. Use `mcp-list-tools-active` for what the model
+            // currently sees.
+            Ok(print_tool_definitions(
+                manager.all_tool_definitions(),
+                "No MCP tools available.",
+            ))
+        }),
+    );
 
-            if tools.is_empty() {
-                println!("No MCP tools available.");
+    env.define(
+        Symbol::from("mcp-list-tools-active"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+            Ok(print_tool_definitions(
+                manager.active_tool_definitions(),
+                "No active MCP tools currently exposed to AI.",
+            ))
+        }),
+    );
+
+    // mcp-group-tools: List the tools of one group.
+    // With no mode (or any mode but "active") this is the group's registered
+    // membership; with "active" it is the subset currently exposed to AI.
+    env.define(
+        Symbol::from("mcp-group-tools"),
+        Value::NativeFunc(|env, args| {
+            let group = require_typed_arg::<&String>("mcp-group-tools", &args, 0)?.clone();
+            let mode = args
+                .get(1)
+                .map(|value| match value {
+                    Value::String(text) => text.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+            if !manager
+                .tool_groups()
+                .iter()
+                .any(|known| known.name == group)
+            {
+                println!("Unknown MCP tool group: '{group}'");
+                println!("Run `mcp group list` to see available groups.");
+                return Ok(Value::False);
+            }
+            let tools = if mode == "active" {
+                manager.group_tool_definitions(&group)
+            } else {
+                let members: std::collections::HashSet<String> = manager
+                    .tool_groups()
+                    .into_iter()
+                    .find(|known| known.name == group)
+                    .map(|known| known.tools.into_iter().collect())
+                    .unwrap_or_default();
+                manager
+                    .all_tool_definitions()
+                    .into_iter()
+                    .filter(|definition| {
+                        definition
+                            .get("function")
+                            .and_then(|function| function.get("name"))
+                            .and_then(|name| name.as_str())
+                            .is_some_and(|name| members.contains(name))
+                    })
+                    .collect()
+            };
+            Ok(print_tool_definitions(
+                tools,
+                &format!("No MCP tools in group '{group}'."),
+            ))
+        }),
+    );
+
+    // mcp-groups: List MCP tool groups with their exposure state
+    env.define(
+        Symbol::from("mcp-groups"),
+        Value::NativeFunc(|env, _args| {
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+            let groups = manager.tool_groups();
+
+            if groups.is_empty() {
+                println!("No MCP tool groups available.");
                 return Ok(Value::List(List::NIL));
             }
 
-            println!("{:<30} DESCRIPTION", "NAME");
-            println!("{:<30} -----------", "----");
+            println!("{:<20} {:<8} TOOLS", "GROUP", "ENABLED");
+            println!("{:<20} {:<8} -----", "-----", "-------");
 
             let mut names = Vec::new();
-
-            for tool in tools {
-                let name = tool
-                    .get("function")
-                    .and_then(|f| f.get("name"))
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("unknown");
-
-                let desc = tool
-                    .get("function")
-                    .and_then(|f| f.get("description"))
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("");
-
-                // Truncate description if too long
-                let desc = if desc.len() > 50 {
-                    format!("{}...", &desc[..47])
-                } else {
-                    desc.to_string()
-                };
-
-                println!("{:<30} {}", name, desc);
-                names.push(Value::String(name.to_string()));
+            for group in groups {
+                println!(
+                    "{:<20} {:<8} {}",
+                    group.name,
+                    if group.enabled { "yes" } else { "no" },
+                    group.tools.len()
+                );
+                names.push(Value::String(group.name));
             }
 
             Ok(Value::List(names.into_iter().collect()))
+        }),
+    );
+
+    // mcp-group-show: Show one group's membership and exposure state
+    env.define(
+        Symbol::from("mcp-group-show"),
+        Value::NativeFunc(|env, args| {
+            let group = require_typed_arg::<&String>("mcp-group-show", &args, 0)?.clone();
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+            let Some(known) = manager.tool_groups().into_iter().find(|g| g.name == group) else {
+                println!("Unknown MCP tool group: '{group}'");
+                println!("Run `mcp group list` to see available groups.");
+                return Ok(Value::False);
+            };
+
+            println!("Group: {}", known.name);
+            println!(
+                "Description: {}",
+                known.description.as_deref().unwrap_or("")
+            );
+            println!(
+                "Status: {}",
+                if known.enabled { "enabled" } else { "disabled" }
+            );
+            if manager.is_disabled(&group) {
+                println!(
+                    "Server '{group}' is disconnected; run `mcp connect {group}` to use its tools."
+                );
+            }
+            println!();
+            println!("Tools:");
+            for tool in &known.tools {
+                println!("  {tool}");
+            }
+
+            Ok(Value::True)
+        }),
+    );
+
+    // mcp-group-enable: Offer a group's schemas to AI again
+    env.define(
+        Symbol::from("mcp-group-enable"),
+        Value::NativeFunc(|env, args| {
+            let group = require_typed_arg::<&String>("mcp-group-enable", &args, 0)?.clone();
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+
+            match manager.enable_group(&group) {
+                Ok(true) => {
+                    println!("Enabled MCP tool group: {group}");
+                    Ok(Value::True)
+                }
+                Ok(false) => {
+                    println!("MCP tool group '{group}' is already active.");
+                    Ok(Value::True)
+                }
+                Err(err) => {
+                    println!("{err}");
+                    Ok(Value::False)
+                }
+            }
+        }),
+    );
+
+    // mcp-group-disable: Hide a group's schemas from AI, keeping the connection
+    env.define(
+        Symbol::from("mcp-group-disable"),
+        Value::NativeFunc(|env, args| {
+            let group = require_typed_arg::<&String>("mcp-group-disable", &args, 0)?.clone();
+
+            let env_borrow = env.borrow();
+            let env_read = env_borrow.shell_env.read();
+            let manager = env_read.integration_state.mcp_manager.read();
+
+            match manager.disable_group(&group) {
+                Ok(true) => {
+                    println!("Disabled MCP tool group: {group}");
+                    Ok(Value::True)
+                }
+                Ok(false) => {
+                    println!("MCP tool group '{group}' is already inactive.");
+                    Ok(Value::True)
+                }
+                Err(err) => {
+                    println!("{err}");
+                    Ok(Value::False)
+                }
+            }
         }),
     );
 
@@ -240,6 +410,22 @@ pub fn register(env: &mut Env) {
                     status.label, status_str, status.transport_type, status.tool_count, uptime
                 );
                 labels.push(Value::String(status.label));
+            }
+
+            let groups = manager.tool_groups();
+            if !groups.is_empty() {
+                println!();
+                println!("Tool Groups:");
+                println!("{:<20} {:<8} TOOLS", "GROUP", "ENABLED");
+                println!("{:<20} {:<8} -----", "-----", "-------");
+                for group in groups {
+                    println!(
+                        "{:<20} {:<8} {}",
+                        group.name,
+                        if group.enabled { "yes" } else { "no" },
+                        group.tools.len()
+                    );
+                }
             }
 
             Ok(Value::List(labels.into_iter().collect()))
@@ -305,4 +491,46 @@ pub fn register(env: &mut Env) {
             Ok(Value::True)
         }),
     );
+}
+
+/// Print tool definitions as a NAME/DESCRIPTION table and return the names.
+///
+/// Shared by `mcp-list-tools`, `mcp-list-tools-active` and `mcp-group-tools`
+/// so the three listings cannot drift apart.
+fn print_tool_definitions(tools: Vec<serde_json::Value>, empty_message: &str) -> Value {
+    if tools.is_empty() {
+        println!("{empty_message}");
+        return Value::List(List::NIL);
+    }
+
+    println!("{:<30} DESCRIPTION", "NAME");
+    println!("{:<30} -----------", "----");
+
+    let mut names = Vec::new();
+
+    for tool in tools {
+        let name = tool
+            .get("function")
+            .and_then(|f| f.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown");
+
+        let desc = tool
+            .get("function")
+            .and_then(|f| f.get("description"))
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+
+        // Truncate description if too long
+        let desc = if desc.len() > 50 {
+            format!("{}...", &desc[..47])
+        } else {
+            desc.to_string()
+        };
+
+        println!("{:<30} {}", name, desc);
+        names.push(Value::String(name.to_string()));
+    }
+
+    Value::List(names.into_iter().collect())
 }

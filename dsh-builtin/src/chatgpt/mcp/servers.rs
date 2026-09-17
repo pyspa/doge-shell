@@ -141,6 +141,7 @@ impl McpManager {
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
             disabled: RwLock::new(HashSet::new()),
+            group_disabled: RwLock::new(HashSet::new()),
             connections: parking_lot::Mutex::new(HashMap::new()),
             tools_refreshed: Instant::now(),
         })

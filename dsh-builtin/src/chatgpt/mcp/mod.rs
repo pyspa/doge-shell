@@ -1,9 +1,11 @@
 mod connection;
 mod exec;
+mod groups;
 mod naming;
 mod servers;
 use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
+pub use groups::{McpToolExposure, McpToolGroup};
 use naming::*;
 use rmcp::{
     ServiceExt,
@@ -285,6 +287,13 @@ pub struct McpManager {
     /// metadata alone, so `mcp status` said "disconnected" while the agent
     /// carried on calling the tools.
     disabled: RwLock<HashSet<String>>,
+    /// Groups hidden from the model, by group name (today: the server label).
+    ///
+    /// Separate from `disabled`: that cuts the connection, this only hides
+    /// schemas. Nothing here clears it - not `connect`, not a server
+    /// re-registration - so an operator's scoping choice survives reconnects
+    /// and only an explicit enable lifts it.
+    group_disabled: RwLock<HashSet<String>>,
 }
 
 impl Default for McpManager {
@@ -296,6 +305,7 @@ impl Default for McpManager {
             session_meta: RwLock::new(HashMap::new()),
             connection_errors: RwLock::new(HashMap::new()),
             disabled: RwLock::new(HashSet::new()),
+            group_disabled: RwLock::new(HashSet::new()),
             connections: parking_lot::Mutex::new(HashMap::new()),
             tools_refreshed: Instant::now(),
         }
@@ -337,6 +347,20 @@ impl McpManager {
     fn disabled_write(&self) -> std::sync::RwLockWriteGuard<'_, HashSet<String>> {
         self.disabled.write().unwrap_or_else(|poisoned| {
             warn!("disabled server lock poisoned; recovering write access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn group_disabled_read(&self) -> std::sync::RwLockReadGuard<'_, HashSet<String>> {
+        self.group_disabled.read().unwrap_or_else(|poisoned| {
+            warn!("disabled group lock poisoned; recovering read access");
+            poisoned.into_inner()
+        })
+    }
+
+    fn group_disabled_write(&self) -> std::sync::RwLockWriteGuard<'_, HashSet<String>> {
+        self.group_disabled.write().unwrap_or_else(|poisoned| {
+            warn!("disabled group lock poisoned; recovering write access");
             poisoned.into_inner()
         })
     }
@@ -614,61 +638,22 @@ impl McpManager {
         Ok(())
     }
 
+    /// Definitions currently offered to the model (active groups only).
+    ///
+    /// Compatibility alias for [`McpManager::active_tool_definitions`]: with
+    /// every group enabled - the default - the two are identical. New code
+    /// that means "everything registered" should call
+    /// [`McpManager::all_tool_definitions`] instead.
     pub fn tool_definitions(&self) -> Vec<Value> {
-        let disabled = self.disabled_read();
-        self.bindings
-            .values()
-            .filter_map(|binding| {
-                if disabled.contains(&binding.server_label) {
-                    return None;
-                }
-                let server = self
-                    .servers
-                    .iter()
-                    .find(|srv| srv.label == binding.server_label)?;
-                let tool = server
-                    .tools
-                    .iter()
-                    .find(|tool| tool.name.as_ref() == binding.tool_name)?;
-
-                let schema = Value::Object((*tool.input_schema).clone());
-                let description = match (&server.description, &tool.description) {
-                    (Some(server_desc), Some(tool_desc)) if !server_desc.is_empty() => format!(
-                        "MCP server `{}` — {}\nTool `{}`: {}",
-                        server.label, server_desc, tool.name, tool_desc
-                    ),
-                    (Some(server_desc), _) if !server_desc.is_empty() => format!(
-                        "MCP server `{}` — {}\nTool `{}`",
-                        server.label, server_desc, tool.name
-                    ),
-                    (_, Some(tool_desc)) if !tool_desc.is_empty() => format!(
-                        "MCP server `{}` tool `{}`: {}",
-                        server.label, tool.name, tool_desc
-                    ),
-                    _ => format!("MCP server `{}` tool `{}`", server.label, tool.name),
-                };
-
-                let function_name = binding.function_name.clone();
-
-                Some(json!({
-                    "type": "function",
-                    "function": {
-                        "name": function_name,
-                        "description": description,
-                        "parameters": schema,
-                    }
-                }))
-            })
-            .collect()
+        self.active_tool_definitions()
     }
 
     pub fn system_prompt_fragment(&self) -> Option<String> {
         let disabled = self.disabled_read();
-        if self
-            .servers
-            .iter()
-            .all(|server| disabled.contains(&server.label))
-        {
+        let group_disabled = self.group_disabled_read();
+        if self.servers.iter().all(|server| {
+            disabled.contains(&server.label) || group_disabled.contains(&server.label)
+        }) {
             return None;
         }
 
@@ -693,7 +678,7 @@ impl McpManager {
         // through the `tools` array with its own name, description and schema;
         // repeating them in the prompt paid for the same text twice.
         for server in &self.servers {
-            if disabled.contains(&server.label) {
+            if disabled.contains(&server.label) || group_disabled.contains(&server.label) {
                 continue;
             }
             let mut header = format!("- Server `{}`", server.label);

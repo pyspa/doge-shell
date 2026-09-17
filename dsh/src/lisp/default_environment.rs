@@ -652,6 +652,30 @@ mod tests {
     }
 
     #[test]
+    fn mcp_group_functions_report_unknown_groups_without_servers() {
+        let env = Environment::new();
+        let engine = LispEngine::new(env.clone());
+
+        assert_eq!(
+            engine.borrow().run("(mcp-groups)").unwrap(),
+            Value::List(List::NIL)
+        );
+        assert_eq!(
+            engine.borrow().run("(mcp-list-tools-active)").unwrap(),
+            Value::List(List::NIL)
+        );
+        for code in [
+            "(mcp-group-show \"github\")",
+            "(mcp-group-enable \"github\")",
+            "(mcp-group-disable \"github\")",
+            "(mcp-group-tools \"github\")",
+            "(mcp-group-tools \"github\" \"active\")",
+        ] {
+            assert_eq!(engine.borrow().run(code).unwrap(), Value::False, "{code}");
+        }
+    }
+
+    #[test]
     fn selector_validation_checks() {
         let env = Environment::new();
         let engine = LispEngine::new(env.clone());

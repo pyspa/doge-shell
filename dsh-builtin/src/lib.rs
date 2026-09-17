@@ -46,7 +46,7 @@ pub use chatgpt::chat_status_detailed;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{
     LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
-    McpServerStatus,
+    McpServerStatus, McpToolExposure, McpToolGroup,
 };
 pub use skill::installed_names as installed_skill_names;
 pub use skill::pending_proposal_ids;

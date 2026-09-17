@@ -215,8 +215,13 @@ const HELP_TOPICS: &[HelpTopic] = &[
         name: "mcp",
         category: "ai",
         summary: "Manage configured MCP servers and tools.",
-        usage: "mcp <status|connect|disconnect|list|tools> [label]",
-        examples: &["mcp status", "mcp tools", "mcp connect local-dev-tools"],
+        usage: "mcp <status|connect|disconnect|list|tools|group> [label]",
+        examples: &[
+            "mcp status",
+            "mcp tools",
+            "mcp connect local-dev-tools",
+            "mcp group list",
+        ],
         related: &["doctor", "chat_model"],
     },
     HelpTopic {

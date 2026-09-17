@@ -446,3 +446,166 @@ fn tool_facts_report_the_name_and_the_declaration_together() {
     );
     assert_eq!(manager.tool_facts_for("mcp__ops__missing"), None);
 }
+
+fn group_tool(name: &str) -> Tool {
+    Tool::new(
+        name.to_string(),
+        format!("{name} description"),
+        Arc::new(serde_json::Map::new()),
+    )
+}
+
+/// Two servers, one implicit group each: the Phase 1 group model.
+fn grouped_manager() -> McpManager {
+    let mut manager = McpManager::default();
+    let github_tools = vec![
+        group_tool("list_issues"),
+        group_tool("get_issue"),
+        group_tool("create_issue"),
+    ];
+    let mut github = mock_server("github");
+    github.tools = github_tools.clone();
+    manager.register_server(github, github_tools).unwrap();
+    let fs_tools = vec![group_tool("read_file"), group_tool("write_file")];
+    let mut filesystem = mock_server("filesystem");
+    filesystem.description = None;
+    filesystem.tools = fs_tools.clone();
+    manager.register_server(filesystem, fs_tools).unwrap();
+    manager
+}
+
+#[test]
+fn implicit_groups_mirror_their_servers() {
+    let groups = grouped_manager().tool_groups();
+
+    assert_eq!(groups.len(), 2);
+    let github = groups.iter().find(|group| group.name == "github").unwrap();
+    assert_eq!(github.description.as_deref(), Some("github server"));
+    assert!(github.enabled);
+    assert_eq!(
+        github.tools,
+        vec![
+            "mcp__github__create_issue",
+            "mcp__github__get_issue",
+            "mcp__github__list_issues",
+        ]
+    );
+    // No server description: the group still gets a short fallback.
+    let filesystem = groups
+        .iter()
+        .find(|group| group.name == "filesystem")
+        .unwrap();
+    assert_eq!(
+        filesystem.description.as_deref(),
+        Some("Tools provided by MCP server 'filesystem'")
+    );
+}
+
+#[test]
+fn disabling_a_group_hides_only_its_tools() {
+    let manager = grouped_manager();
+    assert_eq!(manager.all_tool_definitions().len(), 5);
+    assert_eq!(manager.active_tool_count(), 5);
+
+    assert_eq!(manager.disable_group("github"), Ok(true));
+    assert!(!manager.is_group_enabled("github"));
+    assert!(manager.is_group_enabled("filesystem"));
+
+    assert_eq!(manager.all_tool_definitions().len(), 5);
+    assert_eq!(manager.active_tool_count(), 2);
+    // The compatibility alias follows the active set.
+    assert_eq!(manager.tool_definitions().len(), 2);
+    assert!(manager.group_tool_definitions("github").is_empty());
+    assert_eq!(manager.group_tool_definitions("filesystem").len(), 2);
+
+    assert_eq!(manager.enable_group("github"), Ok(true));
+    assert_eq!(manager.active_tool_count(), 5);
+    // Re-enabling an active group changes nothing and duplicates nothing.
+    assert_eq!(manager.enable_group("github"), Ok(false));
+    assert_eq!(manager.active_tool_count(), 5);
+    assert_eq!(manager.disable_group("github"), Ok(true));
+    assert_eq!(manager.disable_group("github"), Ok(false));
+}
+
+#[test]
+fn disabling_an_unknown_group_names_what_exists() {
+    let manager = grouped_manager();
+    let err = manager.disable_group("nope").unwrap_err();
+    assert!(err.contains("Unknown MCP tool group: 'nope'"), "{err}");
+    assert!(err.contains("github"), "{err}");
+    assert!(err.contains("filesystem"), "{err}");
+    assert_eq!(manager.enable_group("nope").unwrap_err(), err);
+}
+
+#[test]
+fn group_disable_is_exposure_only_not_a_disconnect() {
+    let manager = grouped_manager();
+    manager.disable_group("github").unwrap();
+
+    // The binding survives: execution still resolves, and the server is not
+    // marked disconnected. Only the model's view shrinks.
+    assert!(manager.has_tool_binding("mcp__github__list_issues"));
+    assert!(!manager.is_disabled("github"));
+    assert!(manager.system_prompt_fragment().is_some());
+}
+
+#[test]
+fn enabling_a_group_on_a_disconnected_server_fails() {
+    let manager = grouped_manager();
+    manager.disconnect("filesystem").unwrap();
+    // Enabling the toggle must not report success while the tools stay
+    // hidden: the operator has to reconnect first.
+    let err = manager.enable_group("filesystem").unwrap_err();
+    assert!(err.contains("disconnected"), "{err}");
+    assert!(err.contains("mcp connect filesystem"), "{err}");
+    assert!(manager.is_group_enabled("filesystem"));
+    assert_eq!(manager.active_tool_count(), 3);
+    assert!(manager.group_tool_definitions("filesystem").is_empty());
+}
+
+#[test]
+fn same_tool_name_on_two_servers_does_not_collide() {
+    let mut manager = McpManager::default();
+    for label in ["alpha", "beta"] {
+        let tools = vec![group_tool("search")];
+        let mut server = mock_server(label);
+        server.tools = tools.clone();
+        manager.register_server(server, tools).unwrap();
+    }
+    let mut names: Vec<String> = manager
+        .active_tool_definitions()
+        .into_iter()
+        .filter_map(|definition| {
+            definition
+                .get("function")?
+                .get("name")?
+                .as_str()
+                .map(str::to_string)
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names.len(), 2);
+
+    manager.disable_group("alpha").unwrap();
+    assert_eq!(manager.active_tool_count(), 1);
+    assert_eq!(manager.group_tool_definitions("beta").len(), 1);
+}
+
+#[test]
+fn tool_exposure_reports_total_and_active_footprint() {
+    let manager = grouped_manager();
+    let exposure = manager.tool_exposure();
+    assert_eq!(exposure.total_tools, 5);
+    assert_eq!(exposure.active_tools, 5);
+    assert_eq!(exposure.total_groups, 2);
+    assert_eq!(exposure.active_groups, 2);
+    assert!(exposure.schema_bytes > 0);
+
+    manager.disable_group("github").unwrap();
+    let exposure = manager.tool_exposure();
+    assert_eq!(exposure.total_tools, 5);
+    assert_eq!(exposure.active_tools, 2);
+    assert_eq!(exposure.active_groups, 1);
+    assert!(exposure.schema_bytes > 0);
+}

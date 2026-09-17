@@ -928,3 +928,35 @@ fn doctor_mcp_reports_small_tool_footprint_as_ok() {
         "{output}"
     );
 }
+
+/// Disabling groups quiets the footprint warning: it is driven by the active
+/// count, while the registered total is still reported.
+#[test]
+fn doctor_mcp_footprint_follows_active_tools() {
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
+        vars: HashMap::from([
+            ("MCP_TOOLS".to_string(), "42".to_string()),
+            ("MCP_ACTIVE_TOOLS".to_string(), "5".to_string()),
+            ("MCP_ACTIVE_GROUPS".to_string(), "2".to_string()),
+        ]),
+        ..TestProxy::default()
+    };
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec!["doctor".to_string(), "mcp".to_string()],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(output.contains("ok tools 42"), "{output}");
+    assert!(output.contains("ok active-tools 5"), "{output}");
+    assert!(output.contains("ok active-groups 2"), "{output}");
+    assert!(
+        output.contains("ok mcp-tools-footprint tools=5"),
+        "{output}"
+    );
+}

@@ -710,6 +710,23 @@ You can also manage MCP servers interactively using the `mcp` command:
 - `mcp list`, `mcp l`: List registered servers.
 - `mcp tools`, `mcp t`: List available tools.
 
+### MCP Tool Groups
+
+Each MCP server's tools form a tool group named for the server. A connected
+server is not the same as AI exposure: `mcp group disable <group>` hides that
+group's schemas from AI while keeping the connection up, and the model can
+load a hidden group on demand when the task needs it.
+
+- `mcp group list`, `mcp groups`: List groups and their exposure state.
+- `mcp group show <group>`: Show one group's tools and state.
+- `mcp group enable <group>`: Offer a group's tools to AI again.
+- `mcp group disable <group>`: Hide a group's tools from AI (keeps connection).
+- `mcp tools --active`: List only the tools currently exposed to AI.
+- `mcp tools --group <name>`: List one group's tools.
+
+Hiding idle groups keeps every AI request small: `doctor mcp` reports active
+versus registered tool counts and warns while the active footprint is high.
+
 ## 🔧 Usage
 
 ### Basic Usage

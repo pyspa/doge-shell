@@ -151,19 +151,29 @@ pub(super) fn check_mcp(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let tools = proxy
         .get_var("MCP_TOOLS")
         .unwrap_or_else(|| "0".to_string());
+    let active_tools = proxy
+        .get_var("MCP_ACTIVE_TOOLS")
+        .unwrap_or_else(|| tools.clone());
+    let active_groups = proxy
+        .get_var("MCP_ACTIVE_GROUPS")
+        .unwrap_or_else(|| "0".to_string());
 
     let state = if configured > 0 { "ok" } else { "warn" };
     let _ = ctx.write_stdout(&format!("{state} configured {configured}"));
     let _ = ctx.write_stdout(&format!("ok servers {servers}"));
     let _ = ctx.write_stdout(&format!("ok connected {connected}"));
     let _ = ctx.write_stdout(&format!("ok tools {tools}"));
-    let tool_count: usize = tools.parse().unwrap_or(0);
-    if tool_count > MCP_TOOLS_FOOTPRINT_WARN {
+    let _ = ctx.write_stdout(&format!("ok active-tools {active_tools}"));
+    let _ = ctx.write_stdout(&format!("ok active-groups {active_groups}"));
+    // The per-turn tax is what the model actually sees, not what is
+    // registered: disabling idle groups quiets this warning.
+    let active_count: usize = active_tools.parse().unwrap_or(0);
+    if active_count > MCP_TOOLS_FOOTPRINT_WARN {
         let _ = ctx.write_stdout(&format!(
-            "warn mcp-tools-footprint high tools={tool_count} interactive turns carry all definitions; disconnect idle servers or move the work to an agent task"
+            "warn mcp-tools-footprint high tools={active_count} interactive turns carry all active definitions; hide idle groups with `mcp group disable <group>` or disconnect idle servers"
         ));
     } else {
-        let _ = ctx.write_stdout(&format!("ok mcp-tools-footprint tools={tool_count}"));
+        let _ = ctx.write_stdout(&format!("ok mcp-tools-footprint tools={active_count}"));
     }
     for server in configured_servers {
         if let McpTransport::Sse { url } = &server.transport {

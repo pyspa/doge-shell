@@ -59,6 +59,21 @@ impl Environment {
                 return mcp(self.integration_state.mcp_manager.read().connected_count());
             }
             "MCP_TOOLS" => return mcp(self.integration_state.mcp_manager.read().tool_count()),
+            "MCP_ACTIVE_TOOLS" => {
+                return mcp(self
+                    .integration_state
+                    .mcp_manager
+                    .read()
+                    .active_tool_count());
+            }
+            "MCP_ACTIVE_GROUPS" => {
+                let manager = self.integration_state.mcp_manager.read();
+                return mcp(manager
+                    .tool_groups()
+                    .iter()
+                    .filter(|group| group.enabled && !manager.is_disabled(&group.name))
+                    .count());
+            }
             _ => {}
         }
 

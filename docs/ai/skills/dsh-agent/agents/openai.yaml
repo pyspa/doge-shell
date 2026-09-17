@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH Agent"
+  short_description: "Run, resume and follow doge-shell persistent agent tasks."
+  default_prompt: "Use $dsh-agent to run, resume or follow a doge-shell persistent agent task, including its grants and budgets."

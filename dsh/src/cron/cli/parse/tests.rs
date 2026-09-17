@@ -215,6 +215,29 @@ fn an_agent_job_needs_at_least_one_grant_root() {
     assert!(error.contains("--read or --write"), "{error}");
 }
 
+/// `--tokens`/`--timeout` without flags must match an `agent run` without
+/// flags: the same built-in defaults, with the job timeout and the task
+/// time budget kept in lock-step.
+#[test]
+fn an_agent_job_without_budgets_uses_agent_defaults() {
+    let parsed = parse_add(&args(&["--agent", "--write", "/", "@daily", "--", "goal"])).unwrap();
+    assert_eq!(
+        parsed.token_budget,
+        crate::agent::DEFAULT_AGENT_TOKEN_BUDGET
+    );
+    let s = build_spec(parsed, "/cwd".to_string()).unwrap();
+    let agent = s.agent.unwrap();
+    assert_eq!(
+        agent.token_budget,
+        crate::agent::DEFAULT_AGENT_TOKEN_BUDGET
+    );
+    assert_eq!(
+        agent.time_budget_secs,
+        crate::agent::DEFAULT_AGENT_TIMEOUT_SECS
+    );
+    assert_eq!(s.timeout_secs, crate::agent::DEFAULT_AGENT_TIMEOUT_SECS);
+}
+
 #[test]
 fn an_agent_jobs_timeout_drives_both_the_lease_and_the_task_budget() {
     let s = spec(&[

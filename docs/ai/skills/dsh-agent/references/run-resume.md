@@ -6,16 +6,19 @@ Quote values the shell would otherwise split or glob-expand.
 ## Start
 
 ```sh
-agent run --tokens N --timeout SECONDS [--check TEXT]... \
+agent run [--tokens N] [--timeout SECONDS] [--check TEXT]... \
   [--read DIR]... [--write DIR]... [--allow-command EXACT]... \
   [--allow-mcp ENTRY]... [--network HOST]... [--env NAME]... \
-  [--sandbox] [--detach] -- GOAL
+  [--sandbox] [--detach|-d] -- GOAL
 ```
 
 - `--` before the goal is required; everything after it is joined into the goal text.
+- `--tokens` / `--timeout` fall back to `AI_AGENT_TOKEN_BUDGET` /
+  `AI_AGENT_TIMEOUT_SECS` (shell variable, then environment), then to
+  50000 tokens / 900s.
 - `--check` is repeatable but only accepted on `run`: criteria are fixed once,
   before work starts, and each one must later be verified against a recorded
-  tool result. `--sandbox` is also `run`-only. `--detach` works on both
+  tool result. `--sandbox` is also `run`-only. `--detach` (`-d`) works on both
   `run` and `resume`.
 - A fresh task starts in the shell's current directory, which is also its
   initial readable directory.
@@ -26,7 +29,7 @@ agent run --tokens N --timeout SECONDS [--check TEXT]... \
 ## Resume
 
 ```sh
-agent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach]
+agent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]
 ```
 
 - `--tokens` / `--timeout` raise the cumulative budgets of the existing task.

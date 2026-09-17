@@ -14,7 +14,7 @@ agent cancel TASK_ID
 agent delete TASK_ID
 ```
 
-時間は秒、トークンと時間の指定値は再開分を含む累積上限です。CLI指定がなければシェル変数、プロセス環境の順で `AI_AGENT_TOKEN_BUDGET` と `AI_AGENT_TIMEOUT_SECS` を解決します。両方に正の残量が必要です。トークン上限は次の要求を止める条件で、請求額の厳密な上限ではありません。使用量を返さないプロバイダではタスクを停止します。
+時間は秒、トークンと時間の指定値は再開分を含む累積上限です。CLI指定がなければシェル変数、プロセス環境の順で `AI_AGENT_TOKEN_BUDGET` と `AI_AGENT_TIMEOUT_SECS` を解決し、どちらも未設定なら既定値（50000トークン／900秒）を使います。いずれも正の残量が必要です。トークン上限は次の要求を止める条件で、請求額の厳密な上限ではありません。使用量を返さないプロバイダではタスクを停止します。
 
 初期の読み取り範囲は開始時の cwd です。`--read DIR`、`--write DIR` は既存ディレクトリを指定し、繰り返せます。コマンドは `--allow-command` の完全一致、MCP操作は `agent show` に表示された承認キーを `--allow-mcp` へ渡して許可します。範囲外の要求は入力待ちになります。`agent resume` に追加の権限を明示できます。外部送信・公開も対象と引数を含む別の許可です。
 
@@ -30,9 +30,9 @@ skill ディレクトリ配下のスクリプトは `--allow-command` では許�
 
 AI chat hooks はタスク実行中も発火します。`ask` は対話プロンプトではなく入力待ちになり、その承認キー `hook:HOOK_ID:対象` は `--allow-command` や `--allow-mcp` では満たせません。`user-prompt-submit` と `pre-tool-use` の hook は失敗やタイムアウトで拒否側に倒れます。`AI_CHAT_HOOK_TURN_BUDGET_MS` もタスク中に効き、予算を使い切ったターンでは gate の hook が残り時間まで縮められて実行されるので、遅い hook はタイムアウト = 拒否側に倒れます。壊れた hook や足りない予算でタスクが止まるときは、予算を上げるか `AI_CHAT_HOOKS=off` を使ってください。
 
-## バックグラウンド実行（`--detach`）
+## バックグラウンド実行（`--detach`／`-d`）
 
-`agent run`/`agent resume` に `--detach` を足すと、タスクを別プロセス（`dogesh -c "agent run-detached <id>"`）に渡してすぐプロンプトへ戻ります。権限モデル・予算・承認の扱いは前景実行と何も変わりません。無人実行なので承認プロンプトは出ず、`--tokens`/`--timeout` は detach でも必須です。
+`agent run`/`agent resume` に `--detach`（`-d`）を足すと、タスクを別プロセス（`dogesh -c "agent run-detached <id>"`）に渡してすぐプロンプトへ戻ります。権限モデル・予算・承認の扱いは前景実行と何も変わりません。無人実行なので承認プロンプトは出ません。`--tokens`/`--timeout` の省略時は既定値が使われます。
 
 ```sh
 agent run --tokens 50000 --timeout 900 --write . --detach -- 'テスト失敗を調査し修正して'

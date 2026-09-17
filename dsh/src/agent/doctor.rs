@@ -50,7 +50,7 @@ fn now() -> i64 {
 }
 
 pub(crate) fn build_report(
-    shell: &mut crate::shell::Shell,
+    _shell: &mut crate::shell::Shell,
     store: &SqliteTaskStore,
 ) -> Result<DoctorReport> {
     let mut report = DoctorReport::new();
@@ -126,14 +126,6 @@ pub(crate) fn build_report(
             "stale-artifacts {stale_artifacts}: director{} under the agent state directory with no matching task row; inspect and remove by hand",
             if stale_artifacts == 1 { "y" } else { "ies" }
         ));
-    }
-
-    if super::setting(shell, "AI_AGENT_TOKEN_BUDGET").is_none()
-        && super::setting(shell, "AI_AGENT_TIMEOUT_SECS").is_none()
-    {
-        report.warn_line(
-            "no-default-budget: AI_AGENT_TOKEN_BUDGET/AI_AGENT_TIMEOUT_SECS are both unset; every `agent run`/`--detach` needs --tokens/--timeout spelled out explicitly",
-        );
     }
 
     Ok(report)

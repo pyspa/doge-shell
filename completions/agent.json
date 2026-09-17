@@ -8,12 +8,12 @@
       "options": [
         {
           "long": "--tokens",
-          "description": "Cumulative token budget",
+          "description": "Cumulative token budget (default: 50000)",
           "takes_value": true
         },
         {
           "long": "--timeout",
-          "description": "Cumulative time budget in seconds",
+          "description": "Cumulative time budget in seconds (default: 900)",
           "takes_value": true
         },
         {
@@ -54,6 +54,11 @@
           "long": "--check",
           "description": "Completion criterion",
           "takes_value": true
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in a separate process and return immediately"
         }
       ]
     },
@@ -105,16 +110,67 @@
           "long": "--reconcile",
           "description": "Observed result of interrupted operation",
           "takes_value": true
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in a separate process and return immediately"
         }
       ]
     },
     {
       "name": "list",
-      "description": "List tasks"
+      "description": "List tasks",
+      "options": [
+        {
+          "long": "--all",
+          "description": "Include tasks finished over a day ago"
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
+    },
+    {
+      "name": "logs",
+      "description": "Show recorded events",
+      "options": [
+        {
+          "long": "--follow",
+          "description": "Follow events until the task stops"
+        },
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        },
+        {
+          "long": "--since",
+          "description": "Only events past this sequence number",
+          "takes_value": true
+        }
+      ]
+    },
+    {
+      "name": "wait",
+      "description": "Wait until a task stops, then show the summary",
+      "options": [
+        {
+          "long": "--timeout",
+          "description": "Give up waiting after N seconds",
+          "takes_value": true
+        }
+      ]
     },
     {
       "name": "show",
-      "description": "Show task and events"
+      "description": "Show task and events",
+      "options": [
+        {
+          "long": "--summary",
+          "description": "Short report instead of the full record"
+        }
+      ]
     },
     {
       "name": "cancel",
@@ -123,6 +179,16 @@
     {
       "name": "delete",
       "description": "Delete task records"
+    },
+    {
+      "name": "doctor",
+      "description": "Diagnose stuck tasks and stale state",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Machine-readable output"
+        }
+      ]
     },
     {
       "name": "respond",

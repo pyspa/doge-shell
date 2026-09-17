@@ -55,8 +55,11 @@ pub(crate) fn startable(
         return Err(anyhow::Error::new(TaskFailure::Config).context("goal required after --"));
     }
     if task.token_budget <= task.tokens_used || task.time_budget_ms <= task.elapsed_ms {
-        return Err(anyhow::Error::new(TaskFailure::Config)
-            .context("positive remaining --tokens and --timeout budgets are required"));
+        return Err(anyhow::Error::new(TaskFailure::Config).context(
+            "positive remaining token and time budgets are required \
+             (defaults 50000 tokens / 900s; see --tokens/--timeout or \
+             AI_AGENT_TOKEN_BUDGET/AI_AGENT_TIMEOUT_SECS)",
+        ));
     }
     if task.pending_operation.is_some() && reconcile.is_none() {
         return Err(anyhow::Error::new(TaskFailure::Reconcile).context(format!(

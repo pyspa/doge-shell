@@ -1016,11 +1016,11 @@ symptom-to-cause debugging table live in the `dsh-cron` skill
 
 ### Background agent tasks
 
-`agent run`/`agent resume` accept `--detach`: the task is handed to a separate
+`agent run`/`agent resume` accept `--detach` (`-d`): the task is handed to a separate
 `dogesh -c "agent run-detached <id>"` process, and the shell returns immediately instead
 of blocking until the task stops. Permissions, budgets and approval semantics are
-unchanged — an unattended run still needs `--tokens`/`--timeout` and still stops for a
-permission it was not granted, rather than asking.
+unchanged — an unattended run uses `--tokens`/`--timeout` when given, else built-in
+defaults (50000 tokens / 900s), and still stops for a permission it was not granted, rather than asking.
 
 ```sh
 agent run --tokens 50000 --timeout 900 --write . --detach -- 'investigate and fix the failing test'

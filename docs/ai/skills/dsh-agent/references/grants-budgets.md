@@ -24,12 +24,13 @@ is available at run time.
 
 ## Budgets
 
-- `agent run --tokens N --timeout SECONDS` sets the cumulative token budget
+- `agent run [--tokens N] [--timeout SECONDS]` sets the cumulative token budget
   and the cumulative time budget in seconds. `agent resume` accepts the same
   two flags to raise them on an existing task.
 - Without flags the values fall back to `AI_AGENT_TOKEN_BUDGET` /
   `AI_AGENT_TIMEOUT_SECS`, read as a shell variable first and the process
-  environment second.
+  environment second, and finally to built-in defaults (50000 tokens / 900s).
+  `cron add --agent` starts from the same defaults.
 - The token budget stops subsequent requests once reached; it is not a
   billing cap. A final round that lands exactly on its budget with verified
   work done still counts as completed.

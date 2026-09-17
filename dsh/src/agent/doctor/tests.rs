@@ -38,10 +38,9 @@ fn an_empty_store_is_clean() {
             .iter()
             .any(|line| line.starts_with("ok no tasks recorded"))
     );
-    // Deliberately not asserting `warn == 0`: whether
-    // `AI_AGENT_TOKEN_BUDGET`/`AI_AGENT_TIMEOUT_SECS` are set is ambient
-    // process state this test does not control. What matters for "clean" is
-    // that nothing here is about an actual task going wrong.
+    // Budgets now fall back to built-in defaults, so this report no longer
+    // depends on ambient `AI_AGENT_*` process state. What matters for "clean"
+    // is that nothing here is about an actual task going wrong.
     assert!(!report.lines.iter().any(|line| {
         line.contains("crashed") || line.contains("needs-") || line.contains("stale-artifacts")
     }));

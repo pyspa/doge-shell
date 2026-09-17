@@ -18,7 +18,9 @@ cron add --agent --name digest \
 ```
 
 - `--tokens` is a **per-run** ceiling - every run starts a fresh task, so this is not a
-  running total the way `agent resume` treats a manually resumed task.
+  running total the way `agent resume` treats a manually resumed task. Both it and
+  `--timeout` are optional and default to the same values as `agent run`
+  (50000 tokens / 900s).
 - `--timeout` sets both the model's own cooperative time budget and the outer wall-clock
   deadline the tick enforces from outside if the model does not stop on its own.
 - `--max-tokens-per-day` (optional) caps total spend across all of a job's runs in a

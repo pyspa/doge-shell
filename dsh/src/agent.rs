@@ -349,7 +349,17 @@ impl AgentTaskStore for SqliteTaskStore {
 pub(crate) const RECOVERED_STOP_REASON: &str =
     "previous shell stopped; inspect persisted results before resuming";
 
-const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach]\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--detach starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
+/// Default cumulative token budget for a new task when neither `--tokens`
+/// nor `AI_AGENT_TOKEN_BUDGET` names one. Mirrors the value the docs use in
+/// examples; `cron add --agent` falls back to the same constant
+/// (`dsh/src/cron/cli/parse.rs`) so an unattended run starts with the same
+/// budget an interactive one would.
+pub(crate) const DEFAULT_AGENT_TOKEN_BUDGET: u64 = 50_000;
+/// Default cumulative time budget in seconds, same fallback chain as above
+/// (`--timeout`, then `AI_AGENT_TIMEOUT_SECS`).
+pub(crate) const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 900;
+
+const HELP: &str = "agent run [--tokens N] [--timeout SECONDS] [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach|-d] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--detach (-d) starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: --tokens/--timeout, else AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment), else 50000 tokens / 900s. Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
 
 /// Whether a turn that just ended needs an explicit
 /// `AgentLifecycleManager::report_blocked` call rather than letting
@@ -539,12 +549,12 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             progress: String::new(),
             token_budget: setting(shell, "AI_AGENT_TOKEN_BUDGET")
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(0),
+                .unwrap_or(DEFAULT_AGENT_TOKEN_BUDGET),
             tokens_used: 0,
             time_budget_ms: setting(shell, "AI_AGENT_TIMEOUT_SECS")
                 .and_then(|s| s.parse::<u64>().ok())
                 .and_then(|s| s.checked_mul(1000))
-                .unwrap_or(0),
+                .unwrap_or(DEFAULT_AGENT_TIMEOUT_SECS * 1000),
             elapsed_ms: 0,
             stop_reason: None,
             checkpoint: None,
@@ -566,7 +576,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             task.grant.sandbox = true;
             continue;
         }
-        if option == "--detach" {
+        if option == "--detach" || option == "-d" {
             detach = true;
             continue;
         }

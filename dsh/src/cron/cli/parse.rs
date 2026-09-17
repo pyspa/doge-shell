@@ -6,6 +6,8 @@ use dsh_types::agent::{TaskGrant, Verification};
 use dsh_types::cron::job::{AgentJobSpec, CronJobPatch, CronJobSpec, JobKind};
 use dsh_types::schedule::{DEFAULT_TIMEOUT_SECS, NotifyPolicy, Schedule, parse_schedule};
 
+use crate::agent::{DEFAULT_AGENT_TIMEOUT_SECS, DEFAULT_AGENT_TOKEN_BUDGET};
+
 /// Default lease/lookback window for a missed schedule slot.
 pub const DEFAULT_CATCHUP_SECS: u64 = 3600;
 /// Longest a job name may be, and the character set it is drawn from.
@@ -93,6 +95,10 @@ fn parse_named_duration(value: &str) -> Result<u64, String> {
 pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
     let mut out = AddArgs {
         catchup_secs: DEFAULT_CATCHUP_SECS,
+        // An agent job starts with the same budget a person typing
+        // `agent run` without flags would get (`crate::agent`'s defaults),
+        // not zero; `build_spec` no longer has to reject the unset case.
+        token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
         ..Default::default()
     };
     let mut index = 0;
@@ -246,7 +252,13 @@ pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, Str
     let schedule = args
         .schedule
         .expect("schedule is always parsed by parse_add");
-    let mut timeout_secs = args.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
+    let mut timeout_secs = args.timeout_secs.unwrap_or(if args.agent {
+        // An agent job's `--timeout` doubles as the task's own time budget,
+        // so it shares `agent run`'s default rather than the shell-job one.
+        DEFAULT_AGENT_TIMEOUT_SECS
+    } else {
+        DEFAULT_TIMEOUT_SECS
+    });
     // An interval job that outlives its own interval would starve its own
     // next run; a cron expression has no fixed interval to compare against.
     if let Schedule::Every(interval) = schedule {
@@ -266,11 +278,7 @@ pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, Str
             Some(AgentJobSpec {
                 grant: args.grant,
                 criteria: args.criteria,
-                token_budget: if args.token_budget == 0 {
-                    return Err("an agent job needs --tokens".to_string());
-                } else {
-                    args.token_budget
-                },
+                token_budget: args.token_budget,
                 // One flag drives both the model's own cooperative budget and
                 // the outer wall-clock deadline the tick enforces from
                 // outside; see `run_job`'s doc comment for why they are kept

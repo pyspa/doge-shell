@@ -3,11 +3,11 @@
 //!
 //! Every action here turns a [`CronToolRequest`]'s already-typed-but-unparsed
 //! fields into the exact argv `cron add`/`cron edit` would have parsed, and
-//! hands it to [`parse_add`]/[`parse_edit`] - so a schedule typo, a grant that
-//! names something that is not a directory, or a duplicate job name fails
-//! with the very same message a person typing the command would see. Nothing
-//! about validation is reimplemented for this third entry point (the CLI and
-//! `config.lisp`'s `cron-add` being the other two).
+//! hands it to [`parse_add`]/[`parse_edit`] - so a schedule typo or a
+//! duplicate job name fails with the very same message a person typing the
+//! command would see. Nothing about validation is reimplemented for this
+//! third entry point (the CLI and `config.lisp`'s `cron-add` being the other
+//! two).
 //!
 //! Read actions return the same shapes `cron ... --json` already builds
 //! (`super::handlers`'s json helpers); write actions return a short summary of
@@ -128,14 +128,10 @@ fn job_cwd_within(cwd: &str, grant: &TaskGrant) -> CwdCheck {
                 CwdCheck::OutOfGrant
             }
         }
-        // Unlike `dsh-builtin`'s `path_within` (which fails open on the same
-        // kind of error, for a *write* grant field): there, an unresolvable
-        // path still has to survive `apply_grant_option`'s own "no such
-        // directory" check before anything happens, so failing open there
-        // only defers the report. Here there is no such later step - `logs`
-        // returns the job's output directly - so failing open would let a
-        // job whose `cwd` no longer resolves (deleted, moved) bypass the
-        // grant check entirely. Refuse instead.
+        // Refuse instead of failing open: `logs` returns the job's output
+        // directly with no later check, so failing open would let a job
+        // whose `cwd` no longer resolves (deleted, moved) bypass the grant
+        // check entirely.
         Err(_) => CwdCheck::Unresolvable,
     }
 }
@@ -180,26 +176,7 @@ fn logs(
         }
     }
 
-    // An AI job's process, killed by its own watchdog before it could ever
-    // call `complete`, never wrote a summary into `stdout` at all - the same
-    // case `cron logs` (`handlers/logs.rs`) reconstructs live from the agent
-    // store rather than showing nothing. Without this, an agent using this
-    // tool to check on its own cron job gets an uninformative empty
-    // `stdout` for exactly the run it most needs to see.
-    let live = output.stdout.is_empty().then_some(()).and_then(|()| {
-        let task_id = output.run.agent_task_id.as_deref()?;
-        let agent_root = config_paths::agent_state_dir();
-        super::handlers::live_agent_summary(&agent_root, task_id)
-            .ok()
-            .flatten()
-    });
-
-    Ok(super::handlers::logs_json(
-        &output,
-        live.as_deref(),
-        true,
-        true,
-    ))
+    Ok(super::handlers::logs_json(&output, true, true))
 }
 
 fn incidents(store: &SqliteCronStore) -> Result<serde_json::Value> {
@@ -218,40 +195,6 @@ fn status(store: &SqliteCronStore) -> Result<serde_json::Value> {
 
 fn doctor(shell: &mut Shell, store: &SqliteCronStore) -> Result<serde_json::Value> {
     Ok(doctor_report(shell, store, now())?.to_json())
-}
-
-/// `--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/
-/// `--sandbox`, in the order `parse_add`/`parse_edit` accept them. Shared
-/// between `create` and `update` so the two never drift apart on which grant
-/// fields exist.
-fn push_grant_args(argv: &mut Vec<String>, request: &CronToolRequest) {
-    for path in &request.read {
-        argv.push("--read".to_string());
-        argv.push(path.clone());
-    }
-    for path in &request.write {
-        argv.push("--write".to_string());
-        argv.push(path.clone());
-    }
-    for command in &request.allow_command {
-        argv.push("--allow-command".to_string());
-        argv.push(command.clone());
-    }
-    for entry in &request.allow_mcp {
-        argv.push("--allow-mcp".to_string());
-        argv.push(entry.clone());
-    }
-    for host in &request.network {
-        argv.push("--network".to_string());
-        argv.push(host.clone());
-    }
-    for name in &request.env {
-        argv.push("--env".to_string());
-        argv.push(name.clone());
-    }
-    if request.sandbox {
-        argv.push("--sandbox".to_string());
-    }
 }
 
 fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_json::Value> {
@@ -279,37 +222,34 @@ fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
     if request.force {
         argv.push("--force".to_string());
     }
-    // A job the agent creates always starts paused, independent of anything
-    // in `request` - see the module doc on the `dsh-builtin` side. A person
-    // resumes it after checking a first `cron run --now`.
+    // A job the tool creates always starts paused - see the module doc on the
+    // `dsh-builtin` side. A person resumes it after checking a first
+    // `cron run --now`.
     argv.push("--paused".to_string());
-    if request.agent {
-        argv.push("--agent".to_string());
-        if let Some(ceiling) = &request.max_tokens_per_day {
-            argv.push("--max-tokens-per-day".to_string());
-            argv.push(ceiling.clone());
-        }
-        for criterion in &request.check {
-            argv.push("--check".to_string());
-            argv.push(criterion.clone());
-        }
-        push_grant_args(&mut argv, request);
+    if request.agent
+        || request.goal.is_some()
+        || !request.check.is_empty()
+        || request.max_tokens_per_day.is_some()
+        || !request.read.is_empty()
+        || !request.write.is_empty()
+        || !request.allow_command.is_empty()
+        || !request.allow_mcp.is_empty()
+        || !request.network.is_empty()
+        || !request.env.is_empty()
+        || request.sandbox
+    {
+        anyhow::bail!("agent jobs are no longer supported; create a shell job with `command`");
     }
 
     let schedule = request.schedule.clone().context("`schedule` is required")?;
     argv.push(schedule);
     argv.push("--".to_string());
-    argv.push(if request.agent {
-        request
-            .goal
-            .clone()
-            .context("`goal` is required for an agent job")?
-    } else {
+    argv.push(
         request
             .command
             .clone()
-            .context("`command` is required for a shell job")?
-    });
+            .context("`command` is required for a shell job")?,
+    );
 
     let parsed = parse_add(&argv).map_err(anyhow::Error::msg)?;
     let force = parsed.force;
@@ -329,12 +269,21 @@ fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
 
 fn update(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_json::Value> {
     let selector = request.job.clone().context("`job` is required")?;
-    // A partial grant edit has to start from what the job already has -
-    // `parse_edit` merges onto it - or `update` with only `--check` would
-    // silently drop every existing `--read`/`--write`/`--allow-command`. See
-    // `handlers::existing_agent_for_edit`'s doc comment for why a real store
-    // error here must propagate rather than being read as "no agent spec".
-    let existing_agent = super::handlers::existing_agent_for_edit(store, &selector)?;
+    if request.agent
+        || request.goal.is_some()
+        || !request.check.is_empty()
+        || request.max_tokens_per_day.is_some()
+        || !request.read.is_empty()
+        || !request.write.is_empty()
+        || !request.allow_command.is_empty()
+        || !request.allow_mcp.is_empty()
+        || !request.network.is_empty()
+        || !request.env.is_empty()
+        || request.sandbox
+    {
+        anyhow::bail!("agent jobs are no longer supported");
+    }
+    let _ = store.get(&selector)?;
 
     let mut argv: Vec<String> = vec![selector];
     if let Some(name) = &request.name {
@@ -368,17 +317,7 @@ fn update(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
         argv.push("--catchup".to_string());
         argv.push(catchup.clone());
     }
-    if let Some(ceiling) = &request.max_tokens_per_day {
-        argv.push("--max-tokens-per-day".to_string());
-        argv.push(ceiling.clone());
-    }
-    for criterion in &request.check {
-        argv.push("--check".to_string());
-        argv.push(criterion.clone());
-    }
-    push_grant_args(&mut argv, request);
-
-    let (name, patch) = parse_edit(&argv, existing_agent.as_ref()).map_err(anyhow::Error::msg)?;
+    let (name, patch) = parse_edit(&argv).map_err(anyhow::Error::msg)?;
     let name = store.patch(&name, &patch, now())?;
     Ok(json!({ "action": "update", "job": name }))
 }

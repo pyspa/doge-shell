@@ -20,15 +20,14 @@ mod tests;
 
 /// What a job runs.
 ///
-/// The two arms diverge completely at execution time - a shell job goes
-/// through `sh -c`, an agent job never touches a shell - so this is the first
-/// thing the tick branches on.
+/// Only `Sh` is created anymore; `Ai` remains so rows written by older
+/// versions still parse. The tick refuses to execute an `Ai` job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobKind {
     /// A command line, run detached under `sh -c`.
     Sh,
-    /// An unattended `agent run`, driven from a structured spec.
+    /// Legacy: an unattended agent run, no longer created or executed.
     Ai,
 }
 
@@ -55,15 +54,9 @@ impl fmt::Display for JobKind {
     }
 }
 
-/// The part of an agent job that does not fit in a column.
+/// Legacy payload of an agent job, stored as JSON in `jobs.payload`.
 ///
-/// Stored as JSON in `jobs.payload`. The goal itself is **not** here - it
-/// lives in `jobs.command`, the same column a shell job uses, so that "what
-/// does this job do" is one lookup for both kinds.
-///
-/// [`TaskGrant`] is reused verbatim rather than mirrored: a cron agent job is
-/// a scheduled `agent run`, and the moment the two grant shapes differ, a
-/// permission means one thing on the prompt and another from the tick.
+/// No longer created; kept so rows written by older versions still parse.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentJobSpec {
     pub grant: TaskGrant,
@@ -85,9 +78,9 @@ pub struct CronJobSpec {
     /// puzzle.
     pub schedule_spec: String,
     pub kind: JobKind,
-    /// A command line for [`JobKind::Sh`], the goal for [`JobKind::Ai`].
+    /// A command line for [`JobKind::Sh`]; a legacy goal for [`JobKind::Ai`].
     pub command: String,
-    /// Present exactly when `kind` is [`JobKind::Ai`].
+    /// Legacy payload, present only on rows written by older versions.
     pub agent: Option<AgentJobSpec>,
     pub cwd: String,
     pub notify: NotifyPolicy,
@@ -290,7 +283,7 @@ pub struct CronRun {
     /// Output differed from the previous run, for `--on change`.
     pub changed: bool,
     pub trigger: RunTrigger,
-    /// The `agent` task this run created, for `agent show`.
+    /// Legacy: the agent task a run created, before agent jobs were removed.
     pub agent_task_id: Option<String>,
     pub tokens_used: u64,
     /// Skill proposals the run left for a person in `skill pending`.
@@ -531,7 +524,7 @@ pub struct ClaimedRun {
     pub job_id: i64,
     pub job_name: String,
     pub kind: JobKind,
-    /// A command line for [`JobKind::Sh`], the goal for [`JobKind::Ai`].
+    /// A command line for [`JobKind::Sh`]; a legacy goal for [`JobKind::Ai`].
     pub command: String,
     pub agent: Option<AgentJobSpec>,
     pub cwd: String,

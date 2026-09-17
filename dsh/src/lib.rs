@@ -15,7 +15,6 @@ compile_error!("doge-shell supports Linux and macOS only");
 
 use std::process::ExitCode;
 
-pub mod agent;
 pub mod agent_lifecycle;
 pub mod ai_features;
 pub mod argument_explainer;

@@ -6,7 +6,7 @@ use dsh_types::text::clamp_chars;
 use std::borrow::Cow;
 use tabled::{Table, Tabled};
 
-/// First 8 characters of an id (a run id or an agent task id, both UUIDs) -
+/// First 8 characters of a run id (a UUID) -
 /// enough to be unambiguous in practice and short enough for a table column.
 /// `cron logs --run` accepts any unique prefix, this or longer.
 fn short_id(id: &str) -> &str {
@@ -111,10 +111,8 @@ impl Tabled for JobRow {
 
 /// Longest a `command` cell may run before the table itself becomes the
 /// wrong tool - same length as `DETAIL_PREVIEW_CHARS` below, so a cell in
-/// either table follows one rule. An agent job's `command` is its goal in
-/// full, which otherwise blows the table out to hundreds of columns; the
-/// full text stays reachable through `cron show <job>` and `--json`, neither
-/// of which clamps it.
+/// either table follows one rule. The full text stays reachable through
+/// `cron show <job>` and `--json`, neither of which clamps it.
 const JOB_LIST_COMMAND_CHARS: usize = 60;
 
 fn job_row(job: &CronJobView, now: i64) -> JobRow {
@@ -179,17 +177,12 @@ impl Tabled for RunRow {
     }
 }
 
-/// Builds the `detail` cell from whichever of reason/task-id/preview this run
-/// actually has, instead of the four-way exclusive match this replaced -
-/// which meant a failed AI run (always has both a reason and a task id) never
-/// showed its `preview` at all, no matter how informative it was.
+/// Builds the `detail` cell from whichever of reason/preview this run
+/// actually has.
 fn run_detail(run: &CronRun) -> String {
     let mut parts = Vec::new();
     if let Some(reason) = run.reason {
         parts.push(reason.to_string());
-    }
-    if let Some(task) = &run.agent_task_id {
-        parts.push(format!("task {}", short_id(task)));
     }
     if !run.preview.is_empty() {
         parts.push(clamp_chars(&run.preview, DETAIL_PREVIEW_CHARS));

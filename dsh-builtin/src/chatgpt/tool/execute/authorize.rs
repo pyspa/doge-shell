@@ -68,9 +68,7 @@ pub(super) fn authorize(
             AgentCommandVerdict::Allowed => Ok(Authorization::Run),
             AgentCommandVerdict::Denied(reason) => Err(reason),
             AgentCommandVerdict::Confirm(reason) => {
-                runtime
-                    .lock()
-                    .note_denial(&format!("{command}: {reason}"));
+                runtime.lock().note_denial(&format!("{command}: {reason}"));
                 Err(format!("agent: command permission required: {command}"))
             }
         };

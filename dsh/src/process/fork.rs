@@ -43,9 +43,8 @@ pub(crate) fn fork_builtin_process(
             }
 
             // `fork()` only duplicates the calling thread, so a builtin that
-            // reports agent lifecycle state (e.g. `agent run ... -- goal &`,
-            // which runs its whole AI turn right here in the child) needs a
-            // reporter of its own - the parent's `HerdrReporter` worker
+            // reports agent lifecycle state needs a reporter of its own -
+            // the parent's `HerdrReporter` worker
             // thread does not exist in this process even though the `Arc`
             // does. A no-op when lifecycle reporting wasn't active.
             crate::agent_lifecycle::reactivate_after_fork(shell);

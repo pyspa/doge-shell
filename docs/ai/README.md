@@ -60,11 +60,11 @@ doctor skills
   `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
 - Skill 自体を書き足すとき (製品利用者向けにも公開): `dsh-skill-authoring`
-- 製品利用者向け: `--profile dogesh-user` (`dsh-cron`, `dsh-agent`, `dsh-skill-authoring`, `dsh-chat`)
+- 製品利用者向け: `--profile dogesh-user` (`dsh-cron`, `dsh-skill-authoring`, `dsh-chat`)
 
 ## 製品利用者向け Skill
 
-このディレクトリの Skill は原則「この repo を AI に編集させるための運用ルール」で、`doge-shell-*` は repo 開発者専用。`dsh-*` の 4 件だけが例外で、**doge-shell 製品自体の利用者**向け: `dsh-cron` と `dsh-agent` は `!` チャットから cron ジョブや永続 agent タスクを扱うための Skill、`dsh-skill-authoring` は利用者が自分用の Skill を書き足すための Skill、`dsh-chat` は `!` チャット自体の日常利用（モデル・メンション・MCP・承認・会話）のための Skill。開発チェックアウトの `--profile dogesh-common` には含めない（無関係な利用者は repo を開発しないし、repo 開発者の毎ターンのプロンプトに無関係な description を乗せたくない）。配布は `--target dogesh --profile dogesh-user` で明示的に行う。命名規則として、製品利用者向けは `dsh-*`、repo 開発者専用は `doge-shell-*` を使う。
+このディレクトリの Skill は原則「この repo を AI に編集させるための運用ルール」で、`doge-shell-*` は repo 開発者専用。`dsh-*` の 3 件だけが例外で、**doge-shell 製品自体の利用者**向け: `dsh-cron` は `!` チャットから cron ジョブを扱うための Skill、`dsh-skill-authoring` は利用者が自分用の Skill を書き足すための Skill、`dsh-chat` は `!` チャット自体の日常利用（モデル・メンション・MCP・承認・会話）のための Skill。開発チェックアウトの `--profile dogesh-common` には含めない（無関係な利用者は repo を開発しないし、repo 開発者の毎ターンのプロンプトに無関係な description を乗せたくない）。配布は `--target dogesh --profile dogesh-user` で明示的に行う。命名規則として、製品利用者向けは `dsh-*`、repo 開発者専用は `doge-shell-*` を使う。
 
 ## 製品側の AI 機能
 

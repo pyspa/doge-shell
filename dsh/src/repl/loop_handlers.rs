@@ -310,7 +310,6 @@ impl<'a> Repl<'a> {
         self.save_history_periodic();
         self.schedule_command_timing_save();
         self.check_background_jobs(true).await?;
-        self.check_agent_notices();
 
         if self.background_tasks.history_sync_last_check.elapsed() > Duration::from_secs(30) {
             self.background_tasks.io.schedule_history_sync(
@@ -329,35 +328,6 @@ impl<'a> Repl<'a> {
         // the reported state off `Working`/`Blocked`.
         crate::agent_lifecycle::current(self.shell).reconcile_if_stale();
         Ok(())
-    }
-
-    /// Prints any notices the agent-task watcher
-    /// (`dsh/src/agent/watch.rs`) queued since the last tick - a detached
-    /// task completing, failing, or needing approval. Mirrors
-    /// `check_background_jobs`'s own shape for job notices, so the two read
-    /// as the same kind of thing above the prompt.
-    fn check_agent_notices(&mut self) {
-        let notices = std::mem::take(&mut *self.shell.environment.read().agent_notices.lock());
-        if notices.is_empty() {
-            return;
-        }
-
-        let prefs = self
-            .shell
-            .environment
-            .read()
-            .completion_state
-            .input_preferences;
-        // `notify_agent_task` already checks `prefs.auto_notify_enabled`
-        // itself (the same convention `notify_command_finished`'s callers
-        // rely on), so this loop does not gate on it a second time.
-        for line in &notices {
-            crate::repl::notify::notify_agent_task(&prefs, line);
-        }
-
-        let mut renderer = TerminalRenderer::new();
-        crate::repl::render::print_above_prompt(self, &mut renderer, &notices);
-        let _ = renderer.flush();
     }
 
     pub(crate) fn schedule_command_timing_save(&mut self) {
@@ -410,7 +380,6 @@ impl<'a> Repl<'a> {
         }
 
         let cron = self.shell.environment.read().cron_health.clone();
-        let agent = self.shell.environment.read().agent_health.clone();
         let job_count = self.shell.wait_jobs.len();
         let (git, github) = {
             let prompt = self.terminal_ui.prompt.read();
@@ -423,13 +392,7 @@ impl<'a> Repl<'a> {
             )
         };
 
-        let content = status_line::compose(
-            &cron.read(),
-            &agent.read(),
-            job_count,
-            git.as_ref(),
-            github.as_ref(),
-        );
+        let content = status_line::compose(&cron.read(), job_count, git.as_ref(), github.as_ref());
 
         let mut renderer = TerminalRenderer::new();
         self.terminal_ui

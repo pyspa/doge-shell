@@ -126,9 +126,8 @@ fn cron_doctor_reports_an_ok_warn_summary() {
     assert!(out.contains(" ok, ") && out.contains(" warn"), "{out}");
 }
 
-/// The bug this guards against: an agent job's `command` (its goal, in full)
-/// had no clamp in `cron list`, so one such job blew the table out to
-/// hundreds of columns.
+/// The bug this guards against: a very long `command` had no clamp in
+/// `cron list`, so one such job blew the table out to hundreds of columns.
 #[test]
 fn cron_list_clamps_a_very_long_command() {
     let sandbox = Sandbox::new();

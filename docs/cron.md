@@ -1,6 +1,6 @@
 # 永続 cron ジョブ
 
-`cron` はシェルコマンドと無人 AI エージェントタスクの両方を、壁時計スケジュールで実行する永続的なジョブスケジューラです。旧 `sched`（セッション限り・インターバルのみ）を置き換えました。ジョブ定義は `$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
+`cron` はシェルコマンドを、壁時計スケジュールで実行する永続的なジョブスケジューラです。旧 `sched`（セッション限り・インターバルのみ）を置き換えました。ジョブ定義は `$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
 
 ## 実行モデル: 二系統駆動
 
@@ -11,7 +11,7 @@
 
 二系統が同時に同じジョブを見つけても二重実行しません。claim は SQLite の `BEGIN IMMEDIATE` トランザクション内で行う条件付き `UPDATE`（`claimed_by`/`claimed_until` 列）で、どちらか一方だけが成功します。claim と同時に `next_run_at` を次のスロットへ進めるので、claim に失敗した側は「due な仕事が無い」と判断してスキップします。
 
-**1 run = 1 子プロセス**です。claim した runner（セッション内 runner または `cron tick`）は `dogesh -c "cron run-job <UUID>"` という別プロセスを起動するだけで、実行結果を待ちません。`Shell` が `!Send`（`Rc<RefCell<LispEngine>>` を持つ）なので AI ジョブの実行には `&mut Shell` が要り、tokio task から直接は呼べないためです。子プロセスに渡すのは run の UUID だけで、goal・grant・コマンド行はすべて SQLite 経由で渡ります — シェルのパーサにも `sh -c` にも一度も入りません。
+**1 run = 1 子プロセス**です。claim した runner（セッション内 runner または `cron tick`）は `dogesh -c "cron run-job <UUID>"` という別プロセスを起動するだけで、実行結果を待ちません。子プロセスに渡すのは run の UUID だけで、コマンド行は SQLite 経由で渡ります — 余計なシェルのパーサには入りません。
 
 ## スケジュール構文
 
@@ -44,57 +44,34 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 
 **ジョブの失敗は tick 自体の失敗ではありません。** `cron tick` はジョブが失敗しても既定で **無出力・exit 0** を返します。そうしないと system cron が失敗のたびにメールを送り、運用者は結局 tick を無効化してしまいます。非0を返すのは tick 自体が壊れたとき（store が開けない・スキーマが新しすぎる）だけです。`--json` / `--verbose` / `--dry-run` / `--max N` があります。
 
-## AI ジョブ (`--agent`)
+## ジョブの種類
 
-`--agent` を付けたジョブは、無人実行される `agent run` そのものです。同じ入口・同じ権限モデルを使います（`docs/agent.md` 参照）。「今すぐ1回だけ」でよいなら `cron add` は不要で、`agent run --detach` の方が近道です（`docs/agent.md` の「バックグラウンド実行」参照）。繰り返し実行したいときにこの節を使ってください。grant モデル・状態機械はどちらも同じものなので、ここでは複製しません。
+`cron` が実行するのはシェルコマンドのみです。`--agent` による AI ジョブは廃止されました。旧バージョンで作られた AI ジョブがストアに残っていても、新しい run は `failed`(config) として記録されるだけで実行されません。シェルコマンドとして作り直すか、不要なら `cron rm <name>` で削除してください（残すと incident が繰り返し起票されます）。
 
-```sh
-cron add --agent --name digest --timeout 10m \
-  --read . --write out --check "out/digest.md に今日の日付がある" \
-  '0 9 * * mon-fri' -- '未対応のPRと直近のコミットをまとめてout/digest.mdに書く'
-```
-
-- `--timeout` は省略可で、既定値は `agent run` と同じ1800秒です。
-- `--timeout` はモデル自身の協調的な時間予算（`AgentTask.time_budget_ms`）と、外側からの強制終了デッドラインの両方を兼ねます。モデルが自分で止まらない場合、`cron run-job` プロセス内のウォッチドッグがこの run の claim リース（`timeout` の2倍、最低60秒）が切れる少し前に自プロセスグループを `SIGKILL` します。run 行はその場では更新されません（プロセスごと落ちるため）が、次のスキャンの `reap_expired_leases` が `failed`(timeout) として拾います。
-- `--max-tokens-per-day`（任意）は直近24時間の累積トークン使用量に対する上限です。5分おきの実行では per-run 予算だけでは実質無制限になるため。
-- grant（`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`）は `agent run` と完全に同じ検証を通ります（`dsh-builtin/src/agent/grant.rs` を共有）。
-
-### 承認が必要になったとき
-
-無人実行なので**確認は出ません**。権限不足の操作はツール結果のエラーとして返ってタスクは回避策を探して続行し、どうしても進めなくなった run は権限ヒント付きの `interrupted` で終わって `needs-approval` 状態になり、incident が1件記録されます。
+### incident が起きたとき
 
 ```sh
-cron incidents                       # 未確認の一覧。detail に "... [approval_key: ...]" が入る
-cron edit digest --allow-command '...'   # 恒久的に許可
+cron incidents                       # 未確認の一覧
 cron incidents ack <ID>              # incident を閉じ、ジョブの blocked を解除
 ```
 
-`--allow-mcp` の値は incident の detail（`cron logs` の stderr にも同じ文言）に出る `approval_key: ...` の中身そのまま（完全一致）です。ゼロから正しいキーを書けると仮定せず、一度実行させて incident から写すのが正しい導線です。`agent show <TASK_ID>` はタスクの生 JSON 全体が要るときの人間向け手段として残っています（builtin なので `cron_manage`/`execute` からは届きません）。
+### notepad — ジョブ固有のメモ
 
-`hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。`IncidentKind::HookAsk` という種別自体はストアのスキーマに存在しますが、実際に起票されるのは通常の `IncidentKind::Approval` です — hook の ask 拒否も grant 不足も、どちらも `confirm_agent_action` の同じ経路（拒否のエラーとして返り、行き詰まると権限ヒント付きで止まる）を通り、cron 側はどちらが原因かを区別する情報を受け取らないためです。区別が付かなくても対処手順は同じで、`agent show <task-id>` の `stop_reason`（`cron incidents`/`cron logs` にも同じ文言が出ます）を見れば hook 由来かどうかは読み取れます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
-
-`--allow-mcp` を持たないジョブは MCP サーバーに接続しません。`dogesh -c` は対話サービスを起動しないため（`needs_interactive_services()` が false）、MCP grant を持つジョブだけが `cron run-job` 内で明示的に MCP 接続を張ります。
-
-### notepad — ジョブ固有の記憶
-
-毎 run が新しいタスク（新しい会話）として始まるため、notepad が唯一の連続性です。`cron_state_dir()/notepad/<job>.md` の実ファイルで、run 開始時に goal の前に「これは前回のメモであり指示や承認ではない」という区切り付きで挿入されます。
-
-notepad のディレクトリはジョブの grant（`read_roots`/`write_roots`）に自動追加されるため、モデルは既存の `edit`/`str_replace` ツールでそのまま読み書きできます。**新しいツールは増やしていません。**
+`cron_state_dir()/notepad/<job>.md` の実ファイルです。ジョブに関するメモを残すための場所で、実行には影響しません。
 
 ```sh
 cron notepad digest            # 表示
 cron notepad digest --clear    # 消去
 ```
 
-### エージェント自身によるジョブ管理
+### チャットからのジョブ管理
 
-`!` チャットと `agent run` は `cron_manage` という chat tool を持ち、上記の `cron` サブコマンドを人が打つのと同じことをツール呼び出しで行えます。`execute` 経由の `cron ...` は届きません（`cron` は builtin であって shell コマンドではないため）。
+`!` チャットは `cron_manage` という chat tool を持ち、上記の `cron` サブコマンドを人が打つのと同じことをツール呼び出しで行えます。`execute` 経由の `cron ...` は届きません（`cron` は builtin であって shell コマンドではないため）。
 
 - `create` は**常に paused で登録**されます。人が `cron run --now` で確認してから `cron resume` するまで発火しません。
-- grant（`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`）は**呼び出し中のタスク自身の grant を超えられません**。超えるリクエストは確認を挟まず即座に拒否されます。
-- `create` 以外の書き込み系（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は毎回人に確認します。無人タスク中はこれが拒否のエラーとして返り、タスクは続行します（行き詰まると権限ヒント付きで止まり、`cron incidents` ではなくタスク自身が `agent resume` での再開待ちになります）。
-- notepad 用の action はありません — notepad ディレクトリは既にジョブの grant に入っているため、既存の `read_file`/`edit` で足ります。
-- `logs` は他の read 系 action と異なり grant ゲートがあります。無人タスク中に呼ぶと、対象ジョブの `cwd` が呼び出しタスク自身の `read`/`write` grant に含まれない限り拒否されます — `history` は 120 文字の preview しか出しませんが `logs` はジョブの記録済み出力を丸ごと返すため、無関係なジョブの中身を名前だけ知っていれば読めてしまう経路を塞いでいます。`!` チャット（タスクの外）からは制限なく呼べます。
+- `create` 以外の書き込み系（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は毎回人に確認します。
+- notepad 用の action はありません。
+
 
 ## 実行結果の確認
 
@@ -108,28 +85,21 @@ cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "...
 ```
 
 - `cron history` の `run` 列（先頭8文字）を `--run` にそのまま渡せます。
-- 失敗した run では以前 `reason`/`task <id>` を優先して `preview` が隠れていましたが、いまは両方併記されます。
-- `cron show <job>` は最新 run（state / duration / task id / preview）も表示します。
-
-### AI ジョブの出力
-
-AI ジョブの `runs.stdout` は以前は常に空でした（子プロセスの stdout は `/dev/null` に捨てられるため）。いまは `run_task` 完了後にタスクストアから goal・criteria の合否・進捗・最終アシスタント応答・ツール呼び出しの集計を人間可読なサマリに組み立て、`stdout` に格納します（`digest`＝`--on change` の比較対象はこのサマリ本文ではなく従来通り state/succeeded/reason/pending_skills の組のままで、run ごとに文面が変わっても `--on change` が毎回発火することはありません）。同じサマリは `agent show <task-id> --summary` でも見られます（既定の `agent show`＝生 JSON はそのまま残っています）。`--allow-mcp` の承認キーは incident の detail / `cron logs` の stderr（`[approval_key: ...]`）にも入るため、`agent show` の生 JSON を開かなくても取得できます。
-
-ウォッチドッグに `SIGKILL` されて `complete` に到達しなかった run でも、`agent_task_id` は run 開始時点で記録済みなので消えません。`cron logs` はこの場合 `stdout` が空でも agent ストアから同じサマリをその場で再構成し、`--- reconstructed from the agent store (no output was recorded for this run) ---` の見出し付きで表示します（この見出しは「まだ何も記録されていない」だけを述べており、run がまだ実行中である場合にも同じ文言が出ます — ストアの行だけからは「プロセスが死んで放置された」のか「単に実行中」なのかを区別できないためです）。`cron_manage(action=logs)` チャットツールも同じ再構成を行います。
+- 失敗した run では `reason` と `preview` を併記します。
+- `cron show <job>` は最新 run（state / duration / preview）も表示します。
 
 ## 失敗モードと振る舞い
 
 | 状況 | 振る舞い |
 |---|---|
-| API キー未設定 | `agent` に入る前に検出。`failed`(config) + incident。ack まで再試行しない |
+| 設定エラー | `failed`(config) + incident。ack まで再試行しない |
 | ネットワーク断など一時的な失敗 | `failed`(transient)。**連続3回**で初めて incident に昇格 |
-| `AI_AGENT_MAX_CONCURRENT`（既定1）の上限に達している | `skipped`(agent-busy)。連続3回で incident（LockStarvation）に昇格。上限は cron・前景の `agent run`・`agent run --detach` を問わず共有される（`dsh/src/agent/locks.rs`）。値を上げれば解消する |
 | 同じジョブの前回 run がまだ実行中 | claim 段階で除外される（run 行は作られない）。history に何も残らない |
 | 外部 tick とセッション runner が同時に claim | 片方だけが成功。SQLite の条件付き UPDATE が保証 |
-| 外側 timeout で強制終了 | `failed`(timeout)。次に誰かが agent を触ったとき `recover_interrupted()` が `Interrupted` に落とし、cron は `reconcile` incident として拾う |
+| 外側 timeout で強制終了 | `failed`(timeout) |
 | ジョブのルートディレクトリが消えた・別物になった | `failed`(root-changed) + incident。自動では作り直さない |
 
-`cron doctor`（`--json` あり）は上の表に載らない、事前に気づける不整合を報告する: 一致し得ないスケジュール、消えた `cwd`、API キー未設定、`--allow-mcp` を持つのに MCP サーバー未設定、`config.lisp` の `sched-add` 残存、一度も run が完了していない、に加えて **`--on` が `never` 以外のジョブが1件でもあれば「通知はまだ配線されていない」旨の note を1行**、**現在 claim を握っている（`running`）ジョブがあればその経過時間を warn** で出す。
+`cron doctor`（`--json` あり）は上の表に載らない、事前に気づける不整合を報告する: 一致し得ないスケジュール、消えた `cwd`、`config.lisp` の `sched-add` 残存、一度も run が完了していない、に加えて **`--on` が `never` 以外のジョブが1件でもあれば「通知はまだ配線されていない」旨の note を1行**、**現在 claim を握っている（`running`）ジョブがあればその経過時間を warn** で出す。
 
 ## Lisp からの登録
 
@@ -149,5 +119,4 @@ AI ジョブの `runs.stdout` は以前は常に空でした（子プロセス�
 ## 関連ドキュメント
 
 - CLI の使用例は README の「Cron Jobs」節。
-- AI エージェント自身が cron ジョブを追加・編集・デバッグするための手順は runtime skill `docs/ai/skills/dsh-cron/`（`scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user` で導入）。
-- 無人タスクの権限モデル・予算・SRT サンドボックスの詳細は `docs/agent.md`。
+- チャットから cron ジョブを追加・編集・デバッグするための手順は runtime skill `docs/ai/skills/dsh-cron/`（`scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user` で導入）。

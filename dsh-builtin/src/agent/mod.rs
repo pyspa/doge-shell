@@ -6,7 +6,6 @@ use serde_json::{Value, json};
 use std::{sync::Arc, time::Instant};
 
 pub mod files;
-pub mod grant;
 pub mod jobs;
 pub mod sandbox;
 
@@ -328,8 +327,7 @@ impl AgentRuntime {
             // ("cannot complete with unverified criteria", the iteration
             // cap); the hint is what unblocks a resume. A failure with no
             // refusals behind it keeps the old `Failed` mapping.
-            let denial_stuck =
-                !success && !self.stopped() && !self.cancelled() && self.denials > 0;
+            let denial_stuck = !success && !self.stopped() && !self.cancelled() && self.denials > 0;
             self.task.status =
                 if success && self.task.verified() && !unfinished_jobs && !self.cancelled() {
                     TaskStatus::Completed
@@ -502,20 +500,6 @@ pub fn task_tool(runtime: &mut AgentRuntime, name: &str, args: &Value) -> Result
     }
     runtime.save(Some((name, args)))?;
     Ok("Task state saved".into())
-}
-
-pub fn command(
-    ctx: &dsh_types::Context,
-    argv: Vec<String>,
-    proxy: &mut dyn crate::ShellProxy,
-) -> dsh_types::ExitStatus {
-    match proxy.dispatch_core_action(ctx, crate::CoreShellAction::Agent, argv) {
-        Ok(()) => dsh_types::ExitStatus::ExitedWith(0),
-        Err(error) => {
-            let _ = ctx.write_stderr(&format!("agent: {error}"));
-            dsh_types::ExitStatus::ExitedWith(1)
-        }
-    }
 }
 
 pub fn has_remote_task(events: &[dsh_types::agent::TaskEvent], server: &str, id: &str) -> bool {

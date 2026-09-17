@@ -70,15 +70,3 @@ pub struct TaskEvent {
     pub kind: String,
     pub data: Value,
 }
-
-/// The counts a status line shows for background agent tasks.
-///
-/// Cached in the environment rather than queried live: composing the status
-/// line runs on the REPL's own task and must not touch the database, the
-/// same reason `dsh_types::cron::job::CronHealth` is cached. Refreshed by
-/// `dsh/src/agent/watch.rs`'s background poller.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AgentHealth {
-    pub running: usize,
-    pub input_required: usize,
-}

@@ -46,9 +46,3 @@
   最終ラウンドで予算に到達しつつ回答・検証が完了しても `Completed` にならないことがある。
   → 完了判定は予算を除いた `cancelled()` で行うようになった（予算超過の失敗は従来どおり
   `Interrupted`）。回帰テスト `finish_completes_verified_work_at_exact_budget`。
-- **`--detach` + `--reconcile` は監査イベント `reconciled` を残さない**。前景 `run_task`
-  は reconcile 時に専用イベントを保存するが、`dsh/src/agent/detach.rs` の `start` はタスク本体の
-  更新のみで、子プロセスには `reconcile=None` を渡すため detach 経路だけ記録が欠落する。
-- **agent タスクでは `begin_turn` が呼ばれず、ターン統計が `agent resume` を跨いで累積する**。
-  `AI_CHAT_TURN_TOKEN_BUDGET` を設定した環境で `agent resume` すると、前回消費分だけで
-  即座にターン予算超過になりうる。

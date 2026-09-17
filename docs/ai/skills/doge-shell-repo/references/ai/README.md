@@ -63,14 +63,9 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は
-ループを持たず、`turn::answer_text` で応答を読む。`agent run --detach`
-（`dsh/src/agent/detach.rs`）も 3 つ目ではない — 経路 A の `run_task` を別プロセス
-（`dogesh -c "agent run-detached <id>"`）から呼ぶだけで、cron の AI ジョブ
-（`dsh/src/cron/run_job.rs`）と同じ形。子プロセスの起動は両者で
-`dsh/src/detached_child.rs` を共有する。同時実行数は `AI_AGENT_MAX_CONCURRENT`
-（既定 1）で、排他はタスク単位の flock（`dsh/src/agent/locks.rs`）。detach したタスクの
-完了・失敗・承認待ちは `dsh/src/agent/watch.rs` のセッション内ポーラがプロンプト上に
-通知する（`DOGESH_AGENT_WATCH`、既定 on）。
+ループを持たず、`turn::answer_text` で応答を読む。cron の各 run は
+`dsh -c "cron run-job <id>"` の別プロセスで走り、子プロセスの起動は
+`dsh/src/detached_child.rs` を共有する。
 
 **コマンドは両経路とも managed job として走る**（`dsh-builtin/src/agent/jobs.rs` の
 `AgentJobs`）。タスクのジョブは `AgentRuntime` が持ち SQLite に artifact を残す。経路 A の

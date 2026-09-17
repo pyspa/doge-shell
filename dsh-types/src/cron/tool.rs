@@ -118,23 +118,31 @@ pub struct CronToolRequest {
     pub schedule: Option<String>,
     /// A shell job's command line.
     pub command: Option<String>,
-    /// An agent job's goal (`create --agent` / `update --goal`).
+    /// Legacy: an agent job's goal. Refused; kept for wire compatibility.
     pub goal: Option<String>,
     pub cwd: Option<String>,
-    /// Whether `create` registers an agent job rather than a shell job.
+    /// Legacy: whether `create` registers an agent job. Refused; kept for wire compatibility.
     pub agent: bool,
+    /// Legacy: an agent job's rolling token ceiling. Refused; kept for wire compatibility.
     pub max_tokens_per_day: Option<String>,
-    /// `--check`, repeatable.
+    /// Legacy: `--check` criteria. Refused; kept for wire compatibility.
     pub check: Vec<String>,
     pub on: Option<String>,
     pub timeout: Option<String>,
     pub catchup: Option<String>,
+    /// Legacy: readable directories. Refused; kept for wire compatibility.
     pub read: Vec<String>,
+    /// Legacy: writable directories. Refused; kept for wire compatibility.
     pub write: Vec<String>,
+    /// Legacy: exact allowed commands. Refused; kept for wire compatibility.
     pub allow_command: Vec<String>,
+    /// Legacy: exact MCP approval keys. Refused; kept for wire compatibility.
     pub allow_mcp: Vec<String>,
+    /// Legacy: allowed hosts. Refused; kept for wire compatibility.
     pub network: Vec<String>,
+    /// Legacy: inherited variable names. Refused; kept for wire compatibility.
     pub env: Vec<String>,
+    /// Legacy: sandbox flag. Refused; kept for wire compatibility.
     pub sandbox: bool,
     /// `create`: replace an existing job of the same name.
     pub force: bool,

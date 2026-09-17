@@ -103,7 +103,6 @@ mod z;
 /// the shell core is exhaustive and typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreShellAction {
-    Agent,
     Cron,
     Exit,
     History,
@@ -124,7 +123,6 @@ pub enum CoreShellAction {
 impl CoreShellAction {
     pub const fn command_name(self) -> &'static str {
         match self {
-            Self::Agent => "agent",
             Self::Cron => "cron",
             Self::Exit => "exit",
             Self::History => "history",
@@ -145,7 +143,6 @@ impl CoreShellAction {
 
     pub fn from_command_name(command: &str) -> Option<Self> {
         Some(match command {
-            "agent" => Self::Agent,
             "cron" => Self::Cron,
             "exit" => Self::Exit,
             "history" => Self::History,
@@ -543,13 +540,6 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
         ("abbr", new(abbr::command, abbr::description())),
         ("alias", new(alias::command, alias::description())),
         ("export", new(export::command, export::description())),
-        (
-            "agent",
-            new(
-                agent::command,
-                "Run, resume, inspect or cancel a durable agent task",
-            ),
-        ),
         // AI integration commands
         (
             "chat_prompt",
@@ -741,7 +731,7 @@ mod shell_proxy_tests {
     #[test]
     fn core_shell_actions_round_trip_through_compatibility_names() {
         let actions = [
-            CoreShellAction::Agent,
+            CoreShellAction::Cron,
             CoreShellAction::Exit,
             CoreShellAction::History,
             CoreShellAction::Reload,

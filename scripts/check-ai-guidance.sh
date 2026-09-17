@@ -245,7 +245,6 @@ doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
     expect_installer_list "dogesh-user" "dsh-cron
-dsh-agent
 dsh-skill-authoring
 dsh-chat"
 

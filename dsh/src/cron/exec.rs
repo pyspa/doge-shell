@@ -155,9 +155,8 @@ fn kill_group(child: &Child) {
 ///
 /// The only thing crossing the boundary is a UUID, validated here so that a
 /// corrupt row cannot put anything else on a command line. Everything else the
-/// run needs - the goal, the grant, the environment - is read back from the
-/// store by the child. The actual spawn is shared with the background agent
-/// (`agent run --detach`) - see `crate::detached_child`.
+/// run needs - the command, the environment - is read back from the store by
+/// the child. The actual spawn is shared - see `crate::detached_child`.
 pub fn spawn_run_child(run_id: &str) -> Result<Child> {
     uuid::Uuid::parse_str(run_id).context("run id is not a UUID")?;
     crate::detached_child::spawn(

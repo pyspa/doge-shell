@@ -377,7 +377,6 @@
                   "type": "string",
                   "description": "Stable dynamic completion provider id",
                   "enum": [
-                    "agent.task",
                     "ansible.inventory_host",
                     "apk.installed_package",
                     "apt.installed_package",

@@ -42,7 +42,6 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Variables**: Environment variable management with `var`, `set` commands
 - **Abbreviations**: Define global abbreviations with `abbr -a g git`, or command-scoped ones with `abbr --add --command git co checkout`; scoped definitions win only in that pipeline segment
 - **Macro Recorder**: Record sequences of commands as reusable macros with `Alt+m`
-- **Background Agent Tasks**: `agent run --detach` hands a task to a separate process and returns immediately; see [Background agent tasks](#background-agent-tasks)
 
 ### Completion & UI
 
@@ -105,9 +104,7 @@ Proceed? [y/N/a(Always)]:
 
 Secrets are masked, long lines are clipped, and a large change stops after 40
 lines saying how many are left. `edit`, `str_replace` and `skill_manage` all go
-through it. An unattended `agent run` shows nothing - it has nobody to show it
-to, and stops for a permission it was not granted instead; it records the
-missing permission and stops, see `agent list`/`agent logs`.
+through it.
 
 ### 🔒 Secret Management
 
@@ -346,8 +343,7 @@ The shell includes many built-in commands:
 | `ai-commit` / `aic` | Generate commit message using AI                                                                                           |
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
-| `cron`              | Create, edit and run scheduled jobs — shell commands or unattended agent tasks                                              |
-| `agent`             | Run, resume, list, watch and inspect durable agent tasks, in the foreground or detached (`agent run --detach`)              |
+| `cron`              | Create, edit and run scheduled jobs — shell commands                                                                  |
 | `notebook-play`     | Play a notebook file (execute code blocks interactively)                                                                   |
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
@@ -863,15 +859,12 @@ PTY-proxied. The browser says so rather than showing an empty pane.
 
 ### Status Line
 
-An optional line pinned to the bottom row, showing scheduled tasks, background agent
-tasks, background jobs, git state and GitHub notifications:
+An optional line pinned to the bottom row, showing scheduled tasks,
+background jobs, git state and GitHub notifications:
 
 ```
-⏱ 3 failing 1   🤖 2 ⚠1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
+⏱ 3 failing 1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
 ```
-
-The `🤖` segment counts detached/cron agent tasks currently running, with a `⚠` count
-for ones sitting at `input-required` (see [Background agent tasks](#background-agent-tasks)).
 
 **Off by default.** Enable it in `config.lisp`:
 
@@ -894,7 +887,7 @@ between terminals.
 
 ### Cron Jobs
 
-`cron` runs a shell command, or an unattended AI agent task, on a schedule:
+`cron` runs a shell command on a schedule:
 
 ```bash
 cron add --name fetch 5m git fetch --all
@@ -962,99 +955,18 @@ Two sessions (or a session and an external tick) racing to run the same job is r
 by the store itself, not by hoping only one thing is ever watching: whichever claims the
 row first runs it, and the other finds nothing left to do.
 
-#### Unattended AI jobs
+#### Chat can manage cron jobs
 
-`--agent` turns a job into a scheduled `agent run` — same entry point, same permission
-model:
-
-```bash
-cron add --agent --name digest --timeout 10m \
-  --read . --write out --check "out/digest.md has today's date" \
-  '0 9 * * mon-fri' -- 'summarise open PRs and recent commits into out/digest.md'
-```
-
-Nobody is watching an unattended run, so a permission it was not granted does not
-prompt — it stalls the job and files an incident instead:
-
-```bash
-cron incidents                # what's blocked, and why
-agent show <task-id>          # exactly what was asked for
-cron edit digest --allow-command 'the command it needed'
-cron incidents ack <id>       # clears the block
-```
-
-Every run starts a fresh conversation; the one thing that persists between them is a
-small per-job **notepad** (`cron notepad digest`) the agent reads and rewrites on its own
-— the closest thing to memory a recurring unattended job has.
-
-`cron logs digest` shows what a run actually did — its goal, which `--check` criteria
-passed, and its final answer, built from the task's own record — rather than
-`history`'s one-line preview. It still works even for a run killed by its own timeout
-before it could report back, reconstructed live from the same record (labelled as such);
-`agent show <task-id> --summary` is the same view from the agent side, and plain
-`agent show <task-id>` remains the full, unabridged record (what `--allow-mcp` approval
-keys are copied from).
-
-#### The agent can manage its own cron jobs
-
-The `!` chat agent (and `agent run`) has a `cron_manage` tool that does everything above
+The `!` chat agent has a `cron_manage` tool that does everything above
 through a tool call instead of the CLI — `execute` cannot reach `cron` itself, since it is
-a builtin, not a shell command. Two things are enforced rather than merely suggested: a
-job it creates always starts paused, and none of its grants (`--read`/`--write`/
-`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`) may exceed what the
-calling task was itself granted — widening one is refused outright, before anyone is
-asked anything. Every other write (`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
-asks a person first, the same as any other tool that changes something. `logs` is the one
-read action with a limit of its own: under a task, it refuses a job whose own directory
-falls outside that task's `read`/`write` grant, so a task cannot read an unrelated job's
-recorded output just by knowing its name.
+a builtin, not a shell command. A job it creates always starts paused.
+Every write (`create`/`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
+asks a person first, the same as any other tool that changes something.
 
 Full CLI reference, schedule grammar, external-tick setup for each OS, and a
 symptom-to-cause debugging table live in the `dsh-cron` skill
 (`docs/ai/skills/dsh-cron/`) — install it for the `!` chat agent with
 `scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user`.
-
-### Background agent tasks
-
-`agent run`/`agent resume` accept `--detach` (`-d`): the task is handed to a separate
-`dogesh -c "agent run-detached <id>"` process, and the shell returns immediately instead
-of blocking until the task stops. Permissions, time budget and approval semantics are
-unchanged — an unattended run uses `--timeout` when given, else the built-in
-default (1800s), and still stops for a permission it was not granted, rather than asking.
-
-```sh
-agent run --timeout 1800 --write . --detach -- 'investigate and fix the failing test'
-#  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
-
-agent list                        # * marks a task that is actually running right now
-agent logs TASK_ID --follow       # recorded events, one per line, following until it stops
-agent wait TASK_ID                # blocks until it finishes (or needs approval), then shows the summary
-agent doctor                      # orphaned tasks a dead process left behind, stale approvals, ...
-```
-
-While a session is open, a detached task finishing, failing, or needing approval prints
-a one-line notice above the prompt (`[agent 1a2b3c4d]  Completed  ...`), the same way a
-background job's completion does, and shows up in the status line's `🤖` segment.
-Notices only fire for a session that is open at the time — one that finished while every
-shell was closed is not announced retroactively, just visible with `agent list`.
-`DOGESH_AGENT_WATCH=0` turns the notifier off; `DOGESH_AGENT_WATCH_INTERVAL_SECS`
-(default 2, backing off to 60 while nothing is running) controls how often it polls.
-Desktop notifications for it follow the existing `(pref-auto-notify t)`.
-
-`AI_AGENT_MAX_CONCURRENT` (default 1, matching prior behaviour) bounds how many agent
-tasks — detached or not — may run at once; a `--detach` past the ceiling fails before
-starting the child.
-
-A task stopped at `input-required` names the exact next command in `agent show
---summary`'s `needs:` line, in `agent doctor`, and in the notice itself — an
-`--allow-command`/`--allow-mcp`/`--write`/`--reconcile` flag ready to paste, when one
-exists; some approvals (a hook's `ask`, a sensitive path, deleting a skill) cannot be
-satisfied by any flag and need `agent resume TASK_ID` answered interactively instead.
-
-There is deliberately no way to `--detach` a task from inside `!` chat itself — asking
-for unattended, recurring, or later work goes through `cron_manage` (create a paused job,
-then `cron run --now`), which already bounds a created job's grants to the calling
-task's own grants.
 
 ### Snippets
 
@@ -1426,12 +1338,12 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
    | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dogesh/openai-execute-tool.json` |
    | `AI_CHAT_EXECUTE_YIELD_MS` | `10000` | How long a `!` chat waits for a command before handing the model a job handle to poll instead of a result. `0` yields immediately; 60000 is the ceiling |
-   | `AI_CHAT_EXECUTE_TIMEOUT_MS` | `600000` | Default `timeout_ms` for a `!` chat command. An `agent run` keeps its own two-minute default |
+   | `AI_CHAT_EXECUTE_TIMEOUT_MS` | `600000` | Default `timeout_ms` for a `!` chat command. An unattended task keeps its own default |
    | `DOGESH_EXECUTE_TOOL_CONFIG` | `~/.config/dogesh/openai-execute-tool.json` | Path of that JSON allowlist file |
    | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
    | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
    | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dogesh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
-   | `AI_CHAT_SKILL_STAGING` | `task` | Whether `skill_manage` writes land immediately or wait in `skill pending`: `task` (only when an `agent run` has no `--write` grant for the target) / `always` / `off` |
+   | `AI_CHAT_SKILL_STAGING` | `task` | Whether `skill_manage` writes land immediately or wait in `skill pending`: `task` (only when an unattended task has no `--write` grant for the target) / `always` / `off` |
    | `AI_CHAT_SKILL_REFLECT` | off | Send one tool-free request after a long turn proposing a skill from what it did; never writes directly |
    | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | `5` | Tool calls a turn needs before the reflection reviewer considers it |
    | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL`, then the chat model | Model used for the reflection request |
@@ -1603,7 +1515,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
       edit. Deleting a skill is asked separately: an "always" given for writing a
       file does not authorise removing it.
     - With `AI_CHAT_SKILL_STAGING` (default `task`), a `skill_manage` write that
-      would otherwise stall an unattended `agent run` with no `--write` grant for the
+      would otherwise stall an unattended task with no `--write` grant for the
       target is queued instead of asked about, so the task keeps running. Review it
       with `skill pending`/`skill diff`/`skill approve`/`skill reject` - see
       "Skills" below.
@@ -1724,7 +1636,7 @@ started, and these belong to the assistant.
 
     **Reviewing a write before it lands.** `AI_CHAT_SKILL_STAGING` controls whether a
     `skill_manage` write goes to disk right away or waits for you: `task` (default)
-    only queues one when an `agent run` has no `--write` grant covering the target -
+    only queues one when an unattended task has no `--write` grant covering the target -
     the one case that used to stall the task on a question nobody could answer -
     `always` queues every write, interactive included, and `off` restores today's
     behaviour. A queued write is never counted as a read or a write, and it never
@@ -1771,7 +1683,7 @@ started, and these belong to the assistant.
     repository once. You are asked once per directory, so a checkout
     carrying both `.dogesh/skills/` and `.agents/skills/` asks twice and refusing one
     leaves the other alone. `skill trust` shows the current answers and
-    `skill untrust` takes them back. Under `agent run` nothing is asked and an
+    `skill untrust` takes them back. Under an unattended task nothing is asked and an
     untrusted repository is simply not read - an unattended run should be the more
     careful one, not the more trusting one.
 
@@ -1790,7 +1702,7 @@ started, and these belong to the assistant.
     A project's skills arrive with a `git clone`, so treat them as you would any other
     file in that repository. They are notes, never permission: a skill cannot authorise
     skipping a confirmation, and a script bundled with one always asks before it runs -
-    including under `agent run`, where `--allow-command` does not cover it, and
+    including under an unattended task, where `--allow-command` does not cover it, and
     including one under `.agents/skills/`. `AI_CHAT_PROJECT_SKILLS=0` turns both
     project roots off entirely.
 

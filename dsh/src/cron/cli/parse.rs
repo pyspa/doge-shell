@@ -1,12 +1,8 @@
 //! Turning `cron` argv into store-ready specs.
 
 use anyhow::{Context as _, Result};
-use dsh_builtin::agent::grant::apply_grant_option;
-use dsh_types::agent::{TaskGrant, Verification};
-use dsh_types::cron::job::{AgentJobSpec, CronJobPatch, CronJobSpec, JobKind};
+use dsh_types::cron::job::{CronJobPatch, CronJobSpec, JobKind};
 use dsh_types::schedule::{DEFAULT_TIMEOUT_SECS, NotifyPolicy, Schedule, parse_schedule};
-
-use crate::agent::DEFAULT_AGENT_TIMEOUT_SECS;
 
 /// Default lease/lookback window for a missed schedule slot.
 pub const DEFAULT_CATCHUP_SECS: u64 = 3600;
@@ -51,13 +47,9 @@ pub struct AddArgs {
     pub catchup_secs: u64,
     pub paused: bool,
     pub force: bool,
-    pub agent: bool,
-    pub grant: TaskGrant,
-    pub criteria: Vec<String>,
-    pub max_tokens_per_day: Option<u64>,
     pub schedule_spec: String,
     pub schedule: Option<Schedule>,
-    /// The command line for a shell job, or the goal for an agent job.
+    /// The command line for a shell job.
     pub command: Vec<String>,
 }
 
@@ -86,11 +78,7 @@ fn parse_named_duration(value: &str) -> Result<u64, String> {
     dsh_types::schedule::parse_interval(value).map(|interval| interval.secs())
 }
 
-/// Parses `cron add`'s options, then the schedule, then the command or goal.
-///
-/// Mirrors `agent run`'s option loop deliberately: everything after `--check`
-/// is the same flag, the same validation, the same error text, because this
-/// is the same grant a person would otherwise type by hand.
+/// Parses `cron add`'s options, then the schedule, then the command.
 pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
     let mut out = AddArgs {
         catchup_secs: DEFAULT_CATCHUP_SECS,
@@ -103,11 +91,6 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
         if option == "--" {
             index += 1;
             break;
-        }
-        if option == "--agent" {
-            out.agent = true;
-            index += 1;
-            continue;
         }
         if option == "--quiet" {
             out.notify = NotifyPolicy::Never;
@@ -124,11 +107,6 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
             index += 1;
             continue;
         }
-        if option == "--sandbox" {
-            out.grant.sandbox = true;
-            index += 1;
-            continue;
-        }
         if !option.starts_with("--") {
             // First non-option token: the schedule.
             break;
@@ -139,9 +117,6 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
             .ok_or(format!("{option} requires a value"))?;
         index += 1;
 
-        if apply_grant_option(&mut out.grant, option, value).map_err(|error| error.to_string())? {
-            continue;
-        }
         match option {
             "--name" => {
                 if value.len() > MAX_NAME_LEN || value.is_empty() {
@@ -153,14 +128,6 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
             "--on" => out.notify = NotifyPolicy::parse(value)?,
             "--timeout" => out.timeout_secs = Some(parse_named_duration(value)?),
             "--catchup" => out.catchup_secs = parse_named_duration(value)?,
-            "--max-tokens-per-day" => {
-                out.max_tokens_per_day = Some(
-                    value
-                        .parse()
-                        .map_err(|_| "--max-tokens-per-day must be a number".to_string())?,
-                )
-            }
-            "--check" => out.criteria.push(value.clone()),
             _ => return Err(format!("{option}: unknown option")),
         }
     }
@@ -172,10 +139,7 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
     out.schedule_spec = schedule_spec.clone();
     index += 1;
 
-    // An optional `--` separates options from the command/goal, the same as
-    // any other subcommand's argv. It matters more for an agent job — whose
-    // goal is free text that might otherwise start with something that looks
-    // like an option — but a shell job accepts it too, rather than silently
+    // An optional `--` separates options from the command, rather than silently
     // folding a stray `--` into the command line it runs (`sh -c '-- exit 3'`
     // is not `exit 3`; it is `sh` complaining about `--` as an option).
     let rest = &args[index..];
@@ -184,11 +148,7 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
         _ => rest.to_vec(),
     };
     if command.is_empty() {
-        return Err(if out.agent {
-            "expected a goal after --".to_string()
-        } else {
-            "expected a command to run".to_string()
-        });
+        return Err("expected a command to run".to_string());
     }
     out.command = command;
     Ok(out)
@@ -196,97 +156,38 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
 
 /// The name a job gets when `--name` was not given.
 ///
-/// A shell job takes its first word, matching `sched`'s old default. An
-/// agent job's "first word" would usually be an article, so it takes the
-/// first few words of the goal instead and slugs them into something safe to
-/// use as a filename.
-pub fn default_job_name(agent: bool, command: &[String]) -> String {
-    let joined = command.join(" ");
-    if !agent {
-        return joined
-            .split_whitespace()
-            .next()
-            .unwrap_or("job")
-            .to_string();
-    }
-    let slug: String = joined
+/// A shell job takes its first word, matching `sched`'s old default.
+pub fn default_job_name(command: &[String]) -> String {
+    command
+        .join(" ")
         .split_whitespace()
-        .take(3)
-        .collect::<Vec<_>>()
-        .join("-")
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let trimmed = slug.trim_matches('-');
-    let capped: String = trimmed.chars().take(MAX_NAME_LEN).collect();
-    if capped.is_empty() {
-        "job".to_string()
-    } else {
-        capped
-    }
+        .next()
+        .unwrap_or("job")
+        .to_string()
 }
 
 /// Builds the spec `cron add` hands to the store, given the parsed options
 /// and the current directory to default `--cwd` to.
 pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, String> {
-    let name = args
-        .name
-        .unwrap_or_else(|| default_job_name(args.agent, &args.command));
+    let name = args.name.unwrap_or_else(|| default_job_name(&args.command));
 
     let schedule = args
         .schedule
         .expect("schedule is always parsed by parse_add");
-    let mut timeout_secs = args.timeout_secs.unwrap_or(if args.agent {
-        // An agent job's `--timeout` doubles as the task's own time budget,
-        // so it shares `agent run`'s default rather than the shell-job one.
-        DEFAULT_AGENT_TIMEOUT_SECS
-    } else {
-        DEFAULT_TIMEOUT_SECS
-    });
+    let mut timeout_secs = args.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS);
     // An interval job that outlives its own interval would starve its own
     // next run; a cron expression has no fixed interval to compare against.
     if let Schedule::Every(interval) = schedule {
         timeout_secs = timeout_secs.min(interval.secs());
     }
 
-    let (kind, command, agent) = if args.agent {
-        if args.grant.read_roots.is_empty() && args.grant.write_roots.is_empty() {
-            return Err(
-                "an agent job needs at least one --read or --write; nothing is granted by default"
-                    .to_string(),
-            );
-        }
-        (
-            JobKind::Ai,
-            args.command.join(" "),
-            Some(AgentJobSpec {
-                grant: args.grant,
-                criteria: args.criteria,
-                // One flag drives both the model's own cooperative budget and
-                // the outer wall-clock deadline the tick enforces from
-                // outside; see `run_job`'s doc comment for why they are kept
-                // in lock-step rather than given two names.
-                time_budget_secs: timeout_secs,
-                max_tokens_per_day: args.max_tokens_per_day,
-            }),
-        )
-    } else {
-        (JobKind::Sh, args.command.join(" "), None)
-    };
-
     Ok(CronJobSpec {
         name,
         schedule,
         schedule_spec: args.schedule_spec,
-        kind,
-        command,
-        agent,
+        kind: JobKind::Sh,
+        command: args.command.join(" "),
+        agent: None,
         cwd: args.cwd.unwrap_or(default_cwd),
         notify: args.notify,
         timeout_secs,
@@ -299,41 +200,13 @@ pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, Str
 ///
 /// Only the fields the caller actually named are touched — `cron edit NAME`
 /// alone is refused rather than silently doing nothing or clearing the job.
-/// `existing_agent` is the job's current AI payload, if it has one. `patch`
-/// stores a whole new `AgentJobSpec` rather than diffing columns (see
-/// `store/api.rs::patch`), so touching *any* grant-related flag here has to
-/// start from what is already there - otherwise `cron edit job --check
-/// '...'` would silently drop every `--read`/`--write`/`--allow-command`/
-/// budget the job already had.
-pub fn parse_edit(
-    args: &[String],
-    existing_agent: Option<&AgentJobSpec>,
-) -> Result<(String, CronJobPatch), String> {
+pub fn parse_edit(args: &[String]) -> Result<(String, CronJobPatch), String> {
     let name = args.first().ok_or("expected a job name")?.clone();
     let mut patch = CronJobPatch::default();
-    let mut grant = existing_agent
-        .map(|agent| agent.grant.clone())
-        .unwrap_or_default();
-    // Whether a flag that only makes sense on an agent job (a grant flag,
-    // `--max-tokens-per-day`, `--check`, `--sandbox`) was named.
-    // `--timeout` is deliberately *not* one of these here - it is checked
-    // separately below, because it is valid on every job but, on an agent
-    // job specifically, still has to resync `time_budget_secs` (see below).
-    let mut agent_flag_touched = false;
-    let mut criteria: Vec<String> = existing_agent
-        .map(|agent| agent.criteria.clone())
-        .unwrap_or_default();
-    let mut max_tokens_per_day = existing_agent.and_then(|agent| agent.max_tokens_per_day);
     let mut index = 1;
 
     while index < args.len() {
         let option = args[index].as_str();
-        if option == "--sandbox" {
-            grant.sandbox = true;
-            agent_flag_touched = true;
-            index += 1;
-            continue;
-        }
         if option == "--quiet" {
             patch.notify = Some(NotifyPolicy::Never);
             index += 1;
@@ -345,10 +218,6 @@ pub fn parse_edit(
             .ok_or(format!("{option} requires a value"))?;
         index += 1;
 
-        if apply_grant_option(&mut grant, option, value).map_err(|error| error.to_string())? {
-            agent_flag_touched = true;
-            continue;
-        }
         match option {
             "--name" => {
                 if value.len() > MAX_NAME_LEN || value.is_empty() {
@@ -365,71 +234,14 @@ pub fn parse_edit(
             "--on" => patch.notify = Some(NotifyPolicy::parse(value)?),
             "--timeout" => patch.timeout_secs = Some(parse_named_duration(value)?),
             "--catchup" => patch.catchup_secs = Some(parse_named_duration(value)?),
-            "--max-tokens-per-day" => {
-                max_tokens_per_day = Some(
-                    value
-                        .parse()
-                        .map_err(|_| "--max-tokens-per-day must be a number".to_string())?,
-                );
-                agent_flag_touched = true;
-            }
-            "--check" => {
-                criteria.push(value.clone());
-                agent_flag_touched = true;
-            }
             _ => return Err(format!("{option}: unknown option")),
         }
-    }
-
-    // Agent-only flags on a job with no existing agent spec would otherwise
-    // silently fabricate one (an empty grant) on what is
-    // really a shell job: `job.kind` stays `sh`, but `cron show`/`doctor`
-    // would start rendering a bogus "agent:" section for it.
-    if agent_flag_touched && existing_agent.is_none() {
-        return Err(
-            "this job is not an agent job; --read/--write/--allow-command/--allow-mcp/--network/\
-             --env/--sandbox/--max-tokens-per-day/--check only apply to one created \
-             with `cron add --agent`"
-                .to_string(),
-        );
-    }
-
-    // An agent job's `time_budget_secs` must track `timeout_secs` exactly -
-    // the claim lease (`store/claim.rs`) and the watchdog
-    // (`run_job.rs::arm_watchdog`) are both derived from `lease_secs`, one
-    // from `jobs.timeout_secs` and the other from this stored value, and the
-    // two must stay in lock-step or a claim can be reaped while the process
-    // it belongs to is still legitimately running. So an edit that only
-    // touches `--timeout` on an existing agent job still has to rebuild
-    // `patch.agent`, even though `--timeout` alone does not set
-    // `agent_flag_touched`.
-    if existing_agent.is_some() && (agent_flag_touched || patch.timeout_secs.is_some()) {
-        let existing_time_budget_secs = existing_agent
-            .map(|agent| agent.time_budget_secs)
-            .unwrap_or(0);
-        patch.agent = Some(AgentJobSpec {
-            grant,
-            criteria,
-            time_budget_secs: patch.timeout_secs.unwrap_or(existing_time_budget_secs),
-            max_tokens_per_day,
-        });
     }
 
     if patch.is_empty() {
         return Err("nothing to change; name at least one field to edit".to_string());
     }
     Ok((name, patch))
-}
-
-pub fn criteria_to_verifications(criteria: &[String]) -> Vec<Verification> {
-    criteria
-        .iter()
-        .map(|criterion| Verification {
-            criterion: criterion.clone(),
-            evidence_event: None,
-            passed: false,
-        })
-        .collect()
 }
 
 /// Current directory, as a string, for defaulting `--cwd`.

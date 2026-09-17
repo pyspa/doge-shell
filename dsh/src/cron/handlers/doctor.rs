@@ -22,7 +22,7 @@ impl DoctorReport {
 }
 
 pub(in crate::cron) fn doctor_report(
-    shell: &mut crate::shell::Shell,
+    _shell: &mut crate::shell::Shell,
     store: &SqliteCronStore,
     now: i64,
 ) -> Result<DoctorReport> {
@@ -102,32 +102,6 @@ pub(in crate::cron) fn doctor_report(
             );
             lines.push(format!("warn {} still-running {detail}", job.name));
             warn_count += 1;
-        }
-
-        if let Some(agent) = &job.agent {
-            if dsh_builtin::agent::resolved_config(shell)
-                .api_key()
-                .is_none()
-            {
-                lines.push(format!(
-                    "warn {} no-api-key set AI_CHAT_API_KEY before this job's next run",
-                    job.name
-                ));
-                warn_count += 1;
-            }
-            if !agent.grant.mcp_calls.is_empty() {
-                let servers = shell.environment.read().mcp_servers().len();
-                if servers == 0 {
-                    lines.push(format!(
-                        "warn {} mcp-grant-without-servers granted --allow-mcp but config.lisp has no MCP servers configured",
-                        job.name
-                    ));
-                    warn_count += 1;
-                } else {
-                    lines.push(format!("ok {} mcp-grant-has-servers", job.name));
-                    ok_count += 1;
-                }
-            }
         }
     }
 

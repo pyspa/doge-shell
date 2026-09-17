@@ -176,12 +176,9 @@ fn truncate_to_width(content: &str, columns: usize) -> String {
 /// task, so composing never does I/O — a status line must not make the prompt
 /// slower. `cron`'s half is [`dsh_types::cron::job::CronHealth`], refreshed by
 /// the session's cron runner after every scan (`dsh/src/cron/runner.rs`)
-/// rather than queried here. `agent`'s half is
-/// [`dsh_types::agent::AgentHealth`], refreshed the same way by
-/// `dsh/src/agent/watch.rs`.
+/// rather than queried here.
 pub(crate) fn compose(
     cron: &dsh_types::cron::job::CronHealth,
-    agent: &dsh_types::agent::AgentHealth,
     job_count: usize,
     git: Option<&crate::prompt::GitStatus>,
     github: Option<&crate::github::GitHubStatus>,
@@ -204,14 +201,6 @@ pub(crate) fn compose(
         // same attention-grabbing mark as GitHub review requests below.
         if cron.open_incidents > 0 {
             summary.push_str(&format!(" ⚠{}", cron.open_incidents));
-        }
-        parts.push(summary);
-    }
-
-    if agent.running > 0 || agent.input_required > 0 {
-        let mut summary = format!("🤖 {}", agent.running);
-        if agent.input_required > 0 {
-            summary.push_str(&format!(" ⚠{}", agent.input_required));
         }
         parts.push(summary);
     }
@@ -309,7 +298,6 @@ impl<W: Write> Drop for StatusLinePause<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_types::agent::AgentHealth;
     use dsh_types::cron::job::CronHealth;
 
     fn status(rows: u16, columns: u16) -> StatusLine {
@@ -431,35 +419,20 @@ mod tests {
 
     #[test]
     fn an_idle_shell_has_an_empty_status() {
-        assert_eq!(
-            compose(
-                &CronHealth::default(),
-                &AgentHealth::default(),
-                0,
-                None,
-                None
-            ),
-            ""
-        );
+        assert_eq!(compose(&CronHealth::default(), 0, None, None), "");
     }
 
     #[test]
     fn tasks_and_jobs_are_summarised() {
         let cron = cron_with(1);
-        let line = compose(&cron, &AgentHealth::default(), 2, None, None);
+        let line = compose(&cron, 2, None, None);
         assert!(line.contains("⏱ 1"), "{line}");
         assert!(line.contains("2 jobs"), "{line}");
     }
 
     #[test]
     fn one_job_is_singular() {
-        let line = compose(
-            &CronHealth::default(),
-            &AgentHealth::default(),
-            1,
-            None,
-            None,
-        );
+        let line = compose(&CronHealth::default(), 1, None, None);
         assert!(line.contains("1 job"));
         assert!(!line.contains("jobs"));
     }
@@ -471,7 +444,7 @@ mod tests {
             failing: 1,
             ..Default::default()
         };
-        assert!(compose(&cron, &AgentHealth::default(), 0, None, None).contains("failing 1"));
+        assert!(compose(&cron, 0, None, None).contains("failing 1"));
     }
 
     #[test]
@@ -481,7 +454,7 @@ mod tests {
             paused: 2,
             ..Default::default()
         };
-        assert!(compose(&cron, &AgentHealth::default(), 0, None, None).contains("paused 2"));
+        assert!(compose(&cron, 0, None, None).contains("paused 2"));
     }
 
     /// The one condition that never clears on its own deserves the same
@@ -493,7 +466,7 @@ mod tests {
             open_incidents: 2,
             ..Default::default()
         };
-        assert!(compose(&cron, &AgentHealth::default(), 0, None, None).contains("⚠2"));
+        assert!(compose(&cron, 0, None, None).contains("⚠2"));
     }
 
     #[test]
@@ -505,40 +478,7 @@ mod tests {
             open_incidents: 1,
             ..Default::default()
         };
-        assert!(!compose(&cron, &AgentHealth::default(), 0, None, None).contains('⏱'));
-    }
-
-    #[test]
-    fn a_running_agent_task_is_shown() {
-        let agent = AgentHealth {
-            running: 2,
-            input_required: 0,
-        };
-        let line = compose(&CronHealth::default(), &agent, 0, None, None);
-        assert!(line.contains("🤖 2"), "{line}");
-        assert!(!line.contains('⚠'), "{line}");
-    }
-
-    #[test]
-    fn a_task_needing_approval_is_marked_with_a_warning() {
-        let agent = AgentHealth {
-            running: 1,
-            input_required: 1,
-        };
-        let line = compose(&CronHealth::default(), &agent, 0, None, None);
-        assert!(line.contains("⚠1"), "{line}");
-    }
-
-    #[test]
-    fn no_agent_tasks_means_no_agent_summary() {
-        let line = compose(
-            &CronHealth::default(),
-            &AgentHealth::default(),
-            0,
-            None,
-            None,
-        );
-        assert!(!line.contains('🤖'), "{line}");
+        assert!(!compose(&cron, 0, None, None).contains('⏱'));
     }
 
     #[test]
@@ -549,13 +489,7 @@ mod tests {
             ahead: 1,
             ..Default::default()
         };
-        let line = compose(
-            &CronHealth::default(),
-            &AgentHealth::default(),
-            0,
-            Some(&git),
-            None,
-        );
+        let line = compose(&CronHealth::default(), 0, Some(&git), None);
         assert!(line.contains("main"), "{line}");
         assert!(line.contains("●2"), "{line}");
         assert!(line.contains("↑1"), "{line}");
@@ -564,30 +498,12 @@ mod tests {
     #[test]
     fn github_appears_only_when_there_is_something_to_show() {
         let empty = crate::github::GitHubStatus::default();
-        assert!(
-            !compose(
-                &CronHealth::default(),
-                &AgentHealth::default(),
-                0,
-                None,
-                Some(&empty)
-            )
-            .contains("🐙")
-        );
+        assert!(!compose(&CronHealth::default(), 0, None, Some(&empty)).contains("🐙"));
 
         let pending = crate::github::GitHubStatus {
             review_count: 3,
             ..Default::default()
         };
-        assert!(
-            compose(
-                &CronHealth::default(),
-                &AgentHealth::default(),
-                0,
-                None,
-                Some(&pending)
-            )
-            .contains("🐙 3")
-        );
+        assert!(compose(&CronHealth::default(), 0, None, Some(&pending)).contains("🐙 3"));
     }
 }

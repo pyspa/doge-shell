@@ -71,5 +71,4 @@ slot is computed forward from there.
 or an interval string like `2m`. For a shell job it is the hard kill deadline. For an
 interval schedule, `--timeout` is capped to the interval itself (a run must not outlive
 its own next scheduled slot); a cron-expression schedule has no fixed interval to compare
-against, so its timeout is not auto-capped. For an agent job, the same value also drives
-the model's own cooperative time budget (see [ai-jobs.md](ai-jobs.md)).
+against, so its timeout is not auto-capped.

@@ -113,42 +113,6 @@ impl<'a> Repl<'a> {
             }
         };
 
-        // The in-session half of `agent run --detach`'s notices
-        // (`dsh/src/agent/watch.rs`): a task started as detached still runs
-        // and finishes without this, it just does so silently. Settings are
-        // resolved once, here, not re-read every scan.
-        let agent_task = if crate::agent::watch::resolve_enabled(shell) {
-            let active_interval_secs = crate::agent::watch::resolve_active_interval_secs(shell);
-            match crate::agent::SqliteTaskStore::open(&dsh_builtin::config_paths::agent_state_dir())
-            {
-                Ok(store) => {
-                    // Two separate statements, deliberately: both temporaries
-                    // from a single `f(a().read()..., b().read()...)` call
-                    // live until the end of that whole statement, not just
-                    // their own argument - holding two `RwLockReadGuard`s on
-                    // the same `parking_lot::RwLock` at once, which can
-                    // self-deadlock this thread if a writer queues in
-                    // between (parking_lot's task-fair policy blocks a new
-                    // reader once a writer is waiting, even one already held
-                    // by the requesting thread).
-                    let agent_health = shell.environment.read().agent_health.clone();
-                    let agent_notices = shell.environment.read().agent_notices.clone();
-                    Some(tokio::spawn(crate::agent::watch::agent_watch_task(
-                        Arc::new(store),
-                        agent_health,
-                        agent_notices,
-                        active_interval_secs,
-                    )))
-                }
-                Err(error) => {
-                    warn!("agent: watch task disabled, could not open its store: {error}");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
 
@@ -267,7 +231,6 @@ impl<'a> Repl<'a> {
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
                 cron_task,
-                agent_task,
                 io: background_io,
             },
             event_loop,

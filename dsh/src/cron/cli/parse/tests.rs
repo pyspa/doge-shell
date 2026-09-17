@@ -7,7 +7,6 @@ fn args(words: &[&str]) -> Vec<String> {
 #[test]
 fn a_bare_shell_command_parses_with_defaults() {
     let parsed = parse_add(&args(&["5m", "echo", "hi"])).unwrap();
-    assert!(!parsed.agent);
     assert_eq!(parsed.schedule_spec, "5m");
     assert_eq!(parsed.command, vec!["echo", "hi"]);
     assert_eq!(parsed.notify, NotifyPolicy::default());
@@ -104,149 +103,14 @@ fn a_leading_separator_is_stripped_from_a_shell_command_too() {
     assert_eq!(parsed.command, vec!["exit", "3"]);
 }
 
-// macOS-only ignore: `/tmp` is a symlink to `/private/tmp` there, so the
-// `--write /tmp` root canonicalizes to `/private/tmp` and the `/tmp`
-// expectation below fails. Linux keeps `/tmp` as-is.
-#[cfg_attr(target_os = "macos", ignore)]
-#[test]
-fn an_agent_job_needs_the_separator_before_its_goal() {
-    let parsed = parse_add(&args(&[
-        "--agent",
-        "--write",
-        "/tmp",
-        "@daily",
-        "--",
-        "summarise",
-        "today",
-    ]))
-    .unwrap();
-    assert!(parsed.agent);
-    assert_eq!(parsed.command, vec!["summarise", "today"]);
-    assert_eq!(
-        parsed.grant.write_roots,
-        vec![std::path::PathBuf::from("/tmp")]
-    );
-}
-
-#[test]
-fn grant_options_reuse_the_shared_agent_run_validation() {
-    let error = parse_add(&args(&[
-        "--agent",
-        "--network",
-        "10.0.0.0/8",
-        "@daily",
-        "--",
-        "x",
-    ]))
-    .unwrap_err();
-    assert!(error.contains("exact host"), "{error}");
-}
-
-#[test]
-fn a_missing_command_is_a_clear_error() {
-    assert!(parse_add(&args(&["5m"])).is_err());
-    assert!(parse_add(&args(&["--agent", "@daily"])).is_err());
-}
-
-#[test]
-fn default_names_differ_by_kind() {
-    assert_eq!(
-        default_job_name(false, &["git".into(), "fetch".into()]),
-        "git"
-    );
-    assert_eq!(
-        default_job_name(
-            true,
-            &[
-                "Summarise".into(),
-                "the".into(),
-                "PRs!".into(),
-                "today".into()
-            ]
-        ),
-        "summarise-the-prs"
-    );
-}
-
-fn spec(args_slice: &[&str]) -> CronJobSpec {
-    build_spec(parse_add(&args(args_slice)).unwrap(), "/cwd".to_string()).unwrap()
-}
-
-#[test]
-fn build_spec_defaults_the_name_and_cwd() {
-    let s = spec(&["5m", "echo", "hi"]);
-    assert_eq!(s.name, "echo");
-    assert_eq!(s.cwd, "/cwd");
-    assert_eq!(s.kind, JobKind::Sh);
-    assert!(s.agent.is_none());
-}
-
-/// An interval job must not be able to outlive its own interval - the next
-/// run would never get a turn.
-#[test]
-fn an_interval_jobs_timeout_is_capped_to_the_interval() {
-    let s = spec(&["--timeout", "10m", "5m", "echo", "hi"]);
-    assert_eq!(s.timeout_secs, 300);
-}
-
-/// A cron expression has no fixed interval to compare against, so its
-/// timeout is not silently reduced.
-#[test]
-fn a_cron_jobs_timeout_is_not_capped() {
-    let s = spec(&["--timeout", "10m", "@daily", "echo", "hi"]);
-    assert_eq!(s.timeout_secs, 600);
-}
-
-#[test]
-fn an_agent_job_needs_at_least_one_grant_root() {
-    let error = build_spec(
-        parse_add(&args(&["--agent", "@daily", "--", "goal"]))
-        .unwrap(),
-        "/cwd".to_string(),
-    )
-    .unwrap_err();
-    assert!(error.contains("--read or --write"), "{error}");
-}
-
-/// `--timeout` without flags must match an `agent run` without flags: the
-/// same built-in default, with the job timeout and the task time budget kept
-/// in lock-step.
-#[test]
-fn an_agent_job_without_budgets_uses_agent_defaults() {
-    let parsed = parse_add(&args(&["--agent", "--write", "/", "@daily", "--", "goal"])).unwrap();
-    let s = build_spec(parsed, "/cwd".to_string()).unwrap();
-    let agent = s.agent.unwrap();
-    assert_eq!(
-        agent.time_budget_secs,
-        crate::agent::DEFAULT_AGENT_TIMEOUT_SECS
-    );
-    assert_eq!(s.timeout_secs, crate::agent::DEFAULT_AGENT_TIMEOUT_SECS);
-}
-
-#[test]
-fn an_agent_jobs_timeout_drives_both_the_lease_and_the_task_budget() {
-    let s = spec(&[
-        "--agent",
-        "--timeout",
-        "5m",
-        "--write",
-        "/tmp",
-        "@daily",
-        "--",
-        "goal",
-    ]);
-    assert_eq!(s.timeout_secs, 300);
-    assert_eq!(s.agent.as_ref().unwrap().time_budget_secs, 300);
-}
-
 #[test]
 fn editing_nothing_is_refused() {
-    assert!(parse_edit(&args(&["probe"]), None).is_err());
+    assert!(parse_edit(&args(&["probe"])).is_err());
 }
 
 #[test]
-fn editing_one_field_leaves_the_agent_payload_alone() {
-    let (name, patch) = parse_edit(&args(&["probe", "--on", "failure"]), None).unwrap();
+fn editing_one_field_leaves_other_fields_alone() {
+    let (name, patch) = parse_edit(&args(&["probe", "--on", "failure"])).unwrap();
     assert_eq!(name, "probe");
     assert_eq!(patch.notify, Some(NotifyPolicy::OnFailure));
     assert!(patch.agent.is_none());
@@ -254,61 +118,8 @@ fn editing_one_field_leaves_the_agent_payload_alone() {
 }
 
 #[test]
-fn editing_a_grant_field_builds_a_full_agent_payload() {
-    let existing = AgentJobSpec::default();
-    let (_, patch) = parse_edit(
-        &args(&["probe", "--allow-command", "cargo test"]),
-        Some(&existing),
-    )
-    .unwrap();
-    let agent = patch.agent.unwrap();
-    assert_eq!(agent.grant.commands, vec!["cargo test"]);
-}
-
-/// The bug this guards against: a grant-shaped flag on a job with no
-/// existing agent spec used to silently fabricate one (an empty grant) - `job.kind` stayed `sh`, but `cron show`/`doctor` started
-/// rendering a bogus "agent:" section for what is really a shell job.
-#[test]
-fn a_grant_field_on_a_job_with_no_agent_spec_is_refused() {
-    let error = parse_edit(&args(&["probe", "--allow-command", "cargo test"]), None).unwrap_err();
-    assert!(error.contains("not an agent job"), "{error}");
-}
-
-/// The bug this guards against: editing one grant flag on a job that already
-/// has other grants and criteria must not wipe them - the
-/// store writes the whole `AgentJobSpec` back (`store/api.rs::patch`), so
-/// `parse_edit` is the only place that can merge onto what already exists.
-#[test]
-fn editing_a_grant_field_on_an_existing_agent_job_preserves_the_rest() {
-    let existing = AgentJobSpec {
-        grant: TaskGrant {
-            read_roots: vec!["/data".into()],
-            commands: vec!["cargo test".into()],
-            ..TaskGrant::default()
-        },
-        criteria: vec!["tests pass".into()],
-        time_budget_secs: 900,
-        max_tokens_per_day: Some(200_000),
-    };
-    let (_, patch) = parse_edit(
-        &args(&["probe", "--check", "docs updated"]),
-        Some(&existing),
-    )
-    .unwrap();
-    let agent = patch.agent.unwrap();
-    assert_eq!(
-        agent.grant.read_roots,
-        vec![std::path::PathBuf::from("/data")]
-    );
-    assert_eq!(agent.grant.commands, vec!["cargo test"]);
-    assert_eq!(agent.criteria, vec!["tests pass", "docs updated"]);
-    assert_eq!(agent.time_budget_secs, 900);
-    assert_eq!(agent.max_tokens_per_day, Some(200_000));
-}
-
-#[test]
 fn quiet_is_recognised_in_edit_without_consuming_the_next_token() {
-    let (name, patch) = parse_edit(&args(&["probe", "--quiet", "--cwd", "/x"]), None).unwrap();
+    let (name, patch) = parse_edit(&args(&["probe", "--quiet", "--cwd", "/x"])).unwrap();
     assert_eq!(name, "probe");
     assert_eq!(patch.notify, Some(NotifyPolicy::Never));
     assert_eq!(patch.cwd.as_deref(), Some("/x"));
@@ -318,33 +129,7 @@ fn quiet_is_recognised_in_edit_without_consuming_the_next_token() {
 /// because there is no existing agent spec to resync.
 #[test]
 fn editing_only_timeout_on_a_shell_job_does_not_need_an_agent_spec() {
-    let (_, patch) = parse_edit(&args(&["probe", "--timeout", "5m"]), None).unwrap();
+    let (_, patch) = parse_edit(&args(&["probe", "--timeout", "5m"])).unwrap();
     assert_eq!(patch.timeout_secs, Some(300));
     assert!(patch.agent.is_none());
-}
-
-/// The bug this guards against: `--timeout` alone used to leave the stored
-/// `AgentJobSpec.time_budget_secs` stale, desyncing it from the fresh
-/// `jobs.timeout_secs` the claim lease is computed from - see `run_job.rs`'s
-/// and `store/claim.rs`'s "kept in lock-step" comments.
-#[test]
-fn editing_only_timeout_on_an_agent_job_resyncs_the_time_budget() {
-    let existing = AgentJobSpec {
-        grant: TaskGrant {
-            read_roots: vec!["/data".into()],
-            ..TaskGrant::default()
-        },
-        criteria: vec!["tests pass".into()],
-        time_budget_secs: 60,
-        max_tokens_per_day: None,
-    };
-    let (_, patch) = parse_edit(&args(&["probe", "--timeout", "10m"]), Some(&existing)).unwrap();
-    assert_eq!(patch.timeout_secs, Some(600));
-    let agent = patch.agent.unwrap();
-    assert_eq!(agent.time_budget_secs, 600, "must track the new timeout");
-    assert_eq!(
-        agent.grant.read_roots,
-        vec![std::path::PathBuf::from("/data")]
-    );
-    assert_eq!(agent.criteria, vec!["tests pass"]);
 }

@@ -128,8 +128,7 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
 ## MCP（大半は解決済み — 下の1項目だけ残る）
 
 このセクションはかつて4項目とも「未着手」だったが、3つは既に解決済み。放置すると
-`docs/agent.md`「MCPと外部タスク」の記述（正しい）と正面から矛盾するので、
-着手前に読んだら実装側を信じること。
+実装側を信じること。
 
 - **接続は永続化・再利用されている**。`dsh-builtin/src/chatgpt/mcp/connection.rs` の
   `Connection` が専用スレッド + 現行スレッド tokio ランタイムを持ち、`service` を
@@ -198,18 +197,12 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
      子で」は今日書けて、`a_hook_that_leaves_a_grandchild_holding_stdin_still_returns` が
      それを担保している。README にパターンとして書いた。
 
-## 背景エージェント (`agent run --detach`)（調査済み・未着手）
-
-`agent run --detach` の再監査で見つかった、今回は見送った項目
-（staleness 判定の起点・`still_going()` の競合窓・保存順序・ステータス行の反映漏れ）は
-[open-questions/background-agent.md](open-questions/background-agent.md) に分割した。
-
 ## `!` チャット / エージェントのコアループ（調査済み・未着手）
 
 `chatgpt.rs`・`conversation.rs`・`dsh-openai`・`AgentRuntime` の新規精査で見つかった、
 既知の設計判断とは別の未文書化項目（3回失敗ガードの不発・store読み取り失敗の誤解釈・
 要約課金・高頻度SQLite読み取り・セッションIDレース・ストリーム劣化リトライ・
-予算ちょうどの誤判定・detachのreconcile記録漏れ・ターン予算の累積）は
+予算ちょうどの誤判定・ターン予算の累積）は
 [open-questions/core-loop.md](open-questions/core-loop.md) に分割した。今回は
 C-4（早期returnがcheckpoint/finishを飛ばす）とC-1（要約+rewindで履歴が消える）だけ直した。
 

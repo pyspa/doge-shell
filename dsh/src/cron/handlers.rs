@@ -1,8 +1,7 @@
 //! Subcommand bodies for [`super::command`].
 //!
 //! Split out of `mod.rs` purely for size; every function here takes the
-//! already-opened store and writes through `ctx`, the same shape `sched.rs`
-//! and `agent.rs` use.
+//! already-opened store and writes through `ctx`.
 
 use anyhow::{Context as _, Result, bail};
 use dsh_builtin::shell_capabilities::CronStore;
@@ -20,7 +19,7 @@ use super::tick;
 mod doctor;
 pub(in crate::cron) use doctor::{doctor, doctor_report};
 mod logs;
-pub(in crate::cron) use logs::{live_agent_summary, logs, logs_json};
+pub(in crate::cron) use logs::{logs, logs_json};
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -81,9 +80,8 @@ pub(super) fn job_json(job: &dsh_types::cron::job::CronJobView) -> serde_json::V
 }
 
 /// The `show`/`cron_manage(action=show)` detail view: [`job_json`] plus the
-/// notepad path, the agent payload `list` leaves out, and its most recent
-/// run - already loaded by `store.get()` (`job.last`) but, until now, never
-/// actually shown here.
+/// notepad path and its most recent run - already loaded by `store.get()`
+/// (`job.last`) but, until now, never actually shown here.
 pub(super) fn job_detail_json(
     job: &dsh_types::cron::job::CronJobView,
     notepad_path: &std::path::Path,
@@ -91,14 +89,6 @@ pub(super) fn job_detail_json(
     let mut value = job_json(job);
     value["notepad_path"] = json!(notepad_path.to_string_lossy());
     value["last"] = job.last.as_ref().map(run_json).into();
-    if let Some(agent) = &job.agent {
-        value["agent"] = json!({
-            "grant": agent.grant,
-            "criteria": agent.criteria,
-            "time_budget_secs": agent.time_budget_secs,
-            "max_tokens_per_day": agent.max_tokens_per_day,
-        });
-    }
     value
 }
 
@@ -125,18 +115,6 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     ctx.write_stdout(&format!("  timeout: {}s", job.timeout_secs))?;
     ctx.write_stdout(&format!("  state: {}", job.state_label()))?;
     ctx.write_stdout(&format!("  notepad: {}", notepad_path.display()))?;
-    if let Some(agent) = &job.agent {
-        ctx.write_stdout(&format!(
-            "  agent: time_budget={}s max_per_day={}",
-            agent.time_budget_secs,
-            agent
-                .max_tokens_per_day
-                .map_or("-".to_string(), |n| n.to_string())
-        ))?;
-        for criterion in &agent.criteria {
-            ctx.write_stdout(&format!("  check: {criterion}"))?;
-        }
-    }
     if let Some(last) = &job.last {
         ctx.write_stdout(&format!(
             "  last run: {} {:.1}s (run {})",
@@ -144,9 +122,6 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
             last.duration_ms as f64 / 1000.0,
             last.id
         ))?;
-        if let Some(task) = &last.agent_task_id {
-            ctx.write_stdout(&format!("    task: {task}"))?;
-        }
         if !last.preview.is_empty() {
             ctx.write_stdout(&format!("    {}", last.preview))?;
         }
@@ -161,34 +136,10 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     Ok(())
 }
 
-/// The job's current AI payload, if any, for `parse_edit` to merge onto.
-///
-/// An unknown job is not fatal here - `parse_edit` still works, and the
-/// unknown-job error is `store.patch`'s own `resolve` to report, with a
-/// clearer message than this function could give. Anything else - most
-/// plausibly a `payload` column that fails to deserialise, from a corrupt row
-/// or a schema change - is a real problem, though, and has to propagate: if
-/// this silently answered `None` the same way "not found" does, `parse_edit`
-/// would treat the job as having no existing agent spec and, on any
-/// grant-touching flag, refuse the edit outright (see `parse_edit`'s
-/// `agent_flag_touched` check) rather than losing anything - but it used to
-/// build a *replacement* `AgentJobSpec` from empty defaults, which
-/// `store.patch` would then write over whatever grant the job actually had.
-pub(super) fn existing_agent_for_edit(
-    store: &SqliteCronStore,
-    selector: &str,
-) -> Result<Option<dsh_types::cron::job::AgentJobSpec>> {
-    match store.get(selector) {
-        Ok(job) => Ok(job.agent),
-        Err(error) if error.to_string().contains("no such cron job") => Ok(None),
-        Err(error) => Err(error).context("cron edit: could not read the job's current definition"),
-    }
-}
-
 pub(super) fn edit(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Result<()> {
     let job_name = args.first().context("expected a job name")?.clone();
-    let existing_agent = existing_agent_for_edit(store, &job_name)?;
-    let (name, patch) = parse_edit(args, existing_agent.as_ref()).map_err(anyhow::Error::msg)?;
+    let _ = store.get(&job_name)?;
+    let (name, patch) = parse_edit(args).map_err(anyhow::Error::msg)?;
     let name = store.patch(&name, &patch, now())?;
     ctx.write_stdout(&format!("cron: {name} updated"))?;
     Ok(())
@@ -328,7 +279,7 @@ pub(super) fn run_json(run: &dsh_types::cron::job::CronRun) -> serde_json::Value
         "started_at": run.started_at, "finished_at": run.finished_at,
         "duration_ms": run.duration_ms, "exit_code": run.exit_code,
         "timed_out": run.timed_out, "changed": run.changed,
-        "trigger": run.trigger.as_str(), "agent_task_id": run.agent_task_id,
+        "trigger": run.trigger.as_str(),
         "tokens_used": run.tokens_used, "preview": run.preview,
     })
 }
@@ -368,7 +319,7 @@ pub(super) fn ack_incident(ctx: &Context, store: &SqliteCronStore, args: &[Strin
 pub(super) fn incident_json(incident: &dsh_types::cron::job::CronIncident) -> serde_json::Value {
     json!({
         "id": incident.id, "job": incident.job_name, "kind": incident.kind.as_str(),
-        "detail": incident.detail, "agent_task_id": incident.agent_task_id,
+        "detail": incident.detail,
         "opened_at": incident.opened_at,
     })
 }
@@ -582,55 +533,6 @@ mod tests {
     #[test]
     fn a_non_numeric_limit_is_a_clear_error() {
         assert!(parse_history_args(&args(&["--limit", "many"])).is_err());
-    }
-
-    /// The bug this guards against: `existing_agent_for_edit` used to be
-    /// `store.get(...).ok().and_then(...)`, which read *any* store error -
-    /// not just "no such job" - as "no existing agent spec". `parse_edit`
-    /// then built a brand-new, empty `AgentJobSpec` from that `None` on any
-    /// grant-touching flag, and `store.patch` wrote it over whatever grant
-    /// the job actually had.
-    #[test]
-    fn existing_agent_for_edit_treats_unknown_job_as_no_agent_but_propagates_a_real_error() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = SqliteCronStore::open(&dir.path().join("cron")).expect("open");
-
-        assert!(
-            existing_agent_for_edit(&store, "nope").unwrap().is_none(),
-            "an unknown job must be treated as having no agent spec"
-        );
-
-        let parsed = parse_add(&args(&[
-            "--agent", "--write", "/tmp", "1h", "--", "goal",
-        ]))
-        .unwrap();
-        let spec = build_spec(parsed, "/tmp".to_string()).unwrap();
-        store
-            .create(&spec, &std::collections::HashMap::new(), 0, false)
-            .unwrap();
-        assert!(
-            existing_agent_for_edit(&store, &spec.name)
-                .unwrap()
-                .is_some()
-        );
-
-        // Corrupt the row's payload directly - only reachable in practice
-        // through a schema change or on-disk corruption, but `parse_edit`
-        // must not read it as "no agent spec" once it is.
-        let connection = rusqlite::Connection::open(dir.path().join("cron").join("jobs.sqlite3"))
-            .expect("raw connection");
-        connection
-            .execute(
-                "UPDATE jobs SET payload = 'not json' WHERE name = ?1",
-                [&spec.name],
-            )
-            .unwrap();
-
-        let error = existing_agent_for_edit(&store, &spec.name).unwrap_err();
-        assert!(
-            error.to_string().contains("could not read"),
-            "a corrupt payload must be a real error, not a silent None: {error}"
-        );
     }
 
     /// `store.get()` has always loaded `job.last`; before this, `show` and

@@ -1,5 +1,65 @@
 use super::*;
+use dsh_builtin::shell_capabilities::{AgentTaskSave, AgentTaskStore};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use tempfile::TempDir;
+
+struct MemoryTaskStore {
+    tasks: Mutex<HashMap<String, dsh_types::agent::AgentTask>>,
+}
+
+impl AgentTaskStore for MemoryTaskStore {
+    fn save(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        _event: Option<(&str, &serde_json::Value)>,
+    ) -> anyhow::Result<AgentTaskSave> {
+        self.tasks
+            .lock()
+            .unwrap()
+            .insert(task.id.clone(), task.clone());
+        Ok(AgentTaskSave {
+            sequence: 0,
+            task: task.clone(),
+        })
+    }
+    fn resume(
+        &self,
+        task: &dsh_types::agent::AgentTask,
+        event: Option<(&str, &serde_json::Value)>,
+    ) -> anyhow::Result<AgentTaskSave> {
+        self.save(task, event)
+    }
+    fn load(&self, id: &str) -> anyhow::Result<dsh_types::agent::AgentTask> {
+        self.tasks
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("no such task"))
+    }
+    fn list(&self) -> anyhow::Result<Vec<dsh_types::agent::AgentTask>> {
+        Ok(self.tasks.lock().unwrap().values().cloned().collect())
+    }
+    fn events(&self, _id: &str) -> anyhow::Result<Vec<dsh_types::agent::TaskEvent>> {
+        Ok(Vec::new())
+    }
+    fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.tasks.lock().unwrap().remove(id);
+        Ok(())
+    }
+    fn save_artifact(
+        &self,
+        _id: &str,
+        _name: &str,
+        _content: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    fn load_artifact(&self, _id: &str, _name: &str) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+}
 
 fn store() -> (TempDir, SqliteCronStore) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -52,7 +112,7 @@ fn create_without_a_schedule_is_a_clear_error() {
 }
 
 #[test]
-fn create_an_agent_job_needs_tokens_and_a_grant() {
+fn create_refuses_an_agent_job() {
     let (_dir, store) = store();
     let request = CronToolRequest {
         schedule: Some("5m".to_string()),
@@ -61,27 +121,7 @@ fn create_an_agent_job_needs_tokens_and_a_grant() {
         ..request()
     };
     let error = create(&store, &request).unwrap_err().to_string();
-    assert!(error.contains("--read or --write"), "{error}");
-}
-
-#[test]
-fn create_an_agent_job_with_a_grant_round_trips_it() {
-    let (_dir, store) = store();
-    let dir = tempfile::tempdir().unwrap();
-    let request = CronToolRequest {
-        name: Some("digest".to_string()),
-        schedule: Some("0 9 * * mon-fri".to_string()),
-        agent: true,
-        goal: Some("summarise new commits".to_string()),
-        check: vec!["out/digest.md exists".to_string()],
-        write: vec![dir.path().to_string_lossy().into_owned()],
-        ..request()
-    };
-    create(&store, &request).expect("create");
-    let job = store.get("digest").expect("job exists");
-    let agent = job.agent.expect("agent spec");
-    assert_eq!(agent.criteria, vec!["out/digest.md exists".to_string()]);
-    assert_eq!(agent.grant.write_roots.len(), 1);
+    assert!(error.contains("no longer supported"), "{error}");
 }
 
 #[test]
@@ -104,38 +144,29 @@ fn create_refuses_a_duplicate_name_without_force() {
 }
 
 #[test]
-fn update_merges_onto_the_jobs_existing_grant() {
+fn update_refuses_agent_fields() {
     let (_dir, store) = store();
-    let dir = tempfile::tempdir().unwrap();
     create(
         &store,
         &CronToolRequest {
-            name: Some("digest".to_string()),
+            name: Some("fetch".to_string()),
             schedule: Some("5m".to_string()),
-            agent: true,
-            goal: Some("summarise".to_string()),
-            write: vec![dir.path().to_string_lossy().into_owned()],
+            command: Some("git fetch".to_string()),
             ..request()
         },
     )
     .expect("create");
 
-    update(
+    let error = update(
         &store,
         &CronToolRequest {
-            job: Some("digest".to_string()),
+            job: Some("fetch".to_string()),
             check: vec!["done".to_string()],
             ..request()
         },
     )
-    .expect("update");
-
-    let job = store.get("digest").expect("job exists");
-    let agent = job.agent.expect("agent spec");
-    // The pre-existing write grant must survive a patch that only touched
-    // `check` - `parse_edit` merges onto the job's current agent spec.
-    assert_eq!(agent.grant.write_roots.len(), 1);
-    assert_eq!(agent.criteria, vec!["done".to_string()]);
+    .unwrap_err();
+    assert!(error.to_string().contains("no longer supported"), "{error}");
 }
 
 #[test]
@@ -448,9 +479,9 @@ fn a_job_outside_the_calling_tasks_grant_is_refused() {
         pending_operation: None,
         created_at: 0,
     };
-    let task_store = std::sync::Arc::new(
-        crate::agent::SqliteTaskStore::open(&agent_dir.path().join("agent")).expect("open"),
-    );
+    let task_store = std::sync::Arc::new(MemoryTaskStore {
+        tasks: Mutex::new(HashMap::new()),
+    });
     task_store.save(&task, None).expect("save");
 
     let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
@@ -513,9 +544,9 @@ fn a_job_whose_cwd_no_longer_resolves_is_refused_under_a_task() {
         pending_operation: None,
         created_at: 0,
     };
-    let task_store = std::sync::Arc::new(
-        crate::agent::SqliteTaskStore::open(&agent_dir.path().join("agent")).expect("open"),
-    );
+    let task_store = std::sync::Arc::new(MemoryTaskStore {
+        tasks: Mutex::new(HashMap::new()),
+    });
     task_store.save(&task, None).expect("save");
 
     let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());

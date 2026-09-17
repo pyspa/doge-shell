@@ -1,4 +1,4 @@
-//! Persistent scheduled jobs: shell commands and unattended agent tasks.
+//! Persistent scheduled jobs: shell commands.
 //!
 //! # Two drivers, one tick
 //!
@@ -10,17 +10,13 @@
 //!
 //! # Why a run is its own process
 //!
-//! `Shell` is `!Send` - it owns `Rc<RefCell<LispEngine>>` - so a spawned task
-//! cannot drive an agent run, which needs `&mut Shell`. Rather than weaken
-//! that, each claimed run is executed by a fresh `dsh -c "cron run-job <id>"`
-//! child. Two other properties fall out of the same choice: an agent run moves
-//! its process's working directory, so sharing one would nest the restores;
-//! and a per-run child can be killed on its own deadline without taking the
-//! rest of the tick's work with it.
+//! `Shell` is `!Send` - it owns `Rc<RefCell<LispEngine>>` - so each claimed
+//! run is executed by a fresh `dsh -c "cron run-job <id>"` child rather than
+//! weakening that. A per-run child can be killed on its own deadline without
+//! taking the rest of the tick's work with it.
 //!
-//! The child receives **only a UUID**. The goal, the grant and the command all
-//! travel through the store as data, so nothing a job carries is ever parsed
-//! by a shell.
+//! The child receives **only a UUID**. The command travels through the store
+//! as data, so nothing a job carries is ever parsed by an extra shell.
 
 pub mod cli;
 pub mod clock;
@@ -41,7 +37,6 @@ use store::SqliteCronStore;
 const HELP: &str = "\
 Usage:
   cron add [options] <schedule> <command...>          Register a shell job
-  cron add --agent [options] <schedule> -- <goal>      Register an agent job
   cron list [--json]                                   Show jobs
   cron show <job> [--json]                              Show one job in full
   cron edit <job> [options]                             Change one job's fields
@@ -66,30 +61,21 @@ Options for `add`/`edit`:
   --cwd <dir>            Working directory (default: here)
   --on <policy>          never | failure | change | both (default) | always
   --quiet                Same as --on never
-  --timeout <n>          Seconds, or an interval like 5m (default: 60s, 1800s for --agent)
+  --timeout <n>          Seconds, or an interval like 5m (default: 60s)
   --catchup <n>          How late a missed run may be and still count (default: 1h)
   --paused               Register paused; see the first run with `cron run --now`
   --force                Allow `add` to replace an existing job of the same name
 
-Options for an agent job (`--agent`), matching `agent run`:
-  --check <text> --read <dir> --write <dir> --allow-command <cmd>
-  --allow-mcp <entry> --network <host> --env <name> --sandbox
-  (agent default: --timeout 1800s)
-
 Commands run under `sh -c` from the job's `--cwd`; shell aliases, abbreviations,
-builtins and Lisp functions are not available inside them. An agent job's
-grant works exactly like `agent run`'s: nothing is asked at tick time, so a
-missing grant stalls the run — see `cron incidents` — instead of prompting.
+builtins and Lisp functions are not available inside them.
 
 `cron run <job>` (no `--now`) refuses a paused or blocked job outright —
 `cron resume <job>` (or `cron incidents ack`) first, or use `--now` to run it
 right now regardless.";
 
 /// The `cron` builtin. Every subcommand but `run-job` opens the store and
-/// returns; `run-job` (and `run --now`) additionally need `&mut Shell` to
-/// start an agent task, which is why this function — not
-/// `dsh-builtin/src/cron.rs` — takes one, the same split `agent::command`
-/// uses for the same reason.
+/// returns; `run-job` additionally needs `&mut Shell`, which is why this
+/// function — not `dsh-builtin/src/cron.rs` — takes one.
 pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
     if argv.len() < 2 || matches!(argv[1].as_str(), "help" | "--help" | "-h") {
         ctx.write_stdout(HELP)?;

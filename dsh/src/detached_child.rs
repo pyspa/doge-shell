@@ -1,11 +1,10 @@
 //! Starting a detached `dogesh -c "<command>"` child and reaping it without
 //! blocking the caller.
 //!
-//! Shared by cron (`cron run-job <id>`) and the background agent
-//! (`agent run-detached <id>`): both need a child that outlives the process
-//! that started it, with its own process group so a `Ctrl-C` at somebody's
-//! prompt does not reach it, and stdin on `/dev/null` so it can never read
-//! from - or steal - the terminal.
+//! Shared by cron (`cron run-job <id>`) and any other caller that needs
+//! a child that outlives the process that started it, with its own process
+//! group so a `Ctrl-C` at somebody's prompt does not reach it, and stdin on
+//! `/dev/null` so it can never read from - or steal - the terminal.
 
 use anyhow::{Context as _, Result};
 use std::os::unix::process::CommandExt;

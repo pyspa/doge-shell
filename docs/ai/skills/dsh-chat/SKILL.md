@@ -9,10 +9,9 @@ description: Use when using the doge-shell `!` AI chat itself - starting a chat,
 - The provider is OpenAI-compatible `chat/completions` only. Show the model with `chat_model`, change it with `chat_model <name>`.
 - Mention a skill with a leading `@name` (up to 5). `skill list` shows what the runtime reads.
 - MCP tools: `mcp status` first, then `mcp tools`.
-- File writes and destructive commands ask first. Answer the prompt; an unattended task stalls instead - see $dsh-agent.
+- File writes and destructive commands ask first. Answer the prompt.
 - `chat_status` inspects the carried conversation; `chat_reset` forgets it.
 - Diagnose in this order: `doctor skills` -> `doctor ai`.
-- Hand long work to `agent run --detach` instead of holding a `!` turn open - criteria: [references/delegation.md](references/delegation.md).
 - Setup and keys: [references/setup.md](references/setup.md).
 - Skills, mentions and project trust: [references/skills-mentions.md](references/skills-mentions.md).
 - Symptom-to-cause table: [references/troubleshooting.md](references/troubleshooting.md).

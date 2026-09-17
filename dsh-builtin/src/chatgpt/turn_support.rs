@@ -138,27 +138,27 @@ pub(super) fn run_tool_calls(
             .unwrap_or_default()
             .to_string();
 
-        if let Some(runtime) = runtime {
-            if let Err(e) = runtime.lock().before_tool(
+        if let Some(runtime) = runtime
+            && let Err(e) = runtime.lock().before_tool(
                 tool_call,
                 serde_json::to_value(&*manager).map_err(|e| e.to_string())?,
-            ) {
-                // A missing plan/criteria is a model ordering error, not a
-                // broken task ledger: feed it back as a tool result so the
-                // next round can call `task_plan` and retry. Anything else
-                // (stopped task, exhausted budget, unusable store) still ends
-                // the turn as `Err`.
-                if crate::agent::is_missing_plan_error(&e) {
-                    let message = e.to_string();
-                    manager.add_message(json!({
+            )
+        {
+            // A missing plan/criteria is a model ordering error, not a
+            // broken task ledger: feed it back as a tool result so the
+            // next round can call `task_plan` and retry. Anything else
+            // (stopped task, exhausted budget, unusable store) still ends
+            // the turn as `Err`.
+            if crate::agent::is_missing_plan_error(&e) {
+                let message = e.to_string();
+                manager.add_message(json!({
                         "role": "tool",
                         "tool_call_id": tool_call_id,
                         "content": format!("Error: {message}. Call task_plan with plan and criteria first, then retry the operation."),
                     }));
-                    continue;
-                }
-                return Err(e.to_string());
+                continue;
             }
+            return Err(e.to_string());
         }
         let execution = match execute_tool_call(tool_call, mcp_manager, hook_ctx, proxy) {
             Ok(execution) => execution,

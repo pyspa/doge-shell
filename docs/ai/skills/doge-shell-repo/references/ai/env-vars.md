@@ -38,13 +38,6 @@
 | `DOGESH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
 | `DOGESH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**唯一の例外 |
 
-永続タスク (`agent`) 専用の変数は上の表とは別の解決先（`dsh/src/agent.rs` の `setting`）を通るが、
-同じ「シェル変数 → プロセス環境」の順で読む。詳細と既定値は正典の [../../../../../agent.md](../../../../../agent.md) にある:
-`AI_AGENT_TIMEOUT_SECS`（`agent run` の累積時間予算。未設定時は1800秒）、
-`AI_AGENT_MAX_CONCURRENT`（既定 1、同時実行数の上限。detach か前景かを問わない）、
-`DOGESH_AGENT_WATCH`（既定 on、detach したタスクの完了・失敗・承認待ちをプロンプト上に通知するか）、
-`DOGESH_AGENT_WATCH_INTERVAL_SECS`（既定 2、1..=60 に clamp。ポーリング間隔）。
-
 `AI_MESSAGE_LANG` は**散文にだけ**効く。JSON を返させるリクエスト
 （`AiRequestOptions::json_object`）に `apply_language` を付けない。フィールド名と
 列挙値まで訳され、`risk_level` が `"危険"` で返ってくると比較対象のどれにも一致しない。

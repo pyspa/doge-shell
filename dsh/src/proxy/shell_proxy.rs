@@ -147,7 +147,6 @@ impl ShellProxy for Shell {
         argv: Vec<String>,
     ) -> Result<()> {
         match action {
-            CoreShellAction::Agent => crate::agent::command(self, ctx, argv),
             CoreShellAction::Cron => crate::cron::command(self, ctx, argv),
             CoreShellAction::Exit => builtin::exit::execute(self, ctx, argv),
             CoreShellAction::History => builtin::history::execute(self, ctx, argv),

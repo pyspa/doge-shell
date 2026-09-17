@@ -18,7 +18,7 @@
 - insert-last-argument / snippet insert / `{{placeholder}}` stops
   - Read: `dsh/src/repl/last_arg.rs`, `dsh/src/repl/placeholder.rs`, `dsh/src/repl/key_handlers/input_shortcuts.rs`, `dsh/src/snippet.rs`
   - Validate: `cargo test -p doge-shell`
-- cron / scheduled jobs / tick / agent job scheduling
+- cron / scheduled jobs / tick
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`（`dsh-cron` は製品利用者向け。repo 開発はこちら）
   - Read: `dsh/src/cron/` (store, clock, exec, run_job, tick, runner, cli), `dsh-builtin/src/cron.rs`, `dsh-types/src/cron.rs`, `dsh-types/src/schedule.rs`, `dsh/src/lisp/cron.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` for CLI changes and `cargo test -p dsh-types` for shared types
@@ -45,11 +45,6 @@
   - 先に読む: [ai/hooks.md](ai/hooks.md)（Regression チェックリストは同ファイル末尾。hook は許可を与えられない）
   - Read: `dsh-builtin/src/chatgpt/hooks/`
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
-- agent / 永続タスク / 要約予算 / 取消 / MCP一覧更新
-  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
-  - Read: `dsh/src/agent.rs`, `dsh-builtin/src/chatgpt.rs`, `dsh-builtin/src/chatgpt/mcp/`
-  - Regression: 要約後にも予算を保存・判定する。取消は最新レコードの状態だけを原子的に更新する。MCP一覧更新はサーバー障害を分離し、各待機とサーバー間に取消を伝播する。
-  - Validate: `cargo test -p doge-shell --lib agent::tests`; `cargo test -p dsh-builtin --lib discovery_`
 - serve / MCP server / shared MCP types
   - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`（静的ファイル配信は `doge-shell-serve-web`）
   - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`

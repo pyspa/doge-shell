@@ -135,25 +135,12 @@ fn empty_history_says_so_instead_of_an_empty_table() {
 }
 
 #[test]
-fn history_includes_the_agent_task_id_when_there_is_one() {
-    let mut r = run(RunState::Succeeded);
-    r.agent_task_id = Some("task-42".to_string());
-    let table = render_history(&[r]);
-    assert!(table.contains("task-42"), "{table}");
-}
-
-#[test]
 fn a_failed_run_shows_both_its_reason_and_its_preview() {
-    // Before this, the four-way match in `run_row` only showed `preview`
-    // when there was no `reason` and no `agent_task_id` - so a failed AI
-    // job's run (which always has both) never showed its preview at all.
     let mut r = run(RunState::Failed);
     r.reason = Some(RunReason::Timeout);
-    r.agent_task_id = Some("task-42".to_string());
     r.preview = "stop reason: ran out of time".to_string();
     let table = render_history(&[r]);
     assert!(table.contains("timeout"), "{table}");
-    assert!(table.contains("task-42"), "{table}");
     assert!(table.contains("ran out of time"), "{table}");
 }
 
@@ -177,7 +164,7 @@ fn a_very_long_preview_does_not_widen_the_detail_column() {
 #[test]
 fn a_run_with_nothing_to_say_shows_a_dash_not_an_empty_cell() {
     // The fixture's own `preview` ("hello") is non-empty, so clear it to hit
-    // the case where a run has no reason, no task id and no preview.
+    // the case where a run has no reason and no preview.
     let mut r = run(RunState::Succeeded);
     r.preview.clear();
     assert_eq!(run_detail(&r), "-");

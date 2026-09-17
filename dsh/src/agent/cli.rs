@@ -87,7 +87,6 @@ pub(crate) fn list(ctx: &Context, store: &SqliteTaskStore, args: &[String]) -> R
                     "status": summary::status_label(task.status),
                     "running": still_going(store, task),
                     "tokens_used": task.tokens_used,
-                    "token_budget": task.token_budget,
                     "age_secs": (now - task.created_at).max(0),
                     "goal": task.goal,
                 })
@@ -102,12 +101,11 @@ pub(crate) fn list(ctx: &Context, store: &SqliteTaskStore, args: &[String]) -> R
     for task in &shown {
         let marker = if still_going(store, task) { '*' } else { ' ' };
         ctx.write_stdout(&format!(
-            "{marker} {}  {:<15} {:>4}  {:>6}/{:<6}  {}",
+            "{marker} {}  {:<15} {:>4}  {:>6} tokens  {}",
             task.id,
             summary::status_label(task.status),
             format_age(now, task.created_at),
             task.tokens_used,
-            task.token_budget,
             goal_preview(&task.goal),
         ))?;
     }

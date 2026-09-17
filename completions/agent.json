@@ -7,13 +7,8 @@
       "description": "Start a task",
       "options": [
         {
-          "long": "--tokens",
-          "description": "Cumulative token budget (default: 50000)",
-          "takes_value": true
-        },
-        {
           "long": "--timeout",
-          "description": "Cumulative time budget in seconds (default: 900)",
+          "description": "Cumulative time budget in seconds (default: 1800)",
           "takes_value": true
         },
         {
@@ -75,11 +70,6 @@
       "name": "resume",
       "description": "Resume a saved task",
       "options": [
-        {
-          "long": "--tokens",
-          "description": "Cumulative token budget",
-          "takes_value": true
-        },
         {
           "long": "--timeout",
           "description": "Cumulative time budget in seconds",
@@ -152,11 +142,6 @@
       "name": "retry",
       "description": "Clone a task with new grants and run it again",
       "options": [
-        {
-          "long": "--tokens",
-          "description": "Cumulative token budget",
-          "takes_value": true
-        },
         {
           "long": "--timeout",
           "description": "Cumulative time budget in seconds",

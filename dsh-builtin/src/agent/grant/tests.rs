@@ -7,7 +7,7 @@ fn grant() -> TaskGrant {
 #[test]
 fn an_unrelated_option_is_left_for_the_caller() {
     let mut g = grant();
-    assert!(!apply_grant_option(&mut g, "--tokens", "100").unwrap());
+    assert!(!apply_grant_option(&mut g, "--timeout", "100").unwrap());
     assert_eq!(g, TaskGrant::default());
 }
 

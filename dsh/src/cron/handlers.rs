@@ -95,7 +95,6 @@ pub(super) fn job_detail_json(
         value["agent"] = json!({
             "grant": agent.grant,
             "criteria": agent.criteria,
-            "token_budget": agent.token_budget,
             "time_budget_secs": agent.time_budget_secs,
             "max_tokens_per_day": agent.max_tokens_per_day,
         });
@@ -128,8 +127,7 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     ctx.write_stdout(&format!("  notepad: {}", notepad_path.display()))?;
     if let Some(agent) = &job.agent {
         ctx.write_stdout(&format!(
-            "  agent: tokens={} time_budget={}s max_per_day={}",
-            agent.token_budget,
+            "  agent: time_budget={}s max_per_day={}",
             agent.time_budget_secs,
             agent
                 .max_tokens_per_day
@@ -603,7 +601,7 @@ mod tests {
         );
 
         let parsed = parse_add(&args(&[
-            "--agent", "--tokens", "10", "--write", "/tmp", "1h", "--", "goal",
+            "--agent", "--write", "/tmp", "1h", "--", "goal",
         ]))
         .unwrap();
         let spec = build_spec(parsed, "/tmp".to_string()).unwrap();

@@ -112,8 +112,6 @@ fn a_leading_separator_is_stripped_from_a_shell_command_too() {
 fn an_agent_job_needs_the_separator_before_its_goal() {
     let parsed = parse_add(&args(&[
         "--agent",
-        "--tokens",
-        "1000",
         "--write",
         "/tmp",
         "@daily",
@@ -124,7 +122,6 @@ fn an_agent_job_needs_the_separator_before_its_goal() {
     .unwrap();
     assert!(parsed.agent);
     assert_eq!(parsed.command, vec!["summarise", "today"]);
-    assert_eq!(parsed.token_budget, 1000);
     assert_eq!(
         parsed.grant.write_roots,
         vec![std::path::PathBuf::from("/tmp")]
@@ -135,8 +132,6 @@ fn an_agent_job_needs_the_separator_before_its_goal() {
 fn grant_options_reuse_the_shared_agent_run_validation() {
     let error = parse_add(&args(&[
         "--agent",
-        "--tokens",
-        "10",
         "--network",
         "10.0.0.0/8",
         "@daily",
@@ -150,7 +145,7 @@ fn grant_options_reuse_the_shared_agent_run_validation() {
 #[test]
 fn a_missing_command_is_a_clear_error() {
     assert!(parse_add(&args(&["5m"])).is_err());
-    assert!(parse_add(&args(&["--agent", "--tokens", "1", "@daily"])).is_err());
+    assert!(parse_add(&args(&["--agent", "@daily"])).is_err());
 }
 
 #[test]
@@ -205,9 +200,7 @@ fn a_cron_jobs_timeout_is_not_capped() {
 #[test]
 fn an_agent_job_needs_at_least_one_grant_root() {
     let error = build_spec(
-        parse_add(&args(&[
-            "--agent", "--tokens", "10", "@daily", "--", "goal",
-        ]))
+        parse_add(&args(&["--agent", "@daily", "--", "goal"]))
         .unwrap(),
         "/cwd".to_string(),
     )
@@ -215,19 +208,14 @@ fn an_agent_job_needs_at_least_one_grant_root() {
     assert!(error.contains("--read or --write"), "{error}");
 }
 
-/// `--tokens`/`--timeout` without flags must match an `agent run` without
-/// flags: the same built-in defaults, with the job timeout and the task
-/// time budget kept in lock-step.
+/// `--timeout` without flags must match an `agent run` without flags: the
+/// same built-in default, with the job timeout and the task time budget kept
+/// in lock-step.
 #[test]
 fn an_agent_job_without_budgets_uses_agent_defaults() {
     let parsed = parse_add(&args(&["--agent", "--write", "/", "@daily", "--", "goal"])).unwrap();
-    assert_eq!(
-        parsed.token_budget,
-        crate::agent::DEFAULT_AGENT_TOKEN_BUDGET
-    );
     let s = build_spec(parsed, "/cwd".to_string()).unwrap();
     let agent = s.agent.unwrap();
-    assert_eq!(agent.token_budget, crate::agent::DEFAULT_AGENT_TOKEN_BUDGET);
     assert_eq!(
         agent.time_budget_secs,
         crate::agent::DEFAULT_AGENT_TIMEOUT_SECS
@@ -239,8 +227,6 @@ fn an_agent_job_without_budgets_uses_agent_defaults() {
 fn an_agent_jobs_timeout_drives_both_the_lease_and_the_task_budget() {
     let s = spec(&[
         "--agent",
-        "--tokens",
-        "10",
         "--timeout",
         "5m",
         "--write",
@@ -280,8 +266,7 @@ fn editing_a_grant_field_builds_a_full_agent_payload() {
 }
 
 /// The bug this guards against: a grant-shaped flag on a job with no
-/// existing agent spec used to silently fabricate one (`token_budget: 0`, an
-/// empty grant) - `job.kind` stayed `sh`, but `cron show`/`doctor` started
+/// existing agent spec used to silently fabricate one (an empty grant) - `job.kind` stayed `sh`, but `cron show`/`doctor` started
 /// rendering a bogus "agent:" section for what is really a shell job.
 #[test]
 fn a_grant_field_on_a_job_with_no_agent_spec_is_refused() {
@@ -290,7 +275,7 @@ fn a_grant_field_on_a_job_with_no_agent_spec_is_refused() {
 }
 
 /// The bug this guards against: editing one grant flag on a job that already
-/// has other grants, criteria, and a token budget must not wipe them - the
+/// has other grants and criteria must not wipe them - the
 /// store writes the whole `AgentJobSpec` back (`store/api.rs::patch`), so
 /// `parse_edit` is the only place that can merge onto what already exists.
 #[test]
@@ -302,7 +287,6 @@ fn editing_a_grant_field_on_an_existing_agent_job_preserves_the_rest() {
             ..TaskGrant::default()
         },
         criteria: vec!["tests pass".into()],
-        token_budget: 50_000,
         time_budget_secs: 900,
         max_tokens_per_day: Some(200_000),
     };
@@ -318,7 +302,6 @@ fn editing_a_grant_field_on_an_existing_agent_job_preserves_the_rest() {
     );
     assert_eq!(agent.grant.commands, vec!["cargo test"]);
     assert_eq!(agent.criteria, vec!["tests pass", "docs updated"]);
-    assert_eq!(agent.token_budget, 50_000);
     assert_eq!(agent.time_budget_secs, 900);
     assert_eq!(agent.max_tokens_per_day, Some(200_000));
 }
@@ -352,7 +335,6 @@ fn editing_only_timeout_on_an_agent_job_resyncs_the_time_budget() {
             ..TaskGrant::default()
         },
         criteria: vec!["tests pass".into()],
-        token_budget: 50_000,
         time_budget_secs: 60,
         max_tokens_per_day: None,
     };
@@ -365,5 +347,4 @@ fn editing_only_timeout_on_an_agent_job_resyncs_the_time_budget() {
         vec![std::path::PathBuf::from("/data")]
     );
     assert_eq!(agent.criteria, vec!["tests pass"]);
-    assert_eq!(agent.token_budget, 50_000);
 }

@@ -12,7 +12,6 @@ fn task() -> AgentTask {
         criteria: vec![],
         plan: vec![],
         progress: String::new(),
-        token_budget: 50_000,
         tokens_used: 12_345,
         time_budget_ms: 600_000,
         elapsed_ms: 41_000,
@@ -212,14 +211,14 @@ fn a_hintless_stop_recovers_its_fix_from_recorded_results() {
     );
 }
 
-/// On exhausted budgets the grant recovery stays out of the way: raising the
-/// budget is the fix, and a stale grant line would mislead.
+/// On an exhausted time budget the grant recovery stays out of the way: raising the
+/// timeout is the fix, and a stale grant line would mislead.
 #[test]
 fn an_exhausted_budget_suppresses_the_events_recovery() {
     let mut t = task();
     t.status = TaskStatus::Interrupted;
-    t.stop_reason = Some("task stopped before completion (budget or interruption)".into());
-    t.tokens_used = t.token_budget;
+    t.stop_reason = Some("task stopped before completion (time budget or interruption)".into());
+    t.elapsed_ms = t.time_budget_ms;
     let events = vec![tool_result_event(
         1,
         "execute",

@@ -6,16 +6,15 @@ Quote values the shell would otherwise split or glob-expand.
 ## Start
 
 ```sh
-agent run [--tokens N] [--timeout SECONDS] [--check TEXT]... \
+agent run [--timeout SECONDS] [--check TEXT]... \
   [--read DIR]... [--write DIR]... [--allow-command EXACT]... \
   [--allow-mcp ENTRY]... [--network HOST]... [--env NAME]... \
   [--sandbox] [--detach|-d] -- GOAL
 ```
 
 - `--` before the goal is required; everything after it is joined into the goal text.
-- `--tokens` / `--timeout` fall back to `AI_AGENT_TOKEN_BUDGET` /
-  `AI_AGENT_TIMEOUT_SECS` (shell variable, then environment), then to
-  50000 tokens / 900s.
+- `--timeout` falls back to `AI_AGENT_TIMEOUT_SECS` (shell variable, then
+  environment), then to 1800s.
 - `--check` is repeatable but only accepted on `run`: criteria are fixed once,
   before work starts, and each one must later be verified against a recorded
   tool result. `--sandbox` is also `run`-only. `--detach` (`-d`) works on both
@@ -29,11 +28,11 @@ agent run [--tokens N] [--timeout SECONDS] [--check TEXT]... \
 ## Resume
 
 ```sh
-agent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]
+agent resume ID [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]
 agent approve ID [--reconcile TEXT] [--dry-run]
 ```
 
-- `--tokens` / `--timeout` raise the cumulative budgets of the existing task.
+- `--timeout` raises the cumulative time budget of the existing task.
 - `--reconcile` reports the observed result of the interrupted operation the
   task stopped on; without it a task waiting on `pending_operation` refuses
   to continue.
@@ -62,7 +61,7 @@ agent doctor [--json]
 - `logs --follow` / `wait` poll until the task stops; `wait --timeout`
   bounds how long the watcher itself waits.
 - `show --summary` prints the human-readable report (goal, criteria with
-  evidence, budget use, tool-call counts). Plain `show` is the full JSON
+  evidence, token usage, time use, tool-call counts). Plain `show` is the full JSON
   dump of the task plus every event - the only place an exact `--allow-mcp`
   approval key can be copied from byte-for-byte.
 - `delete` refuses a currently-running task; `cancel` is the way to stop one.

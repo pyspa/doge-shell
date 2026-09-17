@@ -11,7 +11,6 @@
             criteria: vec![],
             plan: vec![],
             progress: String::new(),
-            token_budget: 1000,
             tokens_used: 0,
             time_budget_ms: 60_000,
             elapsed_ms: 0,
@@ -145,9 +144,9 @@
         assert!(runtime.stopped());
     }
 
-    fn verified_at_budget() -> (AgentTask, Arc<MemoryStore>) {
+    fn verified_at_time_budget() -> (AgentTask, Arc<MemoryStore>) {
         let mut task = running_task();
-        task.tokens_used = task.token_budget;
+        task.elapsed_ms = task.time_budget_ms;
         task.criteria = vec![Verification {
             criterion: "done".into(),
             evidence_event: Some(1),
@@ -158,28 +157,28 @@
         (task, store)
     }
 
-    /// A final round landing exactly on its budget with verified work done
+    /// A final round landing exactly on its time budget with verified work done
     /// completed the task; resuming would stop again at the loop head unless
-    /// the budget is raised.
+    /// the time budget is raised.
     #[test]
     fn finish_completes_verified_work_at_exact_budget() {
-        let (task, store) = verified_at_budget();
+        let (task, store) = verified_at_time_budget();
         let mut runtime = AgentRuntime::new(task, store);
         runtime.finish(true, None).unwrap();
         assert_eq!(runtime.task.status, TaskStatus::Completed);
     }
 
-    /// A turn stopped *by* the budget is resumable, not failed on its merits.
+    /// A turn stopped *by* the time budget is resumable, not failed on its merits.
     #[test]
     fn finish_interrupts_a_budget_stopped_failure() {
-        let (mut task, store) = verified_at_budget();
+        let (mut task, store) = verified_at_time_budget();
         task.criteria = vec![];
         let mut runtime = AgentRuntime::new(task, store);
         runtime.finish(false, Some("boom".into())).unwrap();
         assert_eq!(runtime.task.status, TaskStatus::Interrupted);
     }
 
-    /// A turn that met grant refusals and ended unsuccessfully with budget
+    /// A turn that met grant refusals and ended unsuccessfully with time
     /// left is stuck, not failed: `Interrupted` with the refusal hint, so a
     /// resume can name the missing grant.
     #[test]
@@ -296,6 +295,6 @@
         let wrapped: anyhow::Result<()> = Err(anyhow::anyhow!(MISSING_PLAN_MESSAGE));
         let wrapped = wrapped.context("before_tool failed").unwrap_err();
         assert!(is_missing_plan_error(&wrapped));
-        let other = anyhow::anyhow!("agent: task stopped or budget exhausted");
+        let other = anyhow::anyhow!("agent: task stopped or time budget exhausted");
         assert!(!is_missing_plan_error(&other));
     }

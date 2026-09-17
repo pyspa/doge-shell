@@ -28,17 +28,15 @@ the foreground (`--dry-run` previews without changing anything).
   value on the command line; putting the value itself there does.
 - `--sandbox` (`run`-only): require pinned SRT isolation.
 
-## Budgets
+## Time budget
 
-- `agent run [--tokens N] [--timeout SECONDS]` sets the cumulative token budget
-  and the cumulative time budget in seconds. `agent resume` accepts the same
-  two flags to raise them on an existing task.
-- Without flags the values fall back to `AI_AGENT_TOKEN_BUDGET` /
-  `AI_AGENT_TIMEOUT_SECS`, read as a shell variable first and the process
-  environment second, and finally to built-in defaults (50000 tokens / 900s).
-  `cron add --agent` starts from the same defaults.
-- The token budget stops subsequent requests once reached; it is not a
-  billing cap. A final round that lands exactly on its budget with verified
+- `agent run [--timeout SECONDS]` sets the cumulative time budget in seconds.
+  `agent resume` accepts the same flag to raise it on an existing task.
+- Without the flag the value falls back to `AI_AGENT_TIMEOUT_SECS`, read as
+  a shell variable first and the process environment second, and finally to
+  the built-in default (1800s). `cron add --agent` starts from the same
+  default. Token usage is recorded and shown but never caps a run.
+- A final round that lands exactly on its time budget with verified
   work done still counts as completed.
 - `AI_AGENT_MAX_CONCURRENT` (default 1) bounds how many tasks - detached or
   not - may run at once.

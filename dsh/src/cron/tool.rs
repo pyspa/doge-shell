@@ -285,10 +285,6 @@ fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
     argv.push("--paused".to_string());
     if request.agent {
         argv.push("--agent".to_string());
-        if let Some(tokens) = &request.tokens {
-            argv.push("--tokens".to_string());
-            argv.push(tokens.clone());
-        }
         if let Some(ceiling) = &request.max_tokens_per_day {
             argv.push("--max-tokens-per-day".to_string());
             argv.push(ceiling.clone());
@@ -371,10 +367,6 @@ fn update(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
     if let Some(catchup) = &request.catchup {
         argv.push("--catchup".to_string());
         argv.push(catchup.clone());
-    }
-    if let Some(tokens) = &request.tokens {
-        argv.push("--tokens".to_string());
-        argv.push(tokens.clone());
     }
     if let Some(ceiling) = &request.max_tokens_per_day {
         argv.push("--max-tokens-per-day".to_string());

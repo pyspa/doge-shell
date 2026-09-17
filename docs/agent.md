@@ -5,16 +5,16 @@
 ## 開始と再開
 
 ```sh
-agent run --tokens 50000 --timeout 900 --write . --allow-command 'cargo test -p dsh-types' --check '対象テストが成功する' -- 'テスト失敗を調査し修正して'
+agent run --timeout 1800 --write . --allow-command 'cargo test -p dsh-types' --check '対象テストが成功する' -- 'テスト失敗を調査し修正して'
 agent list
 agent show TASK_ID              # 会話全体・全イベントの生 JSON（--allow-mcp の承認キーはここでしか取れない）
 agent show TASK_ID --summary    # goal・criteria の合否・最終応答・ツール集計の短い要約
-agent resume TASK_ID --tokens 80000 --timeout 1800
+agent resume TASK_ID --timeout 1800
 agent cancel TASK_ID
 agent delete TASK_ID
 ```
 
-時間は秒、トークンと時間の指定値は再開分を含む累積上限です。CLI指定がなければシェル変数、プロセス環境の順で `AI_AGENT_TOKEN_BUDGET` と `AI_AGENT_TIMEOUT_SECS` を解決し、どちらも未設定なら既定値（50000トークン／900秒）を使います。いずれも正の残量が必要です。トークン上限は次の要求を止める条件で、請求額の厳密な上限ではありません。使用量を返さないプロバイダではタスクを停止します。
+時間は秒で、指定値は再開分を含む累積上限です。CLI指定がなければシェル変数、プロセス環境の順で `AI_AGENT_TIMEOUT_SECS` を解決し、どちらも未設定なら既定値（1800秒）を使います。正の残量が必要です。使用量（トークン）は記録・表示されますが、上限としては使いません。使用量を返さないプロバイダでもタスクは続行します。
 
 初期の読み取り範囲は開始時の cwd です。`--read DIR`、`--write DIR` は既存ディレクトリを指定し、繰り返せます。コマンドは `--allow-command` の完全一致、MCP操作は `agent show` に表示された承認キーを `--allow-mcp` へ渡して許可します。範囲外の要求はその場で止まらず、ツール結果のエラーとして返ってタスクは回避策を探して続行します（誰も見ていない実行で承認待ちが出ても意味がないため）。どうしても進めなくなったときだけ `Interrupted` で止まり、`stop_reason` に最後の拒否内容が残るので、`agent resume` に追加の権限を明示して再開できます。外部送信・公開も対象と引数を含む別の許可です。
 
@@ -32,10 +32,10 @@ AI chat hooks はタスク実行中も発火します。`ask` は対話プロン
 
 ## バックグラウンド実行（`--detach`／`-d`）
 
-`agent run`/`agent resume` に `--detach`（`-d`）を足すと、タスクを別プロセス（`dogesh -c "agent run-detached <id>"`）に渡してすぐプロンプトへ戻ります。権限モデル・予算の扱いは前景実行と何も変わりません。無人実行なので承認プロンプトは出ません。代わりに、権限不足の操作はその場で止まらずツール結果のエラーとして返り、タスクは回避策を探して続行します。同じ拒否操作を3回繰り返す・結果不明の操作が残る・予算切れの場合だけ人が再開する状態（`input-required` または権限ヒント付きの `interrupted`）で止まります。`--tokens`/`--timeout` の省略時は既定値が使われます。
+`agent run`/`agent resume` に `--detach`（`-d`）を足すと、タスクを別プロセス（`dogesh -c "agent run-detached <id>"`）に渡してすぐプロンプトへ戻ります。権限モデル・時間予算の扱いは前景実行と何も変わりません。無人実行なので承認プロンプトは出ません。代わりに、権限不足の操作はその場で止まらずツール結果のエラーとして返り、タスクは回避策を探して続行します。同じ拒否操作を3回繰り返す・結果不明の操作が残る・時間切れの場合だけ人が再開する状態（`input-required` または権限ヒント付きの `interrupted`）で止まります。`--timeout` の省略時は既定値が使われます。
 
 ```sh
-agent run --tokens 50000 --timeout 900 --write . --detach -- 'テスト失敗を調査し修正して'
+agent run --timeout 1800 --write . --detach -- 'テスト失敗を調査し修正して'
 #  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
 
 agent list [--all] [--json]      # * が付いた行は今まさに実行中のタスク。--all は 24 時間より前に終わった completed/cancelled も表示
@@ -63,7 +63,7 @@ agent approve TASK_ID          # 最後の拒否を1件だけ確認して許可�
 任意の隔離バックエンドは `@anthropic-ai/sandbox-runtime@0.0.75` の `srt` です。利用者が別途インストールし、PATHから発見できる状態で `--sandbox` を指定してください。Linuxではbubblewrap、socatなどSRTのOS依存も必要です。固定バージョン不一致や起動失敗時に通常実行へ切り替えません。
 
 ```sh
-agent run --sandbox --tokens 30000 --timeout 600 --write . --allow-command 'python3 validate.py' --check '検証スクリプトが終了コード0' -- 'データを検証して'
+agent run --sandbox --timeout 600 --write . --allow-command 'python3 validate.py' --check '検証スクリプトが終了コード0' -- 'データを検証して'
 ```
 
 システムの実行ファイル・ライブラリと明示したフォルダを読めます。Homebrewなど別の場所のツールチェーンには必要な場所だけ `--read` を追加します。`--network example.com` は隔離コマンドの通信先、`--env NAME` は子プロセスへ渡す追加環境変数です。通常はPATH、HOME、言語・一時ディレクトリのみ継承します。隔離なしのコマンド権限はコマンド実行の承認であり、OSによるファイル・通信の制限にはなりません。MCPの通信先・リモート書き込みは別の承認経路です。
@@ -86,7 +86,7 @@ Tasks対応サーバーが返したハンドルを保存し、`mcp_task_status` 
 
 ## cron からの無人実行
 
-`cron add --agent` は本ドキュメントと同じ `agent run` 入口を、スケジュールから起動するものです。権限モデル・予算・隔離は一切変わりません。無人実行のため承認プロンプトは出ず、権限不足の操作はツール結果のエラーとして返ってタスクは回避策を探して続行します。どうしても進めなくなった run は権限ヒント付きの `interrupted` で終わり、`needs-approval` の incident として記録され、次回以降も自動では再試行されません。`--check` の完了条件は、無人で判定されることを踏まえてより具体的に書く必要があります。run が何をしたかは `cron logs <job>` で読めます（AI ジョブの `stdout` にはこの要約が入り、`agent show --summary` と同じ内容です）。全イベントを見たいときだけ、cron 側の run 履歴からこのタスクの id を得て `agent show <id>` に渡してください。grant の一覧やタスクの状態機械はここに複製せず、詳細は `docs/cron.md` を参照してください。
+`cron add --agent` は本ドキュメントと同じ `agent run` 入口を、スケジュールから起動するものです。権限モデル・時間予算・隔離は一切変わりません。無人実行のため承認プロンプトは出ず、権限不足の操作はツール結果のエラーとして返ってタスクは回避策を探して続行します。どうしても進めなくなった run は権限ヒント付きの `interrupted` で終わり、`needs-approval` の incident として記録され、次回以降も自動では再試行されません。`--check` の完了条件は、無人で判定されることを踏まえてより具体的に書く必要があります。run が何をしたかは `cron logs <job>` で読めます（AI ジョブの `stdout` にはこの要約が入り、`agent show --summary` と同じ内容です）。全イベントを見たいときだけ、cron 側の run 履歴からこのタスクの id を得て `agent show <id>` に渡してください。grant の一覧やタスクの状態機械はここに複製せず、詳細は `docs/cron.md` を参照してください。
 
 逆方向 — タスク自身が cron ジョブを作る／変える — には `cron_manage` という chat tool があります（`execute` 経由の `cron ...` は builtin には届きません）。作成したジョブは常に paused で登録され、渡せる grant は**呼び出し中のタスク自身の grant を超えられません**。それ以外の変更（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は他の書き込み系ツールと同じく毎回拒否のエラーとして返り、タスクは続行します。詳細は `docs/cron.md` の「エージェント自身によるジョブ管理」を参照してください。
 

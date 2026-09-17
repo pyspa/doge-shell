@@ -75,7 +75,7 @@ pub(crate) fn definition() -> Value {
                     },
                     "agent": {
                         "type": "boolean",
-                        "description": "`create` only: register an unattended agent job instead of a shell job. Needs `goal`, `tokens`, and at least one of `read`/`write`."
+                        "description": "`create` only: register an unattended agent job instead of a shell job. Needs `goal` and at least one of `read`/`write`."
                     },
                     "goal": {
                         "type": "string",
@@ -84,10 +84,6 @@ pub(crate) fn definition() -> Value {
                     "cwd": {
                         "type": "string",
                         "description": "Working directory. Defaults to the directory this call runs from."
-                    },
-                    "tokens": {
-                        "type": "integer",
-                        "description": "An agent job's per-run token ceiling. Required when `agent` is set on `create`."
                     },
                     "max_tokens_per_day": {
                         "type": "integer",
@@ -213,7 +209,6 @@ fn parse_request(arguments: &str) -> Result<CronToolRequest, String> {
         goal: opt_str(&parsed, "goal"),
         cwd: opt_str(&parsed, "cwd"),
         agent: bool_flag(&parsed, "agent"),
-        tokens: opt_str(&parsed, "tokens"),
         max_tokens_per_day: opt_str(&parsed, "max_tokens_per_day"),
         check: str_list(&parsed, "check"),
         on: opt_str(&parsed, "on"),
@@ -380,9 +375,6 @@ fn update_summary(request: &CronToolRequest) -> Option<String> {
     }
     if let Some(catchup) = &request.catchup {
         parts.push(format!("catchup={catchup}"));
-    }
-    if let Some(tokens) = &request.tokens {
-        parts.push(format!("tokens={tokens}"));
     }
     if let Some(ceiling) = &request.max_tokens_per_day {
         parts.push(format!("max_tokens_per_day={ceiling}"));

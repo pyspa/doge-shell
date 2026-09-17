@@ -116,7 +116,7 @@ pub const MISSING_PLAN_MESSAGE: &str =
     "record a plan and fixed completion criteria with task_plan before taking action";
 
 /// Whether `before_tool` refused a call for a missing plan/criteria, as
-/// opposed to a stopped task, exhausted budget, or unusable store. Matches on
+/// opposed to a stopped task, exhausted time budget, or unusable store. Matches on
 /// the error chain (exact message) so a future `.context()` wrapper around
 /// the refusal still classifies correctly without prose matching elsewhere.
 pub fn is_missing_plan_error(error: &anyhow::Error) -> bool {
@@ -184,7 +184,6 @@ impl AgentRuntime {
     }
     pub fn stopped(&self) -> bool {
         self.task.status != TaskStatus::Running
-            || self.task.tokens_used >= self.task.token_budget
             || self
                 .task
                 .elapsed_ms
@@ -203,10 +202,10 @@ impl AgentRuntime {
                     false
                 })
     }
-    /// Whether the task was cancelled, ignoring budgets.
+    /// Whether the task was cancelled, ignoring the time budget.
     ///
     /// `stopped` doubles as the loop's "do not start more work" check, where
-    /// an exhausted budget must halt the next iteration. `finish` needs the
+    /// an exhausted time budget must halt the next iteration. `finish` needs the
     /// narrower question: a final round that lands exactly on its budget with
     /// verified work done completed the task, it did not interrupt it.
     fn cancelled(&self) -> bool {
@@ -223,14 +222,14 @@ impl AgentRuntime {
             json!({
                 "goal":self.task.goal, "criteria":self.task.criteria, "plan":self.task.plan,
                 "progress":self.task.progress, "grant":self.task.grant,
-                "tokens_used":self.task.tokens_used, "token_budget":self.task.token_budget,
+                "tokens_used":self.task.tokens_used,
                 "pending_operation":self.task.pending_operation
             })
         )
     }
     pub fn before_tool(&mut self, call: &Value, checkpoint: Value) -> Result<()> {
         if self.stopped() {
-            bail!("agent: task stopped or budget exhausted");
+            bail!("agent: task stopped or time budget exhausted");
         }
         let name = call["function"]["name"].as_str().unwrap_or_default();
         // `skill_manage` writes files the next run will follow as instructions,
@@ -313,15 +312,15 @@ impl AgentRuntime {
             )))?;
         }
         if self.task.status == TaskStatus::Running {
-            // `Completed` ignores an exhausted budget on purpose: a final
+            // `Completed` ignores an exhausted time budget on purpose: a final
             // round that lands exactly on it with verified work done completed
             // the task (resuming would stop again at the loop head unless the
-            // budget is raised - a pointless cycle). Cancellation still wins.
-            // `Failed` keeps the budget check: a turn stopped *by* the budget
-            // is `Interrupted` (resumable), not failed on its merits.
+            // time budget is raised - a pointless cycle). Cancellation still wins.
+            // `Failed` keeps the time-budget check: a turn stopped *by* the time
+            // budget is `Interrupted` (resumable), not failed on its merits.
             //
             // A turn that met grant refusals (`denials > 0`) yet ended
-            // unsuccessfully without exhausting a budget is stuck, not
+            // unsuccessfully without exhausting the time budget is stuck, not
             // failed: it lands `Interrupted` with the last refusal hint as
             // its `stop_reason` (the exact shape `blocked_need` parses into
             // an `agent resume --allow-*` command) instead of `Failed`. The
@@ -369,7 +368,7 @@ impl AgentRuntime {
                 .or_else(|| {
                     (!self.task.verified()).then(|| "verification remains incomplete".into())
                 }).or_else(|| {
-                    (self.task.status != TaskStatus::Completed).then(|| "task stopped before completion (budget or interruption)".into())
+                    (self.task.status != TaskStatus::Completed).then(|| "task stopped before completion (time budget or interruption)".into())
                 });
         }
         self.save(Some((
@@ -384,7 +383,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         definition(
             "task_plan",
-            "Record the plan and progress. Must be called with plan and criteria before any edit/str_replace/execute/skill_manage/MCP tool; a mutation without it is rejected and must be retried after task_plan. Criteria can only be set once, before work starts; cannot change grants or budgets.",
+            "Record the plan and progress. Must be called with plan and criteria before any edit/str_replace/execute/skill_manage/MCP tool; a mutation without it is rejected and must be retried after task_plan. Criteria can only be set once, before work starts; cannot change grants.",
             json!({"plan":{"type":"array","items":{"type":"string"}},"progress":{"type":"string"},"criteria":{"type":"array","items":{"type":"string"}}}),
             &["plan", "progress"],
         ),

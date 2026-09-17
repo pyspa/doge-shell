@@ -254,7 +254,6 @@ mod tests {
             criteria: vec![],
             plan: vec![],
             progress: String::new(),
-            token_budget: 100,
             tokens_used: 10,
             time_budget_ms: 1_000,
             elapsed_ms: 10,

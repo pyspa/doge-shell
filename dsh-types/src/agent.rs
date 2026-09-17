@@ -44,7 +44,6 @@ pub struct AgentTask {
     pub criteria: Vec<Verification>,
     pub plan: Vec<String>,
     pub progress: String,
-    pub token_budget: u64,
     pub tokens_used: u64,
     pub time_budget_ms: u64,
     pub elapsed_ms: u64,

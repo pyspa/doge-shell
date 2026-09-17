@@ -6,7 +6,7 @@ use dsh_types::agent::{TaskGrant, Verification};
 use dsh_types::cron::job::{AgentJobSpec, CronJobPatch, CronJobSpec, JobKind};
 use dsh_types::schedule::{DEFAULT_TIMEOUT_SECS, NotifyPolicy, Schedule, parse_schedule};
 
-use crate::agent::{DEFAULT_AGENT_TIMEOUT_SECS, DEFAULT_AGENT_TOKEN_BUDGET};
+use crate::agent::DEFAULT_AGENT_TIMEOUT_SECS;
 
 /// Default lease/lookback window for a missed schedule slot.
 pub const DEFAULT_CATCHUP_SECS: u64 = 3600;
@@ -54,7 +54,6 @@ pub struct AddArgs {
     pub agent: bool,
     pub grant: TaskGrant,
     pub criteria: Vec<String>,
-    pub token_budget: u64,
     pub max_tokens_per_day: Option<u64>,
     pub schedule_spec: String,
     pub schedule: Option<Schedule>,
@@ -95,10 +94,6 @@ fn parse_named_duration(value: &str) -> Result<u64, String> {
 pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
     let mut out = AddArgs {
         catchup_secs: DEFAULT_CATCHUP_SECS,
-        // An agent job starts with the same budget a person typing
-        // `agent run` without flags would get (`crate::agent`'s defaults),
-        // not zero; `build_spec` no longer has to reject the unset case.
-        token_budget: DEFAULT_AGENT_TOKEN_BUDGET,
         ..Default::default()
     };
     let mut index = 0;
@@ -158,11 +153,6 @@ pub fn parse_add(args: &[String]) -> Result<AddArgs, String> {
             "--on" => out.notify = NotifyPolicy::parse(value)?,
             "--timeout" => out.timeout_secs = Some(parse_named_duration(value)?),
             "--catchup" => out.catchup_secs = parse_named_duration(value)?,
-            "--tokens" => {
-                out.token_budget = value
-                    .parse()
-                    .map_err(|_| "--tokens must be a number".to_string())?
-            }
             "--max-tokens-per-day" => {
                 out.max_tokens_per_day = Some(
                     value
@@ -278,7 +268,6 @@ pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, Str
             Some(AgentJobSpec {
                 grant: args.grant,
                 criteria: args.criteria,
-                token_budget: args.token_budget,
                 // One flag drives both the model's own cooperative budget and
                 // the outer wall-clock deadline the tick enforces from
                 // outside; see `run_job`'s doc comment for why they are kept
@@ -326,7 +315,7 @@ pub fn parse_edit(
         .map(|agent| agent.grant.clone())
         .unwrap_or_default();
     // Whether a flag that only makes sense on an agent job (a grant flag,
-    // `--tokens`, `--max-tokens-per-day`, `--check`, `--sandbox`) was named.
+    // `--max-tokens-per-day`, `--check`, `--sandbox`) was named.
     // `--timeout` is deliberately *not* one of these here - it is checked
     // separately below, because it is valid on every job but, on an agent
     // job specifically, still has to resync `time_budget_secs` (see below).
@@ -334,7 +323,6 @@ pub fn parse_edit(
     let mut criteria: Vec<String> = existing_agent
         .map(|agent| agent.criteria.clone())
         .unwrap_or_default();
-    let mut token_budget = existing_agent.map(|agent| agent.token_budget);
     let mut max_tokens_per_day = existing_agent.and_then(|agent| agent.max_tokens_per_day);
     let mut index = 1;
 
@@ -377,14 +365,6 @@ pub fn parse_edit(
             "--on" => patch.notify = Some(NotifyPolicy::parse(value)?),
             "--timeout" => patch.timeout_secs = Some(parse_named_duration(value)?),
             "--catchup" => patch.catchup_secs = Some(parse_named_duration(value)?),
-            "--tokens" => {
-                token_budget = Some(
-                    value
-                        .parse()
-                        .map_err(|_| "--tokens must be a number".to_string())?,
-                );
-                agent_flag_touched = true;
-            }
             "--max-tokens-per-day" => {
                 max_tokens_per_day = Some(
                     value
@@ -402,13 +382,13 @@ pub fn parse_edit(
     }
 
     // Agent-only flags on a job with no existing agent spec would otherwise
-    // silently fabricate one (`token_budget: 0`, an empty grant) on what is
+    // silently fabricate one (an empty grant) on what is
     // really a shell job: `job.kind` stays `sh`, but `cron show`/`doctor`
     // would start rendering a bogus "agent:" section for it.
     if agent_flag_touched && existing_agent.is_none() {
         return Err(
             "this job is not an agent job; --read/--write/--allow-command/--allow-mcp/--network/\
-             --env/--sandbox/--tokens/--max-tokens-per-day/--check only apply to one created \
+             --env/--sandbox/--max-tokens-per-day/--check only apply to one created \
              with `cron add --agent`"
                 .to_string(),
         );
@@ -430,7 +410,6 @@ pub fn parse_edit(
         patch.agent = Some(AgentJobSpec {
             grant,
             criteria,
-            token_budget: token_budget.unwrap_or(0),
             time_budget_secs: patch.timeout_secs.unwrap_or(existing_time_budget_secs),
             max_tokens_per_day,
         });

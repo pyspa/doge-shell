@@ -11,7 +11,6 @@ fn base_task() -> AgentTask {
         criteria: vec![],
         plan: vec![],
         progress: String::new(),
-        token_budget: 1000,
         tokens_used: 0,
         time_budget_ms: 1000,
         elapsed_ms: 0,

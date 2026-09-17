@@ -302,7 +302,6 @@ fn agent_spec_round_trips_through_json() {
             sandbox: true,
         },
         criteria: vec!["the report exists".to_string()],
-        token_budget: 50_000,
         time_budget_secs: 900,
         max_tokens_per_day: None,
     };

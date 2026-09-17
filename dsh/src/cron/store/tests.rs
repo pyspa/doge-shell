@@ -121,7 +121,6 @@ fn an_agent_job_keeps_its_grant() {
     job.command = "summarise today's commits".to_string();
     job.agent = Some(AgentJobSpec {
         criteria: vec!["a summary file exists".to_string()],
-        token_budget: 50_000,
         time_budget_secs: 900,
         max_tokens_per_day: Some(200_000),
         ..Default::default()
@@ -132,7 +131,6 @@ fn an_agent_job_keeps_its_grant() {
     assert_eq!(stored.kind, JobKind::Ai);
     assert_eq!(stored.command, "summarise today's commits");
     let agent = stored.agent.expect("payload");
-    assert_eq!(agent.token_budget, 50_000);
     assert_eq!(agent.max_tokens_per_day, Some(200_000));
 }
 
@@ -1252,7 +1250,6 @@ fn editing_only_the_schedule_also_reclamps_an_agent_jobs_stored_time_budget() {
     job.command = "goal".to_string();
     job.agent = Some(AgentJobSpec {
         time_budget_secs: 900,
-        token_budget: 50_000,
         ..Default::default()
     });
     store.create(&job, &env(), NOW, false).unwrap();
@@ -1275,10 +1272,6 @@ fn editing_only_the_schedule_also_reclamps_an_agent_jobs_stored_time_budget() {
     assert_eq!(
         agent.time_budget_secs, 30,
         "the AI job's own stored time budget must shrink along with jobs.timeout_secs"
-    );
-    assert_eq!(
-        agent.token_budget, 50_000,
-        "the rest of the payload survives"
     );
 }
 

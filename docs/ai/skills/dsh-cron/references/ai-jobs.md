@@ -9,7 +9,7 @@ incident, so grants have to be complete *before* the first unattended run.
 
 ```sh
 cron add --agent --name digest \
-  --tokens 50000 --timeout 10m \
+  --timeout 10m \
   --read . --write out \
   --allow-command 'gh pr list --json number,title' \
   --check 'out/digest.md contains today'"'"'s date' \
@@ -17,15 +17,13 @@ cron add --agent --name digest \
   -- 'summarise open PRs and yesterday'"'"'s commits into out/digest.md'
 ```
 
-- `--tokens` is a **per-run** ceiling - every run starts a fresh task, so this is not a
-  running total the way `agent resume` treats a manually resumed task. Both it and
-  `--timeout` are optional and default to the same values as `agent run`
-  (50000 tokens / 900s).
+- `--timeout` is optional and defaults to the same value as `agent run`
+  (1800s).
 - `--timeout` sets both the model's own cooperative time budget and the outer wall-clock
   deadline the tick enforces from outside if the model does not stop on its own.
 - `--max-tokens-per-day` (optional) caps total spend across all of a job's runs in a
   rolling 24 hours - worth setting on anything scheduled more often than a few times a
-  day, since a per-run budget alone is not a bound on the day's total.
+  day, since the per-run time budget alone is not a bound on the day's total.
 - Grants (`--read`, `--write`, `--allow-command`, `--allow-mcp`, `--network`, `--env`,
   `--sandbox`) are exactly `agent run`'s flags and exactly its validation. Nothing beyond
   what is granted at creation time is available at run time - there is no prompt to fall
@@ -124,7 +122,7 @@ would just reproduce the identical failure every time.
 
 An agent job's `stdout` is a short, human-readable summary built after the run finishes:
 its goal, whether each `--check` criterion passed (with the event number that proved it),
-its token/time budget usage, a count of tool calls (and the last one that failed, if any),
+its token usage and time use, a count of tool calls (and the last one that failed, if any),
 and - the first line, so it doubles as `cron history`'s one-line preview - its final
 answer. `stderr` still carries the `stop_reason`. The same summary is what `agent show
 <task-id> --summary` prints; plain `agent show <task-id>` remains the full JSON record

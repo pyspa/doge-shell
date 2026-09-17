@@ -3,7 +3,7 @@
 //! Shared by [`super::run_task`] (which always runs them) and `agent run
 //! --detach`'s parent-side `start()` (`dsh/src/agent/detach.rs`), which runs
 //! them a second time *before* spawning the detached child so a doomed run -
-//! an empty goal, an exhausted budget, a root that no longer resolves -
+//! an empty goal, an exhausted time budget, a root that no longer resolves -
 //! fails in front of the person who typed the command instead of silently
 //! inside a process nobody is watching.
 
@@ -54,11 +54,11 @@ pub(crate) fn startable(
     if task.goal.trim().is_empty() {
         return Err(anyhow::Error::new(TaskFailure::Config).context("goal required after --"));
     }
-    if task.token_budget <= task.tokens_used || task.time_budget_ms <= task.elapsed_ms {
+    if task.time_budget_ms <= task.elapsed_ms {
         return Err(anyhow::Error::new(TaskFailure::Config).context(
-            "positive remaining token and time budgets are required \
-             (defaults 50000 tokens / 900s; see --tokens/--timeout or \
-             AI_AGENT_TOKEN_BUDGET/AI_AGENT_TIMEOUT_SECS)",
+            "positive remaining time budget is required \
+             (default 1800s; see --timeout or \
+             AI_AGENT_TIMEOUT_SECS)",
         ));
     }
     if task.pending_operation.is_some() && reconcile.is_none() {

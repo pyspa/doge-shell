@@ -302,7 +302,7 @@ impl ConversationManager {
                 return Err("agent: summary provider omitted token usage".into());
             }
             if runtime.stopped() {
-                return Err("agent: task stopped or budget exhausted during summary".into());
+                return Err("agent: task stopped or time budget exhausted during summary".into());
             }
         }
 

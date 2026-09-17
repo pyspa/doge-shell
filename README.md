@@ -968,7 +968,7 @@ row first runs it, and the other finds nothing left to do.
 model:
 
 ```bash
-cron add --agent --name digest --tokens 50000 --timeout 10m \
+cron add --agent --name digest --timeout 10m \
   --read . --write out --check "out/digest.md has today's date" \
   '0 9 * * mon-fri' -- 'summarise open PRs and recent commits into out/digest.md'
 ```
@@ -1018,12 +1018,12 @@ symptom-to-cause debugging table live in the `dsh-cron` skill
 
 `agent run`/`agent resume` accept `--detach` (`-d`): the task is handed to a separate
 `dogesh -c "agent run-detached <id>"` process, and the shell returns immediately instead
-of blocking until the task stops. Permissions, budgets and approval semantics are
-unchanged — an unattended run uses `--tokens`/`--timeout` when given, else built-in
-defaults (50000 tokens / 900s), and still stops for a permission it was not granted, rather than asking.
+of blocking until the task stops. Permissions, time budget and approval semantics are
+unchanged — an unattended run uses `--timeout` when given, else the built-in
+default (1800s), and still stops for a permission it was not granted, rather than asking.
 
 ```sh
-agent run --tokens 50000 --timeout 900 --write . --detach -- 'investigate and fix the failing test'
+agent run --timeout 1800 --write . --detach -- 'investigate and fix the failing test'
 #  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
 
 agent list                        # * marks a task that is actually running right now

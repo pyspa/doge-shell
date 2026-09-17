@@ -229,9 +229,9 @@ pub(crate) fn approve(
             "previous operation has an unknown outcome; inspect `agent show {id}` and the actual files/service, then approve with --reconcile describing the observed result"
         );
     }
-    if task.tokens_used >= task.token_budget || task.elapsed_ms >= task.time_budget_ms {
+    if task.elapsed_ms >= task.time_budget_ms {
         bail!(
-            "task {id} has no budget left; resume with larger budgets first (`agent resume {id} --tokens N --timeout SECONDS`), then approve if it gets stuck on a grant"
+            "task {id} has no time left; resume with a larger timeout first (`agent resume {id} --timeout SECONDS`), then approve if it gets stuck on a grant"
         );
     }
     let events = store.events(id)?;

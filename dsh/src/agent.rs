@@ -36,17 +36,11 @@ pub(crate) use store::TaskFailure;
 
 
 
-/// Default cumulative token budget for a new task when neither `--tokens`
-/// nor `AI_AGENT_TOKEN_BUDGET` names one. Mirrors the value the docs use in
-/// examples; `cron add --agent` falls back to the same constant
-/// (`dsh/src/cron/cli/parse.rs`) so an unattended run starts with the same
-/// budget an interactive one would.
-pub(crate) const DEFAULT_AGENT_TOKEN_BUDGET: u64 = 50_000;
-/// Default cumulative time budget in seconds, same fallback chain as above
-/// (`--timeout`, then `AI_AGENT_TIMEOUT_SECS`).
-pub(crate) const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 900;
+/// Default cumulative time budget in seconds (`--timeout`, then
+/// `AI_AGENT_TIMEOUT_SECS`).
+pub(crate) const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 1800;
 
-const HELP: &str = "agent run [--tokens N] [--timeout SECONDS] [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--profile NAME] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach|-d] [--dry-run] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent retry ID [--tokens N] [--timeout SECONDS] [--check TEXT] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent approve ID [--reconcile TEXT] [--dry-run]\nagent profiles\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--profile expands to exact commands (see `agent profiles`); resume/retry also accept grant options. `approve` asks once, widens the grant by the one refusal the task is stuck on, and resumes in the foreground. --dry-run prints the expanded grant without starting. --detach (-d) starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: --tokens/--timeout, else AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment), else 50000 tokens / 900s. Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
+const HELP: &str = "agent run [--timeout SECONDS] [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--profile NAME] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach|-d] [--dry-run] -- GOAL\nagent resume ID [--timeout SECONDS] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent retry ID [--timeout SECONDS] [--check TEXT] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent approve ID [--reconcile TEXT] [--dry-run]\nagent profiles\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--profile expands to exact commands (see `agent profiles`); resume/retry also accept grant options. `approve` asks once, widens the grant by the one refusal the task is stuck on, and resumes in the foreground. --dry-run prints the expanded grant without starting. --detach (-d) starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudget: --timeout, else AI_AGENT_TIMEOUT_SECS (shell variable, then environment), else 1800s. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
 
 /// Whether a turn that just ended needs an explicit
 /// `AgentLifecycleManager::report_blocked` call rather than letting
@@ -243,8 +237,8 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             bail!("task {source_id} already finished; start a new task with `agent run`");
         }
         // Never clone a live run: without this, a retry of a `Running` task
-        // would duplicate the same work (and burn budget twice when the
-        // concurrency ceiling allows it).
+        // would duplicate the same work when the
+        // concurrency ceiling allows it.
         if source.status == TaskStatus::Running
             || locks::try_lock_task(&store, &source.id)?.is_none()
         {
@@ -267,7 +261,6 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                 .collect(),
             plan: vec![],
             progress: format!("retried from {source_id}"),
-            token_budget: source.token_budget,
             tokens_used: 0,
             time_budget_ms: source.time_budget_ms,
             elapsed_ms: 0,
@@ -289,9 +282,6 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             criteria: vec![],
             plan: vec![],
             progress: String::new(),
-            token_budget: setting(shell, "AI_AGENT_TOKEN_BUDGET")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(DEFAULT_AGENT_TOKEN_BUDGET),
             tokens_used: 0,
             time_budget_ms: setting(shell, "AI_AGENT_TIMEOUT_SECS")
                 .and_then(|s| s.parse::<u64>().ok())
@@ -344,7 +334,6 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             continue;
         }
         match option.as_str() {
-            "--tokens" => task.token_budget = value.parse()?,
             "--timeout" => {
                 task.time_budget_ms = value
                     .parse::<u64>()?
@@ -367,7 +356,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     }
     if dry_run {
         ctx.write_stdout(&format!(
-            "goal: {}\ncommands: {}\nread: {}\nwrite: {}\ntokens: {}/{}\ntimeout_secs: {}\ndetach: {detach}",
+            "goal: {}\ncommands: {}\nread: {}\nwrite: {}\ntokens_used: {}\ntimeout_secs: {}\ndetach: {detach}",
             task.goal,
             if task.grant.commands.is_empty() {
                 "(none)".to_string()
@@ -391,12 +380,11 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                     .join(", ")
             },
             task.tokens_used,
-            task.token_budget,
             task.time_budget_ms / 1000,
         ))?;
         // Fail fast like `detach::start`'s parent-side check: a preview that
         // passes while the real run would immediately fail (empty goal,
-        // exhausted budget, unreconciled operation) is worse than no preview.
+        // exhausted time budget, unreconciled operation) is worse than no preview.
         if let Err(error) = validate::startable(shell, &store, &task, reconcile.as_deref()) {
             bail!("dry-run validation failed: {error:#}");
         }

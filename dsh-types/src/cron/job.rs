@@ -69,9 +69,6 @@ pub struct AgentJobSpec {
     pub grant: TaskGrant,
     /// Completion criteria, verified against recorded tool results.
     pub criteria: Vec<String>,
-    /// Per-run ceiling. Each run starts a fresh task, so this is never a
-    /// running total the way `agent resume` treats it.
-    pub token_budget: u64,
     pub time_budget_secs: u64,
     /// Across a rolling 24 hours, over every run of this job. Without it a
     /// five-minute schedule is an unbounded bill.

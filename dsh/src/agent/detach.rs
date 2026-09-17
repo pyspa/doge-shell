@@ -7,7 +7,7 @@
 //!
 //! - [`start`] runs in the interactive shell. It validates the task the same
 //!   way an ordinary `agent run` would (so a doomed run - an empty goal, an
-//!   exhausted budget, a root that does not resolve - fails in front of the
+//!   exhausted time budget, a root that does not resolve - fails in front of the
 //!   person who typed the command, not silently inside a process nobody is
 //!   watching), persists it, and spawns the child.
 //! - [`execute`] runs inside that child. It is what `agent run-detached

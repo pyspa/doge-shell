@@ -73,7 +73,6 @@ fn create_an_agent_job_with_a_grant_round_trips_it() {
         schedule: Some("0 9 * * mon-fri".to_string()),
         agent: true,
         goal: Some("summarise new commits".to_string()),
-        tokens: Some("50000".to_string()),
         check: vec!["out/digest.md exists".to_string()],
         write: vec![dir.path().to_string_lossy().into_owned()],
         ..request()
@@ -81,7 +80,6 @@ fn create_an_agent_job_with_a_grant_round_trips_it() {
     create(&store, &request).expect("create");
     let job = store.get("digest").expect("job exists");
     let agent = job.agent.expect("agent spec");
-    assert_eq!(agent.token_budget, 50_000);
     assert_eq!(agent.criteria, vec!["out/digest.md exists".to_string()]);
     assert_eq!(agent.grant.write_roots.len(), 1);
 }
@@ -116,7 +114,6 @@ fn update_merges_onto_the_jobs_existing_grant() {
             schedule: Some("5m".to_string()),
             agent: true,
             goal: Some("summarise".to_string()),
-            tokens: Some("1000".to_string()),
             write: vec![dir.path().to_string_lossy().into_owned()],
             ..request()
         },
@@ -443,7 +440,6 @@ fn a_job_outside_the_calling_tasks_grant_is_refused() {
         criteria: vec![],
         plan: vec![],
         progress: String::new(),
-        token_budget: 100,
         tokens_used: 0,
         time_budget_ms: 1_000,
         elapsed_ms: 0,
@@ -509,7 +505,6 @@ fn a_job_whose_cwd_no_longer_resolves_is_refused_under_a_task() {
         criteria: vec![],
         plan: vec![],
         progress: String::new(),
-        token_budget: 100,
         tokens_used: 0,
         time_budget_ms: 1_000,
         elapsed_ms: 0,

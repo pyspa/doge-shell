@@ -66,15 +66,15 @@ Options for `add`/`edit`:
   --cwd <dir>            Working directory (default: here)
   --on <policy>          never | failure | change | both (default) | always
   --quiet                Same as --on never
-  --timeout <n>          Seconds, or an interval like 5m (default: 60s, 900s for --agent)
+  --timeout <n>          Seconds, or an interval like 5m (default: 60s, 1800s for --agent)
   --catchup <n>          How late a missed run may be and still count (default: 1h)
   --paused               Register paused; see the first run with `cron run --now`
   --force                Allow `add` to replace an existing job of the same name
 
 Options for an agent job (`--agent`), matching `agent run`:
-  --tokens <n> --check <text> --read <dir> --write <dir> --allow-command <cmd>
+  --check <text> --read <dir> --write <dir> --allow-command <cmd>
   --allow-mcp <entry> --network <host> --env <name> --sandbox
-  (agent defaults: --tokens 50000, --timeout 900s)
+  (agent default: --timeout 1800s)
 
 Commands run under `sh -c` from the job's `--cwd`; shell aliases, abbreviations,
 builtins and Lisp functions are not available inside them. An agent job's

@@ -49,12 +49,12 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 `--agent` を付けたジョブは、無人実行される `agent run` そのものです。同じ入口・同じ権限モデルを使います（`docs/agent.md` 参照）。「今すぐ1回だけ」でよいなら `cron add` は不要で、`agent run --detach` の方が近道です（`docs/agent.md` の「バックグラウンド実行」参照）。繰り返し実行したいときにこの節を使ってください。grant モデル・状態機械はどちらも同じものなので、ここでは複製しません。
 
 ```sh
-cron add --agent --name digest --tokens 50000 --timeout 10m \
+cron add --agent --name digest --timeout 10m \
   --read . --write out --check "out/digest.md に今日の日付がある" \
   '0 9 * * mon-fri' -- '未対応のPRと直近のコミットをまとめてout/digest.mdに書く'
 ```
 
-- `--tokens` は **run ごと**の上限です（`agent resume` の累積予算とは違い、毎回新しいタスクとして開始するため）。`--tokens`/`--timeout` は省略可で、既定値は `agent run` と同じ 50000トークン／900秒です。
+- `--timeout` は省略可で、既定値は `agent run` と同じ1800秒です。
 - `--timeout` はモデル自身の協調的な時間予算（`AgentTask.time_budget_ms`）と、外側からの強制終了デッドラインの両方を兼ねます。モデルが自分で止まらない場合、`cron run-job` プロセス内のウォッチドッグがこの run の claim リース（`timeout` の2倍、最低60秒）が切れる少し前に自プロセスグループを `SIGKILL` します。run 行はその場では更新されません（プロセスごと落ちるため）が、次のスキャンの `reap_expired_leases` が `failed`(timeout) として拾います。
 - `--max-tokens-per-day`（任意）は直近24時間の累積トークン使用量に対する上限です。5分おきの実行では per-run 予算だけでは実質無制限になるため。
 - grant（`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`）は `agent run` と完全に同じ検証を通ります（`dsh-builtin/src/agent/grant.rs` を共有）。

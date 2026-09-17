@@ -35,7 +35,7 @@ pub(crate) enum TaskFailure {
     /// `--reconcile` was given to settle it.
     Reconcile,
     /// A prerequisite the task cannot supply for itself - a missing sandbox
-    /// runtime, an empty goal, or an exhausted budget - not something a
+    /// runtime, an empty goal, or an exhausted time budget - not something a
     /// retry would fix on its own.
     Config,
     /// The task store itself could not be read or written - the one case

@@ -61,11 +61,6 @@
           "description": "Register an unattended agent job"
         },
         {
-          "long": "--tokens",
-          "description": "Token budget for this run",
-          "takes_value": true
-        },
-        {
           "long": "--check",
           "description": "Completion criterion (repeatable)",
           "takes_value": true
@@ -219,11 +214,6 @@
         {
           "long": "--catchup",
           "description": "New catch-up window",
-          "takes_value": true
-        },
-        {
-          "long": "--tokens",
-          "description": "Token budget for this run",
           "takes_value": true
         },
         {

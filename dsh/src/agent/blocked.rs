@@ -178,7 +178,7 @@ pub(crate) fn is_grant_hint(reason: &str) -> bool {
 ///
 /// `None` means the task is not stuck on a permission at all (still running,
 /// or stopped for a reason no `agent resume` flag could ever address, such
-/// as an exhausted budget).
+/// as an exhausted time budget).
 ///
 /// Both `InputRequired` and grant-stuck `Interrupted` tasks qualify: since
 /// deny-and-continue, a refusal no longer stops the turn, so a task that

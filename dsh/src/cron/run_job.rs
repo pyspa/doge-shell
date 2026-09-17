@@ -313,7 +313,6 @@ fn agent_outcome(
             .collect(),
         plan: vec![],
         progress: String::new(),
-        token_budget: spec.token_budget,
         tokens_used: 0,
         time_budget_ms: spec.time_budget_secs.saturating_mul(1000),
         elapsed_ms: 0,

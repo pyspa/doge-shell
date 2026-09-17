@@ -716,7 +716,6 @@ pub(crate) fn running_task(root: &std::path::Path) -> dsh_types::agent::AgentTas
         criteria: Vec::new(),
         plan: vec!["step".to_string()],
         progress: String::new(),
-        token_budget: 1_000_000,
         tokens_used: 0,
         time_budget_ms: 600_000,
         elapsed_ms: 0,

@@ -23,7 +23,7 @@ fn fields_round_trip_including_numbers_as_strings() {
     let request = parse_request(&args(json!({
         "action": "create",
         "job": "digest",
-        "tokens": 50000,
+        "max_tokens_per_day": 200000,
         "check": ["out/digest.md exists"],
         "read": ["."],
         "sandbox": true,
@@ -32,7 +32,7 @@ fn fields_round_trip_including_numbers_as_strings() {
     assert_eq!(request.action, Some(CronToolAction::Create));
     assert_eq!(request.job.as_deref(), Some("digest"));
     // A JSON number must survive as the string `cli::parse` expects.
-    assert_eq!(request.tokens.as_deref(), Some("50000"));
+    assert_eq!(request.max_tokens_per_day.as_deref(), Some("200000"));
     assert_eq!(request.check, vec!["out/digest.md exists".to_string()]);
     assert_eq!(request.read, vec![".".to_string()]);
     assert!(request.sandbox);
@@ -433,7 +433,7 @@ fn update_confirmation_with_no_field_named_has_no_stray_summary() {
 }
 
 /// The bug this guards against: `update_summary` named `schedule`/`command`/
-/// `goal`/`cwd`/`on`/`timeout`/`catchup` but not `name`, `tokens`,
+/// `goal`/`cwd`/`on`/`timeout`/`catchup` but not `name`,
 /// `max_tokens_per_day` or `check` - an update that only renamed a job or
 /// raised its token ceiling produced the same generic, detail-free
 /// confirmation the "show the command" fix was written to replace.
@@ -443,14 +443,12 @@ fn update_confirmation_names_a_rename_and_a_raised_token_ceiling() {
         action: Some(CronToolAction::Update),
         job: Some("foo".to_string()),
         name: Some("bar".to_string()),
-        tokens: Some("50000".to_string()),
         max_tokens_per_day: Some("200000".to_string()),
         check: vec!["tests pass".to_string()],
         ..CronToolRequest::default()
     };
     let message = confirm_message(CronToolAction::Update, &request);
     assert!(message.contains("name=bar"), "{message}");
-    assert!(message.contains("tokens=50000"), "{message}");
     assert!(message.contains("max_tokens_per_day=200000"), "{message}");
     assert!(message.contains("tests pass"), "{message}");
 }

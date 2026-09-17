@@ -133,10 +133,10 @@ fn push_need(out: &mut String, need: &crate::agent::blocked::BlockedNeed) {
     }
 }
 
-/// Whether the task has no budget left to run on: remaining work then needs
-/// larger budgets first, and a stale grant hint would mislead.
+/// Whether the task has no time left to run on: remaining work then needs
+/// a larger timeout first, and a stale grant hint would mislead.
 fn budgets_exhausted(task: &AgentTask) -> bool {
-    task.tokens_used >= task.token_budget || task.elapsed_ms >= task.time_budget_ms
+    task.elapsed_ms >= task.time_budget_ms
 }
 
 /// `pub(crate)`: `agent/cli.rs`'s `agent logs` names the tool behind each
@@ -235,9 +235,8 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
         status_label(task.status)
     ));
     out.push_str(&format!(
-        "tokens: {}/{}  elapsed: {}s/{}s\n",
+        "tokens_used: {}  elapsed: {}s/{}s\n",
         task.tokens_used,
-        task.token_budget,
         task.elapsed_ms / 1000,
         task.time_budget_ms / 1000
     ));
@@ -257,7 +256,7 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
         // hint preservation, an unfinished-jobs stop after earlier
         // refusals): recover the latest refusal from the recorded results
         // instead of showing no guidance at all. Skipped on exhausted
-        // budgets, where raising the budget - not a grant - is the fix.
+        // time budget, where raising the timeout - not a grant - is the fix.
         if let Some(hint) = crate::agent::blocked::denial_hint_from_events(events) {
             let mut shadow = task.clone();
             shadow.stop_reason = Some(hint);

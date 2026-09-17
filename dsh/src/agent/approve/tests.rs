@@ -11,7 +11,6 @@ fn task_with(status: TaskStatus, stop_reason: Option<&str>) -> AgentTask {
         criteria: vec![],
         plan: vec![],
         progress: String::new(),
-        token_budget: 1000,
         tokens_used: 0,
         time_budget_ms: 60_000,
         elapsed_ms: 0,

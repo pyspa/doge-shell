@@ -123,7 +123,6 @@ pub struct CronToolRequest {
     pub cwd: Option<String>,
     /// Whether `create` registers an agent job rather than a shell job.
     pub agent: bool,
-    pub tokens: Option<String>,
     pub max_tokens_per_day: Option<String>,
     /// `--check`, repeatable.
     pub check: Vec<String>,

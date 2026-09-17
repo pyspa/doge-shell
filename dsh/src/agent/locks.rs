@@ -121,7 +121,7 @@ pub(crate) fn try_lock_task(store: &SqliteTaskStore, id: &str) -> Result<Option<
 /// it takes effect on the very next `agent run --detach` or cron tick.
 ///
 /// Shell variable, then environment - the same resolution order
-/// `AI_AGENT_TOKEN_BUDGET`/`AI_AGENT_TIMEOUT_SECS` and this diff's own
+/// `AI_AGENT_TIMEOUT_SECS` and this diff's own
 /// `DOGESH_AGENT_WATCH*` use (`super::setting`). A plain `std::env::var` read
 /// would silently ignore a value set with the shell's own `set`/`var`
 /// builtin rather than exported to the OS environment.

@@ -29,7 +29,6 @@ fn task(root: &Path) -> AgentTask {
         }],
         plan: vec!["write and read back".into()],
         progress: String::new(),
-        token_budget: 10000,
         tokens_used: 0,
         time_budget_ms: 30000,
         elapsed_ms: 0,
@@ -272,8 +271,7 @@ fn shared_loop_writes_verifies_and_persists_without_real_api() {
     let dir = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let store = Arc::new(SqliteTaskStore::open(&state.path().join("state")).unwrap());
-    let mut task = task(dir.path());
-    task.token_budget = 120;
+    let task = task(dir.path());
     let id = task.id.clone();
     store.save(&task, None).unwrap();
     let file = dir.path().join("hello.txt");
@@ -358,23 +356,8 @@ fn shared_loop_writes_verifies_and_persists_without_real_api() {
     ctx.interactive = false;
     let status =
         dsh_builtin::execute_chat_message(&ctx, &mut shell, "create and verify a greeting", None);
-    assert_ne!(status, dsh_types::ExitStatus::ExitedWith(0));
-    shell.agent_runtime.take();
-    let mut resumed = store.load(&id).unwrap();
-    assert_eq!(resumed.tokens_used, 120);
-    assert_eq!(resumed.status, TaskStatus::Interrupted);
-    assert!(resumed.pending_operation.is_none());
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello\n");
-    resumed.status = TaskStatus::Running;
-    resumed.token_budget = 10000;
-    store.save(&resumed, None).unwrap();
-    shell.agent_runtime = Some(Arc::new(Mutex::new(AgentRuntime::new(
-        resumed,
-        store.clone(),
-    ))));
-    let status =
-        dsh_builtin::execute_chat_message(&ctx, &mut shell, "create and verify a greeting", None);
     server.join().unwrap();
+    shell.agent_runtime.take();
     assert_eq!(status, dsh_types::ExitStatus::ExitedWith(0));
     assert_eq!(std::fs::read_to_string(file).unwrap(), "hello\n");
     let restored = store.load(&id).unwrap();
@@ -489,7 +472,7 @@ fn a_before_tool_refusal_is_recoverable_and_records_a_plan_next_round() {
 }
 
 #[test]
-fn recovery_preserves_budgets_and_unknown_intent() {
+fn recovery_preserves_time_budget_and_unknown_intent() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(SqliteTaskStore::open(&dir.path().join("state")).unwrap());
     let mut saved = task(dir.path());
@@ -510,15 +493,15 @@ fn recovery_preserves_budgets_and_unknown_intent() {
     assert_eq!(restored.elapsed_ms, 1000);
     assert!(restored.pending_operation.is_some());
     restored.status = TaskStatus::Running;
-    restored.tokens_used = restored.token_budget;
+    restored.elapsed_ms = restored.time_budget_ms;
     restored.criteria[0].passed = true;
     restored.criteria[0].evidence_event = Some(1);
     let mut runtime = AgentRuntime::new(restored, store);
     assert!(runtime.stopped());
     runtime.finish(true, None).unwrap();
-    // A final round that lands exactly on its budget with verified work done
+    // A final round that lands exactly on its time budget with verified work done
     // completed the task: resuming would stop again at the loop head unless
-    // the budget is raised, so `Interrupted` here would be a pointless cycle.
+    // the time budget is raised, so `Interrupted` here would be a pointless cycle.
     // (Cancellation still wins over completion; see
     // `cancellation_wins_over_late_result_and_finish`.)
     assert_eq!(runtime.task.status, TaskStatus::Completed);
@@ -726,12 +709,11 @@ fn cancellation_wins_over_late_result_and_finish() {
 }
 
 #[test]
-fn summary_budget_and_missing_usage_stop_before_another_request() {
+fn summary_and_missing_usage_behaviour() {
     for missing_usage in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SqliteTaskStore::open(&dir.path().join("state")).unwrap());
         let mut saved = task(dir.path());
-        saved.token_budget = 100;
         saved.checkpoint = Some(json!({
             "summary":null,"buffer":[{"role":"user","content":"context ".repeat(10000)}],
             "buffer_chars":80000,"last_prompt_tokens":200000,"prompt_token_budget":100000,
@@ -766,11 +748,42 @@ fn summary_budget_and_missing_usage_stop_before_another_request() {
             let body = body.to_string();
             write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
             drop(stream);
+            if missing_usage {
+                let until = std::time::Instant::now() + Duration::from_millis(300);
+                while std::time::Instant::now() < until {
+                    assert!(
+                        listener.accept().is_err(),
+                        "unexpected request after failed summary"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                return;
+            }
+            // Without a token budget the turn continues after a successful
+            // summary: an unverified answer is nudged once, then a second
+            // one stops the turn ("cannot complete with unverified
+            // criteria"), so exactly two follow-up chat requests arrive.
+            for _ in 0..2 {
+                let started = std::time::Instant::now();
+                let mut stream = loop {
+                    if let Ok((stream, _)) = listener.accept() {
+                        break stream;
+                    }
+                    assert!(started.elapsed() < Duration::from_secs(5));
+                    std::thread::sleep(Duration::from_millis(10));
+                };
+                let _follow_up = request(&mut stream);
+                let body = json!({"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
+                    "usage":{"prompt_tokens":50,"completion_tokens":10}})
+                .to_string();
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                drop(stream);
+            }
             let until = std::time::Instant::now() + Duration::from_millis(300);
             while std::time::Instant::now() < until {
                 assert!(
                     listener.accept().is_err(),
-                    "unexpected request after summary stop"
+                    "unexpected fourth request after summary and follow-ups"
                 );
                 std::thread::sleep(Duration::from_millis(10));
             }
@@ -807,8 +820,15 @@ fn summary_budget_and_missing_usage_stop_before_another_request() {
                     .contains("summary provider omitted")
             );
         } else {
-            assert_eq!(saved.tokens_used, 120);
-            assert_eq!(saved.status, TaskStatus::Interrupted);
+            assert_eq!(saved.tokens_used, 240);
+            assert_eq!(saved.status, TaskStatus::Failed);
+            assert!(
+                saved
+                    .stop_reason
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("unverified criteria")
+            );
         }
     }
 }

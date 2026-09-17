@@ -16,20 +16,35 @@ pub(crate) const RUST_BUILD_COMMANDS: &[&str] = &[
     "cargo check --workspace",
 ];
 
+struct Profile {
+    name: &'static str,
+    description: &'static str,
+    commands: &'static [&'static str],
+}
+
+/// The single profile table: `list` and `expand` both read from here so a
+/// new profile cannot be added to one and forgotten in the other.
+const PROFILES: &[Profile] = &[Profile {
+    name: "rust-build",
+    description:
+        "cargo build/test/check for this project (exact match; use --timeout 1800 for large builds)",
+    commands: RUST_BUILD_COMMANDS,
+}];
+
 /// Available profiles with a one-line description each.
 pub(crate) fn list() -> Vec<(&'static str, &'static str)> {
-    vec![(
-        "rust-build",
-        "cargo build/test/check for this project (exact match; use --timeout 1800 for large builds)",
-    )]
+    PROFILES
+        .iter()
+        .map(|profile| (profile.name, profile.description))
+        .collect()
 }
 
 /// Exact commands for a profile name.
 pub(crate) fn expand(name: &str) -> Option<&'static [&'static str]> {
-    match name {
-        "rust-build" => Some(RUST_BUILD_COMMANDS),
-        _ => None,
-    }
+    PROFILES
+        .iter()
+        .find(|profile| profile.name == name)
+        .map(|profile| profile.commands)
 }
 
 /// Expands profile names into `grant.commands`, skipping duplicates.
@@ -83,5 +98,15 @@ mod tests {
     fn list_contains_rust_build() {
         assert!(list().iter().any(|(name, _)| *name == "rust-build"));
         assert!(expand("rust-build").is_some());
+    }
+
+    #[test]
+    fn every_listed_profile_expands() {
+        for (name, _) in list() {
+            assert!(
+                expand(name).is_some_and(|commands| !commands.is_empty()),
+                "{name}"
+            );
+        }
     }
 }

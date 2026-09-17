@@ -379,15 +379,19 @@ pub(super) const CORE_LOCAL_SPECS: &[local::LocalSpec] = &[
 /// Full task IDs for `agent`'s completions (`show`/`logs`/`wait`/`resume`/
 /// `retry`/`cancel`/`delete`/`respond`).
 ///
-/// Opens the store read-only and lists IDs; any failure (store not yet
-/// created, permissions) yields an empty list rather than an error, matching
-/// every other loader in this table.
+/// Lists IDs from the store; a missing store or any failure (permissions)
+/// yields an empty list rather than an error, matching every other loader
+/// in this table. The existence check comes first so a TAB press never
+/// creates state as a side effect (`open` would create the directory and
+/// database).
 fn load_agent_task_ids() -> Vec<String> {
     use dsh_builtin::shell_capabilities::AgentTaskStore as _;
 
-    let Ok(store) =
-        crate::agent::SqliteTaskStore::open(&dsh_builtin::config_paths::agent_state_dir())
-    else {
+    let dir = dsh_builtin::config_paths::agent_state_dir();
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let Ok(store) = crate::agent::SqliteTaskStore::open(&dir) else {
         return Vec::new();
     };
     store
@@ -423,7 +427,8 @@ mod agent_task_tests {
 
     /// A no-store environment must yield an empty list, not a panic or an
     /// error surfaced to the completion popup - every other loader in this
-    /// table treats "nothing to read yet" the same way.
+    /// table treats "nothing to read yet" the same way. It must also leave
+    /// no state behind: completion is a read path, not a first-run setup.
     #[test]
     fn no_store_yields_an_empty_list_rather_than_failing() {
         let _guard = crate::test_env_lock();
@@ -434,12 +439,17 @@ mod agent_task_tests {
         }
 
         let ids = load_agent_task_ids();
+        let state_created = dsh_builtin::config_paths::agent_state_dir().exists();
 
         match previous {
             Some(value) => unsafe { std::env::set_var("XDG_STATE_HOME", value) },
             None => unsafe { std::env::remove_var("XDG_STATE_HOME") },
         }
         assert!(ids.is_empty(), "{ids:?}");
+        assert!(
+            !state_created,
+            "completion must not create agent state"
+        );
     }
 }
 

@@ -1151,6 +1151,33 @@ fn search_never_ranks_unrelated_servers_above_a_direct_match() {
     );
 }
 
+/// A generic plural query is lexically ambiguous between the issue tools:
+/// `get_issue` earns its lead through the `issue_number` parameter,
+/// `create_issue` through `issue` in its parameter descriptions, and even
+/// the name tiebreak (`get` < `search`) agrees with that order. Any order
+/// within the cluster is a correct answer, so this pins the Top-3 set -
+/// exactly the three issue tools, ahead of repositories and pull requests -
+/// instead of an exact ranking.
+#[test]
+fn search_ranks_the_issue_tool_cluster_top_for_a_generic_query() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "github issues", 5);
+
+    assert!(names.len() >= 3, "{names:?}");
+    let mut top: Vec<&str> = names[..3].iter().map(String::as_str).collect();
+    top.sort_unstable();
+    assert_eq!(
+        top,
+        vec![
+            "mcp__github__create_issue",
+            "mcp__github__get_issue",
+            "mcp__github__search_issues",
+        ],
+        "{names:?}"
+    );
+}
+
 /// Ranking is a pure function of current metadata: the same query twice is
 /// the same list, regardless of map iteration order.
 #[test]

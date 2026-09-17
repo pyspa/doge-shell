@@ -28,6 +28,13 @@ const MAX_QUERY_TOKENS: usize = 16;
 /// Tokens shorter than this never match: without the floor, the `a` in
 /// every description matches any query containing the letter by substring.
 const MIN_TOKEN_LEN: usize = 2;
+/// High-frequency filler words that carry no search signal (`the file`
+/// means `file`). Dropped from queries and fields alike, so both sides
+/// stay symmetric: a tool named `for_each` is still found by `for each`.
+const STOP_WORDS: &[&str] = &[
+    "an", "the", "and", "or", "to", "of", "in", "on", "for", "with", "by", "from", "at", "as",
+    "is", "are", "be",
+];
 /// Compact results stay compact: descriptions longer than this are cut at
 /// a character boundary, the full text arrives with the loaded schema.
 const MAX_DESCRIPTION_CHARS: usize = 240;
@@ -66,22 +73,57 @@ pub(crate) struct RankedTool {
 /// `[github, search, issue]`, and so does `"find open GitHub ISSUES"`.
 /// Splits on `_ - . / :` and whitespace, folds a trailing `s` plural
 /// (`issues` to `issue`) - a normalisation, not stemming - and drops
-/// empties, repeats, and single characters, so a padded query cannot
-/// inflate its own score and a one-letter word like the `a` in every
-/// description cannot match every query by substring.
+/// empties, repeats, single characters, and stop words, so a padded query
+/// cannot inflate its own score and a one-letter word like the `a` in
+/// every description cannot match every query by substring.
+///
+/// A camelCase chunk contributes both its whole and its parts:
+/// `issueNumber` becomes `[issuenumber, issue, number]`, so a query for
+/// `issue number` hits exactly, while `GitHub` keeps `github` whole and
+/// `github` queries keep exact-matching it.
 pub(crate) fn tokenize(text: &str) -> Vec<String> {
     let mut tokens = Vec::new();
+    let mut push = |token: String| {
+        if token.len() >= MIN_TOKEN_LEN
+            && !STOP_WORDS.contains(&token.as_str())
+            && !tokens.contains(&token)
+        {
+            tokens.push(token);
+        }
+    };
     for raw in text.split(|c: char| !c.is_alphanumeric()) {
-        let token = fold_plural(&raw.to_lowercase());
-        if token.len() < MIN_TOKEN_LEN || tokens.contains(&token) {
+        if raw.is_empty() {
             continue;
         }
-        tokens.push(token);
+        push(fold_plural(&raw.to_lowercase()));
+        for part in split_camel(raw) {
+            push(fold_plural(&part.to_lowercase()));
+        }
     }
     if tokens.len() > MAX_QUERY_TOKENS {
         tokens.truncate(MAX_QUERY_TOKENS);
     }
     tokens
+}
+
+/// Lower-to-upper boundary splits (`issueNumber` to `[issue, Number]`),
+/// without touching all-caps runs (`HTTPSConnection` stays whole: there
+/// is no lowercase-to-upper boundary inside it). The caller lowercases.
+fn split_camel(chunk: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut prev_lower = false;
+    for ch in chunk.chars() {
+        if ch.is_uppercase() && prev_lower {
+            parts.push(std::mem::take(&mut current));
+        }
+        current.push(ch);
+        prev_lower = ch.is_lowercase();
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    if parts.len() > 1 { parts } else { Vec::new() }
 }
 
 /// Minimal plural folding so `issues` matches `issue` exactly rather than
@@ -296,7 +338,7 @@ mod tests {
         );
         assert_eq!(
             tokenize("find open GitHub ISSUES"),
-            vec!["find", "open", "github", "issue"]
+            vec!["find", "open", "github", "git", "hub", "issue"]
         );
         assert_eq!(
             tokenize("mcp__github__get-issue.number:count"),
@@ -321,6 +363,24 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert_eq!(tokenize(&many).len(), MAX_QUERY_TOKENS);
+    }
+
+    #[test]
+    fn tokenize_drops_stop_words_from_queries_and_fields_alike() {
+        assert_eq!(tokenize("read the file"), vec!["read", "file"]);
+        assert_eq!(tokenize("the"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn tokenize_keeps_camel_whole_and_parts() {
+        // The whole keeps `GitHub` exact-matching `github`; the parts let
+        // `issue number` reach a camelCase parameter name.
+        assert_eq!(
+            tokenize("issueNumber"),
+            vec!["issuenumber", "issue", "number"]
+        );
+        // All-caps runs have no lower-to-upper boundary and stay whole.
+        assert_eq!(tokenize("HTTPSConnection"), vec!["httpsconnection"]);
     }
 
     #[test]

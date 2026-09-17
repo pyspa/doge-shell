@@ -245,7 +245,9 @@ doge-shell-validation
 doge-shell-investigation
 doge-shell-chat-tools"
     expect_installer_list "dogesh-user" "dsh-cron
-dsh-agent"
+dsh-agent
+dsh-skill-authoring
+dsh-chat"
 
     for profile in codex-core codex-common dogesh-common claude-common dogesh-user; do
         if ! grep -q -- "--profile $profile" "$repo_root/docs/ai/README.md"; then

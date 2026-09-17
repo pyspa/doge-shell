@@ -1,0 +1,4 @@
+interface:
+  display_name: "DSH Chat"
+  short_description: "Use the doge-shell `!` AI chat, models, skills and MCP tools."
+  default_prompt: "Use $dsh-chat to use the doge-shell `!` AI chat itself, including models, skill mentions and MCP tools."

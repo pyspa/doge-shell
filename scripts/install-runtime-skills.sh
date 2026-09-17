@@ -23,7 +23,7 @@ Profiles:
   codex-common   doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
   dogesh-common     doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
   claude-common  doge-shell-repo, doge-shell-validation, doge-shell-investigation, doge-shell-chat-tools
-  dogesh-user       dsh-cron, dsh-agent   (product-user skills: cron jobs and agent tasks; not repo-dev skills)
+  dogesh-user       dsh-cron, dsh-agent, dsh-skill-authoring, dsh-chat   (product-user skills: cron jobs, agent tasks, skill authoring, and ! chat use; not repo-dev skills)
 
 Examples:
   scripts/install-runtime-skills.sh --list
@@ -133,7 +133,7 @@ profile_skills() {
                 doge-shell-chat-tools
             ;;
         dogesh-user)
-            printf '%s\n' dsh-cron dsh-agent
+            printf '%s\n' dsh-cron dsh-agent dsh-skill-authoring dsh-chat
             ;;
         *)
             echo "unknown profile: $1" >&2

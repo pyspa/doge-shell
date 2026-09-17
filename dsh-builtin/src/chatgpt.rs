@@ -66,10 +66,7 @@ fn is_mutating_tool_call(call: &Value) -> bool {
         .and_then(|function| function.get("name"))
         .and_then(Value::as_str)
         .unwrap_or_default();
-    matches!(
-        name,
-        "edit" | "str_replace" | "execute" | "skill_manage"
-    ) || name.starts_with("mcp__")
+    matches!(name, "edit" | "str_replace" | "execute" | "skill_manage") || name.starts_with("mcp__")
 }
 
 /// Sent once when `AI_CHAT_VERIFY_AFTER_MUTATION` is on and a mutating `!`
@@ -606,7 +603,9 @@ fn chat_with_tools(
                     {
                         verification_nudged = true;
                         mutating_calls = 0;
-                        manager.add_message(json!({"role":"user","content": VERIFY_AFTER_MUTATION_NUDGE}));
+                        manager.add_message(
+                            json!({"role":"user","content": VERIFY_AFTER_MUTATION_NUDGE}),
+                        );
                         continue;
                     }
                     break Ok(content);

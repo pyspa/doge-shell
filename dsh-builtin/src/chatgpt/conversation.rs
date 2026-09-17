@@ -230,9 +230,7 @@ impl ConversationManager {
             const CHARS_PER_TOKEN: usize = 4;
             let before_tokens = (before / CHARS_PER_TOKEN) as u64;
             let new_tokens = (self.buffer_chars / CHARS_PER_TOKEN) as u64;
-            let overhead = self
-                .last_prompt_tokens
-                .saturating_sub(before_tokens);
+            let overhead = self.last_prompt_tokens.saturating_sub(before_tokens);
             self.last_prompt_tokens = overhead.saturating_add(new_tokens);
         }
         reclaimed

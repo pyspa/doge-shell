@@ -106,8 +106,7 @@ impl AgentTaskStore for MemoryStore {
         self.save(task, event)
     }
     fn load(&self, _id: &str) -> anyhow::Result<AgentTask> {
-        self.loads
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fail_load {
             return Err(anyhow::anyhow!("transient sqlite lock"));
         }

@@ -208,8 +208,7 @@ pub enum Continuity {
 pub fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
     let Some(ttl) = ttl else {
         return Continuity::Fresh {
-            stored: slot().is_some()
-                || crate::config_paths::chat_session_file().is_file(),
+            stored: slot().is_some() || crate::config_paths::chat_session_file().is_file(),
             reasons: Vec::new(),
         };
     };
@@ -349,7 +348,7 @@ pub(super) fn peek_id(
     read_persisted().and_then(|stored| {
         mismatch(&stored, ttl, identity, scope)
             .is_none()
-            .then(|| stored.id)
+            .then_some(stored.id)
     })
 }
 
@@ -432,9 +431,7 @@ fn describe(
 }
 
 pub fn session_description(ttl: Option<Duration>) -> Option<String> {
-    if ttl.is_none() {
-        return None;
-    }
+    ttl?;
     if let Some(found) = slot().as_ref().map(|stored| {
         (
             stored.id.clone(),

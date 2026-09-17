@@ -220,11 +220,10 @@ impl AgentRuntime {
     /// Whether the durable store records this task as cancelled, with a short
     /// TTL cache so 20-50ms poll loops do not issue a SQLite read per poll.
     fn store_cancelled(&mut self) -> bool {
-        if let Some((at, cancelled)) = self.cancel_probe {
-            if at.elapsed() < CANCEL_PROBE_TTL {
+        if let Some((at, cancelled)) = self.cancel_probe
+            && at.elapsed() < CANCEL_PROBE_TTL {
                 return cancelled;
             }
-        }
         let cancelled = self
             .store
             .load(&self.task.id)

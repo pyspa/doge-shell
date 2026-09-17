@@ -158,16 +158,21 @@ fn verify_after_mutation_is_off_by_default() {
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     assert!(!resolve_verify_after_mutation(&mut proxy));
 
-    proxy.vars.insert(
-        VERIFY_AFTER_MUTATION_KEY.to_string(),
-        "1".to_string(),
-    );
+    proxy
+        .vars
+        .insert(VERIFY_AFTER_MUTATION_KEY.to_string(), "1".to_string());
     assert!(resolve_verify_after_mutation(&mut proxy));
 }
 
 #[test]
 fn is_mutating_tool_call_classifies_state_changing_tools() {
-    for name in ["edit", "str_replace", "execute", "skill_manage", "mcp__ops__bash"] {
+    for name in [
+        "edit",
+        "str_replace",
+        "execute",
+        "skill_manage",
+        "mcp__ops__bash",
+    ] {
         let call = json!({"function": {"name": name, "arguments": "{}"}});
         assert!(is_mutating_tool_call(&call), "{name}");
     }
@@ -185,10 +190,9 @@ fn chat_with_tools_bounces_the_first_answer_after_a_mutation_when_opted_in() {
 
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
-    proxy.vars.insert(
-        VERIFY_AFTER_MUTATION_KEY.to_string(),
-        "1".to_string(),
-    );
+    proxy
+        .vars
+        .insert(VERIFY_AFTER_MUTATION_KEY.to_string(), "1".to_string());
     proxy.agent_verdict = AgentCommandVerdict::Allowed;
     let client = ScriptedClient::new(vec![
         tool_call_response("call-1", "execute", r#"{"command":"true"}"#),
@@ -1159,8 +1163,5 @@ fn compaction_without_reclaim_keeps_measured_prompt_tokens() {
     manager.note_prompt_tokens(DEFAULT_CONTEXT_TOKEN_BUDGET + 1);
 
     assert_eq!(manager.compact_buffer(), 0);
-    assert_eq!(
-        manager.last_prompt_tokens,
-        DEFAULT_CONTEXT_TOKEN_BUDGET + 1
-    );
+    assert_eq!(manager.last_prompt_tokens, DEFAULT_CONTEXT_TOKEN_BUDGET + 1);
 }

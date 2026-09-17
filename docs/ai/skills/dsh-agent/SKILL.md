@@ -15,6 +15,7 @@ description: Use when running or following a doge-shell persistent agent task - 
 - Never put a secret on the command line - `agent list` / `agent show` display it. Use `--env NAME` to grant a name (never a value).
 - `list` / `logs` / `doctor` take `--json`; `show` takes `--summary`. `cancel` / `delete` throw away recorded work - confirm with the person first.
 - Scheduled runs are cron's job, not this command's: use `cron add --agent ...` instead - see $dsh-cron and [its AI-jobs reference](../dsh-cron/references/ai-jobs.md).
+- Deciding between `!` and `agent run` from the interactive side is $dsh-chat territory.
 - Command shapes, detach and `respond`: [references/run-resume.md](references/run-resume.md).
 - Grants and budgets in detail: [references/grants-budgets.md](references/grants-budgets.md).
 - Symptom-to-cause table: [references/troubleshooting.md](references/troubleshooting.md).

@@ -12,6 +12,7 @@ description: Use when using the doge-shell `!` AI chat itself - starting a chat,
 - File writes and destructive commands ask first. Answer the prompt; an unattended task stalls instead - see $dsh-agent.
 - `chat_status` inspects the carried conversation; `chat_reset` forgets it.
 - Diagnose in this order: `doctor skills` -> `doctor ai`.
+- Hand long work to `agent run --detach` instead of holding a `!` turn open - criteria: [references/delegation.md](references/delegation.md).
 - Setup and keys: [references/setup.md](references/setup.md).
 - Skills, mentions and project trust: [references/skills-mentions.md](references/skills-mentions.md).
 - Symptom-to-cause table: [references/troubleshooting.md](references/troubleshooting.md).

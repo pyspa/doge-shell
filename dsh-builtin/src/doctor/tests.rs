@@ -881,3 +881,50 @@ fn doctor_mcp_reports_legacy_sse_as_configuration_only() {
         "warn mcp legacy sse url=https://example.com/sse configuration-only use-streamable-http"
     ));
 }
+
+#[test]
+fn doctor_mcp_warns_on_large_tool_footprint() {
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
+        vars: HashMap::from([("MCP_TOOLS".to_string(), "42".to_string())]),
+        ..TestProxy::default()
+    };
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec!["doctor".to_string(), "mcp".to_string()],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(output.contains("ok tools 42"), "{output}");
+    assert!(
+        output.contains("warn mcp-tools-footprint high tools=42"),
+        "{output}"
+    );
+}
+
+#[test]
+fn doctor_mcp_reports_small_tool_footprint_as_ok() {
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
+        vars: HashMap::from([("MCP_TOOLS".to_string(), "3".to_string())]),
+        ..TestProxy::default()
+    };
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec!["doctor".to_string(), "mcp".to_string()],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(
+        output.contains("ok mcp-tools-footprint tools=3"),
+        "{output}"
+    );
+}

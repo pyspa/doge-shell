@@ -109,6 +109,7 @@ pub(super) fn json_section_details(
             let servers = proxy.list_mcp_servers();
             json!({
                 "configured": servers.len(),
+                "tools": proxy.get_var("MCP_TOOLS").and_then(|value| value.parse::<usize>().ok()).unwrap_or(0),
                 "servers": servers.iter().map(|server| {
                     let transport = match &server.transport {
                         McpTransport::Stdio { .. } => "stdio",

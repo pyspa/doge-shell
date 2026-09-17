@@ -510,8 +510,8 @@ fn confirm_and_write(
     }
 
     // Staged rather than written, when policy says so - checked before
-    // `confirm_agent_action`, so a staged write never touches the task's
-    // status the way falling through to that function would.
+    // `confirm_agent_action`, so a staged write is queued for review instead
+    // of being refused as a missing grant like any other ungranted write.
     match crate::chatgpt::resolve_skill_staging(proxy) {
         crate::chatgpt::SkillStaging::Off => {}
         crate::chatgpt::SkillStaging::Always => return stage_instead(request, contents),

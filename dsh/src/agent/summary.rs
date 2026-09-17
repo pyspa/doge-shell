@@ -120,6 +120,25 @@ struct ToolStats {
     last_failure: Option<(String, String)>,
 }
 
+/// Renders one [`crate::agent::blocked::BlockedNeed`] as the `needs:` line
+/// plus its resume command, shared by the direct and events-recovered paths.
+fn push_need(out: &mut String, need: &crate::agent::blocked::BlockedNeed) {
+    out.push_str("needs: ");
+    out.push_str(&clamp_chars(&need.what, STOP_REASON_CHARS));
+    out.push('\n');
+    if let Some(fix) = &need.fix {
+        out.push_str("  ");
+        out.push_str(fix);
+        out.push('\n');
+    }
+}
+
+/// Whether the task has no budget left to run on: remaining work then needs
+/// larger budgets first, and a stale grant hint would mislead.
+fn budgets_exhausted(task: &AgentTask) -> bool {
+    task.tokens_used >= task.token_budget || task.elapsed_ms >= task.time_budget_ms
+}
+
 /// `pub(crate)`: `agent/cli.rs`'s `agent logs` names the tool behind each
 /// `tool_intent`/`tool_result` event the same way this module does.
 pub(crate) fn tool_name(call: Option<&Value>) -> &str {
@@ -228,13 +247,23 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
         out.push('\n');
     }
     if let Some(need) = crate::agent::blocked::blocked_need(task) {
-        out.push_str("needs: ");
-        out.push_str(&clamp_chars(&need.what, STOP_REASON_CHARS));
-        out.push('\n');
-        if let Some(fix) = need.fix {
-            out.push_str("  ");
-            out.push_str(&fix);
-            out.push('\n');
+        push_need(&mut out, &need);
+    } else if matches!(
+        task.status,
+        TaskStatus::InputRequired | TaskStatus::Interrupted
+    ) && !budgets_exhausted(task)
+    {
+        // The `stop_reason` carries no parseable hint (a stall predating
+        // hint preservation, an unfinished-jobs stop after earlier
+        // refusals): recover the latest refusal from the recorded results
+        // instead of showing no guidance at all. Skipped on exhausted
+        // budgets, where raising the budget - not a grant - is the fix.
+        if let Some(hint) = crate::agent::blocked::denial_hint_from_events(events) {
+            let mut shadow = task.clone();
+            shadow.stop_reason = Some(hint);
+            if let Some(need) = crate::agent::blocked::blocked_need(&shadow) {
+                push_need(&mut out, &need);
+            }
         }
     }
 

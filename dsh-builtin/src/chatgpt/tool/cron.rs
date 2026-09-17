@@ -21,9 +21,9 @@
 //!   fires. This alone would be enough even with nothing else below.
 //! - Every write action (`create`/`update`/`pause`/`resume`/`remove`/`run`/
 //!   `ack`) asks the user first, through the same `confirm_agent_action` every
-//!   other write tool uses. Under an unattended task that always means
-//!   `TaskStatus::InputRequired` - the same halt `edit`/`execute` already
-//!   produce there, not a new kind of stop.
+//!   other write tool uses. Under an unattended task that always means a
+//!   recorded refusal the turn works around - the same deny-and-continue
+//!   `edit`/`execute` already produce there, not a new kind of stop.
 //! - A cron job's grant can never exceed the calling task's own: widening one
 //!   (`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/
 //!   `--sandbox`) past what the task itself was granted is refused outright,

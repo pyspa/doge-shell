@@ -125,11 +125,14 @@ impl AgentCommandPolicy for Shell {
     }
 
     fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
-        if let Some(runtime) = &self.agent_runtime {
-            let mut runtime = runtime.lock();
-            runtime.task.status = dsh_types::agent::TaskStatus::InputRequired;
-            runtime.task.stop_reason = Some(message.to_string());
-            runtime.save(None)?;
+        if self.agent_runtime.is_some() {
+            // An unattended task has nobody to ask: deny without stopping.
+            // The caller turns the denial into a tool-result error the turn
+            // works around (recording the grant hint via
+            // `AgentRuntime::note_denial`), and only a task that cannot make
+            // progress - the same operation refused three times, an unknown
+            // outcome, an exhausted budget - still ends up `InputRequired`
+            // or `Interrupted` waiting on a person.
             return Ok(ApprovalDecision::Deny);
         }
         let lifecycle = crate::agent_lifecycle::current(self);

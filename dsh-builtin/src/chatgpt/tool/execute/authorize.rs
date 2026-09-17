@@ -45,19 +45,21 @@ pub(super) fn authorize(
     // `cargo test` meaning "and its arguments". A session "always" answer is
     // matched against the exact line the user was shown instead: approving
     // `rm -rf target` must not go on to approve `rm -rf target ~/documents`.
-    if proxy.agent_runtime().is_some() {
+    if let Some(runtime) = proxy.agent_runtime() {
         // A skill script is not covered by `--allow-command`. The grant names a
         // command line the person read; a skill script is a file the agent can
         // also write, and one that arrives with a `git clone`. Leaving this to
         // `evaluate_agent_command` was how the rule below - "confirmed even
         // when the rest of the policy would wave it through" - stopped being
         // true the moment the same line ran under `agent run`.
+        //
+        // Refused, not stopped: the denial is recorded for a possible
+        // `agent resume` fix and returned as a tool-result error so the turn
+        // can work around it, like every other missing grant.
         if skill_script {
-            proxy
-                .request_agent_approval(&format!(
-                    "{command}: running a skill script needs its own approval"
-                ))
-                .map_err(|e| e.to_string())?;
+            runtime.lock().note_denial(&format!(
+                "{command}: running a skill script needs its own approval"
+            ));
             return Err(format!(
                 "agent: skill script permission required: {command}"
             ));
@@ -66,9 +68,9 @@ pub(super) fn authorize(
             AgentCommandVerdict::Allowed => Ok(Authorization::Run),
             AgentCommandVerdict::Denied(reason) => Err(reason),
             AgentCommandVerdict::Confirm(reason) => {
-                proxy
-                    .request_agent_approval(&format!("{command}: {reason}"))
-                    .map_err(|e| e.to_string())?;
+                runtime
+                    .lock()
+                    .note_denial(&format!("{command}: {reason}"));
                 Err(format!("agent: command permission required: {command}"))
             }
         };

@@ -30,12 +30,18 @@ agent run [--tokens N] [--timeout SECONDS] [--check TEXT]... \
 
 ```sh
 agent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]
+agent approve ID [--reconcile TEXT] [--dry-run]
 ```
 
 - `--tokens` / `--timeout` raise the cumulative budgets of the existing task.
 - `--reconcile` reports the observed result of the interrupted operation the
   task stopped on; without it a task waiting on `pending_operation` refuses
   to continue.
+- `approve` asks once about the one refusal the task is stuck on, widens
+  the grant by exactly that refusal, and resumes in the foreground
+  (one refusal per run; `--dry-run` previews). Refusals no flag can
+  satisfy are reported with manual steps instead. Resuming a detached
+  continuation stays `resume --detach`'s job.
 - Resuming a task that is currently running is refused - `agent wait ID` or
   `agent cancel ID` first.
 

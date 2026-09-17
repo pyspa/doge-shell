@@ -107,6 +107,25 @@ fn a_long_stale_input_required_task_is_a_warning_with_the_fix() {
 }
 
 #[test]
+fn a_stale_grant_stuck_interrupted_task_is_a_needs_grant_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let mut task = minimal_task(dir.path(), TaskStatus::Interrupted);
+    task.stop_reason = Some("blocked [approval_key: write:/tmp/proj/x]".into());
+    task.created_at = 0; // ancient
+    store.save(&task, None).unwrap();
+
+    let mut shell = shell();
+    let report = build_report(&mut shell, &store).unwrap();
+    let line = report
+        .lines
+        .iter()
+        .find(|line| line.contains("needs-grant"))
+        .expect("expected a needs-grant warning");
+    assert!(line.contains("--write /tmp/proj"));
+}
+
+#[test]
 fn a_pending_operation_is_a_reconcile_warning_regardless_of_age() {
     let dir = tempfile::tempdir().unwrap();
     let store = SqliteTaskStore::open(&dir.path().join("state")).unwrap();

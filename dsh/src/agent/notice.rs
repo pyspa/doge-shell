@@ -28,26 +28,23 @@ fn short_id(id: &str) -> &str {
 /// ```text
 /// [agent 1a2b3c4d]  Completed               fix the failing test
 /// [agent 1a2b3c4d]  Needs approval           agent resume 1a2b3c4d --allow-command 'cargo test'
+/// [agent 1a2b3c4d]  Needs grant              agent resume 1a2b3c4d --allow-command 'cargo test'
 /// ```
 ///
-/// For `InputRequired` with a known fix, the body names the exact command to
-/// run rather than repeating the reason - the reason is already one `agent
-/// show` away, and the point of a notice a person did not ask for is to say
-/// what to do about it, not to restate what happened.
+/// For `InputRequired` - and for a grant-stuck `Interrupted` task - with a
+/// known fix, the body names the exact command to run rather than repeating
+/// the reason - the reason is already one `agent show` away, and the point
+/// of a notice a person did not ask for is to say what to do about it, not
+/// to restate what happened.
 pub(crate) fn render(task: &AgentTask) -> String {
-    let (label, body) = if task.status == TaskStatus::InputRequired {
-        match blocked::blocked_need(task).and_then(|need| need.fix) {
-            Some(fix) => ("Needs approval".to_string(), fix),
-            None => (
-                summary::status_label(task.status).to_string(),
-                flatten_command(&task.goal),
-            ),
-        }
-    } else {
-        (
+    let fix = blocked::blocked_need(task).and_then(|need| need.fix);
+    let (label, body) = match (task.status, fix) {
+        (TaskStatus::InputRequired, Some(fix)) => ("Needs approval".to_string(), fix),
+        (TaskStatus::Interrupted, Some(fix)) => ("Needs grant".to_string(), fix),
+        _ => (
             summary::status_label(task.status).to_string(),
             flatten_command(&task.goal),
-        )
+        ),
     };
     format!(
         "[agent {}]  {:<width$}{}",

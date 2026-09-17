@@ -50,19 +50,24 @@ pub(crate) fn notices_for(
         // which case this session never observes it `Running` at all and
         // there is no transition *from* anything to notice. Its first-ever
         // observation already being settled is itself worth a notice -
-        // except `Interrupted`, which a task also sits at for a moment
+        // except a bare `Interrupted`, which a task also sits at for a moment
         // right after `detach::start` saves it and before its child ever
-        // marks it `Running`; that moment must stay quiet, and there is no
-        // way from this data alone to tell it apart from a task that
-        // genuinely failed to start.
+        // marks it `Running`. That pre-start moment always has `stop_reason`
+        // unset (`detach::start` clears it), while a genuinely grant-stuck
+        // run carries its refusal hint there - so only a hinted
+        // `Interrupted` notifies here, and the transient stays quiet.
         let first_observation_already_settled = previous.is_none()
-            && matches!(
+            && (matches!(
                 task.status,
                 TaskStatus::Completed
                     | TaskStatus::Failed
                     | TaskStatus::Cancelled
                     | TaskStatus::InputRequired
-            );
+            ) || (task.status == TaskStatus::Interrupted
+                && task
+                    .stop_reason
+                    .as_deref()
+                    .is_some_and(super::blocked::is_grant_hint)));
         if transitioned_from_running || first_observation_already_settled {
             lines.push(super::notice::render(task));
         }

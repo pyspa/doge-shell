@@ -467,7 +467,16 @@ fn authorize_mcp_tool(
                     proxy.remember_agent_approval(&entry);
                     Ok(true)
                 }
-                ApprovalDecision::Deny => Ok(false),
+                ApprovalDecision::Deny => {
+                    // Under an agent task this only denies (never prompts):
+                    // record the exact grant entry so a stuck task can name
+                    // its `agent resume --allow-mcp` fix, and report the
+                    // refusal as a tool result the turn works around.
+                    if let Some(runtime) = proxy.agent_runtime() {
+                        runtime.lock().note_denial(&message);
+                    }
+                    Ok(false)
+                }
             }
         }
     }

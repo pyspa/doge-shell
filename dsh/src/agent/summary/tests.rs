@@ -186,3 +186,46 @@ fn the_agent_digest_ignores_which_status_label_capitalisation_is_used() {
     assert_eq!(status_label(TaskStatus::Completed), "completed");
     assert_eq!(status_label(TaskStatus::InputRequired), "input-required");
 }
+
+/// A stop without a parseable hint still guides when the recorded results
+/// name the refusal: the events fallback recovers the resume command.
+#[test]
+fn a_hintless_stop_recovers_its_fix_from_recorded_results() {
+    let mut t = task();
+    t.status = TaskStatus::Interrupted;
+    t.stop_reason = Some("task stopped before completion (budget or interruption)".into());
+    // Budgets intact, so the grant recovery below applies rather than a
+    // budget warning.
+    t.tokens_used = 0;
+    t.elapsed_ms = 0;
+    let events = vec![tool_result_event(
+        1,
+        "execute",
+        true,
+        "Error: agent: command permission required: cargo test -p foo\nPlease analyze the error and retry with corrected arguments.",
+    )];
+    let text = task_summary(&t, &events);
+    assert!(text.contains("needs:"), "{text}");
+    assert!(
+        text.contains("agent resume task-1 --allow-command 'cargo test -p foo'"),
+        "{text}"
+    );
+}
+
+/// On exhausted budgets the grant recovery stays out of the way: raising the
+/// budget is the fix, and a stale grant line would mislead.
+#[test]
+fn an_exhausted_budget_suppresses_the_events_recovery() {
+    let mut t = task();
+    t.status = TaskStatus::Interrupted;
+    t.stop_reason = Some("task stopped before completion (budget or interruption)".into());
+    t.tokens_used = t.token_budget;
+    let events = vec![tool_result_event(
+        1,
+        "execute",
+        true,
+        "Error: agent: command permission required: cargo test -p foo\nPlease analyze the error and retry with corrected arguments.",
+    )];
+    let text = task_summary(&t, &events);
+    assert!(!text.contains("needs:"), "{text}");
+}

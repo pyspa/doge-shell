@@ -79,7 +79,7 @@ pub(crate) fn build_report(
         // `store.events()` round trip per task just to inspect the last
         // event's kind.
         if task.status == TaskStatus::Interrupted
-            && task.stop_reason.as_deref() == Some(super::RECOVERED_STOP_REASON)
+            && task.stop_reason.as_deref() == Some(super::store::RECOVERED_STOP_REASON)
         {
             report.warn_line(format!(
                 "crashed {}: a previous process holding this task ended without finishing it; `agent resume {}` to continue",
@@ -94,7 +94,15 @@ pub(crate) fn build_report(
             if task.pending_operation.is_some() {
                 report.warn_line(format!("needs-reconcile {} ({age}): {fix}", task.id));
             } else if now - task.created_at > STALE_APPROVAL_SECS {
-                report.warn_line(format!("needs-approval {} ({age}): {fix}", task.id));
+                // `InputRequired` waits on an approval; a grant-stuck
+                // `Interrupted` task already stopped and wants a resume with
+                // wider grants instead. Same fix line, different verb.
+                let kind = if task.status == TaskStatus::Interrupted {
+                    "needs-grant"
+                } else {
+                    "needs-approval"
+                };
+                report.warn_line(format!("{kind} {} ({age}): {fix}", task.id));
             }
         }
     }

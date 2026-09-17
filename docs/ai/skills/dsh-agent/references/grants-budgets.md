@@ -4,7 +4,13 @@ Grant-shaped options (`--read` / `--write` / `--allow-command` /
 `--allow-mcp` / `--network` / `--env`) are shared with `cron add --agent`,
 so an unattended job's grant validates exactly the way an interactive one
 does (`dsh/src/agent.rs`). Nothing beyond what is granted at creation time
-is available at run time.
+is available at run time. A missing grant no longer stops the task at the
+first refusal: the denial is returned as a tool error the task routes
+around, and only a task that cannot proceed stops - `interrupted` with the
+refusal hint (resumable with wider grants), or `input-required` after the
+same refused operation three times. `agent approve ID` reads that same
+refusal, asks once, widens the grant by that one refusal, and resumes in
+the foreground (`--dry-run` previews without changing anything).
 
 ## Grants
 

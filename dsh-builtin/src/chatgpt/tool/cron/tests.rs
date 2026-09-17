@@ -332,10 +332,12 @@ fn a_grant_wider_than_the_task_is_refused_before_any_confirmation() {
 }
 
 /// A grant that stays within the task's own is still a write action under an
-/// unattended task, so it still halts as `InputRequired` - it is simply not
-/// refused outright the way an out-of-bounds one is.
+/// unattended task, so it is still refused - but as a tool-result error the
+/// turn works around, not as an `InputRequired` halt: nothing is watching to
+/// approve it, and stopping at the first refusal would make every unattended
+/// run with a slightly-too-narrow grant wait on a person.
 #[test]
-fn a_grant_within_the_task_still_needs_a_person_once_unattended() {
+fn a_grant_within_the_task_is_refused_without_stopping_once_unattended() {
     let dir = tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let mut proxy = task_proxy(TaskGrant {
@@ -357,6 +359,17 @@ fn a_grant_within_the_task_still_needs_a_person_once_unattended() {
 
     assert!(error.contains("permission required"));
     assert!(proxy.cron_tool_calls.is_empty());
+    assert_eq!(
+        proxy
+            .agent_runtime
+            .as_ref()
+            .expect("task proxy")
+            .lock()
+            .task
+            .status,
+        dsh_types::agent::TaskStatus::Running,
+        "a refusal must not stop the task for a person"
+    );
 }
 
 /// The bug this guards against: `confirm_message` used to say only "AI wants

@@ -407,6 +407,18 @@ fn agent_run_outcome(
         TaskStatus::Completed => (RunState::Failed, Some(RunReason::Transient)),
         TaskStatus::InputRequired => (RunState::NeedsApproval, None),
         TaskStatus::Cancelled => (RunState::Cancelled, None),
+        // A grant-stuck run is not a timeout: every tick starts a fresh task
+        // with the same grant, so retrying it as fresh work would burn budget
+        // reproducing the same refusals. Like `InputRequired` it earns a
+        // `NeedsApproval` incident (fixable via the job's grant) instead.
+        TaskStatus::Interrupted
+            if report
+                .stop_reason
+                .as_deref()
+                .is_some_and(crate::agent::blocked::is_grant_hint) =>
+        {
+            (RunState::NeedsApproval, None)
+        }
         TaskStatus::Interrupted => (RunState::Failed, Some(RunReason::Timeout)),
         TaskStatus::Failed | TaskStatus::Running => (RunState::Failed, Some(RunReason::Transient)),
     };
@@ -415,7 +427,7 @@ fn agent_run_outcome(
         state,
         reason,
         exit_code: i32::from(state != RunState::Succeeded),
-        timed_out: report.status == TaskStatus::Interrupted,
+        timed_out: report.status == TaskStatus::Interrupted && state != RunState::NeedsApproval,
         duration_ms,
         stdout: redact_sensitive_text(summary),
         stderr: redact_sensitive_text(&stderr_text(summary, report.stop_reason.as_deref())),

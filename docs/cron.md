@@ -61,7 +61,7 @@ cron add --agent --name digest --tokens 50000 --timeout 10m \
 
 ### 承認が必要になったとき
 
-無人実行なので**確認は出ません**。付与されていない権限が必要になった run は `needs-approval` 状態で終わり、incident が1件記録されます。
+無人実行なので**確認は出ません**。権限不足の操作はツール結果のエラーとして返ってタスクは回避策を探して続行し、どうしても進めなくなった run は権限ヒント付きの `interrupted` で終わって `needs-approval` 状態になり、incident が1件記録されます。
 
 ```sh
 cron incidents                       # 未確認の一覧。detail に "... [approval_key: ...]" が入る
@@ -71,7 +71,7 @@ cron incidents ack <ID>              # incident を閉じ、ジョブの blocked
 
 `--allow-mcp` の値は incident の detail（`cron logs` の stderr にも同じ文言）に出る `approval_key: ...` の中身そのまま（完全一致）です。ゼロから正しいキーを書けると仮定せず、一度実行させて incident から写すのが正しい導線です。`agent show <TASK_ID>` はタスクの生 JSON 全体が要るときの人間向け手段として残っています（builtin なので `cron_manage`/`execute` からは届きません）。
 
-`hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。`IncidentKind::HookAsk` という種別自体はストアのスキーマに存在しますが、実際に起票されるのは通常の `IncidentKind::Approval` です — hook の ask 拒否も grant 不足も、どちらも `confirm_agent_action` の同じ経路（`TaskStatus::InputRequired`）を通り、cron 側はどちらが原因かを区別する情報を受け取らないためです。区別が付かなくても対処手順は同じで、`agent show <task-id>` の `stop_reason`（`cron incidents`/`cron logs` にも同じ文言が出ます）を見れば hook 由来かどうかは読み取れます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
+`hook:` で始まる承認キー（AI chat hooks の `ask`）は `--allow-*` では満たせません。`IncidentKind::HookAsk` という種別自体はストアのスキーマに存在しますが、実際に起票されるのは通常の `IncidentKind::Approval` です — hook の ask 拒否も grant 不足も、どちらも `confirm_agent_action` の同じ経路（拒否のエラーとして返り、行き詰まると権限ヒント付きで止まる）を通り、cron 側はどちらが原因かを区別する情報を受け取らないためです。区別が付かなくても対処手順は同じで、`agent show <task-id>` の `stop_reason`（`cron incidents`/`cron logs` にも同じ文言が出ます）を見れば hook 由来かどうかは読み取れます。ジョブ単位の回避策はありません — `--env NAME` は**名前だけ**を許可するもので値は持たないため、`--env AI_CHAT_HOOKS=off` は何も許可しません。直すには hook 定義自体（`ai-hooks.json`）を変えるか、`config.lisp` かジョブを実行する環境で `AI_CHAT_HOOKS=off` を設定してください（この場合ジョブ単位ではなく全体で hooks が止まります）。
 
 `--allow-mcp` を持たないジョブは MCP サーバーに接続しません。`dogesh -c` は対話サービスを起動しないため（`needs_interactive_services()` が false）、MCP grant を持つジョブだけが `cron run-job` 内で明示的に MCP 接続を張ります。
 
@@ -92,7 +92,7 @@ cron notepad digest --clear    # 消去
 
 - `create` は**常に paused で登録**されます。人が `cron run --now` で確認してから `cron resume` するまで発火しません。
 - grant（`--read`/`--write`/`--allow-command`/`--allow-mcp`/`--network`/`--env`/`--sandbox`）は**呼び出し中のタスク自身の grant を超えられません**。超えるリクエストは確認を挟まず即座に拒否されます。
-- `create` 以外の書き込み系（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は毎回人に確認します。無人タスク中はこれが `TaskStatus::InputRequired` になり、`cron incidents` ではなくタスク自身が保留になります。
+- `create` 以外の書き込み系（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は毎回人に確認します。無人タスク中はこれが拒否のエラーとして返り、タスクは続行します（行き詰まると権限ヒント付きで止まり、`cron incidents` ではなくタスク自身が `agent resume` での再開待ちになります）。
 - notepad 用の action はありません — notepad ディレクトリは既にジョブの grant に入っているため、既存の `read_file`/`edit` で足ります。
 - `logs` は他の read 系 action と異なり grant ゲートがあります。無人タスク中に呼ぶと、対象ジョブの `cwd` が呼び出しタスク自身の `read`/`write` grant に含まれない限り拒否されます — `history` は 120 文字の preview しか出しませんが `logs` はジョブの記録済み出力を丸ごと返すため、無関係なジョブの中身を名前だけ知っていれば読めてしまう経路を塞いでいます。`!` チャット（タスクの外）からは制限なく呼べます。
 

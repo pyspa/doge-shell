@@ -340,6 +340,19 @@ fn agent_run_outcome_maps_every_task_status_to_a_run_state() {
     assert!(interrupted.timed_out);
 }
 
+/// A grant-stuck run is not a timeout: every tick starts a fresh task with
+/// the same grant, so it must earn a `NeedsApproval` incident (fixable via
+/// the job's grant) rather than burn budget on identical retries.
+#[test]
+fn agent_run_outcome_maps_a_grant_stuck_interrupted_run_to_needs_approval() {
+    let mut stuck = report(TaskStatus::Interrupted, false);
+    stuck.stop_reason =
+        Some("cargo test: command is not in the task's exact command grants".to_string());
+    let outcome = agent_run_outcome(&stuck, "", 0, 0);
+    assert_eq!(outcome.state, RunState::NeedsApproval);
+    assert!(!outcome.timed_out);
+}
+
 /// The bug this guards against: every `agent_outcome`/`run_task` failure -
 /// root changed, an unreconciled operation, a genuinely broken task store, or
 /// a one-off hiccup - used to collapse into `RunReason::StateUnusable`, which

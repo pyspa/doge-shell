@@ -660,9 +660,20 @@ fn a_skill_script_is_not_covered_by_an_agent_grant() {
     };
 
     let command = format!("{{\"command\":\"{}\"}}", script_path.to_string_lossy());
-    let err = run(&command, &mut proxy).expect_err("a task must stop for approval");
+    let err = run(&command, &mut proxy).expect_err("a task must be refused, not run");
 
     assert!(err.contains("skill script permission required"), "{err}");
+    assert_eq!(
+        proxy
+            .agent_runtime
+            .as_ref()
+            .expect("task proxy")
+            .lock()
+            .task
+            .status,
+        dsh_types::agent::TaskStatus::Running,
+        "a refusal must not stop the task for a person"
+    );
 }
 
 /// `bash <skill>/run.sh` used to walk straight past the skill-script rule:

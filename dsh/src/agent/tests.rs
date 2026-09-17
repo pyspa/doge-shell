@@ -6,6 +6,8 @@ use dsh_builtin::{
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
+    os::unix::fs::PermissionsExt,
+    path::Path,
     time::Duration,
 };
 
@@ -557,6 +559,29 @@ fn remote_handles_use_flattened_mcp_wire_format_and_require_terminal_status() {
         &json!({"criterion":0,"evidence_event":evidence,"explanation":"remote result verified"}),
     )
     .unwrap();
+}
+
+/// A denial-stuck turn with unfinished remote work keeps the existing
+/// precedence: the remote-status warning (not any one grant hint) is what a
+/// resume must act on first.
+#[test]
+fn denial_stuck_with_unfinished_remote_work_keeps_the_remote_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SqliteTaskStore::open(&dir.path().join("state")).unwrap());
+    let saved = task(dir.path());
+    store.save(&saved, None).unwrap();
+    let mut runtime = AgentRuntime::new(saved, store);
+    runtime.note_denial("cargo test: command is not in the task's exact command grants");
+    let call = json!({"function":{"name":"mcp__server__build","arguments":"{}"}});
+    runtime.after_tool(&call, &json!({"server":"server","response":{"resultType":"task","taskId":"remote-1","status":"working"}}).to_string(), ToolOutcome::Success).unwrap();
+    runtime
+        .finish(false, Some("agent: cannot complete with unverified criteria".into()))
+        .unwrap();
+    assert_eq!(runtime.task.status, TaskStatus::Interrupted);
+    assert_eq!(
+        runtime.task.stop_reason.as_deref(),
+        Some("agent: cannot complete with unverified criteria")
+    );
 }
 
 #[test]

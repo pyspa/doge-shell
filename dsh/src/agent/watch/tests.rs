@@ -99,6 +99,21 @@ fn a_task_first_observed_as_interrupted_does_not_notify() {
     assert!(lines.is_empty());
 }
 
+/// A grant-stuck run that starts and finishes between two scans must still
+/// notify: unlike the pre-start transient above it carries its refusal hint
+/// in `stop_reason`, which is also what renders the resume command.
+#[test]
+fn a_task_first_observed_as_grant_stuck_interrupted_notifies() {
+    let mut seen = HashMap::new();
+    let detached: HashSet<String> = ["a".to_string()].into_iter().collect();
+    let mut stuck = task("a", TaskStatus::Interrupted);
+    stuck.stop_reason =
+        Some("cargo test: command is not in the task's exact command grants".into());
+    let lines = notices_for(&mut seen, &[stuck], &detached, false);
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("--allow-command 'cargo test'"));
+}
+
 #[test]
 fn a_task_first_observed_as_running_does_not_notify() {
     let mut seen = HashMap::new();

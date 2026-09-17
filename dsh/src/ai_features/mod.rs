@@ -40,7 +40,7 @@ pub use directory::{describe_directory, directory_listing_entries};
 pub use last_failure::{LastFailure, combine_streams, resolve as resolve_last_failure};
 pub use service::{
     AgentPolicyHandles, AiCommandResponse, AiRequestOptions, AiService, ChatClient,
-    ConfirmationHandler, LiveAiService,
+    ConfirmationHandler, LiveAiService, SharedChatClient,
 };
 pub use suggestion::{generate_completion_json, suggest_next_commands};
 

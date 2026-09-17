@@ -98,7 +98,7 @@ pub(crate) fn definition() -> Value {
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 1000,
-                        "description": "Kill the command after this many milliseconds. Defaults to 120000."
+                        "description": "Kill the command after this many milliseconds. Defaults to 120000 for an agent task and 600000 for an interactive `!` turn (AI_CHAT_EXECUTE_TIMEOUT_MS overrides the interactive default only)."
                     }
                 },
                 "required": ["command"],

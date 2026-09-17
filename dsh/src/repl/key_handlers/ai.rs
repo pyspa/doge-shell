@@ -15,7 +15,7 @@ pub(crate) async fn handle_force_ai_suggestion(repl: &mut Repl<'_>) {
 
 pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
     // Only proceed if we have an AI service configured and the input is not empty
-    if repl.services.ai.is_some() && !repl.input.is_empty() {
+    if repl.ai_service().is_some() && !repl.input.is_empty() {
         let input_str = repl.input.as_str().to_string();
 
         // Clear any existing explanation so the new one takes precedence
@@ -23,7 +23,7 @@ pub(crate) async fn handle_ai_explain_command(repl: &mut Repl<'_>) {
         repl.ai_ui.pending_ai_explanation_input = Some(input_str.clone());
 
         let ai_tx = repl.ai_ui.ai_tx.clone();
-        let service = repl.services.ai.clone().unwrap();
+        let service = repl.ai_service().unwrap();
 
         tokio::spawn(async move {
             match crate::ai_features::explain_command_inline(service.as_ref(), &input_str).await {
@@ -65,7 +65,7 @@ pub(crate) fn handle_ai_watch_current_input(repl: &mut Repl<'_>) {
 pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     let mut renderer = TerminalRenderer::new();
 
-    if repl.services.ai.is_none() {
+    if repl.ai_service().is_none() {
         queue!(
             renderer,
             Print(format!(
@@ -105,7 +105,7 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
         None => (hint_command, String::new(), hint_status),
     };
 
-    if let Some(service) = &repl.services.ai {
+    if let Some(service) = repl.ai_service() {
         let context = DiagnosticContext {
             command: command.clone(),
             output: output.clone(),

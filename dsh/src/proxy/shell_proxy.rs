@@ -510,7 +510,7 @@ impl ShellProxy for Shell {
         command_name: &'a str,
         help_text: &'a str,
     ) -> dsh_builtin::ProxyFuture<'a, String> {
-        let service = self.environment.read().integration_state.ai_service.clone();
+        let service = self.environment.read().live_ai_service();
         let command_name = command_name.to_string();
         let help_text = help_text.to_string();
         Box::pin(async move {
@@ -528,7 +528,7 @@ impl ShellProxy for Shell {
         &'a mut self,
         messages: Vec<serde_json::Value>,
     ) -> dsh_builtin::ProxyFuture<'a, String> {
-        let service = self.environment.read().integration_state.ai_service.clone();
+        let service = self.environment.read().live_ai_service();
         Box::pin(async move {
             let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
             service
@@ -773,7 +773,7 @@ impl dsh_builtin::shell_capabilities::AiJsonRequest for Shell {
         &'a mut self,
         messages: Vec<serde_json::Value>,
     ) -> dsh_builtin::ProxyFuture<'a, String> {
-        let service = self.environment.read().integration_state.ai_service.clone();
+        let service = self.environment.read().live_ai_service();
         Box::pin(async move {
             let service = service.ok_or_else(|| anyhow::anyhow!("AI service not available"))?;
             service

@@ -70,7 +70,7 @@ fn chat_with_tools(
     mut stream_sink: Option<&mut StreamSink>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    let setup = TurnSetup::build(operator_prompt, language, mcp_manager, proxy)?;
+    let mut setup = TurnSetup::build(operator_prompt, language, mcp_manager, proxy)?;
 
     // Everything below runs inside a closure so that the tail - the usage flush
     // and `response-complete` - is reached on every exit, not only the happy
@@ -97,7 +97,10 @@ fn chat_with_tools(
             &|| proxy.is_canceled(),
         );
         if let Some((hook, reason)) = submitted.denied() {
-            return Err(format!("chat: blocked by hook `{hook}`: {reason}"));
+            // `?`, not `return`: `return` would leave this function entirely,
+            // skipping the usage flush and `response-complete` below. `?`
+            // only exits this turn closure, so the shared tail still runs.
+            Err::<(), String>(format!("chat: blocked by hook `{hook}`: {reason}"))?;
         }
         if let Some((hook, reason)) = submitted.asked()
             && !tool::confirm_agent_action(
@@ -106,7 +109,7 @@ fn chat_with_tools(
                 &format!("hook `{hook}` flagged this request: {reason}"),
             )?
         {
-            return Err(format!("chat: blocked by hook `{hook}`: {reason}"));
+            Err::<(), String>(format!("chat: blocked by hook `{hook}`: {reason}"))?;
         }
 
         // `@name` is the user naming a skill outright. Resolved against the
@@ -141,17 +144,36 @@ fn chat_with_tools(
                 manager
             }
             session::Claim::Fresh(reason) => {
+                // Refresh only when the build-time peek had named a stored
+                // conversation: peek and take share the same mismatch check
+                // over identical inputs, so a peek hit followed by `Fresh`
+                // can only mean this turn crossed the TTL while a hook ran
+                // or an approval waited, leaving `hook_ctx` holding an id
+                // `take` just dropped. Refresh it so `retain_session` below
+                // cancels the orphaned jobs instead of keeping them. A
+                // peek miss means the mismatch was already known at build
+                // (identity/scope/age) and `hook_ctx` is already fresh -
+                // replacing it again would hand `UserPromptSubmit` and
+                // `SessionStart` two different ids in one turn. (For a task
+                // `new_session_id` is the stable task id, so this is a no-op
+                // there.)
+                if reason.is_some() && setup.peeked_session {
+                    let fresh = setup.hook_ctx.new_session_id();
+                    setup.hook_ctx.set_session_id(fresh);
+                }
+                // Retained even when there is no reason to report: with the
+                // TTL disabled every turn is `Fresh(None)` under a new id,
+                // and skipping this left the previous turn's jobs
+                // unreachable (`store` is a no-op without a TTL, and the
+                // epilogue's `cancel_session(new_id)` misses the old ones).
+                // Only a `!` turn owns that registry - a task's jobs
+                // live in its own `AgentRuntime`.
+                let orphaned = if setup.runtime.is_none() {
+                    jobs::retain_session(setup.hook_ctx.session_id())
+                } else {
+                    0
+                };
                 if let Some(reason) = &reason {
-                    // Whatever the previous conversation left running, nothing
-                    // can reach any more: the model that knew the ids is gone,
-                    // and an unreachable process group is not a job, it is a
-                    // leak. Only a `!` turn owns that registry - a task's jobs
-                    // live in its own `AgentRuntime`.
-                    let orphaned = if setup.runtime.is_none() {
-                        jobs::retain_session(setup.hook_ctx.session_id())
-                    } else {
-                        0
-                    };
                     let note = if orphaned > 0 {
                         format!("; {orphaned} job(s) cancelled")
                     } else {
@@ -193,16 +215,26 @@ fn chat_with_tools(
         if let Some(runtime) = &setup.runtime {
             let saved = runtime.lock().task.clone();
             if let Some(checkpoint) = &saved.checkpoint {
-                manager = serde_json::from_value(checkpoint.clone())
-                    .map_err(|e| format!("invalid task checkpoint: {e}"))?;
+                manager = serde_json::from_value(checkpoint.clone()).map_err(|e| {
+                    let reason = format!("invalid task checkpoint: {e}");
+                    finish_task_silently(setup.runtime.as_ref(), reason.clone());
+                    reason
+                })?;
                 // Restore protocol balance without re-executing any tool call.
+                // Bound first: the lock guard must be dropped before the
+                // `map_err` below runs, because `finish_task_silently`
+                // locks the same mutex and `parking_lot::Mutex` is not
+                // reentrant.
+                let events = runtime
+                    .lock()
+                    .store
+                    .events(&saved.id)
+                    .map_err(|e| e.to_string());
                 repair_interrupted_tool_calls(
                     &mut manager,
-                    &runtime
-                        .lock()
-                        .store
-                        .events(&saved.id)
-                        .map_err(|e| e.to_string())?,
+                    &events.inspect_err(|reason| {
+                        finish_task_silently(setup.runtime.as_ref(), reason.clone());
+                    })?,
                 );
                 set_system_prompt(&mut manager, &setup.prompt.text);
             }
@@ -262,13 +294,14 @@ fn chat_with_tools(
 
         let outcome = 'agent: loop {
             if let Some(runtime) = &setup.runtime {
+                let snapshot = match serde_json::to_value(&manager) {
+                    Ok(snapshot) => snapshot,
+                    Err(e) => break Err(e.to_string()),
+                };
                 let mut runtime = runtime.lock();
-                runtime
-                    .checkpoint(
-                        serde_json::to_value(&manager).map_err(|e| e.to_string())?,
-                        manager.turn_usage.total_tokens(),
-                    )
-                    .map_err(|e| e.to_string())?;
+                if let Err(e) = runtime.checkpoint(snapshot, manager.turn_usage.total_tokens()) {
+                    break Err(e.to_string());
+                }
                 if runtime.stopped() {
                     break Err("agent: task stopped or budget exhausted".into());
                 }
@@ -508,17 +541,22 @@ fn chat_with_tools(
                     }
                 }
                 TurnOutcome::Answer(content) => {
+                    // Read the event log before the guard: `?` here would
+                    // leave this closure before the epilogue's
+                    // `runtime.finish` below, stranding the task `Running`.
+                    let pending_remote = if let Some(runtime) = &setup.runtime {
+                        let runtime = runtime.lock();
+                        match runtime.store.events(&runtime.task.id) {
+                            Ok(events) => crate::agent::pending_remote_tasks(&events),
+                            Err(e) => break Err(e.to_string()),
+                        }
+                    } else {
+                        false
+                    };
                     if let Some(runtime) = &setup.runtime
                         && {
                             let runtime = runtime.lock();
-                            !runtime.task.verified()
-                                || runtime.jobs.has_running()
-                                || crate::agent::pending_remote_tasks(
-                                    &runtime
-                                        .store
-                                        .events(&runtime.task.id)
-                                        .map_err(|e| e.to_string())?,
-                                )
+                            !runtime.task.verified() || runtime.jobs.has_running() || pending_remote
                         }
                     {
                         unverified_answers += 1;
@@ -577,15 +615,23 @@ fn chat_with_tools(
 
         if let Some(runtime) = &setup.runtime {
             let mut runtime = runtime.lock();
-            runtime
-                .checkpoint(
-                    serde_json::to_value(&manager).map_err(|e| e.to_string())?,
-                    manager.turn_usage.total_tokens(),
-                )
-                .map_err(|e| e.to_string())?;
-            runtime
-                .finish(outcome.is_ok(), outcome.as_ref().err().cloned())
-                .map_err(|e| e.to_string())?;
+            // Resilient, not `?`: a checkpoint failure must not skip `finish`
+            // (which would strand the task `Running`) nor the rewind/store
+            // and job cleanup below it.
+            match serde_json::to_value(&manager) {
+                Ok(snapshot) => {
+                    if let Err(e) = runtime.checkpoint(snapshot, manager.turn_usage.total_tokens())
+                    {
+                        tracing::warn!("agent: turn-end checkpoint failed: {e}");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("agent: turn-end checkpoint serialization failed: {e}");
+                }
+            }
+            if let Err(e) = runtime.finish(outcome.is_ok(), outcome.as_ref().err().cloned()) {
+                tracing::warn!("agent: turn-end finish failed: {e}");
+            }
         }
         report_turn_usage(&manager.turn_usage);
         // Read before `manager` is handed to the session store below.

@@ -378,6 +378,41 @@ fn extend_shares_the_chat_model_slot() {
     );
 }
 
+/// Rotating the key/endpoint at runtime has to reach the shared client slot:
+/// `ChatGptClient` snapshots those at construction, so without a rebuild a
+/// `vset AI_CHAT_API_KEY=...` only ever reached `!` chat (which resolves its
+/// config per message) and never the palette, ghost text, or `ask_ai_async`.
+#[test]
+fn setting_the_api_key_rebuilds_the_shared_ai_client() {
+    init();
+    let env = Environment::new();
+
+    // (No assumption about the inherited process environment here: it may
+    // carry a key. Every step below sets an explicit shell value, which
+    // `reload_ai_client` prefers over both the snapshot and the live
+    // process environment.)
+    env.write()
+        .set_shell_var("AI_CHAT_API_KEY".to_string(), "fixture-key".to_string());
+    assert!(env.read().ai_configured());
+
+    // Rotating the key rebuilds rather than sticking with the first client.
+    env.write()
+        .set_shell_var("AI_CHAT_API_KEY".to_string(), "rotated-key".to_string());
+    assert!(env.read().ai_configured());
+
+    // An endpoint switch resolves into the same slot (no restart needed).
+    env.write().set_shell_var(
+        "AI_CHAT_BASE_URL".to_string(),
+        "https://example.com/v1".to_string(),
+    );
+    assert!(env.read().ai_configured());
+
+    // Clearing the key deconfigures shell-side AI again.
+    env.write()
+        .set_shell_var("AI_CHAT_API_KEY".to_string(), "".to_string());
+    assert!(!env.read().ai_configured());
+}
+
 /// `SAFETY_LEVEL` is read from the policy state, and the policy state is what
 /// an inherited value has to reach: seeding the variable map with "normal"
 /// unconditionally shadowed the environment the shell was started from.

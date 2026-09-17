@@ -155,41 +155,44 @@ impl<'a> Repl<'a> {
         let envronment = Arc::clone(&shell.environment);
         let input_preferences = envronment.read().input_preferences();
         let mut suggestion_manager = SuggestionManager::new();
-        let mut ai_service: Option<Arc<dyn AiService + Send + Sync>> = None;
-        if let Some((ai_backend, client)) = Self::build_ai_backend(&envronment) {
-            suggestion_manager.engine.set_ai_backend(Some(ai_backend));
+        // Always constructed, even without a key: the holders below share
+        // the `ai_client` slot and follow `reload_ai_client`, so a key set
+        // later (or removed later) takes effect without a restart.
+        // Availability checks must read `ai_configured()` (or the slot via
+        // `get_ai_service`), never `ai_service.is_some()`.
+        let (ai_backend, shared_client) = Self::build_ai_backend(&envronment);
+        suggestion_manager.engine.set_ai_backend(Some(ai_backend));
 
-            // ... (in Repl::new)
+        // ... (in Repl::new)
 
-            let policy = AgentPolicyHandles {
-                safety_level: envronment.read().policy_state.safety_level.clone(),
-                safety_guard: shell.safety_guard.clone(),
-                execute_allowlist: envronment.read().policy_state.execute_allowlist.clone(),
-                agent_session_allowlist: envronment
-                    .read()
-                    .policy_state
-                    .agent_session_allowlist
-                    .clone(),
-            };
-            let response_language = envronment
+        let policy = AgentPolicyHandles {
+            safety_level: envronment.read().policy_state.safety_level.clone(),
+            safety_guard: shell.safety_guard.clone(),
+            execute_allowlist: envronment.read().policy_state.execute_allowlist.clone(),
+            agent_session_allowlist: envronment
                 .read()
-                .integration_state
-                .response_language
-                .clone();
-            let chat_model = envronment.read().integration_state.chat_model.clone();
-            let service = Arc::new(LiveAiService::new(
-                client,
-                envronment.read().integration_state.mcp_manager.clone(),
-                policy,
-                Some(confirmation::ReplConfirmationHandler::new()),
-                response_language,
-                chat_model,
-            ));
+                .policy_state
+                .agent_session_allowlist
+                .clone(),
+        };
+        let response_language = envronment
+            .read()
+            .integration_state
+            .response_language
+            .clone();
+        let chat_model = envronment.read().integration_state.chat_model.clone();
+        let service = Arc::new(LiveAiService::new(
+            shared_client,
+            envronment.read().integration_state.mcp_manager.clone(),
+            policy,
+            Some(confirmation::ReplConfirmationHandler::new()),
+            response_language,
+            chat_model,
+        ));
 
-            // Store in environment so ShellProxy can access it
-            envronment.write().integration_state.ai_service = Some(service.clone());
-            ai_service = Some(service);
-        }
+        // Store in environment so ShellProxy can access it
+        envronment.write().integration_state.ai_service = Some(service.clone());
+        let ai_service: Option<Arc<dyn AiService + Send + Sync>> = Some(service);
         suggestion_manager.set_preferences(input_preferences);
 
         // Setup Git event channel
@@ -273,31 +276,16 @@ impl<'a> Repl<'a> {
 
     fn build_ai_backend(
         environment: &Arc<RwLock<Environment>>,
-    ) -> Option<(Arc<dyn SuggestionBackend + Send + Sync>, ChatGptClient)> {
-        let env_handle = Arc::clone(environment);
-        let config = OpenAiConfig::from_getter(|key| {
-            let value = {
-                let guard = env_handle.read();
-                guard.get_var(key)
-            };
-            value.or_else(|| std::env::var(key).ok())
-        });
-
-        config.api_key()?;
-
-        match ChatGptClient::try_from_config(&config) {
-            Ok(client) => {
-                let chat_model = environment.read().integration_state.chat_model.clone();
-                let backend = Arc::new(crate::suggestion::AiSuggestionBackend::new(
-                    client.clone(),
-                    chat_model,
-                ));
-                Some((backend, client))
-            }
-            Err(err) => {
-                warn!("Failed to initialize AI suggestion backend: {err:?}");
-                None
-            }
-        }
+    ) -> (
+        Arc<dyn SuggestionBackend + Send + Sync>,
+        crate::ai_features::SharedChatClient,
+    ) {
+        let slot = environment.read().integration_state.ai_client.clone();
+        let chat_model = environment.read().integration_state.chat_model.clone();
+        let backend = Arc::new(crate::suggestion::AiSuggestionBackend::new(
+            slot.clone(),
+            chat_model,
+        ));
+        (backend, crate::ai_features::SharedChatClient::new(slot))
     }
 }

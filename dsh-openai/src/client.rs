@@ -512,6 +512,16 @@ impl ChatGptClient {
             let has_tools = body.get("tools").is_some();
             if let Some(map) = body.as_object_mut() {
                 map.remove(field);
+                // `stream_options` without `stream` is meaningless: a server
+                // that rejects `stream` would fail the retried request on the
+                // leftover `stream_options` and cost a second round-trip.
+                // Dropping both at once keeps the degradation to one retry.
+                // The reverse is not done: a server may reject only
+                // `stream_options` while supporting `stream` itself.
+                if field == "stream" && map.remove("stream_options").is_some() {
+                    state.dropped.push("stream_options");
+                    self.remember_unsupported("stream_options");
+                }
             }
             state.dropped.push(field);
             if field != "reasoning_effort" || has_tools {

@@ -82,7 +82,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         }
     };
 
-    if ai_watch_request.is_some() && repl.services.ai.is_none() {
+    if ai_watch_request.is_some() && repl.ai_service().is_none() {
         let mut renderer = TerminalRenderer::new();
         queue!(
             renderer,
@@ -329,7 +329,7 @@ async fn summarize_ai_watch(
     exit_code: i32,
     elapsed: std::time::Duration,
 ) -> Option<AiWatchSummary> {
-    let service = repl.services.ai.clone()?;
+    let service = repl.ai_service()?;
     let status = if exit_code == 0 {
         "completed"
     } else {

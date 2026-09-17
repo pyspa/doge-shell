@@ -42,10 +42,9 @@ fn test_input_preferences_default() {
 #[test]
 fn ai_backend_prefetch_reaches_the_override_through_dyn_dispatch() {
     let client = ChatGptClient::new("test-key".to_string()).unwrap();
-    let backend: Arc<dyn SuggestionBackend + Send + Sync> = Arc::new(AiSuggestionBackend::new(
-        client,
-        Arc::new(RwLock::new(None)),
-    ));
+    let slot = Arc::new(RwLock::new(Some(Arc::new(client))));
+    let backend: Arc<dyn SuggestionBackend + Send + Sync> =
+        Arc::new(AiSuggestionBackend::new(slot, Arc::new(RwLock::new(None))));
 
     assert!(!backend.is_pending());
 

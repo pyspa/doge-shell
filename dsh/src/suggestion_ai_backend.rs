@@ -29,7 +29,10 @@ pub struct AiSuggestionBackend {
 }
 
 struct AiBackendInner {
-    client: Arc<ChatGptClient>,
+    /// Shared with `LiveAiService` (via `SharedChatClient`): `reload_ai_client`
+    /// swaps this when the key/endpoint/timeout variables change, so ghost
+    /// text follows without being rebuilt.
+    client_slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
     state: ParkingMutex<AiBackendState>,
     settings: AiBackendSettings,
     notify: Notify,
@@ -53,12 +56,17 @@ struct AiCachedContextSuggestion {
     suggestions: Vec<String>,
     cwd: String,
     received_at: Instant,
+    /// Model that produced these suggestions. A `chat_model` switch must not
+    /// keep serving the previous model's answers for up to the TTL.
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct AiCachedSuggestion {
     completion: String,
     received_at: Instant,
+    /// Model that produced this completion (same reason as above).
+    model: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,17 +85,20 @@ impl Default for AiBackendSettings {
 }
 
 impl AiSuggestionBackend {
-    pub fn new(client: ChatGptClient, chat_model: Arc<RwLock<Option<String>>>) -> Self {
-        Self::with_settings(client, chat_model, AiBackendSettings::default())
+    pub fn new(
+        client_slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
+        chat_model: Arc<RwLock<Option<String>>>,
+    ) -> Self {
+        Self::with_settings(client_slot, chat_model, AiBackendSettings::default())
     }
 
     fn with_settings(
-        client: ChatGptClient,
+        client_slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
         chat_model: Arc<RwLock<Option<String>>>,
         settings: AiBackendSettings,
     ) -> Self {
         let inner = Arc::new(AiBackendInner {
-            client: Arc::new(client),
+            client_slot,
             state: ParkingMutex::new(AiBackendState::default()),
             settings,
             notify: Notify::new(),
@@ -164,10 +175,12 @@ impl AiSuggestionBackend {
 
     fn try_cached(&self, request: &SuggestionRequest) -> Option<String> {
         let state = self.inner.state.lock();
+        let model = self.inner.chat_model.read().clone();
 
         // 1. Check exact match cache
         if let Some(cached) = &state.cached
             && cached.received_at.elapsed() <= self.inner.settings.cache_ttl
+            && cached.model == model
             && cached.completion.starts_with(&request.input)
             && cached.completion.len() > request.input.len()
         {
@@ -179,6 +192,7 @@ impl AiSuggestionBackend {
             && let Some(req_cwd) = &request.cwd
             && &ctx_cached.cwd == req_cwd
             && ctx_cached.received_at.elapsed() <= self.inner.settings.cache_ttl
+            && ctx_cached.model == model
         {
             // Find a suggestion that matches the current input
             for suggestion in &ctx_cached.suggestions {
@@ -210,6 +224,7 @@ impl AiSuggestionBackend {
         let mut state = self.inner.state.lock();
 
         if let Some(content) = completion {
+            let model = self.inner.chat_model.read().clone();
             if request.input.is_empty() {
                 // Determine CWD from request or default
                 let cwd = request.cwd.clone().unwrap_or_default();
@@ -220,6 +235,7 @@ impl AiSuggestionBackend {
                         suggestions,
                         cwd,
                         received_at: Instant::now(),
+                        model: model.clone(),
                     });
                     debug!("ai suggestion backend stored new context completion");
                 }
@@ -227,6 +243,7 @@ impl AiSuggestionBackend {
                 state.cached = Some(AiCachedSuggestion {
                     completion: content,
                     received_at: Instant::now(),
+                    model,
                 });
                 debug!("ai suggestion backend stored new completion");
             }
@@ -248,7 +265,10 @@ impl AiSuggestionBackend {
         let options = ChatRequestOptions::new()
             .with_temperature(Some(self.inner.settings.temperature))
             .with_model(self.inner.chat_model.read().clone());
-        let response = match self.inner.client.send_chat(&messages, &options, None) {
+        // Unconfigured (or deconfigured) since startup or by a later `vset`:
+        // speculative work stays silent instead of erroring into the prompt.
+        let client = self.inner.client_slot.read().clone()?;
+        let response = match client.send_chat(&messages, &options, None) {
             Ok(value) => value,
             Err(err) => {
                 warn!("ai suggestion request failed: {err:?}");
@@ -418,5 +438,45 @@ fn extract_ai_message_content(response: &Value) -> Option<String> {
             debug!("ai suggestion produced no usable answer: {err}");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `chat_model` switch must not keep serving the previous model's
+    /// cached completion for up to the TTL: the cache key used to be
+    /// input-prefix and cwd only.
+    #[test]
+    fn a_model_switch_stops_serving_the_previous_models_cached_suggestion() {
+        let slot: Arc<RwLock<Option<Arc<ChatGptClient>>>> = Arc::new(RwLock::new(None));
+        let chat_model = Arc::new(RwLock::new(Some("model-a".to_string())));
+        let backend = AiSuggestionBackend::new(slot, chat_model.clone());
+        {
+            let mut state = backend.inner.state.lock();
+            state.cached = Some(AiCachedSuggestion {
+                completion: "git status".to_string(),
+                received_at: Instant::now(),
+                model: Some("model-a".to_string()),
+            });
+        }
+        let request = || {
+            SuggestionRequest::new(
+                "git".to_string(),
+                3,
+                InputPreferences::default(),
+                Vec::new(),
+                None,
+                Arc::new(Vec::new()),
+                None,
+            )
+        };
+        assert_eq!(
+            backend.try_cached(&request()).as_deref(),
+            Some("git status")
+        );
+        *chat_model.write() = Some("model-b".to_string());
+        assert!(backend.try_cached(&request()).is_none());
     }
 }

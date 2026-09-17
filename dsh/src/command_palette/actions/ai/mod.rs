@@ -15,14 +15,13 @@ pub mod safety;
 pub mod suggest;
 pub mod suggest_commands;
 
-/// Get the AI service from the shell environment
+/// Get the AI service from the shell environment.
+///
+/// Returns `None` while no API key is configured: the service itself is now
+/// always constructed (it follows the shared client slot so a later `vset`
+/// takes effect), so callers must ask here instead of `is_some()`.
 pub fn get_ai_service(shell: &Shell) -> Option<Arc<dyn AiService + Send + Sync>> {
-    shell
-        .environment
-        .read()
-        .integration_state
-        .ai_service
-        .clone()
+    shell.environment.read().live_ai_service()
 }
 
 /// Helper to get directory listing for AI context

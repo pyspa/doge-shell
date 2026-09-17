@@ -23,7 +23,6 @@ use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
 #[cfg(test)]
 use futures::StreamExt;
 
-use dsh_openai::{ChatGptClient, OpenAiConfig};
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
 use parking_lot::Mutex as ParkingMutex;
@@ -238,6 +237,19 @@ impl<'a> Drop for Repl<'a> {
 }
 
 impl<'a> Repl<'a> {
+    /// The shell-side AI service, when one can currently be used.
+    ///
+    /// The service itself is always constructed (it follows the shared
+    /// client slot, so a key set or rotated later takes effect without a
+    /// restart); availability is the slot holding a client. Tests may inject
+    /// a mock into `services.ai`, which is what is returned when configured.
+    pub(crate) fn ai_service(&self) -> Option<Arc<dyn AiService + Send + Sync>> {
+        if !self.shell.environment.read().ai_configured() {
+            return None;
+        }
+        self.services.ai.clone()
+    }
+
     pub(crate) fn trigger_file_context_update(&self) {
         let cache = self.services.file_context.clone();
         tokio::task::spawn_blocking(move || {

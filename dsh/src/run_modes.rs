@@ -301,53 +301,44 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     debug!("start shell");
     shell.set_signals();
 
-    // Initialize AI service for non-interactive commands
+    // Initialize AI service for non-interactive commands.
+    //
+    // The service always exists and follows the shared `ai_client` slot (see
+    // `Repl::new`): a key exported mid-script still takes effect, and callers
+    // keep asking `ai_configured()` / the slot rather than `is_some()`.
     {
-        use dsh_openai::ChatGptClient;
-        use dsh_openai::OpenAiConfig;
         use std::sync::Arc;
 
         let env_handle = Arc::clone(&shell.environment);
-        let config = OpenAiConfig::from_getter(|key| {
-            let value = {
-                let guard = env_handle.read();
-                guard.get_var(key)
-            };
-            value.or_else(|| std::env::var(key).ok())
-        });
-
-        // Only initialize if API key is present
-        if config.api_key().is_some()
-            && let Ok(client) = ChatGptClient::try_from_config(&config)
-        {
-            let mcp_manager = env_handle.read().integration_state.mcp_manager.clone();
-            let safety_level = env_handle.read().policy_state.safety_level.clone();
-            let policy = crate::ai_features::AgentPolicyHandles {
-                safety_level,
-                safety_guard: shell.safety_guard.clone(),
-                execute_allowlist: env_handle.read().policy_state.execute_allowlist.clone(),
-                agent_session_allowlist: env_handle
-                    .read()
-                    .policy_state
-                    .agent_session_allowlist
-                    .clone(),
-            };
-            let response_language = env_handle
+        let slot = env_handle.read().integration_state.ai_client.clone();
+        let shared = crate::ai_features::SharedChatClient::new(slot);
+        let mcp_manager = env_handle.read().integration_state.mcp_manager.clone();
+        let safety_level = env_handle.read().policy_state.safety_level.clone();
+        let policy = crate::ai_features::AgentPolicyHandles {
+            safety_level,
+            safety_guard: shell.safety_guard.clone(),
+            execute_allowlist: env_handle.read().policy_state.execute_allowlist.clone(),
+            agent_session_allowlist: env_handle
                 .read()
-                .integration_state
-                .response_language
-                .clone();
-            let chat_model = env_handle.read().integration_state.chat_model.clone();
-            let service = Arc::new(crate::ai_features::LiveAiService::new(
-                client,
-                mcp_manager,
-                policy,
-                None,
-                response_language,
-                chat_model,
-            ));
-            shell.environment.write().integration_state.ai_service = Some(service);
-        }
+                .policy_state
+                .agent_session_allowlist
+                .clone(),
+        };
+        let response_language = env_handle
+            .read()
+            .integration_state
+            .response_language
+            .clone();
+        let chat_model = env_handle.read().integration_state.chat_model.clone();
+        let service = Arc::new(crate::ai_features::LiveAiService::new(
+            shared,
+            mcp_manager,
+            policy,
+            None,
+            response_language,
+            chat_model,
+        ));
+        shell.environment.write().integration_state.ai_service = Some(service);
     }
 
     // For command execution, we create a special context that doesn't require full TTY access

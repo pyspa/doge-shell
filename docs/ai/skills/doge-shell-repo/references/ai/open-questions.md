@@ -43,24 +43,25 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
   「使う」方向に配線するか、使わないと決めて周辺コードを削るかは未決定。
 - **`ask_ai_async` は temperature 0.7 固定**。`blocks fix`（「修正コマンドを 1 行だけ」）にも
   同じ値が使われる。
-- **シェル側 client は起動時に固定**。`AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` /
-  `AI_CHAT_TIMEOUT_SECS` を後から変えても `!` チャットにしか届かない。
-  起動時にキーが無いと `integration_state.ai_service` は `None` のままで、後から設定しても
-  コマンドパレットと `Alt+d` は「未設定」と言い続ける。
+- **シェル側 client は共有スロット経由で追随する**【一部解決済み】。以前は `AI_CHAT_API_KEY` /
+  `AI_CHAT_BASE_URL` / `AI_CHAT_TIMEOUT_SECS` を後から変えても `!` チャットにしか届かず、
+  起動時にキーが無いと `integration_state.ai_service` は `None` のままだった。
+  現在は `integration_state.ai_client`（`Arc<RwLock<Option<Arc<ChatGptClient>>>>`）を
+  `LiveAiService`（`SharedChatClient` 経由）とゴーストテキスト backend が共有し、
+  `Environment::reload_ai_client`（`refresh_derived_state` から発火）がキー・URL・timeout・
+  reasoning_effort の変更のたびに作り直す。サービス自体はキー無しでも構築され、
+  利用可否の判定は `ai_configured()`（スロット有無）で行う。作り直しは学習済みの
+  400 リカバリ状態をリセットする（1 往復で再学習する）。
   `AI_MESSAGE_LANG`（`refresh_derived_state` → `response_language` slot）と
   `AI_CHAT_MODEL`/`OPENAI_MODEL`（同様に `chat_model` slot、
-  `Environment::reload_chat_model`）はこの制約の**外**: どちらも `IntegrationState` の
-  `Arc<RwLock<Option<String>>>` を経由し、`LiveAiService::run_tool_loop` が毎リクエスト
-  読んで `with_model`/`with_response_language` を被せるので、client の再構築なしに
-  全経路（`!` チャット・コマンドパレットの AI アクション・ゴーストテキスト・`ai-watch`・
-  `blocks explain|fix`・`output-gen`）へ届く。read-only cache（`ai_features::cache`）は
-  モデルを scope に含めず、`reload_chat_model` が変更のたびに明示的に全消しする形にした
-  （`answer_scope` が `std::env::var` 直読みで export しないシェル変数を見られない問題を、
-  scope 化ではなく invalidate 側で解決）。ゴーストテキストの `AiSuggestionBackend` は
-  `LiveAiService` を通らないので同じ slot を自分でも保持し、`ChatRequestOptions::with_model`
-  を直接呼ぶ。**残る制約**: ゴーストテキストの 8 秒 TTL キャッシュ
-  （`AiBackendState.cached`/`context_cached`）はモデル変更時に明示的なクリアをしないので、
-  切り替え直後の最大 8 秒だけ旧モデルの候補が出うる（体感以下として許容）。
+  `Environment::reload_chat_model`）は従来どおり再構築なしで全経路へ届く。read-only cache
+  （`ai_features::cache`）はモデルを scope に含めず、`reload_chat_model` が変更のたびに
+  明示的に全消しする形のまま（`answer_scope` が `std::env::var` 直読みで export しない
+  シェル変数を見られない問題を、scope 化ではなく invalidate 側で解決）。ゴーストテキストの
+  `AiSuggestionBackend` は `LiveAiService` を通らないので同じ slot を自分でも保持し、
+  `ChatRequestOptions::with_model` を直接呼ぶ。8 秒 TTL キャッシュ
+  （`AiBackendState.cached`/`context_cached`）はモデルをキーに含めるようになったので、
+  切り替え直後の旧モデル候補の混入は無い。
 
 ## プロバイダ API（調査済み・未着手）
 

@@ -59,7 +59,7 @@ impl<'a> Repl<'a> {
     /// failure; it has to fire on every path that produces no applicable fix,
     /// including a blocked or failed AI request.
     fn send_diagnose_hint(&self, command_time: Option<Instant>) {
-        if self.ai_ui.input_preferences.auto_diagnose && self.services.ai.is_some() {
+        if self.ai_ui.input_preferences.auto_diagnose && self.ai_service().is_some() {
             let _ = self.ai_ui.ai_tx.send(AiEvent::AutoFix(AutoFixSuggestion {
                 replacement: String::new(),
                 title: None,
@@ -102,7 +102,7 @@ impl<'a> Repl<'a> {
         }
 
         if self.ai_ui.input_preferences.auto_fix
-            && let Some(service) = &self.services.ai
+            && let Some(service) = self.ai_service()
             && !is_auto_fix_blocked(&command)
         {
             let service = service.clone();
@@ -267,7 +267,7 @@ impl<'a> Repl<'a> {
 
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(15);
-        let service = self.services.ai.clone();
+        let service = self.ai_service();
         let last_status = self.state.last_status;
         let engine = &self.ai_ui.suggestion_manager.engine;
 
@@ -338,18 +338,14 @@ impl<'a> Repl<'a> {
 
     pub(super) async fn expand_smart_pipe(&self, query: String) -> Result<String> {
         let service = self
-            .services
-            .ai
-            .as_ref()
+            .ai_service()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
         ai_features::expand_smart_pipe(service.as_ref(), &query).await
     }
 
     pub(super) async fn run_generative_command(&self, query: &str) -> Result<String> {
         let service = self
-            .services
-            .ai
-            .as_ref()
+            .ai_service()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
         ai_features::run_generative_command(service.as_ref(), query).await
     }
@@ -440,7 +436,7 @@ impl<'a> Repl<'a> {
         };
 
         // Check if AI service is available
-        let Some(_service) = self.services.ai.clone() else {
+        let Some(_service) = self.ai_service() else {
             queue!(
                 renderer,
                 Print(format!(
@@ -574,6 +570,12 @@ mod tests {
 
         let environment = Environment::new();
         let mut shell = Shell::new(environment);
+        // The injected mock below is only reached when a client is
+        // configured: give the shared slot a key first.
+        shell
+            .environment
+            .write()
+            .set_shell_var("AI_CHAT_API_KEY".into(), "test-key".into());
         let mut repl = Repl::new(&mut shell);
 
         // Setup mock AI service

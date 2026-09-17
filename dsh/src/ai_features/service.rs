@@ -8,8 +8,8 @@ use crate::safety::{SafetyGuard, SafetyLevel, SafetyResult};
 use anyhow::Result;
 use async_trait::async_trait;
 use dsh_builtin::McpManager;
-use dsh_openai::ChatRequestOptions;
 use dsh_openai::turn::{self, TurnOutcome};
+use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -171,6 +171,62 @@ pub struct AgentPolicyHandles {
     /// a session answer ended up in the list a person had written by hand, and
     /// the two loops disagreed about what was already approved.
     pub agent_session_allowlist: Arc<RwLock<Vec<String>>>,
+}
+
+/// Chat client that follows the operator's current API configuration.
+///
+/// A `ChatGptClient` snapshots its key, endpoint, and timeouts at
+/// construction, so a shell that built it once at startup kept billing the
+/// old key (or missing the new one) after `vset AI_CHAT_API_KEY=...`.
+/// Every shell-side holder - the `LiveAiService` below and the ghost-text
+/// backend - shares one slot instead, and
+/// `Environment::reload_ai_client` swaps in a freshly resolved client
+/// whenever those variables change. Cloned holders keep working because
+/// they share the slot, not the client.
+#[derive(Clone)]
+pub struct SharedChatClient {
+    slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
+}
+
+impl SharedChatClient {
+    pub fn new(slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>) -> Self {
+        Self { slot }
+    }
+
+    fn current(&self) -> Result<Arc<ChatGptClient>> {
+        self.slot
+            .read()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("AI service not available"))
+    }
+}
+
+impl ChatClient for SharedChatClient {
+    fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value> {
+        let client = self.current()?;
+        client.send_chat(messages, options, None)
+    }
+
+    fn send_chat_cancellable(
+        &self,
+        messages: &[Value],
+        options: &ChatRequestOptions,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<Value> {
+        let client = self.current()?;
+        client.send_chat(messages, options, Some(cancel))
+    }
+
+    fn send_chat_streaming(
+        &self,
+        messages: &[Value],
+        options: &ChatRequestOptions,
+        cancel: &dyn Fn() -> bool,
+        on_delta: &mut dyn FnMut(&str),
+    ) -> Result<Value> {
+        let client = self.current()?;
+        client.send_chat_streaming(messages, options, Some(cancel), on_delta)
+    }
 }
 
 /// Live implementation of AiService using OpenAI API and MCP tools.
@@ -364,7 +420,18 @@ impl LiveAiService {
         } else {
             self.with_response_language(messages_in)
         };
-        let tools = self.mcp_manager.read().tool_definitions();
+        // Read the tool list only when this request may actually offer it:
+        // every production caller uses `without_tools()`, so an
+        // unconditional read paid for the full MCP schema on requests that
+        // then discarded it. (The MCP execution block below is currently
+        // unreachable in production for the same reason; it is kept for a
+        // future `with_tools()` caller rather than deleted. See
+        // ai-architecture.md §2.)
+        let tools = if options.allow_tools {
+            self.mcp_manager.read().tool_definitions()
+        } else {
+            Vec::new()
+        };
         let chat_options = options
             .to_chat_options((!tools.is_empty()).then(|| tools.clone()))
             .with_model(self.chat_model.read().clone());

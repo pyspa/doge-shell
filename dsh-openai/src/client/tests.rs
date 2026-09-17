@@ -226,6 +226,43 @@ fn build_body_drops_stream_once_the_endpoint_rejects_it() {
     assert!(body.get("stream_options").is_none());
 }
 
+/// A 400 naming `stream` must degrade in one retry, not two: `stream_options`
+/// without `stream` is meaningless, so `recover` drops both together.
+/// Otherwise the retried body still carried `stream_options` and paid for a
+/// second 400 before reaching the non-streaming shape.
+#[test]
+fn recover_drops_stream_options_alongside_stream() {
+    let client = client();
+    let err: Error = ApiError {
+        status: Some(400),
+        retry_after: None,
+        message: "Unrecognized request argument supplied: stream".into(),
+    }
+    .into();
+    let mut body = json!({
+        "model": "gpt-4.1-mini",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "stream": true,
+        "stream_options": { "include_usage": true },
+    });
+    let mut state = RecoveryState::seed(client.known_unsupported());
+
+    assert!(client.recover(&err, &mut body, &mut state));
+
+    assert!(body.get("stream").is_none());
+    assert!(body.get("stream_options").is_none());
+    assert!(state.dropped.contains(&"stream"));
+    assert!(state.dropped.contains(&"stream_options"));
+    // A rebuild from the learned memory reaches the same shape without
+    // another round-trip.
+    let rebuilt = client.build_body(
+        &[json!({ "role": "user", "content": "hi" })],
+        &ChatRequestOptions::new().with_stream(true),
+    );
+    assert!(rebuilt.get("stream").is_none());
+    assert!(rebuilt.get("stream_options").is_none());
+}
+
 #[test]
 fn build_body_sends_the_configured_reasoning_effort() {
     let client = client_with_reasoning_effort("high");

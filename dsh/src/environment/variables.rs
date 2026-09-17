@@ -3,6 +3,7 @@
 use super::Environment;
 use dsh_types::output_history;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Strip the sigil and any braces so `$FOO`, `${FOO}` and `FOO` all reach the
 /// same lookup.
@@ -128,6 +129,18 @@ impl Environment {
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
             "AI_CHAT_MODEL" | "OPENAI_MODEL" => self.reload_chat_model(),
+            // The API client snapshots these at construction, so a change
+            // has to rebuild it - otherwise a rotated key or a switched
+            // endpoint only reaches `!` chat (which resolves its config per
+            // message) and never the palette, ghost text, or `ask_ai_async`.
+            "AI_CHAT_API_KEY"
+            | "OPENAI_API_KEY"
+            | "OPEN_AI_API_KEY"
+            | "AI_CHAT_BASE_URL"
+            | "OPENAI_BASE_URL"
+            | "AI_CHAT_TIMEOUT_SECS"
+            | "AI_CHAT_REASONING_EFFORT"
+            | "AI_CHAT_ALLOW_INSECURE_HTTP" => self.reload_ai_client(),
             _ => {}
         }
     }
@@ -172,6 +185,58 @@ impl Environment {
         if changed {
             crate::ai_features::invalidate_read_only_cache();
         }
+    }
+
+    /// Rebuild the shared shell-side API client from the current variables.
+    ///
+    /// `ChatGptClient` snapshots its key, endpoint, and timeouts at
+    /// construction. The `!` runtime rebuilds its own client per message and
+    /// never needed this, but the shell-side holders (`LiveAiService` via
+    /// `SharedChatClient`, the ghost-text backend) share one slot precisely
+    /// so this swap reaches all of them at once. A rebuild drops the old
+    /// client's 400-recovery learning (it is per-client memory); the new
+    /// client re-learns within one retry.
+    ///
+    /// `None` (no key) clears the slot; every shell-side caller treats that
+    /// as "not configured", the same as a missing `ai_service` used to.
+    pub fn reload_ai_client(&mut self) {
+        let config = dsh_openai::OpenAiConfig::from_getter(|key| {
+            self.lookup_variable(key)
+                .or_else(|| std::env::var(key).ok())
+        });
+        let client = match config.api_key() {
+            None => None,
+            Some(_) => match dsh_openai::ChatGptClient::try_from_config(&config) {
+                Ok(client) => Some(Arc::new(client)),
+                Err(e) => {
+                    tracing::debug!("ai client reload failed, treating as not configured: {e}");
+                    None
+                }
+            },
+        };
+        *self.integration_state.ai_client.write() = client;
+    }
+
+    /// Whether a shell-side AI request can currently be sent.
+    ///
+    /// True when the shared client slot holds a client (i.e. an API key is
+    /// configured). Shell-side holders (`LiveAiService`, the ghost-text
+    /// backend) are now always constructed and follow the slot, so callers
+    /// must ask this instead of checking `ai_service.is_some()`.
+    pub fn ai_configured(&self) -> bool {
+        self.integration_state.ai_client.read().is_some()
+    }
+
+    /// The shell-side AI service when one can currently be used.
+    ///
+    /// One call instead of an `ai_configured` check plus a clone at every
+    /// call site. Returns the stored service only while the shared client
+    /// slot holds a client.
+    pub fn live_ai_service(&self) -> Option<Arc<dyn crate::ai_features::AiService + Send + Sync>> {
+        if !self.ai_configured() {
+            return None;
+        }
+        self.integration_state.ai_service.clone()
     }
 
     /// The value a child process would be given for `name`.

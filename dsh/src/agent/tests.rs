@@ -479,7 +479,12 @@ fn recovery_preserves_budgets_and_unknown_intent() {
     let mut runtime = AgentRuntime::new(restored, store);
     assert!(runtime.stopped());
     runtime.finish(true, None).unwrap();
-    assert_ne!(runtime.task.status, TaskStatus::Completed);
+    // A final round that lands exactly on its budget with verified work done
+    // completed the task: resuming would stop again at the loop head unless
+    // the budget is raised, so `Interrupted` here would be a pointless cycle.
+    // (Cancellation still wins over completion; see
+    // `cancellation_wins_over_late_result_and_finish`.)
+    assert_eq!(runtime.task.status, TaskStatus::Completed);
 }
 
 #[test]

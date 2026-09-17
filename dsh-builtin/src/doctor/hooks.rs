@@ -92,6 +92,13 @@ pub(super) fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
             }
         }
     }
+
+    // Scope, not configuration: hooks fire on the `!` chat / agent-task loop
+    // only. The command palette, ghost text, and other shell-side AI requests
+    // bypass them, so a `pre-tool-use` gate here does not cover those paths.
+    let _ = ctx.write_stdout(
+        "info scope hooks apply to `!` chat and agent tasks only; shell-side AI (command palette, ghost text) bypasses them",
+    );
 }
 
 /// The `match` clause as one field per kind, so `doctor` shows what narrowed a

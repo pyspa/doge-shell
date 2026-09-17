@@ -23,6 +23,14 @@ pub(super) struct TurnSetup {
     pub(super) session_ttl: Option<Duration>,
     pub(super) scope: Option<PathBuf>,
     pub(super) hook_ctx: hooks::HookContext,
+    /// Whether `peek_id` named a stored conversation at build time.
+    ///
+    /// `peek_id` and `take` run the same `mismatch` check over identical
+    /// inputs, so a peek hit followed by `Claim::Fresh` can only mean the
+    /// turn crossed the TTL while a hook ran or an approval waited - the one
+    /// case where `hook_ctx` still holds the dropped conversation's id and
+    /// must be refreshed before `retain_session` runs.
+    pub(super) peeked_session: bool,
     pub(super) turn_token_budget: Option<u64>,
     /// Snapshot of `skills::pending::staged_this_process()` before this turn,
     /// so the turn's own count is the difference read afterward.
@@ -69,6 +77,7 @@ impl TurnSetup {
         // Learned without consuming the conversation: `take` is destructive, and
         // a hook that refuses this prompt must leave the previous turn intact.
         let carried_session = session::peek_id(session_ttl, &prompt.identity, scope.as_deref());
+        let peeked_session = carried_session.is_some();
         hook_ctx.set_session_id(
             carried_session
                 .clone()
@@ -87,6 +96,7 @@ impl TurnSetup {
             session_ttl,
             scope,
             hook_ctx,
+            peeked_session,
             turn_token_budget,
             staged_before_turn,
         })
@@ -171,6 +181,23 @@ pub(super) fn run_tool_calls(
         }));
     }
     Ok(())
+}
+
+/// Record a terminal task failure when the turn cannot proceed far enough
+/// to reach the shared epilogue in `chat_with_tools`.
+///
+/// Pre-loop failures (an unreadable checkpoint, an unreadable event log)
+/// exit the turn closure via `?` before the loop - and therefore before the
+/// epilogue's `runtime.finish` - which used to leave the task `Running`
+/// with only `dsh/src/agent.rs`'s generic fallback as its `stop_reason`.
+/// Calling this before returning keeps the specific reason.
+pub(super) fn finish_task_silently(
+    runtime: Option<&Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
+    reason: String,
+) {
+    if let Some(runtime) = runtime {
+        let _ = runtime.lock().finish(false, Some(reason));
+    }
 }
 
 /// Print what this turn cost, so context changes can be judged.

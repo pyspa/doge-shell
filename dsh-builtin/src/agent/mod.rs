@@ -25,6 +25,68 @@ impl ToolOutcome {
     }
 }
 
+/// Stable identity of one failed tool call for the "same operation failed
+/// three times" guard.
+///
+/// The previous signature embedded the tool result verbatim, and an
+/// `execute` result carries a fresh `job_id`/`pid` (plus stream offsets)
+/// on every run - so the same command failing for the same reason never
+/// matched itself twice and `repeats` never advanced. This keeps the tool
+/// name, its arguments, and the stable part of the result (status, exit
+/// code, error, output text) while dropping the volatile job metadata and
+/// bounding the length.
+fn failure_signature(call: &Value, result: &str) -> String {
+    let function = call.get("function").unwrap_or(&Value::Null);
+    let name = function
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let args = function
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    const VOLATILE_KEYS: [&str; 8] = [
+        "job_id",
+        "pid",
+        "stdout_bytes",
+        "stderr_bytes",
+        "stdout_start_offset",
+        "stderr_start_offset",
+        "stdout_next_offset",
+        "stderr_next_offset",
+    ];
+    const MAX_TEXT: usize = 1000;
+    fn truncate_tail(text: &str) -> String {
+        if text.len() <= MAX_TEXT {
+            return text.to_string();
+        }
+        let start = text.floor_char_boundary(text.len().saturating_sub(MAX_TEXT));
+        text[start..].to_string()
+    }
+    let normalized = match serde_json::from_str::<Value>(result) {
+        Ok(Value::Object(mut map)) => {
+            for key in VOLATILE_KEYS {
+                map.remove(key);
+            }
+            for key in ["stdout", "stderr"] {
+                if let Some(text) = map.get(key).and_then(Value::as_str).map(truncate_tail) {
+                    map.insert(key.to_string(), Value::String(text));
+                }
+            }
+            Value::Object(map).to_string()
+        }
+        _ => {
+            if result.len() <= 2000 {
+                result.to_string()
+            } else {
+                let end = result.floor_char_boundary(2000);
+                result[..end].to_string()
+            }
+        }
+    };
+    format!("{name}:{args}:{normalized}")
+}
+
 pub struct AgentRuntime {
     pub task: AgentTask,
     pub store: Arc<dyn AgentTaskStore>,
@@ -63,10 +125,32 @@ impl AgentRuntime {
                 .elapsed_ms
                 .saturating_add(self.tick.elapsed().as_millis() as u64)
                 >= self.task.time_budget_ms
+            // A transient store failure is not a cancellation. `map_or(true)`
+            // here used to turn a momentary SQLite lock contention into
+            // "the task was cancelled", and the 20-50ms pollers below made
+            // that contention self-inflicted.
             || self
                 .store
                 .load(&self.task.id)
-                .map_or(true, |t| t.status == TaskStatus::Cancelled)
+                .map(|t| t.status == TaskStatus::Cancelled)
+                .unwrap_or_else(|e| {
+                    tracing::debug!("agent: task store load failed, treating as not-cancelled: {e}");
+                    false
+                })
+    }
+    /// Whether the task was cancelled, ignoring budgets.
+    ///
+    /// `stopped` doubles as the loop's "do not start more work" check, where
+    /// an exhausted budget must halt the next iteration. `finish` needs the
+    /// narrower question: a final round that lands exactly on its budget with
+    /// verified work done completed the task, it did not interrupt it.
+    fn cancelled(&self) -> bool {
+        self.task.status != TaskStatus::Running
+            || self
+                .store
+                .load(&self.task.id)
+                .map(|t| t.status == TaskStatus::Cancelled)
+                .unwrap_or(false)
     }
     pub fn context(&self) -> String {
         format!(
@@ -113,7 +197,7 @@ impl AgentRuntime {
             self.task.stop_reason =
                 Some("operation outcome is unknown; reconcile before resuming".into());
         }
-        let signature = format!("{}:{result}", call.get("function").unwrap_or(&Value::Null));
+        let signature = failure_signature(call, result);
         if outcome.failed() {
             self.repeats = if self.previous_failure.as_ref() == Some(&signature) {
                 self.repeats + 1
@@ -154,8 +238,14 @@ impl AgentRuntime {
             )))?;
         }
         if self.task.status == TaskStatus::Running {
+            // `Completed` ignores an exhausted budget on purpose: a final
+            // round that lands exactly on it with verified work done completed
+            // the task (resuming would stop again at the loop head unless the
+            // budget is raised - a pointless cycle). Cancellation still wins.
+            // `Failed` keeps the budget check: a turn stopped *by* the budget
+            // is `Interrupted` (resumable), not failed on its merits.
             self.task.status =
-                if success && self.task.verified() && !unfinished_jobs && !self.stopped() {
+                if success && self.task.verified() && !unfinished_jobs && !self.cancelled() {
                     TaskStatus::Completed
                 } else if !success
                     && !self.stopped()
@@ -391,4 +481,188 @@ pub fn unfinished_local_jobs(events: &[dsh_types::agent::TaskEvent]) -> Vec<Stri
 
 pub fn resolved_config(proxy: &mut dyn crate::ShellProxy) -> dsh_openai::OpenAiConfig {
     crate::chatgpt::load_openai_config(proxy)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell_capabilities::{AgentTaskSave, AgentTaskStore};
+
+    fn running_task() -> AgentTask {
+        AgentTask {
+            id: "task-1".into(),
+            goal: "goal".into(),
+            root: std::path::PathBuf::from("/tmp"),
+            status: TaskStatus::Running,
+            grant: Default::default(),
+            criteria: vec![],
+            plan: vec![],
+            progress: String::new(),
+            token_budget: 1000,
+            tokens_used: 0,
+            time_budget_ms: 60_000,
+            elapsed_ms: 0,
+            stop_reason: None,
+            checkpoint: None,
+            pending_operation: None,
+            created_at: 0,
+        }
+    }
+
+    /// The same command failing the same way twice must match itself even
+    /// though every `execute` result carries a fresh `job_id`/`pid`: the old
+    /// verbatim-result signature never advanced `repeats` past 1.
+    #[test]
+    fn failure_signature_ignores_volatile_job_metadata() {
+        let call = json!({"id":"call-1","function":{"name":"execute","arguments":"{\"command\":\"cargo test\"}"}});
+        let first = failure_signature(
+            &call,
+            &json!({"status":"exited","exit_code":1,"job_id":"aaa","pid":111,"stdout":"boom","stderr":"","stdout_bytes":4,"stdout_next_offset":4}).to_string(),
+        );
+        let second = failure_signature(
+            &call,
+            &json!({"status":"exited","exit_code":1,"job_id":"bbb","pid":222,"stdout":"boom","stderr":"","stdout_bytes":4,"stdout_next_offset":4}).to_string(),
+        );
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn failure_signature_distinguishes_commands_and_outcomes() {
+        let call = json!({"id":"call-1","function":{"name":"execute","arguments":"{\"command\":\"cargo test\"}"}});
+        let other_command = json!({"id":"call-2","function":{"name":"execute","arguments":"{\"command\":\"cargo build\"}"}});
+        let failed = failure_signature(
+            &call,
+            &json!({"status":"exited","exit_code":1,"job_id":"aaa","stdout":"boom"}).to_string(),
+        );
+        assert_ne!(
+            failed,
+            failure_signature(
+                &other_command,
+                &json!({"status":"exited","exit_code":1,"job_id":"aaa","stdout":"boom"})
+                    .to_string(),
+            )
+        );
+        assert_ne!(
+            failed,
+            failure_signature(
+                &call,
+                &json!({"status":"exited","exit_code":0,"job_id":"aaa","stdout":"ok"}).to_string(),
+            )
+        );
+    }
+
+    struct MemoryStore {
+        task: std::sync::Mutex<AgentTask>,
+        fail_load: bool,
+    }
+
+    impl MemoryStore {
+        fn running() -> Self {
+            Self {
+                task: std::sync::Mutex::new(running_task()),
+                fail_load: false,
+            }
+        }
+
+        fn load_fails() -> Self {
+            Self {
+                task: std::sync::Mutex::new(running_task()),
+                fail_load: true,
+            }
+        }
+    }
+
+    impl AgentTaskStore for MemoryStore {
+        fn save(
+            &self,
+            task: &AgentTask,
+            _event: Option<(&str, &Value)>,
+        ) -> anyhow::Result<AgentTaskSave> {
+            *self.task.lock().unwrap() = task.clone();
+            Ok(AgentTaskSave {
+                sequence: 0,
+                task: task.clone(),
+            })
+        }
+        fn resume(
+            &self,
+            task: &AgentTask,
+            event: Option<(&str, &Value)>,
+        ) -> anyhow::Result<AgentTaskSave> {
+            self.save(task, event)
+        }
+        fn load(&self, _id: &str) -> anyhow::Result<AgentTask> {
+            if self.fail_load {
+                return Err(anyhow::anyhow!("transient sqlite lock"));
+            }
+            Ok(self.task.lock().unwrap().clone())
+        }
+        fn list(&self) -> anyhow::Result<Vec<AgentTask>> {
+            Ok(vec![self.task.lock().unwrap().clone()])
+        }
+        fn events(&self, _id: &str) -> anyhow::Result<Vec<dsh_types::agent::TaskEvent>> {
+            Ok(Vec::new())
+        }
+        fn delete(&self, _id: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn save_artifact(&self, _id: &str, _name: &str, _content: &Value) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn load_artifact(&self, _id: &str, _name: &str) -> anyhow::Result<Value> {
+            Ok(Value::Null)
+        }
+    }
+
+    /// A transient store read failure is not a cancellation: `map_or(true)`
+    /// here used to turn momentary SQLite contention into "the task was
+    /// cancelled", and the 20-50ms pollers made that contention likely.
+    #[test]
+    fn stopped_treats_a_store_read_failure_as_not_cancelled() {
+        let store = Arc::new(MemoryStore::load_fails());
+        let runtime = AgentRuntime::new(running_task(), store);
+        assert!(!runtime.stopped());
+    }
+
+    #[test]
+    fn stopped_still_sees_a_persisted_cancellation() {
+        let store = Arc::new(MemoryStore::running());
+        store.task.lock().unwrap().status = TaskStatus::Cancelled;
+        let runtime = AgentRuntime::new(running_task(), store);
+        assert!(runtime.stopped());
+    }
+
+    fn verified_at_budget() -> (AgentTask, Arc<MemoryStore>) {
+        let mut task = running_task();
+        task.tokens_used = task.token_budget;
+        task.criteria = vec![Verification {
+            criterion: "done".into(),
+            evidence_event: Some(1),
+            passed: true,
+        }];
+        let store = Arc::new(MemoryStore::running());
+        *store.task.lock().unwrap() = task.clone();
+        (task, store)
+    }
+
+    /// A final round landing exactly on its budget with verified work done
+    /// completed the task; resuming would stop again at the loop head unless
+    /// the budget is raised.
+    #[test]
+    fn finish_completes_verified_work_at_exact_budget() {
+        let (task, store) = verified_at_budget();
+        let mut runtime = AgentRuntime::new(task, store);
+        runtime.finish(true, None).unwrap();
+        assert_eq!(runtime.task.status, TaskStatus::Completed);
+    }
+
+    /// A turn stopped *by* the budget is resumable, not failed on its merits.
+    #[test]
+    fn finish_interrupts_a_budget_stopped_failure() {
+        let (mut task, store) = verified_at_budget();
+        task.criteria = vec![];
+        let mut runtime = AgentRuntime::new(task, store);
+        runtime.finish(false, Some("boom".into())).unwrap();
+        assert_eq!(runtime.task.status, TaskStatus::Interrupted);
+    }
 }

@@ -98,7 +98,7 @@ impl<'a> Repl<'a> {
 
     fn handle_explanation_idle(&mut self) {
         if self.ai_ui.input_preferences.ai_explanation
-            && self.services.ai.is_some()
+            && self.ai_service().is_some()
             && !self.input.is_empty()
             && self.ai_ui.pending_ai_explanation_input.as_deref() != Some(self.input.as_str())
             && self.ai_ui.current_ai_explanation.is_none()
@@ -106,7 +106,7 @@ impl<'a> Repl<'a> {
             let input = self.input.as_str().to_string();
             self.ai_ui.pending_ai_explanation_input = Some(input.clone());
             let ai_tx = self.ai_ui.ai_tx.clone();
-            let service = self.services.ai.clone();
+            let service = self.ai_service();
 
             tokio::spawn(async move {
                 if let Some(service) = service {

@@ -31,6 +31,7 @@ use crate::suggestion::InputPreferences;
 use anyhow::Context as _;
 use anyhow::Result;
 use dsh_builtin::McpManager;
+use dsh_openai::ChatGptClient;
 use dsh_types::command_block::CommandBlockHistory;
 use dsh_types::mcp::McpServerConfig;
 use dsh_types::output_history::OutputHistory;
@@ -108,6 +109,15 @@ pub(crate) struct IntegrationState {
     /// Same slot-not-lookup shape as `response_language`, and for the same
     /// reason.
     pub(crate) chat_model: Arc<RwLock<Option<String>>>,
+    /// The shell-side API client, shared by `LiveAiService` (through
+    /// `SharedChatClient`) and the ghost-text backend.
+    ///
+    /// A slot rather than a value because a `ChatGptClient` snapshots its
+    /// key, endpoint, and timeouts at construction: `reload_ai_client`
+    /// swaps in a freshly resolved client whenever those variables change,
+    /// and every holder follows without being rebuilt. `None` means no key
+    /// is configured.
+    pub(crate) ai_client: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
     pub(crate) ai_service: Option<Arc<dyn AiService + Send + Sync>>,
     /// Agent lifecycle reporting (idle/working/blocked), forwarded to
     /// whatever external backend `agent_lifecycle::activate` chose. Always a
@@ -223,6 +233,7 @@ impl Environment {
                 mcp_manager: Arc::new(RwLock::new(McpManager::default())),
                 response_language: Arc::new(RwLock::new(None)),
                 chat_model: Arc::new(RwLock::new(None)),
+                ai_client: Arc::new(RwLock::new(None)),
                 ai_service: None,
                 lifecycle: crate::agent_lifecycle::AgentLifecycleManager::null(),
             },
@@ -263,6 +274,10 @@ impl Environment {
             // after this the variable setters keep the slots in step.
             env.reload_response_language();
             env.reload_chat_model();
+            // Resolve the API client from the same inherited environment, so
+            // a key present at startup lands in the shared slot the service
+            // and the ghost-text backend both read.
+            env.reload_ai_client();
         }
 
         env_arc
@@ -295,6 +310,7 @@ impl Environment {
                     mcp_manager: parent.integration_state.mcp_manager.clone(),
                     response_language: parent.integration_state.response_language.clone(),
                     chat_model: parent.integration_state.chat_model.clone(),
+                    ai_client: parent.integration_state.ai_client.clone(),
                     ai_service: parent.integration_state.ai_service.clone(),
                     lifecycle: parent.integration_state.lifecycle.clone(),
                 },

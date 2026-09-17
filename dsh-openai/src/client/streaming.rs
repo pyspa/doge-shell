@@ -95,10 +95,23 @@ impl ChatGptClient {
         if !is_event_stream {
             // The endpoint accepted the request but ignored `stream: true`
             // and answered in one JSON object, as some OpenAI-compatible
-            // servers do. Read it the same way `send_once` would.
-            let text = Self::await_with_cancel(response.text(), cancel_check)
-                .await
-                .map_err(StreamError::BeforeFirstDelta)?;
+            // servers do. Read it the same way `send_once` would - but under
+            // the operator's budget, not the streaming override above: this
+            // degraded reply is an ordinary non-streaming turn, and leaving
+            // it under `MAX_TIMEOUT_SECS` silently disabled
+            // `AI_CHAT_TIMEOUT_SECS` for every such endpoint.
+            let text = tokio::time::timeout(
+                self.request_timeout,
+                Self::await_with_cancel(response.text(), cancel_check),
+            )
+            .await
+            .map_err(|_| {
+                StreamError::BeforeFirstDelta(anyhow!(
+                    "the OpenAI request timed out after {:?}",
+                    self.request_timeout
+                ))
+            })?
+            .map_err(StreamError::BeforeFirstDelta)?;
             let data: Value = serde_json::from_str(&text).map_err(|err| {
                 StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
             })?;

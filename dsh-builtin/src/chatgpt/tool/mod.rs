@@ -16,6 +16,7 @@ pub(crate) mod execute;
 mod gitignore;
 mod jobs;
 mod ls;
+pub(crate) mod mcp_groups;
 mod paths;
 mod read;
 mod replace;
@@ -106,6 +107,28 @@ pub fn build_tools() -> Vec<Value> {
         shell_history::definition(),
         skill::definition(),
     ]
+}
+
+/// MCP group meta tools, gated on a non-empty manager by the caller: with no
+/// MCP servers there is nothing to discover or activate, so these must not
+/// tax every request the way the unconditional builtins above do.
+pub(crate) fn mcp_group_definitions() -> Vec<Value> {
+    mcp_groups::definitions()
+}
+
+/// What one turn may offer beyond the unconditional builtins: the discovery
+/// meta tools wherever MCP servers exist - agent tasks too, whose
+/// `tool_search` only sees active definitions - plus the full schemas for
+/// interactive turns.
+pub(crate) fn mcp_turn_definitions(mcp: &McpManager, interactive: bool) -> Vec<Value> {
+    if mcp.is_empty() {
+        return Vec::new();
+    }
+    let mut tools = mcp_group_definitions();
+    if interactive {
+        tools.extend(mcp.tool_definitions());
+    }
+    tools
 }
 
 pub fn execute_tool_call(
@@ -355,6 +378,8 @@ fn dispatch_tool(
             edit::NAME => edit::run(arguments, proxy)?,
             execute::NAME => execute::run(arguments, proxy)?,
             ls::NAME => ls::run(arguments, proxy)?,
+            mcp_groups::LIST_NAME => mcp_groups::run_list(&mcp.read()),
+            mcp_groups::LOAD_NAME => mcp_groups::run_load(&mcp.read(), arguments)?,
             read::NAME => read::run(arguments, proxy)?,
             replace::NAME => replace::run(arguments, proxy)?,
             search::NAME => search::run(arguments, proxy)?,

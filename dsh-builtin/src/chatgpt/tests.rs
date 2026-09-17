@@ -152,6 +152,38 @@ fn chat_with_tools_runs_a_tool_call_then_returns_the_next_final_answer() {
     assert_eq!(result, Ok("the directory is empty".to_string()));
 }
 
+/// A model that loads a group mid-turn changes what the *next* turn offers:
+/// the toggle flips without approval, and the turn itself just continues.
+#[test]
+fn chat_with_tools_runs_mcp_load_group_without_approval() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![
+        tool_call_response("call-1", "mcp_load_group", r#"{"group":"github"}"#),
+        final_answer("github tools are ready"),
+    ]);
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.disable_group("github").unwrap();
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("github tools are ready".to_string()));
+    assert!(mcp_manager.read().is_group_enabled("github"));
+    assert_eq!(proxy.confirm_calls, 0);
+}
+
 #[test]
 fn verify_after_mutation_is_off_by_default() {
     let cwd = tempfile::tempdir().unwrap();
@@ -176,7 +208,15 @@ fn is_mutating_tool_call_classifies_state_changing_tools() {
         let call = json!({"function": {"name": name, "arguments": "{}"}});
         assert!(is_mutating_tool_call(&call), "{name}");
     }
-    for name in ["ls", "read_file", "search", "job_status", "task_plan"] {
+    for name in [
+        "ls",
+        "read_file",
+        "search",
+        "job_status",
+        "task_plan",
+        "mcp_list_groups",
+        "mcp_load_group",
+    ] {
         let call = json!({"function": {"name": name, "arguments": "{}"}});
         assert!(!is_mutating_tool_call(&call), "{name}");
     }

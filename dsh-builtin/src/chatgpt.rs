@@ -293,9 +293,7 @@ fn chat_with_tools(
         let mut tools = build_tools();
         {
             let mcp = mcp_manager.read();
-            if setup.runtime.is_none() && !mcp.is_empty() {
-                tools.extend(mcp.tool_definitions());
-            }
+            tools.extend(tool::mcp_turn_definitions(&mcp, setup.runtime.is_none()));
         }
         if setup.runtime.is_some() {
             tools.extend(crate::agent::definitions());

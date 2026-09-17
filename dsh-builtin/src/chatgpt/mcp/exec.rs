@@ -179,4 +179,36 @@ impl McpManager {
             },
         );
     }
+
+    /// Register a real tool on a stub server for tests: the server carries
+    /// the tool in its listing and the binding table points at it, so both
+    /// group membership and resolvable definitions agree.
+    #[cfg(test)]
+    pub(crate) fn insert_test_tool(&mut self, label: &str, tool: &str) {
+        if !self.servers.iter().any(|server| server.label == label) {
+            self.servers.push(McpServer {
+                label: label.to_string(),
+                description: Some(format!("{label} server")),
+                transport: McpTransport::Sse {
+                    url: "http://localhost.invalid/sse".to_string(),
+                },
+                tools: Vec::new(),
+            });
+        }
+        let rmcp_tool = Tool::new(
+            tool.to_string(),
+            format!("{tool} description"),
+            Arc::new(serde_json::Map::new()),
+        );
+        let server = self
+            .servers
+            .iter_mut()
+            .find(|server| server.label == label)
+            .expect("server inserted above");
+        if !server.tools.iter().any(|known| known.name.as_ref() == tool) {
+            server.tools.push(rmcp_tool.clone());
+        }
+        let (function_name, binding) = super::bind_tool(label, &rmcp_tool);
+        self.bindings.insert(function_name, binding);
+    }
 }

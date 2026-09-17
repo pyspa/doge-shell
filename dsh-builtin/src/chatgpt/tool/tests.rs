@@ -774,3 +774,80 @@ fn the_job_tools_are_spelled_the_same_in_both_toolboxes() {
         );
     }
 }
+
+/// Group discovery is metadata, not a side effect: no approval question.
+#[test]
+fn mcp_list_groups_runs_without_approval() {
+    let mut proxy = NoopProxy::default();
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let mcp = Arc::new(RwLock::new(inner));
+    let tool_call = json!({ "function": { "name": "mcp_list_groups", "arguments": "{}" } });
+
+    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    assert_eq!(proxy.confirm_calls, 0);
+    let catalogue: Value = serde_json::from_str(&result.content).expect("valid JSON");
+    assert_eq!(catalogue["groups"][0]["name"], "github");
+    assert_eq!(catalogue["groups"][0]["tool_count"], 1);
+}
+
+/// Activation flows through the same dispatch as every builtin: no approval
+/// question, and the manager state the next request reads is changed.
+#[test]
+fn mcp_load_group_activates_through_dispatch_without_approval() {
+    let mut proxy = NoopProxy::default();
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.disable_group("github").unwrap();
+    let mcp = Arc::new(RwLock::new(inner));
+    let tool_call =
+        json!({ "function": { "name": "mcp_load_group", "arguments": r#"{"group":"github"}"# } });
+
+    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    assert_eq!(proxy.confirm_calls, 0);
+    assert!(mcp.read().is_group_enabled("github"));
+
+    // Unknown groups come back as a model-readable error, not a stopped turn.
+    let missing =
+        json!({ "function": { "name": "mcp_load_group", "arguments": r#"{"group":"nope"}"# } });
+    let error =
+        execute_tool_call(&missing, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
+    assert!(
+        error.to_string().contains("Unknown MCP tool group"),
+        "{error}"
+    );
+}
+
+/// Meta tools ride along wherever MCP exists but never where there is
+/// nothing to discover; full schemas stay interactive-only.
+#[test]
+fn turn_definitions_gate_meta_and_full_schemas() {
+    let empty = McpManager::default();
+    assert!(mcp_turn_definitions(&empty, true).is_empty());
+    assert!(mcp_turn_definitions(&empty, false).is_empty());
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let names = |tools: Vec<Value>| {
+        tools
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(mcp_turn_definitions(&inner, true)),
+        vec![
+            "mcp_list_groups",
+            "mcp_load_group",
+            "mcp__github__list_issues"
+        ]
+    );
+    assert_eq!(
+        names(mcp_turn_definitions(&inner, false)),
+        vec!["mcp_list_groups", "mcp_load_group"]
+    );
+}

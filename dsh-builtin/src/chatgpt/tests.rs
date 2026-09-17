@@ -206,7 +206,8 @@ fn chat_with_tools_runs_mcp_load_group_without_approval() {
 }
 
 /// A group loaded mid-turn is offered on the next model request of the same
-/// turn: the first request lacks the tool, the second carries it.
+/// turn: the first request lacks the tool, the second carries it. A second
+/// group that stays inactive reaches neither request.
 #[test]
 fn loaded_group_tools_reach_the_next_request_same_turn() {
     let cwd = tempfile::tempdir().unwrap();
@@ -218,6 +219,8 @@ fn loaded_group_tools_reach_the_next_request_same_turn() {
     let mut inner = McpManager::default();
     inner.insert_test_tool("github", "list_issues");
     inner.disable_group("github").unwrap();
+    inner.insert_test_tool("filesystem", "read_file");
+    inner.disable_group("filesystem").unwrap();
     let mcp_manager = Arc::new(RwLock::new(inner));
 
     let result = chat_with_tools(
@@ -243,21 +246,30 @@ fn loaded_group_tools_reach_the_next_request_same_turn() {
         seen[1].contains(&"mcp__github__list_issues".to_string()),
         "second request must offer the loaded tool: {seen:?}"
     );
+    for (index, offered) in seen.iter().enumerate() {
+        assert!(
+            !offered.contains(&"mcp__filesystem__read_file".to_string()),
+            "request {index} must not offer the still-inactive group: {seen:?}"
+        );
+    }
 }
 
-/// `run_tool_calls` merges one activation once: a repeated load adds no
-/// duplicate schemas.
+/// Interactive turns propagate a group activation through a fresh exposure
+/// read, not through a merge: `run_tool_calls` only flips the toggle (via
+/// `mcp_load_group` dispatch), and the next iteration's
+/// `mcp_turn_definitions` rebuild carries the group's tools. Re-enabling an
+/// already active group changes nothing and duplicates nothing.
 #[test]
-fn run_tool_calls_merges_a_loaded_group_without_duplicates() {
+fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
     let mut inner = McpManager::default();
     inner.insert_test_tool("github", "list_issues");
     inner.disable_group("github").unwrap();
     let mcp_manager = Arc::new(RwLock::new(inner));
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
-    let mut tools = tool::mcp_turn_definitions(&mcp_manager.read(), true);
+    let initial = tool::mcp_turn_definitions(&mcp_manager.read(), true);
     assert!(
-        !tools
+        !initial
             .iter()
             .any(|tool| tool["function"]["name"] == "mcp__github__list_issues")
     );
@@ -274,15 +286,21 @@ fn run_tool_calls_merges_a_loaded_group_without_duplicates() {
         &hooks::HookContext::disabled(),
         &mut proxy,
         &mut manager,
-        &mut tools,
+        &mut Vec::new(),
     )
     .unwrap();
-    assert!(
-        tools
+    assert!(mcp_manager.read().is_group_enabled("github"));
+
+    // The rebuilt definitions - what the next iteration sends - carry the
+    // group's tools exactly once, and rebuilding again duplicates nothing.
+    let rebuilt = tool::mcp_turn_definitions(&mcp_manager.read(), true);
+    assert_eq!(
+        rebuilt
             .iter()
-            .any(|tool| tool["function"]["name"] == "mcp__github__list_issues")
+            .filter(|tool| tool["function"]["name"] == "mcp__github__list_issues")
+            .count(),
+        1
     );
-    let merged = tools.len();
     run_tool_calls(
         &tool_calls,
         &mcp_manager,
@@ -290,10 +308,11 @@ fn run_tool_calls_merges_a_loaded_group_without_duplicates() {
         &hooks::HookContext::disabled(),
         &mut proxy,
         &mut manager,
-        &mut tools,
+        &mut Vec::new(),
     )
     .unwrap();
-    assert_eq!(tools.len(), merged);
+    let rebuilt_again = tool::mcp_turn_definitions(&mcp_manager.read(), true);
+    assert_eq!(rebuilt_again.len(), rebuilt.len());
 }
 
 #[test]

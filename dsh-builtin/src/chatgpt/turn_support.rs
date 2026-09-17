@@ -103,12 +103,79 @@ impl TurnSetup {
     }
 }
 
+/// Fixed per-turn tool halves for `chat_with_tools`.
+///
+/// Returns the interactive base (`Some` for `!` turns: the unconditional
+/// builtins) alongside the agent accumulator (`tools`, grown by
+/// `run_tool_calls`). MCP definitions are deliberately NOT fixed here for
+/// interactive turns: `build_request_tools` rebuilds them from current
+/// exposure before every request, so an `mcp_load_group` call reaches the
+/// very next iteration. Caching them here would freeze the first iteration's
+/// exposure for the rest of the turn. Agent turns keep accumulating into the
+/// vec instead (their `tool_search` discoveries live only there, not in
+/// manager state), so the two paths must not share one construction.
+pub(super) fn split_turn_tool_bases(
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    is_agent: bool,
+) -> (Option<Vec<Value>>, Vec<Value>) {
+    if is_agent {
+        let mut tools = tool::build_tools();
+        {
+            let mcp = mcp_manager.read();
+            tools.extend(tool::mcp_turn_definitions(&mcp, false));
+        }
+        tools.extend(crate::agent::definitions());
+        tools.extend(tool::agent_definitions());
+        (None, tools)
+    } else {
+        (Some(tool::build_tools()), Vec::new())
+    }
+}
+
+/// Tools for one LLM request.
+///
+/// Interactive turns rebuild the MCP part from current exposure every
+/// iteration: `mcp_load_group` flips the toggle inside `McpManager` during
+/// `run_tool_calls`, and the next pass here picks the newly active schemas
+/// up. The read lock covers just this construction, never the LLM request
+/// itself. Agent turns reuse the accumulated vec instead, so their
+/// `tool_search` discoveries survive across iterations.
+///
+/// The order matches the pre-lazy-loading layout - builtins, MCP, then the
+/// job tools - so provider-side prefix caches see the same shape as before.
+/// Only the job tools: `tool_search` would be a second way to reach MCP
+/// definitions that are already in this prompt in full, and the task tools
+/// record against a task that does not exist here.
+///
+/// `accumulated` (the vec `run_tool_calls` grows) is read on the agent path
+/// only; on the interactive path that function never grows it, so it stays
+/// an unused placeholder that keeps one shared call site.
+pub(super) fn build_request_tools(
+    interactive_base: &Option<Vec<Value>>,
+    accumulated: &[Value],
+    mcp_manager: &Arc<RwLock<McpManager>>,
+) -> Vec<Value> {
+    if let Some(base) = interactive_base {
+        let mcp = mcp_manager.read();
+        let mut current = base.clone();
+        current.extend(tool::mcp_turn_definitions(&mcp, true));
+        current.extend(tool::job_definitions());
+        current
+    } else {
+        accumulated.to_vec()
+    }
+}
+
 /// Runs one round's tool calls against the shell: `before_tool`/`after_tool`
 /// bookkeeping for a durable task (when there is one), dispatch through
 /// `execute_tool_call`, and appending each result to `manager`. Growing
-/// `tools` here (rather than back in `chat_with_tools`) is what lets
-/// `tool_search` discoveries - and `mcp_load_group` activations - take effect
-/// the same turn they happen: the loop rebuilds each request from this vec.
+/// `tools` here is an agent-turn mechanism only: `tool_search` discoveries
+/// and `mcp_load_group` activations accumulate in that vec because an agent
+/// turn's per-request view is the accumulated vec, not a fresh exposure read.
+/// Interactive turns instead rebuild their MCP definitions from current
+/// exposure before every request (see `chat_with_tools`), so they need no
+/// merge here - the toggle flip that `mcp_load_group` dispatch performs is
+/// propagation enough.
 ///
 /// Takes just the two pieces of `TurnSetup` this round actually reads
 /// (`runtime`, `hook_ctx`), not the whole struct - so a change to
@@ -171,7 +238,15 @@ pub(super) fn run_tool_calls(
             },
         };
         let mut tool_result = execution.content;
-        merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
+        // Agent turns only: their per-request view is this accumulated vec,
+        // so a freshly activated group must be merged in to take effect the
+        // same turn. Interactive turns skip this - they rebuild from current
+        // exposure before every request, which already reflects the toggle
+        // flip above. Reading the group's definitions here duplicates that
+        // rebuild for no gain and would reintroduce chat-loop state tracking.
+        if runtime.is_some() {
+            merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
+        }
 
         if let Some(runtime) = runtime {
             let sequence = runtime
@@ -203,16 +278,19 @@ pub(super) fn run_tool_calls(
     Ok(())
 }
 
-/// Offer a freshly activated group's schemas on the next model request.
+/// Offer a freshly activated group's schemas on the next model request of an
+/// agent turn.
 ///
-/// Runs for interactive and task turns alike: unlike `tool_search` (agent-only
-/// because interactive turns already carry every definition), group activation
-/// is the one way hidden schemas join an in-flight turn. Matching on dispatch
-/// success plus the call's own arguments - rather than the result text, which
-/// truncation and hook notes can reshape - keeps this immune to everything
-/// downstream of dispatch. `already_active` merges as a no-op through the
-/// dedup below, so repeat loads cost a round but never duplicate a schema;
-/// the turn's `MAX_TOOL_ITERATIONS` bound is the backstop, not a per-load cap.
+/// Agent-only: interactive turns rebuild from current exposure instead (see
+/// `run_tool_calls`), so this never runs for them. Unlike `tool_search`
+/// (agent-only because interactive turns already carry every active
+/// definition), group activation is the one way hidden schemas join an
+/// in-flight agent turn. Matching on dispatch success plus the call's own
+/// arguments - rather than the result text, which truncation and hook notes
+/// can reshape - keeps this immune to everything downstream of dispatch.
+/// `already_active` merges as a no-op through the dedup below, so repeat
+/// loads cost a round but never duplicate a schema; the turn's
+/// `MAX_TOOL_ITERATIONS` bound is the backstop, not a per-load cap.
 fn merge_activated_group_tools(
     tool_call: &Value,
     outcome: crate::agent::ToolOutcome,

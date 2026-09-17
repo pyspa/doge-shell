@@ -851,3 +851,103 @@ fn turn_definitions_gate_meta_and_full_schemas() {
         vec!["mcp_list_groups", "mcp_load_group"]
     );
 }
+
+fn lazy_manager() -> McpManager {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.insert_test_tool("github", "get_issue");
+    inner.insert_test_tool("filesystem", "read_file");
+    inner.insert_test_tool("slack", "post_message");
+    for group in ["github", "filesystem", "slack"] {
+        inner.disable_group(group).unwrap();
+    }
+    inner
+}
+
+fn definition_names(tools: &[Value]) -> Vec<String> {
+    let mut names: Vec<String> = tools
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// With every group inactive, the initial interactive definitions carry zero
+/// actual MCP tools - only the two discovery meta tools.
+#[test]
+fn initial_interactive_definitions_hide_every_inactive_group() {
+    let manager = lazy_manager();
+
+    assert_eq!(
+        definition_names(&mcp_turn_definitions(&manager, true)),
+        vec!["mcp_list_groups", "mcp_load_group"]
+    );
+}
+
+/// Loading one group exposes exactly its tools; the others stay hidden.
+#[test]
+fn interactive_definitions_isolate_the_active_group() {
+    let manager = lazy_manager();
+    manager.enable_group("github").unwrap();
+
+    assert_eq!(
+        definition_names(&mcp_turn_definitions(&manager, true)),
+        vec![
+            "mcp__github__get_issue",
+            "mcp__github__list_issues",
+            "mcp_list_groups",
+            "mcp_load_group",
+        ]
+    );
+}
+
+/// Several active groups all surface; an inactive one still does not.
+#[test]
+fn interactive_definitions_combine_multiple_active_groups() {
+    let manager = lazy_manager();
+    manager.enable_group("github").unwrap();
+    manager.enable_group("filesystem").unwrap();
+
+    assert_eq!(
+        definition_names(&mcp_turn_definitions(&manager, true)),
+        vec![
+            "mcp__filesystem__read_file",
+            "mcp__github__get_issue",
+            "mcp__github__list_issues",
+            "mcp_list_groups",
+            "mcp_load_group",
+        ]
+    );
+}
+
+/// Re-enabling an already active group never duplicates a definition.
+#[test]
+fn reloading_a_group_yields_no_duplicate_definitions() {
+    let manager = lazy_manager();
+    manager.enable_group("github").unwrap();
+    let loaded = mcp_turn_definitions(&manager, true);
+
+    manager.enable_group("github").unwrap();
+    let reloaded = mcp_turn_definitions(&manager, true);
+
+    assert_eq!(reloaded.len(), loaded.len());
+    let names = definition_names(&reloaded);
+    let mut deduped = names.clone();
+    deduped.dedup();
+    assert_eq!(names, deduped);
+}
+
+/// Agent turns stay meta-only no matter the exposure: their discovery path
+/// is `tool_search`, unchanged by interactive lazy loading.
+#[test]
+fn agent_definitions_ignore_group_exposure() {
+    let manager = lazy_manager();
+    manager.enable_group("github").unwrap();
+    manager.enable_group("filesystem").unwrap();
+
+    assert_eq!(
+        definition_names(&mcp_turn_definitions(&manager, false)),
+        vec!["mcp_list_groups", "mcp_load_group"]
+    );
+}

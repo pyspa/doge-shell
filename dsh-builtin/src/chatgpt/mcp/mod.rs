@@ -648,12 +648,25 @@ impl McpManager {
         self.active_tool_definitions()
     }
 
+    /// MCP guidance for the system prompt, or `None` when there is nothing
+    /// the model could use: no servers at all, or every server disconnected.
+    ///
+    /// Groups hidden via `mcp group disable` still count as discoverable -
+    /// unlike a disconnected server, their tools come back through
+    /// `mcp_load_group` - so an all-hidden (but connected) setup still gets
+    /// the discovery guidance rather than silence. Without it the model would
+    /// never learn the meta tools exist.
     pub fn system_prompt_fragment(&self) -> Option<String> {
+        if self.servers.is_empty() {
+            return None;
+        }
         let disabled = self.disabled_read();
         let group_disabled = self.group_disabled_read();
-        if self.servers.iter().all(|server| {
-            disabled.contains(&server.label) || group_disabled.contains(&server.label)
-        }) {
+        if self
+            .servers
+            .iter()
+            .all(|server| disabled.contains(&server.label))
+        {
             return None;
         }
 
@@ -661,6 +674,8 @@ impl McpManager {
             "You can call external Model Context Protocol (MCP) servers when solving tasks."
                 .to_string(),
             "Always prefer the dedicated MCP function tools when they cover the action you need."
+                .to_string(),
+            "MCP tools are available through tool groups. Use mcp_list_groups to discover available groups. Before using tools from an inactive group, call mcp_load_group with the group name; loaded tools become available in the next tool-calling step."
                 .to_string(),
             "Note: Tool execution may be rejected by the user for safety reasons. If rejected, propose an alternative approach."
                 .to_string(),

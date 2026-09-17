@@ -46,7 +46,7 @@ pub use mcp::{
 };
 pub(crate) mod tool;
 
-use tool::{build_tools, execute_tool_call};
+use tool::execute_tool_call;
 
 mod jobs;
 pub use jobs::shutdown as chat_jobs_shutdown;
@@ -290,20 +290,8 @@ fn chat_with_tools(
             manager.begin_turn();
         }
 
-        let mut tools = build_tools();
-        {
-            let mcp = mcp_manager.read();
-            tools.extend(tool::mcp_turn_definitions(&mcp, setup.runtime.is_none()));
-        }
-        if setup.runtime.is_some() {
-            tools.extend(crate::agent::definitions());
-            tools.extend(tool::agent_definitions());
-        } else {
-            // Only the job tools: `tool_search` would be a second way to reach
-            // MCP definitions that are already in this prompt in full, and the
-            // task tools record against a task that does not exist here.
-            tools.extend(tool::job_definitions());
-        }
+        let (interactive_base, mut tools) =
+            split_turn_tool_bases(mcp_manager, setup.runtime.is_some());
         iterations = 0;
         let turn_started = Instant::now();
         let mut unverified_answers = 0;
@@ -440,10 +428,13 @@ fn chat_with_tools(
                 current_messages.push(json!({"role":"system","content":runtime.lock().context()}));
             }
 
+            // Tools for this request only; see `build_request_tools`.
+            let request_tools = build_request_tools(&interactive_base, &tools, mcp_manager);
+
             let options = ChatRequestOptions::new()
                 .with_temperature(temperature)
                 .with_model(model_override.clone())
-                .with_tools(Some(tools.clone()))
+                .with_tools(Some(request_tools))
                 .with_prompt_cache_key(Some(PROMPT_CACHE_KEY.to_string()))
                 .with_stream(stream_sink.is_some());
 

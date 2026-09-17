@@ -118,15 +118,35 @@ pub(crate) fn mcp_group_definitions() -> Vec<Value> {
 
 /// What one turn may offer beyond the unconditional builtins: the discovery
 /// meta tools wherever MCP servers exist - agent tasks too, whose
-/// `tool_search` only sees active definitions - plus the full schemas for
-/// interactive turns.
+/// `tool_search` only sees active definitions - plus, for interactive turns,
+/// the schemas of the currently active groups only.
+///
+/// Lazy loading lives here, not in the chat loop: inactive groups contribute
+/// zero definitions, and `mcp_load_group` flips the toggle inside
+/// `McpManager` immediately, so rebuilding this list from current exposure
+/// before every request is what carries a newly loaded group into the next
+/// iteration of the same turn. The loop itself never interprets
+/// `mcp_load_group` arguments; it only re-reads this function.
 pub(crate) fn mcp_turn_definitions(mcp: &McpManager, interactive: bool) -> Vec<Value> {
     if mcp.is_empty() {
         return Vec::new();
     }
     let mut tools = mcp_group_definitions();
     if interactive {
-        tools.extend(mcp.tool_definitions());
+        // Active groups only: never the full registry. With every group
+        // inactive this is just the two meta tools above.
+        let active = mcp.active_tool_definitions();
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let schema_chars: usize = serde_json::to_string(&active)
+                .map(|text| text.len())
+                .unwrap_or(0);
+            tracing::debug!(
+                active_tools = active.len(),
+                schema_chars,
+                "mcp interactive turn definitions"
+            );
+        }
+        tools.extend(active);
     }
     tools
 }

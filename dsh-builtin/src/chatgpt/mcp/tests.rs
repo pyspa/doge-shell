@@ -609,3 +609,43 @@ fn tool_exposure_reports_total_and_active_footprint() {
     assert_eq!(exposure.active_groups, 1);
     assert!(exposure.schema_bytes > 0);
 }
+
+/// A fully group-hidden (but connected) setup still guides the model to
+/// discovery: unlike a disconnected server, hidden groups come back through
+/// `mcp_load_group`. A disconnected server stays silent.
+#[test]
+fn prompt_fragment_guides_discovery_while_groups_are_hidden() {
+    let manager = grouped_manager();
+    manager.disable_group("github").unwrap();
+    manager.disable_group("filesystem").unwrap();
+
+    let fragment = manager
+        .system_prompt_fragment()
+        .expect("connected servers must still guide discovery");
+    assert!(fragment.contains("mcp_list_groups"), "{fragment}");
+    assert!(fragment.contains("mcp_load_group"), "{fragment}");
+    assert!(!fragment.contains("ALWAYS"), "{fragment}");
+
+    manager.disconnect("github").unwrap();
+    manager.disconnect("filesystem").unwrap();
+    assert!(manager.system_prompt_fragment().is_none());
+}
+
+/// The lazy-loading guidance never orders the model to enumerate first: a
+/// group name it already knows can go straight to `mcp_load_group`.
+#[test]
+fn prompt_fragment_does_not_force_list_before_load() {
+    let fragment = grouped_manager()
+        .system_prompt_fragment()
+        .expect("groups enabled by default");
+    let guidance = fragment
+        .lines()
+        .find(|line| line.contains("mcp_load_group"))
+        .expect("guidance line mentions mcp_load_group");
+    for forced in ["ALWAYS", "always", "must first", "MUST"] {
+        assert!(
+            !guidance.contains(forced),
+            "guidance must not force enumeration: {guidance}"
+        );
+    }
+}

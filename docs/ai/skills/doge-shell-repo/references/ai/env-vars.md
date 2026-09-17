@@ -16,7 +16,7 @@
 | `AI_CHAT_REASONING_EFFORT` | なし（未設定時は `OPENAI_REASONING_MODEL_PREFIXES` 該当モデル＋`tools` 付きリクエストだけ `"none"`、それ以外はプロバイダ既定） | 同上。値は allow-list しない（`none`/`minimal`/`low`/`medium`/`high` などプロバイダ依存）。設定値が `tools` 付きリクエストで拒否された後は、このクライアントの `tools` 付きリクエストで `"none"` に強制される |
 | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | 同上 |
 | `AI_SUMMARY_MODEL` | チャットモデル | `dsh-builtin/src/chatgpt/settings.rs` |
-| `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session.rs`。idle timeout で、時計は成功したターンだけが進める（巻き戻したターンは進めない） |
+| `AI_CHAT_SESSION_TTL_SECS` | 1800（`0` で無効） | `dsh-builtin/src/chatgpt/session/mod.rs`。idle timeout で、時計は成功したターンだけが進める（巻き戻したターンは進めない） |
 | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | 100000 | `dsh-builtin/src/chatgpt/settings.rs` |
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
 | `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |

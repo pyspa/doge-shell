@@ -125,11 +125,16 @@ fn chat_with_tools(
             setup.scope.as_deref(),
         ) {
             session::Claim::Continued(carried) => {
+                let age = carried.stored_at.elapsed();
+                let soon = setup
+                    .session_ttl
+                    .is_some_and(|ttl| session::expiry_soon(ttl, carried.stored_at));
                 eprintln!(
-                    "\x1b[2msession: continuing {} ({} message(s), {}s old)\x1b[0m",
+                    "\x1b[2msession: continuing {} ({} message(s), {}s old){}\x1b[0m",
                     carried.id,
                     carried.manager.buffer.len(),
-                    carried.stored_at.elapsed().as_secs()
+                    age.as_secs(),
+                    if soon { " - expires soon" } else { "" },
                 );
                 carried_stored_at = Some(carried.stored_at);
                 let mut manager = carried.manager;

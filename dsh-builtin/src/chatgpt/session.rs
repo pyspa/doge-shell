@@ -80,6 +80,18 @@ fn mismatch(
     identity: &str,
     scope: Option<&Path>,
 ) -> Option<String> {
+    let reasons = mismatch_reasons(stored, ttl, identity, scope);
+    (!reasons.is_empty()).then(|| reasons.join("; "))
+}
+
+/// The individual reasons, for callers like `chat_status` that report more
+/// than a single joined line.
+fn mismatch_reasons(
+    stored: &StoredSession,
+    ttl: Duration,
+    identity: &str,
+    scope: Option<&Path>,
+) -> Vec<String> {
     let mut reasons = Vec::new();
 
     let age = stored.stored_at.elapsed();
@@ -100,7 +112,71 @@ fn mismatch(
         });
     }
 
-    (!reasons.is_empty()).then(|| reasons.join("; "))
+    reasons
+}
+
+/// What a non-destructive continuity check finds. Unlike [`Claim`], this
+/// never consumes the stored conversation, so `chat_status` can answer
+/// "would a follow-up `!` continue this?" without discarding it.
+pub enum Continuity {
+    Continued {
+        id: String,
+        messages: usize,
+        age: Duration,
+        scope: Option<PathBuf>,
+    },
+    Fresh {
+        /// Whether anything is stored at all. False is the ordinary "no
+        /// conversation yet" (or TTL disabled); true with reasons means a
+        /// stored conversation the next turn would drop.
+        stored: bool,
+        reasons: Vec<String>,
+    },
+}
+
+/// Check continuity without consuming the stored conversation.
+pub fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
+    let Some(ttl) = ttl else {
+        return Continuity::Fresh {
+            stored: slot().is_some(),
+            reasons: Vec::new(),
+        };
+    };
+    let guard = slot();
+    let Some(stored) = guard.as_ref() else {
+        return Continuity::Fresh {
+            stored: false,
+            reasons: Vec::new(),
+        };
+    };
+    let reasons = mismatch_reasons(stored, ttl, identity, scope);
+    if reasons.is_empty() {
+        Continuity::Continued {
+            id: stored.id.clone(),
+            messages: stored.manager.buffer.len(),
+            age: stored.stored_at.elapsed(),
+            scope: stored.scope.clone(),
+        }
+    } else {
+        Continuity::Fresh {
+            stored: true,
+            reasons,
+        }
+    }
+}
+
+/// Idle time under which a continued conversation counts as about to expire.
+///
+/// Warns while there is still a turn left to act on it, rather than reporting
+/// the expiry after the fact.
+pub(super) const SESSION_EXPIRY_SOON_SECS: u64 = 60;
+
+/// Whether a continued conversation's remaining idle window is under
+/// [`SESSION_EXPIRY_SOON_SECS`]. Pure, so the "expires soon" notice in the
+/// turn header is unit-testable without driving a turn.
+pub(super) fn expiry_soon(ttl: Duration, stored_at: Instant) -> bool {
+    ttl.checked_sub(stored_at.elapsed())
+        .is_some_and(|left| left.as_secs() < SESSION_EXPIRY_SOON_SECS)
 }
 
 /// A conversation this turn gets to continue.
@@ -233,7 +309,7 @@ pub fn session_reset() -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use serde_json::json;
 
@@ -248,8 +324,9 @@ mod tests {
         )
     }
 
-    /// The store is process-wide, so these run under one lock.
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// The store is process-wide, so these run under one lock. Shared with
+    /// other test modules in this crate that seed the slot.
+    pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn a_stored_conversation_is_reused_for_the_same_prompt_and_scope() {
@@ -564,5 +641,100 @@ mod tests {
             Claim::Continued(_) => "Continued",
             Claim::Fresh(_) => "Fresh",
         }
+    }
+
+    #[test]
+    fn check_reports_a_matching_conversation_without_consuming_it() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        session_reset();
+
+        let scope = PathBuf::from("/tmp/project");
+        store(ttl(), manager(), "s1", "sys", Some(scope.clone()), None);
+
+        match check(ttl(), "sys", Some(&scope)) {
+            Continuity::Continued { id, messages, .. } => {
+                assert_eq!(id, "s1");
+                assert_eq!(messages, manager().buffer.len());
+            }
+            Continuity::Fresh { stored, reasons } => {
+                panic!("expected Continued, stored={stored} reasons={reasons:?}")
+            }
+        }
+        // Non-destructive: the turn that follows still claims it.
+        assert!(matches!(
+            take(ttl(), "sys", Some(&scope)),
+            Claim::Continued(_)
+        ));
+    }
+
+    #[test]
+    fn check_names_every_reason_a_stored_conversation_would_be_dropped() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        session_reset();
+
+        store(
+            ttl(),
+            manager(),
+            "s1",
+            "sys",
+            Some(PathBuf::from("/a")),
+            None,
+        );
+
+        match check(ttl(), "different", Some(Path::new("/b"))) {
+            Continuity::Fresh { stored, reasons } => {
+                assert!(stored);
+                assert!(reasons.iter().any(|r| r.contains("prompt")), "{reasons:?}");
+                assert!(
+                    reasons
+                        .iter()
+                        .any(|r| r.contains("project changed from /a")),
+                    "{reasons:?}"
+                );
+            }
+            Continuity::Continued { id, .. } => panic!("expected Fresh, got {id}"),
+        }
+    }
+
+    #[test]
+    fn check_reports_an_empty_slot_and_a_disabled_ttl_as_fresh() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        session_reset();
+
+        match check(ttl(), "sys", None) {
+            Continuity::Fresh { stored, reasons } => {
+                assert!(!stored);
+                assert!(reasons.is_empty());
+            }
+            Continuity::Continued { id, .. } => panic!("expected Fresh, got {id}"),
+        }
+
+        store(ttl(), manager(), "s1", "sys", None, None);
+        match check(None, "sys", None) {
+            Continuity::Fresh { stored, reasons } => {
+                assert!(stored);
+                assert!(reasons.is_empty());
+            }
+            Continuity::Continued { id, .. } => panic!("expected Fresh, got {id}"),
+        }
+    }
+
+    #[test]
+    fn expiry_soon_fires_only_inside_the_final_minute() {
+        // Far from the deadline: no warning.
+        assert!(!expiry_soon(
+            Duration::from_secs(1800),
+            Instant::now() - Duration::from_secs(100)
+        ));
+        // Inside the final minute: warn.
+        assert!(expiry_soon(
+            Duration::from_secs(1800),
+            Instant::now() - Duration::from_secs(1790)
+        ));
+        // Already past the deadline reads as expired, not expiring.
+        assert!(!expiry_soon(
+            Duration::from_secs(60),
+            Instant::now() - Duration::from_secs(120)
+        ));
     }
 }

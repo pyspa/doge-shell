@@ -42,6 +42,7 @@ mod safe_run;
 mod safety_policy;
 mod skill;
 pub use chatgpt::chat_jobs_shutdown;
+pub use chatgpt::chat_status_detailed;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{
     LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
@@ -103,6 +104,7 @@ mod z;
 /// the shell core is exhaustive and typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreShellAction {
+    ChatStatus,
     Cron,
     Exit,
     History,
@@ -123,6 +125,7 @@ pub enum CoreShellAction {
 impl CoreShellAction {
     pub const fn command_name(self) -> &'static str {
         match self {
+            Self::ChatStatus => "chat_status",
             Self::Cron => "cron",
             Self::Exit => "exit",
             Self::History => "history",
@@ -143,6 +146,7 @@ impl CoreShellAction {
 
     pub fn from_command_name(command: &str) -> Option<Self> {
         Some(match command {
+            "chat_status" => Self::ChatStatus,
             "cron" => Self::Cron,
             "exit" => Self::Exit,
             "history" => Self::History,
@@ -731,6 +735,7 @@ mod shell_proxy_tests {
     #[test]
     fn core_shell_actions_round_trip_through_compatibility_names() {
         let actions = [
+            CoreShellAction::ChatStatus,
             CoreShellAction::Cron,
             CoreShellAction::Exit,
             CoreShellAction::History,

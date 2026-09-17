@@ -6,6 +6,7 @@
 pub mod abbr;
 pub mod blocks_persistent;
 pub mod blocks_tui;
+pub mod chat_status;
 pub mod exit;
 pub mod history;
 pub mod jobs;

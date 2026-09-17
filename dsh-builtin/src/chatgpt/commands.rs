@@ -22,6 +22,13 @@ pub fn execute_chat_message(
 
     let config = load_openai_config(proxy);
 
+    // A typo here silently becomes the default (see `resolve_ttl`), so say
+    // so while there is still a chance to fix it. Checked every turn because
+    // the value is resolved every turn.
+    if let Some(notice) = invalid_ttl_notice(proxy) {
+        ctx.write_stderr(&notice).ok();
+    }
+
     if config.api_key().is_none() {
         ctx.write_stderr(&format!(
             "chat: AI service is not configured. {}",
@@ -144,15 +151,16 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             // to trim around again.
             let new_model = argv[1].trim();
             proxy.set_var(MODEL_KEY.to_string(), new_model.to_string());
+            let carried = carried_model_note(proxy);
             if new_model.is_empty() {
                 let config = load_openai_config(proxy);
                 ctx.write_stdout(&format!(
-                    "OpenAI model reset to default: {}",
+                    "OpenAI model reset to default: {}{carried}",
                     config.default_model()
                 ))
                 .ok();
             } else {
-                ctx.write_stdout(&format!("OpenAI model set to: {new_model}"))
+                ctx.write_stdout(&format!("OpenAI model set to: {new_model}{carried}"))
                     .ok();
             }
             ExitStatus::ExitedWith(0)
@@ -204,44 +212,140 @@ pub fn chat_status_description() -> &'static str {
 
 /// Built-in chat_status command implementation
 ///
-/// Read-only counterpart to `chat_reset`: names the conversation a follow-up
-/// `!` would continue, without discarding it - based on idle time, though.
-/// `session_description` cannot re-check whether the operator prompt,
-/// language, MCP connections or project changed since the conversation was
-/// stored (that needs `ChatToolHost`, not the base `ShellProxy` every builtin
-/// gets), so a conversation shown here as carried can still turn out to start
-/// fresh for one of those reasons.
+/// Thin compatibility wrapper: the real work needs the MCP manager, which
+/// only `ChatToolHost` reaches, so this hands off to the shell core like
+/// `cron` does and [`chat_status_detailed`] runs there.
 pub fn chat_status(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    match proxy.dispatch_core_action(ctx, crate::CoreShellAction::ChatStatus, argv) {
+        Ok(()) => ExitStatus::ExitedWith(0),
+        Err(error) => {
+            let _ = ctx.write_stderr(&format!("chat_status: {error}"));
+            ExitStatus::ExitedWith(1)
+        }
+    }
+}
+
+/// Full `chat_status`: answers "would a follow-up `!` continue this?" with
+/// the same age/identity/scope check a turn itself runs, instead of the
+/// idle-time-only approximation `session_description` can give through a
+/// plain `ShellProxy`.
+pub fn chat_status_detailed(
+    ctx: &Context,
+    argv: Vec<String>,
+    proxy: &mut dyn ChatToolHost,
+) -> anyhow::Result<()> {
     if argv.len() > 1 {
-        ctx.write_stderr("Usage: chat_status").ok();
-        return ExitStatus::ExitedWith(1);
+        anyhow::bail!("Usage: chat_status");
     }
 
-    let ttl = resolve_session_ttl(proxy);
-    let message = match session::session_description(ttl) {
-        Some(detail) => format!("chat session {detail}"),
-        None if ttl.is_none() => format!(
-            "no chat session ({} is 0, so `!` turns do not share a conversation)",
-            session::SESSION_TTL_KEY
-        ),
-        None => "no chat session carried".to_string(),
-    };
-    ctx.write_stdout(&message).ok();
+    let report = status_report(proxy);
+    ctx.write_stdout(&report.status)?;
 
     // Jobs are reported whether or not a conversation is carried: a running
     // process group is worth naming even when the turn that started it is
     // gone, since `chat_reset` is how a person stops it.
-    let running = jobs::describe_running();
-    if !running.is_empty() {
-        ctx.write_stdout(&format!("{} job(s) running:", running.len()))
-            .ok();
-        for line in running {
-            ctx.write_stdout(&format!("  {line}")).ok();
+    if !report.jobs.is_empty() {
+        ctx.write_stdout(&format!("{} job(s) running:", report.jobs.len()))?;
+        for line in &report.jobs {
+            ctx.write_stdout(&format!("  {line}"))?;
         }
-        ctx.write_stdout("  stop them with chat_reset, or kill -- -<pid> for one")
-            .ok();
+        ctx.write_stdout("  stop them with chat_reset, or kill -- -<pid> for one")?;
     }
-    ExitStatus::ExitedWith(0)
+    Ok(())
+}
+
+/// The `chat_status` text without the writing: the continuity verdict plus
+/// the running-job lines. Split out so tests can assert the verdict without
+/// a capturable `Context`.
+pub(super) struct StatusReport {
+    pub(super) status: String,
+    pub(super) jobs: Vec<String>,
+}
+
+pub(super) fn status_report(proxy: &mut dyn ChatToolHost) -> StatusReport {
+    let ttl = resolve_session_ttl(proxy);
+    // Rebuilt exactly the way a turn builds it: the continuity-relevant
+    // part of the system prompt (operator prompt, language, MCP fragment),
+    // never the skills list, which is re-rendered every turn.
+    let identity = {
+        let manager = proxy.agent_mcp_manager();
+        let manager = manager.read();
+        assemble_system_prompt(
+            "",
+            proxy.get_var(PROMPT_KEY).as_deref(),
+            proxy.get_var(LANGUAGE_KEY).as_deref(),
+            &manager,
+        )
+    };
+    let scope = conversation_scope(proxy.get_current_dir().ok().as_deref());
+
+    let status = match session::check(ttl, &identity, scope.as_deref()) {
+        session::Continuity::Continued {
+            id,
+            messages,
+            age,
+            scope,
+        } => {
+            let left = ttl
+                .and_then(|ttl| ttl.checked_sub(age))
+                .map(|left| format!(", idle for {}s more", left.as_secs()))
+                .unwrap_or_default();
+            let root = scope
+                .map(|scope| format!(", root {}", scope.display()))
+                .unwrap_or_default();
+            format!(
+                "chat session {id} - {messages} message(s), {}s old{root}{left}; a follow-up `!` continues this",
+                age.as_secs()
+            )
+        }
+        session::Continuity::Fresh { stored, reasons } => {
+            if ttl.is_none() {
+                format!(
+                    "no chat session ({} is 0, so `!` turns do not share a conversation)",
+                    session::SESSION_TTL_KEY
+                )
+            } else if stored {
+                format!(
+                    "no chat session carried (would start fresh: {})",
+                    reasons.join("; ")
+                )
+            } else {
+                "no chat session carried".to_string()
+            }
+        }
+    };
+
+    StatusReport {
+        status,
+        jobs: jobs::describe_running(),
+    }
+}
+
+/// Note appended to `chat_model` output when a carried conversation exists.
+///
+/// A model change does not end the conversation - the history is
+/// model-agnostic text - so say so while the cause is still obvious, rather
+/// than leaving the next `!`'s continuation a surprise. Pure text built from
+/// the same age-only description `chat_reset` prints; `chat_status` remains
+/// the arbiter for whether identity or scope would still break it.
+pub(super) fn carried_model_note(proxy: &mut dyn ShellProxy) -> String {
+    session::session_description(resolve_session_ttl(proxy))
+        .map(|detail| format!(" (carried conversation continues with the new model: {detail})"))
+        .unwrap_or_default()
+}
+
+/// Warning for a misconfigured `AI_CHAT_SESSION_TTL_SECS`. `resolve_ttl`
+/// silently falls back to the default on unparsable input, so a typo would
+/// otherwise never surface. `None` when the setting is absent (default
+/// applies) or valid (`0` disables, anything else parses).
+pub(super) fn invalid_ttl_notice(proxy: &mut dyn ShellProxy) -> Option<String> {
+    let raw = resolve_setting(proxy, session::SESSION_TTL_KEY)?;
+    raw.trim().parse::<u64>().err().map(|_| {
+        format!(
+            "chat: {}={raw:?} is not a number of seconds; using the default 1800s",
+            session::SESSION_TTL_KEY
+        )
+    })
 }
 
 /// Describe the carried conversation, for `doctor ai`.
@@ -252,6 +356,7 @@ pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell_capabilities::AgentCommandPolicy;
     use crate::test_support::TestShellProxy;
     use nix::unistd::getpid;
 
@@ -309,5 +414,110 @@ mod tests {
         );
 
         assert_eq!(result, ExitStatus::ExitedWith(1));
+    }
+
+    /// Seeds the process-wide session slot the way a finished turn leaves
+    /// it, with the identity and scope this proxy would compute itself.
+    fn seed_session(proxy: &mut TestShellProxy, id: &str) {
+        let manager = proxy.agent_mcp_manager();
+        let identity = assemble_system_prompt("", None, None, &manager.read());
+        let scope = conversation_scope(Some(&proxy.current_dir));
+        session::store(
+            resolve_session_ttl(proxy),
+            ConversationManager::new(
+                serde_json::json!({"role": "system", "content": "sys"}),
+                serde_json::json!({"role": "user", "content": "goal"}),
+            ),
+            id,
+            &identity,
+            scope,
+            None,
+        );
+    }
+
+    #[test]
+    fn status_report_continues_a_matching_session() {
+        let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        session::session_reset();
+        let mut proxy = TestShellProxy::default();
+        seed_session(&mut proxy, "s1");
+
+        let report = status_report(&mut proxy);
+        assert!(report.status.contains("s1"), "{}", report.status);
+        assert!(
+            report.status.contains("continues this"),
+            "{}",
+            report.status
+        );
+    }
+
+    #[test]
+    fn status_report_names_a_prompt_change_instead_of_claiming_continuity() {
+        let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        session::session_reset();
+        let mut proxy = TestShellProxy::default();
+        seed_session(&mut proxy, "s1");
+        proxy
+            .vars
+            .insert(PROMPT_KEY.to_string(), "custom".to_string());
+
+        let report = status_report(&mut proxy);
+        assert!(
+            report.status.contains("would start fresh"),
+            "{}",
+            report.status
+        );
+        assert!(report.status.contains("prompt"), "{}", report.status);
+    }
+
+    #[test]
+    fn status_report_honors_a_disabled_ttl() {
+        let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        session::session_reset();
+        let mut proxy = TestShellProxy::default();
+        seed_session(&mut proxy, "s1");
+        proxy
+            .vars
+            .insert(session::SESSION_TTL_KEY.to_string(), "0".to_string());
+
+        let report = status_report(&mut proxy);
+        assert!(report.status.contains("is 0"), "{}", report.status);
+    }
+
+    #[test]
+    fn carried_model_note_names_the_session_only_when_one_is_carried() {
+        let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        session::session_reset();
+        let mut proxy = TestShellProxy::default();
+        assert_eq!(carried_model_note(&mut proxy), "");
+
+        seed_session(&mut proxy, "s1");
+        let note = carried_model_note(&mut proxy);
+        assert!(note.contains("s1"), "{note}");
+        assert!(note.contains("continues with the new model"), "{note}");
+    }
+
+    #[test]
+    fn invalid_ttl_notice_fires_only_on_unparsable_values() {
+        let mut proxy = TestShellProxy::default();
+        assert_eq!(invalid_ttl_notice(&mut proxy), None);
+
+        proxy
+            .vars
+            .insert(session::SESSION_TTL_KEY.to_string(), "90".to_string());
+        assert_eq!(invalid_ttl_notice(&mut proxy), None);
+
+        proxy
+            .vars
+            .insert(session::SESSION_TTL_KEY.to_string(), "0".to_string());
+        assert_eq!(invalid_ttl_notice(&mut proxy), None);
+
+        proxy.vars.insert(
+            session::SESSION_TTL_KEY.to_string(),
+            "ten-minutes".to_string(),
+        );
+        let notice = invalid_ttl_notice(&mut proxy).expect("typo must warn");
+        assert!(notice.contains("ten-minutes"), "{notice}");
+        assert!(notice.contains("1800s"), "{notice}");
     }
 }

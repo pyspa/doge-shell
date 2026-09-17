@@ -230,7 +230,7 @@ Seamlessly handle structured data (JSON, CSV, Tables) within the shell pipeline 
 - **Web Server**: Built-in static file server with `serve` command
 - **Configuration Reload**: Runtime configuration reloading with `reload` command
 - **Trigger Command**: Monitor file changes matching a glob pattern and automatically execute commands. Results are captured in the [output history](#command-output-history).
-- **Cron Jobs**: Run a shell command, or an unattended AI agent task, on an interval, a five-field cron expression, or `@daily`-style macro with `cron` — fires while a session is open, and while none is if an external tick is installed
+- **Cron Jobs**: Run a shell command on an interval, a five-field cron expression, or `@daily`-style macro with `cron` — fires while a session is open, and while none is if an external tick is installed
 ### Project Manager
 
 Organize and switch between workspaces efficiently with the integrated Project Manager.
@@ -412,7 +412,7 @@ The embedded Lisp interpreter includes many built-in functions:
   - Calling this again with the same name **replaces** the job rather than erroring or duplicating it — safe to leave in `config.lisp`, which runs on every launch.
 - `cron-remove` / `cron-pause` / `cron-resume` - Manage a job by name or id
 - `cron-list` - List the registered jobs (the `cron list` command is easier from the prompt)
-- `sched-add` / `sched-remove` / `sched-pause` / `sched-resume` / `sched-list` - **Deprecated**, kept for one release as aliases for the `cron-*` functions above (same arguments and behavior). Each prints a warning; migrate to `cron-*`.
+- `sched-add` / `sched-remove` / `sched-pause` / `sched-resume` / `sched-list` - **Deprecated**, kept for one release as aliases for the `cron-*` functions above (same arguments and behavior). Each prints a warning to stderr only when stderr is a TTY; migrate to `cron-*`.
 
 See [Cron Jobs](#cron-jobs) for schedule syntax and notify policies.
 
@@ -895,7 +895,7 @@ cron add --name prs --on change '0 9-17 * * mon-fri' gh pr list
 cron add --quiet 30s 'df -h /'
 cron list                               # id, schedule, state, next run, last result
 cron history fetch                      # recent runs
-cron logs fetch                         # a run's full recorded stdout/stderr
+cron logs fetch                         # a run's recorded stdout/stderr (each stream clamped to 8 KiB)
 cron rm prs
 cron pause                              # stop every job, keeping the definitions
 cron resume
@@ -910,6 +910,8 @@ schedules, not just intervals:
 | Interval | `30s` / `5m` / `1h` | Every N seconds/minutes/hours, from the previous run. 5s-24h. |
 | Cron expression | `0 9 * * mon-fri` | Five fields (minute hour day-of-month month day-of-week), on the local wall clock. |
 | Macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | Shorthand for a fixed cron expression. |
+| `@reboot` | `@reboot` | Once per interactive session runner start; never fires from an external tick. |
+| `@manual` | `@manual` | Only an explicit `cron run` / `cron run --now`; never fires on its own. |
 
 **Always quote a cron expression** — `cron add */5 * * * * git fetch` is glob-expanded by
 the shell before dogesh ever sees it. `cron add` detects the common shapes of this mistake
@@ -957,9 +959,12 @@ row first runs it, and the other finds nothing left to do.
 
 #### Chat can manage cron jobs
 
-The `!` chat agent has a `cron_manage` tool that does everything above
-through a tool call instead of the CLI — `execute` cannot reach `cron` itself, since it is
-a builtin, not a shell command. A job it creates always starts paused.
+The `!` chat agent has a `cron_manage` tool for the job lifecycle
+(`list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` for reading;
+`create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` for writing) through a
+tool call instead of the CLI — `execute` cannot reach `cron` itself, since it is
+a builtin, not a shell command. It does not cover `setup`, `notepad`, or `tick`.
+A job it creates always starts paused.
 Every write (`create`/`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
 asks a person first, the same as any other tool that changes something.
 

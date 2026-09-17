@@ -7,6 +7,8 @@
 | Interval | `30s`, `5m`, `1h` | Every N seconds/minutes/hours, measured from the previous run. Range: 5s-24h. |
 | Cron expression | `0 9 * * mon-fri` | Five fields: minute hour day-of-month month day-of-week, on the local wall clock. |
 | Macro | `@hourly`, `@daily`, `@midnight`, `@weekly`, `@monthly`, `@yearly`/`@annually` | Shorthand for a fixed cron expression. |
+| `@reboot` | `@reboot` | Once per interactive session runner start; never fires from an external tick. |
+| `@manual` | `@manual` | Only an explicit `cron run` / `cron run --now`; never fires on its own. |
 
 ## Quoting
 

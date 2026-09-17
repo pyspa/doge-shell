@@ -1,6 +1,6 @@
 {
   "command": "cron",
-  "description": "Create, edit and run scheduled jobs — shell commands or unattended agent tasks",
+  "description": "Create, edit and run scheduled jobs \u2014 shell commands",
   "subcommands": [
     {
       "name": "add",
@@ -55,67 +55,19 @@
         {
           "long": "--force",
           "description": "Replace an existing job of the same name"
-        },
-        {
-          "long": "--agent",
-          "description": "Register an unattended agent job"
-        },
-        {
-          "long": "--check",
-          "description": "Completion criterion (repeatable)",
-          "takes_value": true
-        },
-        {
-          "long": "--read",
-          "description": "Readable directory",
-          "takes_value": true
-        },
-        {
-          "long": "--write",
-          "description": "Writable directory",
-          "takes_value": true
-        },
-        {
-          "long": "--allow-command",
-          "description": "Exact allowed command",
-          "takes_value": true
-        },
-        {
-          "long": "--allow-mcp",
-          "description": "Exact MCP approval key",
-          "takes_value": true
-        },
-        {
-          "long": "--network",
-          "description": "Allowed sandbox host",
-          "takes_value": true
-        },
-        {
-          "long": "--env",
-          "description": "Inherited environment variable",
-          "takes_value": true
-        },
-        {
-          "long": "--sandbox",
-          "description": "Require pinned SRT isolation"
-        },
-        {
-          "long": "--max-tokens-per-day",
-          "description": "Rolling daily token ceiling",
-          "takes_value": true
         }
       ],
       "arguments": [
         {
           "name": "schedule",
-          "description": "30s/5m/1h, a 5-field cron expression, or @daily etc.",
+          "description": "30s/5m/1h, a 5-field cron expression, @daily etc., @reboot, or @manual",
           "type": {
             "type": "String"
           }
         },
         {
           "name": "command",
-          "description": "Command to run, or the goal after -- for an agent job",
+          "description": "Command to run",
           "multiple": true,
           "type": {
             "type": "CommandWithArgs"
@@ -178,11 +130,6 @@
           "takes_value": true
         },
         {
-          "long": "--goal",
-          "description": "New goal (agent jobs)",
-          "takes_value": true
-        },
-        {
           "long": "--cwd",
           "description": "New working directory",
           "takes_value": true
@@ -214,50 +161,6 @@
         {
           "long": "--catchup",
           "description": "New catch-up window",
-          "takes_value": true
-        },
-        {
-          "long": "--check",
-          "description": "Completion criterion (repeatable)",
-          "takes_value": true
-        },
-        {
-          "long": "--read",
-          "description": "Readable directory",
-          "takes_value": true
-        },
-        {
-          "long": "--write",
-          "description": "Writable directory",
-          "takes_value": true
-        },
-        {
-          "long": "--allow-command",
-          "description": "Exact allowed command",
-          "takes_value": true
-        },
-        {
-          "long": "--allow-mcp",
-          "description": "Exact MCP approval key",
-          "takes_value": true
-        },
-        {
-          "long": "--network",
-          "description": "Allowed sandbox host",
-          "takes_value": true
-        },
-        {
-          "long": "--env",
-          "description": "Inherited environment variable",
-          "takes_value": true
-        },
-        {
-          "long": "--sandbox",
-          "description": "Require pinned SRT isolation"
-        },
-        {
-          "long": "--max-tokens-per-day",
-          "description": "Rolling daily token ceiling",
           "takes_value": true
         }
       ],
@@ -383,7 +286,7 @@
     },
     {
       "name": "logs",
-      "description": "Show one run's full recorded stdout/stderr",
+      "description": "Show one run's recorded stdout/stderr (each stream clamped to 8 KiB at record time)",
       "options": [
         {
           "long": "--run",

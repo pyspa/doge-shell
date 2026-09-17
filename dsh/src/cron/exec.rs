@@ -13,10 +13,9 @@
 //!    scheduled task was session-scoped by definition. A cron run is not: it
 //!    may have been started by a session that has since been closed, and
 //!    killing it at exit would make "runs while you are logged out" untrue.
-//! 3. **Execution is synchronous.** A run happens inside `cron run-job`, a
-//!    builtin that also has to be able to call the agent entry point, which
-//!    needs `&mut Shell`. Reader threads plus a polled deadline keep that
-//!    possible without a second runtime.
+//! 3. **Execution is synchronous.** A run happens inside `cron run-job`,
+//!    which waits for the detached shell command while keeping the session
+//!    runtime out of the child process.
 
 use anyhow::{Context as _, Result};
 use dsh_types::cron::job::ClaimedRun;

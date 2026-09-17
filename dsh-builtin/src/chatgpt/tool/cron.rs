@@ -34,7 +34,7 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Add, edit, run or inspect a doge-shell cron job - a persistent scheduled shell command, surviving restarts and independent of this conversation. `list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` read without asking; `create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` always ask first. A job this tool creates always starts paused - a person resumes it after checking `cron run` once. `run` marks a job due for the next tick (session runner or external `cron tick`, usually within about a minute); it does not run synchronously and does not accept a one-off prompt, and it refuses a job that is still paused or blocked by an open incident (`resume` or `ack` it first). `logs` returns one run's full recorded stdout/stderr - use it, not `history`'s one-line preview, to actually read what a past run produced; refused if the job's own directory falls outside this task's grant. Prefer `update` on an existing job over creating a near-duplicate; always `list` first rather than guessing a job's name.",
+            "description": "Add, edit, run or inspect a doge-shell cron job - a persistent scheduled shell command, surviving restarts and independent of this conversation. `list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` read without asking; `create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` always ask first. A job this tool creates always starts paused - a person resumes it after checking `cron run --now` once. `run` marks a job due for the next tick (session runner or external `cron tick`, usually within about a minute); it does not run synchronously - only the CLI `cron run --now` runs in the foreground - and it does not accept a one-off prompt, and it refuses a job that is still paused or blocked by an open incident (`resume` or `ack` it first). `logs` returns one run's recorded stdout/stderr (each stream clamped to 8 KiB at record time) - use it, not `history`'s one-line preview, to actually read what a past run produced; refused if the job's own directory falls outside this task's grant. Prefer `update` on an existing job over creating a near-duplicate; always `list` first rather than guessing a job's name.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -57,7 +57,7 @@ pub(crate) fn definition() -> Value {
                     },
                     "schedule": {
                         "type": "string",
-                        "description": "`create`'s required schedule, or `update`'s new one. An interval (`30s`/`5m`/`1h`, 5s-24h), a 5-field cron expression (`0 9 * * mon-fri`), or a macro (`@daily`, `@hourly`, ...)."
+                        "description": "`create`'s required schedule, or `update`'s new one. An interval (`30s`/`5m`/`1h`, 5s-24h), a 5-field cron expression (`0 9 * * mon-fri`), a macro (`@daily`, `@hourly`, ...), `@reboot` (once per interactive session runner start, never from an external tick), or `@manual` (only an explicit `cron run` / `cron run --now`)."
                     },
                     "command": {
                         "type": "string",

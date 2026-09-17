@@ -1234,6 +1234,63 @@ fn a_timeout_already_within_the_new_interval_is_left_alone() {
     assert_eq!(store.get("probe").unwrap().timeout_secs, 10);
 }
 
+/// `cron edit NAME --timeout VALUE` alone must clamp to the job's own
+/// interval, the same way `cron add --timeout` does at creation time. A cron
+/// expression has no fixed interval, so it is never clamped.
+#[test]
+fn editing_only_the_timeout_reclamps_to_the_existing_interval() {
+    let (_dir, store) = store();
+    // The raw `spec()` helper (unlike `build_spec`) sets `timeout_secs: 60`
+    // regardless of the interval, so a "30s" job starts with a 60s timeout.
+    store
+        .create(&spec("probe", "30s"), &env(), NOW, false)
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().timeout_secs, 60);
+
+    store
+        .patch(
+            "probe",
+            &CronJobPatch {
+                timeout_secs: Some(3_600),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().timeout_secs, 30);
+
+    store
+        .patch(
+            "probe",
+            &CronJobPatch {
+                timeout_secs: Some(10),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().timeout_secs, 10);
+}
+
+#[test]
+fn editing_only_the_timeout_on_a_cron_expression_is_not_clamped() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "0 9 * * *"), &env(), NOW, false)
+        .unwrap();
+    store
+        .patch(
+            "probe",
+            &CronJobPatch {
+                timeout_secs: Some(3_600),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().timeout_secs, 3_600);
+}
+
 /// The bug this guards against: the `timeout_secs` reclamp above shrinks the
 /// `jobs` column, but an AI job's watchdog is armed from its own copy inside
 /// `payload` (`AgentJobSpec.time_budget_secs`) - `parse_edit` only resyncs

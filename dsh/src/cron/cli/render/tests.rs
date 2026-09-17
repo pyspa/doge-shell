@@ -95,9 +95,9 @@ fn the_job_table_includes_every_job_by_name() {
     assert!(table.contains("beta"));
 }
 
-/// The bug this guards against: an agent job's `command` is its goal in
-/// full, which had no clamp at all - one such job blew the table out to
-/// hundreds of columns. `cron show <job>`/`--json` still carry the untruncated
+/// The bug this guards against: a very long `command` had no clamp at all
+/// in the list table - one such job blew the table out to hundreds of
+/// columns. `cron show <job>`/`--json` still carry the untruncated
 /// text, so nothing is lost, just not shown in the list.
 #[test]
 fn a_very_long_command_does_not_widen_the_list_table() {

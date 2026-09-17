@@ -16,9 +16,9 @@
 
 use super::*;
 
-/// Re-exported so an AI job's in-process watchdog
-/// (`dsh/src/cron/run_job.rs`) fires from the exact same formula the lease
-/// expiry below uses, rather than a second constant that could drift from it.
+/// Re-exported so the run deadline (`dsh/src/cron/run_job.rs`) fires from
+/// the exact same formula the lease expiry below uses, rather than a second
+/// constant that could drift from it.
 use dsh_types::cron::job::lease_secs;
 
 /// How many consecutive failures or skips before it stops being noise.

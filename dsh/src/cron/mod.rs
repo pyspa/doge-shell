@@ -44,7 +44,7 @@ Usage:
   cron run <job> [--now]                                Run on the next tick, or right now
   cron pause [<job>...]                                 Pause job(s), or the whole scheduler
   cron resume [<job>...]                                Resume job(s), or the whole scheduler
-  cron history [<job>] [--failed] [--json]              Show finished runs
+  cron history [<job>] [--limit N] [--failed] [--json]      Show finished runs
   cron logs [<job>] [--run <id>] [--stdout|--stderr] [--json]
                                                           Show one run's full recorded output
                                                           (needs job, --run, or both)
@@ -57,7 +57,7 @@ Usage:
   cron setup [--crontab|--systemd|--launchd]            Print external-tick setup text
 
 Options for `add`/`edit`:
-  --name <name>          Reference name (default: derived from the command/goal)
+  --name <name>          Reference name (default: derived from the command)
   --cwd <dir>            Working directory (default: here)
   --on <policy>          never | failure | change | both (default) | always
   --quiet                Same as --on never

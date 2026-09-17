@@ -1,5 +1,5 @@
 //! `sched` no longer exists — replaced entirely by `cron`, which adds wall-
-//! clock schedules and unattended agent jobs on top of everything `sched`
+//! clock schedules and persistence across restarts on top of everything `sched`
 //! did.
 //!
 //! Removing the builtin outright would let `sched` fall through to PATH

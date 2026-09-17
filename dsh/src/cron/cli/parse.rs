@@ -229,7 +229,7 @@ pub fn parse_edit(args: &[String]) -> Result<(String, CronJobPatch), String> {
                 let schedule = parse_schedule_arg(value)?;
                 patch.schedule = Some((schedule, value.clone()));
             }
-            "--command" | "--goal" => patch.command = Some(value.clone()),
+            "--command" => patch.command = Some(value.clone()),
             "--cwd" => patch.cwd = Some(value.clone()),
             "--on" => patch.notify = Some(NotifyPolicy::parse(value)?),
             "--timeout" => patch.timeout_secs = Some(parse_named_duration(value)?),

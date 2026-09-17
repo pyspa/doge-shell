@@ -5,11 +5,11 @@ description: Use when adding, editing or debugging a doge-shell cron job - cron 
 
 # DSH Cron
 
-- Run `cron status` first. It says whether an external tick is arriving; without one, jobs only fire while a dogesh session is open.
+- Run `cron status` first. It shows the last completed run, overdue jobs and counts - not whether an external tick itself arrived. Tick arrival is confirmed in systemd/launchd/crontab logs, or with a verbose tick run. Without a tick, jobs only fire while a dogesh session is open.
 - Add with `cron add --name NAME '<schedule>' <command...>`. Quote the schedule - an unquoted five-field expression is glob-expanded by the shell before dogesh sees it.
 - Create new jobs `--paused`. `cron run NAME --now` (CLI only - `cron_manage`'s `run` cannot run synchronously) runs it right away to see the real output before `cron resume NAME`; from a chat tool, ask a person to run that once instead.
 - Edit one field at a time: `cron edit NAME --schedule '...' | --command '...' | --on failure | --timeout 2m`. Re-adding the same `--name` with `cron add` needs `--force`; it never silently creates a duplicate.
-- Debug in this order: `cron status` -> `cron doctor` -> `cron history NAME --failed` -> `cron logs NAME`. `cron logs NAME` shows a run's full recorded stdout/stderr - use it, not `history`'s one-line preview, to read what a past run produced.
+- Debug in this order: `cron status` -> `cron doctor` -> `cron history NAME --failed` -> `cron logs NAME`. `cron logs NAME` shows one run's recorded stdout/stderr (each stream clamped to 8 KiB at record time, not the full live output) - use it, not `history`'s one-line preview, to read what a past run produced.
 - From inside a `!` chat, use the `cron_manage` tool, not `execute` - `cron` is a builtin, not a shell command, so `execute("cron ...")` cannot reach it. A job the tool creates always starts paused.
 - Schedule grammar, intervals, `@daily`, and timezone behaviour: [references/schedule-syntax.md](references/schedule-syntax.md).
 - Installing the external tick on Linux and macOS: [references/external-tick.md](references/external-tick.md).

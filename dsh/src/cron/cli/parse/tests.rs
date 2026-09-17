@@ -133,3 +133,11 @@ fn editing_only_timeout_on_a_shell_job_does_not_need_an_agent_spec() {
     assert_eq!(patch.timeout_secs, Some(300));
     assert!(patch.agent.is_none());
 }
+
+/// `--goal` was the agent-job alias for `--command`. Agent jobs are gone, so
+/// it is an unknown option rather than a silent alias.
+#[test]
+fn goal_is_no_longer_an_alias_for_command() {
+    let error = parse_edit(&args(&["probe", "--goal", "do things"])).unwrap_err();
+    assert!(error.contains("unknown option"), "{error}");
+}

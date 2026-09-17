@@ -601,12 +601,11 @@ pub trait CronStore: Send + Sync {
     fn start(&self, run_id: &str, now: i64) -> Result<ClaimedRun>;
     /// Records which agent task a run started, before it can possibly finish.
     ///
+    /// Legacy: only rows written by older agent-job versions carry this.
     /// `complete` is the only other writer of `runs.agent_task_id`, and a run
-    /// killed by its own watchdog (an AI job that outlived its lease) never
-    /// reaches it: the process group is gone, and `reap_expired_leases`
+    /// killed after its lease expired never reaches it: `reap_expired_leases`
     /// closes the row out as `failed`/`timeout` without knowing what task it
-    /// had started. The task itself is still fully recorded in the agent
-    /// store - this is what makes it findable again from `cron logs`.
+    /// had started.
     fn attach_agent_task(&self, run_id: &str, task_id: &str) -> Result<()>;
     /// Records the outcome, releases the claim and opens or closes incidents.
     fn complete(&self, run_id: &str, outcome: &RunOutcome, now: i64) -> Result<()>;
@@ -623,7 +622,8 @@ pub trait CronStore: Send + Sync {
         agent_task_id: Option<&str>,
         now: i64,
     ) -> Result<i64>;
-    /// Acknowledges an incident and lifts the block it put on its job.
+    /// Acknowledges an incident and unblocks its job when no other blocking
+    /// incident remains open.
     fn ack_incident(&self, id: i64, now: i64) -> Result<CronIncident>;
     fn notepad(&self, selector: &str) -> Result<String>;
     fn set_notepad(&self, selector: &str, body: &str) -> Result<()>;

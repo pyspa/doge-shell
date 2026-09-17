@@ -121,9 +121,27 @@ impl CronStore for SqliteCronStore {
         // after any `--timeout` this same call also named, so a schedule
         // change alone cannot leave a stale, now-too-long timeout in place,
         // and a schedule change paired with an explicit `--timeout` is
-        // clamped exactly the way `cron add` would clamp it.
-        if let Some((Schedule::Every(interval), _)) = &patch.schedule {
-            let interval_secs = interval.secs() as i64;
+        // clamped exactly the way `cron add` would clamp it. A `--timeout`
+        // alone is clamped the same way against the job's existing interval;
+        // a cron expression has no fixed interval to compare against, so it
+        // is never clamped.
+        let effective_interval_secs: Option<i64> =
+            if let Some((Schedule::Every(interval), _)) = &patch.schedule {
+                Some(interval.secs() as i64)
+            } else if patch.timeout_secs.is_some() && patch.schedule.is_none() {
+                let spec: String = tx.query_row(
+                    "SELECT schedule_spec FROM jobs WHERE id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                match parse_schedule(&spec) {
+                    Ok(Schedule::Every(interval)) => Some(interval.secs() as i64),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+        if let Some(interval_secs) = effective_interval_secs {
             tx.execute(
                 "UPDATE jobs SET timeout_secs = MIN(timeout_secs, ?2) WHERE id = ?1",
                 params![id, interval_secs],

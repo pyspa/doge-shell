@@ -294,10 +294,7 @@ fn update(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
         argv.push("--schedule".to_string());
         argv.push(schedule.clone());
     }
-    if let Some(goal) = &request.goal {
-        argv.push("--goal".to_string());
-        argv.push(goal.clone());
-    } else if let Some(command) = &request.command {
+    if let Some(command) = &request.command {
         argv.push("--command".to_string());
         argv.push(command.clone());
     }

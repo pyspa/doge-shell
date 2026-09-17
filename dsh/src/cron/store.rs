@@ -195,7 +195,7 @@ impl SqliteCronStore {
 
     /// Where a job's notepad lives. Under the cron state directory, never the
     /// agent one: `SafetyGuard::task_file_allowed` refuses that whole subtree,
-    /// and the notepad has to be writable by the agent task it belongs to.
+    /// and the notepad has to stay writable as ordinary job notes.
     pub fn notepad_path(&self, job: &str) -> PathBuf {
         self.root.join("notepad").join(format!("{}.md", slug(job)))
     }

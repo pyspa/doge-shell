@@ -22,6 +22,8 @@
 | interval | `30s` / `5m` / `1h` | 前回実行からの相対時間。5秒〜24時間。 |
 | cron 式 | `0 9 * * mon-fri` | 5フィールド（分 時 日 月 曜）、ローカル壁時計。 |
 | macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | 固定 cron 式の省略形。 |
+| `@reboot` | `@reboot` | 対話セッションの runner 開始ごとに一度だけ発火。外部 tick からは発火しない。 |
+| `@manual` | `@manual` | 明示的な `cron run` / `cron run --now` でのみ発火。スケジュール単独では発火しない。 |
 
 cron 式は**必ずクォートする**こと。`cron add */5 * * * * git fetch` はシェルが `*/5` 以外のフィールドをファイル名として glob 展開してしまいます。`cron add` はこの典型的な間違いを検出し、直し方を含むエラーを返します。
 
@@ -52,12 +54,12 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 
 ```sh
 cron incidents                       # 未確認の一覧
-cron incidents ack <ID>              # incident を閉じ、ジョブの blocked を解除
+cron incidents ack <ID>              # incident を閉じる。他に blocking な incident がなければジョブの blocked を解除
 ```
 
 ### notepad — ジョブ固有のメモ
 
-`cron_state_dir()/notepad/<job>.md` の実ファイルです。ジョブに関するメモを残すための場所で、実行には影響しません。
+`cron_state_dir()/notepad/<slug>.md` の実ファイルです（`<slug>` はジョブ名をファイル名安全にしたもの）。ジョブに関するメモを残すための場所で、実行には影響しません。
 
 ```sh
 cron notepad digest            # 表示
@@ -78,7 +80,7 @@ cron notepad digest --clear    # 消去
 `runs` テーブルには `stdout`/`stderr` 列（マスク済み、各 8KiB にクランプ）が最初からありましたが、それを読み出す口は `cron logs` を追加するまで存在しませんでした。
 
 ```sh
-cron logs digest                # 最新の finished run の stdout/stderr を全文表示
+cron logs digest                # 最新の finished run の記録済み stdout/stderr を表示（各 8KiB clamp 済みの記録であり、実行時の全出力ではない）
 cron logs digest --run <id>     # 特定の run（history の run 列、一意な prefix でも可）
 cron logs digest --stdout       # stdout だけ（パイプ向け、見出し無し）
 cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "..."}
@@ -92,12 +94,14 @@ cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "...
 
 | 状況 | 振る舞い |
 |---|---|
-| 設定エラー | `failed`(config) + incident。ack まで再試行しない |
-| ネットワーク断など一時的な失敗 | `failed`(transient)。**連続3回**で初めて incident に昇格 |
+| コマンドの起動失敗（`sh` が spawn できない） | `failed`（exit 127、stderr に理由）。単発では incident にならない |
+| 外側 timeout で強制終了 | `failed`(timeout) |
+| 失敗が連続3回 | `failing` incident に昇格。成功で自動解消 |
 | 同じジョブの前回 run がまだ実行中 | claim 段階で除外される（run 行は作られない）。history に何も残らない |
 | 外部 tick とセッション runner が同時に claim | 片方だけが成功。SQLite の条件付き UPDATE が保証 |
-| 外側 timeout で強制終了 | `failed`(timeout) |
-| ジョブのルートディレクトリが消えた・別物になった | `failed`(root-changed) + incident。自動では作り直さない |
+| ジョブの `cwd` が消えた | run 時の `root-changed`/`transient` 判定は shell job では記録されない。`cron doctor` が `cwd-missing` として warn で報告する |
+
+旧バージョンの AI ジョブ由来の行にだけ残っている `config`/`root-changed`/`transient` などの reason は、新しい shell job の実行では記録されません。
 
 `cron doctor`（`--json` あり）は上の表に載らない、事前に気づける不整合を報告する: 一致し得ないスケジュール、消えた `cwd`、`config.lisp` の `sched-add` 残存、一度も run が完了していない、に加えて **`--on` が `never` 以外のジョブが1件でもあれば「通知はまだ配線されていない」旨の note を1行**、**現在 claim を握っている（`running`）ジョブがあればその経過時間を warn** で出す。
 

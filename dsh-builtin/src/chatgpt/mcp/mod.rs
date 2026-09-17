@@ -5,7 +5,7 @@ mod naming;
 mod servers;
 use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpTransport};
-pub use groups::{McpToolExposure, McpToolGroup};
+pub use groups::{McpToolExposure, McpToolGroup, SearchableTool};
 use naming::*;
 use rmcp::{
     ServiceExt,

@@ -185,6 +185,24 @@ impl McpManager {
     /// group membership and resolvable definitions agree.
     #[cfg(test)]
     pub(crate) fn insert_test_tool(&mut self, label: &str, tool: &str) {
+        self.insert_test_tool_full(
+            label,
+            tool,
+            &format!("{tool} description"),
+            serde_json::json!({"type": "object"}),
+        );
+    }
+
+    /// Like [`McpManager::insert_test_tool`], with an explicit description
+    /// and input schema, for tests that rank over parameter metadata.
+    #[cfg(test)]
+    pub(crate) fn insert_test_tool_full(
+        &mut self,
+        label: &str,
+        tool: &str,
+        description: &str,
+        schema: serde_json::Value,
+    ) {
         if !self.servers.iter().any(|server| server.label == label) {
             self.servers.push(McpServer {
                 label: label.to_string(),
@@ -195,10 +213,11 @@ impl McpManager {
                 tools: Vec::new(),
             });
         }
+        let input_schema = schema.as_object().cloned().unwrap_or_default();
         let rmcp_tool = Tool::new(
             tool.to_string(),
-            format!("{tool} description"),
-            Arc::new(serde_json::Map::new()),
+            description.to_string(),
+            std::sync::Arc::new(input_schema),
         );
         let server = self
             .servers

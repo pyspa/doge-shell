@@ -255,9 +255,22 @@ pub(super) fn run_tool_calls(
                 .map_err(|e| e.to_string())?;
             if tool_call["function"]["name"] == "tool_search"
                 && let Ok(result) = serde_json::from_str::<Value>(&tool_result)
-                && let Some(found) = result["tools"].as_array()
             {
-                for definition in found {
+                // Tool-level loading: the compact result names the hits, and
+                // their schemas are resolved here - without flipping any group
+                // toggle - so the next request can call exactly these tools.
+                // A hit removed between search and load resolves to nothing
+                // and is skipped; calling it would report the error instead.
+                let names: Vec<String> = result["results"]
+                    .as_array()
+                    .map(|results| {
+                        results
+                            .iter()
+                            .filter_map(|hit| hit["name"].as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for definition in mcp_manager.read().tool_definitions_for(&names) {
                     if !tools
                         .iter()
                         .any(|d| d["function"]["name"] == definition["function"]["name"])

@@ -951,3 +951,459 @@ fn agent_definitions_ignore_group_exposure() {
         vec!["mcp_list_groups", "mcp_load_group"]
     );
 }
+
+/// Fixed Tool Search v2 surface: three servers with realistic descriptions
+/// and parameter schemas, so ranking is exercised over every search field.
+fn search_bench_manager() -> McpManager {
+    let mut manager = McpManager::default();
+    manager.insert_test_tool_full(
+        "github",
+        "search_issues",
+        "Search GitHub issues using keywords and filters.",
+        json!({"type": "object", "properties": {
+            "query": {"type": "string", "description": "The search keywords to use"},
+            "state": {"type": "string", "description": "Filter by open or closed state"},
+            "labels": {"type": "string", "description": "Filter by label names"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "github",
+        "get_issue",
+        "Get a single GitHub issue by number.",
+        json!({"type": "object", "properties": {
+            "issue_number": {"type": "integer", "description": "The issue number to fetch"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "github",
+        "create_issue",
+        "Create a new GitHub issue.",
+        json!({"type": "object", "properties": {
+            "title": {"type": "string", "description": "The issue title"},
+            "body": {"type": "string", "description": "The issue body text"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "github",
+        "list_pull_requests",
+        "List pull requests in a repository.",
+        json!({"type": "object", "properties": {
+            "state": {"type": "string", "description": "Filter by open or closed state"},
+            "repository": {"type": "string", "description": "The repository full name"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "github",
+        "search_repositories",
+        "Search GitHub repositories by keyword.",
+        json!({"type": "object", "properties": {
+            "query": {"type": "string", "description": "The search keywords to use"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "filesystem",
+        "read_file",
+        "Read a file from the filesystem.",
+        json!({"type": "object", "properties": {
+            "path": {"type": "string", "description": "The file path to read"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "filesystem",
+        "write_file",
+        "Write content to a file on the filesystem.",
+        json!({"type": "object", "properties": {
+            "path": {"type": "string", "description": "The file path to write"},
+            "content": {"type": "string", "description": "The content to write"},
+        }}),
+    );
+    manager.insert_test_tool_full(
+        "slack",
+        "post_message",
+        "Send a message to a Slack channel.",
+        json!({"type": "object", "properties": {
+            "channel": {"type": "string", "description": "The channel to post to"},
+            "text": {"type": "string", "description": "The message text to send"},
+        }}),
+    );
+    manager
+}
+
+/// The regression benchmark: representative queries with the tool each must
+/// find. Every case asserts Top-1 - a near-tie reorder that drops an
+/// expected tool is a ranking regression worth hearing about, and the Top-3
+/// / Top-5 tallies below show how far it fell.
+const SEARCH_BENCH_CASES: &[(&str, &str)] = &[
+    ("search github issues", "mcp__github__search_issues"),
+    ("get github issue", "mcp__github__get_issue"),
+    ("create github issue", "mcp__github__create_issue"),
+    ("list pull requests", "mcp__github__list_pull_requests"),
+    ("search repository", "mcp__github__search_repositories"),
+    ("send slack message", "mcp__slack__post_message"),
+    ("read filesystem file", "mcp__filesystem__read_file"),
+];
+
+fn ranked_names(manager: &McpManager, query: &str, limit: usize) -> Vec<String> {
+    tool_search::search(manager, query, limit)
+        .iter()
+        .map(|hit| hit.name.clone())
+        .collect()
+}
+
+#[test]
+fn search_benchmark_ranks_the_expected_tool_first() {
+    let manager = search_bench_manager();
+    let mut failures = Vec::new();
+    let mut top1 = 0usize;
+    let mut top3 = 0usize;
+    let mut top5 = 0usize;
+    for (query, expected) in SEARCH_BENCH_CASES {
+        let names = ranked_names(&manager, query, 5);
+        match names.iter().position(|name| name == expected) {
+            Some(rank) => {
+                if rank < 1 {
+                    top1 += 1;
+                }
+                if rank < 3 {
+                    top3 += 1;
+                }
+                top5 += 1;
+            }
+            None => failures.push(format!(
+                "query {query:?}: expected {expected} in top 5, got {names:?}"
+            )),
+        }
+    }
+    // Cumulative tallies for the implementation report.
+    let total = SEARCH_BENCH_CASES.len();
+    println!(
+        "tool_search benchmark: Top-1 {top1}/{total}, Top-3 {top3}/{total}, Top-5 {top5}/{total}"
+    );
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(top1, total, "every benchmark query must hit Top-1");
+}
+
+/// An exact tool-name query finds that tool even when siblings share every
+/// other signal (server, group, description words).
+#[test]
+fn search_exact_name_match_ranks_first() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "mcp__github__get_issue", 5);
+
+    assert_eq!(
+        names.first().map(String::as_str),
+        Some("mcp__github__get_issue")
+    );
+}
+
+/// A query matching only a description still discovers the tool.
+#[test]
+fn search_description_only_match_discovers_the_tool() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "keywords filters", 5);
+
+    assert!(
+        names.contains(&"mcp__github__search_issues".to_string()),
+        "description-only query lost the tool: {names:?}"
+    );
+}
+
+/// A query naming a parameter concept finds the tool through its schema.
+#[test]
+fn search_parameter_match_discovers_the_tool() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "issue_number", 5);
+
+    assert_eq!(
+        names.first().map(String::as_str),
+        Some("mcp__github__get_issue")
+    );
+}
+
+/// Naming a server finds its tools above unrelated servers' tools.
+#[test]
+fn search_server_match_favours_that_server() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "slack", 5);
+
+    assert_eq!(
+        names.first().map(String::as_str),
+        Some("mcp__slack__post_message")
+    );
+}
+
+/// Lexical relevance, not semantic understanding: unrelated servers score
+/// zero and never outrank a direct match.
+#[test]
+fn search_never_ranks_unrelated_servers_above_a_direct_match() {
+    let manager = search_bench_manager();
+
+    let names = ranked_names(&manager, "github issues", 5);
+
+    assert!(!names.is_empty());
+    assert!(
+        names.iter().all(|name| name.starts_with("mcp__github__")),
+        "unrelated tools leaked above GitHub matches: {names:?}"
+    );
+}
+
+/// Ranking is a pure function of current metadata: the same query twice is
+/// the same list, regardless of map iteration order.
+#[test]
+fn search_results_are_deterministic_across_calls() {
+    let manager = search_bench_manager();
+
+    let first = ranked_names(&manager, "github issue", 5);
+    let second = ranked_names(&manager, "github issue", 5);
+
+    assert_eq!(first, second);
+}
+
+/// Discoverable is wider than exposed: every group disabled, every tool
+/// still searchable - that is what lazy loading is for.
+#[test]
+fn search_finds_tools_in_inactive_groups_without_activating_them() {
+    let manager = search_bench_manager();
+    for group in ["github", "filesystem", "slack"] {
+        manager.disable_group(group).unwrap();
+    }
+    assert_eq!(manager.active_tool_count(), 0);
+
+    let hits = tool_search::search(&manager, "github issues", 5);
+
+    assert!(
+        hits.iter()
+            .any(|hit| hit.name == "mcp__github__search_issues"),
+        "inactive groups must stay discoverable"
+    );
+    assert!(
+        hits.iter().all(|hit| !hit.active),
+        "hits from disabled groups must report inactive"
+    );
+    assert_eq!(
+        manager.active_tool_count(),
+        0,
+        "searching must not flip group toggles"
+    );
+}
+
+/// Hits from enabled groups report themselves active.
+#[test]
+fn search_marks_active_group_hits_active() {
+    let manager = search_bench_manager();
+
+    let hits = tool_search::search(&manager, "github issues", 5);
+
+    assert!(hits.iter().all(|hit| hit.active));
+}
+
+/// A disconnected server offers nothing to discover: `mcp_load_group`
+/// cannot bring it back without a reconnect, so ranking its tools would
+/// teach the model names it cannot use.
+#[test]
+fn search_excludes_disconnected_servers() {
+    let manager = search_bench_manager();
+    manager.disconnect("slack").unwrap();
+
+    let names = ranked_names(&manager, "send slack message", 5);
+
+    assert!(
+        !names.iter().any(|name| name.starts_with("mcp__slack__")),
+        "disconnected server leaked into results: {names:?}"
+    );
+}
+
+/// Tool-level loading resolves by name without touching group toggles: the
+/// tool becomes callable while its group stays inactive.
+#[test]
+fn tool_definitions_for_loads_without_flipping_group_toggles() {
+    let manager = search_bench_manager();
+    manager.disable_group("github").unwrap();
+
+    let definitions = manager.tool_definitions_for(&["mcp__github__search_issues".to_string()]);
+
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        definitions[0]["function"]["name"],
+        "mcp__github__search_issues"
+    );
+    assert!(
+        !manager.is_group_enabled("github"),
+        "loading one tool must not expose its whole group"
+    );
+}
+
+/// Unknown, stale, and disconnected names resolve to nothing rather than
+/// erroring; the execution path reports the error if one is still called.
+#[test]
+fn tool_definitions_for_skips_what_no_longer_resolves() {
+    let manager = search_bench_manager();
+    manager.disconnect("slack").unwrap();
+
+    let definitions = manager.tool_definitions_for(&[
+        "mcp__github__search_issues".to_string(),
+        "mcp__nope__missing".to_string(),
+        "mcp__slack__post_message".to_string(),
+    ]);
+
+    assert_eq!(definitions.len(), 1);
+    assert_eq!(
+        definitions[0]["function"]["name"],
+        "mcp__github__search_issues"
+    );
+}
+
+/// The default limit keeps results small; an explicit limit is honoured up
+/// to the ceiling.
+#[test]
+fn search_applies_default_and_explicit_limits() {
+    let mut manager = McpManager::default();
+    for index in 0..7 {
+        manager.insert_test_tool("misc", &format!("helper_{index}"));
+    }
+
+    let defaulted = ranked_names(&manager, "misc", 1000);
+    assert_eq!(
+        defaulted.len(),
+        7,
+        "candidates bound the ceiling, not the clamp"
+    );
+
+    let hits = tool_search::search(&manager, "misc", tool_search::DEFAULT_LIMIT);
+    assert_eq!(hits.len(), tool_search::DEFAULT_LIMIT);
+
+    let names = ranked_names(&manager, "misc", 2);
+    assert_eq!(names.len(), 2);
+}
+
+/// Results are compact pointers - name, one-line description, server/group,
+/// score, availability - never full schemas.
+#[test]
+fn tool_search_result_is_compact_json() {
+    let manager = search_bench_manager();
+
+    let rendered: Value = serde_json::from_str(
+        &tool_search::run(&manager, r#"{"query":"search github issues"}"#).unwrap(),
+    )
+    .expect("valid JSON");
+
+    assert_eq!(rendered["query"], "search github issues");
+    assert!(rendered["count"].as_u64().unwrap() >= 1);
+    let first = &rendered["results"][0];
+    assert_eq!(first["name"], "mcp__github__search_issues");
+    assert_eq!(first["server"], "github");
+    assert_eq!(first["group"], "github");
+    assert_eq!(first["active"], true);
+    assert!(first["score"].as_f64().unwrap() > 0.0);
+    assert!(
+        first["description"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+    );
+    assert!(
+        !rendered.to_string().contains("parameters"),
+        "full schemas defeat lazy loading: {rendered}"
+    );
+}
+
+/// No match is a normal informative result, not an error and not a
+/// fabrication.
+#[test]
+fn tool_search_reports_no_results_plainly() {
+    let manager = search_bench_manager();
+
+    let rendered: Value = serde_json::from_str(
+        &tool_search::run(&manager, r#"{"query":"gitlab merge train"}"#).unwrap(),
+    )
+    .expect("valid JSON");
+
+    assert_eq!(rendered["count"], 0);
+    assert!(
+        rendered["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("No matching MCP tools found")),
+        "{rendered}"
+    );
+}
+
+/// `run()` defaults an omitted limit to Top-N and clamps extremes, so one
+/// call cannot reintroduce the dump-every-schema behaviour lazy loading
+/// exists to avoid.
+#[test]
+fn tool_search_run_defaults_and_clamps_limit() {
+    let mut manager = McpManager::default();
+    for index in 0..7 {
+        manager.insert_test_tool("misc", &format!("helper_{index}"));
+    }
+
+    let rendered: Value =
+        serde_json::from_str(&tool_search::run(&manager, r#"{"query":"misc"}"#).unwrap())
+            .expect("valid JSON");
+    assert_eq!(
+        rendered["count"].as_u64(),
+        Some(tool_search::DEFAULT_LIMIT as u64)
+    );
+
+    for (arguments, expected) in [
+        (r#"{"query":"misc","limit":2}"#, 2),
+        (r#"{"query":"misc","limit":0}"#, 1),
+        (r#"{"query":"misc","limit":100}"#, 7),
+    ] {
+        let rendered: Value = serde_json::from_str(&tool_search::run(&manager, arguments).unwrap())
+            .expect("valid JSON");
+        assert_eq!(rendered["count"].as_u64(), Some(expected), "{arguments}");
+    }
+}
+
+/// A query with no usable tokens after normalisation is a plain no-match,
+/// not an error: there is nothing to rank.
+#[test]
+fn tool_search_treats_untokenizable_queries_as_no_results() {
+    let manager = search_bench_manager();
+
+    for arguments in [r#"{"query":"___"}"#, r#"{"query":"a"}"#] {
+        let rendered: Value = serde_json::from_str(&tool_search::run(&manager, arguments).unwrap())
+            .expect("valid JSON");
+        assert_eq!(rendered["count"], 0, "{arguments}");
+        assert!(
+            rendered["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("No matching MCP tools found")),
+            "{rendered}"
+        );
+    }
+}
+
+#[test]
+fn tool_search_rejects_bad_arguments() {
+    let manager = search_bench_manager();
+
+    assert!(tool_search::run(&manager, "{}").is_err());
+    assert!(tool_search::run(&manager, r#"{"query":"   "}"#).is_err());
+    assert!(tool_search::run(&manager, "not json").is_err());
+}
+
+/// End to end through dispatch: an agent task's `tool_search` call returns
+/// the compact ranking, gated like every task tool behind a task.
+#[test]
+fn tool_search_runs_through_dispatch_for_an_agent_task() {
+    let dir = tempdir().unwrap();
+    let mut proxy = NoopProxy {
+        agent_runtime: Some(crate::test_support::test_runtime(dir.path())),
+        ..NoopProxy::default()
+    };
+    let mcp = Arc::new(RwLock::new(search_bench_manager()));
+    let tool_call = json!({
+        "function": {"name": "tool_search", "arguments": "{\"query\":\"search github issues\"}"}
+    });
+
+    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    let rendered: Value = serde_json::from_str(&result.content).expect("valid JSON");
+    assert_eq!(rendered["results"][0]["name"], "mcp__github__search_issues");
+}

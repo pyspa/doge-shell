@@ -254,6 +254,88 @@ fn loaded_group_tools_reach_the_next_request_same_turn() {
     }
 }
 
+/// Scripted responses for an agent turn must carry usage: without it the
+/// loop refuses to enforce the task budget and stops with an error.
+fn with_usage(mut response: Value) -> Value {
+    response["usage"] = json!({"prompt_tokens": 10, "completion_tokens": 5});
+    response
+}
+
+/// Tool Search v2 loads at tool granularity within one agent turn: the
+/// first request lacks the hidden tool, `tool_search` names it, and the
+/// second request carries exactly its schema - while the group toggle
+/// stays off and the other inactive group stays hidden.
+#[test]
+fn tool_search_discovery_reaches_the_next_request_same_turn() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    // An agent turn only accepts an answer once criteria verify; seed one
+    // already-verified criterion so the scripted final answer ends the turn
+    // instead of earning the unverified-criteria nudge.
+    let mut task = crate::test_support::running_task(cwd.path());
+    task.criteria = vec![dsh_types::agent::Verification {
+        criterion: "issues found".to_string(),
+        evidence_event: Some(1),
+        passed: true,
+    }];
+    let store = Arc::new(crate::test_support::MemoryTaskStore::default());
+    {
+        use crate::shell_capabilities::AgentTaskStore;
+        store.save(&task, None).expect("in-memory save");
+    }
+    proxy.agent_runtime = Some(Arc::new(parking_lot::Mutex::new(
+        crate::agent::AgentRuntime::new(task, store),
+    )));
+    let client = ScriptedClient::new(vec![
+        with_usage(tool_call_response(
+            "call-1",
+            "tool_search",
+            r#"{"query":"github issues"}"#,
+        )),
+        with_usage(final_answer("done")),
+    ]);
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.disable_group("github").unwrap();
+    inner.insert_test_tool("filesystem", "read_file");
+    inner.disable_group("filesystem").unwrap();
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let seen = client.tools_seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        !seen[0].contains(&"mcp__github__list_issues".to_string()),
+        "first request must not offer the hidden tool: {seen:?}"
+    );
+    assert!(
+        seen[1].contains(&"mcp__github__list_issues".to_string()),
+        "second request must offer the discovered tool: {seen:?}"
+    );
+    assert!(
+        !mcp_manager.read().is_group_enabled("github"),
+        "tool-level loading must not flip the group toggle"
+    );
+    for (index, offered) in seen.iter().enumerate() {
+        assert!(
+            !offered.contains(&"mcp__filesystem__read_file".to_string()),
+            "request {index} must not offer the undiscovered group: {seen:?}"
+        );
+    }
+}
+
 /// Interactive turns propagate a group activation through a fresh exposure
 /// read, not through a merge: `run_tool_calls` only flips the toggle (via
 /// `mcp_load_group` dispatch), and the next iteration's

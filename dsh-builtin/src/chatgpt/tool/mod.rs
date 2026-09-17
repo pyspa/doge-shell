@@ -25,6 +25,7 @@ mod search;
 mod shell_context;
 mod shell_history;
 pub(crate) mod skill;
+pub(crate) mod tool_search;
 
 #[cfg(test)]
 pub(crate) use paths::is_path_within_tool_roots;
@@ -229,7 +230,8 @@ pub fn execute_tool_call(
         Err(err) => err.message.clone(),
     };
 
-    // Schemas must reach the host unchanged when registering discovered tools.
+    // The merge in `run_tool_calls` parses this JSON to load schemas, so
+    // truncating it here would break same-turn loading of discovered tools.
     let mut content = if name == "tool_search" && !failed {
         raw
     } else {
@@ -317,29 +319,9 @@ fn dispatch_tool(
         let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
         match name {
             "tool_search" => {
-                let query = args["query"]
-                    .as_str()
-                    .ok_or("query required")?
-                    .to_lowercase();
-                if query.trim().is_empty() {
-                    return Err("nonempty query required".into());
-                }
-                let words: Vec<_> = query.split_whitespace().collect();
                 mcp.write()
                     .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
-                let definitions: Vec<_> = mcp
-                    .read()
-                    .tool_definitions()
-                    .into_iter()
-                    .filter(|d| {
-                        let description =
-                            format!("{} {}", d["function"]["name"], d["function"]["description"])
-                                .to_lowercase();
-                        words.iter().all(|word| description.contains(word))
-                    })
-                    .take(8)
-                    .collect();
-                serde_json::json!({"tools":definitions}).to_string()
+                tool_search::run(&mcp.read(), arguments)?
             }
             "mcp_task_status" | "mcp_task_cancel" => {
                 let server = args["server"].as_str().ok_or("server required")?;
@@ -648,8 +630,8 @@ pub(crate) fn agent_definitions() -> Vec<Value> {
     use crate::agent::definition;
     let mut tools = vec![definition(
         "tool_search",
-        "Find MCP tools by words in their name or description. Discovery does not authorize execution.",
-        serde_json::json!({"query":{"type":"string"}}),
+        "Find MCP tools by words in their name, description, parameters, or server/group. Returns compact ranked matches with server, group, and whether each tool is already active. Discovered tools become callable on the next model request; use mcp_load_group only to activate a whole group at once. Discovery does not authorize execution.",
+        serde_json::json!({"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum matches to return. Defaults to 5."}}),
         &["query"],
     )];
     tools.extend(job_definitions());

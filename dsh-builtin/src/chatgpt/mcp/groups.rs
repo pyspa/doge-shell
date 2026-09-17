@@ -35,6 +35,34 @@ pub struct McpToolExposure {
     pub schema_bytes: usize,
 }
 
+/// One MCP tool with the metadata Tool Search ranks over.
+///
+/// Built fresh from current bindings on every search, so it is never a
+/// second source of truth for MCP tools: a stale binding that no longer
+/// resolves to a server tool is simply skipped.
+#[derive(Debug, Clone)]
+pub struct SearchableTool {
+    /// The `mcp__<server>__<tool>` function name the model calls.
+    pub function_name: String,
+    /// The tool's own name on its server.
+    pub tool_name: String,
+    /// The tool's own description, without the server boilerplate that
+    /// `definitions_matching` adds to the schema description.
+    pub description: String,
+    /// Server label, today identical to the group name (see module docs).
+    pub server_label: String,
+    /// Group name, today the server label.
+    pub group: String,
+    /// Whether the group toggle currently exposes this tool's schema.
+    /// `false` means discoverable-but-hidden: loadable through Tool Search
+    /// (agent turns) or `mcp_load_group`, not absent.
+    pub group_enabled: bool,
+    /// Sorted `inputSchema.properties` keys.
+    pub param_names: Vec<String>,
+    /// Sorted `description` values of `inputSchema.properties`.
+    pub param_descriptions: Vec<String>,
+}
+
 impl McpManager {
     /// One implicit group per registered server, sorted by name.
     ///
@@ -158,6 +186,91 @@ impl McpManager {
         self.definitions_matching(|_| true)
     }
 
+    /// Every tool an agent may discover through Tool Search.
+    ///
+    /// Discoverable is deliberately wider than exposed: tools in
+    /// group-disabled (inactive) groups are included with
+    /// `group_enabled: false`, because that is exactly what lazy loading
+    /// exists to reach. Tools on `disconnect`ed servers are excluded -
+    /// nothing, not even `mcp_load_group`, can offer them without a
+    /// reconnect, so ranking them would only teach the model names it
+    /// cannot use. Discovery is not authorization: executing a hit still
+    /// goes through the existing safety/approval path.
+    pub fn searchable_tools(&self) -> Vec<SearchableTool> {
+        let disabled = self.disabled_read();
+        let group_disabled = self.group_disabled_read();
+        let mut tools = Vec::new();
+        for binding in self.bindings.values() {
+            if disabled.contains(&binding.server_label) {
+                continue;
+            }
+            let Some(server) = self
+                .servers
+                .iter()
+                .find(|srv| srv.label == binding.server_label)
+            else {
+                continue;
+            };
+            let Some(tool) = server
+                .tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == binding.tool_name)
+            else {
+                continue;
+            };
+            let (param_names, param_descriptions) = search_params(&tool.input_schema);
+            tools.push(SearchableTool {
+                function_name: binding.function_name.clone(),
+                tool_name: binding.tool_name.clone(),
+                description: tool.description.as_deref().unwrap_or_default().to_string(),
+                server_label: binding.server_label.clone(),
+                group: binding.server_label.clone(),
+                group_enabled: !group_disabled.contains(&binding.server_label),
+                param_names,
+                param_descriptions,
+            });
+        }
+        tools
+    }
+
+    /// Full schema definitions for the named tools, in the order named.
+    ///
+    /// The loading half of Tool Search: after ranking picks names out of
+    /// `searchable_tools`, this resolves them back to schemas without
+    /// touching group toggles, so one tool becomes callable without
+    /// exposing its whole group. Unknown, stale (removed after search),
+    /// and disconnected-server names are skipped rather than erroring -
+    /// the execution path reports the appropriate error if the model
+    /// still tries to call one.
+    pub fn tool_definitions_for(&self, names: &[String]) -> Vec<Value> {
+        let disabled = self.disabled_read();
+        let mut definitions = Vec::new();
+        for name in names {
+            let Some(binding) = self.bindings.get(name) else {
+                continue;
+            };
+            if disabled.contains(&binding.server_label) {
+                continue;
+            }
+            let Some(server) = self
+                .servers
+                .iter()
+                .find(|srv| srv.label == binding.server_label)
+            else {
+                continue;
+            };
+            let Some(tool) = server
+                .tools
+                .iter()
+                .find(|tool| tool.name.as_ref() == binding.tool_name)
+            else {
+                continue;
+            };
+            definitions.push(tool_definition(server, tool, &binding.function_name));
+        }
+        definitions
+    }
+
     /// Only the definitions currently offered to the model.
     pub fn active_tool_definitions(&self) -> Vec<Value> {
         let disabled = self.disabled_read();
@@ -267,34 +380,55 @@ impl McpManager {
                     .iter()
                     .find(|tool| tool.name.as_ref() == binding.tool_name)?;
 
-                let schema = Value::Object((*tool.input_schema).clone());
-                let description = match (&server.description, &tool.description) {
-                    (Some(server_desc), Some(tool_desc)) if !server_desc.is_empty() => format!(
-                        "MCP server `{}` — {}\nTool `{}`: {}",
-                        server.label, server_desc, tool.name, tool_desc
-                    ),
-                    (Some(server_desc), _) if !server_desc.is_empty() => format!(
-                        "MCP server `{}` — {}\nTool `{}`",
-                        server.label, server_desc, tool.name
-                    ),
-                    (_, Some(tool_desc)) if !tool_desc.is_empty() => format!(
-                        "MCP server `{}` tool `{}`: {}",
-                        server.label, tool.name, tool_desc
-                    ),
-                    _ => format!("MCP server `{}` tool `{}`", server.label, tool.name),
-                };
-
-                let function_name = binding.function_name.clone();
-
-                Some(json!({
-                    "type": "function",
-                    "function": {
-                        "name": function_name,
-                        "description": description,
-                        "parameters": schema,
-                    }
-                }))
+                Some(tool_definition(server, tool, &binding.function_name))
             })
             .collect()
     }
+}
+
+/// One binding's schema definition: the single place a listed tool becomes
+/// the JSON the model calls by.
+fn tool_definition(server: &McpServer, tool: &Tool, function_name: &str) -> Value {
+    let schema = Value::Object((*tool.input_schema).clone());
+    let description = match (&server.description, &tool.description) {
+        (Some(server_desc), Some(tool_desc)) if !server_desc.is_empty() => format!(
+            "MCP server `{}` — {}\nTool `{}`: {}",
+            server.label, server_desc, tool.name, tool_desc
+        ),
+        (Some(server_desc), _) if !server_desc.is_empty() => format!(
+            "MCP server `{}` — {}\nTool `{}`",
+            server.label, server_desc, tool.name
+        ),
+        (_, Some(tool_desc)) if !tool_desc.is_empty() => format!(
+            "MCP server `{}` tool `{}`: {}",
+            server.label, tool.name, tool_desc
+        ),
+        _ => format!("MCP server `{}` tool `{}`", server.label, tool.name),
+    };
+
+    json!({
+        "type": "function",
+        "function": {
+            "name": function_name,
+            "description": description,
+            "parameters": schema,
+        }
+    })
+}
+
+/// Sorted parameter names and parameter descriptions from an MCP tool's
+/// input schema: the ranking input for the two lowest-weight search fields.
+fn search_params(schema: &serde_json::Map<String, Value>) -> (Vec<String>, Vec<String>) {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut names: Vec<String> = properties.keys().cloned().collect();
+    names.sort_unstable();
+    let mut descriptions: Vec<String> = properties
+        .values()
+        .filter_map(|property| property.get("description").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    descriptions.sort_unstable();
+    (names, descriptions)
 }

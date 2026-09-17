@@ -227,10 +227,7 @@ fn an_agent_job_without_budgets_uses_agent_defaults() {
     );
     let s = build_spec(parsed, "/cwd".to_string()).unwrap();
     let agent = s.agent.unwrap();
-    assert_eq!(
-        agent.token_budget,
-        crate::agent::DEFAULT_AGENT_TOKEN_BUDGET
-    );
+    assert_eq!(agent.token_budget, crate::agent::DEFAULT_AGENT_TOKEN_BUDGET);
     assert_eq!(
         agent.time_budget_secs,
         crate::agent::DEFAULT_AGENT_TIMEOUT_SECS

@@ -74,7 +74,7 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
 - **`verbosity` を送る口が無い**（`reasoning_effort` は入った）。
 - **`reasoning_effort` の 400 リカバリはクライアント寿命の学習で、プロセス全体キャッシュは
   入れない**。`!` チャットは 1 メッセージごとに `ChatGptClient` を作り直す
-  （`dsh-builtin/src/chatgpt.rs` の `execute_chat_message`）ので、次のメッセージでは学習が消える。
+  （`dsh-builtin/src/chatgpt/commands.rs` の `execute_chat_message`）ので、次のメッセージでは学習が消える。
   ただし `OPENAI_REASONING_MODEL_PREFIXES` 該当モデルは §1 の先回りデフォルトで最初から
   `"none"` を送るため、この「消える学習」が効くのは (a) 未知のモデル・互換サーバが
   `reasoning_effort` 自体を拒否したケースと (b) operator が明示的に `tools` と衝突する値を
@@ -86,7 +86,7 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
   `/v1/responses` を案内していても、それは §1 の方針変更（chat/completions 固定）になるため、
   そのモデルは chat/completions では使えないという結論になる。
 - **400 リカバリの学習（`unsupported` / `force_reasoning_none`）はクライアント単位で、モデル単位
-  ではない**。`perform_summary`（`dsh-builtin/src/chatgpt.rs`）は `AI_SUMMARY_MODEL` が本体と
+  ではない**。`perform_summary`（`dsh-builtin/src/chatgpt/conversation.rs`）は `AI_SUMMARY_MODEL` が本体と
   違っても同じ `ChatGptClient` を使い回す。セッション寿命の client（`dsh/src/repl/mod.rs`、
   ゴーストテキストの suggestion backend とコマンドパレットの `LiveAiService` が clone を共有）も
   同じ弱点を持つ。`chat_model` を実行中に切り替えられるようになった分、この弱点は**広がった**:
@@ -119,30 +119,35 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
 
 ## 対話ジョブ（実装済み・残る制約）
 
-経路 A の `execute` も `AgentJobs` を通るようになった（`dsh-builtin/src/chatgpt/tool/execute/jobs.rs`）。
-その際に受け入れたトレードオフ:
+経路 A の `execute` が `AgentJobs` を通るようになった際に受け入れたトレードオフ
+（出力は末尾1MiBのみ・正常終了時もkillpgする・連続ポーリング下限は対話だけ・
+`tool_search`は対話に開いていない）は
+[open-questions/interactive-jobs.md](open-questions/interactive-jobs.md) に分割した。
 
-- **出力は末尾 1MiB のみ**。旧 `CappedCapture` は先頭 512KiB + 末尾 512KiB を保っていたが、
-  `AgentJobs` のリングは tail-only。`snapshot` の `base = total - bytes.len()` というオフセット
-  算術が純リングバッファ前提なので、head+tail 化すると `*_next_offset` の意味が壊れる。
-  `render_result` がどのみち 3072 字に中央切り詰めするので、実害は 1MiB 超の出力に限られる。
-- **正常終了時にも `killpg` する**。`AgentJobs` の worker は `try_wait` が成功した直後にも
-  プロセスグループを落とすので、`execute` から `foo &` で残したプロセスは殺される。回避は
-  `setsid`。agent 経路は元からこの挙動で、両経路が揃う方向の変更として受け入れた。
-- **連続ポーリング下限は対話だけ**（`chatgpt/jobs.rs` の `poll_backoff`）。`runtime.jobs` には
-  `JobMeta` が無く、agent の挙動を変えない方針を優先した。`wait_ms` は両経路に入っているが
-  既定 0 なので opt-in。
-- **`tool_search` は対話に開いていない**。対話は `mcp.tool_definitions()` を全部プロンプトに
-  載せるので、既に手元にあるものを探す 2 つ目の道になるだけ。
+## MCP（大半は解決済み — 下の1項目だけ残る）
 
-## MCP（調査済み・未着手）
+このセクションはかつて4項目とも「未着手」だったが、3つは既に解決済み。放置すると
+`docs/agent.md`「MCPと外部タスク」の記述（正しい）と正面から矛盾するので、
+着手前に読んだら実装側を信じること。
 
-- **永続接続が無い**。`list_tools` も `call_tool` も毎回接続して切る。stdio サーバは
-  ツール呼び出しごとにプロセスを起動する。
-- **`call_tool` のタイムアウトが 30 秒固定**、`list_tools` は**タイムアウト無し**。
-- **ツールキャッシュに TTL が無い**。`ToolCacheEntry.timestamp` は書かれるだけで読まれない。
-- **`unique_name` の連番が登録順に依存**する。リロードで同じツールの function 名が
-  変わりうる（`mcp:<function_name>:<args>` のセッション承認がそこで無効化される）。
+- **接続は永続化・再利用されている**。`dsh-builtin/src/chatgpt/mcp/connection.rs` の
+  `Connection` が専用スレッド + 現行スレッド tokio ランタイムを持ち、`service` を
+  `Option<Service>` として保持・再利用する。`McpManager.connections` の同じプールから
+  毎回同一 `Connection` を引く（`exec.rs::execute_tool_cancellable`、
+  `mod.rs::refresh_tools_if_expired` とも）。回帰テスト
+  `connection.rs::stdio_reuses_process_and_does_not_replay_cancelled_mutation`。
+  例外は**起動時の登録**（`servers.rs`、`naming.rs::list_tools_via_transport`）だけで、
+  そこは今も one-shot で接続して切るプローブ。
+- **`call_tool` も `list_tools` も同じ 30 秒 timeout**（`naming.rs` が両方を
+  `timeout(DEFAULT_TOOL_TIMEOUT, ...)` で包む。`connection.rs` の `select!` も同様）。
+- **ツールキャッシュには 5 分 TTL がある**。`servers.rs` が
+  `Utc::now().timestamp() - entry.timestamp < 300` を読んで判定し、加えて
+  `mod.rs` にメモリ側の 300 秒 TTL、`connection.rs` に
+  `notifications/tools/list_changed` 通知による即時無効化もある。
+- **`unique_name` という関数はもう存在しない**。現行の命名は
+  `naming.rs::stable_name(base, label, tool)` で、衝突時は `(label, tool)` の
+  **FNV-1a ハッシュ**接尾辞を付ける（登録順に依存しない）。`mcp:<function_name>:<args>`
+  のセッション承認がリロードで無効化される問題は解消済み。
 
 ## MCP の危険度判定（残る設計判断）
 
@@ -179,6 +184,9 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
 - **観測イベントの非同期化は入れない**（調査済み・入れないと決定）。
   1. **回収の担い手が居ない**。`dsh/src/process/job_wait.rs` は既知 pid にしか `waitpid` せず
      `waitpid(-1)` が無いので、detach した hook はシェルが終わるまでゾンビとして残る。
+     ※ `dsh/src/detached_child.rs` の `reap` が「専用スレッドで `wait()` する」パターンを
+     導入したので、この根拠だけを見れば「担い手を足す」余地はできた。ただし 2〜5 の根拠は
+     無傷なので結論（入れない）はそのまま — 1 だけを理由に再検討しないこと。
   2. **pre/post のペア保証が壊れる**。`fire` を跨いで生き残る子は、call N の post が call N+1 の
      pre より後に完了しうる。この対称性は `tool/mod.rs` がわざわざ守っているもの。
   3. **応答の置き場所が無い**。`message` / `additional_context` / `decision` を読む相手が居ない
@@ -188,6 +196,21 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
      だけなので、`exit 0` した hook が残した孫は殺されない。「1 行出して exit、重い処理は自分の
      子で」は今日書けて、`a_hook_that_leaves_a_grandchild_holding_stdin_still_returns` が
      それを担保している。README にパターンとして書いた。
+
+## 背景エージェント (`agent run --detach`)（調査済み・未着手）
+
+`agent run --detach` の再監査で見つかった、今回は見送った項目
+（staleness 判定の起点・`still_going()` の競合窓・保存順序・ステータス行の反映漏れ）は
+[open-questions/background-agent.md](open-questions/background-agent.md) に分割した。
+
+## `!` チャット / エージェントのコアループ（調査済み・未着手）
+
+`chatgpt.rs`・`conversation.rs`・`dsh-openai`・`AgentRuntime` の新規精査で見つかった、
+既知の設計判断とは別の未文書化項目（3回失敗ガードの不発・store読み取り失敗の誤解釈・
+要約課金・高頻度SQLite読み取り・セッションIDレース・ストリーム劣化リトライ・
+予算ちょうどの誤判定・detachのreconcile記録漏れ・ターン予算の累積）は
+[open-questions/core-loop.md](open-questions/core-loop.md) に分割した。今回は
+C-4（早期returnがcheckpoint/finishを飛ばす）とC-1（要約+rewindで履歴が消える）だけ直した。
 
 ## 命名（直さない）
 

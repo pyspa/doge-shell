@@ -30,16 +30,30 @@ pub(crate) fn arm(deadline_secs: u64) -> Arc<AtomicBool> {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_secs(deadline_secs.max(1)));
         if flag.load(Ordering::SeqCst) {
-            // This process was made its own process group leader by
-            // whichever spawned it (`crate::detached_child::spawn`), so pgid
-            // 0 (POSIX: "the sender's own process group") takes down this
-            // process and anything it started. The run's row is left
+            // This process is expected to be its own process group leader,
+            // made so by whichever spawned it (`crate::detached_child::spawn`),
+            // so pgid 0 (POSIX: "the sender's own process group") takes down
+            // this process and anything it started. The run's row is left
             // `Running`; the caller's own recovery (`recover_interrupted`
             // for a detached agent task, `reap_expired_leases` for cron)
             // closes it out on the next scan, exactly as it already does for
             // any process that died without reporting back.
-            unsafe {
-                libc::killpg(0, libc::SIGKILL);
+            //
+            // Checked, not assumed: `agent run-detached <id>` is an internal
+            // action (`dsh/src/agent.rs`), but nothing stops someone from
+            // typing it directly at an interactive prompt, where this
+            // process is *not* its own group leader - `killpg(0, ...)` there
+            // would take down the whole shell and every other job in its
+            // group, not just this run.
+            if is_process_group_leader() {
+                unsafe {
+                    libc::killpg(0, libc::SIGKILL);
+                }
+            } else {
+                tracing::warn!(
+                    "agent: watchdog deadline reached, but this process is not its own \
+                     process group leader; refusing to kill the whole group"
+                );
             }
         }
     });
@@ -52,6 +66,14 @@ pub(crate) fn disarm(armed: &Arc<AtomicBool>) {
     armed.store(false, Ordering::SeqCst);
 }
 
+/// Whether this process is its own process group leader - the precondition
+/// `arm`'s `killpg(0, ...)` relies on, and the one thing distinguishing a
+/// real detached child (`detached_child::spawn` puts it in its own group)
+/// from `agent run-detached <id>` typed directly at an interactive prompt.
+fn is_process_group_leader() -> bool {
+    nix::unistd::getpgrp() == nix::unistd::getpid()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +83,18 @@ mod tests {
         let armed = arm(60);
         disarm(&armed);
         assert!(!armed.load(Ordering::SeqCst));
+    }
+
+    /// Not a claim about whether the test process itself is a group leader
+    /// (that depends on how the test binary happens to have been started) -
+    /// only that the check is a plain, panic-free read of the same two
+    /// values `arm`'s guard compares, so the guard cannot silently become a
+    /// no-op or diverge from what it claims to check.
+    #[test]
+    fn process_group_leadership_check_matches_getpgrp_and_getpid() {
+        assert_eq!(
+            is_process_group_leader(),
+            nix::unistd::getpgrp() == nix::unistd::getpid()
+        );
     }
 }

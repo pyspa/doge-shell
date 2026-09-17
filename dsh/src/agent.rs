@@ -603,7 +603,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     }
     let _lock = match locks::admit_run(shell, &store, &task.id)? {
         locks::Admission::Admitted(lock) => lock,
-        locks::Admission::TaskBusy => bail!("this task is already running"),
+        locks::Admission::TaskBusy => bail!("task {} is already running", task.id),
         locks::Admission::NoFreeSlot => {
             bail!("another agent task is active; cancel it, wait, or raise AI_AGENT_MAX_CONCURRENT")
         }

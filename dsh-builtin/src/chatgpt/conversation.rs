@@ -308,6 +308,25 @@ impl ConversationManager {
 
         let new_summary = summary_from_response(&response)?;
 
+        // A later rewind (`rewind_to_turn_start`) falls back to
+        // `turn_mark.summary` - the summary as it stood *before this turn
+        // began*. Left there, it would omit whatever raw history
+        // `drop_buffer_prefix` below is about to fold into `new_summary`:
+        // that raw text is about to stop existing anywhere else once it
+        // drops, so reverting to the old summary on a later rewind would
+        // silently and permanently lose it - not just this turn's own
+        // actions, but real conversation history from before it even
+        // started. Advancing the mark's own snapshot to `new_summary`
+        // avoids that, at the cost of a narrower, self-correcting downside:
+        // if this turn's own messages already number more than
+        // `RETAIN_AFTER_SUMMARY` (so this drop reaches into them too), a
+        // later rewind can leave a trace of them in the summary until the
+        // next round of summarization revises it away - preferred over
+        // losing conversation history outright.
+        if let Some(start) = &mut self.turn_mark {
+            start.summary = Some(new_summary.clone());
+        }
+
         // Update state: keep most recent messages to maintain tool_call/result continuity
         const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
         let retain_start = retain_boundary(&self.buffer, RETAIN_AFTER_SUMMARY);

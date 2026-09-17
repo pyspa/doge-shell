@@ -113,6 +113,42 @@ fn wait_options_require_an_id_and_parse_timeout() {
 }
 
 #[test]
+fn since_and_timeout_report_which_value_was_bad() {
+    let args = vec![
+        "task-1".to_string(),
+        "--since".to_string(),
+        "abc".to_string(),
+    ];
+    let err = parse_logs_options(&args).unwrap_err().to_string();
+    assert!(err.contains("--since"), "{err}");
+    assert!(err.contains("abc"), "{err}");
+
+    let args = vec![
+        "task-1".to_string(),
+        "--timeout".to_string(),
+        "soon".to_string(),
+    ];
+    let err = parse_wait_options(&args).unwrap_err().to_string();
+    assert!(err.contains("--timeout"), "{err}");
+    assert!(err.contains("soon"), "{err}");
+}
+
+/// `agent logs` used to accept any id, including one that does not exist
+/// (or a flag left in the id's position, e.g. `agent logs --follow` with
+/// the id omitted), and just print nothing - unlike `show`/`cancel`/`wait`,
+/// which all reject an unknown id the same way.
+#[test]
+fn logs_rejects_an_unknown_task_id_like_show_and_wait_do() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let pid = nix::unistd::getpid();
+    let ctx = Context::new_safe(pid, pid, false);
+
+    assert!(logs(&ctx, &store, &["--follow".to_string()]).is_err());
+    assert!(logs(&ctx, &store, &["no-such-task".to_string()]).is_err());
+}
+
+#[test]
 fn render_event_line_names_the_tool_for_intents_and_results() {
     let intent = TaskEvent {
         sequence: 1,

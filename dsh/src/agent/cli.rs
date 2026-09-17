@@ -163,6 +163,7 @@ fn render_event_line(event: &TaskEvent) -> String {
     }
 }
 
+#[derive(Debug)]
 struct LogsOptions {
     follow: bool,
     json: bool,
@@ -184,7 +185,9 @@ fn parse_logs_options(args: &[String]) -> Result<(&str, LogsOptions)> {
             "--since" => {
                 index += 1;
                 let value = args.get(index).context("--since needs a sequence number")?;
-                options.since = value.parse()?;
+                options.since = value
+                    .parse()
+                    .with_context(|| format!("--since {value:?} is not a sequence number"))?;
             }
             other => bail!("unsupported option {other}"),
         }
@@ -220,6 +223,13 @@ fn print_new_events(
 
 pub(crate) fn logs(ctx: &Context, store: &SqliteTaskStore, args: &[String]) -> Result<()> {
     let (id, options) = parse_logs_options(args)?;
+    // `store.events(id)` never errors for an unknown id - it just answers
+    // "no events", which used to make a typo'd or omitted id (e.g. `agent
+    // logs --follow` with the id left off, so `--follow` itself gets parsed
+    // as the id) succeed silently with nothing printed, unlike `show`/
+    // `cancel`/`wait`, which all reject an unknown id the same way this
+    // does.
+    store.load(id)?;
     let mut since = options.since;
     loop {
         since = print_new_events(ctx, store, id, since, options.json)?;
@@ -240,6 +250,7 @@ pub(crate) fn logs(ctx: &Context, store: &SqliteTaskStore, args: &[String]) -> R
     }
 }
 
+#[derive(Debug)]
 struct WaitOptions {
     timeout_secs: Option<u64>,
 }
@@ -253,7 +264,11 @@ fn parse_wait_options(args: &[String]) -> Result<(&str, WaitOptions)> {
             "--timeout" => {
                 index += 1;
                 let value = args.get(index).context("--timeout needs seconds")?;
-                options.timeout_secs = Some(value.parse()?);
+                options.timeout_secs = Some(
+                    value
+                        .parse()
+                        .with_context(|| format!("--timeout {value:?} is not seconds"))?,
+                );
             }
             other => bail!("unsupported option {other}"),
         }

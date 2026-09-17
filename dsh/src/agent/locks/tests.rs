@@ -67,6 +67,24 @@ fn try_lock_task_does_not_care_about_other_tasks() {
     assert!(try_lock_task(&store, "task-a").unwrap().is_none());
 }
 
+/// A collision with someone else's momentary probe (`is_locked` takes the
+/// lock and immediately releases it) must not be mistaken for a real,
+/// sustained holder - `try_lock_task` retries a few times before giving up.
+#[test]
+fn try_lock_task_retries_through_a_brief_collision() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let lock = try_lock_task(&store, "task-a").unwrap().unwrap();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(3));
+        drop(lock);
+    });
+    // Held for longer than a single attempt but well inside the retry
+    // window - without retrying, this would report `TaskBusy` outright.
+    assert!(try_lock_task(&store, "task-a").unwrap().is_some());
+    releaser.join().unwrap();
+}
+
 #[test]
 fn dropping_the_lock_releases_it_for_the_next_admission() {
     let dir = tempfile::tempdir().unwrap();

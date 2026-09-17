@@ -20,12 +20,19 @@
 
 ## 永続タスク (`agent`)
 
-`dsh/src/agent.rs` がSQLiteとCLIを所有し、`AgentTaskStore` と `AgentCommandPolicy::agent_runtime` を通してループAへ渡す。`dsh-types/src/agent.rs` が状態型、`dsh-builtin/src/agent/` が記録・検証・ジョブ・任意のSRTアダプターを所有する。ループは追加しない。詳細と利用例は [../../../../../agent.md](../../../../../agent.md)。
+`dsh/src/agent.rs` が SQLite と `run`/`resume`/`show`/`cancel`/`delete`/`respond` を所有し、
+`AgentTaskStore` と `AgentCommandPolicy::agent_runtime` を通してループAへ渡す。CLI の一部
+（`list`/`logs`/`wait`/`doctor` の解析・整形）は `dsh/src/agent/cli.rs`・`doctor.rs` に、
+detach の起動は `agent/detach.rs` に分割されている。`dsh-types/src/agent.rs` が状態型、
+`dsh-builtin/src/agent/` が記録・検証・ジョブ・任意のSRTアダプターを所有する。ループは追加しない。
+詳細と利用例は [../../../../../agent.md](../../../../../agent.md)。
 
-**`agent run --detach` は Herdr に何も報告しない。** 子プロセス（`dsh/src/agent/detach.rs`）は
-親の `DOGESH_HERDR_OWNER_PID` をそのまま継承するので、`HerdrEnv::detect` は所有者マーカーの
-不一致を検出して `None` を返し、`agent_lifecycle` は自動的に no-op になる。この変数を子から
-剥がさないことが設計判断そのもの — pane の identity は前景の人間に属し、背景タスクがそれを
+**`agent run --detach` は Herdr に何も報告しない。** 一次理由は、`dogesh -c` が
+非対話コマンド実行であり `agent_lifecycle::activate()` 自体（`run_modes.rs` の
+`run_interactive` 経由でしか呼ばれない）を一度も呼ばないこと。二次防御として、子プロセスは
+親の `DOGESH_HERDR_OWNER_PID` をそのまま継承するので、万一 activate されても
+`HerdrEnv::detect` が所有者マーカーの不一致を検出して `None` を返す。この変数を子から
+剥がさないのはその二次防御のため — pane の identity は前景の人間に属し、背景タスクがそれを
 握ると対話シェル自身の `Working`/`Blocked` 報告と競合する。
 
 結果のない変更操作を再送しない。チェックポイントに残るtool callは永続イベントの結果で補い、結果不明ならユーザーの実状態確認を要求する。予算は再開でリセットしない。モデルの最終回答だけで完了にしない。認証情報の保存、権限の外部コンテンツからの拡大、隔離失敗時の通常実行へのフォールバックは禁止。

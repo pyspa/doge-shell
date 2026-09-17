@@ -23,6 +23,18 @@ use anyhow::{Context as _, Result};
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+/// [`try_lock_task`] retries this many times before reporting a task busy.
+/// `is_locked`'s own probe (used by `admit_run`'s own counting loop, `agent
+/// list`, the watcher, ...) takes and immediately releases the same lock
+/// file, so a genuine acquire attempt can collide with a probe that is
+/// already on its way out - a window measured in CPU cycles, not time a
+/// real, sustained holder would ever vacate in. A handful of short retries
+/// absorbs that without meaningfully slowing down genuine contention, where
+/// every retry keeps failing regardless.
+const LOCK_PROBE_RETRIES: u32 = 3;
+const LOCK_PROBE_RETRY_DELAY: Duration = Duration::from_millis(2);
 
 /// Holds one task's execution lock for as long as it is alive.
 pub(crate) struct TaskLock {
@@ -87,12 +99,21 @@ pub(crate) fn try_lock_task(store: &SqliteTaskStore, id: &str) -> Result<Option<
         .recursive(true)
         .mode(0o700)
         .create(locks_dir(store))?;
-    let file = open_lock_file(&lock_path(store, id))?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(TaskLock { _file: file })),
-        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-        Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
+    let path = lock_path(store, id);
+    for attempt in 0..LOCK_PROBE_RETRIES {
+        let file = open_lock_file(&path)?;
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(TaskLock { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                if attempt + 1 == LOCK_PROBE_RETRIES {
+                    return Ok(None);
+                }
+                std::thread::sleep(LOCK_PROBE_RETRY_DELAY);
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
     }
+    Ok(None)
 }
 
 /// `AI_AGENT_MAX_CONCURRENT`, defaulting to 1 (today's behaviour: one task

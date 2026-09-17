@@ -70,14 +70,84 @@ fn input_required_is_also_a_notifiable_transition() {
 }
 
 #[test]
-fn a_task_that_was_never_seen_running_does_not_notify() {
-    // e.g. a task that finished between two scans so fast this session never
-    // observed it as `Running` - nothing to announce a transition *from*.
+fn a_task_that_finished_between_two_scans_still_notifies_once() {
+    // A short enough `--detach` run can start and finish entirely inside
+    // one idle poll gap, so this session never observes it `Running` at
+    // all - there is no transition *from* anything, but its first-ever
+    // observation already being settled is itself the news.
     let mut seen = HashMap::new();
     let detached: HashSet<String> = ["a".to_string()].into_iter().collect();
     let tasks = vec![task("a", TaskStatus::Completed)];
     let lines = notices_for(&mut seen, &tasks, &detached, false);
+    assert_eq!(lines.len(), 1);
+
+    // Scanning the same (unchanged) status again must not notify twice.
+    let lines_again = notices_for(&mut seen, &tasks, &detached, false);
+    assert!(lines_again.is_empty());
+}
+
+#[test]
+fn a_task_first_observed_as_interrupted_does_not_notify() {
+    // `detach::start` saves a task as `Interrupted` before its child ever
+    // marks it `Running` - the first scan to see a freshly detached task
+    // can land in that window, and it must not be mistaken for a task that
+    // failed to start.
+    let mut seen = HashMap::new();
+    let detached: HashSet<String> = ["a".to_string()].into_iter().collect();
+    let tasks = vec![task("a", TaskStatus::Interrupted)];
+    let lines = notices_for(&mut seen, &tasks, &detached, false);
     assert!(lines.is_empty());
+}
+
+#[test]
+fn a_task_first_observed_as_running_does_not_notify() {
+    let mut seen = HashMap::new();
+    let detached: HashSet<String> = ["a".to_string()].into_iter().collect();
+    let tasks = vec![task("a", TaskStatus::Running)];
+    let lines = notices_for(&mut seen, &tasks, &detached, false);
+    assert!(lines.is_empty());
+}
+
+/// The exact regression this exists to catch: a task created (and first
+/// scanned) as a plain, non-detached `agent run`, later `agent resume`d
+/// with `--detach`. Gating the check on `seen` instead of `detached` would
+/// have skipped it forever once the first scan had recorded *any* status
+/// for it.
+#[test]
+fn a_task_detached_after_its_first_scan_is_still_caught() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::agent::SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let mut running = task("a", TaskStatus::Running);
+    running.root = dir.path().canonicalize().unwrap();
+    store.save(&running, None).unwrap();
+
+    let mut detached = HashSet::new();
+    refresh_detached_set(&store, &[running.clone()], &mut detached);
+    assert!(
+        detached.is_empty(),
+        "not yet detached; nothing should be recorded"
+    );
+
+    store
+        .save(&running, Some(("detached", &serde_json::json!({"pid": 1}))))
+        .unwrap();
+    refresh_detached_set(&store, &[running.clone()], &mut detached);
+    assert!(detached.contains("a"), "the later --detach must be noticed");
+}
+
+#[test]
+fn a_task_already_confirmed_detached_is_not_rechecked() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = crate::agent::SqliteTaskStore::open(&dir.path().join("state")).unwrap();
+    let t = task("a", TaskStatus::Running);
+    let mut detached: HashSet<String> = ["a".to_string()].into_iter().collect();
+
+    // No "detached" event exists at all, and no such task is even saved in
+    // the store - if this looked it up, `store.events` would still return
+    // an empty (not erroring) list, so this only proves the short-circuit
+    // skips the lookup rather than merely tolerating its absence.
+    refresh_detached_set(&store, &[t], &mut detached);
+    assert!(detached.contains("a"));
 }
 
 #[test]

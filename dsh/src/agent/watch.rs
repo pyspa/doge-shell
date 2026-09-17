@@ -43,7 +43,27 @@ pub(crate) fn notices_for(
         if first_scan || !detached.contains(&task.id) {
             continue;
         }
-        if previous == Some(TaskStatus::Running) && task.status != TaskStatus::Running {
+        let transitioned_from_running =
+            previous == Some(TaskStatus::Running) && task.status != TaskStatus::Running;
+        // A task can start and finish entirely between two scans (a short
+        // `--detach` run during the watcher's up-to-60s idle backoff), in
+        // which case this session never observes it `Running` at all and
+        // there is no transition *from* anything to notice. Its first-ever
+        // observation already being settled is itself worth a notice -
+        // except `Interrupted`, which a task also sits at for a moment
+        // right after `detach::start` saves it and before its child ever
+        // marks it `Running`; that moment must stay quiet, and there is no
+        // way from this data alone to tell it apart from a task that
+        // genuinely failed to start.
+        let first_observation_already_settled = previous.is_none()
+            && matches!(
+                task.status,
+                TaskStatus::Completed
+                    | TaskStatus::Failed
+                    | TaskStatus::Cancelled
+                    | TaskStatus::InputRequired
+            );
+        if transitioned_from_running || first_observation_already_settled {
             lines.push(super::notice::render(task));
         }
     }
@@ -51,14 +71,32 @@ pub(crate) fn notices_for(
 }
 
 /// Whether `id` has ever been started with `agent run --detach` (or as a
-/// cron AI job, which uses the same `detached_child::spawn` machinery) -
-/// found once per task id, the first time it is seen, rather than every
-/// scan: whether a task is detached never changes after it is created.
+/// cron AI job, which uses the same `detached_child::spawn` machinery).
+/// Checked once per scan for any task not yet confirmed detached (see the
+/// call site) - a task can go from not-detached to detached mid-life via
+/// `agent resume ID --detach`, so there is no scan after which it is safe
+/// to stop asking, only one after which the answer is known to be "yes".
 fn has_detached_event(store: &super::SqliteTaskStore, id: &str) -> bool {
     store
         .events(id)
         .map(|events| events.iter().any(|event| event.kind == "detached"))
         .unwrap_or(false)
+}
+
+/// Adds every task not yet known to be detached, but that now is, to
+/// `detached`. Split out from [`agent_watch_task`]'s loop so the "keep
+/// checking until confirmed" logic can be tested against a real store
+/// without spinning up the async task.
+fn refresh_detached_set(
+    store: &super::SqliteTaskStore,
+    tasks: &[AgentTask],
+    detached: &mut HashSet<String>,
+) {
+    for task in tasks {
+        if !detached.contains(&task.id) && has_detached_event(store, &task.id) {
+            detached.insert(task.id.clone());
+        }
+    }
 }
 
 /// `DOGESH_AGENT_WATCH`: whether the watcher runs at all. Default on -
@@ -108,11 +146,7 @@ pub(crate) async fn agent_watch_task(
             }
         };
 
-        for task in &tasks {
-            if !seen.contains_key(&task.id) && has_detached_event(&store, &task.id) {
-                detached.insert(task.id.clone());
-            }
-        }
+        refresh_detached_set(&store, &tasks, &mut detached);
 
         let notices = notices_for(&mut seen, &tasks, &detached, first_scan);
         first_scan = false;

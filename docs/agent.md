@@ -38,18 +38,17 @@ AI chat hooks はタスク実行中も発火します。`ask` は対話プロン
 agent run --tokens 50000 --timeout 900 --write . --detach -- 'テスト失敗を調査し修正して'
 #  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
 
-agent list                      # * が付いた行は今まさに実行中のタスク
-agent list --all                # 24 時間より前に終わった completed/cancelled も含めて表示
-agent logs TASK_ID [--follow]   # 記録済みイベントを1行1件で表示。--follow は Ctrl-C まで追従
+agent list [--all] [--json]      # * が付いた行は今まさに実行中のタスク。--all は 24 時間より前に終わった completed/cancelled も表示
+agent logs TASK_ID [--follow] [--json]  # 記録済みイベントを1行1件で表示。--follow はタスクが停止するか Ctrl-C まで追従（無期限には待たない）
 agent wait TASK_ID [--timeout N]  # 終了（または input-required）まで待ってから summary を表示
 agent doctor [--json]           # 死んだプロセスに取り残されたタスク・承認待ちの放置・孤立ファイルを診断
 ```
 
-セッションが開いている間は、detach したタスクが完了・失敗・承認待ちになると `[agent 1a2b3c4d]  ...` の 1 行がプロンプトの上に表示され、`(pref-status-line t)` なら `🤖` セグメントにも反映されます。この通知はメモリ内のみで、**シェルを開いていない間に終わったタスクは通知されません**（`agent list`/`agent logs` で後から確認してください）。`DOGESH_AGENT_WATCH=0` で無効化、`DOGESH_AGENT_WATCH_INTERVAL_SECS`（既定 2 秒、実行中のタスクが無ければ自動で 60 秒に伸びる）で頻度を調整できます。デスクトップ通知は既存の `(pref-auto-notify t)` に乗ります。
+セッションが開いている間は、detach したタスクが完了・失敗・承認待ちになると `[agent 1a2b3c4d]  ...` の 1 行がプロンプトの上に表示され、`(pref-status-line t)` なら `🤖` セグメントにも反映されます。この通知はメモリ内のみで、**シェルを開いていない間に終わったタスクは通知されません**（`agent list`/`agent logs` で後から確認してください）。`DOGESH_AGENT_WATCH=0` で無効化、`DOGESH_AGENT_WATCH_INTERVAL_SECS`（既定 2 秒、1〜60 に clamp。実行中のタスクが無ければ自動で 60 秒に伸びる）で頻度を調整できます。デスクトップ通知は既存の `(pref-auto-notify t)` に乗ります。
 
 同時に実行できるタスク数は `AI_AGENT_MAX_CONCURRENT`（既定 1、今までと同じ挙動）で決まり、detach か前景かを問いません。上限に達しているときの `--detach` はその場でエラーになり、子プロセスは起動されません。
 
-`input-required` で止まったタスクは、`agent show --summary`・`agent list`・`agent logs` の `needs:` 行、または通知の本文に「次に打つ 1 行」が出ます。`agent resume TASK_ID --reconcile '...'` / `--allow-command '...'` / `--allow-mcp '...'` のどれが必要かはここに書かれた通りに打てば済みますが、hook の `ask` や機微パスの読み取り、`skill_manage delete` は `--allow-*` では満たせないため、対話で `agent resume TASK_ID` を実行してプロンプトに直接答える必要があります。
+`input-required` で止まったタスクは、`agent show --summary` の `needs:` 行、`agent doctor`、または通知の本文に「次に打つ 1 行」が出ます（`agent list`/`agent logs` 自体には出ません）。`agent resume TASK_ID --reconcile '...'` / `--allow-command '...'` / `--allow-mcp '...'` のどれが必要かはここに書かれた通りに打てば済みますが、hook の `ask` や機微パスの読み取り、`skill_manage delete` は `--allow-*` では満たせないため、対話で `agent resume TASK_ID` を実行してプロンプトに直接答える必要があります。
 
 `!` チャットから「あとでやっといて」と頼みたいときは、この `--detach` そのものではなく `cron_manage`（`action: "create"`）でジョブを作らせ、`cron run --now` で起動してください。タスクがタスクを無制限に生む経路を作らないため、`!` から直接 detach できる chat tool は意図的に用意していません（将来 `agent_delegate` のようなツールを足す場合は、grant が呼び出し元タスクの grant を超えられないこと、`agent_runtime` の内側からは呼べないこと、対話では通常の確認を通すこと、親の残予算から子の予算を差し引くことが前提になります）。
 

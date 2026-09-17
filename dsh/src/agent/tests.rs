@@ -382,6 +382,75 @@ fn shared_loop_writes_verifies_and_persists_without_real_api() {
     assert!(restored.checkpoint.is_some());
 }
 
+/// `before_tool`'s own refusal (a mutating tool called before `task_plan`
+/// ever ran) must stop the turn through the loop's normal `break`, not `?` -
+/// otherwise `chat_with_tools`'s epilogue (`runtime.finish`) never runs, and
+/// `dsh/src/agent.rs`'s own fallback records a generic "chat exited: ..."
+/// instead of this specific, actionable reason. `agent/blocked.rs` reads
+/// exactly this field to suggest what to run next, so a regression here
+/// silently breaks that feature without touching it directly.
+#[test]
+fn a_before_tool_refusal_finishes_the_task_with_its_own_specific_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let store = Arc::new(SqliteTaskStore::open(&state.path().join("state")).unwrap());
+    let mut task = task(dir.path());
+    task.plan = vec![];
+    task.criteria = vec![];
+    let id = task.id.clone();
+    store.save(&task, None).unwrap();
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/v1", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let server = std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        let mut stream = loop {
+            if let Ok((stream, _)) = listener.accept() {
+                break stream;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5));
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let _ = request(&mut stream);
+        // A mutating tool with no plan recorded yet - `before_tool` must
+        // refuse this before it ever runs.
+        reply(
+            &mut stream,
+            tool("execute", json!({"command": "echo hi"}), 0),
+        );
+        drop(stream);
+        // The refusal must stop the turn outright: no second request.
+        let until = std::time::Instant::now() + Duration::from_millis(300);
+        while std::time::Instant::now() < until {
+            assert!(listener.accept().is_err(), "unexpected second request");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    });
+
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    for (key, value) in [
+        ("AI_CHAT_API_KEY", "fixture-key"),
+        ("AI_CHAT_BASE_URL", &url),
+        ("AI_CHAT_ALLOW_INSECURE_HTTP", "1"),
+        ("AI_CHAT_STREAM", "0"),
+    ] {
+        shell.set_var(key.into(), value.into());
+    }
+    shell.agent_runtime = Some(Arc::new(Mutex::new(AgentRuntime::new(task, store.clone()))));
+    let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    let status = dsh_builtin::execute_chat_message(&ctx, &mut shell, "do something", None);
+    assert_ne!(status, dsh_types::ExitStatus::ExitedWith(0));
+    server.join().unwrap();
+
+    let saved = store.load(&id).unwrap();
+    assert_eq!(saved.status, TaskStatus::Failed);
+    assert_eq!(
+        saved.stop_reason.as_deref(),
+        Some("record a plan and fixed completion criteria with task_plan before taking action")
+    );
+}
+
 #[test]
 fn recovery_preserves_budgets_and_unknown_intent() {
     let dir = tempfile::tempdir().unwrap();

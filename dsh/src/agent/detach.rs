@@ -110,7 +110,7 @@ pub(crate) fn start(
     // overwritten by a `--detach` attempt that never actually starts.
     match locks::admit_run(shell, store, &task.id)? {
         locks::Admission::Admitted(lock) => drop(lock),
-        locks::Admission::TaskBusy => bail!("this task is already running"),
+        locks::Admission::TaskBusy => bail!("task {} is already running", task.id),
         locks::Admission::NoFreeSlot => {
             bail!("another agent task is active; cancel it, wait, or raise AI_AGENT_MAX_CONCURRENT")
         }

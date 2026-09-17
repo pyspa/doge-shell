@@ -123,7 +123,7 @@ AI ジョブの `runs.stdout` は以前は常に空でした（子プロセス�
 |---|---|
 | API キー未設定 | `agent` に入る前に検出。`failed`(config) + incident。ack まで再試行しない |
 | ネットワーク断など一時的な失敗 | `failed`(transient)。**連続3回**で初めて incident に昇格 |
-| 別の agent タスクが実行中（flock 競合） | `skipped`(agent-busy)。連続3回で incident（LockStarvation）に昇格 |
+| `AI_AGENT_MAX_CONCURRENT`（既定1）の上限に達している | `skipped`(agent-busy)。連続3回で incident（LockStarvation）に昇格。上限は cron・前景の `agent run`・`agent run --detach` を問わず共有される（`dsh/src/agent/locks.rs`）。値を上げれば解消する |
 | 同じジョブの前回 run がまだ実行中 | claim 段階で除外される（run 行は作られない）。history に何も残らない |
 | 外部 tick とセッション runner が同時に claim | 片方だけが成功。SQLite の条件付き UPDATE が保証 |
 | 外側 timeout で強制終了 | `failed`(timeout)。次に誰かが agent を触ったとき `recover_interrupted()` が `Interrupted` に落とし、cron は `reconcile` incident として拾う |

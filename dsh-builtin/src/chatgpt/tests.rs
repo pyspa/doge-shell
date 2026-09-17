@@ -246,10 +246,12 @@ fn dropping_a_buffer_prefix_moves_the_turn_mark_with_it() {
     );
 }
 
-/// `drop_buffer_prefix` (called mid-turn by `perform_summary`) must not
-/// touch the mark's `summary` snapshot - that snapshot is what a later
-/// rewind restores to, and it has to stay the pre-turn value regardless
-/// of what the live `summary` becomes during the turn.
+/// `drop_buffer_prefix` itself must not touch the mark's `summary`
+/// snapshot - only `buffer_index`. `perform_summary` (its only caller) owns
+/// updating `turn_mark.summary`, deliberately and separately, immediately
+/// before calling this; conflating the two here would make it impossible
+/// for a caller to advance the snapshot without also touching
+/// `buffer_index`, or vice versa.
 #[test]
 fn dropping_a_buffer_prefix_does_not_touch_the_marks_summary_snapshot() {
     let mut manager = manager_with(vec![
@@ -276,11 +278,20 @@ fn dropping_a_buffer_prefix_does_not_touch_the_marks_summary_snapshot() {
     );
 }
 
-/// If a turn's own tool calls are numerous enough to trigger
-/// `perform_summary` mid-turn, that summary can fold in part of *this*
-/// turn's own actions. A rewind must undo that, not just truncate the
-/// buffer - otherwise a "removed" turn's footprint survives in every
-/// later request via the summary block.
+/// Tests `rewind_to_turn_start` in isolation: given a `turn_mark.summary`
+/// that was never touched after `mark_turn_start`, a rewind restores
+/// exactly that value, discarding whatever the live `self.summary` became
+/// in between.
+///
+/// In real use `perform_summary` (`conversation.rs`) is what advances the
+/// live summary mid-turn, and it deliberately updates `turn_mark.summary`
+/// to match rather than leaving it here - see that function's own comment,
+/// and `conversation.rs`'s summarising-mid-turn tests, for why: leaving it
+/// at the untouched pre-turn value (what this test exercises) would lose
+/// whatever raw history the same summarization drops from the buffer,
+/// permanently, since a rewind would then have nowhere left to restore it
+/// from. This test's manual setup never advances `turn_mark.summary`, so it
+/// still stands as a test of the revert mechanism itself.
 #[test]
 fn rewinding_restores_the_summary_the_turn_started_with() {
     let mut manager = manager_with(vec![]);
@@ -294,6 +305,74 @@ fn rewinding_restores_the_summary_the_turn_started_with() {
     assert!(manager.rewind_to_turn_start());
 
     assert_eq!(manager.summary.as_deref(), Some("earlier work"));
+}
+
+/// End-to-end regression for the bug `perform_summary`'s own comment
+/// documents: when a mid-turn summarization's drop stays entirely within
+/// content from *before* this turn began, a later rewind must not lose that
+/// content. Before the fix, `turn_mark.summary` was left at its untouched
+/// pre-turn value and a rewind reverted to it - discarding q1..q4 outright,
+/// since the raw messages describing them no longer existed anywhere once
+/// `perform_summary` folded them into a summary it then threw away.
+#[test]
+fn perform_summary_lets_a_later_rewind_keep_pre_turn_history_it_folded_in() {
+    let mut manager = manager_with(vec![
+        assistant_call("a", "search", r#"{"query":"q1"}"#),
+        tool_reply("a", "r1"),
+        assistant_call("b", "search", r#"{"query":"q2"}"#),
+        tool_reply("b", "r2"),
+        assistant_call("c", "search", r#"{"query":"q3"}"#),
+        tool_reply("c", "r3"),
+        assistant_call("d", "search", r#"{"query":"q4"}"#),
+        tool_reply("d", "r4"),
+    ]);
+    manager.summary = Some("earlier work".to_string());
+    manager.mark_turn_start(); // buffer_index = 8, before any of this turn's own messages
+    manager.add_message(json!({ "role": "user", "content": "go" }));
+
+    let client = ScriptedClient::new(vec![final_answer("earlier work, now including q1-q4")]);
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    manager.perform_summary(&client, &mut proxy, None).unwrap();
+
+    assert!(manager.rewind_to_turn_start());
+    assert_eq!(
+        manager.summary.as_deref(),
+        Some("earlier work, now including q1-q4")
+    );
+}
+
+/// The accepted side of the trade-off: when a mid-turn summarization's drop
+/// also reaches into messages this turn itself added (there was no
+/// pre-turn content at all here), a rewind still advances the summary
+/// rather than reverting to the pre-turn value - because there is no way,
+/// from the summary text alone, to tell which part described history from
+/// before the turn and which part described the turn's own now-discarded
+/// actions. Preferred over silently losing history in the (more common)
+/// case the previous test covers.
+#[test]
+fn perform_summary_that_also_folds_in_this_turns_own_actions_still_advances_on_rewind() {
+    let mut manager = manager_with(vec![]);
+    manager.summary = Some("earlier work".to_string());
+    manager.mark_turn_start(); // buffer_index = 0: no pre-turn content exists
+    manager.add_message(json!({ "role": "user", "content": "go" }));
+    for i in 0..4 {
+        let id = format!("t{i}");
+        manager.add_message(assistant_call(&id, "search", r#"{"query":"q"}"#));
+        manager.add_message(tool_reply(&id, "r"));
+    }
+
+    let client = ScriptedClient::new(vec![final_answer("earlier work, plus this turn's actions")]);
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    manager.perform_summary(&client, &mut proxy, None).unwrap();
+
+    assert!(manager.rewind_to_turn_start());
+    assert_eq!(
+        manager.summary.as_deref(),
+        Some("earlier work, plus this turn's actions")
+    );
+    assert!(manager.buffer.is_empty());
 }
 
 /// A checkpoint written before `turn_mark` existed has no such key at

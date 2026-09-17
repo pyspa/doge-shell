@@ -480,7 +480,22 @@ fn chat_with_tools(
             match turn.outcome {
                 TurnOutcome::ToolCalls(tool_calls) => {
                     stalled_rounds = 0;
-                    run_tool_calls(
+                    // `break Err(...)`, not `?`: every other failure in this
+                    // loop (the streaming/response errors above, `Cut`,
+                    // `Stalled`'s `GiveUp` below) reaches the loop's own
+                    // `break` so the epilogue after it - `reflect`,
+                    // `runtime.checkpoint`/`finish`, `report_turn_usage`,
+                    // `rewind_to_turn_start`, `session::store` - always
+                    // runs, per this function's own opening comment. A `?`
+                    // here would be the one path that skips all of that:
+                    // `before_tool`'s `bail!` (budget exhausted, no plan
+                    // recorded yet, ...) would propagate straight out of the
+                    // closure, leaving `runtime.finish` never called and
+                    // `dsh/src/agent.rs`'s own fallback recording a generic
+                    // "chat exited: ExitedWith(1)" as `stop_reason` instead
+                    // of the specific reason `agent/blocked.rs` needs to
+                    // suggest the next command.
+                    if let Err(err) = run_tool_calls(
                         &tool_calls,
                         mcp_manager,
                         setup.runtime.as_ref(),
@@ -488,7 +503,9 @@ fn chat_with_tools(
                         proxy,
                         &mut manager,
                         &mut tools,
-                    )?;
+                    ) {
+                        break Err(err);
+                    }
                 }
                 TurnOutcome::Answer(content) => {
                     if let Some(runtime) = &setup.runtime

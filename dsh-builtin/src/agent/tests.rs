@@ -65,6 +65,7 @@ fn failure_signature_distinguishes_commands_and_outcomes() {
 struct MemoryStore {
     task: std::sync::Mutex<AgentTask>,
     fail_load: bool,
+    loads: std::sync::atomic::AtomicUsize,
 }
 
 impl MemoryStore {
@@ -72,6 +73,7 @@ impl MemoryStore {
         Self {
             task: std::sync::Mutex::new(running_task()),
             fail_load: false,
+            loads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -79,6 +81,7 @@ impl MemoryStore {
         Self {
             task: std::sync::Mutex::new(running_task()),
             fail_load: true,
+            loads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -103,6 +106,8 @@ impl AgentTaskStore for MemoryStore {
         self.save(task, event)
     }
     fn load(&self, _id: &str) -> anyhow::Result<AgentTask> {
+        self.loads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.fail_load {
             return Err(anyhow::anyhow!("transient sqlite lock"));
         }
@@ -131,7 +136,7 @@ impl AgentTaskStore for MemoryStore {
 #[test]
 fn stopped_treats_a_store_read_failure_as_not_cancelled() {
     let store = Arc::new(MemoryStore::load_fails());
-    let runtime = AgentRuntime::new(running_task(), store);
+    let mut runtime = AgentRuntime::new(running_task(), store);
     assert!(!runtime.stopped());
 }
 
@@ -139,8 +144,23 @@ fn stopped_treats_a_store_read_failure_as_not_cancelled() {
 fn stopped_still_sees_a_persisted_cancellation() {
     let store = Arc::new(MemoryStore::running());
     store.task.lock().unwrap().status = TaskStatus::Cancelled;
-    let runtime = AgentRuntime::new(running_task(), store);
+    let mut runtime = AgentRuntime::new(running_task(), store);
     assert!(runtime.stopped());
+}
+
+/// Rapid `stopped()` polls (20-50ms loops) must not issue a store read per
+/// poll: the second call inside the TTL hits the cache.
+#[test]
+fn stopped_caches_the_store_cancel_probe() {
+    let store = Arc::new(MemoryStore::running());
+    let mut runtime = AgentRuntime::new(running_task(), store.clone());
+    assert!(!runtime.stopped());
+    assert!(!runtime.stopped());
+    assert_eq!(
+        store.loads.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "expected one store read for two rapid polls"
+    );
 }
 
 fn verified_at_time_budget() -> (AgentTask, Arc<MemoryStore>) {

@@ -33,6 +33,7 @@
 | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | 5 | 同上。このツール呼び出し数未満のターンでは送らない |
 | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL` → チャットモデル | 同上 |
 | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off（0 または未設定） | `dsh-builtin/src/chatgpt/skills/usage.rs`（`sweep`）。`created_by == "agent"` かつ unpinned かつ user scope の skill だけを、指定日数未読で archive する |
+| `AI_CHAT_VERIFY_AFTER_MUTATION` | off（`1`/`true`/`on`/`yes` で on） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_verify_after_mutation`）。`!` チャットで変異ツール（`edit`/`str_replace`/`execute`/`skill_manage`/`mcp__*`）実行後の最初の最終回答を1回だけ差し戻し、何を確認したかの記述を求める。2回目の回答は必ず採用（最大1往復の追加のみ） |
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
 | `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
 | `DOGESH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |

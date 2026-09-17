@@ -58,6 +58,25 @@ mod reflect;
 pub(crate) mod skills;
 use skills::{SkillRoot, SkillsManager};
 
+/// A tool call that changes state outside the conversation, mirroring the
+/// mutation set `AgentRuntime::before_tool` gates on `task_plan`.
+fn is_mutating_tool_call(call: &Value) -> bool {
+    let name = call
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        name,
+        "edit" | "str_replace" | "execute" | "skill_manage"
+    ) || name.starts_with("mcp__")
+}
+
+/// Sent once when `AI_CHAT_VERIFY_AFTER_MUTATION` is on and a mutating `!`
+/// turn tries to finish on its first answer. The second answer is always
+/// accepted, so this costs at most one extra round trip.
+const VERIFY_AFTER_MUTATION_NUDGE: &str = "You ran mutating tool(s) this turn. Briefly state what you checked to verify the result (command output, file content, or test). If you have not verified yet, run the checks now instead of finishing.";
+
 #[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
     client: &dyn ChatClient,
@@ -293,6 +312,9 @@ fn chat_with_tools(
         iterations = 0;
         let turn_started = Instant::now();
         let mut unverified_answers = 0;
+        let verify_after_mutation = resolve_verify_after_mutation(proxy);
+        let mut mutating_calls = 0usize;
+        let mut verification_nudged = false;
         let mut dynamic_context = DynamicContext::default();
         // Rounds where the model produced neither a tool call nor an answer.
         let mut stalled_rounds = 0usize;
@@ -518,6 +540,12 @@ fn chat_with_tools(
             match turn.outcome {
                 TurnOutcome::ToolCalls(tool_calls) => {
                     stalled_rounds = 0;
+                    if setup.runtime.is_none() && verify_after_mutation && !verification_nudged {
+                        mutating_calls += tool_calls
+                            .iter()
+                            .filter(|call| is_mutating_tool_call(call))
+                            .count();
+                    }
                     // `break Err(...)`, not `?`: every other failure in this
                     // loop (the streaming/response errors above, `Cut`,
                     // `Stalled`'s `GiveUp` below) reaches the loop's own
@@ -569,6 +597,16 @@ fn chat_with_tools(
                             break Err("agent: cannot complete with unverified criteria".into());
                         }
                         manager.add_message(json!({"role":"user","content":"The task still has unverified criteria. Perform the checks and use task_verify with tool-result evidence, or explain the blocker. Do not claim completion."}));
+                        continue;
+                    }
+                    if setup.runtime.is_none()
+                        && verify_after_mutation
+                        && !verification_nudged
+                        && mutating_calls > 0
+                    {
+                        verification_nudged = true;
+                        mutating_calls = 0;
+                        manager.add_message(json!({"role":"user","content": VERIFY_AFTER_MUTATION_NUDGE}));
                         continue;
                     }
                     break Ok(content);

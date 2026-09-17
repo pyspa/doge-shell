@@ -105,7 +105,20 @@ pub struct AgentRuntime {
     /// `stop_reason` of a denial-stuck task so `agent resume` can name the
     /// missing grant without re-reading the event log.
     last_denial_hint: Option<String>,
+    /// Last `(when, cancelled)` probe of the durable store. `stopped()` runs
+    /// inside 20-50ms poll loops, and every probe is a synchronous SQLite
+    /// `SELECT`+deserialize against the same DB `save()` writes with
+    /// `synchronous=FULL` - the pollers manufactured the lock contention
+    /// that used to surface as a spurious cancellation.
+    cancel_probe: Option<(Instant, bool)>,
 }
+
+/// How long a negative store-cancel probe stays valid. Positive (cancelled)
+/// results are returned immediately and also cached, so a burst of polls
+/// after an external `agent cancel` still hits the cache. 500ms bounds the
+/// extra latency of noticing an external cancel to half a second while
+/// cutting 20ms-poll read traffic ~25x.
+const CANCEL_PROBE_TTL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Refusal when a mutating tool runs before `task_plan` recorded a plan and
 /// fixed criteria. Kept as a constant so the tool loop can recognise this
@@ -150,6 +163,7 @@ impl AgentRuntime {
             repeats: 0,
             denials: 0,
             last_denial_hint: None,
+            cancel_probe: None,
         }
     }
     /// Records a grant refusal without stopping the task.
@@ -181,7 +195,7 @@ impl AgentRuntime {
         self.task = saved.task;
         Ok(saved.sequence)
     }
-    pub fn stopped(&self) -> bool {
+    pub fn stopped(&mut self) -> bool {
         self.task.status != TaskStatus::Running
             || self
                 .task
@@ -192,14 +206,7 @@ impl AgentRuntime {
             // here used to turn a momentary SQLite lock contention into
             // "the task was cancelled", and the 20-50ms pollers below made
             // that contention self-inflicted.
-            || self
-                .store
-                .load(&self.task.id)
-                .map(|t| t.status == TaskStatus::Cancelled)
-                .unwrap_or_else(|e| {
-                    tracing::debug!("agent: task store load failed, treating as not-cancelled: {e}");
-                    false
-                })
+            || self.store_cancelled()
     }
     /// Whether the task was cancelled, ignoring the time budget.
     ///
@@ -207,13 +214,27 @@ impl AgentRuntime {
     /// an exhausted time budget must halt the next iteration. `finish` needs the
     /// narrower question: a final round that lands exactly on its budget with
     /// verified work done completed the task, it did not interrupt it.
-    fn cancelled(&self) -> bool {
-        self.task.status != TaskStatus::Running
-            || self
-                .store
-                .load(&self.task.id)
-                .map(|t| t.status == TaskStatus::Cancelled)
-                .unwrap_or(false)
+    fn cancelled(&mut self) -> bool {
+        self.task.status != TaskStatus::Running || self.store_cancelled()
+    }
+    /// Whether the durable store records this task as cancelled, with a short
+    /// TTL cache so 20-50ms poll loops do not issue a SQLite read per poll.
+    fn store_cancelled(&mut self) -> bool {
+        if let Some((at, cancelled)) = self.cancel_probe {
+            if at.elapsed() < CANCEL_PROBE_TTL {
+                return cancelled;
+            }
+        }
+        let cancelled = self
+            .store
+            .load(&self.task.id)
+            .map(|t| t.status == TaskStatus::Cancelled)
+            .unwrap_or_else(|e| {
+                tracing::debug!("agent: task store load failed, treating as not-cancelled: {e}");
+                false
+            });
+        self.cancel_probe = Some((Instant::now(), cancelled));
+        cancelled
     }
     pub fn context(&self) -> String {
         format!(

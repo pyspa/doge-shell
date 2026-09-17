@@ -216,7 +216,26 @@ impl ConversationManager {
         }
 
         self.buffer_chars = sum_message_lengths(&self.buffer);
-        before.saturating_sub(self.buffer_chars)
+        let reclaimed = before.saturating_sub(self.buffer_chars);
+        // The measured prompt size describes the larger request that
+        // `should_summarize` just fired on. Left in place, a
+        // `prompt_tokens`-triggered summary is billed again even when the
+        // free pass already shrank the buffer enough to fit: the next
+        // request is smaller, but `last_prompt_tokens` still names the old
+        // one. Scale only the buffer-attributable portion down, keeping any
+        // overhead (system prompt, tool schemas, summary) intact. When the
+        // estimate is wrong the next measured response corrects it, while
+        // always summarizing wastes a paid request every turn.
+        if reclaimed > 0 && self.last_prompt_tokens > 0 && before > 0 {
+            const CHARS_PER_TOKEN: usize = 4;
+            let before_tokens = (before / CHARS_PER_TOKEN) as u64;
+            let new_tokens = (self.buffer_chars / CHARS_PER_TOKEN) as u64;
+            let overhead = self
+                .last_prompt_tokens
+                .saturating_sub(before_tokens);
+            self.last_prompt_tokens = overhead.saturating_add(new_tokens);
+        }
+        reclaimed
     }
 
     /// Indices of tool results that a later identical call has replaced.

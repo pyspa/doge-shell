@@ -65,6 +65,14 @@
   切らない。cwd 完全一致に戻さないこと。`scope` の計算（canonicalize + 祖先探索）は
   `session_ttl.is_some()` のときだけ行う — agent 経路は `session_ttl` が常に `None` なので、
   結果を誰も読まない計算を毎ターン払わないため。
+- **会話は再起動を越えて1件だけ残る**（`session.rs` の `PersistedSession`、
+  `config_paths::chat_session_file`）。`store` がスロットとファイルの両方へ書き、
+  `take`/`check`/`peek_id`/`session_description` はスロット空き時にファイルから復元する
+  （TTL・identity・scope の判定は同じ `mismatch`）。`take` が `Continued` を返した時点で
+  ファイルは消える — ターンが `store` せず終わったら会話は失われる、という従来の破壊的
+  取得の意味を保つため。不一致の `Fresh` では消さないので、別プロジェクトへ寄り道して
+  戻れば復元できる。時刻はファイルに UNIX 秒で載り、未来時刻は経過 0 として継続扱い。
+  バージョン不一致・破損は無言で新規扱い（移行しない）。`chat_reset` は両方消す。
 - **継続の可否はユーザーに見える。ただし ttl/経過時間までしか正確ではない。**
   `take` は `session::Claim`（`Continued`/`Fresh(reason)`）を返し、`chat_with_tools` が dim な
   1 行（`session: continuing ...` / `session: new conversation (reason)`。ただし `Fresh(None)`

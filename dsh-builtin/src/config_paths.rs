@@ -127,6 +127,18 @@ pub fn skills_pending_dir() -> PathBuf {
         .join("skills-pending")
 }
 
+/// The `!` chat conversation carried across turns, and now across restarts.
+///
+/// Beside `skills_state_file()` and outside the skills directories for the
+/// same reasons: it is bookkeeping, not a skill, and must survive the
+/// installer replacing skill directories.
+pub fn chat_session_file() -> PathBuf {
+    xdg::BaseDirectories::with_prefix(APP)
+        .get_state_home()
+        .unwrap_or_else(|| config_home().join("state"))
+        .join("chat-session.json")
+}
+
 /// Private durable agent state, resolved consistently on both supported OSes.
 pub fn agent_state_dir() -> PathBuf {
     xdg::BaseDirectories::with_prefix(APP)
@@ -219,6 +231,21 @@ mod tests {
         let state = skills_state_file();
         assert_eq!(state.file_name().unwrap(), "skills.json");
         assert!(!state.starts_with(skills_dir()));
+    }
+
+    #[test]
+    fn chat_session_file_lives_beside_the_skills_state() {
+        let _lock = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = XdgGuard::set(dir.path());
+
+        let session = chat_session_file();
+        assert_eq!(session.file_name().unwrap(), "chat-session.json");
+        assert_eq!(
+            session.parent().unwrap(),
+            skills_state_file().parent().unwrap()
+        );
+        assert!(!session.starts_with(skills_dir()));
     }
 
     /// A path that does not exist anywhere still resolves to the XDG location,

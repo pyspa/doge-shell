@@ -78,6 +78,13 @@ pub(super) const SKILL_REFLECT_MODEL_KEY: &str = "AI_CHAT_SKILL_REFLECT_MODEL";
 /// off; a positive integer is the number of unread days before an
 /// agent-written, unpinned, `user`-scope skill is archived.
 pub(super) const SKILL_AUTO_ARCHIVE_DAYS_KEY: &str = "AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS";
+/// Environment key turning on a one-shot verification nudge for `!` chat.
+/// Off by default: when on, a turn that ran a mutating tool (`edit` /
+/// `str_replace` / `execute` / `skill_manage` / `mcp__*`) gets its first
+/// final answer bounced back once with a request to state what was checked.
+/// The second answer is always accepted, so this costs at most one extra
+/// round trip per mutating turn.
+pub(super) const VERIFY_AFTER_MUTATION_KEY: &str = "AI_CHAT_VERIFY_AFTER_MUTATION";
 /// Told to the model after a rewound turn (`ConversationManager::note_turn_rewound`).
 pub(super) const REWIND_NOTICE: &str = "The previous turn was removed from this conversation because it did not finish. Any tool calls it made may already have taken effect; check the actual state rather than assuming.";
 
@@ -222,6 +229,19 @@ pub(crate) fn resolve_skill_staging(proxy: &mut dyn ShellProxy) -> SkillStaging 
         Some("always") => SkillStaging::Always,
         Some("off") => SkillStaging::Off,
         Some(_) => SkillStaging::Task,
+    }
+}
+
+/// Whether a mutating `!` turn bounces its first final answer back once for
+/// verification. Off by default: the extra round trip costs latency and
+/// tokens, so only operators who want the guard pay it.
+pub(super) fn resolve_verify_after_mutation(proxy: &mut dyn ShellProxy) -> bool {
+    match resolve_setting(proxy, VERIFY_AFTER_MUTATION_KEY) {
+        None => false,
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "yes"
+        ),
     }
 }
 

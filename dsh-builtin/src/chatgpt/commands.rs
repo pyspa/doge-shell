@@ -438,6 +438,7 @@ mod tests {
     #[test]
     fn status_report_continues_a_matching_session() {
         let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        let _state = session::tests::isolated_state_home();
         session::session_reset();
         let mut proxy = TestShellProxy::default();
         seed_session(&mut proxy, "s1");
@@ -454,6 +455,7 @@ mod tests {
     #[test]
     fn status_report_names_a_prompt_change_instead_of_claiming_continuity() {
         let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        let _state = session::tests::isolated_state_home();
         session::session_reset();
         let mut proxy = TestShellProxy::default();
         seed_session(&mut proxy, "s1");
@@ -473,6 +475,7 @@ mod tests {
     #[test]
     fn status_report_honors_a_disabled_ttl() {
         let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        let _state = session::tests::isolated_state_home();
         session::session_reset();
         let mut proxy = TestShellProxy::default();
         seed_session(&mut proxy, "s1");
@@ -487,6 +490,7 @@ mod tests {
     #[test]
     fn carried_model_note_names_the_session_only_when_one_is_carried() {
         let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        let _state = session::tests::isolated_state_home();
         session::session_reset();
         let mut proxy = TestShellProxy::default();
         assert_eq!(carried_model_note(&mut proxy), "");

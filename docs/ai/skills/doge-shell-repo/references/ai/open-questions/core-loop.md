@@ -22,13 +22,19 @@
   意味に変換される。
   → 読み取り失敗は「キャンセルではない」（`false`）として扱い、完了判定は予算を除いた
   `cancelled()` で行うようになった（回帰テスト `stopped_treats_a_store_read_failure_*`）。
-- **`compact_buffer` は `last_prompt_tokens` を下げない**ため、`should_summarize()` の
+- **`compact_buffer` は `last_prompt_tokens` を下げない**【解決済み】ため、`should_summarize()` の
   「prompt_tokens > budget」条件で入った要約は、無料の圧縮がどれだけ効いても毎回課金される
   （`last_prompt_tokens` は要約自身でしかクリアされない）。
-- **`stopped()` の高頻度同期 SQLite 読み取り**。キャンセル判定のポーリング
+  → `compact_buffer` が回収量に応じて `last_prompt_tokens` のバッファ寄与分だけを
+  割り引くようになった（オーバーヘッドは保持。外したら次の実測で自己補正）。
+  （回帰テスト `chatgpt::tests::compaction_scales_down_measured_prompt_tokens`）。
+- **`stopped()` の高頻度同期 SQLite 読み取り**【解決済み】。キャンセル判定のポーリング
   （`dsh-openai/src/client/streaming.rs` の 50ms、`dsh-builtin/src/chatgpt/tool/execute.rs`
   の 20ms）のたびに SQLite の SELECT+デシリアライズが走り、`synchronous=FULL` の同一 DB への
   `save()` との競合を自ら誘発しうる（上の「キャンセルに化ける」の顕在化確率も上げる）。
+  → `AgentRuntime` が store の cancel 判定を 500ms TTL でキャッシュする
+  （`store_cancelled`。`stopped()`/`cancelled()` は `&mut` 化）。
+  （回帰テスト `agent::tests::stopped_caches_the_store_cancel_probe`）。
 - **セッションIDの peek/take レース**【解決済み】。`turn_support.rs` の `peek_id` → hook 実行 → 人間の
   承認待ち → `take` の間に `AI_CHAT_SESSION_TTL_SECS` を跨ぐと、`hook_ctx` が古いセッションIDを
   持ったまま新しい会話が始まり、`jobs::retain_session` が前の会話のジョブを誤って生き残らせる。

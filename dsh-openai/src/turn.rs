@@ -189,7 +189,10 @@ pub enum StallAction {
 /// one retry. Shared so the two loops cannot drift on the count or the wording.
 pub fn handle_stall(stalled_rounds: usize) -> StallAction {
     if stalled_rounds > 1 {
-        StallAction::GiveUp("the model returned neither a tool call nor an answer twice in a row")
+        StallAction::GiveUp(
+            "the model returned neither a tool call nor an answer twice in a row. \
+             Ask a narrower question to retry; the conversation so far is kept while the session is active",
+        )
     } else {
         StallAction::Nudge(
             "Your last reply contained neither a tool call nor an answer. Either call a tool or answer the question now.",

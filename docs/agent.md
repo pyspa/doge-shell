@@ -30,6 +30,29 @@ skill ディレクトリ配下のスクリプトは `--allow-command` では許�
 
 AI chat hooks はタスク実行中も発火します。`ask` は対話プロンプトではなく入力待ちになり、その承認キー `hook:HOOK_ID:対象` は `--allow-command` や `--allow-mcp` では満たせません。`user-prompt-submit` と `pre-tool-use` の hook は失敗やタイムアウトで拒否側に倒れます。`AI_CHAT_HOOK_TURN_BUDGET_MS` もタスク中に効き、予算を使い切ったターンでは gate の hook が残り時間まで縮められて実行されるので、遅い hook はタイムアウト = 拒否側に倒れます。壊れた hook や足りない予算でタスクが止まるときは、予算を上げるか `AI_CHAT_HOOKS=off` を使ってください。
 
+## バックグラウンド実行（`--detach`）
+
+`agent run`/`agent resume` に `--detach` を足すと、タスクを別プロセス（`dogesh -c "agent run-detached <id>"`）に渡してすぐプロンプトへ戻ります。権限モデル・予算・承認の扱いは前景実行と何も変わりません。無人実行なので承認プロンプトは出ず、`--tokens`/`--timeout` は detach でも必須です。
+
+```sh
+agent run --tokens 50000 --timeout 900 --write . --detach -- 'テスト失敗を調査し修正して'
+#  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
+
+agent list                      # * が付いた行は今まさに実行中のタスク
+agent list --all                # 24 時間より前に終わった completed/cancelled も含めて表示
+agent logs TASK_ID [--follow]   # 記録済みイベントを1行1件で表示。--follow は Ctrl-C まで追従
+agent wait TASK_ID [--timeout N]  # 終了（または input-required）まで待ってから summary を表示
+agent doctor [--json]           # 死んだプロセスに取り残されたタスク・承認待ちの放置・孤立ファイルを診断
+```
+
+セッションが開いている間は、detach したタスクが完了・失敗・承認待ちになると `[agent 1a2b3c4d]  ...` の 1 行がプロンプトの上に表示され、`(pref-status-line t)` なら `🤖` セグメントにも反映されます。この通知はメモリ内のみで、**シェルを開いていない間に終わったタスクは通知されません**（`agent list`/`agent logs` で後から確認してください）。`DOGESH_AGENT_WATCH=0` で無効化、`DOGESH_AGENT_WATCH_INTERVAL_SECS`（既定 2 秒、実行中のタスクが無ければ自動で 60 秒に伸びる）で頻度を調整できます。デスクトップ通知は既存の `(pref-auto-notify t)` に乗ります。
+
+同時に実行できるタスク数は `AI_AGENT_MAX_CONCURRENT`（既定 1、今までと同じ挙動）で決まり、detach か前景かを問いません。上限に達しているときの `--detach` はその場でエラーになり、子プロセスは起動されません。
+
+`input-required` で止まったタスクは、`agent show --summary`・`agent list`・`agent logs` の `needs:` 行、または通知の本文に「次に打つ 1 行」が出ます。`agent resume TASK_ID --reconcile '...'` / `--allow-command '...'` / `--allow-mcp '...'` のどれが必要かはここに書かれた通りに打てば済みますが、hook の `ask` や機微パスの読み取り、`skill_manage delete` は `--allow-*` では満たせないため、対話で `agent resume TASK_ID` を実行してプロンプトに直接答える必要があります。
+
+`!` チャットから「あとでやっといて」と頼みたいときは、この `--detach` そのものではなく `cron_manage`（`action: "create"`）でジョブを作らせ、`cron run --now` で起動してください。タスクがタスクを無制限に生む経路を作らないため、`!` から直接 detach できる chat tool は意図的に用意していません（将来 `agent_delegate` のようなツールを足す場合は、grant が呼び出し元タスクの grant を超えられないこと、`agent_runtime` の内側からは呼べないこと、対話では通常の確認を通すこと、親の残予算から子の予算を差し引くことが前提になります）。
+
 ## 隔離と長時間処理
 
 任意の隔離バックエンドは `@anthropic-ai/sandbox-runtime@0.0.75` の `srt` です。利用者が別途インストールし、PATHから発見できる状態で `--sandbox` を指定してください。Linuxではbubblewrap、socatなどSRTのOS依存も必要です。固定バージョン不一致や起動失敗時に通常実行へ切り替えません。
@@ -40,7 +63,7 @@ agent run --sandbox --tokens 30000 --timeout 600 --write . --allow-command 'pyth
 
 システムの実行ファイル・ライブラリと明示したフォルダを読めます。Homebrewなど別の場所のツールチェーンには必要な場所だけ `--read` を追加します。`--network example.com` は隔離コマンドの通信先、`--env NAME` は子プロセスへ渡す追加環境変数です。通常はPATH、HOME、言語・一時ディレクトリのみ継承します。隔離なしのコマンド権限はコマンド実行の承認であり、OSによるファイル・通信の制限にはなりません。MCPの通信先・リモート書き込みは別の承認経路です。
 
-長時間の `execute` はジョブIDを返します。モデルは `job_status`、`job_output`、`job_cancel` で追跡します。同じ仕組みは `!` チャットにも入っていますが、そちらはSQLiteに保存せずプロセス内に持ち、会話が続く間だけ残ります（`chat_status` で一覧、`chat_reset` で停止）。出力は各ストリーム末尾1MiBまで保持し、欠落・読取未完了を明示します。終了時にマスク済みのログをstateディレクトリの TASK_ID/JOB_ID.json へ保存します。終了コード、取消、タイムアウトを区別します。初期版は同時に1タスクです。常駐デーモンではなく、シェル終了後にジョブへ再接続はできません。
+長時間の `execute` はジョブIDを返します。モデルは `job_status`、`job_output`、`job_cancel` で追跡します。同じ仕組みは `!` チャットにも入っていますが、そちらはSQLiteに保存せずプロセス内に持ち、会話が続く間だけ残ります（`chat_status` で一覧、`chat_reset` で停止）。出力は各ストリーム末尾1MiBまで保持し、欠落・読取未完了を明示します。終了時にマスク済みのログをstateディレクトリの TASK_ID/JOB_ID.json へ保存します。終了コード、取消、タイムアウトを区別します。同時に実行できるタスク数は `AI_AGENT_MAX_CONCURRENT`（既定 1）で決まります。常駐デーモンではなく、シェル終了後にジョブへ再接続はできません（`--detach` したタスク自体はシェルを閉じても走り続けます。「バックグラウンド実行」の節を参照）。
 
 ## MCPと外部タスク
 
@@ -62,4 +85,4 @@ Tasks対応サーバーが返したハンドルを保存し、`mcp_task_status` 
 
 逆方向 — タスク自身が cron ジョブを作る／変える — には `cron_manage` という chat tool があります（`execute` 経由の `cron ...` は builtin には届きません）。作成したジョブは常に paused で登録され、渡せる grant は**呼び出し中のタスク自身の grant を超えられません**。それ以外の変更（`update`/`pause`/`resume`/`remove`/`run`/`ack`）は他の書き込み系ツールと同じく毎回 `InputRequired` になります。詳細は `docs/cron.md` の「エージェント自身によるジョブ管理」を参照してください。
 
-比較測定は同一モデル・同一入力・初期状態を復元した作業フォルダで各3回以上行い、完遂率、確認回数、累積トークン、所要時間、強制中断後の再開成功率を記録します。現行の `!` と `agent` を比較し、実API測定前に改善率を断定しません。自動検証は `cargo test -p doge-shell --lib agent::tests` と `cargo test -p dsh-builtin --lib agent::`。実隔離試験は `cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored` です。
+比較測定は同一モデル・同一入力・初期状態を復元した作業フォルダで各3回以上行い、完遂率、確認回数、累積トークン、所要時間、強制中断後の再開成功率を記録します。現行の `!` と `agent` を比較し、実API測定前に改善率を断定しません。自動検証は `cargo test -p doge-shell --lib agent::` と `cargo test -p dsh-builtin --lib agent::`。実隔離試験は `cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored` です。

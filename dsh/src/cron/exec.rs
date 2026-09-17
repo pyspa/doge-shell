@@ -156,20 +156,15 @@ fn kill_group(child: &Child) {
 /// The only thing crossing the boundary is a UUID, validated here so that a
 /// corrupt row cannot put anything else on a command line. Everything else the
 /// run needs - the goal, the grant, the environment - is read back from the
-/// store by the child.
+/// store by the child. The actual spawn is shared with the background agent
+/// (`agent run --detach`) - see `crate::detached_child`.
 pub fn spawn_run_child(run_id: &str) -> Result<Child> {
     uuid::Uuid::parse_str(run_id).context("run id is not a UUID")?;
-    let program = std::env::current_exe().context("cannot find this dogesh binary")?;
-
-    Command::new(program)
-        .arg("-c")
-        .arg(format!("cron run-job {run_id}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .context("cannot start the cron run child")
+    crate::detached_child::spawn(
+        &format!("cron run-job {run_id}"),
+        Stdio::null(),
+        Stdio::null(),
+    )
 }
 
 /// Hashes output for change detection, stably across toolchains.

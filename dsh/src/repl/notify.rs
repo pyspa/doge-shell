@@ -47,9 +47,29 @@ pub(crate) fn notify_command_finished(
     }
 }
 
+/// Sends a desktop notification for a detached agent task that just
+/// stopped, if `prefs` enable it.
+///
+/// Unlike [`notify_command_finished`], there is no elapsed-time threshold:
+/// choosing `--detach` at all is already the signal that this might take a
+/// while, so every stop is worth surfacing, not just the slow ones.
+pub(crate) fn notify_agent_task(prefs: &InputPreferences, line: &str) {
+    if !prefs.auto_notify_enabled {
+        return;
+    }
+    if let Err(error) = notify_rust::Notification::new()
+        .summary("Agent task")
+        .body(line)
+        .appname("doge-shell")
+        .show()
+    {
+        warn!("Failed to send desktop notification: {}", error);
+    }
+}
+
 /// Truncate on a character boundary — byte slicing here panics on multi-byte
 /// input such as a Japanese commit message.
-fn preview_command(cmd: &str) -> String {
+pub(crate) fn preview_command(cmd: &str) -> String {
     if cmd.chars().count() <= CMD_PREVIEW_CHARS {
         return cmd.to_string();
     }

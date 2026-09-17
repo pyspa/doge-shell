@@ -12,13 +12,23 @@ use parking_lot::Mutex;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use std::{
-    fs::{DirBuilder, File, OpenOptions},
+    fs::{DirBuilder, OpenOptions},
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
+pub(crate) mod blocked;
+pub(crate) mod cli;
+pub(crate) mod detach;
+pub(crate) mod doctor;
+pub(crate) mod locks;
+pub(crate) mod notice;
 pub(crate) mod summary;
+pub(crate) mod unattended;
+pub(crate) mod validate;
+pub(crate) mod watch;
+pub(crate) mod watchdog;
 
 /// Why [`run_task`] failed before it could even produce a [`TaskRunReport`],
 /// tagged on the returned `anyhow::Error` so a caller that needs to act on
@@ -116,19 +126,6 @@ impl SqliteTaskStore {
             ),
         })
     }
-    fn execution_lock(&self) -> Result<File> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(self.root.join("active.lock"))?;
-        file.try_lock()
-            .context("another agent task is active; cancel it or wait")?;
-        Ok(file)
-    }
     fn cancel(&self, id: &str) -> Result<()> {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -148,12 +145,6 @@ impl SqliteTaskStore {
         tx.commit()?;
         Ok(())
     }
-    /// Like [`Self::execution_lock`], but tells "busy" apart from "broken".
-    ///
-    /// cron needs the distinction that `execution_lock` collapses into one
-    /// error: another task holding the lock is an ordinary skip to retry on
-    /// the next tick, while a state directory that cannot be opened at all is
-    /// an incident a person has to clear.
     /// Adds a value to the set masked out of everything this store writes.
     ///
     /// `command` does this for the API key; cron has to do the same before it
@@ -164,41 +155,37 @@ impl SqliteTaskStore {
             self.secrets.lock().push(value.to_string());
         }
     }
-    pub(crate) fn try_execution_lock(&self) -> Result<Option<File>> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(self.root.join("active.lock"))?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(std::fs::TryLockError::Error(error)) => Err(error.into()),
-        }
-    }
+    /// Recovers every `Running` task no live process still holds the lock
+    /// for.
+    ///
+    /// Checked per task (`locks::try_lock_task`), not globally: a task is
+    /// only recovered once *its own* lock is proven free, so a live run of
+    /// one task can never cause a different, still-running task to be
+    /// marked `Interrupted` out from under it.
     pub(crate) fn recover_interrupted(&self) -> Result<()> {
-        // A live owner holds the lock. Only recover after proving it is gone.
-        let Ok(_lock) = self.execution_lock() else {
-            return Ok(());
-        };
-        for mut task in self.list()? {
-            if task.status == TaskStatus::Running {
-                let jobs = dsh_builtin::agent::unfinished_local_jobs(&self.events(&task.id)?);
-                if !jobs.is_empty() && task.pending_operation.is_none() {
-                    task.pending_operation = Some(
-                        json!({"unfinished_jobs":jobs,"reason":"previous processes may still be running; inspect their effects before resuming"}),
-                    );
-                }
-                task.status = TaskStatus::Interrupted;
-                task.stop_reason = Some(
-                    "previous shell stopped; inspect persisted results before resuming".into(),
-                );
-                self.save(&task, Some(("recovered", &Value::Null)))?;
+        let tasks = self.list()?;
+        for mut task in tasks.iter().cloned() {
+            if task.status != TaskStatus::Running {
+                continue;
             }
+            // A live owner holds this task's own lock - only recover once
+            // that is proven false, by actually taking it ourselves.
+            let Some(lock) = locks::try_lock_task(self, &task.id)? else {
+                continue;
+            };
+            let jobs = dsh_builtin::agent::unfinished_local_jobs(&self.events(&task.id)?);
+            if !jobs.is_empty() && task.pending_operation.is_none() {
+                task.pending_operation = Some(
+                    json!({"unfinished_jobs":jobs,"reason":"previous processes may still be running; inspect their effects before resuming"}),
+                );
+            }
+            task.status = TaskStatus::Interrupted;
+            task.stop_reason = Some(RECOVERED_STOP_REASON.to_string());
+            self.save(&task, Some(("recovered", &Value::Null)))?;
+            drop(lock);
         }
+        let known_ids: Vec<String> = tasks.into_iter().map(|task| task.id).collect();
+        locks::prune_orphaned_locks(self, &known_ids);
         Ok(())
     }
 
@@ -353,7 +340,16 @@ impl AgentTaskStore for SqliteTaskStore {
     }
 }
 
-const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT]\nagent list | show ID [--summary] | cancel ID | delete ID\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap.\n";
+/// The fixed `stop_reason` [`SqliteTaskStore::recover_interrupted`] gives a
+/// task it just marked `Interrupted` after proving its previous owner is
+/// gone. `dsh/src/agent/doctor.rs`'s "crashed" warning matches on this
+/// exact text (on the already-loaded `AgentTask`, not a second `events()`
+/// fetch) instead of re-deriving the same fact from the `"recovered"` event
+/// kind this function also writes.
+pub(crate) const RECOVERED_STOP_REASON: &str =
+    "previous shell stopped; inspect persisted results before resuming";
+
+const HELP: &str = "agent run --tokens N --timeout SECONDS [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach]\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--detach starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment). Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
 
 /// Whether a turn that just ended needs an explicit
 /// `AgentLifecycleManager::report_blocked` call rather than letting
@@ -403,6 +399,13 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     if shell.agent_runtime.is_some() {
         bail!("nested agent invocation is not allowed");
     }
+    // Internal - the only caller is `detach::start`, and it does not print
+    // `HELP`-shaped errors, so it is dispatched before anything else (the
+    // same placement `cron run-job` uses for the same reason).
+    if argv[1] == "run-detached" {
+        let id = argv.get(2).context("task ID required")?;
+        return detach::execute(shell, ctx, id);
+    }
     let store = Arc::new(SqliteTaskStore::open(
         &dsh_builtin::config_paths::agent_state_dir(),
     )?);
@@ -415,13 +418,16 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     store.recover_interrupted()?;
     let action = argv[1].as_str();
     if action == "list" {
-        for task in store.list()? {
-            ctx.write_stdout(&format!(
-                "{} {:?} {} / {} tokens {}",
-                task.id, task.status, task.tokens_used, task.token_budget, task.goal
-            ))?;
-        }
-        return Ok(());
+        return cli::list(ctx, &store, &argv[2..]);
+    }
+    if action == "logs" {
+        return cli::logs(ctx, &store, &argv[2..]);
+    }
+    if action == "wait" {
+        return cli::wait(ctx, &store, &argv[2..]);
+    }
+    if action == "doctor" {
+        return doctor::run(shell, ctx, &store, &argv[2..]);
     }
     if action == "respond" {
         let id = argv.get(2).context("task ID required")?;
@@ -429,7 +435,8 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         let remote = argv.get(4).context("remote task ID required")?;
         let input: Value =
             serde_json::from_str(argv.get(5).context("JSON inputResponses required")?)?;
-        let _lock = store.execution_lock()?;
+        let _lock = locks::try_lock_task(&store, id)?
+            .context("this task is currently running; cancel it or wait")?;
         let mut task = store.load(id)?;
         if task.pending_operation.is_some() {
             bail!("reconcile the previous operation before sending further input");
@@ -490,7 +497,8 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                 )?;
             }
             _ => {
-                let _lock = store.execution_lock()?;
+                let _lock = locks::try_lock_task(&store, id)?
+                    .context("this task is currently running; cancel it or wait")?;
                 store.delete(id)?;
                 ctx.write_stdout("Task and recorded output deleted")?;
             }
@@ -512,7 +520,6 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     if !matches!(action, "run" | "resume") {
         bail!("unknown agent action; {HELP}");
     }
-    let _lock = store.execution_lock()?;
 
     let root = shell.get_current_dir()?.canonicalize()?;
     let mut task = if action == "resume" {
@@ -547,6 +554,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     };
     let mut index = if action == "resume" { 3 } else { 2 };
     let mut reconcile = None;
+    let mut detach = false;
     while index < argv.len() {
         let option = &argv[index];
         index += 1;
@@ -556,6 +564,10 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         }
         if option == "--sandbox" && action == "run" {
             task.grant.sandbox = true;
+            continue;
+        }
+        if option == "--detach" {
+            detach = true;
             continue;
         }
         let value = argv.get(index).context("option value required")?;
@@ -586,6 +598,16 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             _ => bail!("unsupported option {option}"),
         }
     }
+    if detach {
+        return detach::start(shell, ctx, &store, task, reconcile);
+    }
+    let _lock = match locks::admit_run(shell, &store, &task.id)? {
+        locks::Admission::Admitted(lock) => lock,
+        locks::Admission::TaskBusy => bail!("this task is already running"),
+        locks::Admission::NoFreeSlot => {
+            bail!("another agent task is active; cancel it, wait, or raise AI_AGENT_MAX_CONCURRENT")
+        }
+    };
     let report = run_task(shell, ctx, &store, task, reconcile)?;
     if !report.succeeded {
         bail!("task {} stopped; inspect with agent show", report.id);
@@ -624,47 +646,7 @@ pub(crate) fn run_task(
     reconcile: Option<String>,
 ) -> Result<TaskRunReport> {
     use dsh_builtin::ShellProxy;
-    for path in task
-        .grant
-        .read_roots
-        .iter()
-        .chain(&task.grant.write_roots)
-        .chain(std::iter::once(&task.root))
-    {
-        let canonical = path.canonicalize().map_err(|error| {
-            anyhow::Error::new(TaskFailure::RootChanged)
-                .context(format!("task root no longer resolves: {error}"))
-        })?;
-        if canonical != *path {
-            return Err(anyhow::Error::new(TaskFailure::RootChanged)
-                .context("task root changed identity; inspect and start a new task"));
-        }
-    }
-    if task.grant.sandbox {
-        dsh_builtin::agent::sandbox::find_runtime()
-            .map_err(|error| tag_failure(TaskFailure::Config, error))?;
-    }
-    for name in &task.grant.environment {
-        if dsh_types::safety_policy::is_sensitive_key(name)
-            && let Some(value) = setting(shell, name)
-            && value.len() >= 4
-        {
-            store.secrets.lock().push(value);
-        }
-    }
-    if task.goal.trim().is_empty() {
-        return Err(anyhow::Error::new(TaskFailure::Config).context("goal required after --"));
-    }
-    if task.token_budget <= task.tokens_used || task.time_budget_ms <= task.elapsed_ms {
-        return Err(anyhow::Error::new(TaskFailure::Config)
-            .context("positive remaining --tokens and --timeout budgets are required"));
-    }
-    if task.pending_operation.is_some() && reconcile.is_none() {
-        return Err(anyhow::Error::new(TaskFailure::Reconcile).context(format!(
-            "previous operation has an unknown outcome; inspect `agent show {}` and the actual files/service, then resume with --reconcile describing the observed result",
-            task.id
-        )));
-    }
+    validate::startable(shell, store, &task, reconcile.as_deref())?;
     if let Some(note) = reconcile {
         task.pending_operation = None;
         task.progress = format!("User reconciled interrupted operation: {note}");

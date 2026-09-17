@@ -22,6 +22,12 @@
 
 `dsh/src/agent.rs` がSQLiteとCLIを所有し、`AgentTaskStore` と `AgentCommandPolicy::agent_runtime` を通してループAへ渡す。`dsh-types/src/agent.rs` が状態型、`dsh-builtin/src/agent/` が記録・検証・ジョブ・任意のSRTアダプターを所有する。ループは追加しない。詳細と利用例は [../../../../../agent.md](../../../../../agent.md)。
 
+**`agent run --detach` は Herdr に何も報告しない。** 子プロセス（`dsh/src/agent/detach.rs`）は
+親の `DOGESH_HERDR_OWNER_PID` をそのまま継承するので、`HerdrEnv::detect` は所有者マーカーの
+不一致を検出して `None` を返し、`agent_lifecycle` は自動的に no-op になる。この変数を子から
+剥がさないことが設計判断そのもの — pane の identity は前景の人間に属し、背景タスクがそれを
+握ると対話シェル自身の `Working`/`Blocked` 報告と競合する。
+
 結果のない変更操作を再送しない。チェックポイントに残るtool callは永続イベントの結果で補い、結果不明ならユーザーの実状態確認を要求する。予算は再開でリセットしない。モデルの最終回答だけで完了にしない。認証情報の保存、権限の外部コンテンツからの拡大、隔離失敗時の通常実行へのフォールバックは禁止。
 
 再発防止の焦点: 対話用セッションTTLをタスクへ適用しない。互換APIのusage欠落をゼロ使用扱いしない。ジョブ結果のJSONを文字列途中で切らない。SRTがPATHで別のbashを選んでもシステム外への読み取り権限を自動で追加しない。操作結果の不明判定は表示文字列ではなく型で渡す。`Cancelled` は通常保存で解除せず、明示的な `agent resume` だけが解除する。

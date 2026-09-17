@@ -56,18 +56,16 @@ pub fn run_once(
     let mut spawn_failed = Vec::new();
     for claim in claims {
         match spawn_run_child(&claim.run_id) {
-            Ok(mut child) => {
+            Ok(child) => {
                 started.push(claim.job_name);
                 // `Child` is not reaped on drop, and the in-session driver
                 // that calls `run_once` in a loop (`runner.rs`) lives for the
                 // whole session - without this, every completed run left a
-                // zombie behind until the session itself exited. A dedicated
-                // thread just to collect the exit status keeps this call
-                // itself non-blocking (the run is meant to outlive whoever
-                // ticked it).
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
+                // zombie behind until the session itself exited. The run is
+                // meant to outlive whoever ticked it, so this hands the
+                // `Child` to a dedicated reaper thread instead of waiting on
+                // it here.
+                crate::detached_child::reap(child);
             }
             Err(error) => {
                 spawn_failed.push((claim.job_name, error.to_string()));

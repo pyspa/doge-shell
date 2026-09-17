@@ -7,7 +7,7 @@ use crate::process::state::ProcessState;
 use nix::sys::signal::Signal;
 
 /// Width of the state column, matching bash's job table layout.
-const STATE_WIDTH: usize = 24;
+pub(crate) const STATE_WIDTH: usize = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobNoticeState {
@@ -116,7 +116,7 @@ pub(crate) fn format_job_notice(notice: &JobNotice) -> String {
     )
 }
 
-fn flatten_command(cmd: &str) -> String {
+pub(crate) fn flatten_command(cmd: &str) -> String {
     cmd.replace("\r\n", "⏎").replace(['\n', '\r'], "⏎")
 }
 

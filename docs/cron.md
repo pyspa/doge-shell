@@ -46,7 +46,7 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 
 ## AI ジョブ (`--agent`)
 
-`--agent` を付けたジョブは、無人実行される `agent run` そのものです。同じ入口・同じ権限モデルを使います（`docs/agent.md` 参照）。
+`--agent` を付けたジョブは、無人実行される `agent run` そのものです。同じ入口・同じ権限モデルを使います（`docs/agent.md` 参照）。「今すぐ1回だけ」でよいなら `cron add` は不要で、`agent run --detach` の方が近道です（`docs/agent.md` の「バックグラウンド実行」参照）。繰り返し実行したいときにこの節を使ってください。grant モデル・状態機械はどちらも同じものなので、ここでは複製しません。
 
 ```sh
 cron add --agent --name digest --tokens 50000 --timeout 10m \

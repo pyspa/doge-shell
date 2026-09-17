@@ -73,16 +73,16 @@ fn durable_intent_results_redaction_and_delete() {
     assert!(store.events(&task.id).unwrap().is_empty());
 }
 #[test]
-fn cancellation_wins_and_execution_lock_is_exclusive() {
+fn cancellation_wins_and_the_tasks_own_lock_is_exclusive() {
     let dir = tempfile::tempdir().unwrap();
     let first = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
     let second = SqliteTaskStore::open(&dir.path().join("state")).unwrap();
     let task = task(dir.path());
     first.save(&task, None).unwrap();
-    let lock = first.execution_lock().unwrap();
-    assert!(second.execution_lock().is_err());
+    let lock = locks::try_lock_task(&first, &task.id).unwrap().unwrap();
+    assert!(locks::try_lock_task(&second, &task.id).unwrap().is_none());
     drop(lock);
-    assert!(second.execution_lock().is_ok());
+    assert!(locks::try_lock_task(&second, &task.id).unwrap().is_some());
     let mut cancelled = task.clone();
     cancelled.status = TaskStatus::Cancelled;
     second.save(&cancelled, None).unwrap();
@@ -391,7 +391,9 @@ fn recovery_preserves_budgets_and_unknown_intent() {
     saved.elapsed_ms = 1000;
     saved.pending_operation = Some(json!({"id":"lost", "function":{"name":"edit"}}));
     store.save(&saved, None).unwrap();
-    let lock = store.execution_lock().unwrap();
+    // A live owner holds *this task's own* lock - not the old global one -
+    // so `recover_interrupted` must leave it alone.
+    let lock = locks::try_lock_task(&store, &saved.id).unwrap().unwrap();
     store.recover_interrupted().unwrap();
     assert_eq!(store.load(&saved.id).unwrap().status, TaskStatus::Running);
     drop(lock);

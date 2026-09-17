@@ -169,6 +169,11 @@ pub(crate) struct BackgroundTasks {
     /// cron store could not be opened at startup — cron is unavailable for
     /// this session rather than fatal to it.
     pub(crate) cron_task: Option<tokio::task::JoinHandle<()>>,
+    /// The in-session agent-task watcher (`dsh/src/agent/watch.rs`). `None`
+    /// when its store could not be opened, or `DOGESH_AGENT_WATCH` turned it
+    /// off — a detached task still runs and finishes either way; this only
+    /// stops this session from being told about it.
+    pub(crate) agent_task: Option<tokio::task::JoinHandle<()>>,
     pub(crate) io: BackgroundIoCoordinator,
 }
 
@@ -198,6 +203,9 @@ impl<'a> Drop for Repl<'a> {
             handle.abort();
         };
         if let Some(handle) = self.background_tasks.cron_task.take() {
+            handle.abort();
+        };
+        if let Some(handle) = self.background_tasks.agent_task.take() {
             handle.abort();
         };
         // Tests build and drop `Repl` dozens of times; without this gate each

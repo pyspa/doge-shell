@@ -42,6 +42,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Variables**: Environment variable management with `var`, `set` commands
 - **Abbreviations**: Define global abbreviations with `abbr -a g git`, or command-scoped ones with `abbr --add --command git co checkout`; scoped definitions win only in that pipeline segment
 - **Macro Recorder**: Record sequences of commands as reusable macros with `Alt+m`
+- **Background Agent Tasks**: `agent run --detach` hands a task to a separate process and returns immediately; see [Background agent tasks](#background-agent-tasks)
 
 ### Completion & UI
 
@@ -105,7 +106,8 @@ Proceed? [y/N/a(Always)]:
 Secrets are masked, long lines are clipped, and a large change stops after 40
 lines saying how many are left. `edit`, `str_replace` and `skill_manage` all go
 through it. An unattended `agent run` shows nothing - it has nobody to show it
-to, and stops for a permission it was not granted instead.
+to, and stops for a permission it was not granted instead; it records the
+missing permission and stops, see `agent list`/`agent logs`.
 
 ### 🔒 Secret Management
 
@@ -345,6 +347,7 @@ The shell includes many built-in commands:
 | `tm`                | Search and retrieve past command outputs                                                                                   |
 | `trigger`           | Monitor file changes and execute commands (saves output to history)                                                        |
 | `cron`              | Create, edit and run scheduled jobs — shell commands or unattended agent tasks                                              |
+| `agent`             | Run, resume, list, watch and inspect durable agent tasks, in the foreground or detached (`agent run --detach`)              |
 | `notebook-play`     | Play a notebook file (execute code blocks interactively)                                                                   |
 | `eproject`          | Open current project in Emacs                                                                                              |
 | `eview`             | Pipe content to external editor                                                                                            |
@@ -860,12 +863,15 @@ PTY-proxied. The browser says so rather than showing an empty pane.
 
 ### Status Line
 
-An optional line pinned to the bottom row, showing scheduled tasks, background jobs,
-git state and GitHub notifications:
+An optional line pinned to the bottom row, showing scheduled tasks, background agent
+tasks, background jobs, git state and GitHub notifications:
 
 ```
-⏱ 3 failing 1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
+⏱ 3 failing 1   🤖 2 ⚠1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
 ```
+
+The `🤖` segment counts detached/cron agent tasks currently running, with a `⚠` count
+for ones sitting at `input-required` (see [Background agent tasks](#background-agent-tasks)).
 
 **Off by default.** Enable it in `config.lisp`:
 
@@ -1007,6 +1013,48 @@ Full CLI reference, schedule grammar, external-tick setup for each OS, and a
 symptom-to-cause debugging table live in the `dsh-cron` skill
 (`docs/ai/skills/dsh-cron/`) — install it for the `!` chat agent with
 `scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user`.
+
+### Background agent tasks
+
+`agent run`/`agent resume` accept `--detach`: the task is handed to a separate
+`dogesh -c "agent run-detached <id>"` process, and the shell returns immediately instead
+of blocking until the task stops. Permissions, budgets and approval semantics are
+unchanged — an unattended run still needs `--tokens`/`--timeout` and still stops for a
+permission it was not granted, rather than asking.
+
+```sh
+agent run --tokens 50000 --timeout 900 --write . --detach -- 'investigate and fix the failing test'
+#  Task 1a2b3c4d-... detached (pid 12345); log at ~/.local/state/dogesh/agent/1a2b3c4d-.../run.log
+
+agent list                        # * marks a task that is actually running right now
+agent logs TASK_ID --follow       # recorded events, one per line, following until it stops
+agent wait TASK_ID                # blocks until it finishes (or needs approval), then shows the summary
+agent doctor                      # orphaned tasks a dead process left behind, stale approvals, ...
+```
+
+While a session is open, a detached task finishing, failing, or needing approval prints
+a one-line notice above the prompt (`[agent 1a2b3c4d]  Completed  ...`), the same way a
+background job's completion does, and shows up in the status line's `🤖` segment.
+Notices only fire for a session that is open at the time — one that finished while every
+shell was closed is not announced retroactively, just visible with `agent list`.
+`DOGESH_AGENT_WATCH=0` turns the notifier off; `DOGESH_AGENT_WATCH_INTERVAL_SECS`
+(default 2, backing off to 60 while nothing is running) controls how often it polls.
+Desktop notifications for it follow the existing `(pref-auto-notify t)`.
+
+`AI_AGENT_MAX_CONCURRENT` (default 1, matching prior behaviour) bounds how many agent
+tasks — detached or not — may run at once; a `--detach` past the ceiling fails before
+starting the child.
+
+A task stopped at `input-required` names the exact next command in `agent show
+--summary`'s `needs:` line, in `agent doctor`, and in the notice itself — an
+`--allow-command`/`--allow-mcp`/`--write`/`--reconcile` flag ready to paste, when one
+exists; some approvals (a hook's `ask`, a sensitive path, deleting a skill) cannot be
+satisfied by any flag and need `agent resume TASK_ID` answered interactively instead.
+
+There is deliberately no way to `--detach` a task from inside `!` chat itself — asking
+for unattended, recurring, or later work goes through `cron_manage` (create a paused job,
+then `cron run --now`), which already bounds a created job's grants to the calling
+task's own grants.
 
 ### Snippets
 

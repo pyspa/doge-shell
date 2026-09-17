@@ -28,6 +28,7 @@ pub mod command_timing;
 pub mod completion;
 pub mod cron;
 pub mod db;
+pub mod detached_child;
 pub mod direnv;
 pub mod dirs;
 pub mod environment;

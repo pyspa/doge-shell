@@ -82,7 +82,9 @@ pub(crate) fn first_line(text: &str) -> &str {
     text.lines().next().unwrap_or("")
 }
 
-fn status_label(status: TaskStatus) -> &'static str {
+/// `pub(crate)`: `agent/cli.rs`'s `agent list`/`agent logs` render the same
+/// labels this module uses, and a second copy of this match would drift.
+pub(crate) fn status_label(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Running => "running",
         TaskStatus::InputRequired => "input-required",
@@ -118,7 +120,9 @@ struct ToolStats {
     last_failure: Option<(String, String)>,
 }
 
-fn tool_name(call: Option<&Value>) -> &str {
+/// `pub(crate)`: `agent/cli.rs`'s `agent logs` names the tool behind each
+/// `tool_intent`/`tool_result` event the same way this module does.
+pub(crate) fn tool_name(call: Option<&Value>) -> &str {
     call.and_then(|call| call.get("function"))
         .and_then(|function| function.get("name"))
         .and_then(Value::as_str)
@@ -222,6 +226,16 @@ pub(crate) fn task_summary(task: &AgentTask, events: &[TaskEvent]) -> String {
         out.push_str("stop_reason: ");
         out.push_str(&clamp_chars(reason, STOP_REASON_CHARS));
         out.push('\n');
+    }
+    if let Some(need) = crate::agent::blocked::blocked_need(task) {
+        out.push_str("needs: ");
+        out.push_str(&clamp_chars(&need.what, STOP_REASON_CHARS));
+        out.push('\n');
+        if let Some(fix) = need.fix {
+            out.push_str("  ");
+            out.push_str(&fix);
+            out.push('\n');
+        }
     }
 
     if !task.criteria.is_empty() {

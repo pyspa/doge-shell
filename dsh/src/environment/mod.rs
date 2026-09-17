@@ -160,6 +160,15 @@ pub struct Environment {
     /// the cron store's on-disk state, which config.lisp failing does not
     /// undo.
     pub(crate) cron_health: Arc<RwLock<dsh_types::cron::job::CronHealth>>,
+    /// The same idea as `cron_health`, refreshed by
+    /// `dsh/src/agent/watch.rs`'s background poller instead of cron's
+    /// runner.
+    pub(crate) agent_health: Arc<RwLock<dsh_types::agent::AgentHealth>>,
+    /// Rendered notice lines (`dsh/src/agent/notice.rs`) waiting to be
+    /// printed above the prompt. The watcher pushes; `handle_background_tick`
+    /// (`dsh/src/repl/loop_handlers.rs`) drains it every tick, so this is
+    /// never read anywhere that would do its own I/O.
+    pub(crate) agent_notices: Arc<parking_lot::Mutex<Vec<String>>>,
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub(crate) startup_mode: bool,
 }
@@ -228,6 +237,8 @@ impl Environment {
             },
             dir_stack: Vec::new(),
             cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
+            agent_health: Arc::new(RwLock::new(dsh_types::agent::AgentHealth::default())),
+            agent_notices: Arc::new(parking_lot::Mutex::new(Vec::new())),
             startup_mode: false,
         }));
 
@@ -319,6 +330,8 @@ impl Environment {
             // runner that keeps this one warm, so a subshell would otherwise
             // show stale numbers instead of simply showing none.
             cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
+            agent_health: Arc::new(RwLock::new(dsh_types::agent::AgentHealth::default())),
+            agent_notices: Arc::new(parking_lot::Mutex::new(Vec::new())),
             startup_mode: false, // Extended environments (subshells) are not in startup mode
         }))
     }

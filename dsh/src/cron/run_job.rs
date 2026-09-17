@@ -15,9 +15,12 @@
 //!    without one leaves a dead task behind on every single tick.
 //! 2. **The daily ceiling.** A per-run token budget is not a bill: five
 //!    minutes apart, it is unbounded. This is the only thing that bounds it.
-//! 3. **The execution lock.** The agent store serialises one task at a time.
-//!    Losing that race is an ordinary skip, so it is worth discovering before
-//!    a single request is paid for.
+//! 3. **The execution lock.** `agent::locks::admit_run` (`dsh/src/agent/
+//!    locks.rs`) admits at most `AI_AGENT_MAX_CONCURRENT` tasks at once
+//!    (default 1, the old one-task-at-a-time behaviour) across every entry
+//!    point - this job, an interactive `agent run`, and `agent run --detach`
+//!    alike. Losing that race is an ordinary skip, so it is worth
+//!    discovering before a single request is paid for.
 
 use anyhow::{Context as _, Result};
 use dsh_builtin::config_paths;
@@ -27,8 +30,8 @@ use dsh_types::agent::{AgentTask, TaskGrant, TaskStatus, Verification};
 use dsh_types::cron::job::{ClaimedRun, JobKind, RunOutcome, RunReason, RunState, lease_secs};
 use dsh_types::safety_policy::redact_sensitive_text;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 
 use super::exec;
 use super::store::SqliteCronStore;
@@ -241,13 +244,30 @@ fn agent_outcome(
 
     let task_store = Arc::new(SqliteTaskStore::open(&config_paths::agent_state_dir())?);
     task_store.remember_secret(&api_key);
-    let Some(_lock) = task_store.try_execution_lock()? else {
-        return Ok(stopped(
-            RunState::Skipped,
-            RunReason::AgentBusy,
-            "another agent task holds the execution lock",
-            started,
-        ));
+    // Generated here, ahead of admission, so the same id names both the
+    // lock this run tries to take and the task it will create if admitted.
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let _lock = match crate::agent::locks::admit_run(shell, &task_store, &task_id)? {
+        crate::agent::locks::Admission::Admitted(lock) => lock,
+        // A freshly generated v4 UUID cannot already name a running task;
+        // treated the same as a full concurrency ceiling rather than
+        // panicking, on the off chance this assumption is ever wrong.
+        crate::agent::locks::Admission::TaskBusy => {
+            return Ok(stopped(
+                RunState::Skipped,
+                RunReason::AgentBusy,
+                "generated task id unexpectedly already has a lock",
+                started,
+            ));
+        }
+        crate::agent::locks::Admission::NoFreeSlot => {
+            return Ok(stopped(
+                RunState::Skipped,
+                RunReason::AgentBusy,
+                "another agent task holds the execution lock",
+                started,
+            ));
+        }
     };
     task_store.recover_interrupted()?;
 
@@ -256,7 +276,7 @@ fn agent_outcome(
     // report that it could not do the work. Jobs without an MCP grant do not
     // pay for the connection.
     if !spec.grant.mcp_calls.is_empty() {
-        connect_mcp(shell);
+        crate::agent::unattended::connect_mcp(shell);
     }
 
     let notepad_dir = store
@@ -270,9 +290,9 @@ fn agent_outcome(
 
     let grant = notepad_grant(&spec.grant, notepad_dir, &run.cwd);
 
-    let pending_before = pending_skill_count();
+    let pending_before = crate::agent::unattended::pending_skill_count();
     let task = AgentTask {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: task_id,
         goal: compose_goal(&notepad, &run.command, &notepad_path.to_string_lossy()),
         root: std::path::PathBuf::from(&run.cwd)
             .canonicalize()
@@ -328,9 +348,10 @@ fn agent_outcome(
     // Disarmed whether the run succeeded or errored - the only thing the
     // watchdog exists to prevent is a process that is still alive long after
     // this call should have returned one way or the other.
-    watchdog.store(false, Ordering::SeqCst);
+    crate::agent::watchdog::disarm(&watchdog);
     let report = report?;
-    let pending_skills = pending_skill_count().saturating_sub(pending_before);
+    let pending_skills =
+        crate::agent::unattended::pending_skill_count().saturating_sub(pending_before);
 
     // A summary that could not be read is a nicety lost, not a run that
     // failed: `run_task` already returned successfully by this point, so a
@@ -466,57 +487,7 @@ fn watchdog_deadline_secs(time_budget_secs: u64) -> u64 {
 /// own; the watchdog thread checks it once, after waking, and does nothing at
 /// all once it is cleared.
 fn arm_watchdog(time_budget_secs: u64) -> Arc<AtomicBool> {
-    let armed = Arc::new(AtomicBool::new(true));
-    let deadline_secs = watchdog_deadline_secs(time_budget_secs);
-    let flag = Arc::clone(&armed);
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_secs(deadline_secs));
-        if flag.load(Ordering::SeqCst) {
-            // `spawn_run_child` made this process its own process group
-            // leader, so pgid 0 (POSIX: "the sender's own process group")
-            // takes down this process and anything it started - the same
-            // call `exec::kill_group` uses for a runaway shell job, aimed at
-            // ourselves instead of a child. The run's row is left `running`;
-            // the next scan's `reap_expired_leases` closes it out as
-            // `failed`/`timeout`, exactly as it already does for any process
-            // that died without reporting back.
-            unsafe {
-                libc::killpg(0, libc::SIGKILL);
-            }
-        }
-    });
-    armed
-}
-
-/// Connects the MCP servers `config.lisp` declared.
-///
-/// The synchronous path on purpose: `Shell::reload_mcp_config` spawns, and a
-/// run that started before its tools arrived is the failure this exists to
-/// prevent. Failures are left to the agent to report - a server that is down
-/// is not a reason to refuse to run at all.
-fn connect_mcp(shell: &mut Shell) {
-    let servers = shell.environment.read().mcp_servers().to_vec();
-    if servers.is_empty() {
-        return;
-    }
-    let manager = shell
-        .environment
-        .read()
-        .integration_state
-        .mcp_manager
-        .clone();
-    manager.write().sync_servers_blocking(servers);
-}
-
-/// How many skill proposals are waiting for a person.
-///
-/// Staged writes do not stop an unattended task, so a "successful" run can
-/// quietly leave a proposal nobody is looking at. Counting is enough to
-/// surface it; approving stays where it already is, in `skill pending`.
-fn pending_skill_count() -> u32 {
-    std::fs::read_dir(config_paths::skills_pending_dir())
-        .map(|entries| entries.filter_map(Result::ok).count() as u32)
-        .unwrap_or_default()
+    crate::agent::watchdog::arm(watchdog_deadline_secs(time_budget_secs))
 }
 
 /// Puts the job's own notes in front of its goal.

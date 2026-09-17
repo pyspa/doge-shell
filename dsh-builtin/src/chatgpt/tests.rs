@@ -35,13 +35,21 @@ fn manager_with(buffer: Vec<Value>) -> ConversationManager {
 /// `&dyn ChatClient` rather than the concrete `ChatGptClient`.
 struct ScriptedClient {
     responses: std::sync::Mutex<std::collections::VecDeque<Value>>,
+    /// Tool names offered on each request, in order. Proves a mid-turn
+    /// activation reaches the *next* model request of the same turn.
+    seen_tools: std::sync::Mutex<Vec<Vec<String>>>,
 }
 
 impl ScriptedClient {
     fn new(responses: Vec<Value>) -> Self {
         Self {
             responses: std::sync::Mutex::new(responses.into_iter().collect()),
+            seen_tools: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    fn tools_seen(&self) -> Vec<Vec<String>> {
+        self.seen_tools.lock().unwrap().clone()
     }
 }
 
@@ -49,8 +57,21 @@ impl ChatClient for ScriptedClient {
     fn send_chat_request(
         &self,
         _messages: &[Value],
-        _options: &ChatRequestOptions,
+        options: &ChatRequestOptions,
     ) -> anyhow::Result<Value> {
+        let names = options
+            .tools
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|tool| {
+                tool.get("function")?
+                    .get("name")?
+                    .as_str()
+                    .map(str::to_string)
+            })
+            .collect();
+        self.seen_tools.lock().unwrap().push(names);
         self.responses
             .lock()
             .unwrap()
@@ -182,6 +203,97 @@ fn chat_with_tools_runs_mcp_load_group_without_approval() {
     assert_eq!(result, Ok("github tools are ready".to_string()));
     assert!(mcp_manager.read().is_group_enabled("github"));
     assert_eq!(proxy.confirm_calls, 0);
+}
+
+/// A group loaded mid-turn is offered on the next model request of the same
+/// turn: the first request lacks the tool, the second carries it.
+#[test]
+fn loaded_group_tools_reach_the_next_request_same_turn() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![
+        tool_call_response("call-1", "mcp_load_group", r#"{"group":"github"}"#),
+        final_answer("done"),
+    ]);
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.disable_group("github").unwrap();
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let seen = client.tools_seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        !seen[0].contains(&"mcp__github__list_issues".to_string()),
+        "first request must not offer the hidden tool: {seen:?}"
+    );
+    assert!(
+        seen[1].contains(&"mcp__github__list_issues".to_string()),
+        "second request must offer the loaded tool: {seen:?}"
+    );
+}
+
+/// `run_tool_calls` merges one activation once: a repeated load adds no
+/// duplicate schemas.
+#[test]
+fn run_tool_calls_merges_a_loaded_group_without_duplicates() {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.disable_group("github").unwrap();
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut tools = tool::mcp_turn_definitions(&mcp_manager.read(), true);
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "mcp__github__list_issues")
+    );
+
+    let tool_calls =
+        assistant_call("call-1", "mcp_load_group", r#"{"group":"github"}"#)["tool_calls"]
+            .as_array()
+            .cloned()
+            .unwrap();
+    run_tool_calls(
+        &tool_calls,
+        &mcp_manager,
+        None,
+        &hooks::HookContext::disabled(),
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+    )
+    .unwrap();
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "mcp__github__list_issues")
+    );
+    let merged = tools.len();
+    run_tool_calls(
+        &tool_calls,
+        &mcp_manager,
+        None,
+        &hooks::HookContext::disabled(),
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+    )
+    .unwrap();
+    assert_eq!(tools.len(), merged);
 }
 
 #[test]

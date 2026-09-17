@@ -107,7 +107,8 @@ impl TurnSetup {
 /// bookkeeping for a durable task (when there is one), dispatch through
 /// `execute_tool_call`, and appending each result to `manager`. Growing
 /// `tools` here (rather than back in `chat_with_tools`) is what lets
-/// `tool_search` discoveries take effect the same round they are found.
+/// `tool_search` discoveries - and `mcp_load_group` activations - take effect
+/// the same turn they happen: the loop rebuilds each request from this vec.
 ///
 /// Takes just the two pieces of `TurnSetup` this round actually reads
 /// (`runtime`, `hook_ctx`), not the whole struct - so a change to
@@ -170,6 +171,7 @@ pub(super) fn run_tool_calls(
             },
         };
         let mut tool_result = execution.content;
+        merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
 
         if let Some(runtime) = runtime {
             let sequence = runtime
@@ -199,6 +201,51 @@ pub(super) fn run_tool_calls(
         }));
     }
     Ok(())
+}
+
+/// Offer a freshly activated group's schemas on the next model request.
+///
+/// Runs for interactive and task turns alike: unlike `tool_search` (agent-only
+/// because interactive turns already carry every definition), group activation
+/// is the one way hidden schemas join an in-flight turn. Matching on dispatch
+/// success plus the call's own arguments - rather than the result text, which
+/// truncation and hook notes can reshape - keeps this immune to everything
+/// downstream of dispatch. `already_active` merges as a no-op through the
+/// dedup below, so repeat loads cost a round but never duplicate a schema;
+/// the turn's `MAX_TOOL_ITERATIONS` bound is the backstop, not a per-load cap.
+fn merge_activated_group_tools(
+    tool_call: &Value,
+    outcome: crate::agent::ToolOutcome,
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    tools: &mut Vec<Value>,
+) {
+    if outcome != crate::agent::ToolOutcome::Success {
+        return;
+    }
+    if tool_call["function"]["name"] != tool::mcp_groups::LOAD_NAME {
+        return;
+    }
+    let group = tool_call
+        .get("function")
+        .and_then(|function| function.get("arguments"))
+        .and_then(Value::as_str)
+        .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+        .and_then(|args| {
+            args.get("group")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let Some(group) = group else {
+        return;
+    };
+    for definition in mcp_manager.read().group_tool_definitions(&group) {
+        if !tools
+            .iter()
+            .any(|known| known["function"]["name"] == definition["function"]["name"])
+        {
+            tools.push(definition);
+        }
+    }
 }
 
 /// Record a terminal task failure when the turn cannot proceed far enough

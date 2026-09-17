@@ -116,7 +116,12 @@ impl TurnSetup {
 ///
 /// A failing tool call becomes an error message the model reads next round,
 /// not a stopped turn - only `before_tool`/`after_tool` failing (the durable
-/// task ledger itself is broken) propagates out as `Err`.
+/// task ledger itself is broken) propagates out as `Err`. The one exception
+/// is the missing-plan guard: a mutation before `task_plan` is a recoverable
+/// ordering error, returned as a tool result so the next round can record a
+/// plan and retry. A model that never records a plan keeps hitting this
+/// rejection until `MAX_TOOL_ITERATIONS`/budget ends the turn; that bound is
+/// the backstop, not a per-call escalation.
 pub(super) fn run_tool_calls(
     tool_calls: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
@@ -134,13 +139,26 @@ pub(super) fn run_tool_calls(
             .to_string();
 
         if let Some(runtime) = runtime {
-            runtime
-                .lock()
-                .before_tool(
-                    tool_call,
-                    serde_json::to_value(&*manager).map_err(|e| e.to_string())?,
-                )
-                .map_err(|e| e.to_string())?;
+            if let Err(e) = runtime.lock().before_tool(
+                tool_call,
+                serde_json::to_value(&*manager).map_err(|e| e.to_string())?,
+            ) {
+                // A missing plan/criteria is a model ordering error, not a
+                // broken task ledger: feed it back as a tool result so the
+                // next round can call `task_plan` and retry. Anything else
+                // (stopped task, exhausted budget, unusable store) still ends
+                // the turn as `Err`.
+                if crate::agent::is_missing_plan_error(&e) {
+                    let message = e.to_string();
+                    manager.add_message(json!({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": format!("Error: {message}. Call task_plan with plan and criteria first, then retry the operation."),
+                    }));
+                    continue;
+                }
+                return Err(e.to_string());
+            }
         }
         let execution = match execute_tool_call(tool_call, mcp_manager, hook_ctx, proxy) {
             Ok(execution) => execution,

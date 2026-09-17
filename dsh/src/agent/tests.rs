@@ -382,15 +382,14 @@ fn shared_loop_writes_verifies_and_persists_without_real_api() {
     assert!(restored.checkpoint.is_some());
 }
 
-/// `before_tool`'s own refusal (a mutating tool called before `task_plan`
-/// ever ran) must stop the turn through the loop's normal `break`, not `?` -
-/// otherwise `chat_with_tools`'s epilogue (`runtime.finish`) never runs, and
-/// `dsh/src/agent.rs`'s own fallback records a generic "chat exited: ..."
-/// instead of this specific, actionable reason. `agent/blocked.rs` reads
-/// exactly this field to suggest what to run next, so a regression here
-/// silently breaks that feature without touching it directly.
+/// A mutation before `task_plan` is a recoverable ordering error, not a
+/// terminal failure: the rejection is fed back as a tool result so the next
+/// round can record a plan and retry. The turn must therefore make a second
+/// request instead of finishing with the missing-plan reason. (Non-plan
+/// `before_tool` failures still end the turn via the loop's normal `break
+/// Err` so `chat_with_tools`'s epilogue (`runtime.finish`) always runs.)
 #[test]
-fn a_before_tool_refusal_finishes_the_task_with_its_own_specific_reason() {
+fn a_before_tool_refusal_is_recoverable_and_records_a_plan_next_round() {
     let dir = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let store = Arc::new(SqliteTaskStore::open(&state.path().join("state")).unwrap());
@@ -404,27 +403,49 @@ fn a_before_tool_refusal_finishes_the_task_with_its_own_specific_reason() {
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
     let server = std::thread::spawn(move || {
-        let started = std::time::Instant::now();
-        let mut stream = loop {
-            if let Ok((stream, _)) = listener.accept() {
-                break stream;
-            }
-            assert!(started.elapsed() < Duration::from_secs(5));
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        let _ = request(&mut stream);
-        // A mutating tool with no plan recorded yet - `before_tool` must
-        // refuse this before it ever runs.
-        reply(
-            &mut stream,
-            tool("execute", json!({"command": "echo hi"}), 0),
-        );
-        drop(stream);
-        // The refusal must stop the turn outright: no second request.
-        let until = std::time::Instant::now() + Duration::from_millis(300);
-        while std::time::Instant::now() < until {
-            assert!(listener.accept().is_err(), "unexpected second request");
-            std::thread::sleep(Duration::from_millis(10));
+        for step in 0..4 {
+            let started = std::time::Instant::now();
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            && started.elapsed() < Duration::from_secs(10) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(e) => panic!("fixture did not receive request {step}: {e}"),
+                }
+            };
+            let input = request(&mut stream);
+            let message = match step {
+                // A mutating tool with no plan recorded yet - `before_tool`
+                // must refuse this before it ever runs.
+                0 => tool("execute", json!({"command": "echo hi"}), step),
+                1 => {
+                    // The rejection must come back as a retryable tool error
+                    // naming `task_plan`, not as a terminal stop.
+                    let tool_error = input["messages"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "tool")
+                        .unwrap()["content"]
+                        .as_str()
+                        .unwrap()
+                        .to_string();
+                    assert!(tool_error.starts_with("Error:"), "{tool_error}");
+                    assert!(tool_error.contains("task_plan"), "{tool_error}");
+                    tool(
+                        "task_plan",
+                        json!({"plan":["check"],"progress":"retrying","criteria":["hi echoed"]}),
+                        step,
+                    )
+                }
+                _ => json!({"role":"assistant","content":"done"}),
+            };
+            reply(&mut stream, message);
         }
     });
 
@@ -444,10 +465,24 @@ fn a_before_tool_refusal_finishes_the_task_with_its_own_specific_reason() {
     server.join().unwrap();
 
     let saved = store.load(&id).unwrap();
-    assert_eq!(saved.status, TaskStatus::Failed);
+    // The plan recorded on the recovery round survives: the turn continued
+    // instead of failing outright on the first mutation.
+    assert_eq!(saved.plan, vec!["check".to_string()]);
+    assert_eq!(saved.criteria.len(), 1);
+    // The fixture answers without verifying, so the terminal reason is the
+    // unverified-criteria stop - and specifically not the missing-plan refusal.
     assert_eq!(
         saved.stop_reason.as_deref(),
-        Some("record a plan and fixed completion criteria with task_plan before taking action")
+        Some("agent: cannot complete with unverified criteria")
+    );
+    // The rejected `execute` never ran, so it left no `tool_result` behind.
+    assert!(
+        store
+            .events(&id)
+            .unwrap()
+            .iter()
+            .filter(|e| e.kind == "tool_result")
+            .all(|e| e.data["call"]["function"]["name"] != "execute")
     );
 }
 

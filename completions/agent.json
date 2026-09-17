@@ -32,6 +32,11 @@
           "takes_value": true
         },
         {
+          "long": "--profile",
+          "description": "Named bundle of exact allowed commands",
+          "takes_value": true
+        },
+        {
           "long": "--allow-mcp",
           "description": "Exact MCP approval key",
           "takes_value": true
@@ -59,6 +64,10 @@
           "long": "--detach",
           "short": "-d",
           "description": "Run in a separate process and return immediately"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show the expanded grant without starting"
         }
       ]
     },
@@ -92,6 +101,11 @@
           "takes_value": true
         },
         {
+          "long": "--profile",
+          "description": "Named bundle of exact allowed commands",
+          "takes_value": true
+        },
+        {
           "long": "--allow-mcp",
           "description": "Exact MCP approval key",
           "takes_value": true
@@ -115,8 +129,110 @@
           "long": "--detach",
           "short": "-d",
           "description": "Run in a separate process and return immediately"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show the expanded grant without starting"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
         }
       ]
+    },
+    {
+      "name": "retry",
+      "description": "Clone a task with new grants and run it again",
+      "options": [
+        {
+          "long": "--tokens",
+          "description": "Cumulative token budget",
+          "takes_value": true
+        },
+        {
+          "long": "--timeout",
+          "description": "Cumulative time budget in seconds",
+          "takes_value": true
+        },
+        {
+          "long": "--read",
+          "description": "Readable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--write",
+          "description": "Writable directory",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-command",
+          "description": "Exact allowed command",
+          "takes_value": true
+        },
+        {
+          "long": "--profile",
+          "description": "Named bundle of exact allowed commands",
+          "takes_value": true
+        },
+        {
+          "long": "--allow-mcp",
+          "description": "Exact MCP approval key",
+          "takes_value": true
+        },
+        {
+          "long": "--network",
+          "description": "Allowed sandbox host",
+          "takes_value": true
+        },
+        {
+          "long": "--env",
+          "description": "Inherited environment variable",
+          "takes_value": true
+        },
+        {
+          "long": "--reconcile",
+          "description": "Observed result of interrupted operation",
+          "takes_value": true
+        },
+        {
+          "long": "--check",
+          "description": "Additional completion criterion",
+          "takes_value": true
+        },
+        {
+          "long": "--detach",
+          "short": "-d",
+          "description": "Run in a separate process and return immediately"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Show the expanded grant without starting"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "profiles",
+      "description": "List named command bundles"
     },
     {
       "name": "list",
@@ -149,6 +265,18 @@
           "description": "Only events past this sequence number",
           "takes_value": true
         }
+      ],
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
       ]
     },
     {
@@ -160,6 +288,18 @@
           "description": "Give up waiting after N seconds",
           "takes_value": true
         }
+      ],
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
       ]
     },
     {
@@ -170,15 +310,51 @@
           "long": "--summary",
           "description": "Short report instead of the full record"
         }
+      ],
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
       ]
     },
     {
       "name": "cancel",
-      "description": "Request cancellation"
+      "description": "Request cancellation",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
+      ]
     },
     {
       "name": "delete",
-      "description": "Delete task records"
+      "description": "Delete task records",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
+      ]
     },
     {
       "name": "doctor",
@@ -192,7 +368,19 @@
     },
     {
       "name": "respond",
-      "description": "Provide remote task input"
+      "description": "Provide remote task input",
+      "arguments": [
+        {
+          "name": "id",
+          "description": "Task ID",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "agent.task"
+            }
+          }
+        }
+      ]
     }
   ]
 }

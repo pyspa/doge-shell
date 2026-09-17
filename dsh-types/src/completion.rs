@@ -3,6 +3,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
+    "agent.task",
     "ansible.inventory_host",
     "apk.installed_package",
     "apt.installed_package",

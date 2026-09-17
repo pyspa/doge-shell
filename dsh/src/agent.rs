@@ -24,6 +24,7 @@ pub(crate) mod detach;
 pub(crate) mod doctor;
 pub(crate) mod locks;
 pub(crate) mod notice;
+pub(crate) mod profiles;
 pub(crate) mod summary;
 pub(crate) mod unattended;
 pub(crate) mod validate;
@@ -359,7 +360,7 @@ pub(crate) const DEFAULT_AGENT_TOKEN_BUDGET: u64 = 50_000;
 /// (`--timeout`, then `AI_AGENT_TIMEOUT_SECS`).
 pub(crate) const DEFAULT_AGENT_TIMEOUT_SECS: u64 = 900;
 
-const HELP: &str = "agent run [--tokens N] [--timeout SECONDS] [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach|-d] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--detach|-d]\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--detach (-d) starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: --tokens/--timeout, else AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment), else 50000 tokens / 900s. Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
+const HELP: &str = "agent run [--tokens N] [--timeout SECONDS] [--check TEXT] [--write DIR] [--read DIR] [--allow-command EXACT] [--profile NAME] [--allow-mcp ENTRY] [--sandbox] [--network HOST] [--env NAME] [--detach|-d] [--dry-run] -- GOAL\nagent resume ID [--tokens N] [--timeout SECONDS] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent retry ID [--tokens N] [--timeout SECONDS] [--check TEXT] [--reconcile TEXT] [--allow-command EXACT] [--profile NAME] [--detach|-d] [--dry-run]\nagent profiles\nagent list [--all] [--json] | logs ID [--follow] [--json] | wait ID [--timeout SECONDS]\nagent show ID [--summary] | cancel ID | delete ID | doctor [--json]\nagent respond ID SERVER REMOTE_TASK_ID JSON_INPUT_RESPONSES\n--profile expands to exact commands (see `agent profiles`); resume/retry also accept grant options. --dry-run prints the expanded grant without starting. --detach (-d) starts the task in a separate process and returns immediately; see `agent list`/`agent logs`/`agent wait` to follow it.\nBudgets: --tokens/--timeout, else AI_AGENT_TOKEN_BUDGET / AI_AGENT_TIMEOUT_SECS (shell variable, then environment), else 50000 tokens / 900s. Token budget stops subsequent requests, not a billing cap. AI_AGENT_MAX_CONCURRENT (default 1) bounds how many tasks - detached or not - may run at once.\n";
 
 /// Whether a turn that just ended needs an explicit
 /// `AgentLifecycleManager::report_blocked` call rather than letting
@@ -438,6 +439,13 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
     }
     if action == "doctor" {
         return doctor::run(shell, ctx, &store, &argv[2..]);
+    }
+    if action == "profiles" {
+        for (name, description) in profiles::list() {
+            let commands = profiles::expand(name).unwrap_or(&[]);
+            ctx.write_stdout(&format!("{name}: {description}\n  {}", commands.join(", ")))?;
+        }
+        return Ok(());
     }
     if action == "respond" {
         let id = argv.get(2).context("task ID required")?;
@@ -527,13 +535,53 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
         }
         return Ok(());
     }
-    if !matches!(action, "run" | "resume") {
+    if !matches!(action, "run" | "resume" | "retry") {
         bail!("unknown agent action; {HELP}");
     }
 
     let root = shell.get_current_dir()?.canonicalize()?;
     let mut task = if action == "resume" {
         store.load(argv.get(2).context("task ID required")?)?
+    } else if action == "retry" {
+        let source_id = argv.get(2).context("task ID required")?;
+        let source = store.load(source_id)?;
+        if matches!(source.status, TaskStatus::Completed | TaskStatus::Cancelled) {
+            bail!("task {source_id} already finished; start a new task with `agent run`");
+        }
+        // Never clone a live run: without this, a retry of a `Running` task
+        // would duplicate the same work (and burn budget twice when the
+        // concurrency ceiling allows it).
+        if source.status == TaskStatus::Running
+            || locks::try_lock_task(&store, &source.id)?.is_none()
+        {
+            bail!("task {source_id} is already running; `agent wait`/`agent cancel` it before retrying");
+        }
+        AgentTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            goal: source.goal.clone(),
+            root: source.root.clone(),
+            status: TaskStatus::Interrupted,
+            grant: source.grant.clone(),
+            criteria: source
+                .criteria
+                .iter()
+                .map(|c| Verification {
+                    criterion: c.criterion.clone(),
+                    evidence_event: None,
+                    passed: false,
+                })
+                .collect(),
+            plan: vec![],
+            progress: format!("retried from {source_id}"),
+            token_budget: source.token_budget,
+            tokens_used: 0,
+            time_budget_ms: source.time_budget_ms,
+            elapsed_ms: 0,
+            stop_reason: None,
+            checkpoint: None,
+            pending_operation: source.pending_operation.clone(),
+            created_at: chrono::Utc::now().timestamp(),
+        }
     } else {
         AgentTask {
             id: uuid::Uuid::new_v4().to_string(),
@@ -562,9 +610,11 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             created_at: chrono::Utc::now().timestamp(),
         }
     };
-    let mut index = if action == "resume" { 3 } else { 2 };
+    let mut index = if action == "run" { 2 } else { 3 };
     let mut reconcile = None;
     let mut detach = false;
+    let mut dry_run = false;
+    let mut profile_names: Vec<String> = vec![];
     while index < argv.len() {
         let option = &argv[index];
         index += 1;
@@ -580,13 +630,21 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
             detach = true;
             continue;
         }
+        if option == "--dry-run" {
+            dry_run = true;
+            continue;
+        }
         let value = argv.get(index).context("option value required")?;
         index += 1;
+        if option == "--profile" && matches!(action, "run" | "resume" | "retry") {
+            profile_names.push(value.clone());
+            continue;
+        }
         // Grant-shaped options (`--read`/`--write`/`--allow-command`/
         // `--allow-mcp`/`--network`/`--env`) are shared with `cron add
         // --agent`, so an unattended job's grant validates exactly the way
         // an interactive one does.
-        if matches!(action, "run" | "resume")
+        if matches!(action, "run" | "resume" | "retry")
             && dsh_builtin::agent::grant::apply_grant_option(&mut task.grant, option, value)?
         {
             continue;
@@ -599,14 +657,56 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
                     .checked_mul(1000)
                     .context("timeout too large")?
             }
-            "--reconcile" if action == "resume" => reconcile = Some(value.clone()),
-            "--check" if action == "run" => task.criteria.push(Verification {
+            "--reconcile" if matches!(action, "resume" | "retry") => {
+                reconcile = Some(value.clone())
+            }
+            "--check" if matches!(action, "run" | "retry") => task.criteria.push(Verification {
                 criterion: value.clone(),
                 evidence_event: None,
                 passed: false,
             }),
             _ => bail!("unsupported option {option}"),
         }
+    }
+    if !profile_names.is_empty() {
+        profiles::apply(&mut task.grant, &profile_names)?;
+    }
+    if dry_run {
+        ctx.write_stdout(&format!(
+            "goal: {}\ncommands: {}\nread: {}\nwrite: {}\ntokens: {}/{}\ntimeout_secs: {}\ndetach: {detach}",
+            task.goal,
+            if task.grant.commands.is_empty() {
+                "(none)".to_string()
+            } else {
+                task.grant.commands.join(", ")
+            },
+            task.grant
+                .read_roots
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            if task.grant.write_roots.is_empty() {
+                "(none)".to_string()
+            } else {
+                task.grant
+                    .write_roots
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+            task.tokens_used,
+            task.token_budget,
+            task.time_budget_ms / 1000,
+        ))?;
+        // Fail fast like `detach::start`'s parent-side check: a preview that
+        // passes while the real run would immediately fail (empty goal,
+        // exhausted budget, unreconciled operation) is worse than no preview.
+        if let Err(error) = validate::startable(shell, &store, &task, reconcile.as_deref()) {
+            bail!("dry-run validation failed: {error:#}");
+        }
+        return Ok(());
     }
     if detach {
         return detach::start(shell, ctx, &store, task, reconcile);

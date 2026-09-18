@@ -87,7 +87,9 @@ pub async fn execute_with_capture(
 
     let state = launch_result?;
     let exit_code = match state {
-        ProcessState::Completed(code, _) => i32::from(code),
+        ProcessState::Completed(_, _) => state
+            .shell_exit_code()
+            .expect("completed state has exit code"),
         ProcessState::Stopped(_, _) => 130,
         ProcessState::Running => 0,
     };
@@ -141,8 +143,12 @@ async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> 
             // Execute
             let res = job.launch(ctx, shell).await;
 
-            if let Ok(ProcessState::Completed(exit, _)) = res {
-                std::process::exit(i32::from(exit));
+            if let Ok(state @ ProcessState::Completed(_, _)) = res {
+                std::process::exit(
+                    state
+                        .shell_exit_code()
+                        .expect("completed state has exit code"),
+                );
             } else {
                 std::process::exit(-1);
             }

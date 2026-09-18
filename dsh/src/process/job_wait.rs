@@ -243,7 +243,6 @@ pub fn wait_job_sync(job: &mut Job, no_hang: bool) -> Result<()> {
 }
 
 pub fn wait_process_sync(job: &mut Job) -> Result<()> {
-    let mut send_killpg = false;
     let mut backoff = WaitBackoff::new();
     loop {
         let (pid, state) = match wait_known_processes(job, WaitPidFlag::WUNTRACED) {
@@ -273,30 +272,13 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
             job.pgid, pid, state
         );
 
+        // A non-zero pipeline stage completion is data, not a reason to kill
+        // its siblings. Just record the state and keep waiting for the rest.
         if let ProcessState::Completed(code, signal) = state {
             debug!(
                 "⏳ WAIT: Process completed - pid: {}, code: {}, signal: {:?}",
                 pid, code, signal
             );
-            if code != 0 && !send_killpg {
-                if let Some(pgid) = job.pgid {
-                    debug!(
-                        "⏳ WAIT: Process failed (code: {}), sending SIGKILL to pgid: {}",
-                        code, pgid
-                    );
-                    match killpg(pgid, Signal::SIGKILL) {
-                        Ok(_) => debug!("⏳ WAIT: Successfully sent SIGKILL to pgid: {}", pgid),
-                        Err(e) => {
-                            debug!("⏳ WAIT: Failed to send SIGKILL to pgid {}: {}", pgid, e)
-                        }
-                    }
-                    send_killpg = true;
-                } else {
-                    debug!("⏳ WAIT: Process failed but no pgid to kill");
-                }
-            } else if code == 0 {
-                debug!("⏳ WAIT: Process completed successfully");
-            }
         }
 
         if is_job_completed(job) {
@@ -308,6 +290,10 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
             && process.is_pipeline_consumer_terminated()
             && !process.is_completed()
         {
+            // A non-zero producer/consumer exit is not itself a reason to kill
+            // the pipeline. This cleanup is only for the distinct case where
+            // the downstream consumer has terminated while upstream processes
+            // remain alive (e.g. `yes | head -n 1`).
             debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
             if let Some(pgid) = job.pgid {
                 debug!(
@@ -340,7 +326,6 @@ pub fn wait_process_sync(job: &mut Job) -> Result<()> {
 
 pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
     debug!("wait_process_no_hang started for job: {}", job.id);
-    let mut send_killpg = false;
     let mut backoff = WaitBackoff::new();
     loop {
         if crate::process::signal::check_and_clear_sigint() {
@@ -388,17 +373,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         job.set_process_state(pid, state);
         backoff.reset();
 
-        debug!("fin wait: pid:{:?}", pid);
-
-        if let ProcessState::Completed(code, _) = state
-            && code != 0
-            && !send_killpg
-            && let Some(pgid) = job.pgid
-        {
-            debug!("killpg pgid: {}", pgid);
-            let _ = killpg(pgid, Signal::SIGKILL);
-            send_killpg = true;
-        }
+        debug!("fin wait: pid:{:?} state:{:?}", pid, state);
 
         if is_job_completed(job) {
             debug!("Job completed, breaking from wait_process_no_hang loop");
@@ -410,6 +385,10 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
             && process.is_pipeline_consumer_terminated()
             && !process.is_completed()
         {
+            // A non-zero producer/consumer exit is not itself a reason to kill
+            // the pipeline. This cleanup is only for the distinct case where
+            // the downstream consumer has terminated while upstream processes
+            // remain alive (e.g. `yes | head -n 1`).
             debug!("Pipeline consumer terminated, killing remaining processes");
             if let Some(pgid) = job.pgid {
                 debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
@@ -440,7 +419,6 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
 pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
     debug!("wait_process_no_hang_sync started for job: {}", job.id);
-    let mut send_killpg = false;
     let mut backoff = WaitBackoff::new();
     loop {
         if crate::process::signal::check_and_clear_sigint() {
@@ -479,17 +457,7 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
         job.set_process_state(pid, state);
         backoff.reset();
 
-        debug!("fin wait: pid:{:?}", pid);
-
-        if let ProcessState::Completed(code, _) = state
-            && code != 0
-            && !send_killpg
-            && let Some(pgid) = job.pgid
-        {
-            debug!("killpg pgid: {}", pgid);
-            let _ = killpg(pgid, Signal::SIGKILL);
-            send_killpg = true;
-        }
+        debug!("fin wait: pid:{:?} state:{:?}", pid, state);
 
         if is_job_completed(job) {
             debug!("Job completed, breaking from wait_process_no_hang_sync loop");
@@ -500,6 +468,10 @@ pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
             && process.is_pipeline_consumer_terminated()
             && !process.is_completed()
         {
+            // A non-zero producer/consumer exit is not itself a reason to kill
+            // the pipeline. This cleanup is only for the distinct case where
+            // the downstream consumer has terminated while upstream processes
+            // remain alive (e.g. `yes | head -n 1`).
             debug!("Pipeline consumer terminated, killing remaining processes");
             if let Some(pgid) = job.pgid {
                 debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
@@ -546,15 +518,12 @@ fn wait_known_pids(pids: &[Pid], flags: WaitPidFlag) -> nix::Result<KnownWaitRes
                 debug!("wait_job exited {:?} {:?}", pid, status);
                 return Ok(KnownWaitResult::State(
                     pid,
-                    ProcessState::Completed(status as u8, None),
+                    ProcessState::exited(status as u8),
                 ));
             }
             Ok(WaitStatus::Signaled(pid, signal, _)) => {
                 debug!("wait_job signaled {:?} {:?}", pid, signal);
-                return Ok(KnownWaitResult::State(
-                    pid,
-                    ProcessState::Completed(1, Some(signal)),
-                ));
+                return Ok(KnownWaitResult::State(pid, ProcessState::signaled(signal)));
             }
             Ok(WaitStatus::Stopped(pid, signal)) => {
                 debug!("wait_job stopped {:?} {:?}", pid, signal);
@@ -667,7 +636,8 @@ pub async fn drain_foreground_completed_output(job: &mut Job) -> Result<()> {
 mod tests {
     use super::*;
     use crate::process::process::Process;
-    use nix::unistd::getpgrp;
+    use nix::unistd::{getpgrp, setpgid};
+    use std::os::unix::process::CommandExt;
     use std::process::{Command as StdCommand, Stdio};
 
     #[test]
@@ -697,5 +667,72 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout), "unrelated");
         let _ = job_child.wait();
+    }
+
+    /// A pipeline stage completing non-zero does not terminate its siblings.
+    ///
+    /// Both stages share one process group (as interactive pipelines do), so
+    /// this exercises the `job.pgid`-gated path that integration tests — with
+    /// piped stdio and no controlling terminal — cannot reach. The old
+    /// `send_killpg` logic SIGKILLed the whole group when the left stage
+    /// failed, and this test fails against it: the right stage ends up
+    /// `Completed(137, Some(SIGKILL))` instead of `Completed(0, None)`.
+    #[test]
+    fn nonzero_stage_exit_does_not_kill_pipeline_siblings() {
+        fn setpgid_self(pgid: Pid) -> std::io::Result<()> {
+            setpgid(Pid::from_raw(0), pgid)
+                .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+        }
+
+        // Left stage fails (exit 3) shortly after start.
+        let mut left_cmd = StdCommand::new("sh");
+        left_cmd
+            .arg("-c")
+            .arg("sleep 0.05; exit 3")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            left_cmd.pre_exec(|| setpgid_self(Pid::from_raw(0)));
+        }
+        let mut left_child = left_cmd.spawn().expect("spawn left stage");
+        let pgid = Pid::from_raw(left_child.id() as i32);
+
+        // Right stage outlives the left stage's failure.
+        let mut right_cmd = StdCommand::new("sh");
+        right_cmd
+            .arg("-c")
+            .arg("sleep 0.3")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            right_cmd.pre_exec(move || setpgid_self(pgid));
+        }
+        let mut right_child = right_cmd.spawn().expect("spawn right stage");
+        let left_pid = Pid::from_raw(left_child.id() as i32);
+        let right_pid = Pid::from_raw(right_child.id() as i32);
+
+        let mut job = Job::new("test-pipeline".to_string(), getpgrp());
+        job.pgid = Some(pgid);
+        let mut left_proc = Process::new("sh".to_string(), vec![]);
+        left_proc.pid = Some(left_pid);
+        let mut right_proc = Process::new("sh".to_string(), vec![]);
+        right_proc.pid = Some(right_pid);
+        left_proc.next = Some(Box::new(JobProcess::Command(right_proc)));
+        job.set_process(JobProcess::Command(left_proc));
+
+        wait_process_no_hang_sync(&mut job).expect("wait pipeline");
+
+        let _ = left_child.wait();
+        let _ = right_child.wait();
+
+        let head = job.process.as_ref().expect("pipeline head");
+        assert_eq!(head.get_state(), ProcessState::Completed(3, None));
+        let tail = head.next().expect("pipeline tail");
+        assert_eq!(
+            tail.get_state(),
+            ProcessState::Completed(0, None),
+            "right stage must survive the left stage's non-zero exit"
+        );
+        assert_eq!(job.last_process_state(), ProcessState::Completed(0, None));
     }
 }

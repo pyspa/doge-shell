@@ -95,8 +95,10 @@ pub fn capture_subshell_plan_stdout<'a>(
             job.disable_pty = true;
             job.foreground = true;
             match job.launch(&mut job_ctx, shell).await {
-                Ok(crate::process::ProcessState::Completed(code, _)) => {
-                    last_exit_code = i32::from(code);
+                Ok(state @ crate::process::ProcessState::Completed(_, _)) => {
+                    last_exit_code = state
+                        .shell_exit_code()
+                        .expect("completed state has exit code");
                     debug!("subshell job '{}' finished", job.cmd);
                 }
                 Ok(_) => {}

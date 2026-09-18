@@ -168,7 +168,7 @@ pub fn setup_panic_handler() {
 /// the terminal (mirroring `setup_panic_handler`'s own best-effort
 /// `disable_raw_mode` before an abnormal exit) and to exit with this
 /// codebase's own `128 + signal` convention for a signal-terminated process
-/// (`dsh/src/repl/job_notify.rs::JobNoticeState::exit_code`), rather than a
+/// (`crate::process::signal_exit_status`), rather than a
 /// bare `0` that would misreport a forced shutdown as a clean exit to
 /// whatever waits on this process.
 pub(crate) fn spawn_herdr_shutdown_signal_watcher(
@@ -200,7 +200,7 @@ pub(crate) fn spawn_herdr_shutdown_signal_watcher(
         // commands have to be killed here rather than by `ChatJobsShutdown`.
         dsh_builtin::chat_jobs_shutdown();
         let _ = crossterm::terminal::disable_raw_mode();
-        std::process::exit(128 + received as i32);
+        std::process::exit(crate::process::signal_exit_status(received));
     });
 }
 

@@ -2,7 +2,6 @@ use super::async_io::{AsyncPtyMasterWriter, AsyncStdin};
 use super::job::Job;
 use super::job_process::JobProcess;
 use super::pty::{Pty, PtyMode};
-use super::state::ProcessState;
 use crate::process::job_wait::wait_job;
 use crate::shell::Shell;
 use anyhow::Result;
@@ -314,10 +313,7 @@ pub async fn capture_output_and_history(
         let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();
         let stderr_stripped = console::strip_ansi_codes(&stderr_cap).to_string();
 
-        let exit_code = match job.state {
-            ProcessState::Completed(c, _) => c as i32,
-            _ => 0,
-        };
+        let exit_code = job.state.shell_exit_code().unwrap_or(0);
 
         let entry = OutputEntry::new(job.cmd.clone(), stdout_stripped, stderr_stripped, exit_code);
         shell

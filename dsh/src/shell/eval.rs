@@ -438,12 +438,15 @@ pub async fn eval_str(
                 // evaluating the rest of the command list.
                 stop_processing = true;
             }
-            Ok(ProcessState::Completed(exit, _signal)) => {
+            Ok(state @ ProcessState::Completed(_, _)) => {
+                let exit = state
+                    .shell_exit_code()
+                    .expect("completed state has exit code");
                 debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
-                last_exit_code = i32::from(exit);
+                last_exit_code = exit;
 
                 // Execute post-exec hooks
-                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit as i32) {
+                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit) {
                     debug!("Error executing post-exec hooks: {}", e);
                 }
             }

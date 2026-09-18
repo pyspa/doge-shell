@@ -3,7 +3,7 @@
 //! The formatter takes a plain owned struct rather than `&Job` on purpose: a
 //! real `Job` requires a live process, which makes unit testing impossible.
 
-use crate::process::state::ProcessState;
+use crate::process::state::{ProcessState, signal_exit_status};
 use nix::sys::signal::Signal;
 
 /// Width of the state column, matching bash's job table layout.
@@ -39,8 +39,8 @@ impl JobNoticeState {
         match self {
             JobNoticeState::Done => 0,
             JobNoticeState::Exit(code) => i32::from(*code),
-            JobNoticeState::Terminated => 128 + Signal::SIGTERM as i32,
-            JobNoticeState::Killed => 128 + Signal::SIGKILL as i32,
+            JobNoticeState::Terminated => signal_exit_status(Signal::SIGTERM),
+            JobNoticeState::Killed => signal_exit_status(Signal::SIGKILL),
             // Stopped jobs are not reported as finished.
             JobNoticeState::Stopped => 0,
         }
@@ -93,8 +93,15 @@ pub(crate) fn notice_state_from(state: &ProcessState) -> JobNoticeState {
         ProcessState::Completed(code, signal) => match signal {
             Some(Signal::SIGKILL) => JobNoticeState::Killed,
             Some(Signal::SIGTERM) => JobNoticeState::Terminated,
-            _ if *code == 0 => JobNoticeState::Done,
-            _ => JobNoticeState::Exit(*code),
+            Some(_) => {
+                let exit = state
+                    .shell_exit_code()
+                    .expect("completed state has exit code");
+                // Normalized 128+signal; u8 range holds for real signals.
+                JobNoticeState::Exit(exit as u8)
+            }
+            None if *code == 0 => JobNoticeState::Done,
+            None => JobNoticeState::Exit(*code),
         },
     }
 }
@@ -222,6 +229,33 @@ mod tests {
         assert_eq!(
             notice_state_from(&ProcessState::Stopped(Pid::from_raw(1), Signal::SIGTSTP)),
             JobNoticeState::Stopped
+        );
+    }
+
+    #[test]
+    fn background_notice_uses_normalized_signal_status() {
+        assert_eq!(JobNoticeState::Killed.exit_code(), 137);
+        assert_eq!(JobNoticeState::Terminated.exit_code(), 143);
+        assert_eq!(
+            notice_state_from(&ProcessState::signaled(Signal::SIGINT)),
+            JobNoticeState::Exit(130)
+        );
+        assert_eq!(
+            notice_state_from(&ProcessState::signaled(Signal::SIGINT)).exit_code(),
+            130
+        );
+        assert_eq!(
+            notice_state_from(&ProcessState::signaled(Signal::SIGPIPE)),
+            JobNoticeState::Exit(141)
+        );
+        assert_eq!(
+            notice_state_from(&ProcessState::Completed(2, None)).exit_code(),
+            2
+        );
+        // Fail-safe: stale stored code does not leak through the notice.
+        assert_eq!(
+            notice_state_from(&ProcessState::Completed(1, Some(Signal::SIGINT))).exit_code(),
+            130
         );
     }
 

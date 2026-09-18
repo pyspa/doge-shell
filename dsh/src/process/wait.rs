@@ -110,14 +110,14 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
                 "WAIT_PID_EXITED: Process {} exited normally with status: {}",
                 pid, status
             );
-            (pid, ProcessState::Completed(status as u8, None))
+            (pid, ProcessState::exited(status as u8))
         }
         Ok(WaitStatus::Signaled(pid, signal, core_dumped)) => {
             debug!(
                 "WAIT_PID_SIGNALED: Process {} killed by signal: {:?}, core_dumped: {}",
                 pid, signal, core_dumped
             );
-            (pid, ProcessState::Completed(1, Some(signal)))
+            (pid, ProcessState::signaled(signal))
         }
         Ok(WaitStatus::Stopped(pid, signal)) => {
             debug!(
@@ -131,7 +131,7 @@ pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
                 "WAIT_PID_ECHILD: No child process {} (ECHILD) - treating as completed",
                 pid
             );
-            (pid, ProcessState::Completed(1, None))
+            (pid, ProcessState::exited(1))
         }
         Ok(WaitStatus::StillAlive) => {
             debug!("WAIT_PID_ALIVE: Process {} still alive (WNOHANG)", pid);
@@ -254,5 +254,29 @@ mod tests {
         let result = wait_pid_job(getpid(), true);
         // Should not panic, may return None
         assert!(result.is_none() || result.is_some());
+    }
+
+    #[test]
+    fn wait_pid_job_converts_sigterm_to_143() {
+        init();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("kill -TERM $$")
+            .spawn()
+            .expect("spawn self-signalling sh");
+        let pid = Pid::from_raw(child.id() as i32);
+        // Blocking wait: the child terminates itself with SIGTERM immediately.
+        let waited = loop {
+            if let Some(result) = wait_pid_job(pid, false) {
+                break result;
+            }
+        };
+        let _ = child.wait();
+        assert_eq!(waited.0, pid);
+        assert_eq!(
+            waited.1,
+            ProcessState::Completed(143, Some(Signal::SIGTERM))
+        );
+        assert_eq!(waited.1.shell_exit_code(), Some(143));
     }
 }

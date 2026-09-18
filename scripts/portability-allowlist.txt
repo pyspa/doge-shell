@@ -75,11 +75,15 @@ dsh/src/safety/tests.rs	/etc/shadow
 dsh/src/terminal/title.rs	/bin/codex
 dsh/src/terminal/title.rs	/usr/bin/nvim
 dsh/tests/common/mod.rs	/bin/false
+dsh/tests/common/mod.rs	/bin/head
 dsh/tests/common/mod.rs	/bin/tr
 dsh/tests/common/mod.rs	/bin/true
+dsh/tests/common/mod.rs	/bin/yes
 dsh/tests/common/mod.rs	/usr/bin/false
+dsh/tests/common/mod.rs	/usr/bin/head
 dsh/tests/common/mod.rs	/usr/bin/tr
 dsh/tests/common/mod.rs	/usr/bin/true
+dsh/tests/common/mod.rs	/usr/bin/yes
 dsh/tests/export.rs	/usr/bin/env
 dsh/tests/fd_ownership.rs	/usr/bin/wc
 dsh/tests/non_interactive.rs	/bin/sleep

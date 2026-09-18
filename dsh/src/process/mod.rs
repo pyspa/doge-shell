@@ -21,5 +21,5 @@ pub use job_process::JobProcess;
 pub use process::Process;
 pub use pty::Pty;
 pub use redirect::Redirect;
-pub use state::{ListOp, ProcessState, SubshellType};
+pub use state::{ListOp, ProcessState, SubshellType, signal_exit_status};
 pub use wait::wait_pid_job;

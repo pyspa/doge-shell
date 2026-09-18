@@ -103,6 +103,16 @@ pub fn tr_path() -> &'static str {
     first_existing(&["/bin/tr", "/usr/bin/tr"])
 }
 
+/// Absolute path to an external `yes`. See [`true_path`].
+pub fn yes_path() -> &'static str {
+    first_existing(&["/bin/yes", "/usr/bin/yes"])
+}
+
+/// Absolute path to an external `head`. See [`true_path`].
+pub fn head_path() -> &'static str {
+    first_existing(&["/bin/head", "/usr/bin/head"])
+}
+
 fn first_existing(candidates: &'static [&'static str]) -> &'static str {
     candidates
         .iter()

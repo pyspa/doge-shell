@@ -7,8 +7,8 @@ use dsh_types::mcp::McpTransport;
 use super::*;
 
 /// Connected MCP tool count above which `doctor mcp` warns about prompt
-/// footprint. Interactive turns carry every connected definition in full on
-/// every round (agent tasks discover them through `tool_search` instead), so
+/// footprint. Interactive turns carry active definitions in full on
+/// every round (plus turn-local `tool_search` hits), so
 /// the count is a per-turn tax. A heuristic like the runtime-skill-footprint
 /// limit in `check_ai`, not a measured token budget: schemas vary in size.
 const MCP_TOOLS_FOOTPRINT_WARN: usize = 20;

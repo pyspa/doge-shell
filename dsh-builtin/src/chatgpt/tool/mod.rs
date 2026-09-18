@@ -118,9 +118,10 @@ pub(crate) fn mcp_group_definitions() -> Vec<Value> {
 }
 
 /// What one turn may offer beyond the unconditional builtins: the discovery
-/// meta tools wherever MCP servers exist - agent tasks too, whose
-/// `tool_search` only sees active definitions - plus, for interactive turns,
-/// the schemas of the currently active groups only.
+/// meta tools wherever MCP servers exist, plus, for interactive turns, the
+/// schemas of the currently active groups only. Interactive turns also carry
+/// `tool_search` for per-tool discovery without activating a whole group;
+/// agent tasks carry their own copy through `agent_definitions`.
 ///
 /// Lazy loading lives here, not in the chat loop: inactive groups contribute
 /// zero definitions, and `mcp_load_group` flips the toggle inside
@@ -134,8 +135,9 @@ pub(crate) fn mcp_turn_definitions(mcp: &McpManager, interactive: bool) -> Vec<V
     }
     let mut tools = mcp_group_definitions();
     if interactive {
+        tools.push(tool_search::definition());
         // Active groups only: never the full registry. With every group
-        // inactive this is just the two meta tools above.
+        // inactive this is just the meta tools above plus `tool_search`.
         let active = mcp.active_tool_definitions();
         if tracing::enabled!(tracing::Level::DEBUG) {
             let schema_chars: usize = serde_json::to_string(&active)
@@ -304,25 +306,25 @@ fn dispatch_tool(
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, ToolCallError> {
     // The job tools work under either entry point: a task polls its own
-    // runtime, an interactive turn polls the process-wide registry. Everything
-    // else here needs a task - `task_verify` records against its criteria,
-    // `mcp_task_*` against its event log, and `tool_search` is currently
-    // exposed only to agent tasks.
+    // runtime, an interactive turn polls the process-wide registry. `tool_search`
+    // is discovery only - it ranks over current MCP bindings and never records
+    // against a task - so it also runs without a runtime. Everything else here
+    // needs a task - `task_verify` records against its criteria and
+    // `mcp_task_*` against its event log.
     let result = if matches!(name, "job_status" | "job_output" | "job_cancel") {
         let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
         jobs::dispatch(name, &args, proxy)?
+    } else if name == "tool_search" {
+        mcp.write()
+            .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
+        tool_search::run(&mcp.read(), arguments)?
     } else if matches!(
         name,
-        "task_plan" | "task_verify" | "tool_search" | "mcp_task_status" | "mcp_task_cancel"
+        "task_plan" | "task_verify" | "mcp_task_status" | "mcp_task_cancel"
     ) {
         let runtime = proxy.agent_runtime().ok_or("tool requires an agent task")?;
         let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
         match name {
-            "tool_search" => {
-                mcp.write()
-                    .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
-                tool_search::run(&mcp.read(), arguments)?
-            }
             "mcp_task_status" | "mcp_task_cancel" => {
                 let server = args["server"].as_str().ok_or("server required")?;
                 let id = args["task_id"].as_str().ok_or("task_id required")?;
@@ -408,6 +410,10 @@ fn tool_kind(name: &str, is_mcp_tool: bool) -> &'static str {
 }
 
 fn is_agent_task_tool(name: &str) -> bool {
+    // `tool_search` stays in this family for hook compatibility even though
+    // interactive turns can now call it too: reclassifying its `kind` would
+    // silently change existing hook matching, so that redesign stays out of
+    // scope.
     matches!(
         name,
         "task_plan"
@@ -628,12 +634,7 @@ pub(crate) fn job_definitions() -> Vec<Value> {
 
 pub(crate) fn agent_definitions() -> Vec<Value> {
     use crate::agent::definition;
-    let mut tools = vec![definition(
-        "tool_search",
-        "Find MCP tools by words in their name, description, parameters, or server/group. Returns compact ranked matches with server, group, and whether each tool is already active. Discovered tools become callable on the next model request; use mcp_load_group only to activate a whole group at once. Discovery does not authorize execution.",
-        serde_json::json!({"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum matches to return. Defaults to 5."}}),
-        &["query"],
-    )];
+    let mut tools = vec![tool_search::definition()];
     tools.extend(job_definitions());
     for name in ["mcp_task_status", "mcp_task_cancel"] {
         tools.push(definition(name,"Poll or request cancellation of a remote task created by this agent. Cancellation does not guarantee the remote action stopped.",serde_json::json!({"server":{"type":"string"},"task_id":{"type":"string"}}), &["server","task_id"]));

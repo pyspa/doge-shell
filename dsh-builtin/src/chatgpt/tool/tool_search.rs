@@ -1,6 +1,6 @@
 //! Tool Search v2: deterministic lexical discovery over MCP tools.
 //!
-//! An agent turn never carries every MCP schema: it carries `tool_search`
+//! A turn never carries every MCP schema: it carries `tool_search`
 //! and earns the rest. This module is the discovery half of that trade -
 //! candidate collection (from [`McpManager::searchable_tools`], never a
 //! second registry), field-weighted ranking, and Top-N selection. Loading
@@ -268,6 +268,17 @@ fn truncate_description(description: &str) -> String {
     }
     let end = description.floor_char_boundary(MAX_DESCRIPTION_CHARS);
     format!("{}...", description[..end].trim_end())
+}
+
+/// Schema definition for the `tool_search` tool, shared by agent and
+/// interactive turns. Discovery only: calling it never executes an MCP tool.
+pub(crate) fn definition() -> Value {
+    crate::agent::definition(
+        "tool_search",
+        "Find MCP tools by words in their name, description, parameters, or server/group. Returns compact ranked matches with server, group, and whether each tool is already active. Discovered tools become callable on the next model request; use mcp_load_group only to activate a whole group at once. Discovery does not authorize execution.",
+        serde_json::json!({"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum matches to return. Defaults to 5."}}),
+        &["query"],
+    )
 }
 
 /// Run the `tool_search` tool: parse `{query, limit?}`, rank, and render

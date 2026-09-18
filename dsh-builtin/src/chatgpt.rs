@@ -292,6 +292,10 @@ fn chat_with_tools(
 
         let (interactive_base, mut tools) =
             split_turn_tool_bases(mcp_manager, setup.runtime.is_some());
+        // Interactive Tool Search hits live here: names only, for this turn.
+        // The next user message builds a fresh one, so nothing persists
+        // across turns and lazy loading cannot accumulate schemas forever.
+        let mut interactive_exposure = InteractiveToolExposure::default();
         iterations = 0;
         let turn_started = Instant::now();
         let mut unverified_answers = 0;
@@ -429,7 +433,12 @@ fn chat_with_tools(
             }
 
             // Tools for this request only; see `build_request_tools`.
-            let request_tools = build_request_tools(&interactive_base, &tools, mcp_manager);
+            let request_tools = build_request_tools(
+                &interactive_base,
+                &tools,
+                mcp_manager,
+                &interactive_exposure,
+            );
 
             let options = ChatRequestOptions::new()
                 .with_temperature(temperature)
@@ -555,6 +564,7 @@ fn chat_with_tools(
                         proxy,
                         &mut manager,
                         &mut tools,
+                        &mut interactive_exposure,
                     ) {
                         break Err(err);
                     }

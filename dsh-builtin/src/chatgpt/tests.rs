@@ -369,6 +369,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut proxy,
         &mut manager,
         &mut Vec::new(),
+        &mut InteractiveToolExposure::default(),
     )
     .unwrap();
     assert!(mcp_manager.read().is_group_enabled("github"));
@@ -391,6 +392,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut proxy,
         &mut manager,
         &mut Vec::new(),
+        &mut InteractiveToolExposure::default(),
     )
     .unwrap();
     let rebuilt_again = tool::mcp_turn_definitions(&mcp_manager.read(), true);
@@ -1417,4 +1419,300 @@ fn compaction_without_reclaim_keeps_measured_prompt_tokens() {
 
     assert_eq!(manager.compact_buffer(), 0);
     assert_eq!(manager.last_prompt_tokens, DEFAULT_CONTEXT_TOKEN_BUDGET + 1);
+}
+
+fn interactive_base_tools() -> Option<Vec<Value>> {
+    Some(tool::build_tools())
+}
+
+fn request_tool_names(tools: &[Value]) -> Vec<String> {
+    tools
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn github_two_tool_manager() -> McpManager {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "search_issues");
+    inner.insert_test_tool("github", "create_issue");
+    inner.disable_group("github").unwrap();
+    inner
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_one_tool(
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    proxy: &mut crate::test_support::TestShellProxy,
+    manager: &mut ConversationManager,
+    tools: &mut Vec<Value>,
+    exposure: &mut InteractiveToolExposure,
+    id: &str,
+    name: &str,
+    arguments: &str,
+) {
+    let tool_calls = assistant_call(id, name, arguments)["tool_calls"]
+        .as_array()
+        .cloned()
+        .unwrap();
+    run_tool_calls(
+        &tool_calls,
+        mcp_manager,
+        None,
+        &hooks::HookContext::disabled(),
+        proxy,
+        manager,
+        tools,
+        exposure,
+    )
+    .unwrap();
+}
+
+/// Interactive Tool Search loads only the matched schema while the group
+/// stays disabled: the first request hides both tools, `tool_search` names
+/// one, and the next request offers exactly that one.
+#[test]
+fn interactive_tool_search_loads_only_the_matched_tool() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = InteractiveToolExposure::default();
+    let base = interactive_base_tools();
+
+    let first = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let first_names = request_tool_names(&first);
+    assert!(
+        first_names.contains(&"tool_search".to_string()),
+        "{first_names:?}"
+    );
+    assert!(!first_names.contains(&"mcp__github__search_issues".to_string()));
+    assert!(!first_names.contains(&"mcp__github__create_issue".to_string()));
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+
+    assert!(
+        !mcp_manager.read().is_group_enabled("github"),
+        "individual loading must not flip the group toggle"
+    );
+    let discovered: Vec<String> = exposure.names().cloned().collect();
+    assert_eq!(discovered, vec!["mcp__github__search_issues".to_string()]);
+
+    let second = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let second_names = request_tool_names(&second);
+    assert!(
+        second_names.contains(&"mcp__github__search_issues".to_string()),
+        "{second_names:?}"
+    );
+    assert!(
+        !second_names.contains(&"mcp__github__create_issue".to_string()),
+        "{second_names:?}"
+    );
+    assert!(second_names.contains(&"tool_search".to_string()));
+
+    // Interactive turns never attach a task event.
+    let last = manager.buffer.last().expect("tool result recorded");
+    let content = last["content"].as_str().unwrap_or_default();
+    assert!(!content.contains("[task event"), "{content}");
+}
+
+/// An active schema rediscovered through Tool Search appears exactly once:
+/// the active position wins and the turn-local hit adds nothing.
+#[test]
+fn interactive_tool_search_dedupes_against_active_schemas() {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "search_issues");
+    inner.insert_test_tool("github", "create_issue");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = InteractiveToolExposure::default();
+    let base = interactive_base_tools();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let count = rebuilt
+        .iter()
+        .filter(|tool| tool["function"]["name"] == "mcp__github__search_issues")
+        .count();
+    assert_eq!(count, 1, "{:?}", request_tool_names(&rebuilt));
+}
+
+/// A disconnect between search and the next request hides the discovered
+/// tool: names are kept turn-local, schemas re-resolve every iteration.
+#[test]
+fn interactive_tool_search_does_not_reexpose_disconnected_tools() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = InteractiveToolExposure::default();
+    let base = interactive_base_tools();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert!(!exposure.names().cloned().collect::<Vec<_>>().is_empty());
+
+    mcp_manager.read().disconnect("github").unwrap();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let names = request_tool_names(&rebuilt);
+    assert!(
+        !names.contains(&"mcp__github__search_issues".to_string()),
+        "{names:?}"
+    );
+}
+
+/// A tool removed after discovery resolves to nothing on the next request.
+#[test]
+fn interactive_tool_search_does_not_keep_stale_schemas() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = InteractiveToolExposure::default();
+    let base = interactive_base_tools();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+
+    assert!(mcp_manager.write().remove_server("github"));
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let names = request_tool_names(&rebuilt);
+    assert!(
+        !names.contains(&"mcp__github__search_issues".to_string()),
+        "{names:?}"
+    );
+}
+
+/// Turn-local means turn-local: populating one turn's exposure through the
+/// real `tool_search` path leaves a fresh exposure for the next user turn
+/// empty. (`chat_with_tools` constructs a new `InteractiveToolExposure` per
+/// turn; this pins the state side of that contract.)
+#[test]
+fn interactive_tool_search_does_not_persist_across_turns() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = InteractiveToolExposure::default();
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert!(
+        exposure.names().next().is_some(),
+        "first turn must have discovered something"
+    );
+
+    let fresh = InteractiveToolExposure::default();
+    assert!(fresh.names().next().is_none());
+
+    let base = interactive_base_tools();
+    let with_previous = build_request_tools(&base, &[], &mcp_manager, &exposure);
+    assert!(
+        request_tool_names(&with_previous).contains(&"mcp__github__search_issues".to_string()),
+        "sanity: previous exposure resolves"
+    );
+    let rebuilt = build_request_tools(&base, &[], &mcp_manager, &fresh);
+    let names = request_tool_names(&rebuilt);
+    assert!(
+        !names.contains(&"mcp__github__search_issues".to_string()),
+        "{names:?}"
+    );
+}
+
+/// End to end: an interactive turn discovers one tool through `tool_search`
+/// and the very next model request can call it, while the group stays off
+/// and the undiscovered sibling stays hidden.
+#[test]
+fn interactive_tool_search_discovery_reaches_the_next_request_same_turn() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![
+        tool_call_response(
+            "call-1",
+            "tool_search",
+            r#"{"query":"search issues","limit":1}"#,
+        ),
+        final_answer("done"),
+    ]);
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let seen = client.tools_seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen[0].contains(&"tool_search".to_string()),
+        "first request must offer discovery: {seen:?}"
+    );
+    assert!(
+        !seen[0].contains(&"mcp__github__search_issues".to_string()),
+        "first request must not offer the hidden tool: {seen:?}"
+    );
+    assert!(
+        seen[1].contains(&"mcp__github__search_issues".to_string()),
+        "second request must offer the discovered tool: {seen:?}"
+    );
+    assert!(
+        !seen[1].contains(&"mcp__github__create_issue".to_string()),
+        "undiscovered sibling must stay hidden: {seen:?}"
+    );
+    assert!(
+        !mcp_manager.read().is_group_enabled("github"),
+        "tool-level loading must not flip the group toggle"
+    );
 }

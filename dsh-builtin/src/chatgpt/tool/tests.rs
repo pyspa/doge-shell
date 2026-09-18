@@ -730,9 +730,9 @@ fn job_status_works_without_an_agent_task() {
 }
 
 /// The rest of the task toolbox stays behind the gate: `task_verify` records
-/// against criteria and `tool_search` is currently exposed only to agent
-/// tasks (interactive turns discover additional MCP schemas through group
-/// activation instead).
+/// against criteria. `tool_search` is discovery only, so it runs with or
+/// without a task; interactive turns expose it for per-tool loading while
+/// group activation stays available for whole groups.
 #[test]
 fn the_task_only_tools_still_require_an_agent_task() {
     let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
@@ -743,7 +743,6 @@ fn the_task_only_tools_still_require_an_agent_task() {
             "{\"criterion\":0,\"evidence_event\":1,\"explanation\":\"x\"}",
         ),
         ("task_plan", "{\"plan\":[\"x\"],\"progress\":\"x\"}"),
-        ("tool_search", "{\"query\":\"x\"}"),
     ] {
         let mut proxy = NoopProxy::default();
         let tool_call = json!({ "function": { "name": name, "arguments": arguments } });
@@ -844,6 +843,7 @@ fn turn_definitions_gate_meta_and_full_schemas() {
         vec![
             "mcp_list_groups",
             "mcp_load_group",
+            "tool_search",
             "mcp__github__list_issues"
         ]
     );
@@ -875,14 +875,14 @@ fn definition_names(tools: &[Value]) -> Vec<String> {
 }
 
 /// With every group inactive, the initial interactive definitions carry zero
-/// actual MCP tools - only the two discovery meta tools.
+/// actual MCP tools - only the discovery tools.
 #[test]
 fn initial_interactive_definitions_hide_every_inactive_group() {
     let manager = lazy_manager();
 
     assert_eq!(
         definition_names(&mcp_turn_definitions(&manager, true)),
-        vec!["mcp_list_groups", "mcp_load_group"]
+        vec!["mcp_list_groups", "mcp_load_group", "tool_search"]
     );
 }
 
@@ -899,6 +899,7 @@ fn interactive_definitions_isolate_the_active_group() {
             "mcp__github__list_issues",
             "mcp_list_groups",
             "mcp_load_group",
+            "tool_search",
         ]
     );
 }
@@ -918,6 +919,7 @@ fn interactive_definitions_combine_multiple_active_groups() {
             "mcp__github__list_issues",
             "mcp_list_groups",
             "mcp_load_group",
+            "tool_search",
         ]
     );
 }
@@ -1434,4 +1436,82 @@ fn tool_search_runs_through_dispatch_for_an_agent_task() {
     assert_eq!(result.outcome, ToolOutcome::Success);
     let rendered: Value = serde_json::from_str(&result.content).expect("valid JSON");
     assert_eq!(rendered["results"][0]["name"], "mcp__github__search_issues");
+}
+
+/// `tool_search` needs no agent runtime: discovery ranks over current MCP
+/// bindings and never records against a task.
+#[test]
+fn tool_search_runs_through_dispatch_without_an_agent_task() {
+    let mut proxy = NoopProxy::default();
+    let mcp = Arc::new(RwLock::new(search_bench_manager()));
+    let tool_call = json!({
+        "function": {"name": "tool_search", "arguments": "{\"query\":\"search github issues\"}"}
+    });
+
+    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    let rendered: Value = serde_json::from_str(&result.content).expect("valid JSON");
+    assert_eq!(rendered["results"][0]["name"], "mcp__github__search_issues");
+    assert!(
+        !result.content.contains("requires an agent task"),
+        "{content}",
+        content = result.content
+    );
+}
+
+/// Interactive exposure gates on MCP presence: with no servers there is
+/// nothing to discover, so neither the meta tools nor `tool_search` are
+/// offered. With servers, all three discovery tools are present.
+#[test]
+fn interactive_tool_search_definition_follows_mcp_presence() {
+    let empty = McpManager::default();
+    let interactive = mcp_turn_definitions(&empty, true);
+    assert!(interactive.is_empty());
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let names: Vec<String> = mcp_turn_definitions(&inner, true)
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+    assert!(names.contains(&"tool_search".to_string()), "{names:?}");
+    assert!(names.contains(&"mcp_list_groups".to_string()), "{names:?}");
+    assert!(names.contains(&"mcp_load_group".to_string()), "{names:?}");
+}
+
+/// Agent regression: the task toolbox still carries exactly one
+/// `tool_search`, sharing the same definition interactive turns use.
+#[test]
+fn agent_toolbox_still_carries_exactly_one_tool_search() {
+    let task: Vec<String> = agent_definitions()
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        task.iter().filter(|name| *name == "tool_search").count(),
+        1,
+        "{task:?}"
+    );
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let interactive: Vec<String> = mcp_turn_definitions(&inner, true)
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        interactive
+            .iter()
+            .filter(|name| *name == "tool_search")
+            .count(),
+        1,
+        "{interactive:?}"
+    );
+
+    let agent_definition = agent_definitions()
+        .into_iter()
+        .find(|tool| tool["function"]["name"] == "tool_search")
+        .expect("agent tool_search");
+    assert_eq!(agent_definition, tool_search::definition());
 }

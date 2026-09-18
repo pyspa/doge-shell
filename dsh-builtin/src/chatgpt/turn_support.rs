@@ -5,6 +5,34 @@
 //! optional skill auto-archive sweep, checkpoint repair after an
 //! interruption).
 use super::*;
+use std::collections::BTreeSet;
+
+/// Turn-local exposure for Interactive Tool Search.
+///
+/// Holds only the function names `tool_search` discovered in this
+/// interactive turn - never schemas, never manager state. Schemas are
+/// re-resolved from [`McpManager::tool_definitions_for`] on every
+/// [`build_request_tools`] call, so a disconnect or a tool-list refresh that
+/// removes a tool naturally drops it from the next request instead of
+/// serving a stale copy. One value lives for one user turn; the next turn
+/// starts from [`Default::default`].
+#[derive(Debug, Default)]
+pub(super) struct InteractiveToolExposure {
+    loaded_tool_names: BTreeSet<String>,
+}
+
+impl InteractiveToolExposure {
+    pub(super) fn add<I>(&mut self, names: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        self.loaded_tool_names.extend(names);
+    }
+
+    pub(super) fn names(&self) -> impl Iterator<Item = &String> {
+        self.loaded_tool_names.iter()
+    }
+}
 
 /// Everything about a turn that is decided once, before the tool-calling
 /// loop starts: which skills the model may see, the fixed system prompt,
@@ -137,16 +165,17 @@ pub(super) fn split_turn_tool_bases(
 /// Interactive turns rebuild the MCP part from current exposure every
 /// iteration: `mcp_load_group` flips the toggle inside `McpManager` during
 /// `run_tool_calls`, and the next pass here picks the newly active schemas
-/// up. The read lock covers just this construction, never the LLM request
+/// up. Turn-local `tool_search` hits are re-resolved here as well, so a
+/// disconnect or refresh that removes a tool drops it from the next request.
+/// The read lock covers just this construction, never the LLM request
 /// itself. Agent turns reuse the accumulated vec instead, so their
 /// `tool_search` discoveries survive across iterations.
 ///
 /// The order matches the pre-lazy-loading layout - builtins, MCP, then the
 /// job tools - so provider-side prefix caches see the same shape as before.
 /// An interactive request is the fixed builtin base plus the rebuilt MCP
-/// exposure (meta tools plus currently active group schemas) plus the job
-/// tools: `tool_search` is currently exposed only to agent tasks, and the
-/// task tools record against a task that does not exist here.
+/// exposure (meta tools plus currently active group schemas) plus the
+/// individually searched schemas plus the job tools.
 ///
 /// `accumulated` (the vec `run_tool_calls` grows) is read on the agent path
 /// only; on the interactive path that function never grows it, so it stays
@@ -155,16 +184,84 @@ pub(super) fn build_request_tools(
     interactive_base: &Option<Vec<Value>>,
     accumulated: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
+    interactive_exposure: &InteractiveToolExposure,
 ) -> Vec<Value> {
     if let Some(base) = interactive_base {
         let mcp = mcp_manager.read();
         let mut current = base.clone();
         current.extend(tool::mcp_turn_definitions(&mcp, true));
+        let searched_names: Vec<String> = interactive_exposure.names().cloned().collect();
+        if !searched_names.is_empty() {
+            extend_unique_tool_definitions(&mut current, mcp.tool_definitions_for(&searched_names));
+        }
         current.extend(tool::job_definitions());
         current
     } else {
         accumulated.to_vec()
     }
+}
+
+/// Append definitions the target does not already carry, keyed on
+/// `definition["function"]["name"]`. The first occurrence wins, so an
+/// already-active group schema keeps its position when Tool Search
+/// rediscovers the same tool.
+fn extend_unique_tool_definitions(
+    target: &mut Vec<Value>,
+    definitions: impl IntoIterator<Item = Value>,
+) {
+    for definition in definitions {
+        let name = definition["function"]["name"].clone();
+        if !target.iter().any(|known| known["function"]["name"] == name) {
+            target.push(definition);
+        }
+    }
+}
+
+/// Names `tool_search` made callable: `function.name == "tool_search"` with
+/// a successful outcome and a well-formed `{"results":[{"name": ...}]}` body.
+/// Anything else - failure, another tool, unparsable output - yields nothing,
+/// so agent and interactive turns share one parsing rule.
+///
+/// Hook `additional_context` notes are prepended/appended to the same content
+/// (`execute_tool_call`), so a direct parse can fail even though the embedded
+/// search result is intact. Fall back to trying each blank-line-separated
+/// chunk: only a chunk shaped like a search result contributes names.
+fn tool_search_result_names(
+    tool_call: &Value,
+    outcome: crate::agent::ToolOutcome,
+    result: &str,
+) -> Vec<String> {
+    if outcome != crate::agent::ToolOutcome::Success {
+        return Vec::new();
+    }
+    if tool_call["function"]["name"] != "tool_search" {
+        return Vec::new();
+    }
+    if let Some(names) = search_result_names_in(result) {
+        return names;
+    }
+    for chunk in result.split("\n\n") {
+        let chunk = chunk.trim();
+        if chunk.len() == result.len() {
+            continue;
+        }
+        if let Some(names) = search_result_names_in(chunk) {
+            return names;
+        }
+    }
+    Vec::new()
+}
+
+fn search_result_names_in(text: &str) -> Option<Vec<String>> {
+    let value: Value = serde_json::from_str(text.trim()).ok()?;
+    let results = value.get("results")?.as_array()?;
+    Some(
+        results
+            .iter()
+            .filter_map(|hit| hit["name"].as_str())
+            .map(str::to_owned)
+            .collect(),
+    )
 }
 
 /// Runs one round's tool calls against the shell: `before_tool`/`after_tool`
@@ -173,10 +270,10 @@ pub(super) fn build_request_tools(
 /// `tools` here is an agent-turn mechanism only: `tool_search` discoveries
 /// and `mcp_load_group` activations accumulate in that vec because an agent
 /// turn's per-request view is the accumulated vec, not a fresh exposure read.
-/// Interactive turns instead rebuild their MCP definitions from current
-/// exposure before every request (see `chat_with_tools`), so they need no
-/// merge here - the toggle flip that `mcp_load_group` dispatch performs is
-/// propagation enough.
+/// Interactive turns instead record `tool_search` hits by name in
+/// `interactive_exposure` and rebuild their MCP definitions from current
+/// exposure before every request (see `chat_with_tools`), so a toggle flip
+/// from `mcp_load_group` dispatch needs no merge here.
 ///
 /// Takes just the two pieces of `TurnSetup` this round actually reads
 /// (`runtime`, `hook_ctx`), not the whole struct - so a change to
@@ -191,6 +288,7 @@ pub(super) fn build_request_tools(
 /// plan and retry. A model that never records a plan keeps hitting this
 /// rejection until `MAX_TOOL_ITERATIONS`/budget ends the turn; that bound is
 /// the backstop, not a per-call escalation.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_tool_calls(
     tool_calls: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
@@ -199,6 +297,7 @@ pub(super) fn run_tool_calls(
     proxy: &mut dyn ChatToolHost,
     manager: &mut ConversationManager,
     tools: &mut Vec<Value>,
+    interactive_exposure: &mut InteractiveToolExposure,
 ) -> Result<(), String> {
     for tool_call in tool_calls {
         let tool_call_id = tool_call
@@ -239,6 +338,11 @@ pub(super) fn run_tool_calls(
             },
         };
         let mut tool_result = execution.content;
+        // Tool-level loading: the compact result names the hits, resolved
+        // without flipping any group toggle so the next request can call
+        // exactly these tools. A hit removed between search and load resolves
+        // to nothing and is skipped; calling it would report the error instead.
+        let discovered = tool_search_result_names(tool_call, execution.outcome, &tool_result);
         // Agent turns only: their per-request view is this accumulated vec,
         // so a freshly activated group must be merged in to take effect the
         // same turn. Interactive turns skip this - they rebuild from current
@@ -247,6 +351,17 @@ pub(super) fn run_tool_calls(
         // rebuild for no gain and would reintroduce chat-loop state tracking.
         if runtime.is_some() {
             merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
+            if !discovered.is_empty() {
+                extend_unique_tool_definitions(
+                    tools,
+                    mcp_manager.read().tool_definitions_for(&discovered),
+                );
+            }
+        } else if !discovered.is_empty() {
+            // Interactive turns keep names only: `build_request_tools`
+            // re-resolves them every iteration, so a disconnect or refresh
+            // drops what no longer exists instead of serving a stale schema.
+            interactive_exposure.add(discovered);
         }
 
         if let Some(runtime) = runtime {
@@ -254,32 +369,6 @@ pub(super) fn run_tool_calls(
                 .lock()
                 .after_tool(tool_call, &tool_result, execution.outcome)
                 .map_err(|e| e.to_string())?;
-            if tool_call["function"]["name"] == "tool_search"
-                && let Ok(result) = serde_json::from_str::<Value>(&tool_result)
-            {
-                // Tool-level loading: the compact result names the hits, and
-                // their schemas are resolved here - without flipping any group
-                // toggle - so the next request can call exactly these tools.
-                // A hit removed between search and load resolves to nothing
-                // and is skipped; calling it would report the error instead.
-                let names: Vec<String> = result["results"]
-                    .as_array()
-                    .map(|results| {
-                        results
-                            .iter()
-                            .filter_map(|hit| hit["name"].as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                for definition in mcp_manager.read().tool_definitions_for(&names) {
-                    if !tools
-                        .iter()
-                        .any(|d| d["function"]["name"] == definition["function"]["name"])
-                    {
-                        tools.push(definition.clone());
-                    }
-                }
-            }
             tool_result.push_str(&format!("\n[task event {sequence}]"));
         }
         // Add tool result to history buffer
@@ -297,14 +386,13 @@ pub(super) fn run_tool_calls(
 ///
 /// Agent-only: interactive turns rebuild from current exposure instead (see
 /// `run_tool_calls`), so this never runs for them. Unlike `tool_search`
-/// (agent-only; interactive turns already carry the currently active group
-/// schemas), group activation is the one way hidden schemas join an
-/// in-flight agent turn. Matching on dispatch success plus the call's own
-/// arguments - rather than the result text, which truncation and hook notes
-/// can reshape - keeps this immune to everything downstream of dispatch.
-/// `already_active` merges as a no-op through the dedup below, so repeat
-/// loads cost a round but never duplicate a schema; the turn's
-/// `MAX_TOOL_ITERATIONS` bound is the backstop, not a per-load cap.
+/// (which both turns resolve per-tool), group activation is the one way
+/// hidden schemas join an in-flight agent turn. Matching on dispatch success
+/// plus the call's own arguments - rather than the result text, which
+/// truncation and hook notes can reshape - keeps this immune to everything
+/// downstream of dispatch. `already_active` merges as a no-op through the
+/// dedup below, so repeat loads cost a round but never duplicate a schema;
+/// the turn's `MAX_TOOL_ITERATIONS` bound is the backstop, not a per-load cap.
 fn merge_activated_group_tools(
     tool_call: &Value,
     outcome: crate::agent::ToolOutcome,
@@ -330,14 +418,7 @@ fn merge_activated_group_tools(
     let Some(group) = group else {
         return;
     };
-    for definition in mcp_manager.read().group_tool_definitions(&group) {
-        if !tools
-            .iter()
-            .any(|known| known["function"]["name"] == definition["function"]["name"])
-        {
-            tools.push(definition);
-        }
-    }
+    extend_unique_tool_definitions(tools, mcp_manager.read().group_tool_definitions(&group));
 }
 
 /// Record a terminal task failure when the turn cannot proceed far enough
@@ -433,5 +514,70 @@ pub(super) fn repair_interrupted_tool_calls(
         let content = recorded.map(|event| format!("{}\n[task event {}]", event.data["result"].as_str().unwrap_or_default(), event.sequence))
             .unwrap_or_else(|| "Interrupted before the result was recorded. Do not replay. Inspect actual state; the user's reconciliation is recorded in task progress.".into());
         manager.add_message(json!({"role":"tool","tool_call_id":id,"content":content}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn search_call() -> Value {
+        json!({"function": {"name": "tool_search", "arguments": "{}"}})
+    }
+
+    const SEARCH_JSON: &str =
+        r#"{"query":"x","count":1,"results":[{"name":"mcp__github__search_issues"}]}"#;
+
+    #[test]
+    fn search_names_parse_plain_result() {
+        assert_eq!(
+            tool_search_result_names(
+                &search_call(),
+                crate::agent::ToolOutcome::Success,
+                SEARCH_JSON
+            ),
+            vec!["mcp__github__search_issues".to_string()]
+        );
+    }
+
+    /// Hook `additional_context` notes wrap the same JSON with blank-line
+    /// separated prose; discovery must survive the decoration.
+    #[test]
+    fn search_names_survive_hook_context_notes() {
+        let decorated = format!("policy reminder\n\n{SEARCH_JSON}\n\naudit note");
+        assert_eq!(
+            tool_search_result_names(
+                &search_call(),
+                crate::agent::ToolOutcome::Success,
+                &decorated
+            ),
+            vec!["mcp__github__search_issues".to_string()]
+        );
+    }
+
+    #[test]
+    fn search_names_reject_non_success_or_other_tools_or_garbage() {
+        let other = json!({"function": {"name": "mcp_load_group", "arguments": "{}"}});
+        assert!(
+            tool_search_result_names(
+                &search_call(),
+                crate::agent::ToolOutcome::Failure,
+                SEARCH_JSON
+            )
+            .is_empty()
+        );
+        assert!(
+            tool_search_result_names(&other, crate::agent::ToolOutcome::Success, SEARCH_JSON)
+                .is_empty()
+        );
+        assert!(
+            tool_search_result_names(
+                &search_call(),
+                crate::agent::ToolOutcome::Success,
+                "not json"
+            )
+            .is_empty()
+        );
     }
 }

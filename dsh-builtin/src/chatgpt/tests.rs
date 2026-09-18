@@ -369,7 +369,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut proxy,
         &mut manager,
         &mut Vec::new(),
-        &mut InteractiveToolExposure::default(),
+        &mut ToolSearchExposure::default(),
     )
     .unwrap();
     assert!(mcp_manager.read().is_group_enabled("github"));
@@ -392,7 +392,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut proxy,
         &mut manager,
         &mut Vec::new(),
-        &mut InteractiveToolExposure::default(),
+        &mut ToolSearchExposure::default(),
     )
     .unwrap();
     let rebuilt_again = tool::mcp_turn_definitions(&mcp_manager.read(), true);
@@ -1446,7 +1446,7 @@ fn run_one_tool(
     proxy: &mut crate::test_support::TestShellProxy,
     manager: &mut ConversationManager,
     tools: &mut Vec<Value>,
-    exposure: &mut InteractiveToolExposure,
+    exposure: &mut ToolSearchExposure,
     id: &str,
     name: &str,
     arguments: &str,
@@ -1477,7 +1477,7 @@ fn interactive_tool_search_loads_only_the_matched_tool() {
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
     let mut accumulated = Vec::new();
-    let mut exposure = InteractiveToolExposure::default();
+    let mut exposure = ToolSearchExposure::default();
     let base = interactive_base_tools();
 
     let first = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
@@ -1536,7 +1536,7 @@ fn interactive_tool_search_dedupes_against_active_schemas() {
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
     let mut accumulated = Vec::new();
-    let mut exposure = InteractiveToolExposure::default();
+    let mut exposure = ToolSearchExposure::default();
     let base = interactive_base_tools();
 
     run_one_tool(
@@ -1566,7 +1566,7 @@ fn interactive_tool_search_does_not_reexpose_disconnected_tools() {
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
     let mut accumulated = Vec::new();
-    let mut exposure = InteractiveToolExposure::default();
+    let mut exposure = ToolSearchExposure::default();
     let base = interactive_base_tools();
 
     run_one_tool(
@@ -1597,7 +1597,7 @@ fn interactive_tool_search_does_not_keep_stale_schemas() {
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
     let mut accumulated = Vec::new();
-    let mut exposure = InteractiveToolExposure::default();
+    let mut exposure = ToolSearchExposure::default();
     let base = interactive_base_tools();
 
     run_one_tool(
@@ -1622,7 +1622,7 @@ fn interactive_tool_search_does_not_keep_stale_schemas() {
 
 /// Turn-local means turn-local: populating one turn's exposure through the
 /// real `tool_search` path leaves a fresh exposure for the next user turn
-/// empty. (`chat_with_tools` constructs a new `InteractiveToolExposure` per
+/// empty. (`chat_with_tools` constructs a new `ToolSearchExposure` per
 /// turn; this pins the state side of that contract.)
 #[test]
 fn interactive_tool_search_does_not_persist_across_turns() {
@@ -1630,7 +1630,7 @@ fn interactive_tool_search_does_not_persist_across_turns() {
     let mut proxy = crate::test_support::TestShellProxy::default();
     let mut manager = manager_with(vec![]);
     let mut accumulated = Vec::new();
-    let mut exposure = InteractiveToolExposure::default();
+    let mut exposure = ToolSearchExposure::default();
     run_one_tool(
         &mcp_manager,
         &mut proxy,
@@ -1646,7 +1646,7 @@ fn interactive_tool_search_does_not_persist_across_turns() {
         "first turn must have discovered something"
     );
 
-    let fresh = InteractiveToolExposure::default();
+    let fresh = ToolSearchExposure::default();
     assert!(fresh.names().next().is_none());
 
     let base = interactive_base_tools();
@@ -1714,5 +1714,504 @@ fn interactive_tool_search_discovery_reaches_the_next_request_same_turn() {
     assert!(
         !mcp_manager.read().is_group_enabled("github"),
         "tool-level loading must not flip the group toggle"
+    );
+}
+
+fn many_group_manager() -> McpManager {
+    let mut inner = McpManager::default();
+    for index in 0..20 {
+        inner.insert_test_tool_full(
+            "alpha",
+            &format!("alpha_tool_{index:02}"),
+            &format!("Alpha helper tool {index}"),
+            json!({"type": "object"}),
+        );
+        inner.insert_test_tool_full(
+            "beta",
+            &format!("beta_tool_{index:02}"),
+            &format!("Beta helper tool {index}"),
+            json!({"type": "object"}),
+        );
+    }
+    inner.disable_group("alpha").unwrap();
+    inner.disable_group("beta").unwrap();
+    inner
+}
+
+fn oversized_tool_manager() -> McpManager {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool_full(
+        "big",
+        "huge_tool",
+        &"x".repeat(110_000),
+        json!({"type": "object"}),
+    );
+    inner.insert_test_tool("big", "note_tool");
+    inner.disable_group("big").unwrap();
+    inner
+}
+
+fn last_tool_result(manager: &ConversationManager) -> String {
+    manager.buffer.last().expect("tool result recorded")["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Re-searching the same tool charges the turn budget once: the repeat is
+/// already available, the byte count does not move, and the next request
+/// still offers the schema exactly once.
+#[test]
+fn tool_search_budget_charges_a_repeat_search_only_once() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert_eq!(exposure.charged_tool_count(), 1);
+    let bytes = exposure.used_schema_bytes();
+    assert!(bytes > 0);
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-2",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert_eq!(exposure.charged_tool_count(), 1);
+    assert_eq!(exposure.used_schema_bytes(), bytes);
+
+    let base = interactive_base_tools();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    assert_eq!(
+        rebuilt
+            .iter()
+            .filter(|tool| tool["function"]["name"] == "mcp__github__search_issues")
+            .count(),
+        1
+    );
+}
+
+/// Searching a tool whose group is already active costs no budget: its
+/// schema rides the request already, so there is nothing new to expose.
+#[test]
+fn tool_search_budget_ignores_tools_from_active_groups() {
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "search_issues");
+    inner.insert_test_tool("github", "create_issue");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":5}"#,
+    );
+
+    assert_eq!(exposure.charged_tool_count(), 0);
+    assert_eq!(exposure.used_schema_bytes(), 0);
+    assert!(
+        !last_tool_result(&manager).contains("exposure budget"),
+        "a fully available result needs no budget note"
+    );
+}
+
+/// Forty tools through two searches charge 32 and skip 8: the skip is
+/// reported to the model, and the skipped schemas never reach the request.
+#[test]
+fn tool_search_budget_caps_interactive_exposure_per_turn() {
+    let mcp_manager = Arc::new(RwLock::new(many_group_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"alpha","limit":20}"#,
+    );
+    assert_eq!(exposure.charged_tool_count(), 20);
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-2",
+        "tool_search",
+        r#"{"query":"beta","limit":20}"#,
+    );
+    assert_eq!(exposure.charged_tool_count(), 32);
+    let content = last_tool_result(&manager);
+    assert!(content.contains("exposure budget"), "{content}");
+    assert!(content.contains("skipped 8"), "{content}");
+    // The note names what did not make the cut, so the model knows which
+    // ranked matches are not callable.
+    let loaded: Vec<String> = exposure.names().cloned().collect();
+    let skipped_name = (0..20)
+        .map(|index| format!("mcp__beta__beta_tool_{index:02}"))
+        .find(|name| !loaded.contains(name))
+        .expect("the budget must have skipped some beta tools");
+    assert!(content.contains(&skipped_name), "{content}");
+
+    let base = interactive_base_tools();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    assert_eq!(
+        request_tool_names(&rebuilt)
+            .iter()
+            .filter(|name| name.starts_with("mcp__"))
+            .count(),
+        32
+    );
+}
+
+/// A schema larger than the whole byte budget never loads, while a small
+/// sibling from the same result still does - and the model hears why.
+#[test]
+fn tool_search_budget_skips_an_oversized_schema_but_loads_its_sibling() {
+    let mcp_manager = Arc::new(RwLock::new(oversized_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"big tool","limit":5}"#,
+    );
+
+    assert_eq!(exposure.charged_tool_count(), 1);
+    assert!(
+        exposure.used_schema_bytes() < tool::tool_search::MAX_TOOL_SEARCH_SCHEMA_BYTES_PER_TURN
+    );
+    let content = last_tool_result(&manager);
+    assert!(content.contains("exposure budget"), "{content}");
+    assert!(content.contains("skipped 1"), "{content}");
+
+    let base = interactive_base_tools();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let names = request_tool_names(&rebuilt);
+    assert!(
+        names.contains(&"mcp__big__note_tool".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        !names.contains(&"mcp__big__huge_tool".to_string()),
+        "{names:?}"
+    );
+}
+
+/// Charging then disconnecting keeps the budget consumed: the next request
+/// still hides the tool, and the counters never go back down.
+#[test]
+fn tool_search_budget_is_not_refunded_by_a_disconnect() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    let bytes = exposure.used_schema_bytes();
+
+    mcp_manager.read().disconnect("github").unwrap();
+    assert_eq!(exposure.charged_tool_count(), 1);
+    assert_eq!(exposure.used_schema_bytes(), bytes);
+
+    let base = interactive_base_tools();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    assert!(
+        !request_tool_names(&rebuilt).contains(&"mcp__github__search_issues".to_string()),
+        "a disconnect still hides the charged tool"
+    );
+}
+
+/// A fresh exposure starts the next user turn at zero and can charge the
+/// same tool again: the budget is per-turn, never carried over.
+#[test]
+fn tool_search_budget_resets_for_the_next_user_turn() {
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert_eq!(exposure.charged_tool_count(), 1);
+
+    let mut fresh = ToolSearchExposure::default();
+    assert_eq!(fresh.charged_tool_count(), 0);
+    assert_eq!(fresh.used_schema_bytes(), 0);
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut fresh,
+        "call-2",
+        "tool_search",
+        r#"{"query":"search issues","limit":1}"#,
+    );
+    assert_eq!(fresh.charged_tool_count(), 1);
+    assert!(fresh.used_schema_bytes() > 0);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_one_agent_tool(
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    runtime: &Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>,
+    proxy: &mut crate::test_support::TestShellProxy,
+    manager: &mut ConversationManager,
+    tools: &mut Vec<Value>,
+    exposure: &mut ToolSearchExposure,
+    id: &str,
+    name: &str,
+    arguments: &str,
+) {
+    let tool_calls = assistant_call(id, name, arguments)["tool_calls"]
+        .as_array()
+        .cloned()
+        .unwrap();
+    run_tool_calls(
+        &tool_calls,
+        mcp_manager,
+        Some(runtime),
+        &hooks::HookContext::disabled(),
+        proxy,
+        manager,
+        tools,
+        exposure,
+    )
+    .unwrap();
+}
+
+/// Agent turns charge the same count budget into their accumulated vec: 40
+/// tools across two searches land 32 schemas and report the 8 skipped.
+#[test]
+fn agent_tool_search_shares_the_same_count_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::test_support::test_runtime(dir.path());
+    let mcp_manager = Arc::new(RwLock::new(many_group_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_agent_tool(
+        &mcp_manager,
+        &runtime,
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"alpha","limit":20}"#,
+    );
+    run_one_agent_tool(
+        &mcp_manager,
+        &runtime,
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        "call-2",
+        "tool_search",
+        r#"{"query":"beta","limit":20}"#,
+    );
+
+    assert_eq!(exposure.charged_tool_count(), 32);
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["function"]["name"]
+                .as_str()
+                .is_some_and(|name| name.starts_with("mcp__")))
+            .count(),
+        32
+    );
+    let content = last_tool_result(&manager);
+    assert!(content.contains("exposure budget"), "{content}");
+}
+
+/// Agent turns charge the same byte budget: the oversized schema stays out
+/// of the accumulator while its sibling loads.
+#[test]
+fn agent_tool_search_shares_the_same_byte_budget() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::test_support::test_runtime(dir.path());
+    let mcp_manager = Arc::new(RwLock::new(oversized_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    run_one_agent_tool(
+        &mcp_manager,
+        &runtime,
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        "call-1",
+        "tool_search",
+        r#"{"query":"big tool","limit":5}"#,
+    );
+
+    assert_eq!(exposure.charged_tool_count(), 1);
+    let names: Vec<String> = tools
+        .iter()
+        .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        names.contains(&"mcp__big__note_tool".to_string()),
+        "{names:?}"
+    );
+    assert!(
+        !names.contains(&"mcp__big__huge_tool".to_string()),
+        "{names:?}"
+    );
+    assert!(last_tool_result(&manager).contains("exposure budget"));
+}
+
+/// An agent turn that re-searches a loaded tool neither duplicates the
+/// schema nor charges the budget twice.
+#[test]
+fn agent_tool_search_does_not_recharge_a_loaded_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = crate::test_support::test_runtime(dir.path());
+    let mcp_manager = Arc::new(RwLock::new(github_two_tool_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    for id in ["call-1", "call-2"] {
+        run_one_agent_tool(
+            &mcp_manager,
+            &runtime,
+            &mut proxy,
+            &mut manager,
+            &mut tools,
+            &mut exposure,
+            id,
+            "tool_search",
+            r#"{"query":"search issues","limit":1}"#,
+        );
+    }
+
+    assert_eq!(exposure.charged_tool_count(), 1);
+    let bytes = exposure.used_schema_bytes();
+    assert!(bytes > 0);
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["function"]["name"] == "mcp__github__search_issues")
+            .count(),
+        1
+    );
+}
+
+/// `mcp_load_group` is an explicit whole-group activation on another control
+/// plane: it still exposes every group schema even after Tool Search hit its
+/// own budget, and the load itself charges nothing.
+#[test]
+fn mcp_load_group_stays_outside_the_tool_search_budget() {
+    let mcp_manager = Arc::new(RwLock::new(many_group_manager()));
+    let mut proxy = crate::test_support::TestShellProxy::default();
+    let mut manager = manager_with(vec![]);
+    let mut accumulated = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    for (id, query) in [("call-1", "alpha"), ("call-2", "beta")] {
+        run_one_tool(
+            &mcp_manager,
+            &mut proxy,
+            &mut manager,
+            &mut accumulated,
+            &mut exposure,
+            id,
+            "tool_search",
+            &format!(r#"{{"query":"{query}","limit":20}}"#),
+        );
+    }
+    assert_eq!(exposure.charged_tool_count(), 32);
+    let loaded: Vec<String> = exposure.names().cloned().collect();
+    let skipped_beta = (0..20)
+        .map(|index| format!("mcp__beta__beta_tool_{index:02}"))
+        .find(|name| !loaded.contains(name))
+        .expect("the budget must have skipped some beta tools");
+
+    run_one_tool(
+        &mcp_manager,
+        &mut proxy,
+        &mut manager,
+        &mut accumulated,
+        &mut exposure,
+        "call-3",
+        "mcp_load_group",
+        r#"{"group":"beta"}"#,
+    );
+
+    assert!(mcp_manager.read().is_group_enabled("beta"));
+    assert_eq!(exposure.charged_tool_count(), 32);
+    let base = interactive_base_tools();
+    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    assert!(
+        request_tool_names(&rebuilt).contains(&skipped_beta),
+        "an explicit group load exposes even budget-skipped tools"
     );
 }

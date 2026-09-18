@@ -15,6 +15,7 @@
 
 use crate::chatgpt::mcp::{McpManager, SearchableTool};
 use serde_json::{Value, json};
+use std::collections::{BTreeSet, HashMap};
 
 /// Default Top-N: enough to offer a choice, small enough to keep the
 /// tool result a pointer rather than a catalogue.
@@ -275,9 +276,150 @@ fn truncate_description(description: &str) -> String {
 pub(crate) fn definition() -> Value {
     crate::agent::definition(
         "tool_search",
-        "Find MCP tools by words in their name, description, parameters, or server/group. Returns compact ranked matches with server, group, and whether each tool is already active. Discovered tools become callable on the next model request; use mcp_load_group only to activate a whole group at once. Discovery does not authorize execution.",
+        "Find MCP tools by words in their name, description, parameters, or server/group. Returns compact ranked matches with server, group, and whether each tool is already active. Matching tools can become available on the next model request, subject to the per-turn Tool Search exposure budget; use mcp_load_group only to activate a whole group at once. Discovery does not authorize execution.",
         serde_json::json!({"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum matches to return. Defaults to 5."}}),
         &["query"],
+    )
+}
+
+/// Per-turn cap on schemas `tool_search` may newly expose: without it,
+/// repeating searches accumulates every MCP schema and defeats lazy loading.
+pub(crate) const MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN: usize = 32;
+/// Byte twin of the count cap: one giant schema must not eat the whole
+/// prompt either. Measured in compact-JSON serialized UTF-8 bytes, not
+/// tokens, so no tokenizer is needed. Sized from the eval catalog (p50
+/// ~0.3 KiB, max ~0.5 KiB per tool): 32 max-size tools cost ~14 KiB, so
+/// the count budget binds first for normal tools and this only trips on
+/// genuinely oversized single schemas.
+pub(crate) const MAX_TOOL_SEARCH_SCHEMA_BYTES_PER_TURN: usize = 96 * 1024;
+
+/// Ephemeral per-turn Tool Search state, shared by interactive and agent
+/// turns: which tools this turn's searches already charged, and how many
+/// serialized schema bytes they cost. Names only, never schemas - the
+/// caller re-resolves through [`McpManager::tool_definitions_for`] on every
+/// request, so a disconnect or refresh that removes a tool drops it instead
+/// of serving a stale copy. One value lives for one user turn; the next
+/// turn starts from [`Default::default`]. Monotonic within the turn: a
+/// charged tool that later disappears keeps its budget consumed, so
+/// connect/disconnect cycles cannot launder extra exposure.
+#[derive(Debug, Default)]
+pub(crate) struct ToolSearchExposure {
+    loaded_tool_names: BTreeSet<String>,
+    used_schema_bytes: usize,
+}
+
+impl ToolSearchExposure {
+    pub(crate) fn names(&self) -> impl Iterator<Item = &String> {
+        self.loaded_tool_names.iter()
+    }
+
+    /// Tools charged through Tool Search so far this turn.
+    pub(crate) fn charged_tool_count(&self) -> usize {
+        self.loaded_tool_names.len()
+    }
+
+    /// Serialized schema bytes charged through Tool Search so far this turn.
+    pub(crate) fn used_schema_bytes(&self) -> usize {
+        self.used_schema_bytes
+    }
+
+    /// Admit `discovered` Tool Search hits (in ranking order) into this
+    /// turn's exposure and charge the budget. Classification, in order:
+    /// missing schema first (`unavailable`), then anything needing no new
+    /// exposure (`already_available`: already offered in the current tool
+    /// view such as an active group schema, or already charged this turn -
+    /// neither consumes budget twice), then the twin budget gates
+    /// (`loaded` vs `skipped_budget`). Only `loaded` mutates `self`.
+    pub(crate) fn admit(
+        &mut self,
+        mcp: &McpManager,
+        already_offered: &BTreeSet<String>,
+        discovered: &[String],
+    ) -> ToolSearchAdmission {
+        let mut admission = ToolSearchAdmission::default();
+        if discovered.is_empty() {
+            return admission;
+        }
+        let resolved = mcp.tool_definitions_for(discovered);
+        let mut by_name: HashMap<&str, &Value> = HashMap::new();
+        for definition in &resolved {
+            if let Some(name) = definition["function"]["name"].as_str() {
+                by_name.insert(name, definition);
+            }
+        }
+        for name in discovered {
+            let Some(definition) = by_name.get(name.as_str()) else {
+                admission.unavailable.push(name.clone());
+                continue;
+            };
+            if already_offered.contains(name) || self.loaded_tool_names.contains(name) {
+                admission.already_available.push(name.clone());
+                continue;
+            }
+            let bytes = serde_json::to_vec(definition)
+                .map(|body| body.len())
+                .unwrap_or(0);
+            if self.loaded_tool_names.len() >= MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN {
+                admission.skipped_budget.push(name.clone());
+                continue;
+            }
+            if self.used_schema_bytes + bytes > MAX_TOOL_SEARCH_SCHEMA_BYTES_PER_TURN {
+                admission.skipped_budget.push(name.clone());
+                continue;
+            }
+            self.loaded_tool_names.insert(name.clone());
+            self.used_schema_bytes += bytes;
+            admission.loaded_names.push(name.clone());
+            admission.loaded_definitions.push((*definition).clone());
+        }
+        admission
+    }
+}
+
+/// One admission decision: what a single `tool_search` result did to the
+/// turn's exposure. `loaded_*` is the only part that consumed budget;
+/// `already_available` and `unavailable` cost nothing, and `skipped_budget`
+/// is what the model must hear about (see [`exposure_budget_note`]).
+#[derive(Debug, Default)]
+pub(crate) struct ToolSearchAdmission {
+    pub loaded_names: Vec<String>,
+    pub loaded_definitions: Vec<Value>,
+    pub skipped_budget: Vec<String>,
+    pub already_available: Vec<String>,
+    pub unavailable: Vec<String>,
+}
+
+/// Model-readable note for a `tool_search` result that left schemas on the
+/// floor. Names the skipped tools (bounded) so the model knows exactly which
+/// matches did *not* become callable: without the names, a byte-budget skip
+/// can read as contradictory (a nearly empty tool counter next to "budget
+/// reached"), and a count-budget skip leaves the model guessing which of the
+/// ranked results made the cut. Admission is in ranking order, so narrowing
+/// the next search toward the top hits is what recovers them. Only rendered
+/// when something was actually skipped, so fully loaded searches pay no
+/// extra prompt.
+pub(crate) fn exposure_budget_note(
+    exposure: &ToolSearchExposure,
+    loaded: usize,
+    skipped: &[String],
+) -> String {
+    const MAX_NAMED_SKIPS: usize = 8;
+    let mut named = skipped
+        .iter()
+        .take(MAX_NAMED_SKIPS)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if skipped.len() > MAX_NAMED_SKIPS {
+        named.push_str(&format!(", and {} more", skipped.len() - MAX_NAMED_SKIPS));
+    }
+    format!(
+        "Tool Search exposure: loaded {loaded} tool(s) in ranking order; skipped {} ({named}) because the per-turn schema exposure budget was reached ({}/{} tools, {} KiB/{} KiB). Narrow the next search, or use mcp_load_group only if the whole group is intentionally required.",
+        skipped.len(),
+        exposure.charged_tool_count(),
+        MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN,
+        exposure.used_schema_bytes() / 1024,
+        MAX_TOOL_SEARCH_SCHEMA_BYTES_PER_TURN / 1024,
     )
 }
 
@@ -447,5 +589,166 @@ mod tests {
             assert_eq!(hits.len(), 1, "query {query}");
             assert_eq!(hits[0].name, "mcp__github__search_issues");
         }
+    }
+
+    fn admit_names(
+        exposure: &mut ToolSearchExposure,
+        manager: &McpManager,
+        names: &[&str],
+    ) -> ToolSearchAdmission {
+        exposure.admit(
+            manager,
+            &BTreeSet::new(),
+            &names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn budget_manager(tool_count: usize) -> McpManager {
+        let mut manager = McpManager::default();
+        for index in 0..tool_count {
+            manager.insert_test_tool("bulk", &format!("helper_{index:02}"));
+        }
+        manager.disable_group("bulk").unwrap();
+        manager
+    }
+
+    /// Past 32 newly exposed tools the rest is skipped in ranking order,
+    /// and the skip list names exactly what did not fit.
+    #[test]
+    fn admission_stops_at_the_tool_count_budget() {
+        let manager = budget_manager(40);
+        let mut exposure = ToolSearchExposure::default();
+        let discovered: Vec<String> = search(&manager, "bulk", MAX_LIMIT)
+            .iter()
+            .map(|hit| hit.name.clone())
+            .collect();
+        assert_eq!(discovered.len(), MAX_LIMIT);
+
+        let first = exposure.admit(&manager, &BTreeSet::new(), &discovered);
+        assert_eq!(first.loaded_names.len(), MAX_LIMIT);
+        assert!(first.skipped_budget.is_empty());
+
+        let rest: Vec<String> = (0..40)
+            .map(|index| format!("mcp__bulk__helper_{index:02}"))
+            .filter(|name| !discovered.contains(name))
+            .collect();
+        assert_eq!(rest.len(), 20);
+        let second = exposure.admit(&manager, &BTreeSet::new(), &rest);
+        assert_eq!(second.loaded_names.len(), 12, "32 - 20 already charged");
+        assert_eq!(second.skipped_budget.len(), 8);
+        assert_eq!(exposure.charged_tool_count(), 32);
+    }
+
+    /// One schema larger than the whole byte budget never loads, while a
+    /// small sibling from the same result still does.
+    #[test]
+    fn admission_stops_at_the_schema_byte_budget() {
+        let mut manager = McpManager::default();
+        manager.insert_test_tool_full(
+            "big",
+            "huge_tool",
+            &"x".repeat(110_000),
+            json!({"type": "object"}),
+        );
+        manager.insert_test_tool("big", "note_tool");
+        manager.disable_group("big").unwrap();
+        let mut exposure = ToolSearchExposure::default();
+
+        let admission = admit_names(
+            &mut exposure,
+            &manager,
+            &["mcp__big__huge_tool", "mcp__big__note_tool"],
+        );
+
+        assert_eq!(
+            admission.loaded_names,
+            vec!["mcp__big__note_tool".to_string()]
+        );
+        assert_eq!(
+            admission.skipped_budget,
+            vec!["mcp__big__huge_tool".to_string()]
+        );
+        assert_eq!(exposure.charged_tool_count(), 1);
+        assert!(exposure.used_schema_bytes() < MAX_TOOL_SEARCH_SCHEMA_BYTES_PER_TURN);
+    }
+
+    /// Re-searching a charged tool, or one already offered (an active group
+    /// schema), costs nothing - and unknown or disconnected names resolve
+    /// to `unavailable` instead of consuming budget.
+    #[test]
+    fn admission_does_not_recharge_duplicates_or_offered_tools() {
+        let mut manager = McpManager::default();
+        manager.insert_test_tool("github", "search_issues");
+        manager.insert_test_tool("github", "create_issue");
+        manager.disable_group("github").unwrap();
+        let mut exposure = ToolSearchExposure::default();
+
+        let first = admit_names(&mut exposure, &manager, &["mcp__github__search_issues"]);
+        assert_eq!(first.loaded_names.len(), 1);
+        let bytes = exposure.used_schema_bytes();
+        assert!(bytes > 0);
+
+        let second = admit_names(
+            &mut exposure,
+            &manager,
+            &[
+                "mcp__github__search_issues",
+                "mcp__github__create_issue",
+                "mcp__nope__missing",
+            ],
+        );
+        assert_eq!(
+            second.already_available,
+            vec!["mcp__github__search_issues".to_string()]
+        );
+        assert_eq!(
+            second.loaded_names,
+            vec!["mcp__github__create_issue".to_string()]
+        );
+        assert_eq!(second.unavailable, vec!["mcp__nope__missing".to_string()]);
+        assert!(second.skipped_budget.is_empty());
+
+        let offered: BTreeSet<String> = ["mcp__github__create_issue".to_string()].into();
+        let bytes_before = exposure.used_schema_bytes();
+        let third = exposure.admit(
+            &manager,
+            &offered,
+            &["mcp__github__create_issue".to_string()],
+        );
+        assert_eq!(
+            third.already_available,
+            vec!["mcp__github__create_issue".to_string()]
+        );
+        assert!(third.loaded_names.is_empty());
+        assert_eq!(exposure.used_schema_bytes(), bytes_before);
+        assert_eq!(exposure.charged_tool_count(), 2);
+    }
+
+    /// A disconnect after charging keeps the budget consumed: the names stay
+    /// charged even though the schemas no longer resolve.
+    #[test]
+    fn admission_stays_monotonic_when_schemas_disappear() {
+        let mut manager = McpManager::default();
+        manager.insert_test_tool("github", "search_issues");
+        manager.disable_group("github").unwrap();
+        let mut exposure = ToolSearchExposure::default();
+
+        admit_names(&mut exposure, &manager, &["mcp__github__search_issues"]);
+        let bytes = exposure.used_schema_bytes();
+
+        manager.disconnect("github").unwrap();
+        assert!(
+            manager
+                .tool_definitions_for(&["mcp__github__search_issues".to_string()])
+                .is_empty()
+        );
+
+        assert_eq!(exposure.charged_tool_count(), 1);
+        assert_eq!(exposure.used_schema_bytes(), bytes);
+        let names: Vec<&String> = exposure.names().collect();
+        assert_eq!(names, vec!["mcp__github__search_issues"]);
     }
 }

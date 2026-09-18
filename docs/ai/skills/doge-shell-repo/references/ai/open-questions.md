@@ -122,7 +122,7 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
 
 経路 A の `execute` が `AgentJobs` を通るようになった際に受け入れたトレードオフ
 （出力は末尾1MiBのみ・正常終了時もkillpgする・連続ポーリング下限は対話だけ・
-`tool_search`は対話に開いていない）は
+`tool_search`は対話にも開いている）は
 [open-questions/interactive-jobs.md](open-questions/interactive-jobs.md) に分割した。
 
 ## MCP（大半は解決済み — 下の1項目だけ残る）

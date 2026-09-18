@@ -675,7 +675,7 @@ impl McpManager {
                 .to_string(),
             "Always prefer the dedicated MCP function tools when they cover the action you need."
                 .to_string(),
-            "Use tool_search when you need a specific MCP capability without loading an entire group. Matching tools become available on the next tool-calling step. Use mcp_list_groups and mcp_load_group when you need to discover or activate a whole group of related tools. Tool discovery does not authorize execution."
+            "Use tool_search when you need a specific MCP capability without loading an entire group. Matching tools can become available on the next tool-calling step, subject to the per-turn Tool Search exposure budget. Use mcp_list_groups and mcp_load_group when you need to discover or activate a whole group of related tools. Tool discovery does not authorize execution."
                 .to_string(),
             "Note: Tool execution may be rejected by the user for safety reasons. If rejected, propose an alternative approach."
                 .to_string(),

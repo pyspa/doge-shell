@@ -7,32 +7,10 @@
 use super::*;
 use std::collections::BTreeSet;
 
-/// Turn-local exposure for Interactive Tool Search.
-///
-/// Holds only the function names `tool_search` discovered in this
-/// interactive turn - never schemas, never manager state. Schemas are
-/// re-resolved from [`McpManager::tool_definitions_for`] on every
-/// [`build_request_tools`] call, so a disconnect or a tool-list refresh that
-/// removes a tool naturally drops it from the next request instead of
-/// serving a stale copy. One value lives for one user turn; the next turn
-/// starts from [`Default::default`].
-#[derive(Debug, Default)]
-pub(super) struct InteractiveToolExposure {
-    loaded_tool_names: BTreeSet<String>,
-}
-
-impl InteractiveToolExposure {
-    pub(super) fn add<I>(&mut self, names: I)
-    where
-        I: IntoIterator<Item = String>,
-    {
-        self.loaded_tool_names.extend(names);
-    }
-
-    pub(super) fn names(&self) -> impl Iterator<Item = &String> {
-        self.loaded_tool_names.iter()
-    }
-}
+/// Turn-local Tool Search exposure, shared by interactive and agent turns.
+/// Re-exported here so the turn loop names one concept; the accounting
+/// itself lives with discovery in [`tool::tool_search`].
+pub(super) use super::tool::tool_search::ToolSearchExposure;
 
 /// Everything about a turn that is decided once, before the tool-calling
 /// loop starts: which skills the model may see, the fixed system prompt,
@@ -184,13 +162,13 @@ pub(super) fn build_request_tools(
     interactive_base: &Option<Vec<Value>>,
     accumulated: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
-    interactive_exposure: &InteractiveToolExposure,
+    tool_search_exposure: &ToolSearchExposure,
 ) -> Vec<Value> {
     if let Some(base) = interactive_base {
         let mcp = mcp_manager.read();
         let mut current = base.clone();
         current.extend(tool::mcp_turn_definitions(&mcp, true));
-        let searched_names: Vec<String> = interactive_exposure.names().cloned().collect();
+        let searched_names: Vec<String> = tool_search_exposure.names().cloned().collect();
         if !searched_names.is_empty() {
             extend_unique_tool_definitions(&mut current, mcp.tool_definitions_for(&searched_names));
         }
@@ -270,10 +248,18 @@ fn search_result_names_in(text: &str) -> Option<Vec<String>> {
 /// `tools` here is an agent-turn mechanism only: `tool_search` discoveries
 /// and `mcp_load_group` activations accumulate in that vec because an agent
 /// turn's per-request view is the accumulated vec, not a fresh exposure read.
-/// Interactive turns instead record `tool_search` hits by name in
-/// `interactive_exposure` and rebuild their MCP definitions from current
-/// exposure before every request (see `chat_with_tools`), so a toggle flip
-/// from `mcp_load_group` dispatch needs no merge here.
+/// Interactive turns instead charge `tool_search` hits against the shared
+/// per-turn [`ToolSearchExposure`] budget by name and rebuild their MCP
+/// definitions from current exposure before every request (see
+/// `chat_with_tools`), so a toggle flip from `mcp_load_group` dispatch needs
+/// no merge here.
+///
+/// Both paths run the same budget admission: already-offered tools (an
+/// active group schema on the interactive path, anything already in `tools`
+/// on the agent path) and repeats cost nothing, while genuinely new schemas
+/// consume the per-turn count + byte budget in ranking order. A search that
+/// leaves schemas over budget appends a short note to its own tool result so
+/// the model learns why not every match became callable.
 ///
 /// Takes just the two pieces of `TurnSetup` this round actually reads
 /// (`runtime`, `hook_ctx`), not the whole struct - so a change to
@@ -297,7 +283,7 @@ pub(super) fn run_tool_calls(
     proxy: &mut dyn ChatToolHost,
     manager: &mut ConversationManager,
     tools: &mut Vec<Value>,
-    interactive_exposure: &mut InteractiveToolExposure,
+    tool_search_exposure: &mut ToolSearchExposure,
 ) -> Result<(), String> {
     for tool_call in tool_calls {
         let tool_call_id = tool_call
@@ -352,16 +338,49 @@ pub(super) fn run_tool_calls(
         if runtime.is_some() {
             merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
             if !discovered.is_empty() {
-                extend_unique_tool_definitions(
-                    tools,
-                    mcp_manager.read().tool_definitions_for(&discovered),
-                );
+                let offered: BTreeSet<String> = tools
+                    .iter()
+                    .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                    .collect();
+                let admission =
+                    tool_search_exposure.admit(&mcp_manager.read(), &offered, &discovered);
+                extend_unique_tool_definitions(tools, admission.loaded_definitions);
+                if !admission.skipped_budget.is_empty() {
+                    tool_result.push_str("\n\n");
+                    tool_result.push_str(&tool::tool_search::exposure_budget_note(
+                        tool_search_exposure,
+                        admission.loaded_names.len(),
+                        &admission.skipped_budget,
+                    ));
+                }
             }
         } else if !discovered.is_empty() {
             // Interactive turns keep names only: `build_request_tools`
             // re-resolves them every iteration, so a disconnect or refresh
             // drops what no longer exists instead of serving a stale schema.
-            interactive_exposure.add(discovered);
+            // `offered` is the current request view (builtins, meta tools,
+            // active group schemas, job tools): re-searching one of those
+            // costs no budget.
+            let mcp = mcp_manager.read();
+            let mut offered = BTreeSet::new();
+            for definition in tool::build_tools()
+                .iter()
+                .chain(tool::mcp_turn_definitions(&mcp, true).iter())
+                .chain(tool::job_definitions().iter())
+            {
+                if let Some(name) = definition["function"]["name"].as_str() {
+                    offered.insert(name.to_string());
+                }
+            }
+            let admission = tool_search_exposure.admit(&mcp, &offered, &discovered);
+            if !admission.skipped_budget.is_empty() {
+                tool_result.push_str("\n\n");
+                tool_result.push_str(&tool::tool_search::exposure_budget_note(
+                    tool_search_exposure,
+                    admission.loaded_names.len(),
+                    &admission.skipped_budget,
+                ));
+            }
         }
 
         if let Some(runtime) = runtime {

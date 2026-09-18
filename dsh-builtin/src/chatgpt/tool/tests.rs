@@ -2,6 +2,8 @@ use super::*;
 use serde_json::json;
 use tempfile::tempdir;
 
+mod tool_search_eval;
+
 use crate::test_support::TestShellProxy;
 type NoopProxy = TestShellProxy;
 

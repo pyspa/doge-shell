@@ -292,10 +292,12 @@ fn chat_with_tools(
 
         let (interactive_base, mut tools) =
             split_turn_tool_bases(mcp_manager, setup.runtime.is_some());
-        // Interactive Tool Search hits live here: names only, for this turn.
-        // The next user message builds a fresh one, so nothing persists
-        // across turns and lazy loading cannot accumulate schemas forever.
-        let mut interactive_exposure = InteractiveToolExposure::default();
+        // Tool Search hits live here: names plus charged schema bytes, for
+        // this turn only. The next user message builds a fresh one, so
+        // nothing persists across turns and lazy loading cannot accumulate
+        // schemas forever. Both interactive and agent turns charge the same
+        // per-turn count + byte budget here; `mcp_load_group` stays outside it.
+        let mut tool_search_exposure = ToolSearchExposure::default();
         iterations = 0;
         let turn_started = Instant::now();
         let mut unverified_answers = 0;
@@ -437,7 +439,7 @@ fn chat_with_tools(
                 &interactive_base,
                 &tools,
                 mcp_manager,
-                &interactive_exposure,
+                &tool_search_exposure,
             );
 
             let options = ChatRequestOptions::new()
@@ -564,7 +566,7 @@ fn chat_with_tools(
                         proxy,
                         &mut manager,
                         &mut tools,
-                        &mut interactive_exposure,
+                        &mut tool_search_exposure,
                     ) {
                         break Err(err);
                     }

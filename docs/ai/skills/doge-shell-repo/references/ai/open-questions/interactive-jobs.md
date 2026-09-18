@@ -16,5 +16,10 @@
 - **連続ポーリング下限は対話だけ**（`chatgpt/jobs.rs` の `poll_backoff`）。`runtime.jobs` には
   `JobMeta` が無く、agent の挙動を変えない方針を優先した。`wait_ms` は両経路に入っているが
   既定 0 なので opt-in。
-- **`tool_search` は対話に開いていない**。対話は `mcp.tool_definitions()` を全部プロンプトに
-  載せるので、既に手元にあるものを探す 2 つ目の道になるだけ。
+- **`tool_search` は対話に開いていない**。`tool_search` is currently exposed only to
+  agent tasks. Interactive turns instead discover additional MCP schemas through
+  group activation and rebuild their active MCP exposure each iteration.
+  対話ターンは全 MCP schema を常時載せない。載せるのは active group の schema のみで、
+  inactive group の schema は載せない。inactive な schema は `mcp_list_groups` /
+  `mcp_load_group` の meta tool 経路で activation し、`mcp_load_group` による変更は
+  次 iteration の再構築で反映される。

@@ -99,6 +99,9 @@ jobs:
       - name: Portability
         run: scripts/check-portability.py
 
+      - name: File budget
+        run: scripts/check-file-budget.py
+
   msrv:
     name: msrv (1.95)
     runs-on: ubuntu-latest

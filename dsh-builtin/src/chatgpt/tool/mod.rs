@@ -306,8 +306,8 @@ fn dispatch_tool(
     // The job tools work under either entry point: a task polls its own
     // runtime, an interactive turn polls the process-wide registry. Everything
     // else here needs a task - `task_verify` records against its criteria,
-    // `mcp_task_*` against its event log, and `tool_search` only earns its
-    // place where MCP definitions are *not* already in the prompt.
+    // `mcp_task_*` against its event log, and `tool_search` is currently
+    // exposed only to agent tasks.
     let result = if matches!(name, "job_status" | "job_output" | "job_cancel") {
         let args: Value = serde_json::from_str(arguments).map_err(|e| e.to_string())?;
         jobs::dispatch(name, &args, proxy)?

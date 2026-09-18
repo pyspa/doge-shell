@@ -730,8 +730,9 @@ fn job_status_works_without_an_agent_task() {
 }
 
 /// The rest of the task toolbox stays behind the gate: `task_verify` records
-/// against criteria and `tool_search` exists to find MCP definitions that an
-/// interactive prompt already carries in full.
+/// against criteria and `tool_search` is currently exposed only to agent
+/// tasks (interactive turns discover additional MCP schemas through group
+/// activation instead).
 #[test]
 fn the_task_only_tools_still_require_an_agent_task() {
     let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));

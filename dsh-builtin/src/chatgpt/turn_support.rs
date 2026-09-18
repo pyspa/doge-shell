@@ -143,9 +143,10 @@ pub(super) fn split_turn_tool_bases(
 ///
 /// The order matches the pre-lazy-loading layout - builtins, MCP, then the
 /// job tools - so provider-side prefix caches see the same shape as before.
-/// Only the job tools: `tool_search` would be a second way to reach MCP
-/// definitions that are already in this prompt in full, and the task tools
-/// record against a task that does not exist here.
+/// An interactive request is the fixed builtin base plus the rebuilt MCP
+/// exposure (meta tools plus currently active group schemas) plus the job
+/// tools: `tool_search` is currently exposed only to agent tasks, and the
+/// task tools record against a task that does not exist here.
 ///
 /// `accumulated` (the vec `run_tool_calls` grows) is read on the agent path
 /// only; on the interactive path that function never grows it, so it stays
@@ -296,8 +297,8 @@ pub(super) fn run_tool_calls(
 ///
 /// Agent-only: interactive turns rebuild from current exposure instead (see
 /// `run_tool_calls`), so this never runs for them. Unlike `tool_search`
-/// (agent-only because interactive turns already carry every active
-/// definition), group activation is the one way hidden schemas join an
+/// (agent-only; interactive turns already carry the currently active group
+/// schemas), group activation is the one way hidden schemas join an
 /// in-flight agent turn. Matching on dispatch success plus the call's own
 /// arguments - rather than the result text, which truncation and hook notes
 /// can reshape - keeps this immune to everything downstream of dispatch.

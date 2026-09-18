@@ -122,14 +122,16 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Err("chat: execute tool command must not be empty".to_string());
     }
 
-    // Before anything parses this line. The shell's parser *evaluates*
-    // `$(...)`, `` `...` ``, `(...)` and `<(...)` while building its job list
-    // (`shell::parse::parse_command` calls `capture_subshell_stdout`), so
-    // handing an unchecked line to the safety evaluation would run the inner
-    // pipeline before the user is asked - and again when the command really
-    // runs. Pipes, redirection and `&&` are the point of this tool;
-    // substitution is not, and refusing it keeps the evaluation a judgement
-    // rather than an execution.
+    // Before anything parses this line. Shell planning is side-effect-free and
+    // substitution bodies stay deferred until evaluation (materialized in
+    // `dsh::shell::materialize` and run via `dsh::shell::substitution` only
+    // after gating and authorization), but the agent path deliberately keeps
+    // refusing substitution constructs: handing an unchecked line to the
+    // safety evaluation would otherwise run the inner pipeline before the
+    // user is asked - and again when the command really runs. Pipes,
+    // redirection and `&&` are the point of this tool; substitution is not,
+    // and refusing it keeps the evaluation a judgement rather than an
+    // execution.
     if let Some(construct) = substitution_construct(command) {
         return Err(format!(
             "chat: execute tool does not allow {construct}; run the inner command              separately and use its output"

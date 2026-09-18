@@ -9,4 +9,5 @@ description: Use for doge-shell parser, AST, redirect, pipe, brace, expansion, ã
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for parser entry points.
 - Read [../doge-shell-repo/references/module-map.md](../doge-shell-repo/references/module-map.md) only if ownership is unclear outside `dsh/src/parser/`.
 - Default read target is `dsh/src/parser/`.
+- Shell planning (`dsh/src/shell/plan.rs`, `dsh/src/shell/parse.rs`) is side-effect-free; substitution is deferred until evaluation (`dsh/src/shell/materialize.rs`, `dsh/src/shell/substitution.rs`). Every substitution body and the final materialized argv go through `SafetyGuard` via `dsh/src/shell/authorize.rs`.
 - Validate with `cargo test -p doge-shell` unless the behavior crosses crates.

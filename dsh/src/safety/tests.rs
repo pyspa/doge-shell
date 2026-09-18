@@ -843,3 +843,155 @@ fn a_tool_name_splits_into_the_words_a_marker_must_match() {
         assert_eq!(SafetyGuard::words(name), expected, "{name}");
     }
 }
+
+/// Test F (pure): a substitution body is judged like any other job. The
+/// materializer authorizes every nested body before running it; a dangerous
+/// body must come back as `Confirm` so the caller can ask (or deny).
+#[test]
+fn a_substitution_body_reaches_the_guard() {
+    use crate::safety::SafetyCheckContext;
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+    let jobs = vec![mock_pipeline_job(&["rm -rf /tmp/dogesh_nonexistent_probe"])];
+
+    assert!(
+        matches!(
+            guard.check_jobs_with_context(&jobs, &level, &[], &SafetyCheckContext::strict_source()),
+            SafetyResult::Confirm(_)
+        ),
+        "a dangerous substitution body must ask"
+    );
+}
+
+/// Test G (pure): the final concrete argv is judged, not just the raw source.
+/// `$(printf rm)` as a body is harmless, but the materialized `rm -rf`
+/// stage must still ask.
+#[test]
+fn a_dynamic_final_command_is_rechecked() {
+    use crate::process::{JobProcess, Process};
+    use crate::safety::SafetyCheckContext;
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+
+    // The body itself (`printf`) is allowed.
+    let body = vec![mock_pipeline_job(&["printf rm"])];
+    assert_eq!(
+        guard.check_jobs_with_context(&body, &level, &[], &SafetyCheckContext::strict_source()),
+        SafetyResult::Allowed
+    );
+
+    // The materialized outer job runs `rm -rf ...` even though its source
+    // text starts with `$(...)`.
+    let mut dynamic = mock_job("$(printf rm) -rf /tmp/dogesh_dynamic_probe");
+    let argv = vec![
+        "rm".to_string(),
+        "-rf".to_string(),
+        "/tmp/dogesh_dynamic_probe".to_string(),
+    ];
+    dynamic.set_process(JobProcess::Command(Process::new("rm".to_string(), argv)));
+    assert!(
+        matches!(
+            guard.check_jobs_with_context(
+                std::slice::from_ref(&dynamic),
+                &level,
+                &[],
+                &SafetyCheckContext::deferred_source()
+            ),
+            SafetyResult::Confirm(_)
+        ),
+        "a dynamic `rm` must ask even though the source is a substitution"
+    );
+}
+
+/// Test G bypass rule: an exact allowlist match on the raw deferred source
+/// must not skip the concrete check. `AlwaysAllow` on a dynamic line is only
+/// good for that run (see `authorize`).
+#[test]
+fn a_deferred_source_allowlist_match_does_not_skip_the_concrete_check() {
+    use crate::process::{JobProcess, Process};
+    use crate::safety::SafetyCheckContext;
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+    let raw = "$(printf rm) -rf /tmp/dogesh_dynamic_probe".to_string();
+    let allowlist = vec![raw.clone()];
+
+    let mut dynamic = mock_job(&raw);
+    let argv = vec![
+        "rm".to_string(),
+        "-rf".to_string(),
+        "/tmp/dogesh_dynamic_probe".to_string(),
+    ];
+    dynamic.set_process(JobProcess::Command(Process::new("rm".to_string(), argv)));
+
+    // Trusted (non-deferred) source: the allowlist skips, as before.
+    assert_eq!(
+        guard.check_jobs_with_context(
+            std::slice::from_ref(&dynamic),
+            &level,
+            &allowlist,
+            &SafetyCheckContext::strict_source()
+        ),
+        SafetyResult::Allowed
+    );
+    // Deferred source: the same entry must not skip the concrete `rm` check.
+    assert!(
+        matches!(
+            guard.check_jobs_with_context(
+                std::slice::from_ref(&dynamic),
+                &level,
+                &allowlist,
+                &SafetyCheckContext::deferred_source()
+            ),
+            SafetyResult::Confirm(_)
+        ),
+        "raw deferred allowlist must not bypass the concrete check"
+    );
+}
+
+/// Concrete argv must not carry the program twice: `command_argv` strips
+/// `argv[0]` because `classify_tokens` takes the program separately. With
+/// duplication, `git` saw `"git"` as its subcommand and interpreters never
+/// reached their `-c` flag, so dynamic `$(printf git) push --force` passed.
+#[test]
+fn dynamic_git_and_interpreter_bodies_are_detected_without_duplication() {
+    use crate::process::{JobProcess, Process};
+    use crate::safety::SafetyCheckContext;
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+
+    let mut git = mock_job("$(printf git) push --force");
+    git.set_process(JobProcess::Command(Process::new(
+        "git".to_string(),
+        vec!["git".to_string(), "push".to_string(), "--force".to_string()],
+    )));
+    assert!(
+        matches!(
+            guard.check_jobs_with_context(
+                std::slice::from_ref(&git),
+                &level,
+                &[],
+                &SafetyCheckContext::deferred_source()
+            ),
+            SafetyResult::Confirm(_)
+        ),
+        "dynamic `git push --force` must ask"
+    );
+
+    let mut python = mock_job("$(printf python3) -c 'x'");
+    python.set_process(JobProcess::Command(Process::new(
+        "python3".to_string(),
+        vec!["python3".to_string(), "-c".to_string(), "x".to_string()],
+    )));
+    assert!(
+        matches!(
+            guard.check_jobs_with_context(
+                std::slice::from_ref(&python),
+                &level,
+                &[],
+                &SafetyCheckContext::deferred_source()
+            ),
+            SafetyResult::Confirm(_)
+        ),
+        "dynamic `python3 -c` must ask"
+    );
+}

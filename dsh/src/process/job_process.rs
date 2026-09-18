@@ -15,7 +15,6 @@ use super::redirect::{self, AppliedRedirects, Redirect};
 use super::signal::send_signal;
 use super::state::ProcessState;
 use crate::shell::Shell;
-use dsh_builtin::ShellProxy;
 use dsh_types::Context;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -62,6 +61,15 @@ fn apply_pty_stdio(ctx: &mut Context, slave: RawFd, pty_mode: PtyMode) -> bool {
         slave_applied = true;
     }
     slave_applied
+}
+
+/// `argv` as stored includes the program at index 0; safety classification
+/// takes the program separately, so hand back only the arguments.
+fn strip_argv0<'a>(program: &str, argv: &'a [String]) -> &'a [String] {
+    match argv.first() {
+        Some(first) if first == program => &argv[1..],
+        _ => argv,
+    }
 }
 
 impl JobProcess {
@@ -256,37 +264,19 @@ impl JobProcess {
         }
     }
 
-    pub fn check_safety(&self, shell: &mut Shell) -> Result<bool> {
-        let (cmd, argv) = match self {
-            JobProcess::Builtin(p) => (p.name.as_str(), &p.argv),
-            JobProcess::Command(p) => (p.cmd.as_str(), &p.argv),
-        };
-
-        let (level, allowlist) = {
-            let env = shell.environment.read();
-            (
-                *env.policy_state.safety_level.read(),
-                env.policy_state.execute_allowlist.read().clone(),
-            )
-        };
-
-        match shell
-            .safety_guard
-            .check_command(&level, cmd, argv, &allowlist)
-        {
-            crate::safety::SafetyResult::Allowed => {}
-            crate::safety::SafetyResult::Confirm(message) => {
-                if !shell.confirm_action(&message)? {
-                    return Ok(false);
-                }
-            }
+    /// Concrete program plus argv for safety classification of materialized
+    /// jobs. Read-only: the guard must see the post-substitution argv, not
+    /// just the raw source line.
+    ///
+    /// The slice excludes `argv[0]` (the program itself): `classify_tokens`
+    /// takes the program separately and would otherwise see it twice, which
+    /// broke `git` subcommand and interpreter-flag detection for dynamic
+    /// commands (`$(printf git) push --force`).
+    pub(crate) fn command_argv(&self) -> (&str, &[String]) {
+        match self {
+            JobProcess::Builtin(p) => (p.name.as_str(), strip_argv0(&p.name, &p.argv)),
+            JobProcess::Command(p) => (p.cmd.as_str(), strip_argv0(&p.cmd, &p.argv)),
         }
-
-        if let Some(next) = self.next() {
-            return next.check_safety(shell);
-        }
-
-        Ok(true)
     }
 
     pub fn waitable(&self) -> bool {

@@ -1,31 +1,27 @@
-use crate::dirs;
-use crate::parser::{self, Rule};
-use crate::process::{self, Job, JobProcess, Redirect, SubshellType};
-use crate::shell::Shell;
+//! Side-effect-free shell planning: pest pairs become an `ExecutionPlan`.
+//!
+//! This module never spawns processes, allocates pipes, touches the working
+//! directory, mutates the environment, or asks the safety guard anything. It
+//! only reads the environment through `parse_with_expansion` (alias, tilde,
+//! variable, brace, glob) and records `$(...)` / `<(...)` / `(...)` bodies as
+//! deferred `PlannedSubstitution` nodes for the materializer to evaluate after
+//! `&&`/`||` gating and authorization.
+
+use super::plan::{ExecutionPlan, PlannedArg, PlannedCommand, PlannedJob, PlannedSubstitution};
+use super::struct_pipe;
+use crate::environment::Environment;
+use crate::parser::{self, Rule, ShellParser};
+use crate::process::{ListOp, Redirect, SubshellType};
 use anyhow::{Context as _, Result};
-use dsh_types::Context;
 use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::sys::termios::tcgetattr;
-use nix::unistd::pipe;
+use parking_lot::RwLock;
+use pest::Parser as _;
 use pest::iterators::Pair;
-use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
+use std::os::unix::io::RawFd;
+use std::sync::Arc;
 use tracing::{debug, warn};
 
-#[derive(Debug)]
-pub struct ParsedJob {
-    pub subshell_type: SubshellType,
-    pub jobs: Vec<Job>,
-}
-
-impl ParsedJob {
-    pub fn new(subshell_type: SubshellType, jobs: Vec<Job>) -> Self {
-        Self {
-            subshell_type,
-            jobs,
-        }
-    }
-}
-
+/// Pure parse context: pipeline flags only, no shell handle.
 #[derive(Debug)]
 pub struct ParseContext {
     pub foreground: bool,
@@ -43,25 +39,40 @@ impl ParseContext {
     }
 }
 
-/// `FOO=bar` with no command sets a shell variable, the way `set` does.
+/// Parse `input` into a side-effect-free plan.
 ///
-/// Not exported: a prefix only reaches a child process when there is a command
-/// for it to run.
-fn apply_standalone_assignments(shell: &mut Shell, assignments: &mut Vec<(String, String)>) {
-    if assignments.is_empty() {
-        return;
-    }
-    let mut env = shell.environment.write();
-    for (name, value) in assignments.drain(..) {
-        env.set_shell_var(name, value);
+/// Only `environment` is read (for the pre-expansion pass). No command is
+/// executed and no shell state is mutated.
+pub fn parse_execution_plan(
+    input: &str,
+    environment: Arc<RwLock<Environment>>,
+) -> Result<ExecutionPlan> {
+    let (input_cow, pairs_opt) = parser::parse_with_expansion(input, environment)?;
+
+    let mut pairs = if let Some(pairs) = pairs_opt {
+        pairs
+    } else {
+        ShellParser::parse(Rule::commands, &input_cow).map_err(|e| anyhow::anyhow!(e))?
+    };
+
+    let mut ctx = ParseContext::new(true);
+    let Some(pair) = pairs.next() else {
+        return Ok(ExecutionPlan::default());
+    };
+
+    report_unparsed_tail(&input_cow, pair.as_span().end());
+
+    build_commands(&mut ctx, pair)
+}
+
+fn report_unparsed_tail(input: &str, consumed: usize) {
+    if let Some(tail) = parser::unparsed_tail(input, consumed) {
+        tracing::warn!("unparsed input tail: {:?}", tail);
+        eprint!("dsh: warning: ignored unparsed input: {tail}\r\n");
     }
 }
 
-/// Split one `NAME=value` into its two halves.
-///
-/// The value goes through `get_string` like any other word, so quoting and
-/// escapes behave the same as they would in an argument. A bare `NAME=` is an
-/// empty value, which is how shells spell "defined but empty".
+/// Split one `NAME=value` into its two halves (pure).
 fn parse_assignment(pair: Pair<Rule>) -> (String, String) {
     let mut name = String::new();
     let mut value = String::new();
@@ -76,9 +87,6 @@ fn parse_assignment(pair: Pair<Rule>) -> (String, String) {
 }
 
 /// Whether any part of this span is a substitution.
-///
-/// Substitutions become their own argv entries because they can expand to
-/// several words; everything else in a span is joined into one argument.
 fn span_has_substitution(span: &Pair<Rule>) -> bool {
     span.clone().into_inner().any(|part| {
         matches!(
@@ -88,28 +96,7 @@ fn span_has_substitution(span: &Pair<Rule>) -> bool {
     })
 }
 
-/// Attach the command's redirections and environment prefix, then add it
-/// to the job.
-///
-/// Per process rather than per job: in `a 2>&1 | b` the duplication belongs to
-/// `a`, and applying it to `b` sent the error to the terminal instead of down
-/// the pipe.
-fn attach_process(
-    job: &mut Job,
-    mut process: JobProcess,
-    redirects: &mut Vec<Redirect>,
-    env_overrides: &mut Vec<(String, String)>,
-) {
-    process.set_redirects(std::mem::take(redirects));
-    process.set_env_overrides(std::mem::take(env_overrides));
-    job.set_process(process);
-}
-
-/// Build the redirections one `redirect` pair stands for.
-///
-/// `&>` desugars into two entries, which is why this returns a list: keeping
-/// the ordering explicit is what makes `> f 2>&1` and `2>&1 > f` differ
-/// correctly once the list is applied left to right.
+/// Build the redirections one `redirect` pair stands for (pure).
 fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
     let mut direction = None;
 
@@ -123,9 +110,6 @@ fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
                 direction = inner.into_inner().next().map(|rule| rule.as_rule());
             }
             Rule::span => {
-                // Through `get_string` so the target goes through the same
-                // quote removal and expansion as any other word -- taking the
-                // raw text left the quotes in `> "my file.txt"`.
                 let dest = parser::get_string(inner).unwrap_or_default();
                 return Ok(match direction {
                     Some(Rule::stdout_redirect_direction_out) => {
@@ -158,7 +142,6 @@ fn parse_fd_dup(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
     let Some(form) = pair.into_inner().next() else {
         return Ok(Vec::new());
     };
-    // Without an explicit number, `>&` means stdout and `<&` means stdin.
     let default_fd = match form.as_rule() {
         Rule::fd_dup_in => STDIN_FILENO,
         _ => STDOUT_FILENO,
@@ -189,206 +172,153 @@ fn parse_fd(text: &str) -> Result<RawFd> {
         .with_context(|| format!("dsh: invalid file descriptor '{text}'"))
 }
 
-pub fn parse_argv(
-    shell: &mut Shell,
-    ctx: &mut ParseContext,
-    current_job: &mut Job,
-    pair: Pair<Rule>,
-) -> Result<Vec<(String, Option<ParsedJob>)>> {
-    let mut argv: Vec<(String, Option<ParsedJob>)> = vec![];
+fn empty_command() -> PlannedCommand {
+    PlannedCommand {
+        argv: Vec::new(),
+        redirects: Vec::new(),
+        env_overrides: Vec::new(),
+    }
+}
 
+fn empty_job(source: String, ctx: &ParseContext) -> PlannedJob {
+    let subshell = if ctx.subshell {
+        SubshellType::Subshell
+    } else if ctx.proc_subst {
+        SubshellType::ProcessSubstitution
+    } else {
+        SubshellType::None
+    };
+    PlannedJob {
+        source,
+        stages: Vec::new(),
+        list_op: ListOp::None,
+        foreground: ctx.foreground,
+        capture_output: false,
+        struct_pipe_exprs: Vec::new(),
+        subshell,
+    }
+}
+
+/// Collect one `simple_command` into a pipeline stage (pure, no execution).
+fn build_simple_command(ctx: &ParseContext, pair: Pair<Rule>) -> Result<PlannedCommand> {
+    let mut stage = empty_command();
+    build_argv(ctx, &mut stage, pair)?;
+    Ok(stage)
+}
+
+fn push_substitution(
+    argv: &mut Vec<PlannedArg>,
+    kind: SubshellType,
+    inner_pair: Pair<Rule>,
+    ctx: &ParseContext,
+) -> Result<()> {
+    let cmd_str = inner_pair.as_str().to_string();
+    let mut nested = ParseContext::new(ctx.foreground);
+    match kind {
+        SubshellType::Subshell | SubshellType::CommandSubstitution => nested.subshell = true,
+        SubshellType::ProcessSubstitution => nested.proc_subst = true,
+        SubshellType::None => {}
+    }
+    let plan = build_commands(&mut nested, inner_pair)?;
+    if plan.is_empty() {
+        return Ok(());
+    }
+    argv.push(PlannedArg::Substitution(PlannedSubstitution {
+        source: cmd_str,
+        kind,
+        plan: Box::new(plan),
+    }));
+    Ok(())
+}
+
+fn push_span_parts(argv: &mut Vec<PlannedArg>, span: Pair<Rule>, ctx: &ParseContext) -> Result<()> {
+    if !span_has_substitution(&span) {
+        if let Some(arg) = parser::get_string(span) {
+            argv.push(PlannedArg::Literal(arg));
+        }
+        return Ok(());
+    }
+    for part in span.into_inner() {
+        match part.as_rule() {
+            Rule::subshell => {
+                for inner in part.into_inner() {
+                    push_substitution(argv, SubshellType::Subshell, inner, ctx)?;
+                }
+            }
+            Rule::proc_subst => {
+                for inner in part.into_inner() {
+                    if inner.as_rule() == Rule::proc_subst_direction {
+                        continue;
+                    }
+                    push_substitution(argv, SubshellType::ProcessSubstitution, inner, ctx)?;
+                }
+            }
+            Rule::command_subst => {
+                for inner in part.into_inner() {
+                    push_substitution(argv, SubshellType::CommandSubstitution, inner, ctx)?;
+                }
+            }
+            _ => {
+                if let Some(arg) = parser::get_string(part) {
+                    argv.push(PlannedArg::Literal(arg));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn build_argv(ctx: &ParseContext, stage: &mut PlannedCommand, pair: Pair<Rule>) -> Result<()> {
     for inner_pair in pair.into_inner() {
         match inner_pair.as_rule() {
             Rule::argv0 => {
-                for inner_pair in inner_pair.into_inner() {
-                    // span
-                    // A span is one argument. Only a substitution needs its
-                    // parts handled separately; everything else is joined by
-                    // `get_string`, or `echo a"b"c` would arrive as three
-                    // arguments.
-                    if !span_has_substitution(&inner_pair) {
-                        if let Some(arg) = parser::get_string(inner_pair) {
-                            argv.push((arg, None));
-                        }
-                        continue;
-                    }
-
-                    for inner_pair in inner_pair.into_inner() {
-                        match inner_pair.as_rule() {
-                            Rule::subshell => {
-                                debug!("find subshell arg0");
-                                for inner_pair in inner_pair.into_inner() {
-                                    // commands
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    // subshell
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.subshell = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(SubshellType::Subshell, res)),
-                                    ));
-                                }
-                            }
-                            Rule::proc_subst => {
-                                for inner_pair in inner_pair.into_inner() {
-                                    // commands
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.proc_subst = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(
-                                            SubshellType::ProcessSubstitution,
-                                            res,
-                                        )),
-                                    ));
-                                }
-                            }
-                            Rule::command_subst => {
-                                for inner_pair in inner_pair.into_inner() {
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.subshell = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(
-                                            SubshellType::CommandSubstitution,
-                                            res,
-                                        )),
-                                    ));
-                                }
-                            }
-                            _ => {
-                                if let Some(arg) = parser::get_string(inner_pair) {
-                                    argv.push((arg, None));
-                                }
-                            }
-                        }
-                    }
+                for span in inner_pair.into_inner() {
+                    push_span_parts(&mut stage.argv, span, ctx)?;
                 }
             }
             Rule::assignment_list => {
                 for assignment in inner_pair.into_inner() {
-                    current_job.env_overrides.push(parse_assignment(assignment));
+                    stage.env_overrides.push(parse_assignment(assignment));
                 }
             }
             Rule::args => {
-                for inner_pair in inner_pair.into_inner() {
-                    if let Rule::redirect = inner_pair.as_rule() {
-                        current_job.redirects.extend(parse_redirect(inner_pair)?);
+                for item in inner_pair.into_inner() {
+                    if let Rule::redirect = item.as_rule() {
+                        stage.redirects.extend(parse_redirect(item)?);
                         continue;
                     }
-
-                    // A span is one argument. Only a substitution needs its
-                    // parts handled separately; everything else is joined by
-                    // `get_string`, or `echo a"b"c` would arrive as three
-                    // arguments.
-                    if !span_has_substitution(&inner_pair) {
-                        if let Some(arg) = parser::get_string(inner_pair) {
-                            argv.push((arg, None));
-                        }
-                        continue;
-                    }
-
-                    for inner_pair in inner_pair.into_inner() {
-                        match inner_pair.as_rule() {
-                            Rule::subshell => {
-                                debug!("find subshell args");
-                                for inner_pair in inner_pair.into_inner() {
-                                    // commands
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    // subshell
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.subshell = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(SubshellType::Subshell, res)),
-                                    ));
-                                }
-                            }
-                            Rule::proc_subst => {
-                                debug!("find proc_subs args");
-                                for inner_pair in inner_pair.into_inner() {
-                                    if inner_pair.as_rule() == Rule::proc_subst_direction {
-                                        continue;
-                                    }
-                                    // commands
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.proc_subst = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(
-                                            SubshellType::ProcessSubstitution,
-                                            res,
-                                        )),
-                                    ));
-                                }
-                            }
-                            Rule::command_subst => {
-                                debug!("find command_subst args");
-                                for inner_pair in inner_pair.into_inner() {
-                                    let cmd_str = inner_pair.as_str().to_string();
-                                    let mut ctx = ParseContext::new(ctx.foreground);
-                                    ctx.subshell = true;
-                                    let res = parse_commands(shell, &mut ctx, inner_pair)?;
-                                    argv.push((
-                                        cmd_str,
-                                        Some(ParsedJob::new(
-                                            SubshellType::CommandSubstitution,
-                                            res,
-                                        )),
-                                    ));
-                                }
-                            }
-                            _ => {
-                                if let Some(arg) = parser::get_string(inner_pair) {
-                                    argv.push((arg, None));
-                                }
-                            }
-                        }
-                    }
+                    push_span_parts(&mut stage.argv, item, ctx)?;
                 }
             }
             Rule::simple_command => {
-                let mut res = parse_argv(shell, ctx, current_job, inner_pair)?;
-                argv.append(&mut res);
+                let mut nested = empty_command();
+                build_argv(ctx, &mut nested, inner_pair)?;
+                stage.argv.extend(nested.argv);
+                stage.redirects.extend(nested.redirects);
+                stage.env_overrides.extend(nested.env_overrides);
             }
             _ => {
                 warn!("missing {:?}", inner_pair.as_rule());
             }
         }
     }
-    Ok(argv)
+    Ok(())
 }
 
-pub fn parse_commands(
-    shell: &mut Shell,
-    ctx: &mut ParseContext,
-    pair: Pair<Rule>,
-) -> Result<Vec<Job>> {
-    let mut jobs: Vec<Job> = Vec::new();
+fn build_commands(ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<ExecutionPlan> {
+    let mut plan = ExecutionPlan::default();
     if let Rule::commands = pair.as_rule() {
         for pair in pair.into_inner() {
             match pair.as_rule() {
-                Rule::command => parse_jobs(shell, ctx, pair, &mut jobs)?,
+                Rule::command => build_jobs(ctx, pair, &mut plan.jobs)?,
                 Rule::command_list_sep => {
                     if let Some(sep) = pair.into_inner().next()
-                        && let Some(ref mut last) = jobs.last_mut()
+                        && let Some(last) = plan.jobs.last_mut()
                     {
-                        debug!("last job {:?}", &last.cmd);
+                        debug!("last job {:?}", &last.source);
                         match sep.as_rule() {
-                            Rule::and_op => {
-                                last.list_op = process::ListOp::And;
-                            }
-                            Rule::or_op => {
-                                last.list_op = process::ListOp::Or;
-                            }
+                            Rule::and_op => last.list_op = ListOp::And,
+                            Rule::or_op => last.list_op = ListOp::Or,
                             _ => {}
                         }
                     }
@@ -399,176 +329,20 @@ pub fn parse_commands(
             }
         }
     }
-
-    debug!("parsed jobs len: {}", jobs.len());
-    Ok(jobs)
+    debug!("planned jobs len: {}", plan.jobs.len());
+    Ok(plan)
 }
 
-pub fn parse_command(
-    shell: &mut Shell,
-    ctx: &mut ParseContext,
-    current_job: &mut Job,
-    pair: Pair<Rule>,
-) -> Result<()> {
-    debug!("start parse command: {}", pair.as_str());
-    let parsed_argv = parse_argv(shell, ctx, current_job, pair)?;
-    // `parse_argv` collects redirections on the job as a staging area; they
-    // belong to the command being built here, so move them across.
-    let mut redirects = std::mem::take(&mut current_job.redirects);
-    let mut env_overrides = std::mem::take(&mut current_job.env_overrides);
-    if parsed_argv.is_empty() {
-        apply_standalone_assignments(shell, &mut env_overrides);
-        return Ok(());
+fn mark_nested_job(job: &mut PlannedJob, ctx: &ParseContext) {
+    if ctx.subshell {
+        job.subshell = SubshellType::Subshell;
     }
-
-    let mut argv: Vec<String> = Vec::new();
-
-    for (cmd_str, jobs) in parsed_argv {
-        if let Some(ParsedJob {
-            subshell_type,
-            jobs,
-        }) = jobs
-        {
-            debug!("parsed job '{:?}' jobs:{:?}", cmd_str, jobs);
-            if jobs.is_empty() {
-                continue;
-            }
-            debug!("run subshell: {}", cmd_str);
-            let tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
-                Ok(mode) => Some(mode),
-                Err(err) => {
-                    debug!("tcgetattr fallback for command substitution: {}", err);
-                    Context::new_safe(shell.pid, shell.pgid, false).shell_tmode
-                }
-            };
-
-            match subshell_type {
-                SubshellType::Subshell => {
-                    let ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
-                    let output = shell.capture_subshell_stdout(&ctx, jobs)?;
-                    output.lines().for_each(|x| argv.push(x.to_owned()));
-                }
-                SubshellType::CommandSubstitution => {
-                    let ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
-                    let output = shell.capture_subshell_stdout(&ctx, jobs)?;
-                    for part in output.split_whitespace() {
-                        if !part.is_empty() {
-                            argv.push(part.to_owned());
-                        }
-                    }
-                }
-                SubshellType::ProcessSubstitution => {
-                    let mut ctx = Context::new(shell.pid, shell.pgid, tmode.clone(), false);
-                    ctx.foreground = true;
-                    // Deliberately NOT `cloexec_pipe`: the read end is handed to
-                    // the command as `/dev/fd/N`, so it has to survive its exec.
-                    let (pout, pin) = pipe().context("failed pipe")?;
-                    ctx.outfile = pin.as_raw_fd();
-                    shell.launch_subshell(&mut ctx, jobs)?;
-                    drop(pin); // Close write end
-                    // Leak pout to keep it open for process substitution
-                    let file_name = format!("/dev/fd/{}", pout.into_raw_fd());
-                    argv.push(file_name);
-                }
-                SubshellType::None => {}
-            }
-        } else {
-            argv.push(cmd_str);
-        }
+    if ctx.proc_subst {
+        job.subshell = SubshellType::ProcessSubstitution;
     }
-
-    if argv.is_empty() {
-        apply_standalone_assignments(shell, &mut env_overrides);
-        // no main command
-        return Ok(());
-    }
-
-    // Handle 'nopty' prefix
-    if argv[0] == "nopty" {
-        if argv.len() > 1 {
-            argv.remove(0);
-            current_job.disable_pty = true;
-            debug!("'nopty' detected, disabling PTY for this job");
-        } else {
-            // "nopty" with no command? Just ignore it or treat as command "nopty" which likely fails
-        }
-    }
-
-    let cmd = argv[0].as_str();
-    // A builtin runs inside the shell for a foreground job, so a per-command
-    // environment would have to be applied and unwound around the call. Say so
-    // rather than accepting the prefix and quietly ignoring it.
-    if !env_overrides.is_empty()
-        && (dsh_builtin::get_handler(cmd).is_some() || shell.lisp_engine.borrow().is_export(cmd))
-    {
-        // Report and skip *this* command. Bailing here aborted the whole line,
-        // so `FOO=bar cd /tmp; echo ok` silently dropped `echo ok` as well.
-        eprintln!("dsh: {cmd}: a NAME=value prefix is not supported for builtins");
-        return Ok(());
-    }
-
-    if let Some(handler) = dsh_builtin::get_handler(cmd) {
-        let builtin = process::BuiltinProcess::new_handler(cmd.to_string(), handler, argv);
-        attach_process(
-            current_job,
-            JobProcess::Builtin(builtin),
-            &mut redirects,
-            &mut env_overrides,
-        );
-    } else if shell.lisp_engine.borrow().is_export(cmd) {
-        let cmd_fn = dsh_builtin::lisp::run;
-        let builtin = process::BuiltinProcess::new(cmd.to_string(), cmd_fn, argv);
-        attach_process(
-            current_job,
-            JobProcess::Builtin(builtin),
-            &mut redirects,
-            &mut env_overrides,
-        );
-    } else if shell.environment.read().lookup(cmd).is_none() && dirs::is_dir(cmd) {
-        // A bare directory name means `cd` there. Only when the name is not a
-        // command: a directory called `test` next to `/usr/bin/test` is not what
-        // the user meant.
-        if let Some(handler) = dsh_builtin::get_handler("cd") {
-            let builtin = process::BuiltinProcess::new_handler(
-                cmd.to_string(),
-                handler,
-                vec!["cd".to_string(), cmd.to_string()],
-            );
-            attach_process(
-                current_job,
-                JobProcess::Builtin(builtin),
-                &mut redirects,
-                &mut env_overrides,
-            );
-        }
-    } else {
-        // Keep the name, not a path resolved against *this* moment. Parsing
-        // happens before a single command on the line has run, so resolving
-        // here answered with the wrong directory and the wrong `PATH`:
-        // `cd dir && ./script` and `export PATH=...:$PATH; tool` both said
-        // `command not found` for something that was about to exist. A name
-        // that still does not resolve when the command runs is a command that
-        // fails with 127, which is a result the rest of the line can react to —
-        // bailing here threw the whole line away, so `echo a; typo` printed
-        // nothing at all and `typo || fallback` never reached the fallback.
-        let process = process::Process::new(cmd.to_string(), argv);
-        attach_process(
-            current_job,
-            JobProcess::Command(process),
-            &mut redirects,
-            &mut env_overrides,
-        );
-        current_job.foreground = ctx.foreground;
-    }
-    Ok(())
 }
 
-fn parse_jobs(
-    shell: &mut Shell,
-    ctx: &mut ParseContext,
-    pair: Pair<Rule>,
-    jobs: &mut Vec<Job>,
-) -> Result<()> {
+fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJob>) -> Result<()> {
     let job_str = pair.as_str().to_string();
 
     for inner_pair in pair.into_inner() {
@@ -579,34 +353,24 @@ fn parse_jobs(
         );
         match inner_pair.as_rule() {
             Rule::simple_command => {
-                let mut job = Job::new(job_str.clone(), shell.pgid);
-                job.job_id = shell.get_next_job_id();
-                parse_command(shell, ctx, &mut job, inner_pair)?;
-                if job.has_process() {
-                    if ctx.subshell {
-                        job.subshell = SubshellType::Subshell;
-                    }
-                    if ctx.proc_subst {
-                        job.subshell = SubshellType::ProcessSubstitution;
-                    }
+                let mut job = empty_job(job_str.clone(), ctx);
+                let stage = build_simple_command(ctx, inner_pair)?;
+                job.stages.push(stage);
+                mark_nested_job(&mut job, ctx);
+                if !job.stages.iter().all(|stage| stage.is_empty()) {
                     jobs.push(job);
                 }
             }
             Rule::simple_command_bg => {
-                // background job
-                let mut job = Job::new(inner_pair.as_str().to_string(), shell.pgid);
-                job.job_id = shell.get_next_job_id();
+                let mut job = empty_job(inner_pair.as_str().to_string(), ctx);
+                job.foreground = false;
                 for bg_pair in inner_pair.into_inner() {
                     if let Rule::simple_command = bg_pair.as_rule() {
-                        parse_command(shell, ctx, &mut job, bg_pair)?;
-                        if job.has_process() {
-                            if ctx.subshell {
-                                job.subshell = SubshellType::Subshell;
-                            }
-                            if ctx.proc_subst {
-                                job.subshell = SubshellType::ProcessSubstitution;
-                            }
-                            job.foreground = false; // background
+                        let stage = build_simple_command(ctx, bg_pair)?;
+                        job.stages.push(stage);
+                        mark_nested_job(&mut job, ctx);
+                        job.foreground = false;
+                        if !job.stages.iter().all(|stage| stage.is_empty()) {
                             jobs.push(job);
                         }
                         break;
@@ -614,79 +378,52 @@ fn parse_jobs(
                 }
             }
             Rule::pipe_command => {
-                // For pipe commands, create a new job if no existing job
                 if jobs.is_empty() {
-                    let mut job = Job::new(job_str.clone(), shell.pgid);
-                    job.job_id = shell.get_next_job_id();
-                    if ctx.subshell {
-                        job.subshell = SubshellType::Subshell;
-                    }
-                    if ctx.proc_subst {
-                        job.subshell = SubshellType::ProcessSubstitution;
-                    }
+                    let mut job = empty_job(job_str.clone(), ctx);
+                    mark_nested_job(&mut job, ctx);
                     jobs.push(job);
                 }
-
                 if let Some(job) = jobs.last_mut() {
                     let saved_foreground = ctx.foreground;
-                    for inner_pair in inner_pair.into_inner() {
-                        let _cmd = inner_pair.as_str();
-                        if let Rule::simple_command = inner_pair.as_rule() {
+                    for stage_pair in inner_pair.into_inner() {
+                        if let Rule::simple_command = stage_pair.as_rule() {
                             ctx.foreground = true;
-                            parse_command(shell, ctx, job, inner_pair)?;
-                        } else if let Rule::simple_command_bg = inner_pair.as_rule() {
+                            let stage = build_simple_command(ctx, stage_pair)?;
+                            job.stages.push(stage);
+                        } else if let Rule::simple_command_bg = stage_pair.as_rule() {
                             ctx.foreground = false;
-                            parse_command(shell, ctx, job, inner_pair)?;
-                        } else {
-                            // TODO check?
+                            for bg_pair in stage_pair.into_inner() {
+                                if let Rule::simple_command = bg_pair.as_rule() {
+                                    let stage = build_simple_command(ctx, bg_pair)?;
+                                    job.stages.push(stage);
+                                    job.foreground = false;
+                                    break;
+                                }
+                            }
                         }
                     }
                     ctx.foreground = saved_foreground;
                 }
             }
             Rule::capture_suffix => {
-                // Set capture_output flag on the last job
                 if let Some(job) = jobs.last_mut() {
                     job.capture_output = true;
-                    debug!("Capture mode enabled for job: {}", job.cmd);
                 }
             }
             Rule::struct_pipe_command => {
-                // The rule is:
-                // struct_pipe_command = { struct_pipe_op ~ sp* ~ (lisp_expr | struct_pipe_dsl) ~ sp* }
-                // `lisp_expr` is the original `(...)` form and is used as-is;
-                // `struct_pipe_dsl` is the `where ... | select ...` shorthand
-                // and is desugared to an equivalent S-expression before it
-                // joins the same `struct_pipe_exprs` chain.
-                for inner_pair in inner_pair.into_inner() {
-                    let lisp_expr = match inner_pair.as_rule() {
-                        Rule::lisp_expr => {
-                            let expr = inner_pair.as_str().to_string();
-                            debug!("Found struct_pipe Lisp expression: {}", expr);
-                            expr
-                        }
+                for expr_pair in inner_pair.into_inner() {
+                    let lisp_expr = match expr_pair.as_rule() {
+                        Rule::lisp_expr => expr_pair.as_str().to_string(),
                         Rule::struct_pipe_dsl => {
-                            // A desugar failure becomes a runtime-only error
-                            // (see `desugar_or_error_call`'s doc) rather than
-                            // a `?`-propagated `Result::Err` here: this loop
-                            // shares `jobs` with every other command already
-                            // parsed on the same `;`/`&&`/`||`-joined line,
-                            // and an early return would discard all of them
-                            // over a typo in just this one `|:` stage.
-                            let dsl = inner_pair.as_str();
-                            let expr = super::struct_pipe::desugar_or_error_call(dsl);
-                            debug!("Desugared struct_pipe DSL '{}' to: {}", dsl, expr);
-                            expr
+                            struct_pipe::desugar_or_error_call(expr_pair.as_str())
                         }
                         _ => continue,
                     };
-
-                    // Add to last job's struct_pipe_exprs or create new job
                     if let Some(job) = jobs.last_mut() {
                         job.struct_pipe_exprs.push(lisp_expr);
                     } else {
-                        let mut job = Job::new(job_str.clone(), shell.pgid);
-                        job.job_id = shell.get_next_job_id();
+                        let mut job = empty_job(job_str.clone(), ctx);
+                        mark_nested_job(&mut job, ctx);
                         job.struct_pipe_exprs.push(lisp_expr);
                         jobs.push(job);
                     }
@@ -702,4 +439,56 @@ fn parse_jobs(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+
+    fn test_env() -> Arc<RwLock<Environment>> {
+        Environment::new()
+    }
+
+    /// Test A: planning alone must not execute substitutions.
+    #[test]
+    fn planning_does_not_execute_substitution() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("parse_must_not_run");
+        let input = format!("echo $(touch {})", marker.display());
+        let env = test_env();
+        let cwd = std::env::current_dir().expect("cwd");
+        let vars_before = {
+            let guard = env.read();
+            guard.variable_state.variables.clone()
+        };
+        let plan = parse_execution_plan(&input, Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs.len(), 1);
+        assert!(plan.jobs[0].contains_deferred_evaluation());
+        assert!(
+            !marker.exists(),
+            "planning executed a substitution it must only record"
+        );
+        assert_eq!(
+            std::env::current_dir().expect("cwd"),
+            cwd,
+            "planning must not change directories"
+        );
+        let vars_after = env.read().variable_state.variables.clone();
+        assert_eq!(
+            vars_before, vars_after,
+            "planning must not mutate variables"
+        );
+    }
+
+    /// Test B: a standalone assignment is deferred, not applied by planning.
+    #[test]
+    fn planning_does_not_apply_standalone_assignment() {
+        let env = test_env();
+        let plan =
+            parse_execution_plan("DOGESH_TEST_PARSE_ONLY=value", Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs.len(), 1);
+        assert!(env.read().get_var("DOGESH_TEST_PARSE_ONLY").is_none());
+        assert!(plan.jobs[0].is_assignment_only());
+    }
 }

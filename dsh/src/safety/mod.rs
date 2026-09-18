@@ -32,6 +32,30 @@ pub struct SafetyGuard {
     checkers: HashMap<String, SafetyCheckFn>,
 }
 
+/// How strictly a raw source allowlist entry may be trusted.
+///
+/// A job that went through substitution can change its meaning after the
+/// substitution runs (`$(printf rm) -rf target`), so an exact match on the
+/// raw source must never skip the concrete argv check for such jobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SafetyCheckContext {
+    pub allow_exact_source_match: bool,
+}
+
+impl SafetyCheckContext {
+    pub fn strict_source() -> Self {
+        Self {
+            allow_exact_source_match: true,
+        }
+    }
+
+    pub fn deferred_source() -> Self {
+        Self {
+            allow_exact_source_match: false,
+        }
+    }
+}
+
 impl SafetyGuard {
     pub fn new() -> Self {
         let mut guard = Self {
@@ -96,11 +120,30 @@ impl SafetyGuard {
         level: &SafetyLevel,
         allowlist: &[String],
     ) -> SafetyResult {
+        self.check_jobs_with_context(jobs, level, allowlist, &SafetyCheckContext::strict_source())
+    }
+
+    /// Same as [`Self::check_jobs`], but `allow_exact_source_match == false`
+    /// forces the concrete post-substitution argv to be judged even when the
+    /// raw source line is allowlisted. Use it for materialized jobs that
+    /// contained deferred evaluation.
+    pub fn check_jobs_with_context(
+        &self,
+        jobs: &[Job],
+        level: &SafetyLevel,
+        allowlist: &[String],
+        ctx: &SafetyCheckContext,
+    ) -> SafetyResult {
         match level {
             SafetyLevel::Loose => return SafetyResult::Allowed,
             SafetyLevel::Strict => {
-                // In strict mode, check if all jobs are in allowlist
-                if !jobs.is_empty() && jobs.iter().all(|j| allowlist.contains(&j.cmd)) {
+                // In strict mode, check if all jobs are in allowlist. A raw
+                // source match is not trusted for deferred jobs: `$(...)` can
+                // resolve to a different command next time.
+                if ctx.allow_exact_source_match
+                    && !jobs.is_empty()
+                    && jobs.iter().all(|j| allowlist.contains(&j.cmd))
+                {
                     return SafetyResult::Allowed;
                 }
 
@@ -125,7 +168,7 @@ impl SafetyGuard {
         // `jobs[i - 1]` only ever looked at `;`-separated commands, which meant
         // `curl … | sh` was never once detected.
         for job in jobs {
-            if allowlist.contains(&job.cmd) {
+            if ctx.allow_exact_source_match && allowlist.contains(&job.cmd) {
                 continue;
             }
 
@@ -156,12 +199,24 @@ impl SafetyGuard {
         // 2. Check each command line for dangerous invocations.
         for job in jobs {
             // Check allowlist
-            if allowlist.contains(&job.cmd) {
+            if ctx.allow_exact_source_match && allowlist.contains(&job.cmd) {
                 continue;
             }
 
             if let Some(reason) = self.classify_command_line(&job.cmd) {
                 return SafetyResult::Confirm(reason);
+            }
+
+            // 3. Judge the materialized argv as well. A deferred source line
+            // like `$(printf rm) -rf target` does not classify as `rm` above,
+            // but its concrete stages do.
+            let mut stage = job.process.as_deref();
+            while let Some(process) = stage {
+                let (program, args) = process.command_argv();
+                if let Some(reason) = self.classify_tokens(program, args) {
+                    return SafetyResult::Confirm(reason);
+                }
+                stage = process.next_process();
             }
         }
 

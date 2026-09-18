@@ -2,7 +2,9 @@ use crate::parser::{self, Rule, ShellParser};
 use crate::process::{Job, ListOp, ProcessState, wait_pid_job};
 use crate::shell::{
     Shell,
-    parse::{ParseContext, parse_commands},
+    authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
+    materialize::materialize_job,
+    parse::parse_execution_plan,
 };
 use crate::terminal::title;
 use anyhow::{Result, anyhow};
@@ -17,7 +19,7 @@ use std::sync::Arc;
 use tracing::debug;
 
 mod subshell;
-pub use subshell::{capture_subshell_stdout, execute_with_capture, launch_subshell};
+pub use subshell::{execute_with_capture, launch_subshell};
 
 struct TitleGuard {
     active: bool,
@@ -126,77 +128,10 @@ pub async fn eval_str(
     // Smart Pipe transformation
     let input = transform_input_for_smart_pipe(input);
 
-    let jobs = get_jobs(shell, &input)?;
-
-    // SAFETY CHECK
-    {
-        use crate::repl::confirmation::ConfirmationAction;
-        use crate::safety::SafetyResult;
-
-        let _allowlist_add_cmd: Option<String> = None;
-        let mut user_cancelled = false;
-
-        {
-            let environment = shell.environment.read();
-            let safety_level_guard = environment.policy_state.safety_level.read();
-            // What the user types is judged against the configured list *and*
-            // whatever they waved through earlier in this session. The agent
-            // sees only the first of the two.
-            let allowlist_guard = environment.policy_state.execute_allowlist.read();
-            let always_guard = environment.policy_state.shell_always_allowlist.read();
-            let allowlist: Vec<String> = allowlist_guard
-                .iter()
-                .chain(always_guard.iter())
-                .cloned()
-                .collect();
-
-            match shell
-                .safety_guard
-                .check_jobs(&jobs, &safety_level_guard, &allowlist)
-            {
-                SafetyResult::Allowed => {
-                    // Proceed
-                }
-                SafetyResult::Confirm(reason) => {
-                    // Release locks before confirmation to avoid holding them during user input
-                    drop(allowlist_guard);
-                    drop(always_guard);
-                    drop(safety_level_guard);
-                    drop(environment);
-
-                    match crate::repl::confirmation::confirm_action(&reason) {
-                        Ok(ConfirmationAction::Yes) => {
-                            // Proceed
-                        }
-                        Ok(ConfirmationAction::AlwaysAllow) => {
-                            // Proceed and mark for add.
-                            // We allow the *exact matching command strings* of all jobs in this approved pipeline.
-                            //
-                            // This goes to the shell's own store, not the list
-                            // the chat agent reads: approving a command for
-                            // yourself is not approving it for the AI.
-                            shell
-                                .environment
-                                .read()
-                                .policy_state
-                                .shell_always_allowlist
-                                .write()
-                                .extend(jobs.iter().map(|j| j.cmd.clone()));
-                        }
-                        Ok(ConfirmationAction::No) | Err(_) => {
-                            user_cancelled = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if user_cancelled {
-            tracing::info!("Command execution cancelled by user");
-            publish_exit_status(shell, 130);
-            return Ok(130);
-        }
-    }
+    // Pure planning: no command runs and no shell state changes here.
+    // Substitution bodies stay deferred inside the plan until their own
+    // gating and authorization below.
+    let plan = parse_execution_plan(&input, Arc::clone(&shell.environment))?;
 
     let mut last_exit_code = 0_i32;
     // Operator that gates execution of the *current* job based on the previous job result.
@@ -208,16 +143,17 @@ pub async fn eval_str(
     let base_infile = ctx.infile;
     let base_outfile = ctx.outfile;
     let base_errfile = ctx.errfile;
-    for mut job in jobs {
+    for planned in &plan.jobs {
         // `list_op` is stored on the *previous* job by the parser.
         // We keep it here before moving `job` into wait_jobs.
-        let next_gate_op = job.list_op.clone();
+        let next_gate_op = planned.list_op.clone();
 
         ctx.infile = base_infile;
         ctx.outfile = base_outfile;
         ctx.errfile = base_errfile;
 
-        // Decide whether to run this job based on previous operator and last exit code.
+        // Gating comes before materialization: a skipped branch performs no
+        // substitution, no pipe, and no authorization prompt.
         let should_run = match gate_op {
             ListOp::None => true,
             ListOp::And => last_exit_code == 0,
@@ -227,10 +163,43 @@ pub async fn eval_str(
         if !should_run {
             debug!(
                 "skip job '{}' due to gate_op:{:?} last_exit_code:{}",
-                job.cmd, gate_op, last_exit_code
+                planned.source, gate_op, last_exit_code
             );
             gate_op = next_gate_op;
             continue;
+        }
+
+        // Materialize only the selected job. Nested substitution bodies were
+        // authorized inside this call; a nested denial aborts the whole line.
+        let materialized = match materialize_job(
+            shell,
+            ctx,
+            planned,
+            crate::repl::confirmation::confirm_action,
+        )
+        .await
+        {
+            Ok(Some(materialized)) => materialized,
+            Ok(None) => {
+                gate_op = next_gate_op;
+                continue;
+            }
+            Err(err) if is_authorization_cancelled(&err) => {
+                tracing::info!("Command execution cancelled by user (nested)");
+                publish_exit_status(shell, 130);
+                return Ok(130);
+            }
+            Err(err) => return Err(err),
+        };
+        let mut job = materialized.job;
+        let had_deferred = materialized.had_deferred_evaluation;
+        match authorize_job(shell, &job, had_deferred)? {
+            AuthorizationDecision::Allow => {}
+            AuthorizationDecision::Deny => {
+                tracing::info!("Command execution cancelled by user");
+                publish_exit_status(shell, 130);
+                return Ok(130);
+            }
         }
 
         // Execute pre-exec hooks
@@ -517,27 +486,12 @@ fn publish_exit_status(shell: &Shell, code: i32) {
     shell.environment.write().last_exit_status = code;
 }
 
+/// Static job projection for safety checks and tests: pure planning plus
+/// static materialization. Never executes substitutions and never mutates
+/// shell state (standalone assignments become "no job", as before).
 pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
-    let (input_cow, pairs_opt) =
-        parser::parse_with_expansion(input, Arc::clone(&shell.environment))?;
-
-    let mut pairs = if let Some(pairs) = pairs_opt {
-        pairs
-    } else {
-        ShellParser::parse(Rule::commands, &input_cow).map_err(|e| anyhow!(e))?
-    };
-
-    let mut ctx = ParseContext::new(true);
-    let Some(pair) = pairs.next() else {
-        return Ok(Vec::new());
-    };
-
-    // The grammar has no EOI anchor, so `Rule::commands` happily returns a
-    // partial match and we would silently execute only the prefix. Report the
-    // leftover instead of pretending the whole line ran.
-    report_unparsed_tail(&input_cow, pair.as_span().end());
-
-    parse_commands(shell, &mut ctx, pair)
+    let plan = parse_execution_plan(input, Arc::clone(&shell.environment))?;
+    crate::shell::materialize::dry_materialize_plan(&plan, shell)
 }
 
 /// Warn about input the parser did not consume.
@@ -561,16 +515,6 @@ pub fn unconsumed_tail(shell: &mut Shell, input: &str) -> Option<String> {
 
     let pair = pairs.next()?;
     parser::unparsed_tail(&input_cow, pair.as_span().end()).map(str::to_string)
-}
-
-fn report_unparsed_tail(input: &str, consumed: usize) {
-    if let Some(tail) = parser::unparsed_tail(input, consumed) {
-        tracing::warn!("unparsed input tail: {:?}", tail);
-        // `\r\n`, not `\n`: this runs before raw mode is turned off, where a
-        // bare newline leaves the cursor in the same column and staircases the
-        // next line.
-        eprint!("dsh: warning: ignored unparsed input: {tail}\r\n");
-    }
 }
 
 // SAFETY WARNING:

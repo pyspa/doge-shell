@@ -1,8 +1,12 @@
+pub mod authorize;
 pub mod eval;
 pub mod hooks;
 pub mod job;
+pub mod materialize;
 pub mod parse;
+pub mod plan;
 pub mod struct_pipe;
+pub mod substitution;
 
 use crate::environment::Environment;
 use crate::history::{FrecencyHistory, HistoryMetadata};
@@ -195,15 +199,6 @@ impl Shell {
         }
 
         eval::eval_str(self, ctx, input, force_background).await
-    }
-
-    fn launch_subshell(&mut self, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
-        eval::launch_subshell(self, ctx, jobs)
-    }
-
-    /// Run `jobs` in-process and collect their stdout, for `$(...)` and `(...)`.
-    fn capture_subshell_stdout(&mut self, ctx: &Context, jobs: Vec<Job>) -> Result<String> {
-        eval::capture_subshell_stdout(self, ctx, jobs)
     }
 
     pub fn exit(&mut self) {

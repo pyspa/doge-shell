@@ -57,12 +57,9 @@ impl AgentCommandPolicy for Shell {
         AgentCommandVerdict::Confirm("outside task file grants".into())
     }
     fn evaluate_agent_command(&mut self, command: &str) -> AgentCommandVerdict {
-        // `get_jobs` parses *and evaluates*: `shell::parse::parse_command` calls
-        // `capture_subshell_stdout` for `$(...)`, `(...)` and `<(...)`, so
-        // handing one of those to a safety check would run it before anyone
-        // approved it. The `execute` tool refuses them for that reason; this
-        // repeats the refusal here so the trait cannot become a way to run a
-        // command by asking whether it is safe.
+        // Interactive shell parsing is now side-effect-free, but agent command
+        // execution still deliberately rejects shell substitution constructs.
+        // Keep that policy separate from parser safety.
         if let Some(construct) = dsh_types::safety_policy::substitution_construct(command) {
             return AgentCommandVerdict::Denied(format!("{construct} cannot be evaluated safely"));
         }
@@ -92,7 +89,8 @@ impl AgentCommandPolicy for Shell {
         }
 
         // Parse the whole line, so a pipeline is judged as a pipeline. This is
-        // the same path the user's own input takes.
+        // pure planning plus static materialization: no substitution runs and
+        // no shell state changes, matching the interactive parser boundary.
         let jobs = match crate::shell::eval::get_jobs(self, command) {
             Ok(jobs) if !jobs.is_empty() => jobs,
             Ok(_) => {

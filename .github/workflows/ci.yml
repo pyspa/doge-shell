@@ -6,7 +6,8 @@
 #
 # See docs/ai/skills/doge-shell-repo/references/platform-support.md.
 name: CI
-
+permissions:
+  contents: read
 on:
   push:
     branches: [main, develop]

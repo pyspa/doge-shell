@@ -9,6 +9,7 @@
 use super::authorize::ConfirmFn;
 use super::parse::planned_to_concrete;
 use super::plan::{PlannedJob, PlannedRedirectOp};
+use super::substitution::ExecutionResources;
 use super::word_expand::{
     dry_expand_argument_word, dry_expand_scalar_word, expand_argument_word,
     expand_assignment_value, expand_redirect_target,
@@ -23,6 +24,10 @@ use std::pin::Pin;
 pub struct MaterializedJob {
     pub job: Job,
     pub had_dynamic_expansion: bool,
+    /// Process-substitution fds and producer pids created while expanding
+    /// this job. Moved into the `Job` before launch; dropped (fds closed,
+    /// producers reaped) once every stage is spawned.
+    pub resources: ExecutionResources,
 }
 
 pub(crate) struct ExpandedStage {
@@ -109,6 +114,7 @@ async fn expand_redirects(
     planned: &PlannedJob,
     stage_index: usize,
     confirm: ConfirmFn,
+    resources: &mut ExecutionResources,
 ) -> Result<Vec<Redirect>> {
     let mut out = Vec::new();
     for redirect in &planned.stages[stage_index].redirects {
@@ -126,7 +132,7 @@ async fn expand_redirects(
                 // Substitution bodies inside the target execute as part of
                 // `expand_redirect_target`, through the same authorize-then-run
                 // path as argv substitutions.
-                let target = expand_redirect_target(shell, ctx, word, confirm).await?;
+                let target = expand_redirect_target(shell, ctx, word, confirm, resources).await?;
                 out.extend(planned_to_concrete(redirect, target));
             }
         }
@@ -141,18 +147,22 @@ pub fn materialize_job<'a>(
     confirm: ConfirmFn,
 ) -> Pin<Box<dyn Future<Output = Result<Option<MaterializedJob>>> + 'a>> {
     Box::pin(async move {
+        let mut resources = ExecutionResources::new();
         let mut expanded = Vec::with_capacity(planned.stages.len());
         for (stage_index, stage) in planned.stages.iter().enumerate() {
             let mut argv = Vec::new();
             for word in &stage.argv {
-                argv.extend(expand_argument_word(shell, ctx, word, confirm).await?);
+                argv.extend(expand_argument_word(shell, ctx, word, confirm, &mut resources).await?);
             }
             let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
             for assignment in &stage.env_overrides {
-                let value = expand_assignment_value(shell, ctx, &assignment.value, confirm).await?;
+                let value =
+                    expand_assignment_value(shell, ctx, &assignment.value, confirm, &mut resources)
+                        .await?;
                 env_overrides.push((assignment.name.clone(), value));
             }
-            let redirects = expand_redirects(shell, ctx, planned, stage_index, confirm).await?;
+            let redirects =
+                expand_redirects(shell, ctx, planned, stage_index, confirm, &mut resources).await?;
             expanded.push(ExpandedStage {
                 argv,
                 redirects,
@@ -187,6 +197,7 @@ pub fn materialize_job<'a>(
         Ok(job.map(|job| MaterializedJob {
             job,
             had_dynamic_expansion: had_dynamic,
+            resources,
         }))
     })
 }

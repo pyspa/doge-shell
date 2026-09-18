@@ -2,6 +2,7 @@
 
 pub mod async_io;
 pub mod builtin;
+pub mod child_exec;
 pub mod fork;
 pub mod io;
 pub mod job;
@@ -11,6 +12,7 @@ pub mod job_wait;
 pub mod process;
 pub mod pty;
 pub mod redirect;
+pub mod reexec;
 pub mod signal;
 pub mod state;
 pub mod wait;

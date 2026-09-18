@@ -14,6 +14,7 @@
 //! - [`mcp`] - MCP server management
 //! - [`preferences`] - Input preferences and settings
 
+pub mod child_snapshot;
 mod mcp;
 mod paths;
 mod preferences;

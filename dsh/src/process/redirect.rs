@@ -19,14 +19,14 @@ use std::os::fd::BorrowedFd;
 use std::os::unix::io::{AsRawFd, RawFd};
 
 /// One redirection, in the order the user wrote it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Redirect {
     /// The descriptor being redirected: `2` in `2> err`.
     pub fd: RawFd,
     pub op: RedirectOp,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum RedirectOp {
     ReadFile(String),
     WriteFile(String),

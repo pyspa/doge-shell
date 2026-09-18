@@ -7,11 +7,12 @@ use std::os::unix::io::RawFd;
 use tracing::debug;
 
 use super::builtin::BuiltinProcess;
-use super::fork::{fork_builtin_process, fork_process};
+use super::fork::fork_process;
 use super::io::{cloexec_pipe, create_pipe, default_output_wiring};
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::{self, AppliedRedirects, Redirect};
+use super::reexec::spawn_background_builtin;
 use super::signal::send_signal;
 use super::state::ProcessState;
 use crate::shell::Shell;
@@ -408,8 +409,9 @@ impl JobProcess {
                         process.launch(ctx, shell).await?;
                         current_pid
                     } else {
-                        // Fork for background execution
-                        let child_pid = fork_builtin_process(ctx, process, shell)?;
+                        // Background builtins re-exec into a fresh helper
+                        // process (no fork-copy, no post-fork Rust).
+                        let child_pid = spawn_background_builtin(ctx, process, shell)?;
                         process.pid = Some(child_pid);
                         child_pid
                     }

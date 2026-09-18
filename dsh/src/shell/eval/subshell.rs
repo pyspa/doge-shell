@@ -1,14 +1,14 @@
-//! Running a job as a subshell rather than as part of the interactive job table:
-//! `(...)`'s own subshell (`launch_subshell`/`spawn_subshell`, which does fork)
-//! for `<(...)` producers, plus `execute_with_capture`'s pipe-capture plumbing
-//! that `eval_str` builds on. Deferred `$(...)` bodies go through
-//! `crate::shell::substitution::capture_subshell_plan_stdout`, which
-//! authorizes each nested body before running it.
-use anyhow::Context as _;
-use nix::unistd::{ForkResult, Pid, fork, getpid, setpgid};
-use tokio::task;
-
-use super::*;
+//! Pipe-capture plumbing `eval_str` builds on for `|>` and `|:`.
+//!
+//! `execute_with_capture` stays in-process: it never forked, so no boundary
+//! work applies to it. `$(...)` capture and `<(...)` producers live in
+//! `super::super::substitution`, on the re-exec protocol shared with
+//! background builtins (`crate::process::reexec`).
+use crate::process::{Job, ProcessState};
+use crate::shell::Shell;
+use anyhow::{Context as _, Result, anyhow};
+use dsh_types::Context;
+use tracing::debug;
 
 /// Execute a job and capture its stdout and stderr
 /// Returns (exit_code, stdout, stderr)
@@ -102,56 +102,4 @@ pub async fn execute_with_capture(
     );
 
     Ok((exit_code, stdout, stderr))
-}
-pub fn launch_subshell(shell: &mut Shell, ctx: &mut Context, jobs: Vec<Job>) -> Result<()> {
-    for mut job in jobs {
-        disable_raw_mode().ok();
-        let pid = task::block_in_place(|| {
-            // Avoid nested-runtime panic by driving only this future directly.
-            futures::executor::block_on(spawn_subshell(shell, ctx, &mut job))
-        })?;
-        debug!("spawned subshell cmd:{} pid: {:?}", job.cmd, pid);
-        let res = wait_pid_job(pid, false);
-        debug!("wait subshell exit:{:?}", res);
-        enable_raw_mode().ok();
-    }
-
-    Ok(())
-}
-async fn spawn_subshell(shell: &mut Shell, ctx: &mut Context, job: &mut Job) -> Result<Pid> {
-    let pid = unsafe { fork().context("failed fork")? };
-
-    match pid {
-        ForkResult::Parent { child } => {
-            let pid = child;
-            debug!("subshell parent setpgid parent pid:{} pgid:{}", pid, pid);
-            setpgid(pid, pid).context("failed setpgid")?;
-            Ok(pid)
-        }
-        ForkResult::Child => {
-            // Child process
-            // SAFETY: Do NOT use tracing here. Unsafe after fork.
-            let pid = getpid();
-            // setpgid is syscall
-            if setpgid(pid, pid).is_err() {
-                // ignore or raw write
-            }
-
-            job.pgid = Some(pid);
-            ctx.pgid = Some(pid);
-
-            // Execute
-            let res = job.launch(ctx, shell).await;
-
-            if let Ok(state @ ProcessState::Completed(_, _)) = res {
-                std::process::exit(
-                    state
-                        .shell_exit_code()
-                        .expect("completed state has exit code"),
-                );
-            } else {
-                std::process::exit(-1);
-            }
-        }
-    }
 }

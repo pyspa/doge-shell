@@ -1,4 +1,4 @@
-use crate::process::{Job, ListOp, ProcessState, wait_pid_job};
+use crate::process::{Job, ListOp, ProcessState};
 use crate::shell::{
     Shell,
     authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
@@ -6,7 +6,7 @@ use crate::shell::{
     parse::parse_execution_plan,
 };
 use crate::terminal::title;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::execute_chat_message;
 use dsh_types::{Context, ExitStatus};
@@ -16,8 +16,10 @@ use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use tracing::debug;
 
+mod plan_eval;
 mod subshell;
-pub use subshell::{execute_with_capture, launch_subshell};
+pub(crate) use plan_eval::evaluate_plan;
+pub use subshell::execute_with_capture;
 
 struct TitleGuard {
     active: bool,
@@ -206,6 +208,7 @@ pub async fn eval_str(
         };
         let mut job = materialized.job;
         let had_dynamic = materialized.had_dynamic_expansion;
+        job.resources = materialized.resources;
         match authorize_job(shell, &job, had_dynamic)? {
             AuthorizationDecision::Allow => {}
             AuthorizationDecision::Deny => {
@@ -501,7 +504,7 @@ pub async fn eval_str(
 ///
 /// `publish_exit_status` updates after each job completes, so later jobs on
 /// the same line resolve `$?` during their own materialization.
-fn publish_exit_status(shell: &Shell, code: i32) {
+pub(crate) fn publish_exit_status(shell: &Shell, code: i32) {
     shell.environment.write().last_exit_status = code;
 }
 
@@ -515,19 +518,6 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     let plan = parse_execution_plan(input, Arc::clone(&shell.environment))?;
     crate::shell::materialize::dry_materialize_plan(&plan, shell)
 }
-
-// SAFETY WARNING:
-// This function calls `fork()` in a potentially multi-threaded environment (Tokio runtime).
-// In the child process (ForkResult::Child), it proceeds to use `job.launch` which is async
-// and relies on the Tokio runtime.
-//
-// Using `fork` without `exec` in a multi-threaded program is generally unsafe because
-// only the thread calling fork is duplicated. If other threads held locks (like malloc locks
-// or Tokio internal locks), those locks are now held forever in the child, leading to deadlocks.
-//
-// Ideally, subshells should be implemented by re-executing the shell binary with specific flags,
-// or by using a dedicated process spawner that avoids this pattern.
-// Proceed with caution.
 
 fn transform_input_for_smart_pipe(input: String) -> String {
     let trimmed = input.trim_start();

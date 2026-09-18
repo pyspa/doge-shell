@@ -1,82 +1,32 @@
+//! Parent-side spawn preparation for external commands.
+//!
+//! The parent resolves the program, builds the `execve` image (strings plus
+//! pointer arrays), creates the exec-error pipe, and forks. The child branch
+//! does nothing but call `super::child_exec::exec_external_child` — one tiny
+//! raw-syscall function that ends in `execve` or `_exit`. In particular the
+//! child performs no `tracing`, no `anyhow`, no allocation, no locks, and no
+//! `std::process::exit`.
+//!
+//! Failure diagnostics (`EACCES`, `dup2` errors, ...) are formatted here in
+//! the parent, which owns allocation and `format!`, and written to the
+//! process's stderr target fd.
+
+use crate::process::child_exec::{
+    ChildExecError, RawChildPlan, STAGE_CLOSE, STAGE_DUP2_STDERR, STAGE_DUP2_STDIN,
+    STAGE_DUP2_STDOUT, STAGE_EXECVE, STAGE_SETPGID, STAGE_SETSID, STAGE_SIGNAL,
+    exec_external_child,
+};
 use crate::process::io::cloexec_pipe;
 use anyhow::{Context as _, Result};
-use nix::unistd::{ForkResult, Pid, fork, getpid, setpgid};
+use nix::unistd::{ForkResult, Pid, fork};
+use std::os::fd::{BorrowedFd, IntoRawFd};
 use tracing::debug;
 
-use super::builtin::BuiltinProcess;
 use super::process::Process;
-use super::pty::PtyChildConfig;
+use super::pty::{PtyChildConfig, PtyMode};
 use crate::shell::Shell;
 use dsh_types::Context;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
-use std::os::fd::IntoRawFd;
-
-pub(crate) fn fork_builtin_process(
-    ctx: &mut Context,
-    process: &mut BuiltinProcess,
-    shell: &mut Shell,
-) -> Result<Pid> {
-    debug!("fork_builtin_process for background execution");
-
-    debug!(
-        "🍴 BUILTIN: About to fork builtin process: {}",
-        process.name
-    );
-    let pid = unsafe { fork().context("failed fork for builtin")? };
-
-    match pid {
-        ForkResult::Parent { child } => {
-            debug!(
-                "🍴 BUILTIN: Parent process - forked builtin {} with child pid {}",
-                process.name, child
-            );
-            Ok(child)
-        }
-        ForkResult::Child => {
-            // Child process: execute builtin command
-            // SAFETY: Avoid accessing any locks (like tracing/malloc) after fork in multi-threaded env
-            let pid = getpid();
-            // setpgid is a syscall, safe enough
-            if let Err(_e) = setpgid(pid, pid) {
-                // Silently fail or use raw stderr write if absolutely needed.
-                // For now, minimizing risk by suppressing complex logging.
-            }
-
-            // `fork()` only duplicates the calling thread, so a builtin that
-            // reports agent lifecycle state needs a reporter of its own -
-            // the parent's `HerdrReporter` worker
-            // thread does not exist in this process even though the `Arc`
-            // does. A no-op when lifecycle reporting wasn't active.
-            crate::agent_lifecycle::reactivate_after_fork(shell);
-
-            // Execute the builtin command
-            // Note: process.launch might still use tracing internally if not careful.
-            // Ideally builtins should be careful too, but at least we removed the immediate logging.
-            let result = process.launch_sync(ctx, shell);
-
-            // Give any lifecycle report this builtin queued (working/blocked/
-            // idle/release) a bounded chance to actually reach Herdr before
-            // this process vanishes via `std::process::exit` below, which
-            // skips destructors entirely - `ShutdownGuard`'s own `Drop` never
-            // runs in a forked child. A no-op if lifecycle reporting was
-            // never reactivated for this child (`owned_by_this_process`
-            // guards it).
-            shell
-                .environment
-                .read()
-                .integration_state
-                .lifecycle
-                .shutdown();
-
-            if result.is_err() {
-                std::process::exit(1);
-            }
-
-            // Builtin commands complete immediately, so exit with success
-            std::process::exit(0);
-        }
-    }
-}
 
 pub(crate) fn fork_process(
     ctx: &Context,
@@ -85,61 +35,58 @@ pub(crate) fn fork_process(
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
 ) -> Result<Pid> {
-    debug!("🍴 FORK: Starting fork_process");
+    debug!("FORK: Starting fork_process");
+    debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
     debug!(
-        "🍴 FORK: pgid: {:?}, foreground: {}",
-        job_pgid, ctx.foreground
-    );
-    debug!(
-        "🍴 FORK: Process I/O before capture - stdin={}, stdout={}, stderr={}",
+        "FORK: Process I/O before capture - stdin={}, stdout={}, stderr={}",
         process.stdin, process.stdout, process.stderr
     );
     debug!(
-        "🍴 FORK: Context I/O - infile={}, outfile={}, errfile={}",
+        "FORK: Context I/O - infile={}, outfile={}, errfile={}",
         ctx.infile, ctx.outfile, ctx.errfile
     );
 
     // capture
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
-        debug!("🍴 FORK: Creating capture pipe for stdout (background process)");
+        debug!("FORK: Creating capture pipe for stdout (background process)");
         let (pout, pin) = cloexec_pipe().context("failed pipe")?;
         process.stdout = pin.into_raw_fd();
         let pout_raw = pout.into_raw_fd();
         process.cap_stdout = Some(pout_raw);
         debug!(
-            "🍴 FORK: Created capture pipe for stdout: read={}, write={}",
+            "FORK: Created capture pipe for stdout: read={}, write={}",
             pout_raw, process.stdout
         );
     } else {
         debug!(
-            "🍴 FORK: No capture pipe needed for stdout (ctx.outfile={}, foreground={})",
+            "FORK: No capture pipe needed for stdout (ctx.outfile={}, foreground={})",
             ctx.outfile, ctx.foreground
         );
     }
 
     if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty.is_none() {
-        debug!("🍴 FORK: Creating capture pipe for stderr (background process)");
+        debug!("FORK: Creating capture pipe for stderr (background process)");
         let (pout, pin) = cloexec_pipe().context("failed pipe")?;
         process.stderr = pin.into_raw_fd();
         let pout_raw = pout.into_raw_fd();
         process.cap_stderr = Some(pout_raw);
         debug!(
-            "🍴 FORK: Created capture pipe for stderr: read={}, write={}",
+            "FORK: Created capture pipe for stderr: read={}, write={}",
             pout_raw, process.stderr
         );
     } else {
         debug!(
-            "🍴 FORK: No capture pipe needed for stderr (ctx.errfile={}, foreground={})",
+            "FORK: No capture pipe needed for stderr (ctx.errfile={}, foreground={})",
             ctx.errfile, ctx.foreground
         );
     }
 
     debug!(
-        "🍴 FORK: Final process I/O - stdin={}, stdout={}, stderr={}",
+        "FORK: Final process I/O - stdin={}, stdout={}, stderr={}",
         process.stdin, process.stdout, process.stderr
     );
 
-    debug!("🍴 FORK: About to fork external process");
+    debug!("FORK: About to fork external process");
 
     // Resolve the program here rather than while the line was parsed: by now
     // every earlier command on the line has run, so this sees the directory and
@@ -149,51 +96,135 @@ pub(crate) fn fork_process(
     // given, not the shell's own, so `typo 2>/dev/null` is quiet.
     let not_found_fd = process.stderr;
 
-    // Prepare execution data BEFORE forking to avoid allocation/locks in child
-    let prepared = process.prepare_execution(shell.environment.clone())?;
+    // Prepare execution data BEFORE forking, including the null-terminated
+    // pointer arrays: the child only reads, never allocates.
+    let bundle = process
+        .prepare_execution(shell.environment.clone())?
+        .into_bundle();
+
+    // Exec-error pipe: CLOEXEC write end closes on `execve` success (parent
+    // sees EOF); the child writes one `ChildExecError` record on failure.
+    let (err_read, err_write) = cloexec_pipe().context("failed exec-error pipe")?;
+    let err_read_fd = err_read.into_raw_fd();
+    let err_write_fd = err_write.into_raw_fd();
+
+    let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
+    let pty_slave = pty.map(|pty| pty.slave).unwrap_or(-1);
+    // `getpid` in the child decides the default pgid; pass -1 for "none".
+    let pgid_raw = job_pgid.map(Pid::as_raw).unwrap_or(-1);
 
     let pid = unsafe { fork().context("failed fork")? };
 
     match pid {
         ForkResult::Parent { child } => {
-            debug!("🍴 FORK: Parent process - child pid: {}", child);
-            debug!("🍴 FORK: Parent process continuing with child management");
-            // if process.stdout != STDOUT_FILENO {
-            //     close(process.stdout).context("failed close")?;
-            // }
+            debug!("FORK: Parent process - child pid: {}", child);
+            // The write end must close here so EOF reliably means "exec'd".
+            unsafe { libc::close(err_write_fd) };
+            drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
+            unsafe { libc::close(err_read_fd) };
             Ok(child)
         }
         ForkResult::Child => {
-            // This is the child process
-            // SAFETY: Avoid accessing any locks (like tracing/malloc) after fork in multi-threaded env
+            // The ONLY post-fork logic: raw syscalls, then execve/_exit.
+            // No tracing, no anyhow, no allocation, no locks, no
+            // `std::process::exit`.
+            let (not_found_msg, not_found_len) = match &not_found {
+                Some(message) => (message.as_ptr(), message.len()),
+                None => (std::ptr::null(), 0),
+            };
+            let plan = RawChildPlan {
+                executable: bundle.executable_ptr(),
+                argv: bundle.argv_ptr(),
+                envp: bundle.envp_ptr(),
+                stdin: process.stdin,
+                stdout: process.stdout,
+                stderr: process.stderr,
+                pgid: pgid_raw,
+                interactive: ctx.interactive,
+                full_proxy_pty,
+                pty_slave,
+                exec_error_fd: err_write_fd,
+                not_found_msg,
+                not_found_len,
+                not_found_fd,
+            };
+            unsafe { exec_external_child(&plan) }
+        }
+    }
+}
 
-            // An unresolved command is a command that fails, the way every
-            // other shell reports it: the message goes to *this* process's
-            // stderr, so `typo 2>/dev/null` is quiet, and 127 is a status the
-            // rest of the line can branch on.
-            if let Some(message) = not_found {
-                unsafe {
-                    libc::write(
-                        not_found_fd,
-                        message.as_ptr() as *const libc::c_void,
-                        message.len(),
-                    );
-                    libc::_exit(127);
-                }
+/// Read the exec-error pipe to EOF. Success closes the write end via
+/// `CLOEXEC` and yields no bytes; failure yields one `ChildExecError` whose
+/// diagnostic the parent formats and writes to the process's stderr target.
+fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]) {
+    // A single small record; a short read loop tolerates partial delivery.
+    let mut record = ChildExecError { stage: 0, errno: 0 };
+    let mut filled = 0usize;
+    let size = std::mem::size_of::<ChildExecError>();
+    while filled < size {
+        let chunk = unsafe {
+            libc::read(
+                err_read_fd,
+                (std::ptr::addr_of_mut!(record) as *mut u8).add(filled) as *mut libc::c_void,
+                size - filled,
+            )
+        };
+        if chunk <= 0 {
+            break;
+        }
+        filled += chunk as usize;
+    }
+    if filled == 0 {
+        // EOF: the child exec'd and the write end closed.
+        return;
+    }
+    if filled != size {
+        write_process_stderr(
+            stderr_fd,
+            format!("dsh: {cmd}: failed to start (short exec-error report)\r\n").as_bytes(),
+        );
+        return;
+    }
+    let detail = std::io::Error::from_raw_os_error(record.errno).to_string();
+    let what = match record.stage {
+        STAGE_SETPGID => "failed to join process group",
+        STAGE_SETSID => "failed to create session",
+        STAGE_SIGNAL => "failed to reset signal handlers",
+        STAGE_DUP2_STDIN => "failed to set up stdin",
+        STAGE_DUP2_STDOUT => "failed to set up stdout",
+        STAGE_DUP2_STDERR => "failed to set up stderr",
+        STAGE_CLOSE => "failed to close file descriptor",
+        STAGE_EXECVE => {
+            // Keep the historical hint for the most common case.
+            let _ = argv;
+            if record.errno == libc::EACCES {
+                write_process_stderr(
+                    stderr_fd,
+                    format!("dsh: {cmd}: Permission denied ({detail}). chmod(1) may help.\r\n")
+                        .as_bytes(),
+                );
+                return;
             }
+            "failed to execute"
+        }
+        _ => "failed to start",
+    };
+    write_process_stderr(
+        stderr_fd,
+        format!("dsh: {cmd}: {what}: {detail}\r\n").as_bytes(),
+    );
+}
 
-            let pid = getpid();
-            let pgid = job_pgid.unwrap_or(pid);
-
-            if let Err(_e) =
-                process.launch_prepared(pid, pgid, ctx.interactive, ctx.foreground, prepared, pty)
-            {
-                // Raw write to stderr or simple exit
-                std::process::exit(1);
-            }
-            // When execv succeeds, it replaces with new program; when it fails, it exits, so this point is never reached
-            // Explicit exit as a safety measure just in case
-            std::process::exit(1);
+pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
+    if fd < 0 {
+        return;
+    }
+    while !bytes.is_empty() {
+        let fd_ref = unsafe { BorrowedFd::borrow_raw(fd) };
+        match nix::unistd::write(fd_ref, bytes) {
+            Ok(0) => break,
+            Ok(n) => bytes = &bytes[n..],
+            Err(_) => break,
         }
     }
 }

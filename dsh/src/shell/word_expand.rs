@@ -7,11 +7,14 @@
 
 use super::authorize::ConfirmFn;
 use super::plan::{PlannedLiteral, PlannedWord, QuoteMode, WordPart};
-use super::substitution::{capture_subshell_plan_stdout, start_process_substitution};
+use super::substitution::{
+    ExecutionResources, capture_subshell_plan_stdout, start_process_substitution,
+};
 use crate::parser::expansion::{
     escape_glob_metacharacters, expand_braces, expand_glob_pattern, unescape_glob_metacharacters,
 };
 use crate::process::SubshellType;
+use crate::process::reexec::PlanExecMode;
 use crate::shell::Shell;
 use anyhow::{Result, bail};
 use dsh_types::Context;
@@ -243,6 +246,7 @@ pub async fn expand_argument_word(
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
+    resources: &mut ExecutionResources,
 ) -> Result<Vec<String>> {
     let cwd = cwd_for_expansion();
     let mut builder = FieldBuilder::new();
@@ -262,9 +266,14 @@ pub async fn expand_argument_word(
                 let quoted = *quote != QuoteMode::Unquoted;
                 match substitution.kind {
                     SubshellType::CommandSubstitution => {
-                        let output =
-                            capture_subshell_plan_stdout(shell, ctx, &substitution.plan, confirm)
-                                .await?;
+                        let output = capture_subshell_plan_stdout(
+                            shell,
+                            ctx,
+                            &substitution.plan,
+                            PlanExecMode::CommandSubstitution,
+                            confirm,
+                        )
+                        .await?;
                         if quoted {
                             let value = trim_substitution_output(&output);
                             builder.append_single(
@@ -285,9 +294,14 @@ pub async fn expand_argument_word(
                         }
                     }
                     SubshellType::Subshell => {
-                        let output =
-                            capture_subshell_plan_stdout(shell, ctx, &substitution.plan, confirm)
-                                .await?;
+                        let output = capture_subshell_plan_stdout(
+                            shell,
+                            ctx,
+                            &substitution.plan,
+                            PlanExecMode::Subshell,
+                            confirm,
+                        )
+                        .await?;
                         if quoted {
                             let value = trim_substitution_output(&output);
                             builder.append_single(
@@ -306,9 +320,10 @@ pub async fn expand_argument_word(
                         }
                     }
                     SubshellType::ProcessSubstitution => {
-                        let path =
+                        let substitution =
                             start_process_substitution(shell, ctx, &substitution.plan, confirm)
                                 .await?;
+                        let path = resources.add_process_substitution(substitution);
                         builder.append_single(
                             &path,
                             &escape_glob_metacharacters(&path),
@@ -337,8 +352,9 @@ pub async fn expand_assignment_value(
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
+    resources: &mut ExecutionResources,
 ) -> Result<String> {
-    expand_scalar_word(shell, ctx, word, confirm).await
+    expand_scalar_word(shell, ctx, word, confirm, resources).await
 }
 
 /// Expand a redirect target into exactly one path.
@@ -347,8 +363,9 @@ pub async fn expand_redirect_target(
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
+    resources: &mut ExecutionResources,
 ) -> Result<String> {
-    let fields = expand_argument_word(shell, ctx, word, confirm).await?;
+    let fields = expand_argument_word(shell, ctx, word, confirm, resources).await?;
     if fields.len() != 1 {
         bail!(
             "ambiguous redirect: '{}' expands to {} fields",
@@ -364,6 +381,7 @@ async fn expand_scalar_word(
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
+    resources: &mut ExecutionResources,
 ) -> Result<String> {
     let mut builder = FieldBuilder::new();
     let mut first_part = true;
@@ -382,16 +400,21 @@ async fn expand_scalar_word(
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
                 SubshellType::CommandSubstitution | SubshellType::Subshell => {
+                    let mode = match substitution.kind {
+                        SubshellType::Subshell => PlanExecMode::Subshell,
+                        _ => PlanExecMode::CommandSubstitution,
+                    };
                     let output =
-                        capture_subshell_plan_stdout(shell, ctx, &substitution.plan, confirm)
+                        capture_subshell_plan_stdout(shell, ctx, &substitution.plan, mode, confirm)
                             .await?;
                     // Scalar context never splits; keep newlines except trailing.
                     let value = trim_substitution_output(&output);
                     builder.append_single(&value, "", false, false, true);
                 }
                 SubshellType::ProcessSubstitution => {
-                    let path =
+                    let substitution =
                         start_process_substitution(shell, ctx, &substitution.plan, confirm).await?;
+                    let path = resources.add_process_substitution(substitution);
                     builder.append_single(&path, "", false, false, true);
                 }
                 SubshellType::None => {}
@@ -517,7 +540,8 @@ mod tests {
         )
         .expect("plan");
         let word = &plan.jobs[0].stages[0].argv[1];
-        let fields = expand_argument_word(&mut shell, &ctx, word, allow_all)
+        let mut resources = ExecutionResources::new();
+        let fields = expand_argument_word(&mut shell, &ctx, word, allow_all, &mut resources)
             .await
             .expect("expand");
         assert_eq!(fields, vec![String::new()]);

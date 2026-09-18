@@ -15,7 +15,7 @@ use crate::process::redirect::RedirectOp as ConcreteRedirectOp;
 use std::os::unix::io::RawFd;
 
 /// A whole input line, parsed without running anything.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlan {
     pub jobs: Vec<PlannedJob>,
 }
@@ -27,7 +27,7 @@ impl ExecutionPlan {
 }
 
 /// One `;`/`&&`/`||`-separated job: a pipeline plus its gating and flags.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedJob {
     /// User-facing source text (for safety messages and `Job.cmd`).
     pub source: String,
@@ -63,7 +63,7 @@ impl PlannedJob {
 }
 
 /// One pipeline stage: word templates plus per-process redirections and env.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedCommand {
     pub argv: Vec<PlannedWord>,
     pub redirects: Vec<PlannedRedirect>,
@@ -78,7 +78,7 @@ impl PlannedCommand {
 
 /// Whether a part of a word was quoted, which decides if its value may split,
 /// glob, or expand a tilde later.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum QuoteMode {
     Unquoted,
     Single,
@@ -89,7 +89,7 @@ pub enum QuoteMode {
 ///
 /// A `PlannedWord` is not one final argv entry. Runtime expansion may turn it
 /// into zero, one, or many fields.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedWord {
     /// User source for diagnostics/tests.
     pub source: String,
@@ -117,7 +117,7 @@ impl PlannedWord {
 
 /// A fragment of a word: static text, a deferred variable, or a deferred
 /// substitution body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum WordPart {
     Literal(PlannedLiteral),
     Variable {
@@ -131,7 +131,7 @@ pub enum WordPart {
 }
 
 /// Static text inside a word, with the flags runtime expansion needs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedLiteral {
     /// Quote/escape-removed text for argv.
     pub text: String,
@@ -148,7 +148,7 @@ pub struct PlannedLiteral {
 
 /// A deferred substitution body: its own plan, evaluated only after gating
 /// and authorization.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedSubstitution {
     pub source: String,
     pub kind: SubshellType,
@@ -157,7 +157,7 @@ pub struct PlannedSubstitution {
 
 /// One `NAME=value` prefix or standalone assignment. The value stays a word
 /// until the selected job is materialized.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedAssignment {
     pub name: String,
     pub value: PlannedWord,
@@ -171,7 +171,7 @@ impl PlannedAssignment {
 
 /// One redirection in source order. File targets stay words until the
 /// selected job is materialized.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PlannedRedirect {
     pub fd: RawFd,
     pub op: PlannedRedirectOp,
@@ -213,7 +213,7 @@ impl PlannedRedirect {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum PlannedRedirectOp {
     ReadFile(PlannedWord),
     WriteFile(PlannedWord),

@@ -17,6 +17,12 @@ pub struct Cli {
     #[arg(long)]
     pub notebook: Option<String>,
 
+    /// Internal re-exec helper: read one versioned exec request from this fd
+    /// and run it, bypassing all interactive startup. Product-internal
+    /// protocol, never shown in `--help`.
+    #[arg(long = "__dsh-internal-exec-fd", hide = true)]
+    pub internal_exec_fd: Option<i32>,
+
     #[command(subcommand)]
     pub subcommand: Option<SubCommand>,
 }
@@ -84,6 +90,7 @@ mod tests {
             command: None,
             lisp: None,
             notebook: None,
+            internal_exec_fd: None,
             subcommand: None,
         };
         assert!(RunMode::from_cli(&base).needs_interactive_services());

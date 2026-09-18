@@ -22,6 +22,7 @@ mod ai_watch;
 
 pub mod agent;
 mod alias;
+mod background;
 mod bg;
 mod blocks;
 pub mod cd;
@@ -41,6 +42,7 @@ mod markdown;
 mod safe_run;
 mod safety_policy;
 mod skill;
+pub use background::{BackgroundBuiltinMode, background_builtin_mode};
 pub use chatgpt::chat_jobs_shutdown;
 pub use chatgpt::chat_status_detailed;
 pub use chatgpt::execute_chat_message;

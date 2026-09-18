@@ -53,7 +53,7 @@ group_list              = _{
 
 quoted = _{ d_quoted | s_quoted }
 
-stdin_redirect_direction_in         = { "<" }
+stdin_redirect_direction_in         = { "<" ~ !"(" }
 stdouterr_redirect_direction_out    = { "&>" }
 stdouterr_redirect_direction_append = { "&>>" }
 stderr_redirect_direction_out       = { "2>" }

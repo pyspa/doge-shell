@@ -75,6 +75,9 @@ impl std::fmt::Debug for Shell {
 impl Drop for Shell {
     fn drop(&mut self) {
         let _ = self.kill_wait_jobs();
+        // Producer helpers outlive nothing: group-kill any still-registered
+        // group so grandchildren cannot hold session pipes open past exit.
+        substitution::cleanup_producer_groups();
     }
 }
 

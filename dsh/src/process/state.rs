@@ -64,7 +64,7 @@ impl std::fmt::Display for ProcessState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SubshellType {
     None,
     Subshell,
@@ -72,7 +72,7 @@ pub enum SubshellType {
     CommandSubstitution,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ListOp {
     None,
     And,

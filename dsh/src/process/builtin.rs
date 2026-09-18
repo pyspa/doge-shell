@@ -111,12 +111,6 @@ impl BuiltinProcess {
         Ok(())
     }
 
-    pub fn launch_sync(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<()> {
-        let exit = self.handler.execute_sync(ctx, self.argv.to_vec(), shell);
-        self.finish(exit);
-        Ok(())
-    }
-
     fn finish(&mut self, exit: ExitStatus) {
         match exit {
             ExitStatus::ExitedWith(code) => {
@@ -254,9 +248,13 @@ mod tests {
         assert_eq!(process.state, ProcessState::Completed(9, None));
     }
 
+    /// The sync fallback now only serves in-process callers that cannot
+    /// await. Background execution re-execs into a fresh runtime and always
+    /// runs the real async handler (`launch` above) — no `fork()` child ever
+    /// calls `block_on` or the fallback.
     #[test]
-    fn launch_sync_uses_async_builtin_fallback() {
-        let mut process = BuiltinProcess::new_handler(
+    fn async_builtin_fallback_stays_synchronous_only() {
+        let process = BuiltinProcess::new_handler(
             "test-async-builtin".to_string(),
             BuiltinHandler::Async {
                 run: builtin_exit_async,
@@ -264,11 +262,13 @@ mod tests {
             },
             vec!["test-async-builtin".into()],
         );
-        let mut ctx = test_context();
+        let ctx = test_context();
         let mut shell = test_shell();
 
-        process.launch_sync(&mut ctx, &mut shell).unwrap();
+        let exit = process
+            .handler
+            .execute_sync(&ctx, process.argv.clone(), &mut shell);
 
-        assert_eq!(process.state, ProcessState::Completed(0, None));
+        assert_eq!(exit, ExitStatus::ExitedWith(0));
     }
 }

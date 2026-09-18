@@ -1,22 +1,18 @@
 use crate::environment::Environment;
 use anyhow::{Context as _, Result};
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
-use nix::unistd::{Pid, close, execve, setpgid, tcsetpgrp};
+use nix::unistd::Pid;
 use parking_lot::RwLock;
 
-use std::ffi::CString;
-use std::os::fd::BorrowedFd;
+use std::ffi::{CString, c_char};
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::debug;
 
 use super::job_process::JobProcess;
-use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::Redirect;
 use super::state::ProcessState;
 use super::wait::wait_pid_job;
-use crate::shell::SHELL_TERMINAL;
 use dsh_types::ExitStatus;
 
 #[derive(Debug)]
@@ -24,6 +20,67 @@ pub struct PreparedExecution {
     pub cmd: CString,
     pub argv: Vec<CString>,
     pub envp: Vec<CString>,
+}
+
+impl PreparedExecution {
+    /// Build the null-terminated pointer arrays `execve` needs.
+    ///
+    /// Parent-side only, before `fork`: the child must not allocate the
+    /// `Vec<*const c_char>` itself. The returned bundle borrows nothing —
+    /// the pointers reference the owned `CString`s it travels with, so keep
+    /// the bundle alive across the `fork` and hand the child raw pointers
+    /// into it.
+    pub fn into_bundle(mut self) -> ExecveBundle {
+        // `argv[0]` conventionally repeats the program; the prepared `cmd`
+        // is kept as the executable path while `argv` carries the arguments.
+        let mut argv_ptrs: Vec<*const c_char> = Vec::with_capacity(self.argv.len() + 1);
+        for arg in &self.argv {
+            argv_ptrs.push(arg.as_ptr());
+        }
+        argv_ptrs.push(std::ptr::null());
+        let mut envp_ptrs: Vec<*const c_char> = Vec::with_capacity(self.envp.len() + 1);
+        for var in &self.envp {
+            envp_ptrs.push(var.as_ptr());
+        }
+        envp_ptrs.push(std::ptr::null());
+        ExecveBundle {
+            cmd: std::mem::replace(&mut self.cmd, CString::new("").expect("empty CString")),
+            argv: std::mem::take(&mut self.argv),
+            envp: std::mem::take(&mut self.envp),
+            argv_ptrs,
+            envp_ptrs,
+        }
+    }
+}
+
+/// Parent-preallocated `execve` image: owned strings plus pointer arrays
+/// into them. The child reads `executable_ptr()`/`argv_ptr()`/`envp_ptr()`
+/// without allocating.
+#[derive(Debug)]
+pub struct ExecveBundle {
+    pub cmd: CString,
+    pub argv: Vec<CString>,
+    pub envp: Vec<CString>,
+    argv_ptrs: Vec<*const c_char>,
+    envp_ptrs: Vec<*const c_char>,
+}
+
+// Pointer arrays reference the owned `CString`s above; moving the bundle
+// keeps them valid, sharing it across threads would not.
+unsafe impl Send for ExecveBundle {}
+
+impl ExecveBundle {
+    pub fn executable_ptr(&self) -> *const c_char {
+        self.cmd.as_ptr()
+    }
+
+    pub fn argv_ptr(&self) -> *const *const c_char {
+        self.argv_ptrs.as_ptr()
+    }
+
+    pub fn envp_ptr(&self) -> *const *const c_char {
+        self.envp_ptrs.as_ptr()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -106,29 +163,6 @@ impl Process {
                 self.next = Some(Box::new(process));
             }
         }
-    }
-
-    fn set_signals(&self) -> Result<()> {
-        debug!("set signal action pid:{:?}", self.pid);
-        // Accept job-control-related signals (refer https://www.gnu.org/software/libc/manual/html_node/Launching-Jobs.html)
-        let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
-        unsafe {
-            sigaction(Signal::SIGINT, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGINT handler: {}", e))?;
-            sigaction(Signal::SIGQUIT, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGQUIT handler: {}", e))?;
-            sigaction(Signal::SIGTSTP, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGTSTP handler: {}", e))?;
-            sigaction(Signal::SIGTTIN, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGTTIN handler: {}", e))?;
-            sigaction(Signal::SIGTTOU, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGTTOU handler: {}", e))?;
-            sigaction(Signal::SIGCHLD, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGCHLD handler: {}", e))?;
-            sigaction(Signal::SIGPIPE, &action)
-                .map_err(|e| anyhow::anyhow!("failed to set SIGPIPE handler: {}", e))?;
-        }
-        Ok(())
     }
 
     pub fn prepare_execution(
@@ -270,185 +304,6 @@ impl Process {
         }
 
         Ok(PreparedExecution { cmd, argv, envp })
-    }
-
-    // Convenience entry point that prepares and launches in one call;
-    // callers currently use `prepare_execution` + `launch_prepared`.
-    #[allow(dead_code)]
-    pub(crate) fn launch(
-        &mut self,
-        pid: Pid,
-        pgid: Pid,
-        interactive: bool,
-        foreground: bool,
-        environment: Arc<RwLock<Environment>>,
-        pty: Option<PtyChildConfig>,
-    ) -> Result<()> {
-        let prepared = self.prepare_execution(environment)?;
-        self.launch_prepared(pid, pgid, interactive, foreground, prepared, pty)
-    }
-
-    pub(crate) fn launch_prepared(
-        &mut self,
-        pid: Pid,
-        pgid: Pid,
-        interactive: bool,
-        foreground: bool,
-        prepared: PreparedExecution,
-        pty: Option<PtyChildConfig>,
-    ) -> Result<()> {
-        let PreparedExecution { cmd, argv, envp } = prepared;
-        let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
-        if interactive {
-            // Full-proxy PTY jobs call setsid() below, so they must not be made
-            // process-group leaders first. Output-only PTY jobs use normal job
-            // control and keep stdin on the real terminal.
-            if !full_proxy_pty {
-                debug!(
-                    "setpgid child process {} pid:{} pgid:{} foreground:{}",
-                    &self.cmd, pid, pgid, foreground
-                );
-                setpgid(pid, pgid).context("failed setpgid")?;
-            } else {
-                debug!("Skipping setpgid for full-proxy PTY process (setsid will handle it)");
-            }
-
-            // Output-only PTY jobs use the real terminal for stdin, so they
-            // need normal foreground job control before they can read input.
-            // Full-proxy PTY jobs keep the shell foreground and proxy I/O.
-            if foreground && !full_proxy_pty {
-                tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
-                    .context("failed tcsetpgrp")?;
-            }
-
-            // Set signals AFTER setting foreground process group to avoid race condition
-            // where we receive a signal while still ignoring it (inherited from shell)
-            self.set_signals()?;
-        } else {
-            // For non-interactive/background, we still need to reset SIGPIPE as Rust ignores it by default
-            let action = SigAction::new(SigHandler::SigDfl, SaFlags::empty(), SigSet::empty());
-            unsafe {
-                let _ = sigaction(Signal::SIGPIPE, &action);
-            }
-        }
-
-        if let Some(slave_fd) = pty.map(|pty| pty.slave)
-            && full_proxy_pty
-        {
-            // Create a new session and set the controlling terminal to the PTY
-            // This is crucial for programs like 'ls' to detect they are in a terminal
-            let my_pid = nix::unistd::getpid();
-            let my_pgid = nix::unistd::getpgid(Some(my_pid)).unwrap_or(Pid::from_raw(-1));
-            let my_sid = nix::unistd::getsid(Some(my_pid)).unwrap_or(Pid::from_raw(-1));
-            debug!(
-                "setsid check: pid={} pgid={} sid={}",
-                my_pid, my_pgid, my_sid
-            );
-
-            match nix::unistd::setsid() {
-                Ok(new_sid) => {
-                    debug!("setsid success: new_sid={}", new_sid);
-                }
-                Err(e) => {
-                    error!("setsid failed raw error: {:?}", e);
-                    return Err(anyhow::anyhow!("setsid failed: {}", e));
-                }
-            }
-
-            unsafe {
-                if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) != 0 {
-                    // ignore error? sometimes it fails if already leader
-                    debug!("ioctl TIOCSCTTY failed (may be already leader)");
-                }
-            }
-        }
-
-        // cmd, argv, envp are already prepared in `prepared`
-
-        debug!(
-            "launch: execve cmd:{:?} argv:{:?} foreground:{:?} infile:{:?} outfile:{:?} pid:{:?} pgid:{:?} pty:{:?}",
-            cmd, argv, foreground, self.stdin, self.stdout, pid, pgid, pty
-        );
-
-        // Standard IO setup (PTY slave is handled via self.stdin/stdout/stderr being set to it by caller if needed)
-
-        // 1. Handle STDIN
-        if self.stdin != STDIN_FILENO && unsafe { libc::dup2(self.stdin, STDIN_FILENO) } < 0 {
-            return Err(anyhow::anyhow!(
-                "dup2 stdin failed: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        // Don't close stdin yet if it matches stdout or stderr, as we need it for subsequent dup2 calls
-        let keep_stdin = self.stdin == self.stdout || self.stdin == self.stderr;
-        if self.stdin > 2 && !keep_stdin {
-            close(self.stdin).map_err(|e| anyhow::anyhow!("close stdin failed: {}", e))?;
-        }
-
-        // 2. Handle STDOUT & STDERR
-        if self.stdout == self.stderr {
-            // Combined stdout/stderr (e.g. PTY or redirected to same file)
-            if self.stdout != STDOUT_FILENO && unsafe { libc::dup2(self.stdout, STDOUT_FILENO) } < 0
-            {
-                return Err(anyhow::anyhow!(
-                    "dup2 stdout failed: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            if self.stderr != STDERR_FILENO && unsafe { libc::dup2(self.stderr, STDERR_FILENO) } < 0
-            {
-                return Err(anyhow::anyhow!(
-                    "dup2 stderr failed: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-
-            // Close the source if it is > 2.
-            // Even if it was kept open from stdin check above, we are now done with it.
-            if self.stdout > 2 {
-                close(self.stdout).map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
-            }
-        } else {
-            // Separate stdout/stderr
-            if self.stdout != STDOUT_FILENO {
-                if unsafe { libc::dup2(self.stdout, STDOUT_FILENO) } < 0 {
-                    return Err(anyhow::anyhow!(
-                        "dup2 stdout failed: {}",
-                        std::io::Error::last_os_error()
-                    ));
-                }
-                // If stdout matched stdin, it was kept open. Now we can close it.
-                if self.stdout > 2 {
-                    close(self.stdout)
-                        .map_err(|e| anyhow::anyhow!("close stdout failed: {}", e))?;
-                }
-            }
-
-            if self.stderr != STDERR_FILENO {
-                if unsafe { libc::dup2(self.stderr, STDERR_FILENO) } < 0 {
-                    return Err(anyhow::anyhow!(
-                        "dup2 stderr failed: {}",
-                        std::io::Error::last_os_error()
-                    ));
-                }
-                // If stderr matched stdin, it was kept open. Now close it.
-                if self.stderr > 2 {
-                    close(self.stderr)
-                        .map_err(|e| anyhow::anyhow!("close stderr failed: {}", e))?;
-                }
-            }
-        }
-        match execve(&cmd, &argv, &envp) {
-            Ok(_) => Ok(()),
-            Err(nix::errno::Errno::EACCES) => {
-                error!("Failed to exec {:?} (EACCESS). chmod(1) may help.", cmd);
-                std::process::exit(1);
-            }
-            Err(err) => {
-                error!("Failed to exec {:?} ({})", cmd, err);
-                std::process::exit(1);
-            }
-        }
     }
 
     pub(crate) fn update_state(&mut self) -> Option<ProcessState> {

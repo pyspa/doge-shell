@@ -51,6 +51,11 @@ pub struct Job {
     /// When the job was created, used to decide whether a finished background
     /// job ran long enough to warrant a desktop notification.
     pub started_at: std::time::Instant,
+    /// Process-substitution fds and producer pids created while materializing
+    /// this job. Taken and dropped at the end of `launch`: every consumer
+    /// holds its own copies by then, so the parent copies close here and
+    /// producers are handed to reapers instead of leaking.
+    pub resources: crate::shell::substitution::ExecutionResources,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -98,6 +103,7 @@ impl Job {
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
+            resources: crate::shell::substitution::ExecutionResources::new(),
         }
     }
 
@@ -129,6 +135,7 @@ impl Job {
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
+            resources: crate::shell::substitution::ExecutionResources::new(),
         }
     }
 
@@ -222,6 +229,19 @@ impl Job {
         self.stderr = ctx.errfile;
 
         let result = self.launch_inner(ctx, shell).await;
+
+        // Every stage is spawned by now, so each consumer holds its own
+        // copies: close the parent's substitution fds here. Foreground jobs
+        // reap producers synchronously (bounded) so no detached reaper can
+        // die with an exiting shell and orphan grandchildren holding session
+        // pipes; background jobs hand them to detached reapers tracked for
+        // shutdown cleanup.
+        let mut resources = std::mem::take(&mut self.resources);
+        if self.foreground {
+            let producers = std::mem::take(&mut resources.producers);
+            crate::shell::substitution::reap_producers_blocking(producers);
+        }
+        drop(resources);
 
         // Launching rewires `ctx` (pipes, capture, redirections) and nothing put
         // it back. Script mode reuses one `ctx` for every line, so the next line
@@ -359,7 +379,15 @@ impl Job {
 
             // Full-proxy PTY jobs create a new session in the child, so the
             // parent must not make them process-group leaders first.
-            if pty.is_none_or(|pty| pty.mode == PtyMode::OutputOnly) {
+            //
+            // Background builtins are re-exec helpers, already placed in
+            // their group by `posix_spawn` (`SETPGROUP`): a post-exec
+            // `setpgid` here would fail with `EACCES`, so only external
+            // commands take this path. Foreground builtins run in-process
+            // and need no grouping at all.
+            let needs_parent_setpgid = matches!(process, JobProcess::Command(_))
+                && pty.is_none_or(|pty| pty.mode == PtyMode::OutputOnly);
+            if needs_parent_setpgid {
                 debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
                 debug!(
                     "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
@@ -401,7 +429,8 @@ impl Job {
                 }
             } else {
                 debug!(
-                    "Skipping parent setpgid for full-proxy PTY job (child {} will setsid)",
+                    "Skipping parent setpgid for {} (pid {}): full-proxy PTY jobs setsid in the child, re-exec builtins are grouped at spawn",
+                    process.get_cmd(),
                     pid
                 );
             }

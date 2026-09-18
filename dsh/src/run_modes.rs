@@ -24,6 +24,14 @@ use tracing::debug;
 pub async fn run_shell() -> ExitCode {
     let cli = Cli::parse();
 
+    // Internal re-exec helper (background builtins, isolated subshells).
+    // Runs before everything: no config.lisp, no history, no MCP, no
+    // notebook, no lifecycle activation. The helper is an execution detail
+    // of the parent session, not a new interactive agent.
+    if let Some(exec_fd) = cli.internal_exec_fd {
+        return crate::process::reexec::run_internal_helper(exec_fd).await;
+    }
+
     // Handle subcommands
     if let Some(subcommand) = &cli.subcommand {
         match subcommand {

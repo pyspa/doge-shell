@@ -179,9 +179,9 @@ fn append_cached_tail_path_highlighting(
 /// Mark input the grammar did not consume.
 ///
 /// `Rule::commands` returns a partial match rather than failing, so without
-/// this the dropped tail looks like ordinary text right up until the shell
-/// runs only the prefix. Colouring it is the earliest point the user can
-/// notice.
+/// this the dropped tail looks like ordinary text right up until execution
+/// rejects the whole line as a syntax error. Colouring it is the earliest
+/// point the user can notice.
 fn append_unparsed_tail_highlighting(
     input: &str,
     consumed: Option<usize>,

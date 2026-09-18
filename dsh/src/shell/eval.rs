@@ -1,4 +1,3 @@
-use crate::parser::{self, Rule, ShellParser};
 use crate::process::{Job, ListOp, ProcessState, wait_pid_job};
 use crate::shell::{
     Shell,
@@ -12,7 +11,6 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::execute_chat_message;
 use dsh_types::{Context, ExitStatus};
 use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
-use pest::Parser;
 use std::io::Write;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
@@ -131,7 +129,15 @@ pub async fn eval_str(
     // Pure planning: no command runs and no shell state changes here.
     // Substitution bodies stay deferred inside the plan until their own
     // gating and authorization below.
-    let plan = parse_execution_plan(&input, Arc::clone(&shell.environment))?;
+    // A syntax error still happened: publish a non-zero `$?` so the next
+    // line does not see the previous line's success.
+    let plan = match parse_execution_plan(&input, Arc::clone(&shell.environment)) {
+        Ok(plan) => plan,
+        Err(err) => {
+            publish_exit_status(shell, 1);
+            return Err(err);
+        }
+    };
 
     let mut last_exit_code = 0_i32;
     // Operator that gates execution of the *current* job based on the previous job result.
@@ -489,32 +495,12 @@ fn publish_exit_status(shell: &Shell, code: i32) {
 /// Static job projection for safety checks and tests: pure planning plus
 /// static materialization. Never executes substitutions and never mutates
 /// shell state (standalone assignments become "no job", as before).
+///
+/// Fail closed: malformed input is a syntax error here, so callers never
+/// judge a parsed prefix while the whole line runs.
 pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     let plan = parse_execution_plan(input, Arc::clone(&shell.environment))?;
     crate::shell::materialize::dry_materialize_plan(&plan, shell)
-}
-
-/// Warn about input the parser did not consume.
-///
-/// Kept separate from [`get_jobs`] so the "what counts as leftover" rule is
-/// testable without a shell. A trailing separator or whitespace is consumed by
-/// the grammar, so anything reaching here is text the user typed and we ignored.
-/// What the grammar could not consume, for a caller that must fail closed.
-///
-/// `get_jobs` only warns about a leftover tail, which is right for a person at
-/// the prompt - they can see the warning. It is wrong for a safety check: the
-/// verdict would cover the prefix while the whole line runs.
-pub fn unconsumed_tail(shell: &mut Shell, input: &str) -> Option<String> {
-    let (input_cow, pairs_opt) =
-        parser::parse_with_expansion(input, Arc::clone(&shell.environment)).ok()?;
-
-    let mut pairs = match pairs_opt {
-        Some(pairs) => pairs,
-        None => ShellParser::parse(Rule::commands, &input_cow).ok()?,
-    };
-
-    let pair = pairs.next()?;
-    parser::unparsed_tail(&input_cow, pair.as_span().end()).map(str::to_string)
 }
 
 // SAFETY WARNING:

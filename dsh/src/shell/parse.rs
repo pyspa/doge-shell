@@ -6,6 +6,12 @@
 //! variable, brace, glob) and records `$(...)` / `<(...)` / `(...)` bodies as
 //! deferred `PlannedSubstitution` nodes for the materializer to evaluate after
 //! `&&`/`||` gating and authorization.
+//!
+//! Execution planning is strict: any non-whitespace unparsed tail is a syntax
+//! error and no prefix is executed. `Rule::commands` remains intentionally
+//! tolerant for REPL highlighting and completion; the strictness lives only in
+//! this execution path, which validates raw input before expansion and
+//! validates expanded input again when expansion rewrites the line.
 
 use super::plan::{ExecutionPlan, PlannedArg, PlannedCommand, PlannedJob, PlannedSubstitution};
 use super::struct_pipe;
@@ -43,16 +49,27 @@ impl ParseContext {
 ///
 /// Only `environment` is read (for the pre-expansion pass). No command is
 /// executed and no shell state is mutated.
+///
+/// Strict execution: the raw input is fully validated before expansion (so an
+/// unparsed suffix cannot be discarded by expansion), and an expanded line is
+/// validated again when expansion rewrites it. Any non-whitespace leftover is
+/// a syntax error and no `ExecutionPlan` is returned.
 pub fn parse_execution_plan(
     input: &str,
     environment: Arc<RwLock<Environment>>,
 ) -> Result<ExecutionPlan> {
+    // 1. Validate exactly what the user supplied BEFORE expansion can discard
+    // an unparsed suffix.
+    validate_complete_commands(input)?;
+
+    // 2. Existing expansion behavior.
     let (input_cow, pairs_opt) = parser::parse_with_expansion(input, environment)?;
 
-    let mut pairs = if let Some(pairs) = pairs_opt {
-        pairs
-    } else {
-        ShellParser::parse(Rule::commands, &input_cow).map_err(|e| anyhow::anyhow!(e))?
+    // 3. If no expansion happened, the raw parse was already verified.
+    // If expansion produced a new command line, verify THAT command line too.
+    let mut pairs = match pairs_opt {
+        Some(pairs) => pairs,
+        None => parse_commands_strict(&input_cow)?,
     };
 
     let mut ctx = ParseContext::new(true);
@@ -60,16 +77,32 @@ pub fn parse_execution_plan(
         return Ok(ExecutionPlan::default());
     };
 
-    report_unparsed_tail(&input_cow, pair.as_span().end());
-
     build_commands(&mut ctx, pair)
 }
 
-fn report_unparsed_tail(input: &str, consumed: usize) {
+/// Parse `Rule::commands` and fail when any non-whitespace input is left over.
+///
+/// `Rule::commands` itself stays tolerant (REPL highlighting and completion
+/// rely on partial parses); only the execution path uses this helper.
+fn parse_commands_strict(input: &str) -> Result<pest::iterators::Pairs<'_, Rule>> {
+    let pairs = ShellParser::parse(Rule::commands, input)
+        .map_err(|e| anyhow::anyhow!("syntax error: {e}"))?;
+
+    let consumed = pairs
+        .clone()
+        .next()
+        .map(|pair| pair.as_span().end())
+        .unwrap_or(0);
+
     if let Some(tail) = parser::unparsed_tail(input, consumed) {
-        tracing::warn!("unparsed input tail: {:?}", tail);
-        eprint!("dsh: warning: ignored unparsed input: {tail}\r\n");
+        anyhow::bail!("syntax error: unexpected input {tail:?}");
     }
+
+    Ok(pairs)
+}
+
+fn validate_complete_commands(input: &str) -> Result<()> {
+    parse_commands_strict(input).map(|_| ())
 }
 
 /// Split one `NAME=value` into its two halves (pure).
@@ -490,5 +523,65 @@ mod tests {
         assert_eq!(plan.jobs.len(), 1);
         assert!(env.read().get_var("DOGESH_TEST_PARSE_ONLY").is_none());
         assert!(plan.jobs[0].is_assignment_only());
+    }
+
+    /// Raw validation runs before expansion: `echo $FOO )` takes the
+    /// meta-expansion path, but the raw `)` must still reject the line instead
+    /// of being discarded when the prefix is re-serialized.
+    #[test]
+    fn raw_tail_is_rejected_before_expansion_can_discard_it() {
+        let env = test_env();
+        env.write()
+            .variable_state
+            .variables
+            .insert("$FOO".to_string(), "bar".to_string());
+        let err = parse_execution_plan("echo $FOO )", Arc::clone(&env))
+            .expect_err("raw tail must be a syntax error");
+        assert!(
+            err.to_string().contains("syntax error"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// Post-expansion validation: a raw-complete line whose alias expands to
+    /// invalid syntax must not produce a plan.
+    #[test]
+    fn expanded_tail_is_rejected_after_expansion() {
+        let env = test_env();
+        env.write()
+            .variable_state
+            .alias
+            .insert("bad".to_string(), "echo expanded )".to_string());
+        let err = parse_execution_plan("bad", Arc::clone(&env))
+            .expect_err("expanded tail must be a syntax error");
+        assert!(
+            err.to_string().contains("syntax error"),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    /// Boundary pin: `Rule::commands` stays tolerant for REPL highlighting and
+    /// completion, while execution is strict. The editor sees the partial
+    /// prefix plus an `unparsed_tail`; the planner returns an error.
+    #[test]
+    fn tolerant_grammar_and_strict_execution_stay_separate() {
+        use pest::Parser as _;
+
+        let input = "echo a )";
+        let pairs = ShellParser::parse(Rule::commands, input).expect("tolerant parse");
+        let consumed = pairs
+            .clone()
+            .next()
+            .map(|pair| pair.as_span().end())
+            .unwrap_or(0);
+        assert_eq!(parser::unparsed_tail(input, consumed), Some(")"));
+
+        let env = test_env();
+        let err =
+            parse_execution_plan(input, Arc::clone(&env)).expect_err("execution must be strict");
+        assert!(
+            err.to_string().contains("syntax error"),
+            "unexpected error: {err:?}"
+        );
     }
 }

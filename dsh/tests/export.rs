@@ -23,11 +23,9 @@ fn export_variable_is_inherited_by_child_process() {
 
 #[test]
 fn unexported_variable_is_not_inherited() {
-    // 1. Set a variable using the lisp `set-variable` which does not export.
+    // 1. Set a shell variable with a standalone assignment (not exported).
     // 2. Execute `env` and check that the variable is NOT present.
-    // Note: This relies on the `set` or a similar command being available.
-    // We use a lisp expression `(set-variable 'UNEXPORTED "should_not_see")` for this.
-    let cmd = r#"(set-variable 'UNEXPORTED "should_not_see"); /usr/bin/env"#;
+    let cmd = r#"UNEXPORTED=should_not_see; /usr/bin/env"#;
     let output = common::run_command(cmd);
 
     assert!(output.status.success(), "dsh command failed: {:?}", output);

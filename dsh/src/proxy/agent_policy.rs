@@ -64,17 +64,6 @@ impl AgentCommandPolicy for Shell {
             return AgentCommandVerdict::Denied(format!("{construct} cannot be evaluated safely"));
         }
 
-        // The guard judges what dsh's grammar can see; `sh -c` runs the whole
-        // line. A construct the grammar cannot consume - `{ rm -rf ~; }`, a
-        // heredoc - parses as a prefix and the rest is only *warned* about
-        // (`report_unparsed_tail`), so the verdict would describe a different
-        // command from the one that runs. Refuse instead.
-        if let Some(tail) = crate::shell::eval::unconsumed_tail(self, command) {
-            return AgentCommandVerdict::Denied(format!(
-                "the shell's parser cannot read all of it (`{tail}` is left over),                  so it cannot be judged before it runs"
-            ));
-        }
-
         // A compound statement parses as a command named `{` / `for` / `if`,
         // which has no rule, so everything inside it went unjudged while
         // `sh -c` ran the whole thing.
@@ -91,6 +80,8 @@ impl AgentCommandPolicy for Shell {
         // Parse the whole line, so a pipeline is judged as a pipeline. This is
         // pure planning plus static materialization: no substitution runs and
         // no shell state changes, matching the interactive parser boundary.
+        // Execution planning is strict, so any non-whitespace unparsed tail is
+        // an error here and the line is refused fail closed.
         let jobs = match crate::shell::eval::get_jobs(self, command) {
             Ok(jobs) if !jobs.is_empty() => jobs,
             Ok(_) => {
@@ -227,9 +218,9 @@ mod agent_policy_tests {
     }
 
     /// The guard reads what dsh's grammar can parse; `sh -c` runs the whole
-    /// line. A construct the grammar cannot consume used to be judged on its
-    /// prefix and only *warned* about, so `{ rm -rf ~; }` was classified as a
-    /// command called `{` - which has no rule - and ran unasked.
+    /// line. A construct the grammar cannot consume is a strict parse error,
+    /// so `{ rm -rf ~; }` never reaches classification as a command called
+    /// `{` - it is refused fail closed.
     #[test]
     fn a_line_the_parser_cannot_finish_is_refused() {
         let mut shell = shell();

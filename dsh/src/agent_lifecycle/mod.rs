@@ -584,7 +584,9 @@ static ACTIVATION: OnceLock<()> = OnceLock::new();
 /// which builds each child's `envp` explicitly from its own snapshot in
 /// `dsh/src/process/process.rs` rather than the live process environment,
 /// sees it too). Neither alone reaches every spawning path this shell has.
-pub fn activate(env: &crate::environment::Environment) -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>) {
+pub fn activate(
+    env: &crate::environment::Environment,
+) -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>) {
     if !agent_command::herdr_enabled(env.get_var(agent_command::HERDR_ENABLED_KEY).as_deref()) {
         return (AgentLifecycleManager::null(), None);
     }
@@ -647,9 +649,7 @@ pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
         (
             lifecycle.is_active(),
             lifecycle.is_yielded(),
-            agent_command::herdr_enabled(
-                env.get_var(agent_command::HERDR_ENABLED_KEY).as_deref(),
-            ),
+            agent_command::herdr_enabled(env.get_var(agent_command::HERDR_ENABLED_KEY).as_deref()),
         )
     };
     if !was_active {
@@ -660,8 +660,7 @@ pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
         // fork: drop the stale worker-thread manager (fork only duplicated
         // the calling thread, so its channel would queue forever) and
         // replace it with an explicit NullReporter.
-        shell.environment.write().integration_state.lifecycle =
-            AgentLifecycleManager::null();
+        shell.environment.write().integration_state.lifecycle = AgentLifecycleManager::null();
         return;
     }
     let Some(env) = herdr::HerdrEnv::detect_for_forked_child() else {

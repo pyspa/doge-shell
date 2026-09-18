@@ -37,6 +37,24 @@ pub(super) fn check_runtimes(ctx: &Context) {
     // the other way), so replicating the same three checks here is the only
     // way to avoid reporting "active" when this process's own lifecycle
     // manager would in fact be a no-op `NullReporter`.
+    //
+    // `DOGESH_HERDR_ENABLED` itself is a dsh setting (shell var → process
+    // env via `Environment::get_var`), so `doctor` cannot read it precisely
+    // here. As a best-effort diagnostic it checks the process environment
+    // copy; when not set it reports disabled rather than "not running under
+    // herdr" so the user understands why reporting is off.
+    // Keep in sync with `dsh/src/agent_lifecycle/agent_command.rs::herdr_enabled`.
+    let herdr_enabled = std::env::var("DOGESH_HERDR_ENABLED")
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .filter(|v| matches!(v.as_str(), "1" | "true" | "on" | "yes"))
+        .is_some();
+    if !herdr_enabled {
+        let _ = ctx.write_stdout(
+            "skip herdr-pane disabled (DOGESH_HERDR_ENABLED not set to 1/true/on/yes)",
+        );
+        return;
+    }
     let herdr_env = std::env::var("HERDR_ENV").ok();
     let pane_id = non_empty_env_for_doctor("HERDR_PANE_ID");
     let bin_path = non_empty_env_for_doctor("HERDR_BIN_PATH");

@@ -14,7 +14,9 @@
 //! - [`herdr`] - the first (and so far only) backend: reports state to
 //!   [Herdr](https://herdr.dev), a terminal workspace manager, via its
 //!   `pane report-agent`/`release-agent` CLI, when running inside a Herdr
-//!   pane. A complete no-op everywhere else.
+//!   pane. A complete no-op everywhere else. Gated by
+//!   `DOGESH_HERDR_ENABLED` (`agent_command::herdr_enabled`, default off,
+//!   `Environment::get_var` via `activate`/`reactivate_after_fork`).
 //!
 //! # Design notes
 //!
@@ -582,10 +584,15 @@ static ACTIVATION: OnceLock<()> = OnceLock::new();
 /// which builds each child's `envp` explicitly from its own snapshot in
 /// `dsh/src/process/process.rs` rather than the live process environment,
 /// sees it too). Neither alone reaches every spawning path this shell has.
-pub fn activate() -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>) {
+pub fn activate(env: &crate::environment::Environment) -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>) {
+    if !agent_command::herdr_enabled(env.get_var(agent_command::HERDR_ENABLED_KEY).as_deref()) {
+        return (AgentLifecycleManager::null(), None);
+    }
     // Idempotency guard: `run_interactive` is the only call site, and it
     // only runs once per process, but this keeps that an invariant rather
-    // than an assumption if a future caller is added.
+    // than an assumption if a future caller is added. Checked after
+    // `herdr_enabled` so a disabled first call does not consume the slot
+    // and permanently block a future enabled retry (e.g. config reload).
     if ACTIVATION.set(()).is_err() {
         return (AgentLifecycleManager::null(), None);
     }
@@ -634,12 +641,27 @@ pub fn activate() -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>
 /// continues that same yield rather than reclaiming authority the parent
 /// itself doesn't currently hold.
 pub fn reactivate_after_fork(shell: &mut crate::shell::Shell) {
-    let (was_active, was_yielded) = {
+    let (was_active, was_yielded, herdr_enabled) = {
         let env = shell.environment.read();
         let lifecycle = &env.integration_state.lifecycle;
-        (lifecycle.is_active(), lifecycle.is_yielded())
+        (
+            lifecycle.is_active(),
+            lifecycle.is_yielded(),
+            agent_command::herdr_enabled(
+                env.get_var(agent_command::HERDR_ENABLED_KEY).as_deref(),
+            ),
+        )
     };
     if !was_active {
+        return;
+    }
+    if !herdr_enabled {
+        // Parent was active but herdr was toggled off mid-session before
+        // fork: drop the stale worker-thread manager (fork only duplicated
+        // the calling thread, so its channel would queue forever) and
+        // replace it with an explicit NullReporter.
+        shell.environment.write().integration_state.lifecycle =
+            AgentLifecycleManager::null();
         return;
     }
     let Some(env) = herdr::HerdrEnv::detect_for_forked_child() else {

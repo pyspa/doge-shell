@@ -43,7 +43,8 @@
 |---|---|---|
 | `HERDR_ENV` / `HERDR_PANE_ID` / `HERDR_BIN_PATH` | `dsh/src/agent_lifecycle/herdr.rs`（`HerdrEnv::detect`） | Herdr pane 内で起動されたことの検出。**プロセス環境だけを見る**（`DOGESH_HOOK_DEPTH` と同じ理由。シェル変数で「Herdr 配下だ」と偽装・抑止できてはいけない） |
 | `DOGESH_HERDR_OWNER_PID` | 同上 | 同一 pane 内の入れ子 `dogesh` が lifecycle authority を取り合わないためのガード。プロセス環境だけを見る |
+| `DOGESH_HERDR_ENABLED` | `dsh/src/agent_lifecycle/agent_command.rs`（`herdr_enabled`） | Herdr 連携全体の ON/OFF。`1`/`true`/`on`/`yes` で有効、既定 OFF（Herdr pane 内でも自動では有効にならない） |
 | `DOGESH_HERDR_AGENT_COMMANDS` | `dsh/src/agent_lifecycle/agent_command.rs` | `codex`/`claude` など前景で認識するエージェント CLI 名の `:` 区切りリスト。素の名前は追加、`-name` は既定リストから除外 |
 | `DOGESH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
 
-`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく **シェル変数 → プロセス環境** の順（`Environment::get_var`）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。
+`DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく **シェル変数 → プロセス環境** の順（`Environment::get_var`）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。

@@ -3,7 +3,7 @@
 [README.md](README.md) の §10。AI 機能の設計方針全体の索引はそちらを見る。
 
 `dsh/src/agent_lifecycle/` が唯一の実装(`dogesh` crate に閉じる。`dsh-builtin`/`dsh-types`/
-`ShellProxy` は変更しない)。
+`ShellProxy` は変更しない)。既定は OFF — `DOGESH_HERDR_ENABLED=1`（`Environment::get_var` 経由、値は `1`/`true`/`on`/`yes` のみ ON）で有効化する。無効時は `NullReporter` で `herdr` 呼び出しは一切行わない。
 
 - Herdr は「custom source が lifecycle authority を握っている間、そのペインでは組み込みの画面
   検出を止める」仕様(herdr.dev の integrations ガイド)。つまり dogesh が

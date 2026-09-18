@@ -391,12 +391,16 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     ctx.save_history = false;
 
     // Herdr lifecycle reporting, if this process is running inside a Herdr
-    // pane. Scoped to this function (not `Repl::new`/`Drop for Repl`, which
-    // runs across unrelated unit tests) and to interactive/notebook mode
-    // only - a one-shot `-c`/`-l` invocation isn't the "pane a human is
-    // watching" model Herdr targets. `_lifecycle_shutdown` releases
-    // authority on every return path out of this function.
-    let (lifecycle, owner_marker) = agent_lifecycle::activate();
+    // pane and `DOGESH_HERDR_ENABLED` is set (default off). Scoped to this
+    // function (not `Repl::new`/`Drop for Repl`, which runs across unrelated
+    // unit tests) and to interactive/notebook mode only - a one-shot `-c`/`-l`
+    // invocation isn't the "pane a human is watching" model Herdr targets.
+    // `_lifecycle_shutdown` releases authority on every return path out of
+    // this function.
+    let (lifecycle, owner_marker) = {
+        let env = shell.environment.read();
+        agent_lifecycle::activate(&env)
+    };
     shell.environment.write().integration_state.lifecycle = lifecycle.clone();
     if let Some((key, value)) = owner_marker {
         // Published through the shell's own environment snapshot, not

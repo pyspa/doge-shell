@@ -48,6 +48,10 @@ const BUILTIN_AGENT_COMMANDS: &[&str] = &[
 /// agent command list. `:`-separated, like `PATH`/`Z_EXCLUDE`.
 pub(crate) const AGENT_COMMANDS_KEY: &str = "DOGESH_HERDR_AGENT_COMMANDS";
 
+/// Set to `1`/`true`/`on`/`yes` to enable Herdr lifecycle reporting.
+/// Default is off — Herdr pane detection alone is not enough.
+pub(crate) const HERDR_ENABLED_KEY: &str = "DOGESH_HERDR_ENABLED";
+
 /// Set to `0`/`false`/`off`/`no` to disable the whole handoff feature, even
 /// when Herdr is active.
 pub(crate) const HANDOFF_KEY: &str = "DOGESH_HERDR_AGENT_HANDOFF";
@@ -62,6 +66,15 @@ pub(crate) fn is_agent_command(name: &str, configured: Option<&str>) -> bool {
     }
     BUILTIN_AGENT_COMMANDS.iter().any(|known| eq(known, name))
         || additions.iter().any(|added| eq(added, name))
+}
+
+/// Whether Herdr lifecycle reporting itself is enabled. `configured` is the
+/// raw `DOGESH_HERDR_ENABLED` value, if any. Default is off.
+pub(crate) fn herdr_enabled(configured: Option<&str>) -> bool {
+    matches!(
+        configured.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1") | Some("true") | Some("on") | Some("yes")
+    )
 }
 
 /// Whether the handoff feature itself is enabled. `configured` is the raw
@@ -167,6 +180,31 @@ mod tests {
             assert!(
                 !handoff_enabled(Some(value)),
                 "expected {value:?} to disable"
+            );
+        }
+    }
+
+    #[test]
+    fn herdr_enabled_defaults_to_false() {
+        assert!(!herdr_enabled(None));
+        assert!(!herdr_enabled(Some("")));
+        assert!(!herdr_enabled(Some("0")));
+        assert!(!herdr_enabled(Some("false")));
+    }
+
+    #[test]
+    fn herdr_enabled_truthy_enables() {
+        for value in ["1", "true", "on", "yes", "YES", " True ", "ON"] {
+            assert!(herdr_enabled(Some(value)), "expected {value:?} to enable");
+        }
+    }
+
+    #[test]
+    fn herdr_enabled_other_values_stay_disabled() {
+        for value in ["0", "false", "off", "no", "2", "enabled", "ye"] {
+            assert!(
+                !herdr_enabled(Some(value)),
+                "expected {value:?} to stay disabled"
             );
         }
     }

@@ -44,7 +44,6 @@ no-doc	dsh/src/lisp/interpreter.rs
 no-doc	dsh/src/lisp/mod.rs
 no-doc	dsh/src/lisp/model/value.rs
 no-doc	dsh/src/lisp/stdlib/table.rs
-no-doc	dsh/src/parser/expansion.rs
 no-doc	dsh/src/perf_probes.rs
 no-doc	dsh/src/process/io.rs
 no-doc	dsh/src/process/job.rs

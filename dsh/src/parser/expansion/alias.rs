@@ -1,203 +1,91 @@
-//! Rewriting a command line with its aliases applied: the `parse_with_expansion`
-//! entry point, the cheap pre-check that decides whether a reparse is needed at
-//! all, and the per-command substitution that walks the parsed pairs.
-use super::*;
+//! Syntax-time alias rewriting: replace static `argv0` spans only.
+//!
+//! Alias changes command syntax itself, so it runs on the source text before
+//! strict parsing. Variable, tilde, brace/glob and substitution expansion are
+//! runtime concerns and never happen here.
+use crate::parser::{Rule, ShellParser};
+use anyhow::Result;
+use parking_lot::RwLock;
+use pest::Parser as _;
+use pest::iterators::Pair;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-pub fn expand_alias(input: String, environment: Arc<RwLock<Environment>>) -> Result<String> {
-    let (cow, _) = parse_with_expansion(&input, environment)?;
-    Ok(cow.into_owned())
+use crate::environment::Environment;
+
+struct AliasEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
 }
 
-pub fn parse_with_expansion<'a>(
+/// Rewrite static `argv0` words that name an alias, leaving everything else
+/// byte-for-byte intact.
+///
+/// Only a bare `word` names an alias. A `$CMD`, quoted word, or substitution
+/// result is runtime data and is left for materialization.
+pub fn rewrite_aliases<'a>(
     input: &'a str,
     environment: Arc<RwLock<Environment>>,
-) -> Result<(
-    std::borrow::Cow<'a, str>,
-    Option<pest::iterators::Pairs<'a, Rule>>,
-)> {
-    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
-
-    let has_meta = input.contains('~')
-        || input.contains('$')
-        || input.contains('{')
-        || input.contains('*')
-        || input.contains('?')
-        || input.contains('[');
-
-    if !has_meta {
-        let env_read = environment.read();
-        if env_read.variable_state.alias.is_empty() {
-            return Ok((std::borrow::Cow::Borrowed(input), Some(pairs)));
-        }
+) -> Result<std::borrow::Cow<'a, str>> {
+    let aliases: HashMap<String, String> = environment.read().variable_state.alias.clone();
+    if aliases.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(input));
     }
-
-    // Check if expansion is needed
-    let mut needs_expansion = false;
-    {
-        let env_read = environment.read();
-
-        // We iterate over a clone of pairs to check for expansion triggers
-        // This is cheaper than re-parsing if we can avoid expansion
-        for pair in pairs.clone() {
-            if check_expansion_needed(pair, &env_read.variable_state.alias) {
-                needs_expansion = true;
-                break;
-            }
-        }
-    }
-
-    if !needs_expansion {
-        return Ok((std::borrow::Cow::Borrowed(input), Some(pairs)));
-    }
-
-    // If expansion is needed, we fall back to the full expansion logic
-    // We can reuse the pairs we already parsed for the first step of expansion
-    // but expand_alias implementation currently re-parses.
-    // To avoid changing expand_alias logic too much and risking bugs, we just call it.
-    // Ideally expand_alias should take pairs as input.
-
-    // For now, let's just call expand_alias which returns a String
-    let expanded = expand_alias_from_pairs(pairs, environment)?;
-    Ok((std::borrow::Cow::Owned(expanded), None))
-}
-
-fn check_expansion_needed(pair: Pair<Rule>, alias: &HashMap<String, String>) -> bool {
-    match pair.as_rule() {
-        Rule::glob_word | Rule::brace_word => {
-            let s = pair.as_str();
-            s.contains('*')
-                || s.contains('?')
-                || s.contains('[')
-                || s.contains('~')
-                || s.contains('$')
-                || s.contains('{')
-        }
-        Rule::word | Rule::variable | Rule::s_quoted | Rule::d_quoted => {
-            let s = pair.as_str();
-            s.contains('~') || s.contains('$')
-        }
-        Rule::argv0 => {
-            let mut it = pair.into_inner();
-            if let Some(first) = it.next() {
-                if let Some(cmd) = get_string(first.clone())
-                    && alias.contains_key(&cmd)
-                {
-                    return true;
-                }
-                if check_expansion_needed(first, alias) {
-                    return true;
-                }
-            }
-            for inner in it {
-                if check_expansion_needed(inner, alias) {
-                    return true;
-                }
-            }
-            false
-        }
-        Rule::commands | Rule::command | Rule::simple_command | Rule::args => {
-            for inner in pair.into_inner() {
-                if check_expansion_needed(inner, alias) {
-                    return true;
-                }
-            }
-            false
-        }
-        _ => {
-            // Recurse for other rules
-            for inner in pair.into_inner() {
-                if check_expansion_needed(inner, alias) {
-                    return true;
-                }
-            }
-            false
-        }
-    }
-}
-
-pub fn expand_alias_from_pairs(
-    pairs: pest::iterators::Pairs<Rule>,
-    environment: Arc<RwLock<Environment>>,
-) -> Result<String> {
-    let mut buf: Vec<String> = Vec::new();
-    let current_dir = std::env::current_dir()?;
+    let pairs = match ShellParser::parse(Rule::commands, input) {
+        Ok(pairs) => pairs,
+        Err(_) => return Ok(std::borrow::Cow::Borrowed(input)),
+    };
+    let mut edits = Vec::new();
     for pair in pairs {
-        for pair in pair.into_inner() {
-            let mut commands = expand_command_alias(pair, Arc::clone(&environment), &current_dir)?;
-            buf.append(&mut commands);
-        }
+        collect_alias_edits(pair, &aliases, &mut edits);
     }
-    Ok(buf.join(" "))
+    if edits.is_empty() {
+        return Ok(std::borrow::Cow::Borrowed(input));
+    }
+    edits.sort_by_key(|a| std::cmp::Reverse(a.start));
+    let mut out = input.to_string();
+    for edit in edits {
+        out.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    Ok(std::borrow::Cow::Owned(out))
 }
 
-/// Resolve any remaining whole-token variables.
-///
-/// Spans are already resolved and escaped by [`expand_span`], so what reaches
-/// here is operators and markers. Only a token that still *looks* like a
-/// variable reference is substituted -- a bare word must never be read as a
-/// variable name, or `echo $USER LANG` would print the value of `LANG`.
-fn expand_var_args(args: Vec<String>, env: &Environment, buf: &mut Vec<String>) {
-    for arg in args {
-        if !arg.starts_with('$') {
-            buf.push(arg);
-            continue;
-        }
-        match env.get_var(&arg) {
-            // No trimming: leading and trailing whitespace can be the
-            // whole point of a value, and the escaping below already keeps
-            // it from being re-split.
-            Some(val) => buf.push(shell_escape_single(&val)),
-            None => buf.push(arg),
-        }
+fn static_argv0_name(pair: &Pair<Rule>) -> Option<(usize, usize, String)> {
+    let mut spans = pair.clone().into_inner();
+    let span = spans.next()?;
+    if spans.next().is_some() {
+        return None;
     }
+    let mut parts = span.clone().into_inner();
+    let part = parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    if !matches!(part.as_rule(), Rule::word) {
+        return None;
+    }
+    let name = part.as_str().to_string();
+    let span_pos = span.as_span();
+    Some((span_pos.start(), span_pos.end(), name))
 }
 
-fn expand_command_alias(
+fn collect_alias_edits(
     pair: Pair<Rule>,
-    environment: Arc<RwLock<Environment>>,
-    _current_dir: &PathBuf,
-) -> Result<Vec<String>> {
-    let mut buf: Vec<String> = Vec::new();
-
-    if let Rule::command = pair.as_rule() {
-        let env_guard = environment.read();
-        let cx = ExpandCtx {
-            env: &env_guard,
-            current_dir: _current_dir,
-        };
-        for inner_pair in pair.into_inner() {
-            match inner_pair.as_rule() {
-                Rule::simple_command => {
-                    let args = expand_alias_tilde(inner_pair, &cx)?;
-                    expand_var_args(args, &env_guard, &mut buf);
-                }
-                // `&` and `|` come back from the expander itself now, so that
-                // a nested `(a | b &)` keeps them too. Adding them here as well
-                // would double them.
-                Rule::simple_command_bg | Rule::pipe_command => {
-                    let args = expand_alias_tilde(inner_pair, &cx)?;
-                    expand_var_args(args, &env_guard, &mut buf);
-                }
-                Rule::struct_pipe_command => {
-                    // Preserve struct_pipe_command (|: lisp_expr) during alias expansion
-                    buf.push(inner_pair.as_str().to_string());
-                }
-                Rule::capture_suffix => {
-                    // Preserve capture suffix (|>)
-                    buf.push(inner_pair.as_str().to_string());
-                }
-                _ => {
-                    debug!(
-                        "expand_command_alias missing {:?} {:?}",
-                        inner_pair.as_rule(),
-                        inner_pair.as_str()
-                    );
-                }
-            }
-        }
-    } else if let Rule::command_list_sep = pair.as_rule() {
-        buf.push(pair.as_str().to_string());
+    aliases: &HashMap<String, String>,
+    edits: &mut Vec<AliasEdit>,
+) {
+    if pair.as_rule() == Rule::argv0
+        && let Some((start, end, name)) = static_argv0_name(&pair)
+        && let Some(replacement) = aliases.get(&name)
+    {
+        edits.push(AliasEdit {
+            start,
+            end,
+            replacement: replacement.clone(),
+        });
     }
-
-    Ok(buf)
+    for inner in pair.into_inner() {
+        collect_alias_edits(inner, aliases, edits);
+    }
 }

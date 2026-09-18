@@ -1,14 +1,19 @@
 //! Turn a side-effect-free `ExecutionPlan` into runnable `Job`s.
 //!
-//! Gating happens before this module is entered. Substitution bodies are
-//! expanded here through `super::substitution` (which authorizes each nested
-//! body first); the outer job is authorized by the caller once its argv is
-//! concrete.
+//! Gating happens before this module is entered. Only the selected
+//! [`PlannedJob`] is materialized here: each [`PlannedWord`] is expanded with
+//! current shell state through `super::word_expand` (variables, `$?`, tilde,
+//! brace/glob, substitutions), redirects and assignments included. The outer
+//! job is authorized by the caller once its argv is concrete.
 
 use super::authorize::ConfirmFn;
-use super::plan::{PlannedArg, PlannedJob};
-use super::substitution::{capture_subshell_plan_stdout, start_process_substitution};
-use crate::process::{Job, JobProcess, Redirect, SubshellType};
+use super::parse::planned_to_concrete;
+use super::plan::{PlannedJob, PlannedRedirectOp};
+use super::word_expand::{
+    dry_expand_argument_word, dry_expand_scalar_word, expand_argument_word,
+    expand_assignment_value, expand_redirect_target,
+};
+use crate::process::{Job, JobProcess, Redirect};
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
@@ -17,7 +22,7 @@ use std::pin::Pin;
 
 pub struct MaterializedJob {
     pub job: Job,
-    pub had_deferred_evaluation: bool,
+    pub had_dynamic_expansion: bool,
 }
 
 pub(crate) struct ExpandedStage {
@@ -98,36 +103,35 @@ fn assemble_job(
     job.has_process().then_some(job)
 }
 
-async fn expand_arg(
+async fn expand_redirects(
     shell: &mut Shell,
     ctx: &Context,
-    arg: &PlannedArg,
+    planned: &PlannedJob,
+    stage_index: usize,
     confirm: ConfirmFn,
-    out: &mut Vec<String>,
-) -> Result<()> {
-    match arg {
-        PlannedArg::Literal(value) => out.push(value.clone()),
-        PlannedArg::Substitution(subst) => match subst.kind {
-            SubshellType::CommandSubstitution => {
-                let output = capture_subshell_plan_stdout(shell, ctx, &subst.plan, confirm).await?;
-                out.extend(
-                    output
-                        .split_whitespace()
-                        .filter(|part| !part.is_empty())
-                        .map(str::to_owned),
-                );
+) -> Result<Vec<Redirect>> {
+    let mut out = Vec::new();
+    for redirect in &planned.stages[stage_index].redirects {
+        match &redirect.op {
+            PlannedRedirectOp::DupFrom(from) => {
+                out.push(Redirect::dup(redirect.fd, *from));
             }
-            SubshellType::Subshell => {
-                let output = capture_subshell_plan_stdout(shell, ctx, &subst.plan, confirm).await?;
-                out.extend(output.lines().map(str::to_owned));
+            PlannedRedirectOp::Close => out.push(Redirect::close(redirect.fd)),
+            PlannedRedirectOp::ReadFile(word)
+            | PlannedRedirectOp::WriteFile(word)
+            | PlannedRedirectOp::AppendFile(word)
+            | PlannedRedirectOp::BothWrite(word)
+            | PlannedRedirectOp::BothAppend(word) => {
+                // Target expansion happens once; `&>` forms share it.
+                // Substitution bodies inside the target execute as part of
+                // `expand_redirect_target`, through the same authorize-then-run
+                // path as argv substitutions.
+                let target = expand_redirect_target(shell, ctx, word, confirm).await?;
+                out.extend(planned_to_concrete(redirect, target));
             }
-            SubshellType::ProcessSubstitution => {
-                out.push(start_process_substitution(shell, ctx, &subst.plan, confirm).await?);
-            }
-            SubshellType::None => {}
-        },
+        }
     }
-    Ok(())
+    Ok(out)
 }
 
 pub fn materialize_job<'a>(
@@ -138,15 +142,21 @@ pub fn materialize_job<'a>(
 ) -> Pin<Box<dyn Future<Output = Result<Option<MaterializedJob>>> + 'a>> {
     Box::pin(async move {
         let mut expanded = Vec::with_capacity(planned.stages.len());
-        for stage in &planned.stages {
+        for (stage_index, stage) in planned.stages.iter().enumerate() {
             let mut argv = Vec::new();
-            for arg in &stage.argv {
-                expand_arg(shell, ctx, arg, confirm, &mut argv).await?;
+            for word in &stage.argv {
+                argv.extend(expand_argument_word(shell, ctx, word, confirm).await?);
             }
+            let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
+            for assignment in &stage.env_overrides {
+                let value = expand_assignment_value(shell, ctx, &assignment.value, confirm).await?;
+                env_overrides.push((assignment.name.clone(), value));
+            }
+            let redirects = expand_redirects(shell, ctx, planned, stage_index, confirm).await?;
             expanded.push(ExpandedStage {
                 argv,
-                redirects: stage.redirects.clone(),
-                env_overrides: stage.env_overrides.clone(),
+                redirects,
+                env_overrides,
             });
         }
         // Assignment-only stages apply to the shell, but only now that the job
@@ -172,30 +182,62 @@ pub fn materialize_job<'a>(
             return Ok(None);
         }
         let job_id = shell.get_next_job_id();
-        let had_deferred = planned.contains_deferred_evaluation();
+        let had_dynamic = planned.contains_dynamic_expansion();
         let job = assemble_job(shell, planned, concrete, job_id);
         Ok(job.map(|job| MaterializedJob {
             job,
-            had_deferred_evaluation: had_deferred,
+            had_dynamic_expansion: had_dynamic,
         }))
     })
 }
 
 /// Static materialization for safety checks: no execution, no env mutation.
 pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option<Job>> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut expanded = Vec::with_capacity(planned.stages.len());
     for stage in &planned.stages {
         let mut argv = Vec::new();
-        for arg in &stage.argv {
-            match arg {
-                PlannedArg::Literal(value) => argv.push(value.clone()),
-                PlannedArg::Substitution(subst) => argv.push(format!("$({})", subst.source)),
+        for word in &stage.argv {
+            argv.extend(dry_expand_argument_word(word, shell, &cwd));
+        }
+        let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
+        for assignment in &stage.env_overrides {
+            env_overrides.push((
+                assignment.name.clone(),
+                dry_expand_scalar_word(&assignment.value, shell),
+            ));
+        }
+        let mut redirects = Vec::new();
+        for redirect in &stage.redirects {
+            match &redirect.op {
+                PlannedRedirectOp::DupFrom(from) => {
+                    redirects.push(Redirect::dup(redirect.fd, *from));
+                }
+                PlannedRedirectOp::Close => redirects.push(Redirect::close(redirect.fd)),
+                PlannedRedirectOp::ReadFile(word)
+                | PlannedRedirectOp::WriteFile(word)
+                | PlannedRedirectOp::AppendFile(word)
+                | PlannedRedirectOp::BothWrite(word)
+                | PlannedRedirectOp::BothAppend(word) => {
+                    let fields = dry_expand_argument_word(word, shell, &cwd);
+                    if fields.len() != 1 {
+                        anyhow::bail!(
+                            "ambiguous redirect: '{}' expands to {} fields",
+                            word.source,
+                            fields.len()
+                        );
+                    }
+                    redirects.extend(planned_to_concrete(
+                        redirect,
+                        fields.into_iter().next().expect("one field"),
+                    ));
+                }
             }
         }
         expanded.push(ExpandedStage {
             argv,
-            redirects: stage.redirects.clone(),
-            env_overrides: stage.env_overrides.clone(),
+            redirects,
+            env_overrides,
         });
     }
     if expanded.iter().all(|stage| stage.argv.is_empty()) {
@@ -243,7 +285,7 @@ mod tests {
             super::super::parse::parse_execution_plan(&input, Arc::clone(&shell.environment))
                 .expect("plan");
         assert_eq!(plan.jobs.len(), 1);
-        assert!(plan.jobs[0].contains_deferred_evaluation());
+        assert!(plan.jobs[0].contains_dynamic_expansion());
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
         match materialize_job(&mut shell, &ctx, &plan.jobs[0], deny_all).await {
             Err(err) => assert!(
@@ -253,5 +295,64 @@ mod tests {
             Ok(_) => panic!("nested dangerous body must not materialize"),
         }
         assert!(victim.exists(), "denied nested body must not run");
+    }
+
+    /// A variable-derived command is dynamic: the concrete argv is `rm ...`
+    /// and the raw source must not bypass the guard.
+    #[tokio::test]
+    async fn dynamic_command_reports_dynamic_expansion() {
+        use crate::repl::confirmation::ConfirmationAction;
+
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env);
+        shell
+            .environment
+            .write()
+            .set_shell_var("CMD".to_string(), "rm".to_string());
+        let plan = super::super::parse::parse_execution_plan(
+            "$CMD -rf victim",
+            Arc::clone(&shell.environment),
+        )
+        .expect("plan");
+        assert!(plan.jobs[0].contains_dynamic_expansion());
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        let materialized = materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+            .expect("job");
+        assert!(materialized.had_dynamic_expansion);
+        let argv = materialized
+            .job
+            .process
+            .as_ref()
+            .expect("process")
+            .command_argv();
+        assert_eq!(argv.0, "rm");
+        assert_eq!(
+            argv.1.to_vec(),
+            vec!["-rf".to_string(), "victim".to_string()]
+        );
+    }
+
+    /// Redirect and assignment substitutions count as dynamic, not just argv.
+    #[test]
+    fn redirect_and_assignment_bodies_are_dynamic() {
+        let env = crate::environment::Environment::new();
+        let plan = super::super::parse::parse_execution_plan(
+            "echo hi > $(some-command)",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        assert!(plan.jobs[0].contains_dynamic_expansion());
+        let plan = super::super::parse::parse_execution_plan(
+            "FOO=$(some-command) command",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        assert!(plan.jobs[0].contains_dynamic_expansion());
     }
 }

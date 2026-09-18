@@ -187,6 +187,13 @@ pub async fn eval_str(
         {
             Ok(Some(materialized)) => materialized,
             Ok(None) => {
+                // Assignment-only: its values were applied during
+                // materialization, so the job succeeded and publishes zero
+                // rather than leaving the previous job's status stale.
+                if planned.is_assignment_only() {
+                    last_exit_code = 0;
+                    publish_exit_status(shell, last_exit_code);
+                }
                 gate_op = next_gate_op;
                 continue;
             }
@@ -198,8 +205,8 @@ pub async fn eval_str(
             Err(err) => return Err(err),
         };
         let mut job = materialized.job;
-        let had_deferred = materialized.had_deferred_evaluation;
-        match authorize_job(shell, &job, had_deferred)? {
+        let had_dynamic = materialized.had_dynamic_expansion;
+        match authorize_job(shell, &job, had_dynamic)? {
             AuthorizationDecision::Allow => {}
             AuthorizationDecision::Deny => {
                 tracing::info!("Command execution cancelled by user");
@@ -287,6 +294,7 @@ pub async fn eval_str(
             if ctx.interactive {
                 enable_raw_mode().ok();
             }
+            publish_exit_status(shell, last_exit_code);
             gate_op = next_gate_op;
             continue;
         }
@@ -338,6 +346,7 @@ pub async fn eval_str(
                 if ctx.interactive {
                     enable_raw_mode().ok();
                 }
+                publish_exit_status(shell, last_exit_code);
                 gate_op = next_gate_op;
                 continue;
             }
@@ -418,6 +427,7 @@ pub async fn eval_str(
             if ctx.interactive {
                 enable_raw_mode().ok();
             }
+            publish_exit_status(shell, last_exit_code);
             gate_op = next_gate_op;
             continue;
         }
@@ -469,6 +479,7 @@ pub async fn eval_str(
             enable_raw_mode().ok();
         }
 
+        publish_exit_status(shell, last_exit_code);
         gate_op = next_gate_op;
 
         if stop_processing {
@@ -488,9 +499,8 @@ pub async fn eval_str(
 /// included: a line that was blocked still happened, and leaving the previous
 /// line's status in place would tell the user it succeeded.
 ///
-/// Once per line, not once per job: the whole line is parsed and expanded
-/// before the first job runs, so a `$?` written on this line was already
-/// substituted from the previous one.
+/// `publish_exit_status` updates after each job completes, so later jobs on
+/// the same line resolve `$?` during their own materialization.
 fn publish_exit_status(shell: &Shell, code: i32) {
     shell.environment.write().last_exit_status = code;
 }

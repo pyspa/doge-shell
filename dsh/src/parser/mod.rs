@@ -19,7 +19,7 @@ mod tests_escape;
 
 // Re-exports
 pub use ast::{get_pos_word, get_string, get_words, get_words_from_pairs};
-pub use expansion::{expand_alias, parse_with_expansion};
+pub use expansion::rewrite_aliases;
 pub use highlight::{
     HighlightKind, HighlightResult, HighlightToken, collect_highlight_tokens_from_pairs,
     highlight_error_token,

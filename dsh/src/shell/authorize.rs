@@ -34,12 +34,12 @@ pub fn is_authorization_cancelled(err: &anyhow::Error) -> bool {
 pub fn authorize_job(
     shell: &mut Shell,
     job: &crate::process::Job,
-    had_deferred: bool,
+    had_dynamic: bool,
 ) -> Result<AuthorizationDecision> {
     authorize_job_with(
         shell,
         job,
-        had_deferred,
+        had_dynamic,
         crate::repl::confirmation::confirm_action,
     )
 }
@@ -47,7 +47,7 @@ pub fn authorize_job(
 pub fn authorize_job_with(
     shell: &mut Shell,
     job: &crate::process::Job,
-    had_deferred: bool,
+    had_dynamic: bool,
     confirm: ConfirmFn,
 ) -> Result<AuthorizationDecision> {
     let (level, allowlist) = {
@@ -63,8 +63,8 @@ pub fn authorize_job_with(
         );
         (level, allowlist)
     };
-    let ctx = if had_deferred {
-        SafetyCheckContext::deferred_source()
+    let ctx = if had_dynamic {
+        SafetyCheckContext::dynamic_source()
     } else {
         SafetyCheckContext::strict_source()
     };
@@ -78,8 +78,8 @@ pub fn authorize_job_with(
         SafetyResult::Confirm(reason) => match confirm(&reason) {
             Ok(ConfirmationAction::Yes) => Ok(AuthorizationDecision::Allow),
             Ok(ConfirmationAction::AlwaysAllow) => {
-                // A deferred source can resolve differently next time.
-                if !had_deferred {
+                // A dynamic source can resolve differently next time.
+                if !had_dynamic {
                     shell
                         .environment
                         .read()
@@ -141,10 +141,10 @@ mod tests {
         );
     }
 
-    /// `AlwaysAllow` on a deferred source is single-run: it must not land in
+    /// `AlwaysAllow` on a dynamic source is single-run: it must not land in
     /// the session allowlist where it would pre-approve future resolutions.
     #[test]
-    fn always_allow_on_deferred_source_is_not_persisted() {
+    fn always_allow_on_dynamic_source_is_not_persisted() {
         let mut shell = shell();
         let job = concrete_job(
             "rm -rf /tmp/dogesh_always_probe",
@@ -180,7 +180,7 @@ mod tests {
                 .shell_always_allowlist
                 .read()
                 .contains(&dynamic.cmd),
-            "deferred AlwaysAllow must not persist the raw source"
+            "dynamic AlwaysAllow must not persist the raw source"
         );
     }
 }

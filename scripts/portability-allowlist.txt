@@ -90,5 +90,6 @@ dsh/tests/non_interactive.rs	/bin/sleep
 dsh/tests/quoting.rs	/usr/bin/printf
 dsh/tests/redirection.rs	/usr/bin/grep
 dsh/tests/redirection.rs	/usr/bin/wc
+dsh/tests/runtime_expansion.rs	/usr/bin/printf
 dsh/tests/substitution.rs	/usr/bin/printf
 dsh/tests/variables.rs	/usr/bin/env

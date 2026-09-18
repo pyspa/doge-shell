@@ -1,7 +1,8 @@
 //! Turning a pattern into the filenames it names: brace expansion, splitting a
 //! pattern into its fixed root and its wildcard tail, the glob walk itself, and
 //! the escaping that keeps text from a quote or a variable value literal.
-use super::*;
+use std::path::{Path, PathBuf};
+use tracing::debug;
 
 fn find_glob_root(path: &str) -> (String, String) {
     let mut root = Vec::new();
@@ -100,7 +101,7 @@ pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
 /// Returns raw, unquoted results; the caller decides how to escape them. A
 /// pattern that matches nothing comes back as itself, which is what the shell
 /// has always done here.
-pub(super) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<String> {
+pub(crate) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
     for pat in expand_braces(pattern) {
         if !(pat.contains('*') || pat.contains('?') || pat.contains('[')) {
@@ -152,7 +153,7 @@ pub(super) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<Stri
 ///
 /// Applied to text that came from a quote or a variable value: those are
 /// literals, even when another part of the same word is a real pattern.
-pub(super) fn escape_glob_metacharacters(value: &str) -> String {
+pub(crate) fn escape_glob_metacharacters(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
         if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
@@ -164,7 +165,7 @@ pub(super) fn escape_glob_metacharacters(value: &str) -> String {
 }
 
 /// Undo [`escape_glob_metacharacters`].
-pub(super) fn unescape_glob_metacharacters(value: &str) -> String {
+pub(crate) fn unescape_glob_metacharacters(value: &str) -> String {
     if !value.contains('\\') {
         return value.to_string();
     }

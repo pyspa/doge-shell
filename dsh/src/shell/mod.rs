@@ -7,6 +7,7 @@ pub mod parse;
 pub mod plan;
 pub mod struct_pipe;
 pub mod substitution;
+pub mod word_expand;
 
 use crate::environment::Environment;
 use crate::history::{FrecencyHistory, HistoryMetadata};

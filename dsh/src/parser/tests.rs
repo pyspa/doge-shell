@@ -1,21 +1,11 @@
 use super::ast::{get_pos_word, get_string};
-use super::expansion::{ExpandCtx, expand_alias, expand_alias_tilde};
-
-/// Build the expansion context these tests need. `expand_alias_tilde` resolves
-/// variables inside a span, so it needs the environment, not just the aliases.
-fn expand_ctx<'a>(
-    env: &'a crate::environment::Environment,
-    current_dir: &'a Path,
-) -> ExpandCtx<'a> {
-    ExpandCtx { env, current_dir }
-}
+use super::expansion::rewrite_aliases;
 use super::{Rule, ShellParser};
 use crate::environment::Environment;
 use anyhow::Result;
 use pest::Parser;
 use std::cell::RefCell;
 
-use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::debug;
@@ -197,17 +187,8 @@ fn parse_simple_command_with_input_redirect() {
 fn expand_alias_preserves_input_redirect() {
     init();
     let env = Environment::new();
-    let mut pairs = ShellParser::parse(Rule::simple_command, "cat < input.txt")
-        .unwrap_or_else(|e| panic!("{}", e));
-    let alias_simple = pairs.next().unwrap();
-    let guard = env.read();
-    let cx = expand_ctx(&guard, Path::new("."));
-    let tokens = expand_alias_tilde(alias_simple, &cx).expect("tokenize redirect");
-    drop(guard);
-    assert_eq!(tokens, vec!["cat", "<", "input.txt"]);
-
-    let result =
-        expand_alias("cat < input.txt".to_string(), env).expect("alias expansion succeeds");
+    // Alias rewriting touches only static argv0 spans; redirects pass through.
+    let result = rewrite_aliases("cat < input.txt", env).expect("alias rewrite succeeds");
     assert_eq!(result, "cat < input.txt");
 }
 
@@ -485,8 +466,8 @@ fn expand_alias_preserves_operators() -> Result<()> {
         .variables
         .insert("$FOO".to_string(), "bar".to_string());
 
-    // `$FOO` forces the expansion path; without a variable the line is passed
-    // through untouched and proves nothing.
+    // Alias rewriting leaves the rest of the line byte-for-byte intact, so
+    // operators and `$FOO` spellings survive untouched.
     for (input, operator) in [
         ("echo $FOO | cat &", "&"),
         ("echo $FOO | cat", "|"),
@@ -499,7 +480,7 @@ fn expand_alias_preserves_operators() -> Result<()> {
         ("(echo $FOO && echo b)", "&&"),
         ("(echo $FOO | cat &)", "&"),
     ] {
-        let replaced = expand_alias(input.to_string(), Arc::clone(&env))?;
+        let replaced = rewrite_aliases(input, Arc::clone(&env))?;
         assert!(
             replaced.contains(operator),
             "{input:?} lost {operator:?}: {replaced:?}"
@@ -523,52 +504,52 @@ fn test_expand_alias() -> Result<()> {
         .variables
         .insert("$FOO".to_string(), "BAR".to_string());
 
-    let input = r#"alias abc " test" '-vvv' --foo "#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    // Values are single-quoted rather than double-quoted: the line is re-parsed
-    // and `$` is live inside double quotes, so a value containing one would be
-    // interpolated twice. `-vvv` needs no quoting and comes back bare.
+    // Span-based rewriting replaces only the argv0 span; the remaining
+    // quoting and `$FOO` spellings stay exactly as typed for runtime.
+    let input = r#"alias abc " test" '-vvv' --foo "#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
     assert_eq!(
-        replaced,
-        r#"echo 'test' | sk abc ' test' -vvv --foo"#.to_string()
+        replaced.as_ref(),
+        r#"echo 'test' | sk  abc " test" '-vvv' --foo "#.to_string()
     );
 
-    let input = r#"alias abc " test" '-vvv' --foo &"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
+    let input = r#"alias abc " test" '-vvv' --foo &"#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
     assert_eq!(
-        replaced,
-        r#"echo 'test' | sk abc ' test' -vvv --foo &"#.to_string()
+        replaced.as_ref(),
+        r#"echo 'test' | sk  abc " test" '-vvv' --foo &"#.to_string()
     );
 
     // The trailing `&` belongs to the last pipeline stage and has to survive
-    // the round trip: dropping it ran the pipeline in the foreground.
-    let input = r#"alias | abc " test" '-vvv' --foo &"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
+    // the rewrite untouched.
+    let input = r#"alias | abc " test" '-vvv' --foo &"#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
     assert_eq!(
-        replaced,
-        r#"echo 'test' | sk | abc ' test' -vvv --foo &"#.to_string()
+        replaced.as_ref(),
+        r#"echo 'test' | sk  | abc " test" '-vvv' --foo &"#.to_string()
     );
 
-    let input = r#"sh -c | alias " test" '-vvv' --foo &"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
+    let input = r#"sh -c | alias " test" '-vvv' --foo &"#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
     assert_eq!(
-        replaced,
-        r#"sh -c | echo 'test' | sk ' test' -vvv --foo &"#.to_string()
+        replaced.as_ref(),
+        r#"sh -c | echo 'test' | sk  " test" '-vvv' --foo &"#.to_string()
     );
 
-    let input = r#"echo (alias " test" '-vvv' --foo) "#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
+    let input = r#"echo (alias " test" '-vvv' --foo) "#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
     assert_eq!(
-        replaced,
-        r#"echo ( echo 'test' | sk ' test' -vvv --foo )"#.to_string()
+        replaced.as_ref(),
+        r#"echo (echo 'test' | sk  " test" '-vvv' --foo) "#.to_string()
     );
-    let input = r#"echo $FOO"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, r#"echo BAR"#.to_string());
+    // `$FOO` is runtime data: alias rewriting must not resolve it.
+    let input = r#"echo $FOO"#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
+    assert_eq!(replaced.as_ref(), r#"echo $FOO"#.to_string());
 
-    let input = r#"echo 'test' > test.log"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, r#"echo 'test' > test.log"#.to_string());
+    let input = r#"echo 'test' > test.log"#;
+    let replaced = rewrite_aliases(input, Arc::clone(&env))?;
+    assert_eq!(replaced.as_ref(), r#"echo 'test' > test.log"#.to_string());
 
     Ok(())
 }
@@ -589,18 +570,18 @@ fn test_simple_alias_like_ll() -> Result<()> {
 
     // Test simple alias 'll'
     let input = r#"ll"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, r#"exa -al"#.to_string());
+    let replaced = rewrite_aliases(&input, Arc::clone(&env))?;
+    assert_eq!(replaced.as_ref(), r#"exa -al"#.to_string());
 
     // Test alias with arguments
     let input = r#"ll -h"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, r#"exa -al -h"#.to_string());
+    let replaced = rewrite_aliases(&input, Arc::clone(&env))?;
+    assert_eq!(replaced.as_ref(), r#"exa -al -h"#.to_string());
 
     // Test single letter alias
     let input = r#"g status"#.to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, r#"git status"#.to_string());
+    let replaced = rewrite_aliases(&input, Arc::clone(&env))?;
+    assert_eq!(replaced.as_ref(), r#"git status"#.to_string());
 
     Ok(())
 }
@@ -981,46 +962,27 @@ fn test_get_string_safety() {
 #[test]
 fn test_brace_expansion_unit() -> Result<()> {
     init();
+    // Brace expansion is runtime-only now: alias rewriting leaves the source
+    // spelling intact for the materializer.
     let env = crate::environment::Environment::new();
+    for input in [
+        "echo {a,b,c}",
+        "echo pre{X,Y}post",
+        "echo a{b,c{d,e}}",
+        "echo {a,b}{1,2}",
+        "echo a{1,2} b{x,y}",
+        "echo {a}",
+        "echo {*.test_dummy_1,*.test_dummy_2}",
+    ] {
+        let replaced = rewrite_aliases(input, Arc::clone(&env))?;
+        assert_eq!(replaced.as_ref(), input);
+    }
 
-    let input = "echo {a,b,c}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo a b c".to_string());
-
-    let input = "echo pre{X,Y}post".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo preXpost preYpost".to_string());
-
-    let input = "echo a{b,c{d,e}}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo ab acd ace".to_string());
-
-    let input = "echo {a,b}{1,2}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo a1 a2 b1 b2".to_string());
-
-    // Each word on the line is brace-expanded independently, not as a
-    // cartesian product across words.
-    let input = "echo a{1,2} b{x,y}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo a1 a2 bx by".to_string());
-
-    // A brace group with no comma still expands to its single element,
-    // rather than staying literal like some shells.
-    let input = "echo {a}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    assert_eq!(replaced, "echo a".to_string());
-
-    // Check globbing interaction
-    // Since files don't exist, glob pattern remains literal
-    let input = "echo {*.test_dummy_1,*.test_dummy_2}".to_string();
-    let replaced = expand_alias(input, Arc::clone(&env))?;
-    // Patterns that matched nothing are passed through in brace-expansion order,
-    // quoted so the re-parse does not glob them again.
-    assert_eq!(
-        replaced,
-        "echo '*.test_dummy_1' '*.test_dummy_2'".to_string()
-    );
+    // Pure brace helper behavior stays pinned here; runtime composition is
+    // covered by shell word expansion tests.
+    use super::expansion::expand_braces;
+    assert_eq!(expand_braces("{a,b,c}"), vec!["a", "b", "c"]);
+    assert_eq!(expand_braces("{a}"), vec!["a"]);
 
     Ok(())
 }
@@ -1101,13 +1063,11 @@ fn glob_patterns_expand_against_the_current_directory() -> Result<()> {
             File::create(dir.path().join(file))?;
         }
 
-        let env = Environment::new();
-        let guard = env.read();
-        let pairs = ShellParser::parse(Rule::glob_word, case.pattern)
-            .unwrap_or_else(|e| panic!("{}: {}", case.what, e));
-
-        for pair in pairs {
-            let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
+        use super::expansion::expand_glob_pattern;
+        for _pair in ShellParser::parse(Rule::glob_word, case.pattern)
+            .unwrap_or_else(|e| panic!("{}: {}", case.what, e))
+        {
+            let expanded = expand_glob_pattern(case.pattern, dir.path());
             assert_eq!(
                 expanded.len(),
                 case.expected_len,
@@ -1152,18 +1112,11 @@ fn test_glob_no_match() -> Result<()> {
     let path = dir.path().join("file.txt");
     File::create(&path)?;
 
-    let env = crate::environment::Environment::new();
-    let guard = env.read();
-
-    // Pattern matches nothing
-    let pairs = ShellParser::parse(Rule::glob_word, "*.rs").unwrap_or_else(|e| panic!("{}", e));
-
-    for pair in pairs {
-        let expanded = expand_alias_tilde(pair, &expand_ctx(&guard, dir.path()))?;
-        // Literal on no match, quoted so the re-parse does not glob it again.
-        assert_eq!(expanded.len(), 1);
-        assert_eq!(expanded[0], "'*.rs'");
-    }
+    use super::expansion::expand_glob_pattern;
+    // Pattern matches nothing: it comes back as itself for runtime argv.
+    let expanded = expand_glob_pattern("*.rs", dir.path());
+    assert_eq!(expanded.len(), 1);
+    assert_eq!(expanded[0], "*.rs");
     Ok(())
 }
 

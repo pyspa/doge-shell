@@ -1,4 +1,4 @@
-use super::expansion::expand_alias;
+use super::expansion::rewrite_aliases;
 use super::{Rule, ShellParser};
 use crate::environment::Environment;
 use anyhow::Result;
@@ -42,10 +42,8 @@ fn test_unclosed_bracket() -> Result<()> {
     // If it parses, we check expansion.
     let _pairs = ShellParser::parse(Rule::simple_command, input)?;
     let env = Environment::new();
-    let expanded = expand_alias(input.to_string(), std::sync::Arc::clone(&env))?;
-    // A pattern that matched nothing is passed through -- now quoted, because
-    // the expanded line is re-parsed and an unquoted `[` would be read as a
-    // glob a second time. It still reaches argv as `val[1`.
-    assert_eq!(expanded, "'val[1'");
+    let expanded = rewrite_aliases(input, std::sync::Arc::clone(&env))?;
+    // Alias rewriting leaves non-alias words alone; `val[1` reaches runtime.
+    assert_eq!(expanded.as_ref(), "val[1");
     Ok(())
 }

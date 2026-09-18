@@ -1,19 +1,20 @@
 //! Side-effect-free shell planning: pest pairs become an `ExecutionPlan`.
 //!
-//! This module never spawns processes, allocates pipes, touches the working
-//! directory, mutates the environment, or asks the safety guard anything. It
-//! only reads the environment through `parse_with_expansion` (alias, tilde,
-//! variable, brace, glob) and records `$(...)` / `<(...)` / `(...)` bodies as
-//! deferred `PlannedSubstitution` nodes for the materializer to evaluate after
-//! `&&`/`||` gating and authorization.
+//! The parser may read aliases for syntax rewriting, but it does not resolve
+//! runtime variables, tilde, glob/brace patterns, or substitutions. One source
+//! span becomes one [`PlannedWord`]; runtime values are left for the selected
+//! job's materialization.
 //!
 //! Execution planning is strict: any non-whitespace unparsed tail is a syntax
 //! error and no prefix is executed. `Rule::commands` remains intentionally
 //! tolerant for REPL highlighting and completion; the strictness lives only in
-//! this execution path, which validates raw input before expansion and
-//! validates expanded input again when expansion rewrites the line.
+//! this execution path, which validates raw input before alias rewriting and
+//! validates alias-rewritten input again.
 
-use super::plan::{ExecutionPlan, PlannedArg, PlannedCommand, PlannedJob, PlannedSubstitution};
+use super::plan::{
+    ExecutionPlan, PlannedAssignment, PlannedCommand, PlannedJob, PlannedLiteral, PlannedRedirect,
+    PlannedRedirectOp, PlannedSubstitution, PlannedWord, QuoteMode, WordPart,
+};
 use super::struct_pipe;
 use crate::environment::Environment;
 use crate::parser::{self, Rule, ShellParser};
@@ -47,30 +48,29 @@ impl ParseContext {
 
 /// Parse `input` into a side-effect-free plan.
 ///
-/// Only `environment` is read (for the pre-expansion pass). No command is
-/// executed and no shell state is mutated.
+/// Only aliases are read (for syntax rewriting). No command is executed, no
+/// variable or pattern is resolved, and no shell state is mutated.
 ///
-/// Strict execution: the raw input is fully validated before expansion (so an
-/// unparsed suffix cannot be discarded by expansion), and an expanded line is
-/// validated again when expansion rewrites it. Any non-whitespace leftover is
-/// a syntax error and no `ExecutionPlan` is returned.
+/// Strict execution: the raw input is fully validated before rewriting (so an
+/// unparsed suffix cannot be discarded), and a rewritten line is validated
+/// again. Any non-whitespace leftover is a syntax error and no
+/// `ExecutionPlan` is returned.
 pub fn parse_execution_plan(
     input: &str,
     environment: Arc<RwLock<Environment>>,
 ) -> Result<ExecutionPlan> {
-    // 1. Validate exactly what the user supplied BEFORE expansion can discard
+    // 1. Validate exactly what the user supplied BEFORE rewriting can discard
     // an unparsed suffix.
     validate_complete_commands(input)?;
 
-    // 2. Existing expansion behavior.
-    let (input_cow, pairs_opt) = parser::parse_with_expansion(input, environment)?;
+    // 2. Syntax-time alias rewrite only; runtime expansion happens later.
+    let aliased = parser::rewrite_aliases(input, environment)?;
+    if let std::borrow::Cow::Owned(_) = aliased {
+        validate_complete_commands(aliased.as_ref())?;
+    }
 
-    // 3. If no expansion happened, the raw parse was already verified.
-    // If expansion produced a new command line, verify THAT command line too.
-    let mut pairs = match pairs_opt {
-        Some(pairs) => pairs,
-        None => parse_commands_strict(&input_cow)?,
-    };
+    // 3. Parse the (possibly rewritten) line strictly.
+    let mut pairs = parse_commands_strict(aliased.as_ref())?;
 
     let mut ctx = ParseContext::new(true);
     let Some(pair) = pairs.next() else {
@@ -105,32 +105,22 @@ fn validate_complete_commands(input: &str) -> Result<()> {
     parse_commands_strict(input).map(|_| ())
 }
 
-/// Split one `NAME=value` into its two halves (pure).
-fn parse_assignment(pair: Pair<Rule>) -> (String, String) {
+/// Parse one `NAME=value` into a planned assignment (pure, no resolution).
+fn parse_assignment(pair: Pair<Rule>, ctx: &ParseContext) -> Result<(String, PlannedWord)> {
     let mut name = String::new();
-    let mut value = String::new();
+    let mut value: Option<PlannedWord> = None;
     for part in pair.into_inner() {
         match part.as_rule() {
             Rule::assign_name => name = part.as_str().to_string(),
-            Rule::span => value = parser::get_string(part).unwrap_or_default(),
+            Rule::span => value = Some(parse_word(part, ctx)?),
             _ => {}
         }
     }
-    (name, value)
+    Ok((name, value.unwrap_or_else(PlannedWord::empty)))
 }
 
-/// Whether any part of this span is a substitution.
-fn span_has_substitution(span: &Pair<Rule>) -> bool {
-    span.clone().into_inner().any(|part| {
-        matches!(
-            part.as_rule(),
-            Rule::subshell | Rule::proc_subst | Rule::command_subst
-        )
-    })
-}
-
-/// Build the redirections one `redirect` pair stands for (pure).
-fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
+/// Build the redirections one `redirect` pair stands for (pure, no resolution).
+fn parse_redirect(pair: Pair<Rule>, ctx: &ParseContext) -> Result<Vec<PlannedRedirect>> {
     let mut direction = None;
 
     for inner in pair.into_inner() {
@@ -143,23 +133,44 @@ fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
                 direction = inner.into_inner().next().map(|rule| rule.as_rule());
             }
             Rule::span => {
-                let dest = parser::get_string(inner).unwrap_or_default();
+                let target = parse_word(inner, ctx)?;
                 return Ok(match direction {
                     Some(Rule::stdout_redirect_direction_out) => {
-                        vec![Redirect::write(STDOUT_FILENO, dest)]
+                        vec![PlannedRedirect {
+                            fd: STDOUT_FILENO,
+                            op: PlannedRedirectOp::WriteFile(target),
+                        }]
                     }
                     Some(Rule::stdout_redirect_direction_append) => {
-                        vec![Redirect::append(STDOUT_FILENO, dest)]
+                        vec![PlannedRedirect {
+                            fd: STDOUT_FILENO,
+                            op: PlannedRedirectOp::AppendFile(target),
+                        }]
                     }
                     Some(Rule::stderr_redirect_direction_out) => {
-                        vec![Redirect::write(STDERR_FILENO, dest)]
+                        vec![PlannedRedirect {
+                            fd: STDERR_FILENO,
+                            op: PlannedRedirectOp::WriteFile(target),
+                        }]
                     }
                     Some(Rule::stderr_redirect_direction_append) => {
-                        vec![Redirect::append(STDERR_FILENO, dest)]
+                        vec![PlannedRedirect {
+                            fd: STDERR_FILENO,
+                            op: PlannedRedirectOp::AppendFile(target),
+                        }]
                     }
-                    Some(Rule::stdouterr_redirect_direction_out) => Redirect::both(dest, false),
-                    Some(Rule::stdouterr_redirect_direction_append) => Redirect::both(dest, true),
-                    Some(Rule::stdin_redirect_direction_in) => vec![Redirect::input(dest)],
+                    Some(Rule::stdouterr_redirect_direction_out) => vec![PlannedRedirect {
+                        fd: STDOUT_FILENO,
+                        op: PlannedRedirectOp::BothWrite(target),
+                    }],
+                    Some(Rule::stdouterr_redirect_direction_append) => vec![PlannedRedirect {
+                        fd: STDOUT_FILENO,
+                        op: PlannedRedirectOp::BothAppend(target),
+                    }],
+                    Some(Rule::stdin_redirect_direction_in) => vec![PlannedRedirect {
+                        fd: STDIN_FILENO,
+                        op: PlannedRedirectOp::ReadFile(target),
+                    }],
                     _ => Vec::new(),
                 });
             }
@@ -171,7 +182,7 @@ fn parse_redirect(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
 }
 
 /// `2>&1`, `>&2`, `2>&-`.
-fn parse_fd_dup(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
+fn parse_fd_dup(pair: Pair<Rule>) -> Result<Vec<PlannedRedirect>> {
     let Some(form) = pair.into_inner().next() else {
         return Ok(Vec::new());
     };
@@ -194,15 +205,30 @@ fn parse_fd_dup(pair: Pair<Rule>) -> Result<Vec<Redirect>> {
         return Ok(Vec::new());
     };
     Ok(vec![if target == "-" {
-        Redirect::close(fd)
+        PlannedRedirect {
+            fd,
+            op: PlannedRedirectOp::Close,
+        }
     } else {
-        Redirect::dup(fd, parse_fd(&target)?)
+        PlannedRedirect {
+            fd,
+            op: PlannedRedirectOp::DupFrom(parse_fd(&target)?),
+        }
     }])
 }
 
 fn parse_fd(text: &str) -> Result<RawFd> {
     text.parse::<RawFd>()
         .with_context(|| format!("dsh: invalid file descriptor '{text}'"))
+}
+
+/// Convert a concrete planned redirect back for dry assembly.
+pub(crate) fn planned_to_concrete(redirect: &PlannedRedirect, target: String) -> Vec<Redirect> {
+    match &redirect.op {
+        PlannedRedirectOp::DupFrom(from) => vec![Redirect::dup(redirect.fd, *from)],
+        PlannedRedirectOp::Close => vec![Redirect::close(redirect.fd)],
+        _ => redirect.to_concrete(target),
+    }
 }
 
 fn empty_command() -> PlannedCommand {
@@ -239,66 +265,180 @@ fn build_simple_command(ctx: &ParseContext, pair: Pair<Rule>) -> Result<PlannedC
     Ok(stage)
 }
 
-fn push_substitution(
-    argv: &mut Vec<PlannedArg>,
+fn make_substitution(
     kind: SubshellType,
-    inner_pair: Pair<Rule>,
+    commands_pair: Pair<Rule>,
     ctx: &ParseContext,
-) -> Result<()> {
-    let cmd_str = inner_pair.as_str().to_string();
+) -> Result<Option<PlannedSubstitution>> {
+    let cmd_str = commands_pair.as_str().to_string();
     let mut nested = ParseContext::new(ctx.foreground);
     match kind {
         SubshellType::Subshell | SubshellType::CommandSubstitution => nested.subshell = true,
         SubshellType::ProcessSubstitution => nested.proc_subst = true,
         SubshellType::None => {}
     }
-    let plan = build_commands(&mut nested, inner_pair)?;
+    let plan = build_commands(&mut nested, commands_pair)?;
     if plan.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
-    argv.push(PlannedArg::Substitution(PlannedSubstitution {
+    Ok(Some(PlannedSubstitution {
         source: cmd_str,
         kind,
         plan: Box::new(plan),
-    }));
-    Ok(())
+    }))
 }
 
-fn push_span_parts(argv: &mut Vec<PlannedArg>, span: Pair<Rule>, ctx: &ParseContext) -> Result<()> {
-    if !span_has_substitution(&span) {
-        if let Some(arg) = parser::get_string(span) {
-            argv.push(PlannedArg::Literal(arg));
-        }
-        return Ok(());
-    }
-    for part in span.into_inner() {
-        match part.as_rule() {
-            Rule::subshell => {
-                for inner in part.into_inner() {
-                    push_substitution(argv, SubshellType::Subshell, inner, ctx)?;
+fn substitution_from_wrapper(
+    wrapper: Pair<Rule>,
+    kind: SubshellType,
+    ctx: &ParseContext,
+) -> Result<Vec<PlannedSubstitution>> {
+    let mut out = Vec::new();
+    for inner in wrapper.into_inner() {
+        match inner.as_rule() {
+            Rule::proc_subst_direction => continue,
+            _ => {
+                if let Some(subst) = make_substitution(kind.clone(), inner, ctx)? {
+                    out.push(subst);
                 }
             }
-            Rule::proc_subst => {
+        }
+    }
+    Ok(out)
+}
+
+fn unquoted_literal(part: Pair<Rule>, first: bool) -> PlannedLiteral {
+    let raw = part.as_str().to_string();
+    let text = parser::get_string(part).unwrap_or_default();
+    PlannedLiteral {
+        text,
+        raw: raw.clone(),
+        quote: QuoteMode::Unquoted,
+        pattern_active: false,
+        brace_active: false,
+        tilde_candidate: first && raw.starts_with('~'),
+    }
+}
+
+fn active_literal(part: Pair<Rule>, first: bool) -> PlannedLiteral {
+    let raw = part.as_str().to_string();
+    let text = parser::get_string(part).unwrap_or_default();
+    PlannedLiteral {
+        text,
+        raw: raw.clone(),
+        quote: QuoteMode::Unquoted,
+        pattern_active: true,
+        brace_active: true,
+        tilde_candidate: first && raw.starts_with('~'),
+    }
+}
+
+/// One `span` becomes one [`PlannedWord`]; runtime values are never resolved.
+fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
+    let source = span.as_str().to_string();
+    let mut parts = Vec::new();
+    let mut first = true;
+    for part in span.into_inner() {
+        match part.as_rule() {
+            Rule::word => parts.push(WordPart::Literal(unquoted_literal(part, first))),
+            Rule::glob_word | Rule::brace_word => {
+                parts.push(WordPart::Literal(active_literal(part, first)));
+            }
+            Rule::variable => parts.push(WordPart::Variable {
+                source: part.as_str().to_string(),
+                quote: QuoteMode::Unquoted,
+            }),
+            Rule::s_quoted => {
+                let raw = part.as_str().to_string();
+                let text = parser::get_string(part).unwrap_or_default();
+                parts.push(WordPart::Literal(PlannedLiteral {
+                    text,
+                    raw,
+                    quote: QuoteMode::Single,
+                    pattern_active: false,
+                    brace_active: false,
+                    tilde_candidate: false,
+                }));
+            }
+            Rule::d_quoted => {
                 for inner in part.into_inner() {
-                    if inner.as_rule() == Rule::proc_subst_direction {
-                        continue;
+                    match inner.as_rule() {
+                        Rule::variable => parts.push(WordPart::Variable {
+                            source: inner.as_str().to_string(),
+                            quote: QuoteMode::Double,
+                        }),
+                        Rule::command_subst => {
+                            for subst in substitution_from_wrapper(
+                                inner,
+                                SubshellType::CommandSubstitution,
+                                ctx,
+                            )? {
+                                parts.push(WordPart::Substitution {
+                                    substitution: subst,
+                                    quote: QuoteMode::Double,
+                                });
+                            }
+                        }
+                        _ => {
+                            let raw = inner.as_str().to_string();
+                            let text = parser::get_string(inner).unwrap_or_default();
+                            parts.push(WordPart::Literal(PlannedLiteral {
+                                text,
+                                raw,
+                                quote: QuoteMode::Double,
+                                pattern_active: false,
+                                brace_active: false,
+                                tilde_candidate: false,
+                            }));
+                        }
                     }
-                    push_substitution(argv, SubshellType::ProcessSubstitution, inner, ctx)?;
                 }
             }
             Rule::command_subst => {
-                for inner in part.into_inner() {
-                    push_substitution(argv, SubshellType::CommandSubstitution, inner, ctx)?;
+                for subst in
+                    substitution_from_wrapper(part, SubshellType::CommandSubstitution, ctx)?
+                {
+                    parts.push(WordPart::Substitution {
+                        substitution: subst,
+                        quote: QuoteMode::Unquoted,
+                    });
+                }
+            }
+            Rule::proc_subst => {
+                for subst in
+                    substitution_from_wrapper(part, SubshellType::ProcessSubstitution, ctx)?
+                {
+                    parts.push(WordPart::Substitution {
+                        substitution: subst,
+                        quote: QuoteMode::Unquoted,
+                    });
+                }
+            }
+            Rule::subshell => {
+                for subst in substitution_from_wrapper(part, SubshellType::Subshell, ctx)? {
+                    parts.push(WordPart::Substitution {
+                        substitution: subst,
+                        quote: QuoteMode::Unquoted,
+                    });
                 }
             }
             _ => {
-                if let Some(arg) = parser::get_string(part) {
-                    argv.push(PlannedArg::Literal(arg));
+                let raw = part.as_str().to_string();
+                if let Some(text) = parser::get_string(part) {
+                    parts.push(WordPart::Literal(PlannedLiteral {
+                        raw,
+                        text,
+                        quote: QuoteMode::Unquoted,
+                        pattern_active: false,
+                        brace_active: false,
+                        tilde_candidate: false,
+                    }));
                 }
             }
         }
+        first = false;
     }
-    Ok(())
+    Ok(PlannedWord { source, parts })
 }
 
 fn build_argv(ctx: &ParseContext, stage: &mut PlannedCommand, pair: Pair<Rule>) -> Result<()> {
@@ -306,21 +446,22 @@ fn build_argv(ctx: &ParseContext, stage: &mut PlannedCommand, pair: Pair<Rule>) 
         match inner_pair.as_rule() {
             Rule::argv0 => {
                 for span in inner_pair.into_inner() {
-                    push_span_parts(&mut stage.argv, span, ctx)?;
+                    stage.argv.push(parse_word(span, ctx)?);
                 }
             }
             Rule::assignment_list => {
                 for assignment in inner_pair.into_inner() {
-                    stage.env_overrides.push(parse_assignment(assignment));
+                    let (name, value) = parse_assignment(assignment, ctx)?;
+                    stage.env_overrides.push(PlannedAssignment { name, value });
                 }
             }
             Rule::args => {
                 for item in inner_pair.into_inner() {
                     if let Rule::redirect = item.as_rule() {
-                        stage.redirects.extend(parse_redirect(item)?);
+                        stage.redirects.extend(parse_redirect(item, ctx)?);
                         continue;
                     }
-                    push_span_parts(&mut stage.argv, item, ctx)?;
+                    stage.argv.push(parse_word(item, ctx)?);
                 }
             }
             Rule::simple_command => {
@@ -497,7 +638,7 @@ mod tests {
         };
         let plan = parse_execution_plan(&input, Arc::clone(&env)).expect("plan");
         assert_eq!(plan.jobs.len(), 1);
-        assert!(plan.jobs[0].contains_deferred_evaluation());
+        assert!(plan.jobs[0].contains_dynamic_expansion());
         assert!(
             !marker.exists(),
             "planning executed a substitution it must only record"
@@ -525,9 +666,8 @@ mod tests {
         assert!(plan.jobs[0].is_assignment_only());
     }
 
-    /// Raw validation runs before expansion: `echo $FOO )` takes the
-    /// meta-expansion path, but the raw `)` must still reject the line instead
-    /// of being discarded when the prefix is re-serialized.
+    /// Raw validation runs before rewriting: `echo $FOO )` must still reject
+    /// the line instead of being discarded when the prefix is re-serialized.
     #[test]
     fn raw_tail_is_rejected_before_expansion_can_discard_it() {
         let env = test_env();
@@ -543,7 +683,7 @@ mod tests {
         );
     }
 
-    /// Post-expansion validation: a raw-complete line whose alias expands to
+    /// Post-rewrite validation: a raw-complete line whose alias expands to
     /// invalid syntax must not produce a plan.
     #[test]
     fn expanded_tail_is_rejected_after_expansion() {
@@ -583,5 +723,37 @@ mod tests {
             err.to_string().contains("syntax error"),
             "unexpected error: {err:?}"
         );
+    }
+
+    /// Planning is environment-independent except for aliases: the same word
+    /// structure comes back regardless of variable values or cwd.
+    #[test]
+    fn planning_preserves_word_structure_across_environments() {
+        use super::super::plan::QuoteMode;
+
+        let env_a = test_env();
+        env_a
+            .write()
+            .set_shell_var("FOO".to_string(), "aaa".to_string());
+        let env_b = test_env();
+        env_b
+            .write()
+            .set_shell_var("FOO".to_string(), "bbb".to_string());
+        let plan_a = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_a)).expect("plan");
+        let plan_b = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_b)).expect("plan");
+        assert_eq!(plan_a.jobs.len(), 1);
+        assert_eq!(plan_b.jobs.len(), 1);
+        let argv_a = &plan_a.jobs[0].stages[0].argv;
+        let argv_b = &plan_b.jobs[0].stages[0].argv;
+        assert_eq!(argv_a.len(), argv_b.len());
+        assert!(matches!(
+            argv_a[1].parts[0],
+            WordPart::Variable {
+                quote: QuoteMode::Unquoted,
+                ..
+            }
+        ));
+        assert!(plan_a.jobs[0].contains_dynamic_expansion());
+        assert!(plan_b.jobs[0].contains_dynamic_expansion());
     }
 }

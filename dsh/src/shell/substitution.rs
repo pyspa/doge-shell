@@ -75,7 +75,7 @@ pub fn capture_subshell_plan_stdout<'a>(
             match authorize_job_with(
                 shell,
                 &materialized.job,
-                materialized.had_deferred_evaluation,
+                materialized.had_dynamic_expansion,
                 confirm,
             )? {
                 AuthorizationDecision::Allow => {}
@@ -156,7 +156,7 @@ pub fn start_process_substitution<'a>(
             match authorize_job_with(
                 shell,
                 &materialized.job,
-                materialized.had_deferred_evaluation,
+                materialized.had_dynamic_expansion,
                 confirm,
             )? {
                 AuthorizationDecision::Allow => concrete.push(materialized.job),

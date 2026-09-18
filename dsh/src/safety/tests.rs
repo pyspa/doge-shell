@@ -895,7 +895,7 @@ fn a_dynamic_final_command_is_rechecked() {
                 std::slice::from_ref(&dynamic),
                 &level,
                 &[],
-                &SafetyCheckContext::deferred_source()
+                &SafetyCheckContext::dynamic_source()
             ),
             SafetyResult::Confirm(_)
         ),
@@ -903,11 +903,11 @@ fn a_dynamic_final_command_is_rechecked() {
     );
 }
 
-/// Test G bypass rule: an exact allowlist match on the raw deferred source
+/// Test G bypass rule: an exact allowlist match on the raw dynamic source
 /// must not skip the concrete check. `AlwaysAllow` on a dynamic line is only
 /// good for that run (see `authorize`).
 #[test]
-fn a_deferred_source_allowlist_match_does_not_skip_the_concrete_check() {
+fn a_dynamic_source_allowlist_match_does_not_skip_the_concrete_check() {
     use crate::process::{JobProcess, Process};
     use crate::safety::SafetyCheckContext;
     let guard = SafetyGuard::new();
@@ -923,7 +923,7 @@ fn a_deferred_source_allowlist_match_does_not_skip_the_concrete_check() {
     ];
     dynamic.set_process(JobProcess::Command(Process::new("rm".to_string(), argv)));
 
-    // Trusted (non-deferred) source: the allowlist skips, as before.
+    // Trusted (non-dynamic) source: the allowlist skips, as before.
     assert_eq!(
         guard.check_jobs_with_context(
             std::slice::from_ref(&dynamic),
@@ -940,11 +940,11 @@ fn a_deferred_source_allowlist_match_does_not_skip_the_concrete_check() {
                 std::slice::from_ref(&dynamic),
                 &level,
                 &allowlist,
-                &SafetyCheckContext::deferred_source()
+                &SafetyCheckContext::dynamic_source()
             ),
             SafetyResult::Confirm(_)
         ),
-        "raw deferred allowlist must not bypass the concrete check"
+        "raw dynamic allowlist must not bypass the concrete check"
     );
 }
 
@@ -970,7 +970,7 @@ fn dynamic_git_and_interpreter_bodies_are_detected_without_duplication() {
                 std::slice::from_ref(&git),
                 &level,
                 &[],
-                &SafetyCheckContext::deferred_source()
+                &SafetyCheckContext::dynamic_source()
             ),
             SafetyResult::Confirm(_)
         ),
@@ -988,7 +988,7 @@ fn dynamic_git_and_interpreter_bodies_are_detected_without_duplication() {
                 std::slice::from_ref(&python),
                 &level,
                 &[],
-                &SafetyCheckContext::deferred_source()
+                &SafetyCheckContext::dynamic_source()
             ),
             SafetyResult::Confirm(_)
         ),

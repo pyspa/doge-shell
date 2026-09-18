@@ -100,12 +100,8 @@ fn tilde_expands_only_at_the_start_of_a_word() {
     assert_eq!(stdout_of(r#"echo "x"~/y"#), "x~/y");
 }
 
-/// `$?` carries the previous line's status.
-///
-/// It is resolved when the line is expanded, which happens before the first
-/// job of that line runs -- so `false; echo $?` reports the status of the
-/// *previous* line, not of `false`. Pinned here so the limitation is explicit;
-/// per-command expansion is what would close it.
+/// `$?` resolves when its own job is materialized, so later jobs on the same
+/// line see earlier jobs' exit statuses.
 #[test]
 fn dollar_question_reports_the_previous_lines_status() {
     let output = common::run_interactive(&["false", "echo $?", "true", "echo $?"]);
@@ -117,6 +113,11 @@ fn dollar_question_reports_the_previous_lines_status() {
         .collect();
 
     assert_eq!(seen, vec!["1", "0"], "got stdout: {stdout:?}");
+
+    // Same-line timing: each job materializes after the previous one published
+    // its status.
+    assert_eq!(stdout_of("false; echo $?"), "1");
+    assert_eq!(stdout_of("true; echo $?"), "0");
 }
 
 #[test]

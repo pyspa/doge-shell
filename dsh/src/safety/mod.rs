@@ -34,9 +34,10 @@ pub struct SafetyGuard {
 
 /// How strictly a raw source allowlist entry may be trusted.
 ///
-/// A job that went through substitution can change its meaning after the
-/// substitution runs (`$(printf rm) -rf target`), so an exact match on the
-/// raw source must never skip the concrete argv check for such jobs.
+/// A job that went through runtime expansion can change its meaning after
+/// materialization (`$(printf rm) -rf target`, `$CMD -rf target`, `*`),
+/// so an exact match on the raw source must never skip the concrete argv
+/// check for such jobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SafetyCheckContext {
     pub allow_exact_source_match: bool,
@@ -49,7 +50,7 @@ impl SafetyCheckContext {
         }
     }
 
-    pub fn deferred_source() -> Self {
+    pub fn dynamic_source() -> Self {
         Self {
             allow_exact_source_match: false,
         }
@@ -124,9 +125,9 @@ impl SafetyGuard {
     }
 
     /// Same as [`Self::check_jobs`], but `allow_exact_source_match == false`
-    /// forces the concrete post-substitution argv to be judged even when the
+    /// forces the concrete post-expansion argv to be judged even when the
     /// raw source line is allowlisted. Use it for materialized jobs that
-    /// contained deferred evaluation.
+    /// contained dynamic expansion.
     pub fn check_jobs_with_context(
         &self,
         jobs: &[Job],
@@ -138,8 +139,8 @@ impl SafetyGuard {
             SafetyLevel::Loose => return SafetyResult::Allowed,
             SafetyLevel::Strict => {
                 // In strict mode, check if all jobs are in allowlist. A raw
-                // source match is not trusted for deferred jobs: `$(...)` can
-                // resolve to a different command next time.
+                // source match is not trusted for dynamic jobs: runtime
+                // expansion can resolve to a different command next time.
                 if ctx.allow_exact_source_match
                     && !jobs.is_empty()
                     && jobs.iter().all(|j| allowlist.contains(&j.cmd))
@@ -207,7 +208,7 @@ impl SafetyGuard {
                 return SafetyResult::Confirm(reason);
             }
 
-            // 3. Judge the materialized argv as well. A deferred source line
+            // 3. Judge the materialized argv as well. A dynamic source line
             // like `$(printf rm) -rf target` does not classify as `rm` above,
             // but its concrete stages do.
             let mut stage = job.process.as_deref();

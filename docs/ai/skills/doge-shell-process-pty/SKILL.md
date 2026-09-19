@@ -16,4 +16,5 @@ description: Use for doge-shell process, PTY, job control, raw terminal, colored
 - A foreground child must not inherit terminal state the shell set up for itself (raw mode, the status line's scroll region). Pause it for the whole lifetime of the child, not just up to the spawn.
 - `fg` resumes on the existing async foreground wait so background `OutputMonitor`s keep draining; never add a sync monitor drain duplicate.
 - A job removed from `wait_jobs` for `fg` returns when still active/stopped (real observed `Stopped`, never synthesized), even on wait/SIGCONT error; completed jobs stay dropped.
+- `bg` selects stopped work from the process tree, marks stopped stages running only after SIGCONT succeeds, and requeues the original active `Job` before propagating resume errors.
 - Validate with `cargo test -p doge-shell`; use a narrower test filter only after identifying the affected module.

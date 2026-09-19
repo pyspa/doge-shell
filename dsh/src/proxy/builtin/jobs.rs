@@ -243,8 +243,8 @@ pub(crate) async fn foreground_selected_job(
     ))
     .ok();
 
-    // `job.state` can lag the tree (`bg` only flips the summary), so consult
-    // the tree as well: a still-stopped pipeline must get SIGCONT.
+    // `job.state` is only a cached summary and can lag the process tree, so
+    // consult the tree as well: a still-stopped pipeline must get SIGCONT.
     let cont = matches!(job.state, ProcessState::Stopped(_, _)) || is_job_stopped(&job);
     if cont {
         debug!(

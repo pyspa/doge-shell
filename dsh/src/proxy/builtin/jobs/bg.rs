@@ -135,8 +135,23 @@ mod tests {
     use crate::process::wait::is_job_completed;
     use crate::process::{Job, JobProcess, Process, ProcessState};
     use crate::shell::Shell;
+    use dsh_types::Context;
     use nix::sys::signal::Signal;
-    use nix::unistd::{Pid, getpgrp};
+    use nix::unistd::{Pid, getpgrp, getpid};
+
+    fn stopped_job(job_id: usize, signal: Signal) -> Job {
+        let mut job = Job::new("sleep 60".to_string(), getpgrp());
+        job.job_id = job_id;
+        let pid = Pid::from_raw(424247 + job_id as i32);
+        job.pid = Some(pid);
+        job.pgid = None;
+        let mut process = Process::new("sleep".to_string(), vec!["sleep".to_string()]);
+        process.pid = Some(pid);
+        process.state = ProcessState::Stopped(pid, signal);
+        job.set_process(JobProcess::Command(process));
+        job.state = ProcessState::Running;
+        job
+    }
 
     fn stopped_producer_completed_consumer_job(job_id: usize) -> Job {
         let mut job = Job::new("producer | consumer".to_string(), getpgrp());
@@ -182,5 +197,23 @@ mod tests {
             "regression fixture must exercise the consumer-terminated shortcut"
         );
         assert!(!requeued.is_process_tree_completed());
+    }
+
+    #[test]
+    fn bg_default_selection_prefers_most_recent_stopped_process_tree() {
+        let mut shell = Shell::new(Environment::new());
+        shell.wait_jobs.push(stopped_job(16, Signal::SIGSTOP));
+        shell.wait_jobs.push(stopped_job(17, Signal::SIGTSTP));
+        let mut ctx = Context::new_safe(getpid(), getpgrp(), true);
+        ctx.interactive = false;
+
+        let result = super::execute_bg(&mut shell, &ctx, vec!["bg".to_string()]);
+
+        let err = result.expect_err("most recent stopped tree should be selected");
+        assert!(err.to_string().contains("job 17 has no process group"));
+        assert_eq!(shell.wait_jobs.len(), 2);
+        assert_eq!(shell.wait_jobs[0].job_id, 16);
+        assert_eq!(shell.wait_jobs[1].job_id, 17);
+        assert!(shell.wait_jobs.iter().all(Job::has_stopped_process));
     }
 }

@@ -420,27 +420,41 @@ pub(crate) fn dispatch_shell_command<P: shell_capabilities::ShellExecution + ?Si
 }
 
 /// Immutable builtin command metadata.
+///
+/// `background_mode` is the authoritative background execution policy for
+/// the command. It is a required constructor argument with no default, so
+/// registering a new builtin without deciding its background semantics is
+/// a compile error, not a silent inherit.
 #[derive(Debug, Clone, Copy)]
 pub struct BuiltinSpec {
     pub handler: BuiltinHandler,
     pub description: &'static str,
+    pub background_mode: BackgroundBuiltinMode,
 }
 
 impl BuiltinSpec {
     pub fn new(
         func: fn(&Context, Vec<String>, &mut dyn ShellProxy) -> ExitStatus,
         description: &'static str,
+        background_mode: BackgroundBuiltinMode,
     ) -> Self {
         Self {
             handler: BuiltinHandler::Sync(func),
             description,
+            background_mode,
         }
     }
 
-    pub fn new_async(fallback: BuiltinFn, run: AsyncBuiltinFn, description: &'static str) -> Self {
+    pub fn new_async(
+        fallback: BuiltinFn,
+        run: AsyncBuiltinFn,
+        description: &'static str,
+        background_mode: BackgroundBuiltinMode,
+    ) -> Self {
         Self {
             handler: BuiltinHandler::Async { run, fallback },
             description,
+            background_mode,
         }
     }
 }
@@ -505,74 +519,156 @@ impl BuiltinSpec {
 }
 
 /// Immutable registry of all builtin commands.
+///
+/// Each entry states its background execution policy explicitly via
+/// [`BuiltinSpec::background_mode`]: this table is the single authoritative
+/// command → mode mapping. [`background_builtin_mode`] only reads it back,
+/// so there is no separate match with a wildcard default to drift.
 pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyLock::new(|| {
+    use BackgroundBuiltinMode::{ParentSessionRequired, Reexec};
     let new = BuiltinSpec::new;
     let new_async = BuiltinSpec::new_async;
     let entries: &[(&str, BuiltinSpec)] = &[
         // Core shell commands
-        ("exit", new(exit, exit_description())),
-        ("cd", new(cd::command, cd::description())),
-        ("history", new(history::command, history::description())),
+        ("exit", new(exit, exit_description(), ParentSessionRequired)),
+        ("cd", new(cd::command, cd::description(), Reexec)),
+        (
+            "history",
+            new(
+                history::command,
+                history::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Navigation and directory management
-        ("z", new(z::command, z::description())),
+        (
+            "z",
+            new(z::command, z::description(), ParentSessionRequired),
+        ),
         (
             "pushd",
-            new(dirstack::pushd_command, dirstack::pushd_description()),
+            new(
+                dirstack::pushd_command,
+                dirstack::pushd_description(),
+                Reexec,
+            ),
         ),
         (
             "popd",
-            new(dirstack::popd_command, dirstack::popd_description()),
+            new(dirstack::popd_command, dirstack::popd_description(), Reexec),
         ),
         (
             "dirs",
-            new(dirstack::dirs_command, dirstack::dirs_description()),
+            new(dirstack::dirs_command, dirstack::dirs_description(), Reexec),
         ),
         // Job control commands
         (
             "sched",
-            new(removed_sched::command, removed_sched::description()),
+            new(removed_sched::command, removed_sched::description(), Reexec),
         ),
-        ("cron", new(cron::command, cron::description())),
-        ("jobs", new(jobs::command, jobs::description())),
-        ("fg", new(fg::command, fg::description())),
-        ("bg", new(bg::command, bg::description())),
+        (
+            "cron",
+            new(cron::command, cron::description(), ParentSessionRequired),
+        ),
+        (
+            "jobs",
+            new(jobs::command, jobs::description(), ParentSessionRequired),
+        ),
+        (
+            "fg",
+            new(fg::command, fg::description(), ParentSessionRequired),
+        ),
+        (
+            "bg",
+            new(bg::command, bg::description(), ParentSessionRequired),
+        ),
         // Include command
-        ("include", new(include::command, include::description())),
+        (
+            "include",
+            new(
+                include::command,
+                include::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Scripting and configuration
-        ("lisp", new(lisp::command, lisp::description())),
-        ("set", new(set::command, set::description())),
-        ("var", new(var::command, var::description())),
-        ("read", new(read::command, read::description())),
-        ("abbr", new(abbr::command, abbr::description())),
-        ("alias", new(alias::command, alias::description())),
-        ("export", new(export::command, export::description())),
+        (
+            "lisp",
+            new(lisp::command, lisp::description(), ParentSessionRequired),
+        ),
+        ("set", new(set::command, set::description(), Reexec)),
+        ("var", new(var::command, var::description(), Reexec)),
+        (
+            "read",
+            new(read::command, read::description(), ParentSessionRequired),
+        ),
+        ("abbr", new(abbr::command, abbr::description(), Reexec)),
+        ("alias", new(alias::command, alias::description(), Reexec)),
+        (
+            "export",
+            new(export::command, export::description(), Reexec),
+        ),
         // AI integration commands
         (
             "chat_prompt",
-            new(chatgpt::chat_prompt, chatgpt::chat_prompt_description()),
+            new(
+                chatgpt::chat_prompt,
+                chatgpt::chat_prompt_description(),
+                ParentSessionRequired,
+            ),
         ),
         (
             "chat_model",
-            new(chatgpt::chat_model, chatgpt::chat_model_description()),
+            new(
+                chatgpt::chat_model,
+                chatgpt::chat_model_description(),
+                ParentSessionRequired,
+            ),
         ),
         (
             "chat_reset",
-            new(chatgpt::chat_reset, chatgpt::chat_reset_description()),
+            new(
+                chatgpt::chat_reset,
+                chatgpt::chat_reset_description(),
+                ParentSessionRequired,
+            ),
         ),
         (
             "chat_status",
-            new(chatgpt::chat_status, chatgpt::chat_status_description()),
+            new(
+                chatgpt::chat_status,
+                chatgpt::chat_status_description(),
+                ParentSessionRequired,
+            ),
         ),
-        ("skill", new(skill::command, skill::description())),
+        (
+            "skill",
+            new(skill::command, skill::description(), ParentSessionRequired),
+        ),
         // Safety commands
-        ("safe-run", new(safe_run::command, safe_run::description())),
-        ("ai-watch", new(ai_watch::command, ai_watch::description())),
+        (
+            "safe-run",
+            new(
+                safe_run::command,
+                safe_run::description(),
+                ParentSessionRequired,
+            ),
+        ),
+        (
+            "ai-watch",
+            new(
+                ai_watch::command,
+                ai_watch::description(),
+                ParentSessionRequired,
+            ),
+        ),
         (
             "comp-gen",
             new_async(
                 comp_gen::command,
                 comp_gen::command_async,
                 comp_gen::description(),
+                Reexec,
             ),
         ),
         (
@@ -581,81 +677,205 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
                 output_gen::command,
                 output_gen::command_async,
                 output_gen::description(),
+                Reexec,
             ),
         ),
         // Git integration commands
         (
             "ai-commit",
-            new(commit_ai::command, commit_ai::description()),
+            new(
+                commit_ai::command,
+                commit_ai::description(),
+                ParentSessionRequired,
+            ),
         ),
         // Alias for ai-commit
-        ("aic", new(commit_ai::command, commit_ai::description())),
-        ("glog", new(glog::command, glog::description())),
-        ("gco", new(gco::command, gco::description())),
-        ("ga", new(ga::command, ga::description())),
-        ("gwt", new(gwt::command, gwt::description())),
+        (
+            "aic",
+            new(
+                commit_ai::command,
+                commit_ai::description(),
+                ParentSessionRequired,
+            ),
+        ),
+        (
+            "glog",
+            new(glog::command, glog::description(), ParentSessionRequired),
+        ),
+        (
+            "gco",
+            new(gco::command, gco::description(), ParentSessionRequired),
+        ),
+        (
+            "ga",
+            new(ga::command, ga::description(), ParentSessionRequired),
+        ),
+        (
+            "gwt",
+            new(gwt::command, gwt::description(), ParentSessionRequired),
+        ),
         (
             "gh-notify",
-            new(gh_notify::command, gh_notify::description()),
+            new(
+                gh_notify::command,
+                gh_notify::description(),
+                ParentSessionRequired,
+            ),
         ),
-        ("gpr", new(gpr::command, gpr::description())),
+        (
+            "gpr",
+            new(gpr::command, gpr::description(), ParentSessionRequired),
+        ),
         // Utility commands
-        ("add_path", new(add_path::command, add_path::description())),
-        ("serve", new(serve::command, serve::description())),
-        ("uuid", new(uuid::command, uuid::description())),
-        ("dmv", new(dmv::command, dmv::description())),
-        ("reload", new(reload::command, reload::description())),
-        ("help", new(help::command, help::description())),
+        (
+            "add_path",
+            new(add_path::command, add_path::description(), Reexec),
+        ),
+        ("serve", new(serve::command, serve::description(), Reexec)),
+        ("uuid", new(uuid::command, uuid::description(), Reexec)),
+        ("dmv", new(dmv::command, dmv::description(), Reexec)),
+        (
+            "reload",
+            new(
+                reload::command,
+                reload::description(),
+                ParentSessionRequired,
+            ),
+        ),
+        ("help", new(help::command, help::description(), Reexec)),
         // Emacs integration commands
-        ("eview", new(eview::command, eview::description())),
-        ("magit", new(magit::command, magit::description())),
-        ("eproject", new(eproject::command, eproject::description())),
+        (
+            "eview",
+            new(eview::command, eview::description(), ParentSessionRequired),
+        ),
+        (
+            "magit",
+            new(magit::command, magit::description(), ParentSessionRequired),
+        ),
+        (
+            "eproject",
+            new(eproject::command, eproject::description(), Reexec),
+        ),
         // Notebook commands
         (
             "notebook-play",
-            new(notebook_play::command, notebook_play::description()),
+            new(
+                notebook_play::command,
+                notebook_play::description(),
+                ParentSessionRequired,
+            ),
         ),
         // Performance and statistics commands
         (
             "timing",
-            new(command_timing::command, command_timing::description()),
+            new(
+                command_timing::command,
+                command_timing::description(),
+                ParentSessionRequired,
+            ),
         ),
         // Output history command
-        ("out", new(out::command, out::description())),
+        (
+            "out",
+            new(out::command, out::description(), ParentSessionRequired),
+        ),
         (
             "__dsh_print_last_stdout",
-            new(out::print_last_stdout, out::print_last_stdout_description()),
+            new(
+                out::print_last_stdout,
+                out::print_last_stdout_description(),
+                ParentSessionRequired,
+            ),
         ),
-        ("tm", new(tm::command, tm::description())),
+        (
+            "tm",
+            new(tm::command, tm::description(), ParentSessionRequired),
+        ),
         (
             "blocks",
             new_async(
                 blocks::command,
                 blocks::command_async,
                 blocks::description(),
+                ParentSessionRequired,
             ),
         ),
         // Dashboard command
         (
             "dashboard",
-            new(dashboard::command, dashboard::description()),
+            new(
+                dashboard::command,
+                dashboard::description(),
+                ParentSessionRequired,
+            ),
         ),
-        ("doctor", new(doctor::command, doctor::description())),
+        (
+            "doctor",
+            new(
+                doctor::command,
+                doctor::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Project Management command
-        ("procs", new(procs::command, procs::description())),
-        ("project", new(project::command, project::description())),
-        ("pm", new(project::command, project::description())),
-        ("pj", new(project::command, project::description())),
+        (
+            "procs",
+            new(procs::command, procs::description(), ParentSessionRequired),
+        ),
+        (
+            "project",
+            new(
+                project::command,
+                project::description(),
+                ParentSessionRequired,
+            ),
+        ),
+        (
+            "pm",
+            new(
+                project::command,
+                project::description(),
+                ParentSessionRequired,
+            ),
+        ),
+        (
+            "pj",
+            new(
+                project::command,
+                project::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // MCP management command
-        ("mcp", new(mcp::command, mcp::description())),
+        (
+            "mcp",
+            new(mcp::command, mcp::description(), ParentSessionRequired),
+        ),
         // Snippet management command
-        ("snippet", new(snippet::command, snippet::description())),
+        (
+            "snippet",
+            new(
+                snippet::command,
+                snippet::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Bookmark management command
-        ("bookmark", new(bookmark::command, bookmark::description())),
+        (
+            "bookmark",
+            new(
+                bookmark::command,
+                bookmark::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Task runner command
-        ("task", new(task::command, task::description())),
+        ("task", new(task::command, task::description(), Reexec)),
         // Trigger command
-        ("trigger", new(trigger::command, trigger::description())),
+        (
+            "trigger",
+            new(trigger::command, trigger::description(), Reexec),
+        ),
     ];
 
     let mut builtin = HashMap::with_capacity(entries.len());

@@ -258,9 +258,11 @@ pub(crate) fn spawn_background_builtin(
     process: &mut BuiltinProcess,
     shell: &mut Shell,
 ) -> Result<Pid> {
-    if dsh_builtin::background_builtin_mode(&process.name)
-        == dsh_builtin::BackgroundBuiltinMode::ParentSessionRequired
-    {
+    // Unknown builtins fail closed: without an explicit policy the helper
+    // must never run them.
+    let background_mode = dsh_builtin::background_builtin_mode(&process.name)
+        .ok_or_else(|| anyhow::anyhow!("unknown builtin background policy: {}", process.name))?;
+    if background_mode == dsh_builtin::BackgroundBuiltinMode::ParentSessionRequired {
         let message = format!(
             "dogesh: {}: cannot run in background (needs the live shell session)\r\n",
             process.name

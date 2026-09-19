@@ -9,6 +9,7 @@ description: Use for doge-shell builtin commands, proxy builtins, help, project,
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for builtin command entries.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
 - Default read targets are command-specific files under `dsh-builtin/src/` and `dsh/src/proxy/builtin/`.
+- 新 builtin を registry へ追加するときは `background_mode` を必ず指定する。
 - For interactive builtin prompts, use the shared tty-aware input helper instead of reading `std::io::stdin()` directly; REPL command execution may not have stdin in a safe line-input state.
 - Keep `ShellProxy` as the frozen compatibility facade. Add new builtin dependencies to a narrow trait in `dsh-builtin/src/shell_capabilities.rs`, and make internal helpers accept only the capabilities they use.
 - After changing `ShellProxy` or a capability trait, run `scripts/check-shell-proxy-capabilities.py` and `cargo test -p dsh-builtin`.

@@ -90,6 +90,24 @@ fn session_bound_builtin_fails_clearly_in_background() {
 }
 
 #[test]
+fn terminal_bound_builtins_are_refused_before_handler_in_background() {
+    // The policy gate runs before the helper spawns, so these never reach
+    // their Skim/TUI/editor handlers: no hang, no UI, non-zero exit, and
+    // the shared refusal diagnostic on stderr.
+    for name in ["dashboard", "gco", "procs", "gwt", "timing"] {
+        let output = common::run_command(&format!("{name} &"));
+        assert!(
+            !output.status.success(),
+            "{name} in background unexpectedly succeeded: {output:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("cannot run in background"),
+            "{name}: clear refusal missing from stderr: {output:?}"
+        );
+    }
+}
+
+#[test]
 fn pipeline_with_background_builtin_stage_works() {
     let output = common::run_command("dirs | cat & ; sleep 2");
     assert!(output.status.success(), "command failed: {:?}", output);

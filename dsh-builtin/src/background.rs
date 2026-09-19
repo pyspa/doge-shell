@@ -23,58 +23,72 @@ pub enum BackgroundBuiltinMode {
 
 /// Background execution policy for one builtin.
 ///
-/// This is an explicit per-command audit, not a default: every name in the
-/// registry must appear in the coverage test below, so adding a new builtin
-/// forces a decision here.
-pub fn background_builtin_mode(name: &str) -> BackgroundBuiltinMode {
-    use BackgroundBuiltinMode::{ParentSessionRequired, Reexec};
-    match name {
-        // Job control inspects and mutates the parent's live job table.
-        "jobs" | "fg" | "bg" => ParentSessionRequired,
-        // Reads the parent's in-memory history and owns its writer thread.
-        "history" => ParentSessionRequired,
-        // Re-reads config files into the parent environment.
-        "reload" | "include" => ParentSessionRequired,
-        // Live MCP connections and chat session state.
-        "mcp" | "chat_status" | "chat_prompt" | "chat_model" | "chat_reset" => {
-            ParentSessionRequired
-        }
-        // Session output history and notebook state.
-        "out" | "__dsh_print_last_stdout" | "blocks" | "tm" | "notebook-play" => {
-            ParentSessionRequired
-        }
-        // Lisp definitions live in the parent's engine instance.
-        "lisp" => ParentSessionRequired,
-        // Interactive terminal input cannot work detached.
-        "read" => ParentSessionRequired,
-        // Agent/tool orchestration bound to the parent session.
-        "safe-run" | "ai-watch" | "skill" => ParentSessionRequired,
-        // Exits or detaches the parent shell itself.
-        "exit" => ParentSessionRequired,
-        _ => Reexec,
-    }
+/// The authoritative command → mode mapping lives in
+/// [`crate::BUILTIN_COMMAND`]: every [`crate::BuiltinSpec`] carries its
+/// `background_mode`, and the constructors require it, so registering a new
+/// builtin without deciding its mode is a compile error. This accessor only
+/// reads that mapping back; there is no wildcard/default policy. Unknown
+/// names return `None` so re-exec consumers fail closed instead of silently
+/// inheriting `Reexec`.
+pub fn background_builtin_mode(name: &str) -> Option<BackgroundBuiltinMode> {
+    crate::BUILTIN_COMMAND
+        .get(name)
+        .map(|spec| spec.background_mode)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BUILTIN_COMMAND, get_all_commands, is_builtin};
+    use crate::{BUILTIN_COMMAND, get_all_commands};
 
     #[test]
-    fn background_builtin_policy_covers_every_registered_command() {
-        // Adding a builtin without auditing its background mode must fail
-        // here, not silently inherit a default in production.
-        let mut modes: Vec<(&str, BackgroundBuiltinMode)> = get_all_commands()
-            .iter()
-            .map(|(name, _)| (*name, background_builtin_mode(name)))
-            .collect();
-        modes.sort_unstable_by_key(|(name, _)| *name);
+    fn background_builtin_accessor_covers_every_registered_command() {
+        // The mapping itself is enforced at compile time (BuiltinSpec
+        // requires background_mode), so this only pins the accessor
+        // invariant: every registered builtin resolves to Some(mode).
+        for (name, _) in get_all_commands() {
+            assert!(
+                background_builtin_mode(name).is_some(),
+                "{name} has no background policy in BUILTIN_COMMAND"
+            );
+        }
         assert_eq!(
-            modes.len(),
+            get_all_commands().len(),
             BUILTIN_COMMAND.len(),
-            "policy must cover every registered builtin"
+            "accessor must cover every registered builtin"
         );
+    }
+
+    #[test]
+    fn background_builtin_mode_returns_none_for_unknown_builtin() {
+        // No wildcard/default policy may exist: unknown names fail closed.
+        assert_eq!(background_builtin_mode("__not_a_builtin__"), None);
+    }
+
+    #[test]
+    fn background_builtin_alias_modes_match_canonical() {
+        // Aliases share the handler; their background semantics must match.
+        assert_eq!(
+            background_builtin_mode("aic"),
+            background_builtin_mode("ai-commit")
+        );
+        assert_eq!(
+            background_builtin_mode("pm"),
+            background_builtin_mode("project")
+        );
+        assert_eq!(
+            background_builtin_mode("pj"),
+            background_builtin_mode("project")
+        );
+    }
+
+    #[test]
+    fn background_builtin_session_bound_commands_require_parent() {
+        use BackgroundBuiltinMode::ParentSessionRequired;
+        // Session-bound, terminal-bound, TUI, editor, and live-runtime
+        // commands must never re-exec into a fresh helper.
         for session_command in [
+            "exit",
             "jobs",
             "fg",
             "bg",
@@ -82,32 +96,81 @@ mod tests {
             "reload",
             "include",
             "mcp",
+            "chat_prompt",
+            "chat_model",
+            "chat_reset",
             "chat_status",
+            "skill",
+            "safe-run",
+            "ai-watch",
+            "lisp",
+            "read",
             "out",
+            "__dsh_print_last_stdout",
             "blocks",
             "tm",
             "notebook-play",
-            "lisp",
-            "read",
-            "safe-run",
-            "ai-watch",
-            "exit",
+            "cron",
+            "snippet",
+            "bookmark",
+            "ga",
+            "gco",
+            "glog",
+            "gpr",
+            "gwt",
+            "gh-notify",
+            "ai-commit",
+            "aic",
+            "magit",
+            "eview",
+            "procs",
+            "dashboard",
+            "doctor",
+            "timing",
+            "z",
+            "project",
+            "pm",
+            "pj",
         ] {
             assert_eq!(
                 background_builtin_mode(session_command),
-                BackgroundBuiltinMode::ParentSessionRequired,
+                Some(ParentSessionRequired),
                 "{session_command} needs the live parent session"
             );
         }
-        // Pure/state-scoped builtins stay re-execable.
-        for reexec_command in ["cd", "set", "var", "export", "alias", "abbr", "echo"] {
-            if is_builtin(reexec_command) {
-                assert_eq!(
-                    background_builtin_mode(reexec_command),
-                    BackgroundBuiltinMode::Reexec,
-                    "{reexec_command} should re-exec"
-                );
-            }
+    }
+
+    #[test]
+    fn background_builtin_plain_data_commands_reexec() {
+        use BackgroundBuiltinMode::Reexec;
+        // Pure/state-scoped builtins whose mutations stay inside the helper.
+        for reexec_command in [
+            "cd",
+            "pushd",
+            "popd",
+            "dirs",
+            "sched",
+            "set",
+            "var",
+            "abbr",
+            "alias",
+            "export",
+            "comp-gen",
+            "output-gen",
+            "add_path",
+            "serve",
+            "uuid",
+            "dmv",
+            "help",
+            "eproject",
+            "task",
+            "trigger",
+        ] {
+            assert_eq!(
+                background_builtin_mode(reexec_command),
+                Some(Reexec),
+                "{reexec_command} should re-exec"
+            );
         }
     }
 }

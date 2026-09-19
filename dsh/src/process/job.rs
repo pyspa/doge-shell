@@ -234,14 +234,19 @@ impl Job {
         // copies: close the parent's substitution fds here. Foreground jobs
         // reap producers synchronously (bounded) so no detached reaper can
         // die with an exiting shell and orphan grandchildren holding session
-        // pipes; background jobs hand them to detached reapers tracked for
-        // shutdown cleanup.
-        let mut resources = std::mem::take(&mut self.resources);
+        // pipes. Background jobs keep their resources in the job (which
+        // outlives this call on `wait_jobs`): handing them to detached
+        // reapers here would group-kill producers while the background
+        // consumer still needs their pipes (`cat <(sleep 5; echo done) &`
+        // lost its stream after the 2s reaper grace). Ownership moves to
+        // detached reapers only when the background job itself is dropped,
+        // by which point its consumer no longer needs anything.
         if self.foreground {
+            let mut resources = std::mem::take(&mut self.resources);
             let producers = std::mem::take(&mut resources.producers);
             crate::shell::substitution::reap_producers_blocking(producers);
+            drop(resources);
         }
-        drop(resources);
 
         // Launching rewires `ctx` (pipes, capture, redirections) and nothing put
         // it back. Script mode reuses one `ctx` for every line, so the next line

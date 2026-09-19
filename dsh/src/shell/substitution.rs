@@ -94,13 +94,14 @@ impl Drop for ExecutionResources {
     }
 }
 
-/// Reap every producer synchronously (bounded grace, then group-kill).
+/// Reap every producer synchronously (prompt group-kill on lingering ones).
 /// Used when the consumer already completed: the shell waits rather than
 /// exiting with detached reapers that would die with it and orphan
-/// grandchildren holding the session's pipes.
+/// grandchildren holding the session's pipes. No idle grace: a completed
+/// consumer proves no producer output is still needed.
 pub fn reap_producers_blocking(producers: Vec<ProducerHandle>) {
     for producer in producers {
-        reap_producer_sync(producer);
+        reap_producer_sync_after_consumer(producer);
     }
 }
 
@@ -173,9 +174,37 @@ fn spawn_producer_reaper(producer: ProducerHandle) {
 }
 
 /// Bounded synchronous reap of one producer: grace, group `SIGTERM`, group
-/// `SIGKILL`, blocking wait, then the verdict byte. Shared by the detached
-/// reaper thread and the foreground path (`reap_producers_blocking`).
+/// `SIGKILL`, blocking wait, then the verdict byte. Detached-reaper path
+/// only: the consumer may still be reading, so a lingering producer gets a
+/// grace period before escalation.
 fn reap_producer_sync(producer: ProducerHandle) {
+    use std::time::{Duration, Instant};
+    let pid = producer.pid;
+    let reaped = |pid: Pid| crate::process::wait_pid_job(pid, true).is_some();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if reaped(pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    escalate_if_alive_and_report(producer);
+}
+
+/// Reap one producer after its consumer completed: no idle grace. A finished
+/// consumer proves the stream is unneeded — a lingering producer (`yes`
+/// behind an exited `head`) is prompt `SIGTERM` material, and an
+/// already-exited finite producer reaps on the first poll. Waiting the full
+/// detached grace here wedged every `head <(yes)`-shaped line for ~2s.
+fn reap_producer_sync_after_consumer(producer: ProducerHandle) {
+    escalate_if_alive_and_report(producer);
+}
+
+/// Escalate a possibly-lingering producer (group `SIGTERM`, bounded wait,
+/// group `SIGKILL`, blocking wait), then read its verdict byte and
+/// deregister it. Shared by both reap paths; only the pre-escalation grace
+/// differs.
+fn escalate_if_alive_and_report(producer: ProducerHandle) {
     use nix::sys::signal::Signal;
     use std::time::{Duration, Instant};
     let pid = producer.pid;
@@ -188,14 +217,7 @@ fn reap_producer_sync(producer: ProducerHandle) {
         nix::sys::signal::killpg(pid, signal).ok();
     };
     let reaped = |pid: Pid| crate::process::wait_pid_job(pid, true).is_some();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        if reaped(pid) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    // Still alive after grace: escalate before the blocking wait.
+    // Still alive: escalate before the blocking wait.
     if !reaped(pid) {
         kill_group(Signal::SIGTERM);
         let term_deadline = Instant::now() + Duration::from_secs(1);
@@ -251,6 +273,13 @@ pub fn capture_subshell_plan_stdout<'a>(
     _confirm: ConfirmFn,
 ) -> Pin<Box<dyn Future<Output = Result<String>> + 'a>> {
     Box::pin(async move {
+        // The helper may interact with the terminal (`helper_confirm` reads
+        // `/dev/tty`, nested bodies can run interactive commands), so run it
+        // with raw mode paused, as the pre-re-exec engine did around its
+        // substitution reads. No-op when raw mode is off (non-interactive
+        // runs, unit tests, helpers running nested substitutions); nothing
+        // in this function prompts, so pausing cannot swallow a dialog.
+        let _raw_pause = crate::repl::terminal_state::RawModePause::new();
         let (read_end, write_end) =
             crate::process::io::cloexec_pipe().context("failed to create substitution pipe")?;
         let (status_read, status_write) =
@@ -492,5 +521,105 @@ mod tests {
         assert_eq!(resources.producers.len(), 2, "both producers retained");
         assert_ne!(arg_one, arg_two, "distinct /dev/fd arguments");
         // `resources` drops here: fds close, producers go to detached reapers.
+    }
+
+    /// Background jobs keep their producers until the job itself is done.
+    ///
+    /// Launching used to hand background producers to detached reapers
+    /// immediately, whose 2s grace group-killed them while the background
+    /// consumer still needed their pipes (`cat <(sleep 5; echo done) &`
+    /// read early EOF). Ownership now stays in the job on `wait_jobs`;
+    /// detached reapers only take over when the job drops.
+    ///
+    /// The consumer below is the `dirs` builtin on purpose, so the whole
+    /// launch stays fork-free headless (an external consumer would exercise
+    /// interactive `setpgid`/PTY job control instead, which is unrelated to
+    /// producer ownership). Resource retention in `Job::launch` is
+    /// consumer-type-agnostic.
+    #[tokio::test]
+    async fn background_launch_keeps_producer_until_job_done() {
+        use dsh_types::terminal::{ShellMode, TerminalState};
+        use std::time::Duration;
+
+        // The consumer is `dirs` (a background-safe builtin that ignores
+        // stdin): the producer `sleep 30` stays alive for the whole test,
+        // so liveness past the old 2s reaper grace proves it was not
+        // group-killed early. No timing flake: kill (before fix) fires at
+        // wall-clock ~2.0s, the check runs at ~3.0s.
+        let input = "dirs < <(sleep 30)".to_string();
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = crate::shell::parse::parse_execution_plan(&input, std::sync::Arc::clone(&env))
+            .expect("parse background plan");
+        // Headless interactive context: no tty, but background is genuinely
+        // not waited (unlike piped `-c` runs, which wait even for `&`).
+        let null = std::fs::File::open("/dev/null").expect("open /dev/null");
+        use std::os::fd::AsRawFd as _;
+        let null_fd = null.as_raw_fd();
+        let mut ctx = Context {
+            shell_pid: shell.pid,
+            shell_pgid: shell.pgid,
+            shell_tmode: None,
+            terminal_state: TerminalState::non_terminal(),
+            shell_mode: ShellMode::Script,
+            foreground: false,
+            interactive: true,
+            infile: null_fd,
+            outfile: null_fd,
+            errfile: null_fd,
+            captured_out: None,
+            output_observer: None,
+            save_history: false,
+            pid: None,
+            pgid: Some(shell.pgid),
+            process_count: 0,
+        };
+        let materialized =
+            crate::shell::materialize::materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+                .await
+                .expect("materialize")
+                .expect("job");
+        let mut job = materialized.job;
+        job.resources = materialized.resources;
+        job.foreground = false;
+        job.disable_pty = true;
+
+        let state = job.launch(&mut ctx, &mut shell).await.expect("launch");
+        assert_eq!(
+            state,
+            crate::process::state::ProcessState::Running,
+            "background launch must return without waiting"
+        );
+        // Structural gate, no timing involved: ownership moved to the job,
+        // not to an immediate detached reaper.
+        assert_eq!(
+            job.resources.producers.len(),
+            1,
+            "background job must retain its producer"
+        );
+        assert_eq!(
+            job.resources.inherited_fds.len(),
+            1,
+            "background job must retain its read end"
+        );
+
+        // Functional proof: the producer is still alive past the old 2s
+        // reaper grace, i.e. no detached reaper group-killed it while the
+        // background consumer lives. `WNOHANG` on a running child reports
+        // `None` without reaping, so the check is non-destructive.
+        tokio::time::sleep(Duration::from_millis(3100)).await;
+        let producer_pid = job
+            .resources
+            .producers
+            .first()
+            .expect("retained producer")
+            .pid;
+        assert!(
+            crate::process::wait_pid_job(producer_pid, true).is_none(),
+            "background producer was killed early (still needed by its consumer)"
+        );
+        // `job` drops here: the lingering producer goes to a detached
+        // reaper (grace, then group-kill), and shell-shutdown cleanup covers
+        // anything left. No zombie: the reaper owns the final wait.
     }
 }

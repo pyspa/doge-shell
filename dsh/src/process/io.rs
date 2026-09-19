@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::unistd::isatty;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::BorrowedFd;
 use std::os::fd::OwnedFd;
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
@@ -30,6 +30,14 @@ fn append_output_chunk(output_started: &mut bool, buffer: &mut String, chunk: &s
 #[derive(Debug)]
 pub struct OutputMonitor {
     pub(crate) reader: io::BufReader<fs::File>,
+    /// Incomplete record bytes kept across timeout cancellations.
+    ///
+    /// `read_until` is cancellation-safe only while the caller keeps the
+    /// buffer: bytes moved from the reader into this `Vec` before a timeout
+    /// must stay owned here until the record completes (newline) or the
+    /// reader reports EOF. Clearing or publishing it on timeout would lose
+    /// output such as `printf one` (no newline yet, no EOF yet).
+    pending_line: Vec<u8>,
     pub(crate) outputed: bool,
     pub captured_output: String,
     // Cached renderer to avoid repeated allocations.
@@ -37,6 +45,17 @@ pub struct OutputMonitor {
     pub(crate) renderer: TerminalRenderer,
     observer: Option<SharedOutputObserver>,
     observed_stream: ObservedStream,
+}
+
+/// Outcome of a single timed record read against `pending_line`.
+enum MonitorRead {
+    /// A complete record whose ownership moved out of `pending_line` for
+    /// exactly-once publish (newline-terminated, or final fragment at EOF).
+    Data(Vec<u8>),
+    /// Timeout fired; partial bytes (if any) stay owned by `pending_line`.
+    TimedOut,
+    /// True EOF: the reader returned 0 bytes and `pending_line` is empty.
+    Eof,
 }
 
 impl OutputMonitor {
@@ -49,6 +68,7 @@ impl OutputMonitor {
         let reader = io::BufReader::new(file);
         OutputMonitor {
             reader,
+            pending_line: Vec::new(),
             outputed: false,
             captured_output: String::new(),
             renderer: TerminalRenderer::new(),
@@ -79,45 +99,92 @@ impl OutputMonitor {
         Ok(())
     }
 
-    pub async fn output(&mut self) -> Result<usize> {
-        let mut line = String::new();
+    /// Read one record with a timeout, appending into `pending_line`.
+    ///
+    /// `read_until` appends into the caller-owned `pending_line`, so bytes
+    /// read before a timeout cancellation stay owned here across calls. A
+    /// `Vec<u8>` (rather than `read_line`'s `String`) is used so a
+    /// multi-byte character split by a timeout can be held before validation.
+    /// Only a completed record is taken out for publish; timeout keeps the
+    /// pending bytes for the next call to resume.
+    async fn read_record_timed(&mut self) -> Result<MonitorRead> {
         match time::timeout(
             Duration::from_millis(MONITOR_TIMEOUT),
-            self.reader.read_line(&mut line),
+            self.reader.read_until(b'\n', &mut self.pending_line),
         )
         .await
         {
-            Ok(Ok(len)) => {
-                if len > 0 {
-                    let mut buffer = String::new();
-                    self.append_line(&mut buffer, &line);
-                    self.flush_buffer(&buffer)?;
-                }
+            Err(_) => Ok(MonitorRead::TimedOut),
+            Ok(Err(e)) => Err(e.into()),
+            // 0 new bytes with nothing pending is the only true EOF. With
+            // pending bytes it is the final no-newline fragment (e.g.
+            // `printf one`), which must be published exactly once.
+            Ok(Ok(0)) if self.pending_line.is_empty() => Ok(MonitorRead::Eof),
+            Ok(Ok(_)) => Ok(MonitorRead::Data(std::mem::take(&mut self.pending_line))),
+        }
+    }
+
+    /// Blocking counterpart of `read_record_timed` sharing the same
+    /// `pending_line`, so bytes buffered by a timed-out read are continued
+    /// here instead of being skipped over.
+    async fn read_record_blocking(&mut self) -> Result<Option<Vec<u8>>> {
+        let read = self
+            .reader
+            .read_until(b'\n', &mut self.pending_line)
+            .await?;
+        if read == 0 && self.pending_line.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(std::mem::take(&mut self.pending_line)))
+        }
+    }
+
+    /// Publish one complete record exactly once to the renderer buffer, the
+    /// capture, and the observer.
+    ///
+    /// UTF-8 validation mirrors the old `read_line` semantics: invalid UTF-8
+    /// is an error and the offending bytes are dropped, so the stream
+    /// continues with the next record. Restoring them into `pending_line`
+    /// would fail conversion again on every retry, stalling all later output
+    /// behind one bad record.
+    fn publish_record(&mut self, buffer: &mut String, record: Vec<u8>) -> Result<usize> {
+        let len = record.len();
+        match String::from_utf8(record) {
+            Ok(line) => {
+                self.append_line(buffer, &line);
                 Ok(len)
             }
-            Ok(Err(_)) | Err(_) => Ok(0),
+            Err(_) => Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )
+            .into()),
+        }
+    }
+
+    pub async fn output(&mut self) -> Result<usize> {
+        let mut buffer = String::new();
+        match self.read_record_timed().await {
+            Err(_) | Ok(MonitorRead::TimedOut) | Ok(MonitorRead::Eof) => Ok(0),
+            Ok(MonitorRead::Data(record)) => match self.publish_record(&mut buffer, record) {
+                Ok(len) => {
+                    self.flush_buffer(&buffer)?;
+                    Ok(len)
+                }
+                Err(_) => Ok(0),
+            },
         }
     }
 
     pub async fn drain_available(&mut self) -> Result<()> {
         let mut buffer = String::new();
         loop {
-            let mut line = String::new();
-            match time::timeout(
-                Duration::from_millis(MONITOR_TIMEOUT),
-                self.reader.read_line(&mut line),
-            )
-            .await
-            {
-                Ok(Ok(readed)) => {
-                    if readed == 0 {
+            match self.read_record_timed().await {
+                Err(_) | Ok(MonitorRead::TimedOut) | Ok(MonitorRead::Eof) => break,
+                Ok(MonitorRead::Data(record)) => {
+                    if self.publish_record(&mut buffer, record).is_err() {
                         break;
-                    } else {
-                        self.append_line(&mut buffer, &line);
                     }
-                }
-                Ok(Err(_)) | Err(_) => {
-                    break;
                 }
             }
         }
@@ -130,15 +197,15 @@ impl OutputMonitor {
     pub async fn drain_to_eof(&mut self) -> Result<()> {
         let mut buffer = String::new();
         loop {
-            let mut line = String::new();
-            let read = self.reader.read_line(&mut line).await?;
-            if read == 0 {
-                break;
-            }
-            self.append_line(&mut buffer, &line);
-            if buffer.len() >= 8192 {
-                self.flush_buffer(&buffer)?;
-                buffer.clear();
+            match self.read_record_blocking().await? {
+                None => break,
+                Some(record) => {
+                    self.publish_record(&mut buffer, record)?;
+                    if buffer.len() >= 8192 {
+                        self.flush_buffer(&buffer)?;
+                        buffer.clear();
+                    }
+                }
             }
         }
         if !buffer.is_empty() {
@@ -643,6 +710,103 @@ mod tests {
         monitor.drain_to_eof().await.expect("drain to eof");
         writer.await.expect("writer task");
         assert_eq!(monitor.captured_output, "late output");
+    }
+
+    /// Write bytes to a pipe writer without closing it, so the reader
+    /// observes data but neither newline/EOF completion nor writer close.
+    fn write_to_pipe(writer: &mut std::fs::File, data: &[u8]) {
+        writer.write_all(data).expect("write output");
+        writer.flush().expect("flush output");
+    }
+
+    #[tokio::test]
+    async fn output_monitor_timeout_preserves_partial_line() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+
+        // Partial line without newline or EOF: drain_available must time out
+        // without capturing it, and without losing it.
+        write_to_pipe(&mut writer, b"PARTIAL");
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        // Complete the line and close: the whole record must arrive exactly once.
+        write_to_pipe(&mut writer, b"-TAIL\n");
+        drop(writer);
+        monitor.drain_to_eof().await.expect("drain to eof");
+        assert_eq!(monitor.captured_output, "PARTIAL-TAIL\n");
+    }
+
+    #[tokio::test]
+    async fn output_monitor_timeout_preserves_no_newline_eof() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+
+        // `<(printf ...)` shape: bytes with no newline, timed out once, then EOF.
+        write_to_pipe(&mut writer, b"NO-NEWLINE");
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        drop(writer);
+        monitor.drain_to_eof().await.expect("drain to eof");
+        assert_eq!(monitor.captured_output, "NO-NEWLINE");
+    }
+
+    #[tokio::test]
+    async fn output_monitor_timeout_resume_does_not_duplicate() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+
+        write_to_pipe(&mut writer, b"first-");
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        write_to_pipe(&mut writer, b"second-");
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        write_to_pipe(&mut writer, b"third\n");
+        drop(writer);
+        monitor.drain_to_eof().await.expect("drain to eof");
+        assert_eq!(monitor.captured_output, "first-second-third\n");
+    }
+
+    #[tokio::test]
+    async fn output_monitor_timeout_preserves_split_utf8() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+
+        // "あ" is E3 81 82 in UTF-8; split it across the timeout boundary so a
+        // partial-byte UTF-8 conversion must not run or fail.
+        write_to_pipe(&mut writer, &[0xE3]);
+        monitor.drain_available().await.expect("drain available");
+        assert_eq!(monitor.captured_output, "");
+
+        write_to_pipe(&mut writer, &[0x81, 0x82, b'\n']);
+        drop(writer);
+        monitor.drain_to_eof().await.expect("drain to eof");
+        assert_eq!(monitor.captured_output, "あ\n");
+    }
+
+    #[tokio::test]
+    async fn output_monitor_invalid_utf8_does_not_stall_later_output() {
+        let (read_fd, write_fd) = pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read_fd.into_raw_fd(), None, ObservedStream::Stdout);
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
+
+        // One invalid-UTF-8 record followed by valid lines: like `read_line`,
+        // the bad record is dropped with an error, but later output must
+        // still arrive instead of stalling behind the retained prefix.
+        write_to_pipe(&mut writer, b"\xff\n");
+        write_to_pipe(&mut writer, b"after\n");
+        drop(writer);
+        let _ = monitor.drain_available().await;
+        monitor.drain_to_eof().await.expect("drain to eof");
+        assert_eq!(monitor.captured_output, "after\n");
     }
 
     #[tokio::test]

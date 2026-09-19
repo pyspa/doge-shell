@@ -63,3 +63,4 @@ no-doc	dsh/src/safety/mod.rs
 no-doc	dsh/src/shell/eval.rs
 no-doc	dsh/src/shell/mod.rs
 no-doc	dsh/src/suggestion.rs
+oversized	dsh/src/process/io.rs

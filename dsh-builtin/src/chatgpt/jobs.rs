@@ -129,28 +129,90 @@ impl ChatJobs {
         }
     }
 
-    /// New bytes to echo, and how much of the budget is left.
+    /// New bytes to echo, capped at [`MAX_LIVE_ECHO_BYTES`].
     ///
-    /// Returns `None` once this job has printed [`MAX_LIVE_ECHO_BYTES`].
+    /// Returns `None` once this job has printed its budget, or when there is
+    /// nothing new and the job is already suppressed.
     pub(super) fn take_echo(&mut self, id: &str) -> Option<(Vec<u8>, Vec<u8>, bool)> {
+        self.take_echo_with_limit(id, MAX_LIVE_ECHO_BYTES)
+    }
+
+    /// Same as [`Self::take_echo`] with an injectable budget, so tests can
+    /// prove the cap with tens of bytes instead of megabytes.
+    ///
+    /// Invariants:
+    /// - the returned live bytes never push `echoed_total` past
+    ///   `max_live_bytes`, even when one poll delivers more than the whole
+    ///   budget;
+    /// - the capture offsets (`echoed_stdout`/`echoed_stderr`) still advance
+    ///   to what `read_raw` observed, so a suppressed job never re-reads the
+    ///   same chunk;
+    /// - `echoed_total` counts only bytes actually handed out for the
+    ///   terminal, never bytes discarded from the live view.
+    fn take_echo_with_limit(
+        &mut self,
+        id: &str,
+        max_live_bytes: usize,
+    ) -> Option<(Vec<u8>, Vec<u8>, bool)> {
         let (stdout_from, stderr_from) = {
             let meta = self.meta.get(id)?;
             (meta.echoed_stdout, meta.echoed_stderr)
         };
         let raw = self.inner.read_raw(id, stdout_from, stderr_from).ok()?;
         let meta = self.meta.get_mut(id)?;
+        // Advance to what was observed even when nothing below is echoed:
+        // otherwise a suppressed job would re-read the same huge chunk on
+        // every poll.
         meta.echoed_stdout = raw.stdout_next;
         meta.echoed_stderr = raw.stderr_next;
 
         if meta.echo_suppressed {
             return None;
         }
-        meta.echoed_total += raw.stdout.len() + raw.stderr.len();
-        let first_suppression = meta.echoed_total > MAX_LIVE_ECHO_BYTES;
-        if first_suppression {
-            meta.echo_suppressed = true;
+
+        let remaining = max_live_bytes.saturating_sub(meta.echoed_total);
+        let incoming = raw.stdout.len().saturating_add(raw.stderr.len());
+        if incoming <= remaining {
+            meta.echoed_total = meta.echoed_total.saturating_add(incoming);
+            return Some((raw.stdout, raw.stderr, false));
         }
-        Some((raw.stdout, raw.stderr, first_suppression))
+
+        // Over budget: spend what is left on stdout first, then stderr, and
+        // discard the rest from the live view only. The capture ring keeps
+        // everything; only the terminal stops here.
+        let take_stdout = raw.stdout.len().min(remaining);
+        let take_stderr = raw.stderr.len().min(remaining - take_stdout);
+        let mut live_stdout = Vec::with_capacity(take_stdout);
+        live_stdout.extend_from_slice(&raw.stdout[..take_stdout]);
+        let mut live_stderr = Vec::with_capacity(take_stderr);
+        live_stderr.extend_from_slice(&raw.stderr[..take_stderr]);
+        meta.echoed_total = meta
+            .echoed_total
+            .saturating_add(live_stdout.len().saturating_add(live_stderr.len()));
+        meta.echo_suppressed = true;
+        Some((live_stdout, live_stderr, true))
+    }
+
+    /// Write pending live output to the given writers, for tests.
+    ///
+    /// Production uses [`echo_pending`], which locks the real stdio and calls
+    /// this with [`MAX_LIVE_ECHO_BYTES`]. Tests pass `Vec<u8>` writers and a
+    /// tiny budget so no test ever writes megabytes to the CI log.
+    #[cfg(test)]
+    fn echo_pending_to_with_limit(
+        &mut self,
+        id: &str,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+        max_live_bytes: usize,
+    ) {
+        let echo = self.take_echo_with_limit(id, max_live_bytes);
+        write_echo(echo, stdout, stderr);
+    }
+
+    fn echo_pending_to(&mut self, id: &str, stdout: &mut dyn Write, stderr: &mut dyn Write) {
+        let echo = self.take_echo(id);
+        write_echo(echo, stdout, stderr);
     }
 
     fn reap(&mut self) {
@@ -161,6 +223,33 @@ impl ChatJobs {
                 self.archive.pop_front();
             }
         }
+    }
+}
+
+/// Shared writer for both echo paths, so the suppression notice is spelled
+/// once and the injected-writer tests exercise the production formatting.
+fn write_echo(
+    echo: Option<(Vec<u8>, Vec<u8>, bool)>,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) {
+    let Some((stdout_bytes, stderr_bytes, first_suppression)) = echo else {
+        return;
+    };
+    if !stdout_bytes.is_empty() {
+        let _ = stdout.write_all(&stdout_bytes);
+        let _ = stdout.flush();
+    }
+    if !stderr_bytes.is_empty() {
+        let _ = stderr.write_all(&stderr_bytes);
+        let _ = stderr.flush();
+    }
+    if first_suppression {
+        let _ = writeln!(
+            stderr,
+            "\x1b[2m(live output suppressed; the assistant still receives the last 1MiB)\x1b[0m"
+        );
+        let _ = stderr.flush();
     }
 }
 
@@ -322,26 +411,11 @@ pub(super) fn carried_notice() -> Option<String> {
 /// because `indicatif` holds the bottom line there, and the polling path has no
 /// spinner to get out of the way of.
 pub(super) fn echo_pending(id: &str) {
-    let Some((stdout_bytes, stderr_bytes, first_suppression)) = with(|jobs| jobs.take_echo(id))
-    else {
-        return;
-    };
-
-    if !stdout_bytes.is_empty() {
-        let mut stdout = std::io::stdout();
-        stdout.write_all(&stdout_bytes).ok();
-        stdout.flush().ok();
-    }
-    if !stderr_bytes.is_empty() {
-        let mut stderr = std::io::stderr();
-        stderr.write_all(&stderr_bytes).ok();
-        stderr.flush().ok();
-    }
-    if first_suppression {
-        eprintln!(
-            "\x1b[2m(live output suppressed; the assistant still receives the last 1MiB)\x1b[0m"
-        );
-    }
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let mut stdout = stdout.lock();
+    let mut stderr = stderr.lock();
+    with(|jobs| jobs.echo_pending_to(id, &mut stdout, &mut stderr));
 }
 
 /// Cancel every job, returning how many were still running.
@@ -430,6 +504,9 @@ fn running_ids(jobs: &ChatJobs) -> Vec<String> {
 pub(super) fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
+
+#[cfg(test)]
+mod live_echo_tests;
 
 #[cfg(test)]
 mod tests {

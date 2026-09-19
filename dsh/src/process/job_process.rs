@@ -251,6 +251,31 @@ impl JobProcess {
         }
     }
 
+    /// Mark every stopped pipeline stage as running after a successful resume.
+    ///
+    /// Completed stages stay completed, and traversal borrows the actual tree
+    /// mutably so the transition is not lost in one of the clone-based accessors.
+    pub(crate) fn mark_stopped_processes_running(&mut self) {
+        match self {
+            JobProcess::Builtin(process) => {
+                if matches!(process.state, ProcessState::Stopped(_, _)) {
+                    process.state = ProcessState::Running;
+                }
+                if let Some(next) = process.next.as_deref_mut() {
+                    next.mark_stopped_processes_running();
+                }
+            }
+            JobProcess::Command(process) => {
+                if matches!(process.state, ProcessState::Stopped(_, _)) {
+                    process.state = ProcessState::Running;
+                }
+                if let Some(next) = process.next.as_deref_mut() {
+                    next.mark_stopped_processes_running();
+                }
+            }
+        }
+    }
+
     /// First `Stopped` state in pipeline order, if any.
     ///
     /// Used to sync the job-table summary state after a foreground wait:
@@ -567,6 +592,90 @@ mod tests {
         process.state = ProcessState::Completed(0, None);
 
         assert!(!JobProcess::Command(process).is_stopped());
+    }
+
+    fn pipeline_with_states(states: &[ProcessState]) -> JobProcess {
+        let mut states = states.iter().copied();
+        let first = states.next().expect("pipeline needs at least one stage");
+        let mut process = Process::new("stage-1".to_string(), vec![]);
+        process.state = first;
+        let mut pipeline = JobProcess::Command(process);
+        for (index, state) in states.enumerate() {
+            let mut process = Process::new(format!("stage-{}", index + 2), vec![]);
+            process.state = state;
+            pipeline.link(JobProcess::Command(process));
+        }
+        pipeline
+    }
+
+    fn pipeline_states(process: &JobProcess) -> Vec<ProcessState> {
+        let mut states = Vec::new();
+        let mut current = Some(process);
+        while let Some(process) = current {
+            states.push(process.get_state());
+            current = process.next_process();
+        }
+        states
+    }
+
+    #[test]
+    fn stopped_query_sees_stopped_tail_behind_running_pipeline_head() {
+        let pipeline = pipeline_with_states(&[
+            ProcessState::Running,
+            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
+        ]);
+
+        assert!(pipeline.has_stopped_process());
+    }
+
+    #[test]
+    fn mark_stopped_processes_running_updates_single_process() {
+        let mut process =
+            pipeline_with_states(&[ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP)]);
+
+        process.mark_stopped_processes_running();
+
+        assert_eq!(pipeline_states(&process), vec![ProcessState::Running]);
+    }
+
+    #[test]
+    fn mark_stopped_processes_running_updates_all_stopped_pipeline_stages() {
+        let mut process = pipeline_with_states(&[
+            ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP),
+            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGSTOP),
+            ProcessState::Stopped(Pid::from_raw(13), Signal::SIGTTIN),
+        ]);
+
+        process.mark_stopped_processes_running();
+
+        assert_eq!(
+            pipeline_states(&process),
+            vec![
+                ProcessState::Running,
+                ProcessState::Running,
+                ProcessState::Running
+            ]
+        );
+    }
+
+    #[test]
+    fn mark_stopped_processes_running_preserves_completed_pipeline_stage() {
+        let mut process = pipeline_with_states(&[
+            ProcessState::Completed(0, None),
+            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
+            ProcessState::Running,
+        ]);
+
+        process.mark_stopped_processes_running();
+
+        assert_eq!(
+            pipeline_states(&process),
+            vec![
+                ProcessState::Completed(0, None),
+                ProcessState::Running,
+                ProcessState::Running
+            ]
+        );
     }
 
     #[test]

@@ -5,11 +5,12 @@ use crate::process::wait::{is_job_completed, is_job_stopped};
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
-use nix::sys::signal::{Signal, killpg};
 use std::borrow::Cow;
 use tabled::{Table, Tabled};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
+mod bg;
+pub use bg::execute_bg;
 struct Job {
     job: usize,
     pid: i32,
@@ -321,144 +322,32 @@ pub(crate) fn finalize_foreground_job(
     wait_result
 }
 
-/// Execute the `bg` builtin command.
-///
-/// Resumes a stopped job in the background.
-pub fn execute_bg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
-    debug!(
-        "BG_CMD_START: Starting bg command - wait_jobs.len(): {}, args: {:?}",
-        shell.wait_jobs.len(),
-        argv
-    );
-
-    if shell.wait_jobs.is_empty() {
-        debug!("BG_CMD_NO_JOBS: No jobs available for bg command");
-        ctx.write_stdout("bg: there are no suitable jobs")?;
+/// Reconcile a background resume without orphaning an active job on error.
+fn finalize_background_resume(
+    shell: &mut Shell,
+    mut job: crate::process::Job,
+    resume_result: Result<()>,
+) -> Result<()> {
+    if resume_result.is_ok() {
+        job.mark_stopped_processes_running();
     } else {
-        let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
-        debug!("BG_CMD_SPEC: Job specification: '{}'", job_spec);
-
-        // Log current job list for debugging
-        debug!("BG_CMD_AVAILABLE_JOBS: Current job list:");
-        for (i, job) in shell.wait_jobs.iter().enumerate() {
-            debug!(
-                "BG_CMD_JOB[{}]: id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
-                i, job.job_id, job.pid, job.state, job.foreground, job.cmd
-            );
-        }
-
-        // Find job by specification or default to most recent stopped job
-        let job_index = if job_spec.is_empty() {
-            debug!("BG_CMD_FIND_STOPPED: Looking for most recent stopped job");
-            // Find the most recent stopped job
-            let mut found_index = None;
-            for (i, job) in shell.wait_jobs.iter().enumerate().rev() {
-                debug!(
-                    "BG_CMD_CHECK_STOPPED: Checking job {} (index: {}, state: {:?})",
-                    job.job_id, i, job.state
-                );
-                if matches!(job.state, ProcessState::Stopped(_, _)) {
-                    debug!(
-                        "BG_CMD_FOUND_STOPPED: Found stopped job {} at index {}",
-                        job.job_id, i
-                    );
-                    found_index = Some(i);
-                    break;
-                }
-            }
-            if found_index.is_none() {
-                debug!("BG_CMD_NO_STOPPED: No stopped jobs found");
-            }
-            found_index
-        } else {
-            debug!(
-                "BG_CMD_PARSE_SPEC: Parsing job specification: '{}'",
-                job_spec
-            );
-            // Parse job specification
-            parse_job_spec(job_spec, &shell.wait_jobs)
-        };
-
-        if let Some(index) = job_index {
-            let job = &shell.wait_jobs[index];
-            debug!(
-                "BG_CMD_SELECTED: Selected job {} at index {} for background",
-                job.job_id, index
-            );
-
-            // Check if job is actually stopped
-            if !matches!(job.state, ProcessState::Stopped(_, _)) {
-                let error_msg = format!("bg: job {} is already running", job.job_id);
-                debug!("BG_CMD_ALREADY_RUNNING: {}", error_msg);
-                ctx.write_stderr(&error_msg)?;
-                return Err(anyhow::anyhow!(error_msg));
-            }
-
-            let mut job = shell.wait_jobs.remove(index);
-            debug!(
-                "BG_CMD_JOB_DETAILS: Job details before bg - state: {:?}, pgid: {:?}, pid: {:?}",
-                job.state, job.pgid, job.pid
-            );
-
-            ctx.write_stdout(&format!(
-                "dsh: job {} '{}' to background",
-                job.job_id, job.cmd
-            ))
-            .ok();
-
-            // Set job state to running and send SIGCONT
-            let old_state = job.state;
-            job.state = ProcessState::Running;
-            debug!(
-                "BG_CMD_STATE_CHANGE: Set job {} state from {:?} to Running",
-                job.job_id, old_state
-            );
-
-            // Send SIGCONT to resume the job
-            if let Some(pgid) = job.pgid {
-                debug!(
-                    "BG_CMD_SIGCONT: Sending SIGCONT to process group {} for job {}",
-                    pgid, job.job_id
-                );
-                match killpg(pgid, Signal::SIGCONT) {
-                    Ok(_) => {
-                        debug!(
-                            "BG_CMD_SIGCONT_SUCCESS: SIGCONT sent successfully to job {}",
-                            job.job_id
-                        );
-                    }
-                    Err(err) => {
-                        error!(
-                            "BG_CMD_SIGCONT_ERROR: Failed to send SIGCONT to job {}: {}",
-                            job.job_id, err
-                        );
-                        ctx.write_stderr(&format!("bg: failed to resume job: {err}"))
-                            .ok();
-                        return Err(err.into());
-                    }
-                }
-            } else {
-                warn!(
-                    "BG_CMD_NO_PGID: Job {} has no process group ID, cannot send SIGCONT",
-                    job.job_id
-                );
-            }
-
-            // Put the job back in the background jobs list
-            shell.wait_jobs.push(job);
-            debug!("BG_CMD_SUCCESS: Job moved to background successfully");
-        } else {
-            let error_msg = if job_spec.is_empty() {
-                "bg: no stopped jobs".to_string()
-            } else {
-                format!("bg: job not found: {job_spec}")
-            };
-            debug!("BG_CMD_NOT_FOUND: {}", error_msg);
-            ctx.write_stderr(&error_msg)?;
-            return Err(anyhow::anyhow!(error_msg));
-        }
+        job.refresh_lifecycle_state();
     }
-    Ok(())
+
+    if !job.is_process_tree_completed() {
+        debug!(
+            "BG_CMD_REQUEUE: Job {} remains active after resume attempt (state: {:?})",
+            job.job_id, job.state
+        );
+        shell.wait_jobs.push(job);
+    } else {
+        debug!(
+            "BG_CMD_DONE: Job {} is already completed, not returning to job table",
+            job.job_id
+        );
+    }
+
+    resume_result
 }
 
 #[cfg(test)]
@@ -596,6 +485,124 @@ mod tests {
         assert!(
             shell.wait_jobs.is_empty(),
             "completed job must stay dropped even when the wait errored"
+        );
+    }
+
+    #[test]
+    fn bg_success_marks_stopped_process_tree_running() {
+        let mut shell = test_shell();
+        let job = stopped_tree_job(12, NixSignal::SIGTSTP);
+
+        finalize_background_resume(&mut shell, job, Ok(())).expect("finalize");
+
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let requeued = &shell.wait_jobs[0];
+        assert_eq!(requeued.job_id, 12);
+        assert_eq!(requeued.state, ProcessState::Running);
+        assert_eq!(
+            requeued.process.as_deref().map(JobProcess::get_state),
+            Some(ProcessState::Running)
+        );
+    }
+
+    #[test]
+    fn bg_sigcont_error_requeues_stopped_job() {
+        let mut shell = test_shell();
+        let pid = Pid::from_raw(424242);
+        let job = stopped_tree_job(13, NixSignal::SIGTTIN);
+
+        let result =
+            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")));
+
+        assert!(result.is_err());
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let requeued = &shell.wait_jobs[0];
+        assert_eq!(requeued.job_id, 13);
+        assert_eq!(
+            requeued.state,
+            ProcessState::Stopped(pid, NixSignal::SIGTTIN)
+        );
+        assert_eq!(
+            requeued.process.as_deref().map(JobProcess::get_state),
+            Some(ProcessState::Stopped(pid, NixSignal::SIGTTIN))
+        );
+    }
+
+    #[test]
+    fn bg_error_does_not_resurrect_completed_job() {
+        let mut shell = test_shell();
+        let job = completed_tree_job(14);
+
+        let result =
+            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")));
+
+        assert!(result.is_err());
+        assert!(shell.wait_jobs.is_empty());
+    }
+
+    #[test]
+    fn bg_missing_pgid_keeps_job_stopped() {
+        let mut shell = test_shell();
+        let pid = Pid::from_raw(424242);
+        let mut job = stopped_tree_job(15, NixSignal::SIGTSTP);
+        job.pgid = None;
+        shell.wait_jobs.push(job);
+        let ctx = test_ctx();
+
+        let result = execute_bg(&mut shell, &ctx, vec!["bg".to_string(), "%15".to_string()]);
+
+        let err = result.expect_err("missing pgid must fail");
+        assert!(err.to_string().contains("has no process group"));
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let requeued = &shell.wait_jobs[0];
+        assert_eq!(requeued.job_id, 15);
+        assert_eq!(
+            requeued.state,
+            ProcessState::Stopped(pid, NixSignal::SIGTSTP)
+        );
+        assert_eq!(
+            requeued.process.as_deref().map(JobProcess::get_state),
+            Some(ProcessState::Stopped(pid, NixSignal::SIGTSTP))
+        );
+    }
+
+    #[test]
+    fn bg_default_selection_uses_process_tree_not_stale_summary() {
+        let mut shell = test_shell();
+        let mut job = stopped_tree_job(16, NixSignal::SIGSTOP);
+        job.pgid = None;
+        assert_eq!(job.state, ProcessState::Running);
+        assert!(job.has_stopped_process());
+        shell.wait_jobs.push(job);
+        let ctx = test_ctx();
+
+        let result = execute_bg(&mut shell, &ctx, vec!["bg".to_string()]);
+
+        let err = result.expect_err("selected stopped tree should reach pgid validation");
+        assert!(err.to_string().contains("job 16 has no process group"));
+        assert_eq!(shell.wait_jobs.len(), 1);
+        assert!(shell.wait_jobs[0].has_stopped_process());
+    }
+
+    #[test]
+    fn bg_explicit_job_rejects_stale_stopped_summary_when_tree_is_running() {
+        let mut shell = test_shell();
+        let mut job = running_tree_job(17);
+        job.state = ProcessState::Stopped(Pid::from_raw(424244), NixSignal::SIGTSTP);
+        shell.wait_jobs.push(job);
+        let ctx = test_ctx();
+
+        let result = execute_bg(&mut shell, &ctx, vec!["bg".to_string(), "%17".to_string()]);
+
+        let err = result.expect_err("running process tree must not be resumed");
+        assert!(err.to_string().contains("already running"));
+        assert_eq!(shell.wait_jobs.len(), 1);
+        assert_eq!(
+            shell.wait_jobs[0]
+                .process
+                .as_deref()
+                .map(JobProcess::get_state),
+            Some(ProcessState::Running)
         );
     }
 

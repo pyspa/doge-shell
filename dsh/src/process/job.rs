@@ -17,6 +17,8 @@ use dsh_types::Context;
 use crate::process::job_pty;
 use crate::process::job_wait;
 
+mod lifecycle;
+
 #[derive(Debug)]
 pub struct Job {
     pub id: String,
@@ -561,7 +563,7 @@ impl Job {
             self.state = stopped;
             return;
         }
-        if is_job_completed(self) {
+        if self.is_process_tree_completed() {
             self.state = self.last_process_state();
         } else {
             self.state = ProcessState::Running;

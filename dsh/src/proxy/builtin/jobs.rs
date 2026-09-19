@@ -173,23 +173,41 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
 /// runtime. When no runtime exists (plain sync callers/tests), a fresh
 /// runtime is created instead. `block_in_place` is multi-thread-only, so
 /// unit tests must either call [`foreground_selected_job`] directly or run
-/// on `#[tokio::test(flavor = "multi_thread")]`. A `current_thread` runtime
-/// returns an error instead of panicking; the job stays in `wait_jobs`
-/// because the driver closure never ran.
+/// on `#[tokio::test(flavor = "multi_thread")]`.
+///
+/// The runtime flavor is checked before entering `block_in_place`.
+/// Current-thread runtimes are rejected without polling the foreground
+/// future, so the job remains in `wait_jobs`. Internal panics inside the
+/// foreground future propagate as panics and are never converted into
+/// runtime-compatibility errors.
 fn run_foreground_driver(shell: &mut Shell, ctx: &Context, job_index: usize) -> Result<()> {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::task::block_in_place(|| {
-                handle.block_on(foreground_selected_job(shell, ctx, job_index))
-            })
-        })) {
-            Ok(result) => result,
-            Err(_) => Err(anyhow::anyhow!(
+    block_on_fg_future(foreground_selected_job(shell, ctx, job_index))?
+}
+
+/// Block a foreground future on the current Tokio runtime when possible.
+///
+/// Compatibility is decided up front via [`tokio::runtime::Handle::runtime_flavor`],
+/// before the future is polled: multi-thread runtimes use
+/// `block_in_place` + `block_on`, current-thread (and any unknown future
+/// flavor) is rejected with an error, and callers outside any runtime get a
+/// fresh `Runtime`. No `catch_unwind` is used here on purpose.
+fn block_on_fg_future<F, T>(future: F) -> Result<T>
+where
+    F: std::future::Future<Output = T>,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                Ok(tokio::task::block_in_place(|| handle.block_on(future)))
+            }
+            tokio::runtime::RuntimeFlavor::CurrentThread => Err(anyhow::anyhow!(
                 "fg requires a multi-thread Tokio runtime (current_thread is unsupported)"
             )),
-        }
-    } else {
-        tokio::runtime::Runtime::new()?.block_on(foreground_selected_job(shell, ctx, job_index))
+            flavor => Err(anyhow::anyhow!(
+                "fg does not support Tokio runtime flavor: {flavor:?}"
+            )),
+        },
+        Err(_) => Ok(tokio::runtime::Runtime::new()?.block_on(future)),
     }
 }
 
@@ -579,6 +597,92 @@ mod tests {
             shell.wait_jobs.is_empty(),
             "completed job must stay dropped even when the wait errored"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fg_bridge_runs_future_on_multi_thread_runtime() {
+        let value =
+            block_on_fg_future(async { 42 }).expect("multi-thread runtime should support fg");
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn fg_bridge_rejects_current_thread_without_polling_future() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        runtime.block_on(async {
+            let polled = Arc::new(AtomicBool::new(false));
+            let marker = polled.clone();
+            let result = block_on_fg_future(async move {
+                marker.store(true, Ordering::SeqCst);
+                123
+            });
+            let err = result.expect_err("current-thread runtime must be rejected");
+            assert!(
+                err.to_string().contains("multi-thread Tokio runtime"),
+                "unexpected error: {err}"
+            );
+            assert!(
+                !polled.load(Ordering::SeqCst),
+                "rejected future must never be polled"
+            );
+        });
+    }
+
+    #[test]
+    fn fg_bridge_current_thread_rejection_keeps_job_table_intact() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime");
+        runtime.block_on(async {
+            let mut shell = test_shell();
+            shell.wait_jobs.push(running_tree_job(42));
+            let ctx = test_ctx();
+            let result = run_foreground_driver(&mut shell, &ctx, 0);
+            let err = result.expect_err("current-thread runtime must be rejected");
+            assert!(
+                err.to_string().contains("multi-thread Tokio runtime"),
+                "unexpected error: {err}"
+            );
+            assert_eq!(
+                shell.wait_jobs.len(),
+                1,
+                "current-thread rejection must happen before fg takes ownership"
+            );
+            assert_eq!(shell.wait_jobs[0].job_id, 42);
+        });
+    }
+
+    /// `catch_unwind` here only observes that the panic passes through the
+    /// bridge; production `block_on_fg_future` never converts it to an error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn fg_bridge_does_not_mask_inner_future_panic() {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = block_on_fg_future(async {
+                panic!("fg bridge sentinel panic");
+            });
+        }));
+        let payload = result.expect_err("inner panic must propagate, not become a runtime error");
+        let message = payload
+            .downcast_ref::<&'static str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
+        assert_eq!(message, Some("fg bridge sentinel panic"));
+    }
+
+    #[test]
+    fn fg_bridge_runs_future_outside_existing_runtime() {
+        let value =
+            block_on_fg_future(async { 42 }).expect("outside-runtime path should build a runtime");
+        assert_eq!(value, 42);
     }
 
     /// Background capture must keep draining while the job runs in the

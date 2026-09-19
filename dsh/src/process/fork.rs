@@ -110,8 +110,9 @@ pub(crate) fn fork_process(
 
     let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
     let pty_slave = pty.map(|pty| pty.slave).unwrap_or(-1);
-    // `getpid` in the child decides the default pgid; pass -1 for "none".
-    let pgid_raw = job_pgid.map(Pid::as_raw).unwrap_or(-1);
+    // setpgid(0, 0) makes the first child its own process-group leader.
+    // Later pipeline stages receive the existing job PGID.
+    let pgid_raw = job_pgid.map(Pid::as_raw).unwrap_or(0);
 
     let pid = unsafe { fork().context("failed fork")? };
 
@@ -274,4 +275,56 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
     }
 
     Some(message.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+    use nix::unistd::{getpgid, getpgrp, getpid};
+
+    #[test]
+    fn interactive_external_initial_child_becomes_process_group_leader() {
+        // Bare `sleep` resolves via `PATH` in `resolve_program`, so no
+        // absolute `/bin` vs `/usr/bin` literal is needed here (Linux and
+        // macOS place it differently; `check-portability.py` flags those).
+        let path = "sleep";
+        // Force the exact buggy branch: interactive + non-FullProxy + first
+        // child (`job_pgid == None`). `Context::new_safe` detects a pipe in
+        // `cargo test`, so `interactive` must be forced on.
+        let mut ctx = Context::new_safe(getpid(), getpgrp(), true);
+        ctx.interactive = true;
+        ctx.foreground = true;
+        ctx.pgid = None;
+
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
+
+        let child =
+            fork_process(&ctx, None, &mut process, &mut shell, None).expect("fork_process failed");
+
+        // `fork_process` drains the exec-error pipe, so return means the
+        // child already passed `setpgid` + `execve`. No timing sleep needed.
+        let observed = getpgid(Some(child));
+
+        // Always clean up before asserting so a failure never leaves
+        // `sleep 30` or a zombie behind. Only signal the group when the
+        // child actually leads it; otherwise `killpg(child)` could address
+        // an unrelated reused pgid. `sleep` spawns no children, so a
+        // direct `kill(child)` suffices in the failure case.
+        let leads_group = observed.as_ref().is_ok_and(|pgid| *pgid == child);
+        if leads_group {
+            let _ = nix::sys::signal::killpg(child, nix::sys::signal::Signal::SIGKILL);
+        }
+        let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
+        let _ = nix::sys::wait::waitpid(child, None);
+
+        let observed_pgid = observed.expect("getpgid(child) failed: child likely failed setpgid");
+        assert_eq!(
+            observed_pgid, child,
+            "first interactive child must lead its own process group"
+        );
+    }
 }

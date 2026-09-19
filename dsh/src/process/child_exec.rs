@@ -65,6 +65,11 @@ pub struct RawChildPlan {
     pub stderr: RawFd,
     /// Target pgid for `setpgid(0, pgid)` when `interactive` and not a
     /// full-proxy PTY job (those `setsid` instead).
+    ///
+    /// Contract: `pgid > 0` joins the existing job process group;
+    /// `pgid == 0` means the initial process, which becomes its own
+    /// process-group leader via `setpgid(0, 0)`. No negative sentinel
+    /// is used: `0` already carries the POSIX "own pid" meaning.
     pub pgid: libc::pid_t,
     pub interactive: bool,
     pub full_proxy_pty: bool,

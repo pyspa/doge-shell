@@ -115,10 +115,11 @@ fn pipeline_status_is_last_stage_status() {
     );
 }
 
-/// Consumer-terminated cleanup (`yes | head`) must keep working after the
-/// non-zero kill removal: the shell must return promptly.
+/// Ordinary pipe/SIGPIPE semantics (`yes | head`) must keep working without
+/// a consumer-triggered kill: the shell must return promptly because the
+/// producer observes the closed pipe, not because the shell kills it.
 #[test]
-fn consumer_termination_cleanup_still_works() {
+fn sigpipe_terminates_upstream_after_consumer_closes_pipe() {
     let line = format!("{} | {} -n 1", yes_path(), head_path());
     let output = run_interactive(&[line.as_str()]);
     assert!(
@@ -131,6 +132,46 @@ fn consumer_termination_cleanup_still_works() {
         stdout.lines().any(|line| line.trim() == "y"),
         "expected at least one line of `yes` output. Output:\n{}",
         stdout
+    );
+}
+
+/// A foreground pipeline waits for every stage: even when the final stage
+/// (`true`) exits immediately, the shell runs the next command only after
+/// the delayed producer appends its marker, so the order file reads
+/// producer-then-after.
+#[test]
+fn foreground_pipeline_waits_for_producer_after_final_stage_exits() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let order = dir.path().join("order");
+    let producer = write_executable_script(
+        &dir,
+        "delayed_producer.sh",
+        &format!(
+            "#!/bin/sh\nsleep 0.3\nprintf 'producer\\n' >> \"{}\"\n",
+            order.display()
+        ),
+    );
+    let after = write_executable_script(
+        &dir,
+        "mark_after_producer.sh",
+        &format!("#!/bin/sh\nprintf 'after\\n' >> \"{}\"\n", order.display()),
+    );
+    let pipeline = format!("{} | {}", producer.display(), true_path());
+    let output = run_interactive(&[pipeline.as_str(), after.to_str().expect("utf8 path")]);
+    assert!(
+        output.status.success(),
+        "pipeline plus marker command must succeed. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(&order).unwrap_or_else(|_| {
+        panic!(
+            "producer must complete before the next command runs; order file missing: {}",
+            order.display()
+        )
+    });
+    assert_eq!(
+        content, "producer\nafter\n",
+        "producer must finish before the shell advances past the pipeline"
     );
 }
 

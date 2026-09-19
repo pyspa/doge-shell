@@ -219,32 +219,6 @@ impl JobProcess {
         true
     }
 
-    /// Whether the final pipeline stage exited normally (`Completed(0, None)`).
-    ///
-    /// This is the logical consumer-completion shortcut behind
-    /// `is_job_completed`: only the state of the final stage decides it.
-    /// A single-stage process is not a pipeline consumer (its completion is
-    /// already covered by `is_completed`), and a successful intermediate
-    /// stage is never evidence that the consumer has completed.
-    pub(crate) fn is_final_pipeline_consumer_completed_successfully(&self) -> bool {
-        // A real multi-stage pipeline is required so this stays a consumer
-        // shortcut, not a duplicate of `is_completed`.
-        let Some(mut current) = self.next_process() else {
-            return false;
-        };
-        while let Some(next) = current.next_process() {
-            current = next;
-        }
-        if matches!(current.get_state(), ProcessState::Completed(0, None)) {
-            debug!(
-                "PIPELINE_CONSUMER_TERMINATED: Final pipeline consumer '{}' exited normally, pipeline should terminate",
-                current.get_cmd()
-            );
-            return true;
-        }
-        false
-    }
-
     /// Check if any process in the pipeline is stopped
     pub(crate) fn has_stopped_process(&self) -> bool {
         let mut current = Some(self);
@@ -557,37 +531,24 @@ mod tests {
     }
 
     #[test]
-    fn test_pipeline_consumer_termination() {
+    fn running_producer_with_completed_consumer_is_not_tree_completed() {
         init();
 
         // Create a pipeline: cat | less
         let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
         let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
 
-        // Set initial states
+        // Set initial states: producer running, consumer completed.
         cat_process.state = ProcessState::Running;
-        less_process.state = ProcessState::Running;
+        less_process.state = ProcessState::Completed(0, None);
 
         // Link them in pipeline
-        cat_process.next = Some(Box::new(JobProcess::Command(less_process.clone())));
+        cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
 
-        let mut cat_job_process = JobProcess::Command(cat_process);
+        let cat_job_process = JobProcess::Command(cat_process);
 
-        // Initially, consumer is not terminated
-        assert!(!cat_job_process.is_final_pipeline_consumer_completed_successfully());
-
-        // Now simulate less (consumer) exiting normally
-        if let JobProcess::Command(cat_proc) = &mut cat_job_process
-            && let Some(next_box) = &mut cat_proc.next
-            && let JobProcess::Command(less_proc) = next_box.as_mut()
-        {
-            less_proc.state = ProcessState::Completed(0, None);
-        }
-
-        // Now consumer should be detected as terminated
-        assert!(cat_job_process.is_final_pipeline_consumer_completed_successfully());
-
-        // But the pipeline is not fully completed since cat is still running
+        // Strict tree completion: a completed final stage alone is not
+        // completion while the producer is still running.
         assert!(!cat_job_process.is_completed());
     }
 
@@ -636,42 +597,45 @@ mod tests {
         assert!(pipeline.has_stopped_process());
     }
 
-    /// Consumer completion is determined solely by the final pipeline stage.
-    ///
-    /// An intermediate `Completed(0, None)` stage is never evidence that the
-    /// consumer has completed: `Running / Completed(0) / Running` must stay
-    /// incomplete until the final stage itself exits normally.
+    /// Strict tree completion: only all-`Completed` pipelines complete.
+    /// A completed final stage alone (or a successful intermediate stage)
+    /// never completes the tree.
     #[test]
-    fn pipeline_consumer_completion_truth_table() {
+    fn pipeline_tree_completion_truth_table() {
         use ProcessState::{Completed, Running, Stopped};
         let stopped = || Stopped(Pid::from_raw(12), Signal::SIGTSTP);
         let signaled = || Completed(0, Some(Signal::SIGPIPE));
         let cases: &[(&[ProcessState], bool)] = &[
             (&[Running], false),
-            (&[Completed(0, None)], false),
+            (&[Completed(0, None)], true),
             (&[Running, Running], false),
-            (&[Running, Completed(0, None)], true),
+            (&[Running, Completed(0, None)], false),
             (&[Running, Completed(1, None)], false),
             (&[Running, signaled()], false),
-            // Intermediate success must not complete the pipeline.
             (&[Running, Completed(0, None), Running], false),
             (&[Running, Completed(0, None), stopped()], false),
-            (&[Running, Running, Completed(0, None)], true),
+            (&[Running, Running, Completed(0, None)], false),
             (&[Completed(0, None), Completed(0, None), Running], false),
-            (&[Completed(0, None), Running, Completed(0, None)], true),
+            (&[Completed(0, None), Running, Completed(0, None)], false),
             (
                 &[Completed(0, None), Completed(0, None), Completed(0, None)],
                 true,
             ),
+            (
+                &[Completed(3, None), Completed(0, None)],
+                // Non-zero upstream still counts as completed: exit codes
+                // never affect tree completion.
+                true,
+            ),
             (&[Completed(1, None), Completed(0, None), Running], false),
-            (&[Completed(1, None), Running, Completed(0, None)], true),
+            (&[Completed(1, None), Running, Completed(0, None)], false),
         ];
         for (states, expected) in cases {
             let pipeline = pipeline_with_states(states);
             assert_eq!(
-                pipeline.is_final_pipeline_consumer_completed_successfully(),
+                pipeline.is_completed(),
                 *expected,
-                "consumer completion for {:?}",
+                "tree completion for {:?}",
                 states,
             );
         }

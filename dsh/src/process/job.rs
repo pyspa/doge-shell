@@ -9,7 +9,6 @@ use super::job_process::JobProcess;
 use super::process::Process;
 use super::redirect::{self, Redirect};
 use super::state::{ListOp, ProcessState, SubshellType};
-use super::wait::is_job_completed;
 use crate::process::pty::{Pty, PtyChildConfig, PtyMode};
 use crate::shell::Shell;
 use dsh_types::Context;
@@ -621,7 +620,7 @@ impl Job {
             }
         }
 
-        let is_completed = is_job_completed(self);
+        let is_completed = self.is_process_tree_completed();
         debug!(
             "JOB_COMPLETION_CHECK: Job {} completion check result: {} (current state: {:?})",
             self.job_id, is_completed, self.state
@@ -741,7 +740,7 @@ mod tests {
     }
 
     #[test]
-    fn test_job_completion_with_consumer_termination() {
+    fn running_producer_with_completed_consumer_is_not_job_complete() {
         init();
 
         let shell_pgid = getpgrp();
@@ -759,8 +758,10 @@ mod tests {
         cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
         job.set_process(JobProcess::Command(cat_process));
 
-        // Job should be considered completed due to consumer termination
-        assert!(is_job_completed(&job));
+        // Strict completion: a completed final consumer alone is not job
+        // completion while the producer is still running.
+        assert!(!is_job_completed(&job));
+        assert!(!job.is_process_tree_completed());
     }
 
     #[test]

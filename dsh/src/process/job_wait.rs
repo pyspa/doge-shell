@@ -1,7 +1,6 @@
 use super::job::Job;
 use super::job_process::JobProcess;
 use super::state::ProcessState;
-use crate::process::wait::is_job_completed;
 use crate::shell::SHELL_TERMINAL;
 use anyhow::{Context, Result};
 use nix::sys::signal::Signal;
@@ -240,35 +239,13 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
         debug!("fin wait: pid:{:?} state:{:?}", pid, state);
 
-        if is_job_completed(job) {
+        // Strict completion first: every stage in the canonical process
+        // tree must be `Completed`. Final-consumer success alone never
+        // completes the job and never kills siblings (not even
+        // `Stopped / Completed(0)`).
+        if job.is_process_tree_completed() {
             debug!("Job completed, breaking from wait_process_no_hang loop");
             drain_foreground_completed_output(job).await?;
-            break;
-        }
-
-        if let Some(process) = &job.process
-            && process.is_final_pipeline_consumer_completed_successfully()
-            && !process.is_completed()
-        {
-            // A non-zero producer/consumer exit is not itself a reason to kill
-            // the pipeline. This cleanup is only for the distinct case where
-            // the downstream consumer has terminated while upstream processes
-            // remain alive (e.g. `yes | head -n 1`).
-            debug!("Pipeline consumer terminated, killing remaining processes");
-            if let Some(pgid) = job.pgid {
-                debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
-                match killpg(pgid, Signal::SIGTERM) {
-                    Ok(_) => {
-                        debug!("Successfully sent SIGTERM to pgid: {}", pgid);
-                        time::sleep(Duration::from_millis(100)).await;
-                        let _ = killpg(pgid, Signal::SIGKILL);
-                        debug!("Sent SIGKILL to pgid: {}", pgid);
-                    }
-                    Err(e) => {
-                        debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                    }
-                }
-            }
             break;
         }
 

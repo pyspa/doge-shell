@@ -130,10 +130,11 @@ pub fn execute_bg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::super::finalize_background_resume;
+    use super::super::{finalize_background_resume, finalize_foreground_job};
     use crate::environment::Environment;
     use crate::process::wait::is_job_completed;
     use crate::process::{Job, JobProcess, Process, ProcessState};
+
     use crate::shell::Shell;
     use dsh_types::Context;
     use nix::sys::signal::Signal;
@@ -192,11 +193,123 @@ mod tests {
             producer.next_process().map(JobProcess::get_state),
             Some(ProcessState::Completed(0, None))
         );
-        assert!(
-            is_job_completed(requeued),
-            "regression fixture must exercise the consumer-terminated shortcut"
-        );
+        // Strict completion: a running producer with a completed consumer
+        // is not complete and must stay in the job table.
+        assert!(!is_job_completed(requeued));
         assert!(!requeued.is_process_tree_completed());
+    }
+
+    #[test]
+    fn background_job_retains_running_producer_after_consumer_completion() {
+        use crate::shell::job::check_job_state;
+
+        let mut shell = Shell::new(Environment::new());
+        let mut job = stopped_producer_completed_consumer_job(19);
+        // Simulate `bg` resume: stopped producer becomes running, consumer
+        // stays completed.
+        job.mark_stopped_processes_running();
+        assert_eq!(
+            job.process.as_deref().map(JobProcess::get_state),
+            Some(ProcessState::Running)
+        );
+        // Clear the fake pid so `update_status` (ECHILD => exited(1)) does
+        // not rewrite the fixture: ECHILD semantics are out of scope here,
+        // this test isolates the strict partition predicate.
+        if let Some(process) = job.process.as_mut() {
+            process.set_pid(None);
+        }
+        shell.wait_jobs.push(job);
+
+        let completed = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(check_job_state(&mut shell))
+            .expect("check job state");
+        assert!(
+            completed.is_empty(),
+            "Running / Completed(0) must not be collected as completed"
+        );
+        assert_eq!(shell.wait_jobs.len(), 1);
+        assert!(!shell.wait_jobs[0].is_process_tree_completed());
+        assert!(!is_job_completed(&shell.wait_jobs[0]));
+    }
+
+    fn pipeline_job(job_id: usize, states: &[ProcessState]) -> Job {
+        let mut job = Job::new("producer | consumer".to_string(), getpgrp());
+        job.job_id = job_id;
+        for (index, state) in states.iter().enumerate() {
+            let pid = Pid::from_raw(425000 + job_id as i32 * 10 + index as i32);
+            let mut proc = Process::new(format!("stage-{}", index + 1), vec![]);
+            proc.pid = Some(pid);
+            proc.state = *state;
+            job.set_process(JobProcess::Command(proc));
+            if index == 0 {
+                job.pid = Some(pid);
+                job.pgid = Some(pid);
+            }
+        }
+        job.state = ProcessState::Running;
+        job
+    }
+
+    #[test]
+    fn foreground_finalizer_requeues_running_producer_after_consumer_completion() {
+        let mut shell = Shell::new(Environment::new());
+        let job = pipeline_job(
+            20,
+            &[ProcessState::Running, ProcessState::Completed(0, None)],
+        );
+
+        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let requeued = &shell.wait_jobs[0];
+        assert!(!requeued.is_process_tree_completed());
+        assert_eq!(requeued.state, ProcessState::Running);
+    }
+
+    #[test]
+    fn foreground_finalizer_requeues_stopped_producer_after_consumer_completion() {
+        let mut shell = Shell::new(Environment::new());
+        let stopped_pid = Pid::from_raw(425200);
+        let job = pipeline_job(
+            21,
+            &[
+                ProcessState::Stopped(stopped_pid, Signal::SIGTSTP),
+                ProcessState::Completed(0, None),
+            ],
+        );
+
+        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let requeued = &shell.wait_jobs[0];
+        assert!(!requeued.is_process_tree_completed());
+        assert_eq!(
+            requeued.state,
+            ProcessState::Stopped(stopped_pid, Signal::SIGTSTP),
+            "stopped producer must keep its real observed stop state"
+        );
+    }
+
+    #[test]
+    fn foreground_finalizer_drops_all_completed_pipeline() {
+        let mut shell = Shell::new(Environment::new());
+        let job = pipeline_job(
+            22,
+            &[
+                ProcessState::Completed(0, None),
+                ProcessState::Completed(0, None),
+            ],
+        );
+
+        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+
+        assert!(
+            shell.wait_jobs.is_empty(),
+            "all-completed pipeline must be dropped"
+        );
     }
 
     #[test]

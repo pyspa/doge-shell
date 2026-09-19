@@ -1,7 +1,6 @@
 //! Job control command handlers (jobs, fg, bg).
 
 use crate::process::ProcessState;
-use crate::process::wait::is_job_completed;
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
@@ -306,7 +305,8 @@ pub(crate) fn finalize_foreground_job(
     wait_result: Result<()>,
 ) -> Result<()> {
     job.refresh_lifecycle_state();
-    let still_active = !is_job_completed(&job);
+    // Strict ownership: only a fully-completed tree may be dropped.
+    let still_active = !job.is_process_tree_completed();
     if still_active {
         debug!(
             "FG_CMD_REQUEUE: Job {} still active after foreground wait (state: {:?}), returning to job table",

@@ -5,74 +5,17 @@ use tracing::{debug, error};
 use super::job::Job;
 use super::state::ProcessState;
 
+/// Whether every process in the canonical job process tree has completed.
+///
+/// This is a strict lifecycle/ownership predicate. Final-consumer success
+/// alone is not job completion.
 pub fn is_job_completed(job: &Job) -> bool {
+    let job_completed = job.is_process_tree_completed();
     debug!(
-        "JOB_COMPLETION_CHECK_START: Checking completion for job {} (state: {:?}, cmd: '{}')",
-        job.job_id, job.state, job.cmd
+        "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {} (state: {:?})",
+        job.job_id, job_completed, job.state
     );
-
-    if let Some(process) = &job.process {
-        let process_state = process.get_state();
-        let completed = process.is_completed();
-        let consumer_terminated = process.is_final_pipeline_consumer_completed_successfully();
-
-        debug!(
-            "JOB_COMPLETION_CHECK_PROCESS: Job {} process '{}' state: {:?}, completed: {}, consumer_terminated: {}",
-            job.job_id,
-            process.get_cmd(),
-            process_state,
-            completed,
-            consumer_terminated
-        );
-
-        // Additional logging for specific states
-        match process_state {
-            ProcessState::Running => {
-                debug!(
-                    "JOB_COMPLETION_CHECK_RUNNING: Job {} is still running",
-                    job.job_id
-                );
-            }
-            ProcessState::Stopped(pid, signal) => {
-                debug!(
-                    "JOB_COMPLETION_CHECK_STOPPED: Job {} is stopped (pid: {}, signal: {:?})",
-                    job.job_id, pid, signal
-                );
-            }
-            ProcessState::Completed(exit_code, signal) => {
-                debug!(
-                    "JOB_COMPLETION_CHECK_COMPLETED: Job {} completed (exit_code: {}, signal: {:?})",
-                    job.job_id, exit_code, signal
-                );
-            }
-        }
-
-        // Job is completed if either all processes are completed OR
-        // (the consumer terminated normally AND no processes are stopped)
-        let has_stopped = process.has_stopped_process();
-        let job_completed = completed || (consumer_terminated && !has_stopped);
-
-        debug!(
-            "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {}",
-            job.job_id, job_completed
-        );
-
-        // If consumer terminated but not all processes are complete, we should terminate remaining processes
-        if consumer_terminated && !completed {
-            debug!(
-                "JOB_COMPLETION_CONSUMER_TERM: Job {} consumer terminated, should terminate remaining processes",
-                job.job_id
-            );
-        }
-
-        job_completed
-    } else {
-        debug!(
-            "JOB_COMPLETION_CHECK_NO_PROCESS: Job {} has no process, treating as completed",
-            job.job_id
-        );
-        true
-    }
+    job_completed
 }
 
 pub fn wait_pid_job(pid: Pid, no_hang: bool) -> Option<(Pid, ProcessState)> {
@@ -233,46 +176,98 @@ mod tests {
         assert!(is_job_completed(job));
     }
 
-    /// The logical consumer-completion shortcut must follow the final stage:
-    /// intermediate success alone never completes the job, while a normally
-    /// exited final stage keeps the existing shortcut (no stopped stages).
+    /// Strict lifecycle completion: a Job is complete only when every stage
+    /// in the canonical process tree is `Completed`. Final-consumer success
+    /// alone never completes the job (failing regression for the removed
+    /// consumer shortcut).
     #[test]
-    fn consumer_shortcut_follows_only_the_final_stage() {
+    fn running_producer_with_completed_consumer_is_not_job_complete() {
+        init();
+        let job = job_with_states(&[ProcessState::Running, ProcessState::Completed(0, None)]);
+        assert!(!is_job_completed(&job));
+        assert!(!job.is_process_tree_completed());
+    }
+
+    #[test]
+    fn stopped_producer_with_completed_consumer_is_not_job_complete() {
+        init();
+        let job = job_with_states(&[
+            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
+            ProcessState::Completed(0, None),
+        ]);
+        assert!(!is_job_completed(&job));
+        assert!(!job.is_process_tree_completed());
+        assert!(job.is_fully_stopped());
+    }
+
+    /// Strict completion truth table: only all-`Completed` trees complete.
+    /// Exit codes never matter; a completed final consumer alone changes
+    /// nothing.
+    #[test]
+    fn strict_completion_truth_table() {
         init();
         let stopped = || ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP);
-
-        // Intermediate success with a still-running final stage: incomplete.
-        let job = job_with_states(&[
-            ProcessState::Running,
-            ProcessState::Completed(0, None),
-            ProcessState::Running,
-        ]);
-        assert!(!is_job_completed(&job));
-
-        // Final stage exited normally: existing shortcut preserved.
-        let job = job_with_states(&[
-            ProcessState::Running,
-            ProcessState::Running,
-            ProcessState::Completed(0, None),
-        ]);
-        assert!(is_job_completed(&job));
-
-        // Intermediate success with a stopped final stage: never complete,
-        // so the stopped final stage is not killed or dropped as done.
-        let job = job_with_states(&[
-            ProcessState::Running,
-            ProcessState::Completed(0, None),
-            stopped(),
-        ]);
-        assert!(!is_job_completed(&job));
-
-        // Strict all-completed pipelines complete regardless of the shortcut.
-        let job = job_with_states(&[
-            ProcessState::Completed(3, None),
-            ProcessState::Completed(7, None),
-            ProcessState::Completed(1, None),
-        ]);
-        assert!(is_job_completed(&job));
+        let cases: &[(&[ProcessState], bool)] = &[
+            (&[ProcessState::Running], false),
+            (
+                &[ProcessState::Running, ProcessState::Completed(0, None)],
+                false,
+            ),
+            (&[stopped(), ProcessState::Completed(0, None)], false),
+            (
+                &[
+                    ProcessState::Completed(0, None),
+                    ProcessState::Running,
+                    ProcessState::Completed(0, None),
+                ],
+                false,
+            ),
+            (
+                &[
+                    ProcessState::Completed(0, None),
+                    ProcessState::Completed(0, None),
+                ],
+                true,
+            ),
+            (
+                &[
+                    ProcessState::Completed(3, None),
+                    ProcessState::Completed(0, None),
+                ],
+                true,
+            ),
+            (
+                &[
+                    ProcessState::Running,
+                    ProcessState::Running,
+                    ProcessState::Completed(0, None),
+                ],
+                false,
+            ),
+            (
+                &[
+                    ProcessState::Completed(3, None),
+                    ProcessState::Completed(7, None),
+                    ProcessState::Completed(1, None),
+                ],
+                true,
+            ),
+        ];
+        for (states, expected) in cases {
+            let job = job_with_states(states);
+            assert_eq!(
+                is_job_completed(&job),
+                *expected,
+                "strict completion for {:?}",
+                states,
+            );
+            assert_eq!(
+                job.is_process_tree_completed(),
+                *expected,
+                "process-tree completion for {:?}",
+                states,
+            );
+        }
     }
 
     #[test]

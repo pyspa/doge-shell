@@ -1,4 +1,4 @@
-use crate::process::{Job, wait::is_job_completed};
+use crate::process::Job;
 use crate::shell::Shell;
 use anyhow::Result;
 use nix::sys::signal::Signal;
@@ -168,8 +168,9 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     // We move all jobs out, partition them, and put active jobs back.
     // This avoids O(N^2) removal operations.
     let all_jobs = std::mem::take(&mut shell.wait_jobs);
-    let (completed, active): (Vec<Job>, Vec<Job>) =
-        all_jobs.into_iter().partition(is_job_completed);
+    let (completed, active): (Vec<Job>, Vec<Job>) = all_jobs
+        .into_iter()
+        .partition(|job: &Job| job.is_process_tree_completed());
 
     shell.wait_jobs = active;
     let completed_jobs = completed;

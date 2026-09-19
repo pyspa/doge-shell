@@ -212,12 +212,9 @@ mod tests {
             job.process.as_deref().map(JobProcess::get_state),
             Some(ProcessState::Running)
         );
-        // Clear the fake pid so `update_status` (ECHILD => exited(1)) does
-        // not rewrite the fixture: ECHILD semantics are out of scope here,
-        // this test isolates the strict partition predicate.
-        if let Some(process) = job.process.as_mut() {
-            process.set_pid(None);
-        }
+        // The fixture pids are not waitable by this caller (ECHILD), which
+        // must preserve the tree verbatim: no synthetic Completed(1) may
+        // rewrite the resumed Running producer below.
         shell.wait_jobs.push(job);
 
         let completed = tokio::runtime::Builder::new_current_thread()

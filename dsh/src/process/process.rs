@@ -12,7 +12,7 @@ use tracing::debug;
 use super::job_process::JobProcess;
 use super::redirect::Redirect;
 use super::state::ProcessState;
-use super::wait::wait_pid_job;
+use super::wait::{WaitPidObservation, wait_pid_job};
 use dsh_types::ExitStatus;
 
 #[derive(Debug)]
@@ -310,10 +310,26 @@ impl Process {
         if let ProcessState::Completed(_, _) = self.state {
             Some(self.state)
         } else {
-            if let Some(pid) = self.pid
-                && let Some((_waited_pid, state)) = wait_pid_job(pid, true)
-            {
-                self.state = state;
+            // Only a status this caller actually observed may enter the
+            // canonical tree. `NoChild` (ECHILD) means the status belongs to
+            // another waiter that already consumed it — or never was ours —
+            // so the existing state is kept verbatim instead of inventing an
+            // exit code.
+            if let Some(pid) = self.pid {
+                match wait_pid_job(pid, true) {
+                    Ok(WaitPidObservation::State(_, state)) => {
+                        self.state = state;
+                    }
+                    Ok(WaitPidObservation::StillAlive) => {}
+                    Ok(WaitPidObservation::NoChild) => {}
+                    Err(nix::errno::Errno::EINTR) => {}
+                    Err(err) => {
+                        debug!(
+                            "update_state: waitpid for pid {} failed: {}; keeping {:?}",
+                            pid, err, self.state
+                        );
+                    }
+                }
             }
 
             if let Some(next) = self.next.as_mut() {
@@ -329,7 +345,7 @@ impl Process {
 mod tests {
     use super::*;
     use nix::sys::signal::Signal;
-    use nix::unistd::Pid;
+    use nix::unistd::{Pid, getpid};
 
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
@@ -352,6 +368,40 @@ mod tests {
             process.state,
             ProcessState::Stopped(_, Signal::SIGSTOP)
         ));
+    }
+
+    /// ECHILD must not synthesize `Completed(1)`: a `Running` process whose
+    /// pid is not waitable by this caller stays `Running`.
+    ///
+    /// The own pid deterministically yields ECHILD (it is never our child),
+    /// so no timing is involved.
+    #[test]
+    fn update_state_does_not_synthesize_exit_one_on_echild() {
+        init();
+        let mut process = Process::new("test_cmd".to_string(), vec![]);
+        process.pid = Some(getpid());
+        assert_eq!(process.state, ProcessState::Running);
+        process.update_state();
+        assert_eq!(
+            process.state,
+            ProcessState::Running,
+            "ECHILD must leave Running untouched, not invent Completed(1)"
+        );
+    }
+
+    /// A `Stopped` state is real observed state and must survive ECHILD too.
+    #[test]
+    fn update_state_preserves_stopped_on_echild() {
+        init();
+        let mut process = Process::new("test_cmd".to_string(), vec![]);
+        let stopped = ProcessState::Stopped(getpid(), Signal::SIGTSTP);
+        process.pid = Some(getpid());
+        process.state = stopped;
+        process.update_state();
+        assert_eq!(
+            process.state, stopped,
+            "ECHILD must leave Stopped untouched, not invent Completed(1)"
+        );
     }
     #[test]
     fn test_prepare_execution() {

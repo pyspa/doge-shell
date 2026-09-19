@@ -1,11 +1,12 @@
 use super::job::Job;
 use super::job_process::JobProcess;
 use super::state::ProcessState;
+use super::wait::{WaitPidObservation, observe_pid};
 use crate::shell::SHELL_TERMINAL;
 use anyhow::{Context, Result};
 use nix::sys::signal::Signal;
 use nix::sys::signal::killpg;
-use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::sys::wait::WaitPidFlag;
 use nix::unistd::{Pid, getpid, isatty, tcsetpgrp};
 use std::os::fd::BorrowedFd;
 use std::time::Duration;
@@ -43,7 +44,14 @@ fn print_stopped_notice(job: &Job) {
 enum KnownWaitResult {
     State(Pid, ProcessState),
     StillAlive,
-    NoChildren,
+    /// Known pids existed but none is currently waitable by this caller
+    /// (every `waitpid` reported `ECHILD`). This says nothing about the
+    /// process tree: claiming completion from it alone would invent status.
+    NoWaitableChildren,
+    /// The canonical tree holds no pid to wait at all (e.g. a builtin-only
+    /// job). Kept distinct from [`KnownWaitResult::NoWaitableChildren`] so
+    /// logs tell "nothing to wait" apart from "lost wait ownership".
+    NoKnownPids,
 }
 
 /// Poll delay bounds for the `WNOHANG` wait loops.
@@ -208,6 +216,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         check_background_all_output(job).await?;
 
         let wait_pids = job_wait_pids(job);
+        let wait_pids_for_error = wait_pids.clone();
         let (pid, state) = match tokio::task::spawn_blocking(move || {
             wait_known_pids(&wait_pids, WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG)
         })
@@ -218,10 +227,30 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
                 time::sleep(backoff.next_delay()).await;
                 continue;
             }
-            Ok(Ok(KnownWaitResult::NoChildren)) | Ok(Err(nix::errno::Errno::ECHILD)) => {
+            Ok(Ok(
+                no_waitable @ (KnownWaitResult::NoWaitableChildren | KnownWaitResult::NoKnownPids),
+            )) => {
+                // `ECHILD` (or an empty pid set) never completes a job on
+                // its own: only the canonical tree decides. Drain available
+                // (non-blocking) output first, then consult the tree.
                 check_background_all_output(job).await?;
-                drain_foreground_completed_output(job).await?;
-                break;
+                if job.is_process_tree_completed() {
+                    drain_foreground_completed_output(job).await?;
+                    break;
+                }
+                if job.is_fully_stopped() {
+                    job.refresh_lifecycle_state();
+                    print_stopped_notice(job);
+                    break;
+                }
+                anyhow::bail!(
+                    "no waitable child remains ({:?}) for active job {} ('{}', state: {:?}, known pids: {:?})",
+                    no_waitable,
+                    job.job_id,
+                    job.cmd,
+                    job.state,
+                    wait_pids_for_error,
+                );
             }
             Ok(Err(nix::errno::Errno::EINTR)) => {
                 debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
@@ -265,50 +294,31 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 
 fn wait_known_pids(pids: &[Pid], flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
     if pids.is_empty() {
-        return Ok(KnownWaitResult::NoChildren);
+        return Ok(KnownWaitResult::NoKnownPids);
     }
 
+    // One shared decoder with `wait_pid_job`, so both wait layers agree on
+    // what ECHILD, EINTR, and unexpected statuses mean.
     let mut saw_alive = false;
-    let mut saw_child = false;
     for pid in pids {
-        match waitpid(*pid, Some(flags | WaitPidFlag::WNOHANG)) {
-            Ok(WaitStatus::Exited(pid, status)) => {
-                debug!("wait_job exited {:?} {:?}", pid, status);
-                return Ok(KnownWaitResult::State(
-                    pid,
-                    ProcessState::exited(status as u8),
-                ));
+        match observe_pid(*pid, flags | WaitPidFlag::WNOHANG) {
+            Ok(WaitPidObservation::State(pid, state)) => {
+                return Ok(KnownWaitResult::State(pid, state));
             }
-            Ok(WaitStatus::Signaled(pid, signal, _)) => {
-                debug!("wait_job signaled {:?} {:?}", pid, signal);
-                return Ok(KnownWaitResult::State(pid, ProcessState::signaled(signal)));
-            }
-            Ok(WaitStatus::Stopped(pid, signal)) => {
-                debug!("wait_job stopped {:?} {:?}", pid, signal);
-                return Ok(KnownWaitResult::State(
-                    pid,
-                    ProcessState::Stopped(pid, signal),
-                ));
-            }
-            Ok(WaitStatus::StillAlive) => {
-                saw_child = true;
+            Ok(WaitPidObservation::StillAlive) => {
                 saw_alive = true;
             }
-            Err(nix::errno::Errno::ECHILD) => {}
+            // Not waitable by this caller; keep scanning the remaining pids.
+            Ok(WaitPidObservation::NoChild) => {}
             Err(nix::errno::Errno::EINTR) => return Err(nix::errno::Errno::EINTR),
-            status => {
-                error!(
-                    "unexpected waitpid event for known pid {}: {:?}",
-                    pid, status
-                );
-            }
+            Err(err) => return Err(err),
         }
     }
 
-    if saw_alive || saw_child {
+    if saw_alive {
         Ok(KnownWaitResult::StillAlive)
     } else {
-        Ok(KnownWaitResult::NoChildren)
+        Ok(KnownWaitResult::NoWaitableChildren)
     }
 }
 
@@ -425,6 +435,32 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout), "unrelated");
         let _ = job_child.wait();
+    }
+
+    /// An active tree with no waitable child is an ownership inconsistency,
+    /// never a silent success: the wait must fail loudly instead of
+    /// completing the job with invented status.
+    ///
+    /// The own pid deterministically yields ECHILD (it is never our child
+    /// and can never be recycled under us), so no timing is involved.
+    #[tokio::test]
+    async fn active_job_with_no_waitable_child_fails_loudly() {
+        let pid = getpid();
+
+        let mut job = Job::new("test".to_string(), getpgrp());
+        let mut process = Process::new("sh".to_string(), vec![]);
+        process.pid = Some(pid);
+        job.pid = Some(pid);
+        job.set_process(JobProcess::Command(process));
+
+        let result = wait_process_no_hang(&mut job).await;
+        assert!(
+            result.is_err(),
+            "active tree + ECHILD everywhere must fail loudly, not complete"
+        );
+        // The canonical tree must not gain invented status on the way out.
+        let head = job.process.as_ref().expect("process tree");
+        assert_eq!(head.get_state(), ProcessState::Running);
     }
 
     /// A pipeline stage completing non-zero does not terminate its siblings.

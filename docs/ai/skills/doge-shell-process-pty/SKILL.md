@@ -19,4 +19,5 @@ description: Use for doge-shell process, PTY, job control, raw terminal, colored
 - `bg` selects stopped work from the process tree, marks stopped stages running only after SIGCONT succeeds, and requeues the original active `Job` before propagating resume errors.
 - Pipeline stop state distinguishes `has_stopped_process` from `is_fully_stopped`: SIGCONT decisions use the former; foreground wait/Job summary use the latter. `Job.state` is derived from the process tree, never the source of truth.
 - Foreground pipeline lifecycle completion is strict: every stage in the canonical `JobProcess` tree must be `Completed`. Final-consumer success alone never drops the `Job` or kills remaining/stopped stages.
+- ECHILD is a wait observation, never a synthetic ProcessState. The code that consumes an actual child status owns recording that status into the canonical process tree; later ECHILD observers must not invent an exit code.
 - Validate with `cargo test -p doge-shell`; use a narrower test filter only after identifying the affected module.

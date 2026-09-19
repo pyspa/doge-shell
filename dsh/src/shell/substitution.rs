@@ -18,6 +18,7 @@
 use super::authorize::{AuthorizationCancelled, ConfirmFn};
 use super::plan::ExecutionPlan;
 use crate::process::reexec::{ChildStdio, PlanExecMode, spawn_plan_helper};
+use crate::process::{ProcessState, WaitPidObservation};
 use crate::shell::Shell;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
@@ -149,6 +150,29 @@ impl ProducerRegistry {
         }
     }
 }
+/// Whether a producer wait observation means no further direct-child wait
+/// is needed: the producer completed, or it is no longer waitable by this
+/// caller (`NoChild`, i.e. this owner already consumed its status or it was
+/// never ours). A `Stopped` producer is live state, never "reaped".
+fn producer_wait_is_done(observation: &WaitPidObservation) -> bool {
+    match observation {
+        WaitPidObservation::State(_, ProcessState::Completed(_, _)) => true,
+        WaitPidObservation::State(_, _) => false,
+        WaitPidObservation::StillAlive => false,
+        WaitPidObservation::NoChild => true,
+    }
+}
+
+/// Whether `pid` needs no further direct-child wait. EINTR and unexpected
+/// wait errors keep polling; only a terminal observation ends the wait.
+fn child_no_longer_needs_wait(pid: Pid) -> bool {
+    match crate::process::wait_pid_job(pid, true) {
+        Ok(observation) => producer_wait_is_done(&observation),
+        Err(nix::errno::Errno::EINTR) => false,
+        Err(_) => false,
+    }
+}
+
 /// Reap one producer helper: bounded grace, then `SIGTERM`, then `SIGKILL`,
 /// then a blocking wait. Runs on a detached thread so the shell never blocks
 /// on a producer that outlives its consumer (`cat <(sleep 30)`); reuses the
@@ -180,7 +204,7 @@ fn spawn_producer_reaper(producer: ProducerHandle) {
 fn reap_producer_sync(producer: ProducerHandle) {
     use std::time::{Duration, Instant};
     let pid = producer.pid;
-    let reaped = |pid: Pid| crate::process::wait_pid_job(pid, true).is_some();
+    let reaped = |pid: Pid| child_no_longer_needs_wait(pid);
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         if reaped(pid) {
@@ -216,7 +240,7 @@ fn escalate_if_alive_and_report(producer: ProducerHandle) {
     let kill_group = |signal: Signal| {
         nix::sys::signal::killpg(pid, signal).ok();
     };
-    let reaped = |pid: Pid| crate::process::wait_pid_job(pid, true).is_some();
+    let reaped = |pid: Pid| child_no_longer_needs_wait(pid);
     // Still alive: escalate before the blocking wait.
     if !reaped(pid) {
         kill_group(Signal::SIGTERM);
@@ -419,6 +443,33 @@ mod tests {
         Ok(ConfirmationAction::Yes)
     }
 
+    /// Producer reap policy: only terminal observations end the wait.
+    /// `Stopped` is live state and must never count as reaped.
+    #[test]
+    fn producer_reap_policy_treats_only_terminal_observations_as_done() {
+        use nix::sys::signal::Signal;
+
+        let pid = Pid::from_raw(424281);
+        assert!(producer_wait_is_done(&WaitPidObservation::State(
+            pid,
+            ProcessState::Completed(0, None)
+        )));
+        assert!(producer_wait_is_done(&WaitPidObservation::State(
+            pid,
+            ProcessState::Completed(1, None)
+        )));
+        assert!(producer_wait_is_done(&WaitPidObservation::NoChild));
+        assert!(!producer_wait_is_done(&WaitPidObservation::StillAlive));
+        assert!(!producer_wait_is_done(&WaitPidObservation::State(
+            pid,
+            ProcessState::Stopped(pid, Signal::SIGTSTP)
+        )));
+        assert!(!producer_wait_is_done(&WaitPidObservation::State(
+            pid,
+            ProcessState::Running
+        )));
+    }
+
     /// Test A (producer-only): the re-exec producer delivers its bytes to the
     /// data pipe with no `/dev/fd` consumer involved.
     ///
@@ -614,8 +665,9 @@ mod tests {
             .first()
             .expect("retained producer")
             .pid;
-        assert!(
-            crate::process::wait_pid_job(producer_pid, true).is_none(),
+        assert_eq!(
+            crate::process::wait_pid_job(producer_pid, true),
+            Ok(crate::process::WaitPidObservation::StillAlive),
             "background producer was killed early (still needed by its consumer)"
         );
         // `job` drops here: the lingering producer goes to a detached

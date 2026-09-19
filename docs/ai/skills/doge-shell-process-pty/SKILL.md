@@ -14,4 +14,6 @@ description: Use for doge-shell process, PTY, job control, raw terminal, colored
 - Keep display-only fixes at the PTY/stdout boundary unless the task proves captured output or command execution semantics are involved.
 - Cron jobs do **not** go through this path: `dsh/src/cron/exec.rs` spawns a detached `sh -c` child with stdin on `/dev/null` and its own process group, with no PTY and no `Job`. `Shell` is `!Send`, so a claimed run executes in its own `dogesh -c "cron run-job <uuid>"` child (`dsh/src/cron/run_job.rs`). See [../doge-shell-repo/references/invariants.md](../doge-shell-repo/references/invariants.md).
 - A foreground child must not inherit terminal state the shell set up for itself (raw mode, the status line's scroll region). Pause it for the whole lifetime of the child, not just up to the spawn.
+- `fg` resumes on the existing async foreground wait so background `OutputMonitor`s keep draining; never add a sync monitor drain duplicate.
+- A job removed from `wait_jobs` for `fg` returns when still active/stopped (real observed `Stopped`, never synthesized), even on wait/SIGCONT error; completed jobs stay dropped.
 - Validate with `cargo test -p doge-shell`; use a narrower test filter only after identifying the affected module.

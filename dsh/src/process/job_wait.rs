@@ -99,8 +99,11 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
 
     debug!("Terminal environment detected, proceeding with process group control");
 
-    if !crate::process::job_pty::uses_full_pty_proxy(job) {
-        if let Some(pgid) = job.pgid {
+    // Snapshot what the terminal handoff needs before any `&mut` wait borrow.
+    let job_pgid = job.pgid;
+    let uses_full_proxy = crate::process::job_pty::uses_full_pty_proxy(job);
+    if !uses_full_proxy {
+        if let Some(pgid) = job_pgid {
             debug!("Setting foreground process group to {}", pgid);
             if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid) {
                 debug!(
@@ -113,8 +116,13 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
 
             if cont {
                 debug!("Sending SIGCONT to process group {}", pgid);
-                crate::process::signal::send_signal(pgid, Signal::SIGCONT)
-                    .context("failed send signal SIGCONT")?;
+                let cont_result = crate::process::signal::send_signal(pgid, Signal::SIGCONT)
+                    .context("failed send signal SIGCONT");
+                if let Err(err) = cont_result {
+                    debug!("SIGCONT failed, restoring shell foreground before returning");
+                    restore_shell_foreground(job);
+                    return Err(err);
+                }
                 debug!("SIGCONT sent successfully");
             }
         } else {
@@ -125,69 +133,22 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
     }
 
     debug!("About to call wait_job with no_hang: {}", no_hang);
-    wait_job(job, no_hang).await?;
-    debug!("wait_job completed");
+    let wait_result = wait_job(job, no_hang).await;
+    debug!("wait_job completed (or failed), restoring shell foreground");
+    // Terminal ownership must come back even when the wait itself fails;
+    // a failed wait must not strand the real terminal on the job's pgid.
+    // Restoration stays best-effort (debug log, continue), so a restoration
+    // failure never masks the primary wait/SIGCONT error.
+    restore_shell_foreground(job);
 
-    let shell_pgid = job.shell_pgid;
-    debug!("Restoring shell process group {}", shell_pgid);
-    if let Err(err) = tcsetpgrp(
-        unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
-        shell_pgid,
-    ) {
-        debug!("tcsetpgrp shell_pgid failed: {}, continuing anyway", err);
-    } else {
-        debug!("Successfully restored shell process group {}", shell_pgid);
+    match &wait_result {
+        Ok(()) => debug!("put_in_foreground completed successfully"),
+        Err(err) => debug!("put_in_foreground wait failed: {:?}", err),
     }
-
-    debug!("put_in_foreground completed successfully");
-    Ok(())
+    wait_result
 }
 
-pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Result<()> {
-    debug!(
-        "put_in_foreground_sync: id: {} pgid {:?} no_hang: {} cont: {}",
-        job.id, job.pgid, no_hang, cont
-    );
-
-    if !owns_terminal() {
-        debug!("Not a terminal environment, skipping process group control");
-        debug!("About to call wait_job_sync with no_hang: {}", no_hang);
-        wait_job_sync(job, no_hang)?;
-        debug!("wait_job_sync completed in non-terminal mode");
-        return Ok(());
-    }
-
-    debug!("Terminal environment detected, proceeding with process group control");
-
-    if !crate::process::job_pty::uses_full_pty_proxy(job) {
-        if let Some(pgid) = job.pgid {
-            debug!("Setting foreground process group to {}", pgid);
-            if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid) {
-                debug!(
-                    "tcsetpgrp failed: {}, continuing without terminal control",
-                    err
-                );
-            } else {
-                debug!("Successfully set foreground process group to {}", pgid);
-            }
-
-            if cont {
-                debug!("Sending SIGCONT to process group {}", pgid);
-                crate::process::signal::send_signal(pgid, Signal::SIGCONT)
-                    .context("failed send signal SIGCONT")?;
-                debug!("SIGCONT sent successfully");
-            }
-        } else {
-            debug!("No pgid available, skipping process group operations");
-        }
-    } else {
-        debug!("Full-proxy PTY job active, skipping tcsetpgrp (shell proxies I/O)");
-    }
-
-    debug!("About to call wait_job_sync with no_hang: {}", no_hang);
-    wait_job_sync(job, no_hang)?;
-    debug!("wait_job_sync completed");
-
+fn restore_shell_foreground(job: &Job) {
     let shell_pgid = job.shell_pgid;
     debug!("Restoring shell process group {}", shell_pgid);
     if let Err(err) = tcsetpgrp(
@@ -198,9 +159,6 @@ pub fn put_in_foreground_sync(job: &mut Job, no_hang: bool, cont: bool) -> Resul
     } else {
         debug!("Successfully restored shell process group {}", shell_pgid);
     }
-
-    debug!("put_in_foreground_sync completed successfully");
-    Ok(())
 }
 
 pub async fn put_in_background(job: &mut Job) -> Result<()> {
@@ -229,99 +187,6 @@ pub async fn wait_job(job: &mut Job, no_hang: bool) -> Result<()> {
     debug!("wait_job called with no_hang: {}", no_hang);
     debug!("Calling wait_process_no_hang (forced for output capture)");
     wait_process_no_hang(job).await
-}
-
-pub fn wait_job_sync(job: &mut Job, no_hang: bool) -> Result<()> {
-    debug!("wait_job_sync called with no_hang: {}", no_hang);
-    if no_hang {
-        debug!("Calling wait_process_no_hang_sync");
-        wait_process_no_hang_sync(job)
-    } else {
-        debug!("Calling wait_process (blocking)");
-        wait_process_sync(job)
-    }
-}
-
-pub fn wait_process_sync(job: &mut Job) -> Result<()> {
-    let mut backoff = WaitBackoff::new();
-    loop {
-        let (pid, state) = match wait_known_processes(job, WaitPidFlag::WUNTRACED) {
-            Ok(KnownWaitResult::State(pid, state)) => (pid, state),
-            Ok(KnownWaitResult::StillAlive) => {
-                std::thread::sleep(backoff.next_delay());
-                continue;
-            }
-            Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
-                break;
-            }
-            Err(nix::errno::Errno::EINTR) => {
-                debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
-                continue;
-            }
-            status => {
-                error!("unexpected waitpid event: {:?}", status);
-                break;
-            }
-        };
-
-        job.set_process_state(pid, state);
-        backoff.reset();
-
-        debug!(
-            "fin waitpid pgid:{:?} pid:{:?} state:{:?}",
-            job.pgid, pid, state
-        );
-
-        // A non-zero pipeline stage completion is data, not a reason to kill
-        // its siblings. Just record the state and keep waiting for the rest.
-        if let ProcessState::Completed(code, signal) = state {
-            debug!(
-                "⏳ WAIT: Process completed - pid: {}, code: {}, signal: {:?}",
-                pid, code, signal
-            );
-        }
-
-        if is_job_completed(job) {
-            debug!("⏳ WAIT: Job completed, breaking from wait_process loop");
-            break;
-        }
-
-        if let Some(process) = &job.process
-            && process.is_pipeline_consumer_terminated()
-            && !process.is_completed()
-        {
-            // A non-zero producer/consumer exit is not itself a reason to kill
-            // the pipeline. This cleanup is only for the distinct case where
-            // the downstream consumer has terminated while upstream processes
-            // remain alive (e.g. `yes | head -n 1`).
-            debug!("⏳ WAIT: Pipeline consumer terminated, killing remaining processes");
-            if let Some(pgid) = job.pgid {
-                debug!(
-                    "⏳ WAIT: Sending SIGTERM to remaining processes in pgid: {}",
-                    pgid
-                );
-                match killpg(pgid, Signal::SIGTERM) {
-                    Ok(_) => {
-                        debug!("⏳ WAIT: Successfully sent SIGTERM to pgid: {}", pgid);
-                        std::thread::sleep(Duration::from_millis(100));
-                        let _ = killpg(pgid, Signal::SIGKILL);
-                        debug!("⏳ WAIT: Sent SIGKILL to pgid: {}", pgid);
-                    }
-                    Err(e) => {
-                        debug!("⏳ WAIT: Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                    }
-                }
-            }
-            break;
-        }
-
-        if is_job_stopped(job) {
-            debug!("⏳ WAIT: Job stopped");
-            print_stopped_notice(job);
-            break;
-        }
-    }
-    Ok(())
 }
 
 pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
@@ -415,94 +280,6 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
     }
     debug!("wait_process_no_hang completed for job: {}", job.id);
     Ok(())
-}
-
-pub fn wait_process_no_hang_sync(job: &mut Job) -> Result<()> {
-    debug!("wait_process_no_hang_sync started for job: {}", job.id);
-    let mut backoff = WaitBackoff::new();
-    loop {
-        if crate::process::signal::check_and_clear_sigint() {
-            debug!("wait_process_no_hang_sync: Detected SIGINT in parent shell, forwarding to job");
-            if let Some(pgid) = job.pgid {
-                debug!("Forwarding SIGINT to pgid: {}", pgid);
-                let _ = killpg(pgid, Signal::SIGINT);
-            } else if let Some(pid) = job.pid {
-                debug!("Forwarding SIGINT to pid: {}", pid);
-                let _ = nix::sys::signal::kill(pid, Signal::SIGINT);
-            }
-        }
-
-        debug!("waitpid loop iteration...");
-
-        let (pid, state) =
-            match wait_known_processes(job, WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG) {
-                Ok(KnownWaitResult::State(pid, state)) => (pid, state),
-                Ok(KnownWaitResult::StillAlive) => {
-                    std::thread::sleep(backoff.next_delay());
-                    continue;
-                }
-                Ok(KnownWaitResult::NoChildren) | Err(nix::errno::Errno::ECHILD) => {
-                    break;
-                }
-                Err(nix::errno::Errno::EINTR) => {
-                    debug!("⏳ WAIT: waitpid interrupted by signal (EINTR), continuing");
-                    continue;
-                }
-                status => {
-                    error!("unexpected waitpid event: {:?}", status);
-                    break;
-                }
-            };
-
-        job.set_process_state(pid, state);
-        backoff.reset();
-
-        debug!("fin wait: pid:{:?} state:{:?}", pid, state);
-
-        if is_job_completed(job) {
-            debug!("Job completed, breaking from wait_process_no_hang_sync loop");
-            break;
-        }
-
-        if let Some(process) = &job.process
-            && process.is_pipeline_consumer_terminated()
-            && !process.is_completed()
-        {
-            // A non-zero producer/consumer exit is not itself a reason to kill
-            // the pipeline. This cleanup is only for the distinct case where
-            // the downstream consumer has terminated while upstream processes
-            // remain alive (e.g. `yes | head -n 1`).
-            debug!("Pipeline consumer terminated, killing remaining processes");
-            if let Some(pgid) = job.pgid {
-                debug!("Sending SIGTERM to remaining processes in pgid: {}", pgid);
-                match killpg(pgid, Signal::SIGTERM) {
-                    Ok(_) => {
-                        debug!("Successfully sent SIGTERM to pgid: {}", pgid);
-                        std::thread::sleep(Duration::from_millis(100));
-                        let _ = killpg(pgid, Signal::SIGKILL);
-                        debug!("Sent SIGKILL to pgid: {}", pgid);
-                    }
-                    Err(e) => {
-                        debug!("Failed to send SIGTERM to pgid {}: {}", pgid, e);
-                    }
-                }
-            }
-            break;
-        }
-
-        if is_job_stopped(job) {
-            print_stopped_notice(job);
-            debug!("Job stopped, breaking from wait_process_no_hang_sync loop");
-            break;
-        }
-    }
-    debug!("wait_process_no_hang_sync completed for job: {}", job.id);
-    Ok(())
-}
-
-fn wait_known_processes(job: &Job, flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
-    let wait_pids = job_wait_pids(job);
-    wait_known_pids(&wait_pids, flags)
 }
 
 fn wait_known_pids(pids: &[Pid], flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
@@ -640,8 +417,8 @@ mod tests {
     use std::os::unix::process::CommandExt;
     use std::process::{Command as StdCommand, Stdio};
 
-    #[test]
-    fn job_wait_does_not_reap_unrelated_completion_child() {
+    #[tokio::test]
+    async fn job_wait_does_not_reap_unrelated_completion_child() {
         let unrelated = StdCommand::new("sh")
             .arg("-c")
             .arg("printf unrelated")
@@ -661,7 +438,7 @@ mod tests {
         job.pid = Some(job_pid);
         job.set_process(JobProcess::Command(process));
 
-        wait_process_no_hang_sync(&mut job).expect("wait job");
+        wait_process_no_hang(&mut job).await.expect("wait job");
 
         let output = unrelated.wait_with_output().expect("wait unrelated child");
         assert!(output.status.success());
@@ -677,8 +454,8 @@ mod tests {
     /// `send_killpg` logic SIGKILLed the whole group when the left stage
     /// failed, and this test fails against it: the right stage ends up
     /// `Completed(137, Some(SIGKILL))` instead of `Completed(0, None)`.
-    #[test]
-    fn nonzero_stage_exit_does_not_kill_pipeline_siblings() {
+    #[tokio::test]
+    async fn nonzero_stage_exit_does_not_kill_pipeline_siblings() {
         fn setpgid_self(pgid: Pid) -> std::io::Result<()> {
             setpgid(Pid::from_raw(0), pgid)
                 .map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
@@ -720,7 +497,7 @@ mod tests {
         left_proc.next = Some(Box::new(JobProcess::Command(right_proc)));
         job.set_process(JobProcess::Command(left_proc));
 
-        wait_process_no_hang_sync(&mut job).expect("wait pipeline");
+        wait_process_no_hang(&mut job).await.expect("wait pipeline");
 
         let _ = left_child.wait();
         let _ = right_child.wait();

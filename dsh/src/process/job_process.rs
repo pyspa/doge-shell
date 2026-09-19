@@ -251,6 +251,22 @@ impl JobProcess {
         }
     }
 
+    /// First `Stopped` state in pipeline order, if any.
+    ///
+    /// Used to sync the job-table summary state after a foreground wait:
+    /// the actual `waitpid`-observed `(pid, signal)` must be reused, never
+    /// synthesized.
+    pub(crate) fn first_stopped_state(&self) -> Option<ProcessState> {
+        let mut current = Some(self);
+        while let Some(process) = current {
+            if let stopped @ ProcessState::Stopped(_, _) = process.get_state() {
+                return Some(stopped);
+            }
+            current = process.next_process();
+        }
+        None
+    }
+
     pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
         match self {
             JobProcess::Builtin(p) => (p.cap_stdout, p.cap_stderr),

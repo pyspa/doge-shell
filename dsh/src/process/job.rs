@@ -537,12 +537,6 @@ impl Job {
         job_wait::put_in_foreground(self, no_hang, cont).await
     }
 
-    /// Synchronous version of put_in_foreground for use in non-async contexts
-    /// This method uses spawn_blocking to handle the async operations safely
-    pub fn put_in_foreground_sync(&mut self, no_hang: bool, cont: bool) -> Result<()> {
-        job_wait::put_in_foreground_sync(self, no_hang, cont)
-    }
-
     pub async fn put_in_background(&mut self) -> Result<()> {
         job_wait::put_in_background(self).await
     }
@@ -553,14 +547,24 @@ impl Job {
         job_wait::wait_job(self, no_hang).await
     }
 
-    /// Synchronous version of wait_job for use in non-async contexts
-    pub fn wait_job_sync(&mut self, no_hang: bool) -> Result<()> {
-        job_wait::wait_job_sync(self, no_hang)
-    }
-
     pub(crate) fn set_process_state(&mut self, pid: Pid, state: ProcessState) {
         if let Some(process) = self.process.as_mut() {
             process.set_state_pid(pid, state);
+        }
+    }
+
+    /// Sync the job-table summary from the process tree (real `Stopped`, never synthesized).
+    pub(crate) fn refresh_lifecycle_state(&mut self) {
+        if let Some(process) = &self.process
+            && let Some(stopped) = process.first_stopped_state()
+        {
+            self.state = stopped;
+            return;
+        }
+        if is_job_completed(self) {
+            self.state = self.last_process_state();
+        } else {
+            self.state = ProcessState::Running;
         }
     }
 

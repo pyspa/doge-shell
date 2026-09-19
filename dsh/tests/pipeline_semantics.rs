@@ -134,6 +134,56 @@ fn consumer_termination_cleanup_still_works() {
     );
 }
 
+/// A middle stage exiting normally must not release a 3-stage pipeline
+/// early: the shell advances past `true | true | delayed-tail` only after
+/// the final stage appends its marker, so the order file reads tail-then-after.
+///
+/// The `> /dev/null` on the final stage matters: without a redirect the
+/// harness (piped stdin, non-interactive) auto-captures the final stage's
+/// stdout, and the post-wait `drain_to_eof` would wait for the final stage
+/// anyway, masking a premature wait return. With the redirect there is no
+/// capture monitor, so only the wait loop decides when the shell advances.
+#[test]
+fn middle_stage_success_does_not_release_pipeline_early() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let order = dir.path().join("order");
+    let tail = write_executable_script(
+        &dir,
+        "delayed_tail.sh",
+        &format!(
+            "#!/bin/sh\nsleep 0.3\nprintf 'tail\\n' >> \"{}\"\n",
+            order.display()
+        ),
+    );
+    let after = write_executable_script(
+        &dir,
+        "mark_after.sh",
+        &format!("#!/bin/sh\nprintf 'after\\n' >> \"{}\"\n", order.display()),
+    );
+    let pipeline = format!(
+        "{} | {} | {} > /dev/null",
+        true_path(),
+        true_path(),
+        tail.display()
+    );
+    let output = run_interactive(&[pipeline.as_str(), after.to_str().expect("utf8 path")]);
+    assert!(
+        output.status.success(),
+        "pipeline plus marker command must succeed. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let content = std::fs::read_to_string(&order).unwrap_or_else(|_| {
+        panic!(
+            "final stage must complete before the next command runs; order file missing: {}",
+            order.display()
+        )
+    });
+    assert_eq!(
+        content, "tail\nafter\n",
+        "final stage must finish before the shell advances past the pipeline"
+    );
+}
+
 /// A process killed by signal N has shell status 128 + N, end to end.
 #[test]
 fn signal_termination_maps_to_128_plus_signal() {

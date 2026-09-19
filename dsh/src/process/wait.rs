@@ -14,7 +14,7 @@ pub fn is_job_completed(job: &Job) -> bool {
     if let Some(process) = &job.process {
         let process_state = process.get_state();
         let completed = process.is_completed();
-        let consumer_terminated = process.is_pipeline_consumer_terminated();
+        let consumer_terminated = process.is_final_pipeline_consumer_completed_successfully();
 
         debug!(
             "JOB_COMPLETION_CHECK_PROCESS: Job {} process '{}' state: {:?}, completed: {}, consumer_terminated: {}",
@@ -231,6 +231,48 @@ mod tests {
 
         debug!("{:?}", job);
         assert!(is_job_completed(job));
+    }
+
+    /// The logical consumer-completion shortcut must follow the final stage:
+    /// intermediate success alone never completes the job, while a normally
+    /// exited final stage keeps the existing shortcut (no stopped stages).
+    #[test]
+    fn consumer_shortcut_follows_only_the_final_stage() {
+        init();
+        let stopped = || ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP);
+
+        // Intermediate success with a still-running final stage: incomplete.
+        let job = job_with_states(&[
+            ProcessState::Running,
+            ProcessState::Completed(0, None),
+            ProcessState::Running,
+        ]);
+        assert!(!is_job_completed(&job));
+
+        // Final stage exited normally: existing shortcut preserved.
+        let job = job_with_states(&[
+            ProcessState::Running,
+            ProcessState::Running,
+            ProcessState::Completed(0, None),
+        ]);
+        assert!(is_job_completed(&job));
+
+        // Intermediate success with a stopped final stage: never complete,
+        // so the stopped final stage is not killed or dropped as done.
+        let job = job_with_states(&[
+            ProcessState::Running,
+            ProcessState::Completed(0, None),
+            stopped(),
+        ]);
+        assert!(!is_job_completed(&job));
+
+        // Strict all-completed pipelines complete regardless of the shortcut.
+        let job = job_with_states(&[
+            ProcessState::Completed(3, None),
+            ProcessState::Completed(7, None),
+            ProcessState::Completed(1, None),
+        ]);
+        assert!(is_job_completed(&job));
     }
 
     #[test]

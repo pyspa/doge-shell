@@ -219,24 +219,28 @@ impl JobProcess {
         true
     }
 
-    /// Check if pipeline should be considered complete based on consumer process termination
-    /// This handles the case where the last process in a pipeline (consumer) exits normally
-    /// while earlier processes (producers) are still running
-    pub(crate) fn is_pipeline_consumer_terminated(&self) -> bool {
-        // If this process has a next process, check if the consumer terminated
-        if let Some(next) = self.next() {
-            // Recursively check the next process
-            if next.is_pipeline_consumer_terminated() {
-                return true;
-            }
-            // If the next process (consumer) completed normally, the pipeline should terminate
-            if let ProcessState::Completed(0, None) = next.get_state() {
-                debug!(
-                    "PIPELINE_CONSUMER_TERMINATED: Consumer process '{}' exited normally, pipeline should terminate",
-                    next.get_cmd()
-                );
-                return true;
-            }
+    /// Whether the final pipeline stage exited normally (`Completed(0, None)`).
+    ///
+    /// This is the logical consumer-completion shortcut behind
+    /// `is_job_completed`: only the state of the final stage decides it.
+    /// A single-stage process is not a pipeline consumer (its completion is
+    /// already covered by `is_completed`), and a successful intermediate
+    /// stage is never evidence that the consumer has completed.
+    pub(crate) fn is_final_pipeline_consumer_completed_successfully(&self) -> bool {
+        // A real multi-stage pipeline is required so this stays a consumer
+        // shortcut, not a duplicate of `is_completed`.
+        let Some(mut current) = self.next_process() else {
+            return false;
+        };
+        while let Some(next) = current.next_process() {
+            current = next;
+        }
+        if matches!(current.get_state(), ProcessState::Completed(0, None)) {
+            debug!(
+                "PIPELINE_CONSUMER_TERMINATED: Final pipeline consumer '{}' exited normally, pipeline should terminate",
+                current.get_cmd()
+            );
+            return true;
         }
         false
     }
@@ -570,7 +574,7 @@ mod tests {
         let mut cat_job_process = JobProcess::Command(cat_process);
 
         // Initially, consumer is not terminated
-        assert!(!cat_job_process.is_pipeline_consumer_terminated());
+        assert!(!cat_job_process.is_final_pipeline_consumer_completed_successfully());
 
         // Now simulate less (consumer) exiting normally
         if let JobProcess::Command(cat_proc) = &mut cat_job_process
@@ -581,7 +585,7 @@ mod tests {
         }
 
         // Now consumer should be detected as terminated
-        assert!(cat_job_process.is_pipeline_consumer_terminated());
+        assert!(cat_job_process.is_final_pipeline_consumer_completed_successfully());
 
         // But the pipeline is not fully completed since cat is still running
         assert!(!cat_job_process.is_completed());
@@ -630,6 +634,47 @@ mod tests {
         ]);
 
         assert!(pipeline.has_stopped_process());
+    }
+
+    /// Consumer completion is determined solely by the final pipeline stage.
+    ///
+    /// An intermediate `Completed(0, None)` stage is never evidence that the
+    /// consumer has completed: `Running / Completed(0) / Running` must stay
+    /// incomplete until the final stage itself exits normally.
+    #[test]
+    fn pipeline_consumer_completion_truth_table() {
+        use ProcessState::{Completed, Running, Stopped};
+        let stopped = || Stopped(Pid::from_raw(12), Signal::SIGTSTP);
+        let signaled = || Completed(0, Some(Signal::SIGPIPE));
+        let cases: &[(&[ProcessState], bool)] = &[
+            (&[Running], false),
+            (&[Completed(0, None)], false),
+            (&[Running, Running], false),
+            (&[Running, Completed(0, None)], true),
+            (&[Running, Completed(1, None)], false),
+            (&[Running, signaled()], false),
+            // Intermediate success must not complete the pipeline.
+            (&[Running, Completed(0, None), Running], false),
+            (&[Running, Completed(0, None), stopped()], false),
+            (&[Running, Running, Completed(0, None)], true),
+            (&[Completed(0, None), Completed(0, None), Running], false),
+            (&[Completed(0, None), Running, Completed(0, None)], true),
+            (
+                &[Completed(0, None), Completed(0, None), Completed(0, None)],
+                true,
+            ),
+            (&[Completed(1, None), Completed(0, None), Running], false),
+            (&[Completed(1, None), Running, Completed(0, None)], true),
+        ];
+        for (states, expected) in cases {
+            let pipeline = pipeline_with_states(states);
+            assert_eq!(
+                pipeline.is_final_pipeline_consumer_completed_successfully(),
+                *expected,
+                "consumer completion for {:?}",
+                states,
+            );
+        }
     }
 
     #[test]

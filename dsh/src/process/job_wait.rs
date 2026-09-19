@@ -247,7 +247,7 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         }
 
         if let Some(process) = &job.process
-            && process.is_pipeline_consumer_terminated()
+            && process.is_final_pipeline_consumer_completed_successfully()
             && !process.is_completed()
         {
             // A non-zero producer/consumer exit is not itself a reason to kill

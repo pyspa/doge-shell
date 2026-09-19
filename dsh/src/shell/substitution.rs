@@ -43,10 +43,16 @@ pub struct ProcessSubstitution {
 
 /// A helper producer the parent must reap: pid plus the status-pipe read end
 /// carrying its one-byte completion verdict.
+///
+/// The `registry` handle deregisters the pid once reaped, so a `Shell` drop
+/// only ever group-kills producers that shell itself still owns — never a
+/// concurrent shell's producers sharing the same process (unit tests run many
+/// shells on one fd/process table).
 #[derive(Debug)]
 pub struct ProducerHandle {
     pub pid: Pid,
     pub status_fd: OwnedFd,
+    registry: ProducerRegistry,
 }
 
 /// File descriptors and auxiliary children one materialized job owns.
@@ -98,32 +104,48 @@ pub fn reap_producers_blocking(producers: Vec<ProducerHandle>) {
     }
 }
 
-/// Live producer groups, process-wide.
+/// Live producer groups for one shell session.
 ///
 /// A detached reaper dies with its process: if the shell exits first, the
 /// group would linger holding session pipes (and hang test harnesses waiting
 /// on EOF). Registration here lets shell shutdown group-kill every
 /// still-tracked producer; reapers deregister on success.
-static PRODUCER_GROUPS: parking_lot::Mutex<Vec<Pid>> = parking_lot::Mutex::new(Vec::new());
-
-fn register_producer(pid: Pid) {
-    PRODUCER_GROUPS.lock().push(pid);
+///
+/// This is per-`Shell` (shared by `Arc`), never process-global: a process may
+/// host many shells at once (unit tests do), and one shell's shutdown must
+/// not group-kill another shell's running producers. The previous global
+/// registry did exactly that — whichever shell dropped first SIGTERMed every
+/// still-registered producer in the process, emptying concurrent producers'
+/// pipes before they wrote.
+///
+/// Invariant: cleanup only ever touches producers this shell still owns.
+/// A reaped producer is deregistered by its reaper, so shutdown kill only
+/// reaches genuinely lingering groups.
+#[derive(Debug, Clone, Default)]
+pub struct ProducerRegistry {
+    inner: std::sync::Arc<parking_lot::Mutex<Vec<Pid>>>,
 }
 
-fn deregister_producer(pid: Pid) {
-    PRODUCER_GROUPS.lock().retain(|known| *known != pid);
-}
-
-/// Best-effort group-kill of every still-registered producer. Called on
-/// shell shutdown so no producer outlives the session that spawned it.
-pub(crate) fn cleanup_producer_groups() {
-    let pids = std::mem::take(&mut *PRODUCER_GROUPS.lock());
-    for pid in &pids {
-        nix::sys::signal::killpg(*pid, nix::sys::signal::Signal::SIGTERM).ok();
+impl ProducerRegistry {
+    pub fn register(&self, pid: Pid) {
+        self.inner.lock().push(pid);
     }
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    for pid in &pids {
-        nix::sys::signal::killpg(*pid, nix::sys::signal::Signal::SIGKILL).ok();
+
+    pub fn deregister(&self, pid: Pid) {
+        self.inner.lock().retain(|known| *known != pid);
+    }
+
+    /// Best-effort group-kill of every still-registered producer. Called on
+    /// shell shutdown so no producer outlives the session that spawned it.
+    pub(crate) fn cleanup_producer_groups(&self) {
+        let pids = std::mem::take(&mut *self.inner.lock());
+        for pid in &pids {
+            nix::sys::signal::killpg(*pid, nix::sys::signal::Signal::SIGTERM).ok();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        for pid in &pids {
+            nix::sys::signal::killpg(*pid, nix::sys::signal::Signal::SIGKILL).ok();
+        }
     }
 }
 /// Reap one producer helper: bounded grace, then `SIGTERM`, then `SIGKILL`,
@@ -203,7 +225,7 @@ fn reap_producer_sync(producer: ProducerHandle) {
     if n == 1 && byte[0] == b'D' {
         eprintln!("dogesh: process substitution producer denied by safety policy");
     }
-    deregister_producer(pid);
+    producer.registry.deregister(pid);
 }
 
 /// Snapshot the shell state one helper needs. The snapshot is authoritative;
@@ -343,7 +365,7 @@ pub fn start_process_substitution<'a>(
         drop(write_end);
         drop(status_write);
 
-        register_producer(producer_pid);
+        shell.producer_registry.register(producer_pid);
         let argument = format!("/dev/fd/{}", read_end.as_raw_fd());
         Ok(ProcessSubstitution {
             argument,
@@ -351,9 +373,124 @@ pub fn start_process_substitution<'a>(
             producer: ProducerHandle {
                 pid: producer_pid,
                 status_fd: status_read,
+                registry: shell.producer_registry.clone(),
             },
         })
     })
 }
 
 use std::os::fd::AsRawFd as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repl::confirmation::ConfirmationAction;
+
+    fn allow_all(_: &str) -> Result<ConfirmationAction> {
+        Ok(ConfirmationAction::Yes)
+    }
+
+    /// Test A (producer-only): the re-exec producer delivers its bytes to the
+    /// data pipe with no `/dev/fd` consumer involved.
+    ///
+    /// Green here + red end-to-end isolates the failure to consumer
+    /// inheritance / resource lifetime, not the producer path. Red here
+    /// isolates it to producer stdout wiring / helper evaluation / producer
+    /// lifetime.
+    #[tokio::test]
+    async fn producer_only_delivers_marker_without_consumer() {
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = crate::shell::parse::parse_execution_plan(
+            "printf PRODUCER-MARKER",
+            std::sync::Arc::clone(&env),
+        )
+        .expect("parse producer plan");
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+
+        let substitution =
+            match start_process_substitution(&mut shell, &ctx, &plan, allow_all).await {
+                Ok(substitution) => substitution,
+                Err(err) => panic!("dogesh helper binary missing for producer test: {err:#}"),
+            };
+        // The read end must survive a consumer `execve`: non-CLOEXEC.
+        let read_number = substitution.read_fd.as_raw_fd();
+        let cloexec = unsafe {
+            let borrowed = std::os::fd::BorrowedFd::borrow_raw(substitution.read_fd.as_raw_fd());
+            nix::fcntl::fcntl(borrowed, nix::fcntl::FcntlArg::F_GETFD).expect("F_GETFD")
+        };
+        assert!(
+            !nix::fcntl::FdFlag::from_bits_retain(cloexec).contains(nix::fcntl::FdFlag::FD_CLOEXEC),
+            "process-substitution read fd {read_number} must be non-CLOEXEC to survive consumer exec"
+        );
+        let producer_pid = substitution.producer.pid;
+        tracing::debug!(
+            producer_pid = %producer_pid,
+            read_fd = read_number,
+            argument = %substitution.argument,
+            "producer-only test spawned",
+        );
+
+        // Read the data pipe directly: no `/dev/fd/N` consumer anywhere.
+        let read_fd = substitution.read_fd;
+        let producer = substitution.producer;
+        let output = tokio::task::spawn_blocking(move || {
+            use std::io::Read as _;
+            let mut file = std::fs::File::from(read_fd);
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf).map(|_| buf)
+        })
+        .await
+        .expect("reader task")
+        .expect("read producer pipe");
+        let text = String::from_utf8_lossy(&output).to_string();
+        assert_eq!(
+            text, "PRODUCER-MARKER",
+            "producer helper wrote {text:?}, expected PRODUCER-MARKER (producer pid {producer_pid})"
+        );
+
+        // A finite producer is gone by EOF: bounded reap must not escalate to
+        // group-kill for the healthy case.
+        reap_producers_blocking(vec![producer]);
+    }
+
+    /// Two substitutions retain two distinct read ends and two producers:
+    /// guards against `ExecutionResources` overwrite collapsing the first.
+    #[tokio::test]
+    async fn two_substitutions_retain_distinct_resources() {
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        let plan_one =
+            crate::shell::parse::parse_execution_plan("printf one", std::sync::Arc::clone(&env))
+                .expect("parse");
+        let plan_two =
+            crate::shell::parse::parse_execution_plan("printf two", std::sync::Arc::clone(&env))
+                .expect("parse");
+
+        let first = start_process_substitution(&mut shell, &ctx, &plan_one, allow_all)
+            .await
+            .expect("start first producer");
+        let second = start_process_substitution(&mut shell, &ctx, &plan_two, allow_all)
+            .await
+            .expect("start second producer");
+
+        assert_ne!(
+            first.read_fd.as_raw_fd(),
+            second.read_fd.as_raw_fd(),
+            "two producers must hold distinct read fds"
+        );
+        assert_ne!(
+            first.producer.pid, second.producer.pid,
+            "distinct producers"
+        );
+
+        let mut resources = ExecutionResources::new();
+        let arg_one = resources.add_process_substitution(first);
+        let arg_two = resources.add_process_substitution(second);
+        assert_eq!(resources.inherited_fds.len(), 2, "both read ends retained");
+        assert_eq!(resources.producers.len(), 2, "both producers retained");
+        assert_ne!(arg_one, arg_two, "distinct /dev/fd arguments");
+        // `resources` drops here: fds close, producers go to detached reapers.
+    }
+}

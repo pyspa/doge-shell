@@ -13,6 +13,18 @@ fn stdout_of(command: &str) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
 }
 
+/// Full output with status: failure messages name stdout, stderr, and the
+/// exit status so an empty producer pipe can be told apart from a consumer
+/// that never ran.
+fn run_full(command: &str) -> (String, String, std::process::ExitStatus) {
+    let output = common::run_command(command);
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status,
+    )
+}
+
 #[test]
 fn command_substitution_does_not_move_parent_cwd() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -81,20 +93,125 @@ fn skipped_process_substitution_spawns_nothing() {
 
 #[test]
 fn repeated_process_substitution_does_not_hang_or_leak() {
-    for word in ["alpha", "beta", "gamma"] {
-        let out = stdout_of(&format!("cat <(printf {word})"));
+    // Unique markers per iteration: a stale producer's output cannot be
+    // mistaken for the current one, and one empty iteration fails loudly.
+    for i in 0..20 {
+        let word = format!("PS-{i:03}");
+        let (out, err, status) = run_full(&format!("cat <(printf {word})"));
+        assert!(
+            status.success(),
+            "iteration {word} failed: stdout={out:?} stderr={err:?} status={status:?}"
+        );
         assert!(
             out.lines().any(|line| line.trim() == word),
-            "iteration {word} broke: {out:?}"
+            "iteration {word} broke: stdout={out:?} stderr={err:?} status={status:?}"
         );
     }
 }
 
 #[test]
 fn two_producers_in_one_command() {
-    let out = stdout_of("cat <(printf one) <(printf two)");
-    assert!(out.contains("one"), "first producer missing: {out:?}");
-    assert!(out.contains("two"), "second producer missing: {out:?}");
+    let (out, err, status) = run_full("cat <(printf one) <(printf two)");
+    assert!(
+        status.success(),
+        "two-producer command failed: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    assert!(
+        out.contains("one"),
+        "first producer missing: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    assert!(
+        out.contains("two"),
+        "second producer missing: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+}
+
+#[test]
+fn three_producers_in_one_command() {
+    // `cat` concatenates in argv order, so the expectation is fixed.
+    let (out, err, status) = run_full("cat <(printf one) <(printf two) <(printf three)");
+    assert!(
+        status.success(),
+        "three-producer command failed: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    for word in ["one", "two", "three"] {
+        assert!(
+            out.contains(word),
+            "producer {word} missing: stdout={out:?} stderr={err:?} status={status:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_producer_is_eof_not_hang() {
+    let (out, err, status) = run_full(&format!("cat <({})", common::true_path()));
+    assert!(
+        status.success(),
+        "empty producer failed: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    assert!(
+        out.trim().is_empty(),
+        "empty producer must read as EOF: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+}
+
+#[test]
+fn nonzero_producer_still_delivers_its_stream() {
+    // A non-zero producer status must not discard the bytes already written.
+    // `false` exits 1 after `printf` wrote, using only policy-allowed words
+    // (`sh -c` would deny the whole producer by policy, which is separate
+    // existing semantics, not data loss).
+    let (out, err, status) = run_full("cat <(printf x; false)");
+    assert!(
+        out.contains('x'),
+        "non-zero producer stream lost: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+}
+
+#[test]
+fn slow_producer_is_not_read_as_early_eof() {
+    // The consumer must block for a late producer, not settle on the empty
+    // pipe it sees first. This is a regression test, not a timing fix.
+    let (out, err, status) = run_full("cat <(sleep 0.05; printf late)");
+    assert!(
+        status.success(),
+        "slow producer command failed: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    assert!(
+        out.contains("late"),
+        "slow producer read as early EOF: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+}
+
+#[test]
+fn large_producer_streams_past_the_pipe_buffer() {
+    // ~128 KiB exceeds the 64 KiB pipe buffer: the producer can only finish
+    // while the consumer drains concurrently. Buffering the whole stream in
+    // the parent first would deadlock here.
+    //
+    // The stream goes to a file, not the harness stdout pipe: the harness
+    // only drains after exit, so >64 KiB on stdout would wedge the display
+    // path regardless of producer/consumer streaming (separate pre-existing
+    // limitation, out of scope here).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("large.out");
+    let (out, err, status) = run_full(&format!(
+        "cat <({} | {} -c 131072) > {}",
+        common::yes_path(),
+        common::head_path(),
+        target.display()
+    ));
+    assert!(
+        status.success(),
+        "large producer failed: stdout={out:?} stderr={err:?} status={status:?}"
+    );
+    let bytes = std::fs::read(&target).expect("read large output");
+    assert_eq!(
+        bytes.len(),
+        131072,
+        "large producer short: len={} stdout={out:?} stderr={err:?} status={status:?}",
+        bytes.len(),
+    );
 }
 
 #[test]

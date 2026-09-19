@@ -71,10 +71,55 @@ fn a_failed_redirect_leaves_the_shell_running() {
 /// producer-helper spawn no matter which number it holds.
 #[test]
 fn process_substitution_handle_survives_helper_spawn() {
-    let stdout = stdout_of("cat <(printf FD-COLLISION-MARKER)");
+    let output = run_command("cat <(printf FD-COLLISION-MARKER)");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     assert!(
         stdout.contains("FD-COLLISION-MARKER"),
-        "producer output lost across the re-exec boundary: {stdout:?}"
+        "producer output lost across the re-exec boundary: stdout={stdout:?} stderr={stderr:?} status={:?}",
+        output.status,
+    );
+}
+
+/// Test B (consumer-only): no producer helper anywhere. A preseeded
+/// non-CLOEXEC pipe is inherited through the normal external fork/exec path
+/// as `/dev/fd/N`.
+///
+/// Green here + red end-to-end isolates the failure to the producer side or
+/// to resource-lifetime ordering. Red here isolates it to external fd
+/// inheritance / consumer lifetime, independent of the re-exec producer.
+#[test]
+fn consumer_inherits_preseeded_pipe_without_producer() {
+    use std::io::Write as _;
+    use std::os::fd::FromRawFd as _;
+
+    // The `<(...)` shape: non-CLOEXEC read end, so `fork`+`execve` carries it
+    // into the consumer. `run_command` spawns dogesh via `Command`, which
+    // inherits every non-CLOEXEC fd open here; dogesh then forks its consumer
+    // the same way.
+    let mut pipe_fds = [0 as std::os::unix::io::RawFd; 2];
+    assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+    let read_fd = pipe_fds[0];
+    let write_fd = pipe_fds[1];
+    {
+        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd) };
+        writer.write_all(b"CONSUMER-MARKER").expect("write marker");
+        // Closed here: the consumer must see EOF right after the marker
+        // instead of hanging on a held write end.
+    }
+    let output = run_command(&format!("/bin/cat /dev/fd/{read_fd}"));
+    unsafe { libc::close(read_fd) };
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "consumer failed: stdout={stdout:?} stderr={stderr:?} status={:?}",
+        output.status,
+    );
+    assert!(
+        stdout.contains("CONSUMER-MARKER"),
+        "consumer lost preseeded pipe /dev/fd/{read_fd}: stdout={stdout:?} stderr={stderr:?} status={:?}",
+        output.status,
     );
 }
 

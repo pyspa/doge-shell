@@ -6,6 +6,11 @@
 //! parent only moves pipes: it hands the helper its stdout target, reads the
 //! capture pipe, or retains the producer's read end as `/dev/fd/N`.
 //!
+//! A process-substitution descriptor is user-visible execution state.
+//! Internal re-exec protocol descriptors must never overwrite it: protocol
+//! targets are reserved from the kernel at spawn time (see
+//! `crate::process::reexec`), never fixed numbers.
+//!
 //! Skipped branches (`false && $(...)`) spawn nothing: gating is checked in
 //! the parent before any pipe or helper exists, and the helper re-checks
 //! inner `&&`/`||` itself.

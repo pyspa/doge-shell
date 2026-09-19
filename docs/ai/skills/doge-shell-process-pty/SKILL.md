@@ -8,7 +8,7 @@ description: Use for doge-shell process, PTY, job control, raw terminal, colored
 - Start with `rg -n "pty|PtyMonitor|raw mode|cfmakeraw|isatty|ANSI|stdout|job" dsh/src/process dsh/src/shell dsh/src/terminal`.
 - Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) for the process / PTY entry.
 - Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before choosing cargo package names.
-- Default read targets are `dsh/src/process/io.rs`, `dsh/src/process/job_pty.rs`, `dsh/src/process/pty.rs`, `dsh/src/shell/eval.rs`, and `dsh/src/terminal/`. Spawn-boundary work starts at `dsh/src/process/child_exec.rs` (raw post-fork child), `dsh/src/process/reexec.rs` (shared re-exec protocol), and `dsh/src/shell/substitution.rs` (producer ownership).
+- Default read targets are `dsh/src/process/io.rs`, `dsh/src/process/job_pty.rs`, `dsh/src/process/pty.rs`, `dsh/src/shell/eval.rs`, and `dsh/src/terminal/`. Spawn-boundary work starts at `dsh/src/process/child_exec.rs` (raw post-fork child), `dsh/src/process/reexec/` (shared re-exec protocol), and `dsh/src/shell/substitution.rs` (producer ownership).
 - `fork()` child では raw syscall（`setpgid`/`setsid`/`sigaction`/`dup2`/`close`/`ioctl`/`execve`/`_exit`）以外を実行しない。`tracing`・`anyhow`・確保・lock・`std::process::exit` は親側（exec-error pipe の診断整形）へ。Rust を実行する子は `posix_spawn` + fresh `dogesh` helper のみ。
 - Background builtin の可否は `dsh-builtin/src/background.rs` の audit が正。Session-bound builtin は明示拒否し、fork へ戻さない。
 - Keep display-only fixes at the PTY/stdout boundary unless the task proves captured output or command execution semantics are involved.

@@ -23,6 +23,11 @@ pub struct Cli {
     #[arg(long = "__dsh-internal-exec-fd", hide = true)]
     pub internal_exec_fd: Option<i32>,
 
+    /// Internal re-exec helper: one-byte completion report goes to this fd.
+    /// Absent for helpers without a status channel (background builtins).
+    #[arg(long = "__dsh-internal-status-fd", hide = true)]
+    pub internal_status_fd: Option<i32>,
+
     #[command(subcommand)]
     pub subcommand: Option<SubCommand>,
 }
@@ -91,6 +96,7 @@ mod tests {
             lisp: None,
             notebook: None,
             internal_exec_fd: None,
+            internal_status_fd: None,
             subcommand: None,
         };
         assert!(RunMode::from_cli(&base).needs_interactive_services());

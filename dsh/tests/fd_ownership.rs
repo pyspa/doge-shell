@@ -65,3 +65,27 @@ fn a_failed_redirect_leaves_the_shell_running() {
         );
     }
 }
+
+/// The internal re-exec protocol reserves its descriptors dynamically, so the
+/// `/dev/fd/N` handle handed to a `<(...)` consumer must survive the
+/// producer-helper spawn no matter which number it holds.
+#[test]
+fn process_substitution_handle_survives_helper_spawn() {
+    let stdout = stdout_of("cat <(printf FD-COLLISION-MARKER)");
+    assert!(
+        stdout.contains("FD-COLLISION-MARKER"),
+        "producer output lost across the re-exec boundary: {stdout:?}"
+    );
+}
+
+/// `$(...)` around `<(...)`: command substitution, process substitution, and
+/// the nested helper/external below must all share the descriptor namespace
+/// without collision.
+#[test]
+fn nested_command_and_process_substitution_share_no_descriptor() {
+    let stdout = stdout_of("echo $(cat <(printf DEEP-MARKER))");
+    assert!(
+        stdout.lines().any(|line| line.trim() == "DEEP-MARKER"),
+        "nested substitution output lost: {stdout:?}"
+    );
+}

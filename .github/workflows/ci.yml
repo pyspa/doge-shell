@@ -71,7 +71,11 @@ jobs:
       - name: Agent OS sandbox boundary
         run: cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored
 
+      # Fail fast on a runaway suite: a healthy workspace run takes a few
+      # minutes, so hitting this 15-minute step timeout means a regression,
+      # not a slow day.
       - name: Test
+        timeout-minutes: 15
         run: cargo test --workspace < /dev/null
 
   lint:

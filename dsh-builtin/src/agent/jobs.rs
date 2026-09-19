@@ -22,6 +22,59 @@ struct Output {
     truncated: bool,
     eof: bool,
 }
+impl Output {
+    fn push(&mut self, bytes: &[u8]) {
+        self.push_with_limit(bytes, OUTPUT_LIMIT);
+    }
+
+    /// Append `bytes`, keeping only the newest `limit` bytes.
+    ///
+    /// `total` counts everything ever received; `truncated` turns on the
+    /// first time an old byte is dropped and never turns off. A single chunk
+    /// larger than `limit` keeps its own tail, and `limit == 0` keeps
+    /// nothing without panicking.
+    fn push_with_limit(&mut self, bytes: &[u8], limit: usize) {
+        if limit == 0 {
+            if !bytes.is_empty() {
+                self.truncated = true;
+            }
+            self.bytes.clear();
+            self.total = self.total.saturating_add(bytes.len());
+            return;
+        }
+        if bytes.len() >= limit {
+            // An exact fill of an empty ring drops nothing, so it must not
+            // read as truncated; anything else in this arm discards bytes -
+            // the buffered head, the incoming head, or both.
+            if !self.bytes.is_empty() || bytes.len() > limit {
+                self.truncated = true;
+            }
+            self.bytes.clear();
+            self.bytes.extend_from_slice(&bytes[bytes.len() - limit..]);
+            self.total = self.total.saturating_add(bytes.len());
+            return;
+        }
+        // From here `bytes.len() < limit`, so any overflow is smaller than
+        // what is already buffered and `drain(..overflow)` cannot overrun.
+        if self.bytes.len() > limit {
+            let excess = self.bytes.len() - limit;
+            self.bytes.drain(..excess);
+            self.truncated = true;
+        }
+        let overflow = self
+            .bytes
+            .len()
+            .saturating_add(bytes.len())
+            .saturating_sub(limit);
+        if overflow > 0 {
+            let remove = overflow.min(self.bytes.len());
+            self.bytes.drain(..remove);
+            self.truncated = true;
+        }
+        self.bytes.extend_from_slice(bytes);
+        self.total = self.total.saturating_add(bytes.len());
+    }
+}
 fn reader(mut pipe: impl Read + Send + 'static) -> Arc<Mutex<Output>> {
     let output = Arc::new(Mutex::new(Output::default()));
     let dest = output.clone();
@@ -31,14 +84,7 @@ fn reader(mut pipe: impl Read + Send + 'static) -> Arc<Mutex<Output>> {
             if n == 0 {
                 break;
             }
-            let mut out = dest.lock();
-            if out.bytes.len() + n > OUTPUT_LIMIT {
-                let remove = out.bytes.len() + n - OUTPUT_LIMIT;
-                out.bytes.drain(..remove);
-                out.truncated = true;
-            }
-            out.bytes.extend_from_slice(&buf[..n]);
-            out.total = out.total.saturating_add(n);
+            dest.lock().push(&buf[..n]);
         }
         dest.lock().eof = true;
     });
@@ -388,17 +434,88 @@ mod tests {
         id
     }
 
+    /// A finished job built in memory, without spawning a process.
+    ///
+    /// Archiving and reaping are about table bookkeeping, not process
+    /// behaviour, so these tests do not need a shell for every row.
+    fn insert_finished_job(
+        jobs: &mut AgentJobs,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        seq: u64,
+    ) -> String {
+        let id = format!("test-job-{seq}");
+        let output = |bytes: Vec<u8>| {
+            Arc::new(Mutex::new(Output {
+                bytes: bytes.clone(),
+                total: bytes.len(),
+                truncated: false,
+                eof: true,
+            }))
+        };
+        jobs.jobs.insert(
+            id.clone(),
+            Job {
+                state: Arc::new(Mutex::new(json!({"status":"exited","exit_code":0}))),
+                cancel: Arc::new(AtomicBool::new(false)),
+                stdout: output(stdout),
+                stderr: output(stderr),
+                worker: None,
+                seq,
+            },
+        );
+        jobs.next_seq = jobs.next_seq.max(seq.saturating_add(1));
+        id
+    }
+
     /// `start` counts finished jobs against its ceiling, which is right for a
     /// task and wrong for a shell session. Without reaping, the thirty-third
     /// `execute` of a session fails.
     #[test]
     fn finished_jobs_are_reaped_so_the_limit_is_not_reached() {
         let mut jobs = AgentJobs::default();
-        for _ in 0..40 {
-            jobs.reap_finished(8);
-            run_to_completion(&mut jobs, "true");
+        // One genuinely running job first, so the test also pins that reaping
+        // never takes a live process down with the finished ones. It has to
+        // come first: `start` enforces the 32-job ceiling while the fixture
+        // inserts below bypass it on purpose.
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 10"]);
+        let running = jobs.start(command, Duration::from_secs(20), None).unwrap();
+        for seq in 1..=40 {
+            insert_finished_job(&mut jobs, format!("out-{seq}").into_bytes(), vec![], seq);
         }
-        assert!(jobs.jobs.len() <= 9, "leaked jobs: {}", jobs.jobs.len());
+
+        let archived = jobs.reap_finished(8);
+
+        // 40 finished collapse to the 8 newest; the running job stays.
+        assert_eq!(jobs.jobs.len(), 9, "leaked jobs: {}", jobs.jobs.len());
+        assert!(jobs.snapshot(&running, 0, 64).is_ok());
+        // The reap drops the oldest first and hands them back for archiving.
+        assert_eq!(archived.len(), 32);
+        assert!(archived.iter().any(|(id, _)| id == "test-job-1"));
+        assert!(!archived.iter().any(|(id, _)| id == "test-job-40"));
+        assert!(jobs.jobs.contains_key("test-job-40"));
+        jobs.cancel(&running).unwrap();
+    }
+
+    /// The ceiling is still real: at 32 jobs `start` refuses, and one reap
+    /// makes room for exactly one real command.
+    #[test]
+    fn a_reaped_session_still_starts_a_new_command() {
+        let mut jobs = AgentJobs::default();
+        for seq in 0..32 {
+            insert_finished_job(&mut jobs, format!("out-{seq}").into_bytes(), vec![], seq);
+        }
+        let mut probe = Command::new("sh");
+        probe.args(["-c", "true"]);
+        assert!(
+            jobs.start(probe, Duration::from_secs(20), None).is_err(),
+            "the 32-job ceiling should hold with no reap"
+        );
+
+        jobs.reap_finished(8);
+        let id = run_to_completion(&mut jobs, "true");
+        assert_eq!(jobs.snapshot(&id, 0, 64).unwrap()["status"], "exited");
     }
 
     /// The archive a reap hands back has to carry the whole log: `snapshot`
@@ -407,9 +524,7 @@ mod tests {
     #[test]
     fn a_reaped_job_is_archived_whole_rather_than_through_the_snapshot_window() {
         let mut jobs = AgentJobs::default();
-        let id = run_to_completion(&mut jobs, "printf 'x%.0s' $(seq 1 70000)");
-        jobs.reap_finished(8);
-        run_to_completion(&mut jobs, "true");
+        let id = insert_finished_job(&mut jobs, vec![b'x'; 70000], vec![], 0);
 
         let archived = jobs.reap_finished(0);
         let (_, entry) = archived
@@ -470,5 +585,72 @@ mod tests {
 
         assert!(raw.contains("abcd1234"), "{raw}");
         assert!(!masked.contains("abcd1234"), "{masked}");
+    }
+
+    /// The ring keeps the tail, not the head, once it overflows - without
+    /// spawning a process or printing a megabyte anywhere.
+    #[test]
+    fn bounded_output_keeps_the_tail_after_overflow() {
+        let mut out = Output::default();
+        out.push_with_limit(b"HEAD-MARKER", 16);
+        out.push_with_limit(&[b'x'; 32], 16);
+        out.push_with_limit(b"TAIL-MARKER", 16);
+
+        assert!(out.bytes.len() <= 16, "len {}", out.bytes.len());
+        let text = String::from_utf8_lossy(&out.bytes);
+        assert!(text.contains("TAIL-MARKER"), "{text}");
+        assert!(!text.contains("HEAD-MARKER"), "{text}");
+        assert!(out.truncated);
+        assert_eq!(out.total, 11 + 32 + 11);
+    }
+
+    /// One chunk bigger than the whole ring keeps its own tail instead of
+    /// panicking in `drain`.
+    #[test]
+    fn bounded_output_handles_a_single_chunk_larger_than_the_limit() {
+        let mut out = Output::default();
+        out.push_with_limit(b"HEAD", 16);
+        let big = [b'y'; 64];
+        out.push_with_limit(&big, 16);
+
+        assert_eq!(out.bytes.len(), 16);
+        assert_eq!(out.bytes, big[big.len() - 16..]);
+        assert!(out.truncated);
+        assert_eq!(out.total, 4 + 64);
+    }
+
+    /// Under the limit nothing is dropped and nothing is marked truncated.
+    #[test]
+    fn bounded_output_under_the_limit_is_verbatim() {
+        let mut out = Output::default();
+        out.push_with_limit(b"abc", 16);
+        out.push_with_limit(b"def", 16);
+
+        assert_eq!(out.bytes, b"abcdef");
+        assert!(!out.truncated);
+        assert_eq!(out.total, 6);
+    }
+
+    /// Filling an empty ring exactly to the limit drops nothing, so it must
+    /// not read as truncated either.
+    #[test]
+    fn bounded_output_exact_fill_is_not_truncated() {
+        let mut out = Output::default();
+        out.push_with_limit(b"1234567890123456", 16);
+
+        assert_eq!(out.bytes, b"1234567890123456");
+        assert!(!out.truncated);
+        assert_eq!(out.total, 16);
+    }
+
+    /// A zero limit keeps nothing but still counts, without panicking.
+    #[test]
+    fn bounded_output_with_a_zero_limit_keeps_nothing() {
+        let mut out = Output::default();
+        out.push_with_limit(b"abc", 0);
+
+        assert!(out.bytes.is_empty());
+        assert!(out.truncated);
+        assert_eq!(out.total, 3);
     }
 }

@@ -958,38 +958,16 @@ fn run_returns_even_while_a_grandchild_holds_the_pipe() {
     );
 }
 
-/// The end of a long output is where the compiler error is, so a capture that
-/// overflows its cap has to keep the tail.
-///
-/// The interactive path used to keep both ends (`CappedCapture`: 512KiB of
-/// head, 512KiB of tail, with a note in between). `AgentJobs`' ring keeps the
-/// last 1MiB only - the trade recorded in `ai/open-questions.md` for having
-/// one capture engine instead of two. The tail is the half that matters.
-#[test]
-fn a_capture_over_the_cap_keeps_the_tail() {
-    let _lock = env_lock();
-    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "printf");
-    let mut proxy = TestProxy {
-        execute_allowlist: vec!["printf".to_string()],
-        current_dir: std::env::current_dir().unwrap(),
-        confirm_result: true,
-        ..TestProxy::default()
-    };
-
-    let result = run(
-        "{\"command\":\"printf HEAD-MARKER; head -c 1200000 /dev/zero | tr '\\\\0' x; printf TAIL-MARKER\"}",
-        &mut proxy,
-    )
-    .unwrap();
-
-    let parsed: Value = serde_json::from_str(&result).unwrap();
-    let stdout = parsed["stdout"].as_str().unwrap();
-    assert!(stdout.ends_with("TAIL-MARKER"), "lost the tail: {stdout:?}");
-    assert!(
-        !stdout.starts_with("HEAD-MARKER"),
-        "the ring is tail-only; keeping the head would mean two capture engines again"
-    );
-}
+// The end of a long output is where the compiler error is, so a capture that
+// overflows its cap has to keep the tail. The interactive path used to keep
+// both ends (`CappedCapture`: 512KiB of head, 512KiB of tail); `AgentJobs`'
+// ring keeps the last 1MiB only. Coverage for this lives in three cheaper
+// places now, none of which echoes megabytes to the CI log:
+// `agent::jobs::tests::bounded_output_*` pins the ring itself,
+// `chatgpt::jobs::tests::live_echo_*` pins the 256KiB terminal cap, and
+// `chatgpt::tool::execute::jobs::tests::
+// over_the_cap_capture_keeps_the_tail_without_live_echo` pins the
+// ring-to-result seam without calling `echo_pending`.
 
 /// The common case has to look exactly as it did before jobs existed: one
 /// round trip, `{exit_code, stdout, stderr}`, and the output on the screen.

@@ -418,13 +418,16 @@ mod tests {
     /// A payload larger than a pipe buffer, plus a hook that talks back before
     /// reading it. With a pipe this deadlocked both sides; with a file the hook
     /// reads at its own pace.
+    ///
+    /// 128KiB each way is still twice the 64KiB pipe buffer, so the old
+    /// threaded-writer deadlock would still trigger at this size.
     #[test]
     fn large_payload_and_large_output_do_not_deadlock() {
         let dir = tempfile::tempdir().unwrap();
         // Reads its whole stdin only after writing a lot of its own output.
-        let path = script(&dir, "yes abcdefghij | head -c 200000\ncat > /dev/null");
+        let path = script(&dir, "yes abcdefghij | head -c 131072\ncat > /dev/null");
         let hook = definition(vec!["sh".to_string(), path.display().to_string()], 10_000);
-        let payload = "x".repeat(512 * 1024);
+        let payload = "x".repeat(128 * 1024);
 
         match run(&dir, &hook, &payload) {
             HookRun::Answered(response) => assert!(response.decision.is_none()),
@@ -435,6 +438,9 @@ mod tests {
     /// The failure the writer thread caused: the hook exits cleanly but leaves
     /// a grandchild holding the read end of stdin. Feeding the child a file
     /// instead of a pipe means there is nothing left to block on.
+    ///
+    /// 128KiB still exceeds the pipe buffer, so the old pipe-fed writer would
+    /// still have blocked on the grandchild at this size.
     #[test]
     fn a_hook_that_leaves_a_grandchild_holding_stdin_still_returns() {
         let dir = tempfile::tempdir().unwrap();
@@ -444,7 +450,7 @@ mod tests {
 exit 0",
         );
         let hook = definition(vec!["sh".to_string(), path.display().to_string()], 10_000);
-        let payload = "x".repeat(512 * 1024);
+        let payload = "x".repeat(128 * 1024);
 
         let started = Instant::now();
         let outcome = run(&dir, &hook, &payload);

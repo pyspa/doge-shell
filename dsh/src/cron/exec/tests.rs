@@ -45,12 +45,16 @@ fn stderr_is_captured_separately() {
 
 /// Reading the pipes after waiting would deadlock here, which is exactly the
 /// kind of job someone schedules.
+///
+/// `seq 1 20000` is ~110KiB, comfortably over the 64KiB pipe buffer on both
+/// Linux and macOS, so the regression still exercises the drain threads
+/// without generating ten times that.
 #[test]
 fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
-    let outcome = run_command(&run("seq 1 200000", 30));
+    let outcome = run_command(&run("seq 1 20000", 30));
     assert_eq!(outcome.exit_code, 0);
     assert!(
-        outcome.stdout.lines().count() == 200_000,
+        outcome.stdout.lines().count() == 20_000,
         "{}",
         outcome.stdout.len()
     );

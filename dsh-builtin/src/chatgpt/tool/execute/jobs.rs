@@ -140,3 +140,67 @@ fn still_running_result(id: &str, command: &str) -> String {
 fn redact(bytes: &[u8]) -> String {
     dsh_types::safety_policy::redact_sensitive_text(&String::from_utf8_lossy(bytes))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::MutexGuard;
+
+    /// Same process-wide lock the `execute` and `chatgpt::jobs` tests share:
+    /// the registry is global, so a `shutdown` here could otherwise kill a job
+    /// another test is waiting on.
+    fn guard() -> MutexGuard<'static, ()> {
+        let guard = super::super::tests::env_lock();
+        chat_jobs::shutdown();
+        guard
+    }
+
+    /// The ring-to-result seam, without the terminal.
+    ///
+    /// The old `a_capture_over_the_cap_keeps_the_tail` drove this through
+    /// `run()`, whose wait loop echoes every byte to real stdout - about
+    /// 1MiB of newline-free `x` on one CI log line, which stalled the
+    /// `cargo test --workspace` step for tens of minutes. This starts the
+    /// same managed job and reads it back through `finished_result` without
+    /// ever calling `echo_pending`, so generating 1.2MiB is milliseconds of
+    /// pipe and memory and zero bytes of CI log.
+    #[test]
+    fn over_the_cap_capture_keeps_the_tail_without_live_echo() {
+        let _lock = guard();
+
+        chat_jobs::set_session("over-cap-without-echo");
+        let command =
+            r"printf HEAD-MARKER; head -c 1200000 /dev/zero | tr '\0' x; printf TAIL-MARKER";
+        let builder = super::capture::shell_command(command, None);
+        let timeout = Duration::from_secs(60);
+        let id = chat_jobs::start(builder, command, None, timeout).unwrap();
+
+        // Wait for the job the way the wait loop does, minus the echo: poll
+        // the snapshot until the worker publishes its final state.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let state = chat_jobs::with(|jobs| jobs.snapshot(&id, 0, 0)).unwrap();
+            if state["status"] != "running" {
+                break;
+            }
+            assert!(Instant::now() < deadline, "job {id} never finished");
+            std::thread::sleep(POLL_INTERVAL);
+        }
+
+        let result = finished_result(&id, timeout, false);
+        let parsed: Value = serde_json::from_str(&result).expect("result is JSON");
+        assert_eq!(parsed["exit_code"], 0);
+        let stdout = parsed["stdout"].as_str().expect("stdout is text");
+        assert!(
+            stdout.ends_with("TAIL-MARKER"),
+            "lost the tail: {}",
+            stdout.len()
+        );
+        assert!(
+            !stdout.starts_with("HEAD-MARKER"),
+            "the ring is tail-only; keeping the head would mean two capture engines again"
+        );
+
+        chat_jobs::shutdown();
+    }
+}

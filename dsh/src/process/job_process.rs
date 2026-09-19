@@ -186,32 +186,36 @@ impl JobProcess {
         }
     }
 
-    pub(crate) fn is_stopped(&self) -> bool {
-        match self.get_state() {
-            ProcessState::Stopped(_, _) => true,
-            ProcessState::Running => false,
-            _ => {
-                if let Some(p) = self.next() {
-                    p.is_stopped()
-                } else {
-                    false
+    /// Whether the whole job can be treated as stopped: at least one
+    /// `Stopped` stage exists and no `Running` stage remains.
+    ///
+    /// `Completed` stages are neutral (already out of the lifecycle), so
+    /// `Completed / Stopped` is fully stopped while `Running / Stopped`
+    /// (partial stop) is not. All-completed pipelines are *not* stopped.
+    pub(crate) fn is_fully_stopped(&self) -> bool {
+        let mut saw_stopped = false;
+        let mut current = Some(self);
+        while let Some(process) = current {
+            match process.get_state() {
+                ProcessState::Running => return false,
+                ProcessState::Stopped(_, _) => {
+                    saw_stopped = true;
                 }
+                ProcessState::Completed(_, _) => {}
             }
+            current = process.next_process();
         }
+        saw_stopped
     }
 
     pub(crate) fn is_completed(&self) -> bool {
-        match self.get_state() {
-            ProcessState::Completed(_, _signal) => {
-                //ok
-                if let Some(next) = self.next() {
-                    return next.is_completed();
-                }
-            }
-            _ => {
+        let mut current = Some(self);
+        while let Some(process) = current {
+            if !matches!(process.get_state(), ProcessState::Completed(_, _)) {
                 return false;
             }
-        };
+            current = process.next_process();
+        }
         true
     }
 
@@ -239,16 +243,14 @@ impl JobProcess {
 
     /// Check if any process in the pipeline is stopped
     pub(crate) fn has_stopped_process(&self) -> bool {
-        match self.get_state() {
-            ProcessState::Stopped(_, _) => true,
-            _ => {
-                if let Some(next) = self.next() {
-                    next.has_stopped_process()
-                } else {
-                    false
-                }
+        let mut current = Some(self);
+        while let Some(process) = current {
+            if matches!(process.get_state(), ProcessState::Stopped(_, _)) {
+                return true;
             }
+            current = process.next_process();
         }
+        false
     }
 
     /// Mark every stopped pipeline stage as running after a successful resume.
@@ -591,7 +593,9 @@ mod tests {
         let mut process = Process::new("test".to_string(), vec![]);
         process.state = ProcessState::Completed(0, None);
 
-        assert!(!JobProcess::Command(process).is_stopped());
+        let pipeline = JobProcess::Command(process);
+        assert!(!pipeline.has_stopped_process());
+        assert!(!pipeline.is_fully_stopped());
     }
 
     fn pipeline_with_states(states: &[ProcessState]) -> JobProcess {

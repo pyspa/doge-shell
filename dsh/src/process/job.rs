@@ -18,6 +18,8 @@ use crate::process::job_pty;
 use crate::process::job_wait;
 
 mod lifecycle;
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[derive(Debug)]
 pub struct Job {
@@ -555,21 +557,6 @@ impl Job {
         }
     }
 
-    /// Sync the job-table summary from the process tree (real `Stopped`, never synthesized).
-    pub(crate) fn refresh_lifecycle_state(&mut self) {
-        if let Some(process) = &self.process
-            && let Some(stopped) = process.first_stopped_state()
-        {
-            self.state = stopped;
-            return;
-        }
-        if self.is_process_tree_completed() {
-            self.state = self.last_process_state();
-        } else {
-            self.state = ProcessState::Running;
-        }
-    }
-
     pub async fn check_background_output(&mut self) -> Result<()> {
         job_wait::check_background_output(self).await
     }
@@ -586,48 +573,50 @@ impl Job {
     pub fn update_status(&mut self) -> bool {
         let old_state = self.state;
 
-        if let Some(process) = self.process.as_mut()
-            && let Some(state) = process.update_state()
-        {
-            self.state = state;
+        // Poll individual process states, then re-derive the job summary
+        // from the whole tree. The root stage's returned state must not be
+        // copied directly: it is order-dependent for pipelines.
+        if let Some(process) = self.process.as_mut() {
+            let _ = process.update_state();
+        }
+        self.refresh_lifecycle_state();
 
-            if old_state != self.state {
-                debug!(
-                    "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
-                    self.job_id, old_state, self.state, self.pid, self.pgid
-                );
+        if old_state != self.state {
+            debug!(
+                "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
+                self.job_id, old_state, self.state, self.pid, self.pgid
+            );
 
-                match (&old_state, &self.state) {
-                    (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
-                        debug!(
-                            "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
-                            self.job_id, signal, pid
-                        );
-                    }
-                    (ProcessState::Stopped(_, _), ProcessState::Running) => {
-                        debug!(
-                            "JOB_RESUMED: Job {} resumed from stopped state",
-                            self.job_id
-                        );
-                    }
-                    (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
-                        debug!(
-                            "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
-                            self.job_id, exit_code, signal
-                        );
-                    }
-                    (ProcessState::Stopped(_, _), ProcessState::Completed(exit_code, signal)) => {
-                        debug!(
-                            "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
-                            self.job_id, exit_code, signal
-                        );
-                    }
-                    _ => {
-                        debug!(
-                            "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
-                            self.job_id, old_state, self.state
-                        );
-                    }
+            match (&old_state, &self.state) {
+                (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
+                    debug!(
+                        "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
+                        self.job_id, signal, pid
+                    );
+                }
+                (ProcessState::Stopped(_, _), ProcessState::Running) => {
+                    debug!(
+                        "JOB_RESUMED: Job {} resumed from stopped state",
+                        self.job_id
+                    );
+                }
+                (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
+                    debug!(
+                        "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
+                        self.job_id, exit_code, signal
+                    );
+                }
+                (ProcessState::Stopped(_, _), ProcessState::Completed(exit_code, signal)) => {
+                    debug!(
+                        "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
+                        self.job_id, exit_code, signal
+                    );
+                }
+                _ => {
+                    debug!(
+                        "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
+                        self.job_id, old_state, self.state
+                    );
                 }
             }
         }

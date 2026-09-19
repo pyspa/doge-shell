@@ -1,7 +1,7 @@
 use super::job::Job;
 use super::job_process::JobProcess;
 use super::state::ProcessState;
-use crate::process::wait::{is_job_completed, is_job_stopped};
+use crate::process::wait::is_job_completed;
 use crate::shell::SHELL_TERMINAL;
 use anyhow::{Context, Result};
 use nix::sys::signal::Signal;
@@ -272,7 +272,11 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
             break;
         }
 
-        if is_job_stopped(job) {
+        // Only a fully-stopped job (every live stage stopped) ends the
+        // foreground wait. A single stopped stage in a still-running
+        // pipeline must keep polling until its siblings stop as well.
+        if job.is_fully_stopped() {
+            job.refresh_lifecycle_state();
             print_stopped_notice(job);
             debug!("Job stopped, breaking from wait_process_no_hang loop");
             break;

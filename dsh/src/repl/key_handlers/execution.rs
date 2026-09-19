@@ -537,7 +537,7 @@ pub(crate) fn handle_resume_last_job(repl: &mut Repl<'_>) -> Result<()> {
         .wait_jobs
         .iter()
         .rev()
-        .find(|job| matches!(job.state, crate::process::state::ProcessState::Stopped(..)))
+        .find(|job| job.is_fully_stopped())
         .map(|job| job.job_id)
     else {
         return Ok(());

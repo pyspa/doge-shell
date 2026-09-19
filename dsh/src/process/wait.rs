@@ -5,22 +5,6 @@ use tracing::{debug, error};
 use super::job::Job;
 use super::state::ProcessState;
 
-pub fn is_job_stopped(job: &Job) -> bool {
-    if let Some(p) = &job.process {
-        let stopped = p.is_stopped();
-        debug!(
-            "is_job_stopped {} {} -> {}",
-            p.get_cmd(),
-            p.get_state(),
-            stopped
-        );
-        stopped
-    } else {
-        debug!("is_job_stopped: no process -> true");
-        true
-    }
-}
-
 pub fn is_job_completed(job: &Job) -> bool {
     debug!(
         "JOB_COMPLETION_CHECK_START: Checking completion for job {} (state: {:?}, cmd: '{}')",
@@ -169,41 +153,46 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
     }
 
+    fn job_with_states(states: &[ProcessState]) -> Job {
+        let mut job = Job::new("/usr/bin/touch".to_string(), getpgrp());
+        for (index, state) in states.iter().enumerate() {
+            let mut process = Process::new(format!("{}", index + 1), vec![]);
+            process.state = *state;
+            job.set_process(JobProcess::Command(process));
+        }
+        debug!("{:?}", job);
+        job
+    }
+
     #[test]
-    fn is_stopped() {
+    fn fully_stopped_needs_every_live_stage_stopped() {
         init();
-        let input = "/usr/bin/touch";
 
-        let job = &mut Job::new(input.to_string(), getpgrp());
-        let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0, None);
-        job.set_process(JobProcess::Command(process));
+        // Completed / Completed / Running: still live, not fully stopped.
+        let job = job_with_states(&[
+            ProcessState::Completed(0, None),
+            ProcessState::Completed(0, None),
+            ProcessState::Running,
+        ]);
+        assert!(!job.has_stopped_process());
+        assert!(!job.is_fully_stopped());
 
-        let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Completed(0, None);
-        job.set_process(JobProcess::Command(process));
+        // Completed / Completed / Stopped: no Running left, fully stopped.
+        let job = job_with_states(&[
+            ProcessState::Completed(0, None),
+            ProcessState::Completed(0, None),
+            ProcessState::Stopped(Pid::from_raw(10), Signal::SIGSTOP),
+        ]);
+        assert!(job.has_stopped_process());
+        assert!(job.is_fully_stopped());
 
-        let process = Process::new("3".to_string(), vec![]);
-        job.set_process(JobProcess::Command(process));
-
-        debug!("{:?}", job);
-        assert!(!is_job_stopped(job));
-
-        let job = &mut Job::new(input.to_string(), getpgrp());
-        let mut process = Process::new("1".to_string(), vec![]);
-        process.state = ProcessState::Completed(0, None);
-        job.set_process(JobProcess::Command(process));
-
-        let mut process = Process::new("2".to_string(), vec![]);
-        process.state = ProcessState::Completed(0, None);
-        job.set_process(JobProcess::Command(process));
-
-        let mut process = Process::new("3".to_string(), vec![]);
-        process.state = ProcessState::Stopped(Pid::from_raw(10), Signal::SIGSTOP);
-        job.set_process(JobProcess::Command(process));
-
-        debug!("{:?}", job);
-        assert!(is_job_stopped(job));
+        // Partial stop must not end a foreground wait.
+        let job = job_with_states(&[
+            ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP),
+            ProcessState::Running,
+        ]);
+        assert!(job.has_stopped_process());
+        assert!(!job.is_fully_stopped());
     }
 
     #[test]

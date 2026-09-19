@@ -1,7 +1,7 @@
 //! Job control command handlers (jobs, fg, bg).
 
 use crate::process::ProcessState;
-use crate::process::wait::{is_job_completed, is_job_stopped};
+use crate::process::wait::is_job_completed;
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
@@ -243,9 +243,9 @@ pub(crate) async fn foreground_selected_job(
     ))
     .ok();
 
-    // `job.state` is only a cached summary and can lag the process tree, so
-    // consult the tree as well: a still-stopped pipeline must get SIGCONT.
-    let cont = matches!(job.state, ProcessState::Stopped(_, _)) || is_job_stopped(&job);
+    // Any stopped stage needs SIGCONT; the canonical tree (not the cached
+    // `job.state` summary) decides so stale summaries cannot interfere.
+    let cont = job.has_stopped_process();
     if cont {
         debug!(
             "FG_CMD_STOPPED: Job {} is stopped, will send SIGCONT",

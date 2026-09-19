@@ -7,6 +7,8 @@ pub mod fork;
 pub mod io;
 pub mod job;
 pub mod job_process;
+#[cfg(test)]
+mod job_process_tests;
 pub mod job_pty;
 pub mod job_wait;
 pub mod process;

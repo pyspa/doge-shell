@@ -17,4 +17,5 @@ description: Use for doge-shell process, PTY, job control, raw terminal, colored
 - `fg` resumes on the existing async foreground wait so background `OutputMonitor`s keep draining; never add a sync monitor drain duplicate.
 - A job removed from `wait_jobs` for `fg` returns when still active/stopped (real observed `Stopped`, never synthesized), even on wait/SIGCONT error; completed jobs stay dropped.
 - `bg` selects stopped work from the process tree, marks stopped stages running only after SIGCONT succeeds, and requeues the original active `Job` before propagating resume errors.
+- Pipeline stop state distinguishes `has_stopped_process` from `is_fully_stopped`: SIGCONT decisions use the former; foreground wait/Job summary use the latter. `Job.state` is derived from the process tree, never the source of truth.
 - Validate with `cargo test -p doge-shell`; use a narrower test filter only after identifying the affected module.

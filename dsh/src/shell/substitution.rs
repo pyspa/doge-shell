@@ -748,4 +748,49 @@ mod tests {
         // reaper (grace, then group-kill), and shell-shutdown cleanup covers
         // anything left. No zombie: the reaper owns the final wait.
     }
+
+    /// Same-process multi-`Shell` ownership isolation (Layer 3 companion).
+    ///
+    /// Owner invariant: every live helper/producer has exactly one logical
+    /// owner. Ownership may move `ExecutionResources -> Job -> detached
+    /// reaper` but is never duplicated, never dropped while a consumer
+    /// needs it, and `Shell` A cleanup never affects `Shell` B resources.
+    /// The previous process-global registry violated the last clause:
+    /// whichever shell dropped first group-killed every still-registered
+    /// producer in the process.
+    ///
+    /// No real processes: fake pids only exercise registry bookkeeping, and
+    /// group-kill on absent pids is a harmless `ESRCH`.
+    #[test]
+    fn producer_registries_are_isolated_per_shell() {
+        let registry_a = ProducerRegistry::default();
+        let registry_b = ProducerRegistry::default();
+        let pid_a = Pid::from_raw(41_001);
+        let pid_b = Pid::from_raw(41_002);
+        registry_a.register(pid_a);
+        registry_b.register(pid_b);
+
+        // Shell A shuts down: only its own producer is released.
+        registry_a.cleanup_producer_groups();
+        assert!(
+            registry_a.inner.lock().is_empty(),
+            "shell A cleanup must release shell A's producers"
+        );
+        assert!(
+            registry_b.inner.lock().contains(&pid_b),
+            "shell A cleanup must never affect shell B resources"
+        );
+
+        // Deregistration (reaper success path) is per-pid, not per-registry.
+        registry_b.deregister(pid_a);
+        assert!(
+            registry_b.inner.lock().contains(&pid_b),
+            "deregistering another shell's pid must not release shell B's producer"
+        );
+        registry_b.deregister(pid_b);
+        assert!(
+            registry_b.inner.lock().is_empty(),
+            "reaped producers deregister exactly once"
+        );
+    }
 }

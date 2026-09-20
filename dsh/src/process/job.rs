@@ -19,6 +19,8 @@ use crate::process::job_wait;
 
 mod lifecycle;
 #[cfg(test)]
+mod lifecycle_property_tests;
+#[cfg(test)]
 mod lifecycle_tests;
 
 #[derive(Debug)]

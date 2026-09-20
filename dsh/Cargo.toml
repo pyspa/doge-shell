@@ -87,3 +87,8 @@ sysinfo = { workspace = true }
 nix = { workspace = true, features = ["net"] }
 
 [dev-dependencies]
+# Lifecycle property harness (Layer 2): generated transition sequences
+# against a reference model. Plain proptest only -- no proptest-state-machine
+# until the model outgrows this file. proptest 1.11 needs Rust 1.84, below
+# the workspace MSRV 1.95.
+proptest = "1.11"

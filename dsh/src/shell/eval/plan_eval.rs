@@ -62,10 +62,21 @@ pub(crate) async fn evaluate_plan(
 
         // Mirrors the top-level loop: a rejected builtin prefix is an
         // ordinary command failure (publish + continue), not an abort.
+        // No-command stages run through the same shared executor as the top
+        // level, so `&&`/`||` gating cannot drift between parent and helper.
         let materialized = match materialize_job(shell, ctx, planned, confirm).await? {
             MaterializeOutcome::Runnable(materialized) => materialized,
-            MaterializeOutcome::AssignmentOnly => {
-                last_exit_code = 0;
+            MaterializeOutcome::NoCommand(no_command) => {
+                use super::super::no_command::{NoCommandExecutionResult, execute_no_command};
+                match execute_no_command(shell, ctx, *no_command) {
+                    NoCommandExecutionResult::Completed(code) => {
+                        last_exit_code = code;
+                    }
+                    NoCommandExecutionResult::Failed { exit_code, message } => {
+                        let _ = ctx.write_stderr(&message);
+                        last_exit_code = exit_code;
+                    }
+                }
                 super::publish_exit_status(shell, last_exit_code);
                 gate_op = next_gate_op;
                 continue;

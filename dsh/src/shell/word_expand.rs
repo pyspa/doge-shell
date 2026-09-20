@@ -240,6 +240,19 @@ fn trim_substitution_output(output: &str) -> String {
     output.trim_end_matches(['\n', '\r']).to_string()
 }
 
+/// Per-stage trace of runtime expansion, kept in stage order.
+///
+/// Only `SubshellType::CommandSubstitution` updates
+/// `last_command_substitution_status`. Process substitution (`<(...)`) and
+/// subshell groups (`( ... )`) have different semantics and must never feed
+/// this status. The value is consumed only when runtime expansion leaves no
+/// command name (Bash `3.7.1 Simple Command Expansion`); a surviving command
+/// reports its own execution status instead.
+#[derive(Debug, Default)]
+pub struct ExpansionTrace {
+    pub last_command_substitution_status: Option<i32>,
+}
+
 /// Expand one word into zero, one, or many argument fields.
 pub async fn expand_argument_word(
     shell: &mut Shell,
@@ -247,6 +260,7 @@ pub async fn expand_argument_word(
     word: &PlannedWord,
     confirm: ConfirmFn,
     resources: &mut ExecutionResources,
+    trace: &mut ExpansionTrace,
 ) -> Result<Vec<String>> {
     let cwd = cwd_for_expansion();
     let mut builder = FieldBuilder::new();
@@ -266,7 +280,7 @@ pub async fn expand_argument_word(
                 let quoted = *quote != QuoteMode::Unquoted;
                 match substitution.kind {
                     SubshellType::CommandSubstitution => {
-                        let output = capture_subshell_plan_stdout(
+                        let captured = capture_subshell_plan_stdout(
                             shell,
                             ctx,
                             &substitution.plan,
@@ -274,6 +288,8 @@ pub async fn expand_argument_word(
                             confirm,
                         )
                         .await?;
+                        trace.last_command_substitution_status = Some(captured.exit_code);
+                        let output = captured.stdout;
                         if quoted {
                             let value = trim_substitution_output(&output);
                             builder.append_single(
@@ -294,7 +310,7 @@ pub async fn expand_argument_word(
                         }
                     }
                     SubshellType::Subshell => {
-                        let output = capture_subshell_plan_stdout(
+                        let captured = capture_subshell_plan_stdout(
                             shell,
                             ctx,
                             &substitution.plan,
@@ -302,6 +318,7 @@ pub async fn expand_argument_word(
                             confirm,
                         )
                         .await?;
+                        let output = captured.stdout;
                         if quoted {
                             let value = trim_substitution_output(&output);
                             builder.append_single(
@@ -353,8 +370,9 @@ pub async fn expand_assignment_value(
     word: &PlannedWord,
     confirm: ConfirmFn,
     resources: &mut ExecutionResources,
+    trace: &mut ExpansionTrace,
 ) -> Result<String> {
-    expand_scalar_word(shell, ctx, word, confirm, resources).await
+    expand_scalar_word(shell, ctx, word, confirm, resources, trace).await
 }
 
 /// Expand a redirect target into exactly one path.
@@ -364,8 +382,9 @@ pub async fn expand_redirect_target(
     word: &PlannedWord,
     confirm: ConfirmFn,
     resources: &mut ExecutionResources,
+    trace: &mut ExpansionTrace,
 ) -> Result<String> {
-    let fields = expand_argument_word(shell, ctx, word, confirm, resources).await?;
+    let fields = expand_argument_word(shell, ctx, word, confirm, resources, trace).await?;
     if fields.len() != 1 {
         bail!(
             "ambiguous redirect: '{}' expands to {} fields",
@@ -382,6 +401,7 @@ async fn expand_scalar_word(
     word: &PlannedWord,
     confirm: ConfirmFn,
     resources: &mut ExecutionResources,
+    trace: &mut ExpansionTrace,
 ) -> Result<String> {
     let mut builder = FieldBuilder::new();
     let mut first_part = true;
@@ -404,11 +424,14 @@ async fn expand_scalar_word(
                         SubshellType::Subshell => PlanExecMode::Subshell,
                         _ => PlanExecMode::CommandSubstitution,
                     };
-                    let output =
+                    let captured =
                         capture_subshell_plan_stdout(shell, ctx, &substitution.plan, mode, confirm)
                             .await?;
+                    if substitution.kind == SubshellType::CommandSubstitution {
+                        trace.last_command_substitution_status = Some(captured.exit_code);
+                    }
                     // Scalar context never splits; keep newlines except trailing.
-                    let value = trim_substitution_output(&output);
+                    let value = trim_substitution_output(&captured.stdout);
                     builder.append_single(&value, "", false, false, true);
                 }
                 SubshellType::ProcessSubstitution => {
@@ -541,9 +564,17 @@ mod tests {
         .expect("plan");
         let word = &plan.jobs[0].stages[0].argv[1];
         let mut resources = ExecutionResources::new();
-        let fields = expand_argument_word(&mut shell, &ctx, word, allow_all, &mut resources)
-            .await
-            .expect("expand");
+        let mut trace = ExpansionTrace::default();
+        let fields = expand_argument_word(
+            &mut shell,
+            &ctx,
+            word,
+            allow_all,
+            &mut resources,
+            &mut trace,
+        )
+        .await
+        .expect("expand");
         assert_eq!(fields, vec![String::new()]);
     }
 

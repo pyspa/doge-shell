@@ -272,6 +272,70 @@ fn dollar_question_reflects_normalized_signal_status() {
     );
 }
 
+/// A stage that expands to no command never rewires the pipeline:
+/// `producer | $(false) | consumer` launches nothing and fails non-zero.
+#[test]
+fn empty_middle_stage_does_not_rewire_pipeline() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let prod_marker = dir.path().join("prod_marker");
+    let cons_marker = dir.path().join("cons_marker");
+    let producer = write_executable_script(
+        &dir,
+        "prod_empty.sh",
+        &format!(
+            "#!/bin/sh\nprintf produced > \"{}\"\n",
+            prod_marker.display()
+        ),
+    );
+    let consumer = write_executable_script(
+        &dir,
+        "cons_empty.sh",
+        &format!(
+            "#!/bin/sh\nprintf consumed > \"{}\"\n",
+            cons_marker.display()
+        ),
+    );
+    let line = format!(
+        "{} | $({}) | {}",
+        producer.display(),
+        false_path(),
+        consumer.display()
+    );
+    let output = common::run_command(&line);
+
+    assert!(
+        !output.status.success(),
+        "a pipeline with an empty stage must fail closed: {:?}",
+        output.status.code()
+    );
+    assert!(
+        !prod_marker.exists(),
+        "the upstream stage must not launch after fail-closed materialization"
+    );
+    assert!(
+        !cons_marker.exists(),
+        "the downstream stage must not launch after fail-closed materialization"
+    );
+}
+
+/// An assignment-only pipeline stage never leaks into the parent shell.
+#[test]
+fn assignment_only_stage_does_not_leak_into_parent() {
+    let output = run_interactive(&[
+        "FOO=pipeline_parent_check",
+        "FOO=bar | /bin/cat",
+        "echo [$FOO]",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "[pipeline_parent_check]"),
+        "the pipeline assignment leaked into the parent: {stdout:?}"
+    );
+}
+
 /// The `|>` capture path reports the same normalized status.
 #[test]
 fn capture_path_reports_normalized_signal_status() {

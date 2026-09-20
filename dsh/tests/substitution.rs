@@ -9,10 +9,22 @@
 mod common;
 
 use common::run_command;
+use std::os::unix::fs::PermissionsExt;
 
 fn stdout_of(command: &str) -> String {
     let output = run_command(command);
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn write_executable_script(dir: &tempfile::TempDir, name: &str, body: &str) -> std::path::PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, body).expect("write helper script");
+    let mut perms = std::fs::metadata(&path)
+        .expect("stat helper script")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).expect("chmod helper script");
+    path
 }
 
 #[test]
@@ -192,6 +204,139 @@ fn the_body_of_a_substitution_is_expanded() {
             "{command:?} did not expand its body: {stdout:?}"
         );
     }
+}
+
+/// A bare `$(...)` with no command name reports the helper's real status:
+/// `$(false)` is 1, `$(true)` is 0 -- not a blanket success.
+#[test]
+fn bare_substitution_reports_helper_status() {
+    let failed = run_command(&format!("$({})", common::false_path()));
+    assert_eq!(
+        failed.status.code(),
+        Some(1),
+        "bare $(false) must exit 1. stderr:\n{}",
+        String::from_utf8_lossy(&failed.stderr)
+    );
+    let ok = run_command(&format!("$({})", common::true_path()));
+    assert_eq!(
+        ok.status.code(),
+        Some(0),
+        "bare $(true) must exit 0. stderr:\n{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+}
+
+/// Same, for an arbitrary non-zero status through the helper exit code.
+#[test]
+fn bare_substitution_reports_arbitrary_status() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let exit7 = write_executable_script(&dir, "exit7.sh", "#!/bin/sh\nexit 7\n");
+    let output = run_command(&format!("$({})", exit7.display()));
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "bare $(exit-7) must exit 7. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The no-command status gates `&&` / `||` like any other command status.
+#[test]
+fn bare_substitution_gates_and_or_lists() {
+    let gated = stdout_of(&format!(
+        "$({}) && /bin/echo SHOULD_NOT_RUN",
+        common::false_path()
+    ));
+    assert!(
+        !gated.contains("SHOULD_NOT_RUN"),
+        "`&&` ran after a failing substitution: {gated:?}"
+    );
+    let recovered = stdout_of(&format!(
+        "$({}) || /bin/echo EXPECTED",
+        common::false_path()
+    ));
+    assert!(
+        recovered.lines().any(|line| line.trim() == "EXPECTED"),
+        "`||` did not run after a failing substitution: {recovered:?}"
+    );
+}
+
+/// With several substitutions, the *last* one decides -- not the first.
+#[test]
+fn last_command_substitution_status_wins() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let exit7 = write_executable_script(&dir, "exit7b.sh", "#!/bin/sh\nexit 7\n");
+    // Both bodies print nothing; only their statuses differ.
+    let output = run_command(&format!(
+        "$({}) $({})",
+        common::false_path(),
+        exit7.display()
+    ));
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "last status (7) must win. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = run_command(&format!(
+        "$({}) $({})",
+        exit7.display(),
+        common::false_path()
+    ));
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "last status (1) must win. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// A surviving command reports its own status: `echo $(false)` is 0.
+#[test]
+fn surviving_command_ignores_substitution_status() {
+    let output = run_command(&format!("/bin/echo $({})", common::false_path()));
+    assert!(
+        output.status.success(),
+        "echo with a failing substitution must succeed: {:?}",
+        output.status.code()
+    );
+}
+
+/// The isolated helper evaluator shares the no-command semantics: gating and
+/// `$?` inside `$(...)` behave exactly as on the top level.
+#[test]
+fn helper_evaluator_shares_no_command_semantics() {
+    let gated = stdout_of(&format!(
+        "/bin/echo $({} && /bin/echo SHOULD_NOT_RUN)",
+        common::false_path()
+    ));
+    assert!(
+        !gated.contains("SHOULD_NOT_RUN"),
+        "helper && branch must not run: {gated:?}"
+    );
+    let status = stdout_of(&format!(
+        "/bin/echo $({}; /bin/echo status=$?)",
+        common::false_path()
+    ));
+    assert!(
+        status.lines().any(|line| line.trim() == "status=1"),
+        "helper must publish the no-command status: {status:?}"
+    );
+}
+
+/// A signal death inside the substitution surfaces as 128+signal end to end.
+#[test]
+fn bare_substitution_reports_signal_status() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let sigterm = write_executable_script(&dir, "sigterm_sub.sh", "#!/bin/sh\nkill -TERM $$\n");
+    let stdout = stdout_of(&format!(
+        "$({}); /bin/echo \"status=$?\"",
+        sigterm.display()
+    ));
+    assert!(
+        stdout.lines().any(|line| line.trim() == "status=143"),
+        "expected status=143 after SIGTERM substitution, got {stdout:?}"
+    );
 }
 
 /// Expanding the body must not cost it its operators.

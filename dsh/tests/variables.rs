@@ -369,6 +369,48 @@ fn builtin_prefix_refusal_in_command_substitution_blocks_and_branch() {
     );
 }
 
+/// `A=$(false)` sets `A` in the current shell while the simple command
+/// itself reports the substitution status 1.
+#[test]
+fn assignment_with_failing_substitution_sets_var_and_reports_status() {
+    let output = run_command(&format!(
+        "A=$({}); /bin/echo \"status=$?\"; /bin/echo \"A=[$A]\"",
+        common::false_path()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "status=1"),
+        "expected status=1 from A=$(false), got {stdout:?}"
+    );
+    // `A` is set (to the empty substitution output): an unset name would
+    // echo back literally as `[$A]`, while the set-but-empty value is `[]`.
+    assert!(
+        stdout.lines().any(|line| line.trim() == "A=[]"),
+        "expected A to exist in the shell, got {stdout:?}"
+    );
+}
+
+/// Assignments apply before redirections: even when the redirect fails, the
+/// variable is already in the shell while the command reports the failure.
+#[test]
+fn assignment_survives_failed_redirect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = run_command(&format!(
+        "FOO=bar > {}; /bin/echo \"FOO=[$FOO] status=$?\"",
+        missing.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "FOO=[bar] status=1"),
+        "expected the assignment plus the redirect failure, got {stdout:?}"
+    );
+}
+
 /// The shell has to look commands up in the `PATH` it hands its children.
 /// `export PATH=...` only wrote the variable, so the child of the very next
 /// command saw the new directory while the shell searching for that command did

@@ -194,11 +194,22 @@ pub async fn eval_str(
         .await
         {
             Ok(MaterializeOutcome::Runnable(materialized)) => materialized,
-            Ok(MaterializeOutcome::AssignmentOnly) => {
-                // Assignment-only: its values were applied during
-                // materialization, so the job succeeded and publishes zero
-                // rather than leaving the previous job's status stale.
-                last_exit_code = 0;
+            Ok(MaterializeOutcome::NoCommand(no_command)) => {
+                // Expansion left no command name: assignments, redirections,
+                // and the last substitution status still run through the
+                // shared no-command executor, exactly as in helpers.
+                match crate::shell::no_command::execute_no_command(shell, ctx, *no_command) {
+                    crate::shell::no_command::NoCommandExecutionResult::Completed(code) => {
+                        last_exit_code = code;
+                    }
+                    crate::shell::no_command::NoCommandExecutionResult::Failed {
+                        exit_code,
+                        message,
+                    } => {
+                        let _ = ctx.write_stderr(&message);
+                        last_exit_code = exit_code;
+                    }
+                }
                 publish_exit_status(shell, last_exit_code);
                 gate_op = next_gate_op;
                 continue;

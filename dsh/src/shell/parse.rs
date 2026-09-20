@@ -449,11 +449,12 @@ fn build_argv(ctx: &ParseContext, stage: &mut PlannedCommand, pair: Pair<Rule>) 
                     stage.argv.push(parse_word(span, ctx)?);
                 }
             }
-            Rule::assignment_list => {
-                for assignment in inner_pair.into_inner() {
-                    let (name, value) = parse_assignment(assignment, ctx)?;
-                    stage.env_overrides.push(PlannedAssignment { name, value });
-                }
+            Rule::assignment => {
+                let (name, value) = parse_assignment(inner_pair, ctx)?;
+                stage.env_overrides.push(PlannedAssignment { name, value });
+            }
+            Rule::redirect => {
+                stage.redirects.extend(parse_redirect(inner_pair, ctx)?);
             }
             Rule::args => {
                 for item in inner_pair.into_inner() {

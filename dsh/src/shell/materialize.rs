@@ -7,11 +7,12 @@
 //! job is authorized by the caller once its argv is concrete.
 
 use super::authorize::ConfirmFn;
+use super::no_command::NoCommandMaterialization;
 use super::parse::planned_to_concrete;
 use super::plan::{PlannedJob, PlannedRedirectOp};
 use super::substitution::ExecutionResources;
 use super::word_expand::{
-    dry_expand_argument_word, dry_expand_scalar_word, expand_argument_word,
+    ExpansionTrace, dry_expand_argument_word, dry_expand_scalar_word, expand_argument_word,
     expand_assignment_value, expand_redirect_target,
 };
 use crate::process::{Job, JobProcess, Redirect};
@@ -34,6 +35,7 @@ pub(crate) struct ExpandedStage {
     pub argv: Vec<String>,
     pub redirects: Vec<Redirect>,
     pub env_overrides: Vec<(String, String)>,
+    pub last_command_substitution_status: Option<i32>,
 }
 
 /// Exit status for a rejected `NAME=value` builtin prefix. This is an
@@ -60,16 +62,35 @@ impl CommandMaterializationFailure {
             message: format!("dsh: {cmd}: a NAME=value prefix is not supported for builtins"),
         }
     }
+
+    pub(crate) fn pipeline_no_command() -> Self {
+        Self {
+            exit_code: 1,
+            // No trailing newline: `Context::write_stderr` appends exactly one.
+            // `dsh:` matches the other user-facing command diagnostics on this
+            // path (builtin-prefix refusal, fd errors, command-not-found).
+            message: "dsh: pipeline stage expanded to no command".to_string(),
+        }
+    }
 }
 
-/// Explicit materialization result: `None` used to conflate assignment-only
-/// jobs with rejected builtin prefixes, letting a refusal masquerade as
-/// success. The three cases are now typed apart. (`Runnable` is boxed: the
-/// job plus its substitution resources are several hundred bytes, and the
-/// other variants are tiny.)
+/// Explicit materialization result.
+///
+/// - `Runnable`: an executable command remains after expansion.
+/// - `NoCommand`: expansion completed normally but no command name remains
+///   (standalone assignment, redirection-only line, or words that expanded
+///   to zero fields such as `$(false)`). Carries the assignments,
+///   redirections, and last command-substitution status the shared
+///   no-command executor needs.
+/// - `Rejected`: an understood command was explicitly refused before launch
+///   (builtin `NAME=value` prefix, or a pipeline stage that expanded to no
+///   command). A normal non-zero command result, never infrastructure error.
+///
+/// (`Runnable` and `NoCommand` are boxed: the job plus its substitution
+/// resources are several hundred bytes, and `Rejected` is tiny.)
 pub enum MaterializeOutcome {
     Runnable(Box<MaterializedJob>),
-    AssignmentOnly,
+    NoCommand(Box<NoCommandMaterialization>),
     Rejected(CommandMaterializationFailure),
 }
 
@@ -130,8 +151,11 @@ fn assemble_job(
     job.subshell = planned.subshell.clone();
     job.list_op = planned.list_op.clone();
     for mut stage in expanded {
+        // Fail closed: expansion must have ruled out empty stages before this
+        // point. Silently dropping one would rewire `A | empty | C` into
+        // `A | C`, a different pipeline.
         if stage.argv.is_empty() {
-            continue;
+            return Err(CommandMaterializationFailure::pipeline_no_command());
         }
         if stage.argv.first().is_some_and(|first| first == "nopty") && stage.argv.len() > 1 {
             stage.argv.remove(0);
@@ -157,6 +181,7 @@ async fn expand_redirects(
     stage_index: usize,
     confirm: ConfirmFn,
     resources: &mut ExecutionResources,
+    trace: &mut ExpansionTrace,
 ) -> Result<Vec<Redirect>> {
     let mut out = Vec::new();
     for redirect in &planned.stages[stage_index].redirects {
@@ -173,8 +198,9 @@ async fn expand_redirects(
                 // Target expansion happens once; `&>` forms share it.
                 // Substitution bodies inside the target execute as part of
                 // `expand_redirect_target`, through the same authorize-then-run
-                // path as argv substitutions.
-                let target = expand_redirect_target(shell, ctx, word, confirm, resources).await?;
+                // path as argv substitutions, and feed the same trace.
+                let target =
+                    expand_redirect_target(shell, ctx, word, confirm, resources, trace).await?;
                 out.extend(planned_to_concrete(redirect, target));
             }
         }
@@ -191,57 +217,77 @@ pub fn materialize_job<'a>(
     Box::pin(async move {
         let mut resources = ExecutionResources::new();
         let mut expanded = Vec::with_capacity(planned.stages.len());
+        // Stage order is argv, then assignments, then redirects: the "last"
+        // command substitution is the last one in that deterministic order.
         for (stage_index, stage) in planned.stages.iter().enumerate() {
+            let mut trace = ExpansionTrace::default();
             let mut argv = Vec::new();
             for word in &stage.argv {
-                argv.extend(expand_argument_word(shell, ctx, word, confirm, &mut resources).await?);
+                argv.extend(
+                    expand_argument_word(shell, ctx, word, confirm, &mut resources, &mut trace)
+                        .await?,
+                );
             }
             let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
             for assignment in &stage.env_overrides {
-                let value =
-                    expand_assignment_value(shell, ctx, &assignment.value, confirm, &mut resources)
-                        .await?;
+                let value = expand_assignment_value(
+                    shell,
+                    ctx,
+                    &assignment.value,
+                    confirm,
+                    &mut resources,
+                    &mut trace,
+                )
+                .await?;
                 env_overrides.push((assignment.name.clone(), value));
             }
-            let redirects =
-                expand_redirects(shell, ctx, planned, stage_index, confirm, &mut resources).await?;
+            let redirects = expand_redirects(
+                shell,
+                ctx,
+                planned,
+                stage_index,
+                confirm,
+                &mut resources,
+                &mut trace,
+            )
+            .await?;
             expanded.push(ExpandedStage {
                 argv,
                 redirects,
                 env_overrides,
+                last_command_substitution_status: trace.last_command_substitution_status,
             });
         }
-        // Assignment-only stages apply to the shell, but only now that the job
-        // was actually selected for execution. This includes mixed pipelines
-        // (`FOO=bar | cat`): the empty stage has no process to carry the
-        // assignment, so it is applied to the shell alongside the launch.
-        let pending: Vec<(String, String)> = expanded
-            .iter()
-            .filter(|stage| stage.argv.is_empty())
-            .flat_map(|stage| stage.env_overrides.clone())
-            .collect();
-        let concrete: Vec<ExpandedStage> = expanded
-            .into_iter()
-            .filter(|stage| !stage.argv.is_empty())
-            .collect();
-        if !pending.is_empty() {
-            let mut env = shell.environment.write();
-            for (name, value) in &pending {
-                env.set_shell_var(name.clone(), value.clone());
-            }
+        // Single-stage expansion with no command name is not a refusal and
+        // not an empty pipeline: it is a no-command simple command whose
+        // assignments, redirections, and substitution status the shared
+        // executor handles. Nothing is applied to the shell here;
+        // `execute_no_command` owns those side effects so the top-level and
+        // helper evaluators share one semantics.
+        if expanded.len() == 1 && expanded[0].argv.is_empty() {
+            let stage = expanded.pop().expect("single stage");
+            return Ok(MaterializeOutcome::NoCommand(Box::new(
+                NoCommandMaterialization {
+                    assignments: stage.env_overrides,
+                    redirects: stage.redirects,
+                    last_command_substitution_status: stage.last_command_substitution_status,
+                    resources,
+                },
+            )));
         }
-        // Intentionally unconditional: anything with no runnable stage after
-        // expansion (standalone assignments, redirect-only lines, words that
-        // expanded to zero fields) reports success once its pending
-        // assignments are applied, instead of leaving the previous `$?`
-        // stale. Redirect-only stages carry no process, so their redirects
-        // stay unapplied here, exactly as before this change.
-        if concrete.is_empty() {
-            return Ok(MaterializeOutcome::AssignmentOnly);
+        // Multi-stage pipelines never drop or rewire an empty stage
+        // (`A | empty | C` must not become `A | C`), never leak its
+        // assignments into the parent shell, and never launch a subset of
+        // stages: fail closed as an explicit command-level failure before
+        // any process spawns.
+        if expanded.iter().any(|stage| stage.argv.is_empty()) {
+            return Ok(MaterializeOutcome::Rejected(
+                CommandMaterializationFailure::pipeline_no_command(),
+            ));
         }
         let job_id = shell.get_next_job_id();
         let had_dynamic = planned.contains_dynamic_expansion();
-        match assemble_job(shell, planned, concrete, job_id) {
+        match assemble_job(shell, planned, expanded, job_id) {
             Ok(job) => Ok(MaterializeOutcome::Runnable(Box::new(MaterializedJob {
                 job,
                 had_dynamic_expansion: had_dynamic,
@@ -299,20 +345,23 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
             argv,
             redirects,
             env_overrides,
+            last_command_substitution_status: None,
         });
     }
-    if expanded.iter().all(|stage| stage.argv.is_empty()) {
+    // A single no-command stage carries no argv to authorize: report "no job",
+    // as before for standalone assignments.
+    if expanded.len() == 1 && expanded[0].argv.is_empty() {
         return Ok(None);
     }
-    let concrete: Vec<ExpandedStage> = expanded
-        .into_iter()
-        .filter(|stage| !stage.argv.is_empty())
-        .collect();
-    // Fail closed: a rejected stage must not let the dry projection show the
-    // remaining stages as a different, runnable pipeline to SafetyGuard
-    // (e.g. `FOO=bar alias | dangerous-command` must not become just
-    // `dangerous-command`). Surface it as an error instead.
-    match assemble_job(shell, planned, concrete, 0) {
+    // Fail closed: never show a collapsed pipeline to SafetyGuard. Both a
+    // rejected stage and an empty stage must surface as an error instead of
+    // a smaller runnable job (e.g. `A | empty | dangerous-C` must not become
+    // just `A | dangerous-C`, and `FOO=bar alias | dangerous-command` must
+    // not become just `dangerous-command`).
+    if expanded.iter().any(|stage| stage.argv.is_empty()) {
+        anyhow::bail!("dsh: pipeline stage expanded to no command");
+    }
+    match assemble_job(shell, planned, expanded, 0) {
         Ok(job) => Ok(Some(job)),
         Err(failure) => anyhow::bail!("{}", failure.message),
     }
@@ -393,7 +442,7 @@ mod tests {
             .expect("materialize")
         {
             MaterializeOutcome::Runnable(materialized) => materialized,
-            MaterializeOutcome::AssignmentOnly => panic!("expected runnable job"),
+            MaterializeOutcome::NoCommand(_) => panic!("expected runnable job"),
             MaterializeOutcome::Rejected(failure) => {
                 panic!("expected runnable job, got rejection: {failure:?}")
             }
@@ -414,7 +463,7 @@ mod tests {
 
     /// A `NAME=value` prefix on a builtin is an expected command failure, not
     /// a silently dropped stage: the outcome is `Rejected` with a non-zero
-    /// status and a diagnostic, never `Runnable` and never `AssignmentOnly`.
+    /// status and a diagnostic, never `Runnable` and never `NoCommand`.
     #[tokio::test]
     async fn builtin_prefix_is_rejected_as_command_failure() {
         fn allow_all(_: &str) -> Result<ConfirmationAction> {
@@ -437,7 +486,7 @@ mod tests {
                 assert!(failure.message.contains("alias"));
             }
             MaterializeOutcome::Runnable(_) => panic!("builtin prefix must not be runnable"),
-            MaterializeOutcome::AssignmentOnly => panic!("builtin prefix is not assignment-only"),
+            MaterializeOutcome::NoCommand(_) => panic!("builtin prefix is not no-command"),
         }
     }
 
@@ -472,7 +521,7 @@ mod tests {
                 assert_eq!(failure.exit_code, BUILTIN_ENV_PREFIX_EXIT_CODE);
             }
             MaterializeOutcome::Runnable(_) => panic!("expected rejection, got runnable"),
-            MaterializeOutcome::AssignmentOnly => panic!("expected rejection, got assignment-only"),
+            MaterializeOutcome::NoCommand(_) => panic!("expected rejection, got no-command"),
         }
     }
 
@@ -512,7 +561,7 @@ mod tests {
             MaterializeOutcome::Rejected(failure) => {
                 panic!("external prefix must not be rejected: {failure:?}")
             }
-            MaterializeOutcome::AssignmentOnly => panic!("external prefix is not assignment-only"),
+            MaterializeOutcome::NoCommand(_) => panic!("external prefix is not no-command"),
         }
     }
 
@@ -541,14 +590,17 @@ mod tests {
             MaterializeOutcome::Runnable(_) => {
                 panic!("pipeline with a rejected stage must not be runnable")
             }
-            MaterializeOutcome::AssignmentOnly => panic!("pipeline is not assignment-only"),
+            MaterializeOutcome::NoCommand(_) => panic!("pipeline is not no-command"),
         }
     }
 
-    /// Standalone assignments stay `AssignmentOnly`: the value lands in the
-    /// shell exactly once and the evaluator can publish status 0.
+    /// Standalone assignments materialize as `NoCommand` without touching the
+    /// shell: the shared `execute_no_command` applies the value exactly once
+    /// and reports status 0.
     #[tokio::test]
-    async fn standalone_assignment_is_assignment_only() {
+    async fn standalone_assignment_is_no_command() {
+        use super::super::no_command::{NoCommandExecutionResult, execute_no_command};
+
         fn allow_all(_: &str) -> Result<ConfirmationAction> {
             Ok(ConfirmationAction::Yes)
         }
@@ -558,20 +610,66 @@ mod tests {
         let plan = super::super::parse::parse_execution_plan("FOO=standalone", Arc::clone(&env))
             .expect("plan");
         assert!(plan.jobs[0].is_assignment_only());
+        let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        let no_command = match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::NoCommand(no_command) => no_command,
+            MaterializeOutcome::Runnable(_) => panic!("standalone assignment must not run"),
+            MaterializeOutcome::Rejected(failure) => {
+                panic!("standalone assignment must not be rejected: {failure:?}")
+            }
+        };
+        // Materialization itself leaves the shell untouched; execution applies.
+        assert_eq!(
+            shell.environment.read().lookup_variable("FOO").as_deref(),
+            None
+        );
+        assert_eq!(
+            no_command.assignments,
+            vec![("FOO".to_string(), "standalone".to_string())]
+        );
+        assert!(no_command.redirects.is_empty());
+        assert_eq!(no_command.last_command_substitution_status, None);
+        match execute_no_command(&mut shell, &mut ctx, *no_command) {
+            NoCommandExecutionResult::Completed(0) => {}
+            other => panic!("standalone assignment must complete 0, got {other:?}"),
+        }
+        assert_eq!(
+            shell.environment.read().lookup_variable("FOO").as_deref(),
+            Some("standalone")
+        );
+    }
+
+    /// A pipeline with an assignment-only stage fails closed: no stage is
+    /// dropped, nothing is applied to the parent shell, and nothing spawns.
+    #[tokio::test]
+    async fn pipeline_with_assignment_only_stage_is_rejected_without_parent_leak() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan("FOO=bar | cat", Arc::clone(&env))
+            .expect("plan");
+        assert_eq!(plan.jobs[0].stages.len(), 2);
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
         match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
             .await
             .expect("materialize")
         {
-            MaterializeOutcome::AssignmentOnly => {}
-            MaterializeOutcome::Runnable(_) => panic!("standalone assignment must not run"),
-            MaterializeOutcome::Rejected(failure) => {
-                panic!("standalone assignment must not be rejected: {failure:?}")
+            MaterializeOutcome::Rejected(_) => {}
+            MaterializeOutcome::Runnable(_) => {
+                panic!("pipeline with an empty stage must not be runnable")
             }
+            MaterializeOutcome::NoCommand(_) => panic!("multi-stage job is not no-command"),
         }
         assert_eq!(
             shell.environment.read().lookup_variable("FOO").as_deref(),
-            Some("standalone")
+            None,
+            "pipeline assignments must not leak into the parent shell"
         );
     }
 
@@ -591,6 +689,58 @@ mod tests {
             err.to_string().contains("not supported for builtins"),
             "unexpected dry error: {err:?}"
         );
+    }
+
+    /// The dry projection must not collapse an empty pipeline stage either:
+    /// `probe-a | FOO=bar | probe-c` errors fail-closed instead of showing a
+    /// smaller runnable pipeline to SafetyGuard.
+    #[test]
+    fn dry_materialization_does_not_collapse_empty_pipeline_stage() {
+        let env = crate::environment::Environment::new();
+        let shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan(
+            "probe-a | FOO=bar | probe-dangerous-c",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        assert_eq!(plan.jobs[0].stages.len(), 3);
+        let err = dry_materialize_job(&plan.jobs[0], &shell).expect_err("dry must fail closed");
+        assert!(
+            err.to_string().contains("no command"),
+            "unexpected dry error: {err:?}"
+        );
+    }
+
+    /// A statically empty middle stage (redirection-only, no substitution
+    /// involved) fails closed on the live path too: no launch, no leak.
+    #[tokio::test]
+    async fn pipeline_with_redirect_only_stage_is_rejected_without_launch() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan(
+            "probe-upstream-cmd | > /tmp/dsh-no-command-stage-probe | probe-downstream-cmd",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        assert_eq!(plan.jobs[0].stages.len(), 3);
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::Rejected(failure) => {
+                assert_ne!(failure.exit_code, 0);
+                assert!(failure.message.contains("no command"));
+            }
+            MaterializeOutcome::Runnable(_) => {
+                panic!("pipeline with an empty stage must not be runnable")
+            }
+            MaterializeOutcome::NoCommand(_) => panic!("multi-stage job is not no-command"),
+        }
     }
 
     /// Redirect and assignment substitutions count as dynamic, not just argv.

@@ -3,6 +3,7 @@ pub mod eval;
 pub mod hooks;
 pub mod job;
 pub mod materialize;
+pub mod no_command;
 pub mod parse;
 pub mod plan;
 pub mod struct_pipe;

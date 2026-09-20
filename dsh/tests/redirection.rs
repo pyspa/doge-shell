@@ -193,6 +193,183 @@ fn a_duplication_survives_expansion() {
     );
 }
 
+/// A redirection-only line creates/truncates its file and reports 0.
+#[test]
+fn redirect_only_truncates_and_reports_zero() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("out.txt");
+    fs::write(&file, "old content that must go").expect("seed file");
+
+    let output = common::run_command(&format!("> {}", file.display()));
+    assert!(
+        output.status.success(),
+        "redirect-only line failed: {:?}",
+        output
+    );
+    assert_eq!(
+        fs::read_to_string(&file).expect("truncated file"),
+        "",
+        "redirect-only `>` must truncate"
+    );
+}
+
+/// `>>` with no command creates a missing file and never truncates.
+#[test]
+fn append_only_creates_without_truncating() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let fresh = dir.path().join("fresh.txt");
+    let output = common::run_command(&format!(">> {}", fresh.display()));
+    assert!(
+        output.status.success(),
+        "append-only create failed: {:?}",
+        output
+    );
+    assert!(fresh.exists(), "append-only `>>` must create the file");
+
+    let kept = dir.path().join("kept.txt");
+    fs::write(&kept, "hello\n").expect("seed file");
+    let output = common::run_command(&format!(">> {}", kept.display()));
+    assert!(
+        output.status.success(),
+        "append-only on existing file failed: {:?}",
+        output
+    );
+    assert_eq!(
+        fs::read_to_string(&kept).expect("kept file"),
+        "hello\n",
+        "append-only must not truncate"
+    );
+}
+
+/// `< file` alone checks readability: 0 when present, non-zero when missing.
+#[test]
+fn input_only_checks_existence() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let present = dir.path().join("in.txt");
+    fs::write(&present, "hi\n").expect("seed file");
+
+    let output = common::run_command(&format!("< {}", present.display()));
+    assert!(
+        output.status.success(),
+        "present input-only line failed: {:?}",
+        output
+    );
+
+    let missing = dir.path().join("no-such-input.txt");
+    let output = common::run_command(&format!("< {}", missing.display()));
+    assert!(
+        !output.status.success(),
+        "missing input-only line unexpectedly succeeded: {:?}",
+        output
+    );
+}
+
+/// A redirection failure is a command failure: the list continues and
+/// `||` recovers while `&&` stays gated.
+#[test]
+fn redirect_failure_gates_and_or_lists() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+
+    let output = common::run_command(&format!("> {} || /bin/echo RECOVERED", missing.display()));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == "RECOVERED"),
+        "`||` did not run after a failed redirect: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let output = common::run_command(&format!(
+        "> {} && /bin/echo SHOULD_NOT_RUN",
+        missing.display()
+    ));
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("SHOULD_NOT_RUN"),
+        "`&&` ran after a failed redirect: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        !output.status.success(),
+        "failed redirect plus gated `&&` must be non-zero: {:?}",
+        output.status.code()
+    );
+}
+
+/// `FOO=bar > file` applies both: the variable stays in the shell and the
+/// file side effect happens.
+#[test]
+fn assignment_with_redirect_applies_both() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("assigned.txt");
+    let output = common::run_command(&format!(
+        "FOO=bar > {}; /bin/echo \"[$FOO]\"",
+        file.display()
+    ));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == "[bar]"),
+        "assignment did not persist: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(file.exists(), "redirect side effect missing");
+}
+
+/// A no-command redirection never leaks into later commands: the file holds
+/// only the truncation, and the next command still writes to the terminal.
+#[test]
+fn redirect_only_does_not_leak_into_later_commands() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("trunc.txt");
+    let output = common::run_command(&format!("> {}; /bin/echo AFTER", file.display()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "AFTER"),
+        "the next command lost its stdout: {stdout:?}"
+    );
+    assert_eq!(
+        fs::read_to_string(&file).expect("truncated file"),
+        "",
+        "later output leaked into the redirected file"
+    );
+}
+
+/// A substitution inside the redirect target feeds the no-command status:
+///
+/// `> $(helper-that-prints-a-path-and-exits-7)` creates the file and the
+/// simple command reports 7.
+#[test]
+fn redirect_target_substitution_status_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("via_subst.txt");
+    let helper = dir.path().join("mkpath.sh");
+    fs::write(
+        &helper,
+        format!("#!/bin/sh\nprintf '%s' \"{}\"\nexit 7\n", target.display()),
+    )
+    .expect("write helper");
+    let mut perms = fs::metadata(&helper).expect("stat helper").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&helper, perms).expect("chmod helper");
+
+    let output = common::run_command(&format!(
+        "> $({}); /bin/echo \"status=$?\"",
+        helper.display()
+    ));
+    assert!(target.exists(), "redirect target was not created");
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == "status=7"),
+        "expected status=7 from the target substitution, got {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
 /// Only the three standard descriptors are tracked, so any other source would
 /// name one of the shell's own files -- its history database or config -- and
 /// hand the child a writable duplicate.

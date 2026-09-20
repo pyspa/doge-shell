@@ -20,7 +20,6 @@ no-doc	dsh-builtin/src/dmv.rs
 no-doc	dsh-builtin/src/gh_notify.rs
 no-doc	dsh-builtin/src/glog.rs
 no-doc	dsh-builtin/src/help.rs
-no-doc	dsh-builtin/src/lib.rs
 no-doc	dsh-builtin/src/markdown/mod.rs
 no-doc	dsh-builtin/src/safe_run.rs
 no-doc	dsh-builtin/src/serve/handlers.rs

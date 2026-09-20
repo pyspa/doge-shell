@@ -6,7 +6,8 @@
 
 use super::*;
 use nix::sys::signal::Signal;
-use nix::unistd::Pid;
+use nix::unistd::{Pid, getpgrp};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 
 fn job_with_stage_states(states: &[ProcessState]) -> Job {
     let mut job = Job::new("test".to_string(), Pid::from_raw(1));
@@ -154,4 +155,83 @@ fn resume_last_job_selects_only_fully_stopped_job() {
         .map(|job| job.cmd.clone());
     // `rev` visits `partial` first and skips it, selecting `full`.
     assert_eq!(selected.as_deref(), Some("full"));
+}
+
+/// A job pgid naming the shell's own group must never be signaled as a
+/// group: `killpg(shell_group)` would kill the shell itself.
+#[test]
+fn safe_job_pgid_rejects_shell_group() {
+    let shell_group = getpgrp();
+    let mut job = Job::new("test".to_string(), shell_group);
+    job.pgid = Some(shell_group);
+    assert_eq!(job.safe_job_pgid(), None);
+
+    let own = Pid::from_raw(shell_group.as_raw() + 100_000);
+    job.pgid = Some(own);
+    assert_eq!(job.safe_job_pgid(), Some(own));
+
+    job.pgid = None;
+    assert_eq!(job.safe_job_pgid(), None);
+}
+
+fn setpgid_self(pgid: Pid) -> std::io::Result<()> {
+    setpgid(Pid::from_raw(0), pgid).map_err(|errno| std::io::Error::from_raw_os_error(errno as i32))
+}
+
+/// With a safe job pgid, `signal` terminates through the group: the
+/// dedicated group leader (as `posix_spawn` creates for background
+/// re-exec helpers) dies without touching the shell.
+#[test]
+fn signal_prefers_safe_process_group() {
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c").arg("sleep 30");
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| setpgid_self(Pid::from_raw(0)));
+    }
+    let child = cmd.spawn().expect("spawn grouped child");
+    let pid = Pid::from_raw(child.id() as i32);
+
+    let shell_group = getpgrp();
+    assert_ne!(pid, shell_group, "group leader must own a fresh group");
+    let mut job = Job::new("test".to_string(), shell_group);
+    job.pid = Some(pid);
+    job.pgid = Some(pid);
+    let mut process = Process::new("sh".to_string(), vec![]);
+    process.pid = Some(pid);
+    job.set_process(JobProcess::Command(process));
+
+    job.signal(Signal::SIGKILL).expect("group signal");
+    let mut child = child;
+    let status = child.wait().expect("reap grouped child");
+    assert_eq!(status.signal(), Some(Signal::SIGKILL as i32));
+    // Reaching here proves the shell's own group was never signaled.
+}
+
+/// With an unsafe pgid (the shell's own group), `signal` must fall back
+/// to the canonical tree's owned child pids instead of `killpg`: the
+/// child dies, the test process survives.
+#[test]
+fn signal_falls_back_to_tree_when_pgid_is_shell_group() {
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 30")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn child in shell group");
+    let pid = Pid::from_raw(child.id() as i32);
+
+    let shell_group = getpgrp();
+    let mut job = Job::new("test".to_string(), shell_group);
+    job.pid = Some(pid);
+    job.pgid = Some(shell_group);
+    let mut process = Process::new("sh".to_string(), vec![]);
+    process.pid = Some(pid);
+    job.set_process(JobProcess::Command(process));
+
+    job.signal(Signal::SIGKILL).expect("tree fallback signal");
+    let status = child.wait().expect("reap child");
+    assert_eq!(status.signal(), Some(Signal::SIGKILL as i32));
 }

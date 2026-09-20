@@ -461,6 +461,74 @@ mod tests {
         assert_eq!(delayed.stderr, "errdone");
     }
 
+    fn exit_zero_builtin(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(0)
+    }
+
+    /// End-to-end background-builtin lifecycle through the real job table:
+    /// `waitpid` observation → canonical `BuiltinProcess` state → strict
+    /// tree completion → removal from `wait_jobs`.
+    ///
+    /// The child is a plain `sh` instead of the re-exec helper so the test
+    /// never depends on the helper binary; the pid ownership semantics under
+    /// test are identical.
+    #[tokio::test]
+    async fn background_builtin_child_is_removed_after_completion() {
+        use crate::process::{BuiltinProcess, JobProcess};
+        use std::time::Duration;
+
+        let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+
+        let environment = crate::environment::Environment::new();
+        let mut shell = Shell::new(environment);
+
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn builtin-like child");
+        let pid = Pid::from_raw(child.id() as i32);
+        // The status belongs to `check_job_state`, not to `Child::wait`.
+        std::mem::forget(child);
+
+        let mut job = Job::new("test-builtin &".to_string(), getpgrp());
+        job.foreground = false;
+        job.pid = Some(pid);
+        let mut process = BuiltinProcess::new(
+            "test-builtin".to_string(),
+            exit_zero_builtin,
+            vec!["test-builtin".to_string()],
+        );
+        process.pid = Some(pid);
+        job.set_process(JobProcess::Builtin(process));
+        shell.wait_jobs.push(job);
+        assert_eq!(shell.wait_jobs.len(), 1);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let completed = shell.check_job_state().await.expect("check job state");
+            if completed.len() == 1 && shell.wait_jobs.is_empty() {
+                assert_eq!(
+                    completed[0].process.as_deref().map(JobProcess::get_state),
+                    Some(crate::process::ProcessState::Completed(0, None))
+                );
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background builtin was never reaped from the job table \
+                 (completed={}, remaining={})",
+                completed.len(),
+                shell.wait_jobs.len(),
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
     #[tokio::test]
     async fn background_job_check_does_not_wait_for_stdout_holding_descendant() {
         use std::time::Duration;

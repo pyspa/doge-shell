@@ -340,25 +340,17 @@ fn job_wait_pids(job: &Job) -> Vec<Pid> {
 }
 
 fn collect_process_wait_pids(process: &JobProcess, current_pid: Pid, pids: &mut Vec<Pid>) {
-    match process {
-        JobProcess::Builtin(process) => {
-            if let Some(pid) = process.pid
-                && pid != current_pid
-            {
-                pids.push(pid);
-            }
-            if let Some(next) = &process.next {
-                collect_process_wait_pids(next, current_pid, pids);
-            }
-        }
-        JobProcess::Command(process) => {
-            if let Some(pid) = process.pid {
-                pids.push(pid);
-            }
-            if let Some(next) = &process.next {
-                collect_process_wait_pids(next, current_pid, pids);
-            }
-        }
+    // Variant-independent: both re-exec builtin helpers and external
+    // commands own real child pids. Foreground in-process builtins carry
+    // `pid == getpid()` and are excluded here.
+    if let Some(pid) = process.get_pid()
+        && pid != current_pid
+    {
+        pids.push(pid);
+    }
+
+    if let Some(next) = process.next_process() {
+        collect_process_wait_pids(next, current_pid, pids);
     }
 }
 

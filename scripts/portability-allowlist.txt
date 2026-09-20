@@ -67,7 +67,7 @@ dsh/src/environment/tests.rs	/usr/bin/touch
 dsh/src/lisp/stdlib_tests.rs	/sbin/init
 dsh/src/output_schema/loader.rs	/usr/bin/ps
 dsh/src/output_schema/text_parser.rs	/sbin/init
-dsh/src/process/job.rs	/usr/bin/touch
+dsh/src/process/job/tests.rs	/usr/bin/touch
 dsh/src/process/wait.rs	/usr/bin/touch
 dsh/src/safety/checks.rs	/etc/passwd
 dsh/src/safety/checks.rs	/etc/shadow

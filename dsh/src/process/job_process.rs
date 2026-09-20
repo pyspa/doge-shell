@@ -13,7 +13,6 @@ use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::{self, AppliedRedirects, Redirect};
 use super::reexec::spawn_background_builtin;
-use super::signal::send_signal;
 use super::state::ProcessState;
 use crate::shell::Shell;
 use dsh_types::Context;
@@ -134,8 +133,8 @@ impl JobProcess {
 
     pub fn set_pid(&mut self, pid: Option<Pid>) {
         match self {
-            JobProcess::Builtin(_) => {
-                // noop
+            JobProcess::Builtin(process) => {
+                process.pid = pid;
             }
             JobProcess::Command(process) => {
                 process.pid = pid;
@@ -145,12 +144,19 @@ impl JobProcess {
 
     pub fn get_pid(&self) -> Option<Pid> {
         match self {
-            JobProcess::Builtin(_) => {
-                // noop
-                None
-            }
+            JobProcess::Builtin(process) => process.pid,
             JobProcess::Command(process) => process.pid,
         }
+    }
+
+    /// The child pid this node owns, if any.
+    ///
+    /// A foreground in-process builtin carries `pid == shell_pid`, which is
+    /// the shell itself — never a waitable/killable child. Only a pid owned
+    /// by the parent shell (background re-exec helper or external command)
+    /// is lifecycle-managed.
+    pub(crate) fn owned_child_pid(&self, shell_pid: Pid) -> Option<Pid> {
+        self.get_pid().filter(|pid| *pid != shell_pid)
     }
 
     pub fn set_state(&mut self, state: ProcessState) {
@@ -299,10 +305,6 @@ impl JobProcess {
             JobProcess::Builtin(p) => (p.name.as_str(), strip_argv0(&p.name, &p.argv)),
             JobProcess::Command(p) => (p.cmd.as_str(), strip_argv0(&p.cmd, &p.argv)),
         }
-    }
-
-    pub fn waitable(&self) -> bool {
-        matches!(self, JobProcess::Command(_))
     }
 
     /// Redirections written on this command.
@@ -487,30 +489,28 @@ impl JobProcess {
     }
 
     pub fn kill(&self) -> Result<()> {
-        match self {
-            JobProcess::Builtin(_) => Ok(()),
-            JobProcess::Command(process) => {
-                if let Some(pid) = process.pid {
-                    send_signal(pid, Signal::SIGKILL)
-                } else {
-                    Ok(())
-                }
-            }
+        use super::signal::send_signal_allow_gone;
+
+        let Some(pid) = self.owned_child_pid(getpid()) else {
+            return Ok(());
+        };
+        if matches!(self.get_state(), ProcessState::Completed(_, _)) {
+            return Ok(());
         }
+        send_signal_allow_gone(pid, Signal::SIGKILL)
     }
 
     pub fn cont(&self) -> Result<()> {
-        match self {
-            JobProcess::Builtin(_) => Ok(()),
-            JobProcess::Command(process) => {
-                if let Some(pid) = process.pid {
-                    debug!("send signal SIGCONT pid:{:?}", pid);
-                    send_signal(pid, Signal::SIGCONT)
-                } else {
-                    Ok(())
-                }
-            }
+        use super::signal::send_signal_allow_gone;
+
+        let Some(pid) = self.owned_child_pid(getpid()) else {
+            return Ok(());
+        };
+        if matches!(self.get_state(), ProcessState::Completed(_, _)) {
+            return Ok(());
         }
+        debug!("send signal SIGCONT pid:{:?}", pid);
+        send_signal_allow_gone(pid, Signal::SIGCONT)
     }
 
     pub(crate) fn update_state(&mut self) -> Option<ProcessState> {

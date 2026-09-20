@@ -307,45 +307,49 @@ impl Process {
     }
 
     pub(crate) fn update_state(&mut self) -> Option<ProcessState> {
-        if let ProcessState::Completed(_, _) = self.state {
-            Some(self.state)
-        } else {
-            // Only a status this caller actually observed may enter the
-            // canonical tree. `NoChild` (ECHILD) means the status belongs to
-            // another waiter that already consumed it — or never was ours —
-            // so the existing state is kept verbatim instead of inventing an
-            // exit code.
-            if let Some(pid) = self.pid {
-                match wait_pid_job(pid, true) {
-                    Ok(WaitPidObservation::State(_, state)) => {
-                        self.state = state;
-                    }
-                    Ok(WaitPidObservation::StillAlive) => {}
-                    Ok(WaitPidObservation::NoChild) => {}
-                    Err(nix::errno::Errno::EINTR) => {}
-                    Err(err) => {
-                        debug!(
-                            "update_state: waitpid for pid {} failed: {}; keeping {:?}",
-                            pid, err, self.state
-                        );
-                    }
+        // Only a status this caller actually observed may enter the
+        // canonical tree. `NoChild` (ECHILD) means the status belongs to
+        // another waiter that already consumed it — or never was ours —
+        // so the existing state is kept verbatim instead of inventing an
+        // exit code.
+        //
+        // A `Completed` head must not stop pipeline traversal: later stages
+        // may still be `Running` and need polling.
+        if !matches!(self.state, ProcessState::Completed(_, _))
+            && let Some(pid) = self.pid
+        {
+            match wait_pid_job(pid, true) {
+                Ok(WaitPidObservation::State(_, state)) => {
+                    self.state = state;
+                }
+                Ok(WaitPidObservation::StillAlive) => {}
+                Ok(WaitPidObservation::NoChild) => {}
+                Err(nix::errno::Errno::EINTR) => {}
+                Err(err) => {
+                    debug!(
+                        "update_state: waitpid for pid {} failed: {}; keeping {:?}",
+                        pid, err, self.state
+                    );
                 }
             }
-
-            if let Some(next) = self.next.as_mut() {
-                next.update_state();
-            }
-
-            Some(self.state)
         }
+
+        if let Some(next) = self.next.as_mut() {
+            next.update_state();
+        }
+
+        Some(self.state)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::builtin::BuiltinProcess;
+    use dsh_types::{Context, ExitStatus};
     use nix::sys::signal::Signal;
     use nix::unistd::{Pid, getpid};
+    use std::time::{Duration, Instant};
 
     fn init() {
         let _ = tracing_subscriber::fmt::try_init();
@@ -387,6 +391,91 @@ mod tests {
             ProcessState::Running,
             "ECHILD must leave Running untouched, not invent Completed(1)"
         );
+    }
+
+    /// A `Completed` head must not stop pipeline traversal: a still-`Running`
+    /// tail keeps being polled until its own `waitpid` observation completes
+    /// it. The old early-return left everything behind a completed first
+    /// stage unpolled forever.
+    #[test]
+    fn completed_head_still_updates_running_tail() {
+        init();
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn tail child");
+        let tail_pid = Pid::from_raw(child.id() as i32);
+        // The status belongs to `update_state`, not to `Child::wait`.
+        std::mem::forget(child);
+
+        let mut head = Process::new("head".to_string(), vec![]);
+        head.state = ProcessState::Completed(0, None);
+        let mut tail = Process::new("tail".to_string(), vec![]);
+        tail.pid = Some(tail_pid);
+        head.next = Some(Box::new(JobProcess::Command(tail)));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            head.update_state();
+            let tail_state = head.next.as_deref().expect("pipeline tail").get_state();
+            if matches!(tail_state, ProcessState::Completed(0, None)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tail behind a Completed head was never polled: {tail_state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(head.state, ProcessState::Completed(0, None));
+    }
+
+    fn exit_zero_builtin(
+        _ctx: &Context,
+        _argv: Vec<String>,
+        _proxy: &mut dyn dsh_builtin::ShellProxy,
+    ) -> ExitStatus {
+        ExitStatus::ExitedWith(0)
+    }
+
+    /// `External Completed` head must not block polling of a builtin-child
+    /// tail: the re-exec helper pid is owned exactly like an external pid.
+    #[test]
+    fn completed_external_head_does_not_block_builtin_tail_polling() {
+        init();
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn builtin-tail child");
+        let tail_pid = Pid::from_raw(child.id() as i32);
+        std::mem::forget(child);
+
+        let mut head = Process::new("head".to_string(), vec![]);
+        head.state = ProcessState::Completed(0, None);
+        let mut tail = BuiltinProcess::new(
+            "dirs".to_string(),
+            exit_zero_builtin,
+            vec!["dirs".to_string()],
+        );
+        tail.pid = Some(tail_pid);
+        head.next = Some(Box::new(JobProcess::Builtin(tail)));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            head.update_state();
+            let tail_state = head.next.as_deref().expect("pipeline tail").get_state();
+            if matches!(tail_state, ProcessState::Completed(0, None)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "builtin tail behind a Completed head was never polled: {tail_state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(head.state, ProcessState::Completed(0, None));
     }
 
     /// A `Stopped` state is real observed state and must survive ECHILD too.

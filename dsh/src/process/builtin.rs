@@ -1,3 +1,10 @@
+//! Foreground in-process and background re-exec builtin pipeline nodes.
+//!
+//! A `BuiltinProcess` with `pid == getpid()` runs inside the shell and is
+//! never waited on or signaled; a background node owns a real `posix_spawn`
+//! helper child and shares the external wait/reap/kill lifecycle, polled
+//! through the shared `wait_pid_job` decoder.
+
 use anyhow::Result;
 use dsh_builtin::BuiltinHandler;
 use dsh_types::{Context, ExitStatus};
@@ -9,7 +16,9 @@ use tracing::debug;
 use super::job_process::JobProcess;
 use super::redirect::Redirect;
 use super::state::ProcessState;
+use super::wait::{WaitPidObservation, wait_pid_job};
 use crate::shell::Shell;
+use nix::unistd::getpid;
 
 #[derive(Clone)]
 pub struct BuiltinProcess {
@@ -136,11 +145,39 @@ impl BuiltinProcess {
     }
 
     pub(crate) fn update_state(&mut self) -> Option<ProcessState> {
-        if let Some(next) = self.next.as_mut() {
-            next.update_state()
-        } else {
-            None
+        // Background re-exec builtins own a real child pid and share the
+        // external lifecycle semantics: only an actually-observed `waitpid`
+        // status may enter the canonical tree. A foreground in-process
+        // builtin carries `pid == getpid()`, which is never a child and must
+        // never be passed to `waitpid`.
+        //
+        // A `Completed` self must not stop pipeline traversal: later stages
+        // may still be `Running` and need polling.
+        if !matches!(self.state, ProcessState::Completed(_, _))
+            && let Some(pid) = self.pid
+            && pid != getpid()
+        {
+            match wait_pid_job(pid, true) {
+                Ok(WaitPidObservation::State(_, state)) => {
+                    self.state = state;
+                }
+                Ok(WaitPidObservation::StillAlive) => {}
+                Ok(WaitPidObservation::NoChild) => {}
+                Err(nix::errno::Errno::EINTR) => {}
+                Err(err) => {
+                    debug!(
+                        "builtin update_state: waitpid for pid {} failed: {}; keeping {:?}",
+                        pid, err, self.state
+                    );
+                }
+            }
         }
+
+        if let Some(next) = self.next.as_mut() {
+            next.update_state();
+        }
+
+        Some(self.state)
     }
 }
 
@@ -148,6 +185,9 @@ impl BuiltinProcess {
 mod tests {
     use super::*;
     use crate::environment::Environment;
+    use crate::process::Process;
+    use nix::unistd::getpid;
+    use std::time::{Duration, Instant};
 
     fn test_context() -> Context {
         Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true)
@@ -246,6 +286,126 @@ mod tests {
         futures::executor::block_on(process.launch(&mut ctx, &mut shell)).unwrap();
 
         assert_eq!(process.state, ProcessState::Completed(9, None));
+    }
+
+    /// Poll `update_state` until the node leaves `Running`.
+    ///
+    /// Real children exit on their own schedule; the non-blocking poll keeps
+    /// the test fast without inventing status. The caller must `mem::forget`
+    /// the `std::process::Child` handle: `Child::wait` would consume the
+    /// status first and `update_state` would only ever see `ECHILD`.
+    fn poll_builtin_until_settled(process: &mut BuiltinProcess) -> ProcessState {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = process
+                .update_state()
+                .expect("builtin update_state always returns the node state");
+            if !matches!(state, ProcessState::Running) {
+                return state;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for builtin child completion"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn builtin_with_child(argv0: &str, shell_cmd: &str) -> (BuiltinProcess, std::process::Child) {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(shell_cmd)
+            .spawn()
+            .expect("spawn test child");
+        let pid = Pid::from_raw(child.id() as i32);
+        let mut process = BuiltinProcess::new(
+            argv0.to_string(),
+            builtin_exit_zero,
+            vec![argv0.to_string()],
+        );
+        process.pid = Some(pid);
+        assert_eq!(process.state, ProcessState::Running);
+        (process, child)
+    }
+
+    /// A background re-exec helper is a real child: its exit must flow from
+    /// `waitpid` observation into the canonical `BuiltinProcess` state.
+    #[test]
+    fn reexec_like_builtin_child_is_reaped() {
+        let (mut process, child) = builtin_with_child("dirs", "exit 0");
+        // The status belongs to `update_state`, not to `Child::wait`.
+        std::mem::forget(child);
+        assert_eq!(
+            poll_builtin_until_settled(&mut process),
+            ProcessState::Completed(0, None)
+        );
+    }
+
+    /// Non-zero helper exits are data and must be preserved verbatim.
+    #[test]
+    fn reexec_like_builtin_preserves_nonzero_exit() {
+        let (mut process, child) = builtin_with_child("dirs", "exit 7");
+        std::mem::forget(child);
+        assert_eq!(
+            poll_builtin_until_settled(&mut process),
+            ProcessState::Completed(7, None)
+        );
+    }
+
+    /// A foreground in-process builtin carries `pid == getpid()`: never a
+    /// child, never passed to `waitpid`. `ECHILD` semantics keep it `Running`.
+    #[test]
+    fn builtin_update_state_does_not_wait_on_shell_pid() {
+        let mut process = BuiltinProcess::new(
+            "fg-builtin".to_string(),
+            builtin_exit_zero,
+            vec!["fg-builtin".to_string()],
+        );
+        process.pid = Some(getpid());
+        process.state = ProcessState::Running;
+        let state = process
+            .update_state()
+            .expect("builtin update_state always returns the node state");
+        assert_eq!(state, ProcessState::Running);
+        assert_eq!(process.state, ProcessState::Running);
+    }
+
+    /// `Builtin Completed` head must not block polling of an external tail:
+    /// lifecycle semantics are variant-independent.
+    #[test]
+    fn completed_builtin_head_does_not_block_external_tail_polling() {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .expect("spawn tail child");
+        let tail_pid = Pid::from_raw(child.id() as i32);
+        std::mem::forget(child);
+
+        let mut head = BuiltinProcess::new(
+            "dirs".to_string(),
+            builtin_exit_zero,
+            vec!["dirs".to_string()],
+        );
+        head.state = ProcessState::Completed(0, None);
+        let mut tail = Process::new("cat".to_string(), vec!["cat".to_string()]);
+        tail.pid = Some(tail_pid);
+        head.next = Some(Box::new(JobProcess::Command(tail)));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            head.update_state();
+            let tail_state = head.next.as_deref().expect("pipeline tail").get_state();
+            if matches!(tail_state, ProcessState::Completed(0, None)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tail behind a Completed builtin head was never polled: {tail_state:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(head.state, ProcessState::Completed(0, None));
     }
 
     /// The sync fallback now only serves in-process callers that cannot

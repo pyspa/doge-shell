@@ -117,3 +117,35 @@ fn pipeline_with_background_builtin_stage_works() {
         output
     );
 }
+
+/// A completed background re-exec builtin must leave the job table: the
+/// helper's exit flows through `waitpid` into the canonical tree, and `jobs`
+/// reconciles (then drops) completed jobs before listing.
+///
+/// Non-interactive mode waits for background jobs synchronously at launch,
+/// so the helper is guaranteed done before `jobs` runs — no sleep-polling
+/// flakiness by design.
+#[test]
+fn background_reexec_builtin_leaves_job_table_after_completion() {
+    let output = common::run_command("dirs & ; jobs");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("there are no jobs"),
+        "completed background builtin still in job table: {stdout:?}"
+    );
+}
+
+/// The mixed builtin-helper → external pipeline must drain as one lifecycle:
+/// builtin self-wait, Completed-head traversal, external wait, and strict
+/// tree completion together empty the table.
+#[test]
+fn completed_background_builtin_pipeline_leaves_job_table() {
+    let output = common::run_command("dirs | cat & ; jobs");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("there are no jobs"),
+        "completed background builtin pipeline still in job table: {stdout:?}"
+    );
+}

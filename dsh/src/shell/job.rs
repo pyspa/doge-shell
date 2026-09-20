@@ -106,15 +106,16 @@ pub fn send_signal_to_foreground_job(shell: &mut Shell, signal: Signal) -> Resul
     Ok(())
 }
 
-/// Terminate all background jobs
+/// Terminate all background jobs with `SIGTERM`.
+///
+/// Shutdown escalation to `SIGKILL` lives in `kill_wait_jobs`
+/// (`Shell::Drop`); there is no `SIGTERM` → grace period → `SIGKILL` state
+/// machine here.
 pub fn terminate_background_jobs(shell: &mut Shell) -> Result<()> {
-    for job in &mut shell.wait_jobs {
-        if !job.foreground
-            && let Some(pid) = job.pid
-        {
-            debug!("Terminating background job {} (pid: {})", job.job_id, pid);
-            // Send SIGTERM first, then SIGKILL if needed
-            let _ = nix::sys::signal::killpg(pid, Signal::SIGTERM);
+    for job in &shell.wait_jobs {
+        if !job.foreground {
+            debug!("Terminating background job {}", job.job_id);
+            let _ = job.signal(Signal::SIGTERM);
         }
     }
     Ok(())

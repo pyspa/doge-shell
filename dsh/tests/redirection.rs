@@ -383,3 +383,184 @@ fn duplicating_an_untracked_descriptor_is_refused() {
         "expected a refusal, got {stderr:?}"
     );
 }
+
+/// Every output-redirection operator fails the same way: the command reports
+/// 1 and the shell continues. (`>` and `<` are pinned by contracts; `>>`,
+/// `2>`, and `&>` are covered here.)
+#[test]
+fn every_output_operator_failure_continues_the_shell() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir");
+
+    for (operator, category) in [
+        (">>", "failed to open redirect file"),
+        ("2>", "failed to create redirect file"),
+        ("&>", "failed to create redirect file"),
+    ] {
+        let script = format!(
+            "/bin/echo hi {operator} {}/out; echo ST:$?",
+            missing.display()
+        );
+        let output = common::run_command(&script);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stdout.lines().any(|line| line.trim() == "ST:1"),
+            "{operator}: the shell did not continue with status 1: {stdout:?} {stderr:?}"
+        );
+        assert!(
+            stderr.contains(category),
+            "{operator}: missing diagnostic category: {stderr:?}"
+        );
+    }
+}
+
+/// A runnable redirection failure is reported exactly once: the evaluator
+/// owns the diagnostic, and no lower layer prints it too.
+#[test]
+fn runnable_redirect_failure_reports_exactly_one_diagnostic() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = common::run_command(&format!("/bin/echo hi > {}; echo AFTER", missing.display()));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(
+        stderr.matches("failed to create redirect file").count(),
+        1,
+        "diagnostic must be reported exactly once, got: {stderr:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line.trim() == "AFTER"),
+        "the shell did not continue: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+/// A background job whose redirection fails before spawn is never registered:
+/// the status is non-zero and the shell continues.
+#[test]
+fn background_redirect_failure_is_not_a_job() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = common::run_command(&format!(
+        "/bin/echo hi > {} & echo BG:$?",
+        missing.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "BG:1"),
+        "background redirect failure must report non-zero: {stdout:?} {stderr:?}"
+    );
+    assert!(
+        stderr.contains("failed to create redirect file"),
+        "missing diagnostic: {stderr:?}"
+    );
+}
+
+/// A redirection failure through the `|>` capture path is a command failure:
+/// the diagnostic travels the capture stderr and the shell continues.
+#[test]
+fn capture_pipe_redirect_failure_is_a_command_failure() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = common::run_command(&format!(
+        "{} > {} |>; echo AFTER:$?",
+        common::true_path(),
+        missing.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "AFTER:1"),
+        "capture path did not continue with status 1: {stdout:?} {stderr:?}"
+    );
+    assert!(
+        stderr.contains("failed to create redirect file"),
+        "diagnostic missed the capture stderr: {stderr:?}"
+    );
+}
+
+/// A redirection failure through the `|:` struct-pipe path is a command
+/// failure as well: no Lisp evaluation, status 1, shell continues.
+#[test]
+fn struct_pipe_redirect_failure_is_a_command_failure() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = common::run_command(&format!(
+        "echo '[{{\"a\":1}}]' > {} |: (json-parse $_); echo AFTER:$?",
+        missing.display(),
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "AFTER:1"),
+        "struct-pipe path did not continue with status 1: {stdout:?} {stderr:?}"
+    );
+    assert!(
+        stderr.contains("failed to create redirect file"),
+        "diagnostic missed the struct-pipe stderr: {stderr:?}"
+    );
+}
+
+/// A second regular builtin (`uuid`) fails the same way as `help`: this pins
+/// the fix to the shared launch path instead of one command.
+#[test]
+fn second_regular_builtin_redirect_failure_is_a_command_failure() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let output = common::run_command(&format!(
+        "uuid > {} || /bin/echo RECOVERED",
+        missing.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "RECOVERED"),
+        "`||` did not recover a builtin redirect failure: {stdout:?} {stderr:?}"
+    );
+    assert!(
+        stderr.contains("failed to create redirect file"),
+        "missing diagnostic: {stderr:?}"
+    );
+}
+
+/// Dozens of consecutive failures keep the shell usable: pipes still connect
+/// and fresh redirects still land. (A portable behavioral proxy for fd-leak
+/// freedom: a leaked pipe end per failure would break the pipe or the
+/// redirect below.)
+#[test]
+fn many_consecutive_failures_keep_pipes_and_redirects_working() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let missing = dir.path().join("no-such-dir").join("out");
+    let ok = dir.path().join("ok.txt");
+    let mut script = String::new();
+    for _ in 0..30 {
+        script.push_str(&format!(
+            "{} > {}; ",
+            common::true_path(),
+            missing.display()
+        ));
+    }
+    script.push_str(&format!(
+        "/bin/echo piped | {} a-z A-Z; echo PIPE:$?; /bin/echo data > {}; /bin/cat {}",
+        common::tr_path(),
+        ok.display(),
+        ok.display()
+    ));
+    let output = common::run_command(&script);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    for expected in ["PIPED", "PIPE:0", "data"] {
+        assert!(
+            stdout.contains(expected),
+            "shell degraded after repeated failures, missing {expected:?}: {stdout:?}"
+        );
+    }
+}

@@ -20,6 +20,7 @@ use super::super::authorize::{
 };
 use super::super::materialize::{MaterializeOutcome, materialize_job};
 use super::super::plan::ExecutionPlan;
+use crate::process::JobLaunchOutcome;
 use anyhow::Result;
 use dsh_types::Context;
 use tracing::debug;
@@ -72,9 +73,9 @@ pub(crate) async fn evaluate_plan(
                     NoCommandExecutionResult::Completed(code) => {
                         last_exit_code = code;
                     }
-                    NoCommandExecutionResult::Failed { exit_code, message } => {
-                        let _ = ctx.write_stderr(&message);
-                        last_exit_code = exit_code;
+                    NoCommandExecutionResult::Failed(failure) => {
+                        let _ = ctx.write_stderr(&failure.message);
+                        last_exit_code = failure.exit_code;
                     }
                 }
                 super::publish_exit_status(shell, last_exit_code);
@@ -99,22 +100,30 @@ pub(crate) async fn evaluate_plan(
         }
 
         job.job_id = shell.get_job_id();
+        // A redirection setup failure is an ordinary command failure here
+        // too: report it on the helper's stderr, publish status 1 for the
+        // next gate, and continue the plan. It must never become a helper
+        // protocol infrastructure error.
         match job.launch(ctx, shell).await? {
-            ProcessState::Running => {
+            JobLaunchOutcome::Process(ProcessState::Running) => {
                 // A background job inside an isolated body is detached: the
                 // helper cannot wait for it without outliving its purpose.
                 // Record success-at-start like the top-level loop does.
                 shell.wait_jobs.push(job);
                 last_exit_code = 0;
             }
-            ProcessState::Stopped(_, _) => {
+            JobLaunchOutcome::Process(ProcessState::Stopped(_, _)) => {
                 shell.wait_jobs.push(job);
                 break;
             }
-            state @ ProcessState::Completed(_, _) => {
+            JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _)) => {
                 last_exit_code = state
                     .shell_exit_code()
                     .expect("completed state has exit code");
+            }
+            JobLaunchOutcome::CommandFailed(failure) => {
+                let _ = ctx.write_stderr(&failure.message);
+                last_exit_code = failure.exit_code;
             }
         }
         super::publish_exit_status(shell, last_exit_code);

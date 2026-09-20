@@ -1,4 +1,4 @@
-use crate::process::{Job, ListOp, ProcessState};
+use crate::process::{Job, JobLaunchOutcome, ListOp, ProcessState};
 use crate::shell::{
     Shell,
     authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
@@ -198,12 +198,9 @@ pub async fn eval_str(
                     crate::shell::no_command::NoCommandExecutionResult::Completed(code) => {
                         last_exit_code = code;
                     }
-                    crate::shell::no_command::NoCommandExecutionResult::Failed {
-                        exit_code,
-                        message,
-                    } => {
-                        let _ = ctx.write_stderr(&message);
-                        last_exit_code = exit_code;
+                    crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
+                        let _ = ctx.write_stderr(&failure.message);
+                        last_exit_code = failure.exit_code;
                     }
                 }
                 publish_exit_status(shell, last_exit_code);
@@ -456,20 +453,20 @@ pub async fn eval_str(
         let launch_result = job.launch(ctx, shell).await;
         let mut stop_processing = false;
         match launch_result {
-            Ok(ProcessState::Running) => {
+            Ok(JobLaunchOutcome::Process(ProcessState::Running)) => {
                 debug!("job '{}' still running", job.cmd);
                 shell.wait_jobs.push(job);
                 // Background jobs are considered successfully started.
                 last_exit_code = 0;
             }
-            Ok(ProcessState::Stopped(pid, _signal)) => {
+            Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, _signal))) => {
                 debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
                 shell.wait_jobs.push(job);
                 // If a job is stopped, we return control to the user and do not continue
                 // evaluating the rest of the command list.
                 stop_processing = true;
             }
-            Ok(state @ ProcessState::Completed(_, _)) => {
+            Ok(JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _))) => {
                 let exit = state
                     .shell_exit_code()
                     .expect("completed state has exit code");
@@ -480,6 +477,27 @@ pub async fn eval_str(
                 if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit) {
                     debug!("Error executing post-exec hooks: {}", e);
                 }
+            }
+            // A redirection setup failure is an ordinary command failure:
+            // report it on the shell's stderr, publish status 1 for `&&` /
+            // `||` / `$?`, and continue the list. The pre-exec hook already
+            // ran, so the post-exec hook runs too, exactly like a normal
+            // completion.
+            Ok(JobLaunchOutcome::CommandFailed(failure)) => {
+                let _ = ctx.write_stderr(&failure.message);
+                last_exit_code = failure.exit_code;
+                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
+                    debug!("Error executing post-exec hooks: {}", e);
+                }
+                ctx.pid = None;
+                ctx.pgid = None;
+                // Restore raw mode only in interactive mode
+                if ctx.interactive {
+                    enable_raw_mode().ok();
+                }
+                publish_exit_status(shell, last_exit_code);
+                gate_op = next_gate_op;
+                continue;
             }
             Err(err) => {
                 ctx.pid = None;

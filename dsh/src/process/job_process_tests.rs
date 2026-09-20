@@ -251,3 +251,200 @@ fn kill_treats_already_gone_child_as_success() {
     node.set_pid(Some(Pid::from_raw(i32::MAX)));
     node.kill().expect("ESRCH must not fail the kill path");
 }
+
+fn init_logging() {
+    let _ = tracing_subscriber::fmt::try_init();
+}
+
+fn pipeline_states(process: &JobProcess) -> Vec<ProcessState> {
+    let mut states = Vec::new();
+    let mut current = Some(process);
+    while let Some(process) = current {
+        states.push(process.get_state());
+        current = process.next_process();
+    }
+    states
+}
+
+#[test]
+fn running_producer_with_completed_consumer_is_not_tree_completed() {
+    init_logging();
+
+    // Create a pipeline: cat | less
+    let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
+    let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
+
+    // Set initial states: producer running, consumer completed.
+    cat_process.state = ProcessState::Running;
+    less_process.state = ProcessState::Completed(0, None);
+
+    // Link them in pipeline
+    cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
+
+    let cat_job_process = JobProcess::Command(cat_process);
+
+    // Strict tree completion: a completed final stage alone is not
+    // completion while the producer is still running.
+    assert!(!cat_job_process.is_completed());
+}
+
+#[test]
+fn completed_process_is_not_stopped() {
+    init_logging();
+    let mut process = Process::new("test".to_string(), vec![]);
+    process.state = ProcessState::Completed(0, None);
+
+    let pipeline = JobProcess::Command(process);
+    assert!(!pipeline.has_stopped_process());
+    assert!(!pipeline.is_fully_stopped());
+}
+
+#[test]
+fn stopped_query_sees_stopped_tail_behind_running_pipeline_head() {
+    let pipeline = pipeline_with_states(&[
+        ProcessState::Running,
+        ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
+    ]);
+
+    assert!(pipeline.has_stopped_process());
+}
+
+/// Strict tree completion: only all-`Completed` pipelines complete.
+/// A completed final stage alone (or a successful intermediate stage)
+/// never completes the tree.
+#[test]
+fn pipeline_tree_completion_truth_table() {
+    use ProcessState::{Completed, Running, Stopped};
+    let stopped = || Stopped(Pid::from_raw(12), Signal::SIGTSTP);
+    let signaled = || Completed(0, Some(Signal::SIGPIPE));
+    let cases: &[(&[ProcessState], bool)] = &[
+        (&[Running], false),
+        (&[Completed(0, None)], true),
+        (&[Running, Running], false),
+        (&[Running, Completed(0, None)], false),
+        (&[Running, Completed(1, None)], false),
+        (&[Running, signaled()], false),
+        (&[Running, Completed(0, None), Running], false),
+        (&[Running, Completed(0, None), stopped()], false),
+        (&[Running, Running, Completed(0, None)], false),
+        (&[Completed(0, None), Completed(0, None), Running], false),
+        (&[Completed(0, None), Running, Completed(0, None)], false),
+        (
+            &[Completed(0, None), Completed(0, None), Completed(0, None)],
+            true,
+        ),
+        (
+            &[Completed(3, None), Completed(0, None)],
+            // Non-zero upstream still counts as completed: exit codes
+            // never affect tree completion.
+            true,
+        ),
+        (&[Completed(1, None), Completed(0, None), Running], false),
+        (&[Completed(1, None), Running, Completed(0, None)], false),
+    ];
+    for (states, expected) in cases {
+        let pipeline = pipeline_with_states(states);
+        assert_eq!(
+            pipeline.is_completed(),
+            *expected,
+            "tree completion for {:?}",
+            states,
+        );
+    }
+}
+
+#[test]
+fn mark_stopped_processes_running_updates_single_process() {
+    let mut process =
+        pipeline_with_states(&[ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP)]);
+
+    process.mark_stopped_processes_running();
+
+    assert_eq!(pipeline_states(&process), vec![ProcessState::Running]);
+}
+
+#[test]
+fn mark_stopped_processes_running_updates_all_stopped_pipeline_stages() {
+    let mut process = pipeline_with_states(&[
+        ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP),
+        ProcessState::Stopped(Pid::from_raw(12), Signal::SIGSTOP),
+        ProcessState::Stopped(Pid::from_raw(13), Signal::SIGTTIN),
+    ]);
+
+    process.mark_stopped_processes_running();
+
+    assert_eq!(
+        pipeline_states(&process),
+        vec![
+            ProcessState::Running,
+            ProcessState::Running,
+            ProcessState::Running
+        ]
+    );
+}
+
+#[test]
+fn mark_stopped_processes_running_preserves_completed_pipeline_stage() {
+    let mut process = pipeline_with_states(&[
+        ProcessState::Completed(0, None),
+        ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
+        ProcessState::Running,
+    ]);
+
+    process.mark_stopped_processes_running();
+
+    assert_eq!(
+        pipeline_states(&process),
+        vec![
+            ProcessState::Completed(0, None),
+            ProcessState::Running,
+            ProcessState::Running
+        ]
+    );
+}
+
+#[test]
+fn test_job_process_variants() {
+    init_logging();
+    let process = Process::new("test".to_string(), vec![]);
+    let job_process = JobProcess::Command(process);
+
+    // JobProcess type check
+    match job_process {
+        JobProcess::Command(_) => {} // Expected variant
+        _ => panic!("Expected Command variant"),
+    }
+}
+
+#[test]
+fn output_only_pty_keeps_stdin_on_real_terminal() {
+    use crate::process::job_process::apply_pty_stdio;
+    use crate::process::pty::PtyMode;
+    use libc::STDIN_FILENO;
+
+    let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+    let slave = 42;
+
+    let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::OutputOnly);
+
+    assert!(applied);
+    assert_eq!(ctx.infile, STDIN_FILENO);
+    assert_eq!(ctx.outfile, slave);
+    assert_eq!(ctx.errfile, slave);
+}
+
+#[test]
+fn full_proxy_pty_replaces_stdin_stdout_and_stderr() {
+    use crate::process::job_process::apply_pty_stdio;
+    use crate::process::pty::PtyMode;
+
+    let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
+    let slave = 42;
+
+    let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::FullProxy);
+
+    assert!(applied);
+    assert_eq!(ctx.infile, slave);
+    assert_eq!(ctx.outfile, slave);
+    assert_eq!(ctx.errfile, slave);
+}

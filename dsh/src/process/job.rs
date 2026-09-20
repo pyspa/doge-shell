@@ -6,7 +6,8 @@ use std::os::unix::io::RawFd;
 use tracing::{debug, error};
 
 use super::io::OutputMonitor;
-use super::job_process::JobProcess;
+use super::job_process::{JobProcess, ProcessLaunchOutcome};
+use super::launch_outcome::{CommandFailure, JobLaunchOutcome, StageLaunchOutcome};
 use super::process::Process;
 use super::redirect::{self, Redirect};
 use super::state::{ListOp, ProcessState, SubshellType};
@@ -226,7 +227,11 @@ impl Job {
         }
     }
 
-    pub async fn launch(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
+    pub async fn launch(
+        &mut self,
+        ctx: &mut Context,
+        shell: &mut Shell,
+    ) -> Result<JobLaunchOutcome> {
         // Record the descriptors the caller handed us. They belong to the
         // caller — `execute_with_capture` and `$( )` both pass a pipe they read
         // themselves — so the pipeline default restores to them and the
@@ -268,7 +273,11 @@ impl Job {
         result
     }
 
-    async fn launch_inner(&mut self, ctx: &mut Context, shell: &mut Shell) -> Result<ProcessState> {
+    async fn launch_inner(
+        &mut self,
+        ctx: &mut Context,
+        shell: &mut Shell,
+    ) -> Result<JobLaunchOutcome> {
         debug!(
             "JOB_LAUNCH_START: Starting job {} launch (cmd: '{}', foreground: {}, pid: {:?})",
             self.job_id, self.cmd, self.foreground, self.pid
@@ -296,16 +305,28 @@ impl Job {
             // multi-stage pipeline (a synthetic source counts as a stage)
             // isolates every builtin member, first/middle/last alike.
             let pipeline_context = process.stage_count() > 1;
-            if let Err(e) = self
+            match self
                 .launch_process(ctx, shell, &mut process, pty_child, pipeline_context)
                 .await
             {
-                error!(
-                    "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
-                    self.job_id, e
-                );
-                self.cleanup_pty_tasks().await;
-                return Err(e);
+                Ok(StageLaunchOutcome::Launched) => {}
+                Ok(StageLaunchOutcome::CommandFailed(failure)) => {
+                    // A redirection setup failure is an expected command
+                    // failure, not a runtime error: the stages are already
+                    // cleaned up, so report the outcome without `?`.
+                    self.state =
+                        ProcessState::Completed(failure.exit_code.clamp(0, 255) as u8, None);
+                    self.cleanup_pty_tasks().await;
+                    return Ok(JobLaunchOutcome::CommandFailed(failure));
+                }
+                Err(e) => {
+                    error!(
+                        "JOB_LAUNCH_PROCESS_ERROR: Failed to launch process for job {}: {}",
+                        self.job_id, e
+                    );
+                    self.cleanup_pty_tasks().await;
+                    return Err(e);
+                }
             }
 
             // 3. Manage execution (Foreground/Background)
@@ -331,7 +352,7 @@ impl Job {
             self.job_id, final_state, ctx.foreground
         );
 
-        Ok(final_state)
+        Ok(JobLaunchOutcome::Process(final_state))
     }
 
     pub(crate) async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<RawFd>> {
@@ -357,7 +378,7 @@ impl Job {
         process: &mut JobProcess,
         pty: Option<PtyChildConfig>,
         pipeline_context: bool,
-    ) -> Result<()> {
+    ) -> Result<StageLaunchOutcome> {
         let previous_infile = ctx.infile;
         // Input redirection is applied here, before the process is launched;
         // the output side is applied inside `launch`, after the pipe and PTY
@@ -368,7 +389,19 @@ impl Job {
             .filter(|redirect| redirect.is_stdin())
             .cloned()
             .collect();
-        let applied_stdin = redirect::apply(&stdin_redirects, ctx)?;
+        // A failed input redirection fails the command, not the shell: stop
+        // any already-spawned upstream stages, then report the outcome
+        // without the `?` operator. No per-stage wiring exists yet, so there
+        // is nothing else to unwind.
+        let applied_stdin = match redirect::apply(&stdin_redirects, ctx) {
+            Ok(applied) => applied,
+            Err(failure) => {
+                self.abort_spawned_stages(ctx, previous_infile).await;
+                return Ok(StageLaunchOutcome::CommandFailed(CommandFailure::redirect(
+                    &failure,
+                )));
+            }
+        };
         let input_fd = applied_stdin.changed_stdin().then_some(ctx.infile);
 
         // Use launch for automatic capture (modified internal logic)
@@ -376,7 +409,23 @@ impl Job {
             .launch(ctx, shell, self.stdout, pty, pipeline_context)
             .await
         {
-            Ok(launched) => launched,
+            Ok(ProcessLaunchOutcome::Launched {
+                pid,
+                next_process,
+                redirects,
+            }) => (pid, next_process, redirects),
+            // The stage never spawned and its own wiring is already unwound:
+            // restore the input redirection, stop upstream stages, and
+            // report the command failure.
+            Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
+                applied_stdin.restore(ctx);
+                if input_fd.is_some_and(|fd| ctx.infile == fd) {
+                    ctx.infile = previous_infile;
+                }
+                drop(applied_stdin);
+                self.abort_spawned_stages(ctx, previous_infile).await;
+                return Ok(StageLaunchOutcome::CommandFailed(failure));
+            }
             Err(err) => {
                 // The guard is about to drop and close the input file, so
                 // put `ctx` back first rather than leaving it naming a
@@ -538,16 +587,71 @@ impl Job {
         }
 
         // run next pipeline process
-        if let Some(mut next_process) = next_process.take()
-            && let Err(err) =
-                Box::pin(self.launch_process(ctx, shell, &mut next_process, pty, pipeline_context))
-                    .await
-        {
-            debug!("err {:?}", err);
-            return Err(err);
+        //
+        // A downstream `CommandFailed` propagates as-is: the failing stage
+        // already stopped the spawned tree and closed its pipe copy, so this
+        // frame must not clean up again (the parent's copy of *this* stage's
+        // input was already closed after this stage spawned).
+        if let Some(mut next_process) = next_process.take() {
+            match Box::pin(self.launch_process(
+                ctx,
+                shell,
+                &mut next_process,
+                pty,
+                pipeline_context,
+            ))
+            .await
+            {
+                Ok(StageLaunchOutcome::Launched) => {}
+                Ok(StageLaunchOutcome::CommandFailed(failure)) => {
+                    return Ok(StageLaunchOutcome::CommandFailed(failure));
+                }
+                Err(err) => {
+                    debug!("err {:?}", err);
+                    return Err(err);
+                }
+            }
         }
 
-        Ok(())
+        Ok(StageLaunchOutcome::Launched)
+    }
+
+    /// Stop and reap pipeline stages spawned before a later stage's
+    /// redirection failure, and close the parent's copy of the failed
+    /// stage's pipe-fed stdin.
+    ///
+    /// A first-stage failure is a natural no-op: the tree is still empty and
+    /// `previous_infile` is the caller's stdin. Only the failing stage runs
+    /// this — unwinding frames propagate the outcome untouched — so the pipe
+    /// copy is closed exactly once and spawned children are never left
+    /// behind. Signalling reuses the canonical `signal` path, which never
+    /// targets the shell's own pid.
+    async fn abort_spawned_stages(&mut self, ctx: &mut Context, previous_infile: RawFd) {
+        if self.process.is_some() {
+            let _ = self.signal(Signal::SIGKILL);
+            // Bounded reap: the tree must already be dying, but a stuck
+            // child must never hang the shell.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                self.update_status();
+                if self.is_process_tree_completed() {
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    debug!("abort_spawned_stages: reap timed out for '{}'", self.cmd);
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            // The failed stage never spawned, so its stdin pipe has no other
+            // owner left in the parent: close our copy and point `ctx` back
+            // at the job's base stdio (the `launch` wrapper restores the same
+            // values on the way out).
+            if previous_infile != self.stdin {
+                let _ = close(previous_infile);
+                ctx.infile = self.stdin;
+            }
+        }
     }
 
     pub async fn put_in_foreground(&mut self, no_hang: bool, cont: bool) -> Result<()> {

@@ -8,7 +8,7 @@
 //! `&&`/`||` gating cannot drift apart.
 
 use super::substitution::ExecutionResources;
-use crate::process::Redirect;
+use crate::process::{CommandFailure, Redirect};
 use crate::shell::Shell;
 use dsh_types::Context;
 
@@ -28,15 +28,14 @@ pub struct NoCommandMaterialization {
 ///
 /// `Failed` is an expected command-level failure (redirection error): the
 /// caller publishes its non-zero status and continues the `;`/`&&`/`||`
-/// list instead of aborting with `anyhow::Error`.
+/// list instead of aborting with `anyhow::Error`. The payload is the shared
+/// [`CommandFailure`], so runnable and no-command paths report the same
+/// status and diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoCommandExecutionResult {
     Completed(i32),
-    Failed { exit_code: i32, message: String },
+    Failed(CommandFailure),
 }
-
-/// Exit status for a failed no-command redirection.
-pub const NO_COMMAND_REDIRECT_EXIT_CODE: i32 = 1;
 
 /// Execute one no-command simple command:
 ///
@@ -67,10 +66,9 @@ pub fn execute_no_command(
             Err(err) => {
                 // `apply` already rolled `ctx` back on partial failure, so
                 // the shell stdio is intact; report and continue the list.
-                return NoCommandExecutionResult::Failed {
-                    exit_code: NO_COMMAND_REDIRECT_EXIT_CODE,
-                    message: format!("dsh: {err:#}"),
-                };
+                // The diagnostic prefix lives in `CommandFailure::redirect`,
+                // shared with the runnable path.
+                return NoCommandExecutionResult::Failed(CommandFailure::redirect(&err));
             }
         }
     }
@@ -163,11 +161,12 @@ mod tests {
             },
         );
         match result {
-            NoCommandExecutionResult::Failed { exit_code, message } => {
-                assert_ne!(exit_code, 0);
+            NoCommandExecutionResult::Failed(failure) => {
+                assert_ne!(failure.exit_code, 0);
                 assert!(
-                    message.contains("failed to create redirect file"),
-                    "{message:?}"
+                    failure.message.contains("failed to create redirect file"),
+                    "{:?}",
+                    failure.message
                 );
             }
             other => panic!("redirect failure must not complete: {other:?}"),

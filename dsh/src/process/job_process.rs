@@ -10,6 +10,7 @@ use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::{BuiltinProcess, builtin_execution_placement};
 use super::fork::fork_process;
 use super::io::{cloexec_pipe, create_pipe, default_output_wiring};
+use super::launch_outcome::CommandFailure;
 use super::pipeline_source::PipelineSourceProcess;
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
@@ -54,7 +55,7 @@ impl std::fmt::Debug for JobProcess {
     }
 }
 
-fn apply_pty_stdio(ctx: &mut Context, slave: RawFd, pty_mode: PtyMode) -> bool {
+pub(crate) fn apply_pty_stdio(ctx: &mut Context, slave: RawFd, pty_mode: PtyMode) -> bool {
     let mut slave_applied = false;
     if pty_mode == PtyMode::FullProxy && ctx.infile == STDIN_FILENO {
         ctx.infile = slave;
@@ -78,6 +79,24 @@ fn strip_argv0<'a>(program: &str, argv: &'a [String]) -> &'a [String] {
         Some(first) if first == program => &argv[1..],
         _ => argv,
     }
+}
+
+/// What one `JobProcess::launch` reports.
+///
+/// `Launched` carries the child pid, the detached downstream stages, and the
+/// redirection guard (the caller owns its files and must not close those
+/// descriptors itself). `CommandFailed` is a redirection setup failure: the
+/// stage never spawned, its temporary pipe/capture wiring is already closed
+/// and unwound, and the evaluator reports it as an ordinary command failure.
+/// Only internal failures (pipe creation, spawn protocol) travel as `Err`.
+#[derive(Debug)]
+pub(crate) enum ProcessLaunchOutcome {
+    Launched {
+        pid: Pid,
+        next_process: Option<Box<JobProcess>>,
+        redirects: AppliedRedirects,
+    },
+    CommandFailed(CommandFailure),
 }
 
 impl JobProcess {
@@ -389,7 +408,7 @@ impl JobProcess {
         stdout: RawFd,
         pty: Option<PtyChildConfig>,
         pipeline_context: bool,
-    ) -> Result<(Pid, Option<Box<JobProcess>>, AppliedRedirects)> {
+    ) -> Result<ProcessLaunchOutcome> {
         // has pipelines process ?
         let next_process = self.take_next();
         let has_next_process = next_process.is_some();
@@ -412,9 +431,28 @@ impl JobProcess {
             && pty.is_none()
             && ctx.captured_out.is_none();
 
+        // Snapshot the wiring this call did not create. A redirection failure
+        // below must close exactly the descriptors created here (pipeline
+        // pipes, capture pipes, observer pipes) and put these slots back;
+        // anything still naming an entry value is caller-owned and stays.
+        //
+        // NOTE: the entry `ctx.outfile` of a pipeline stage is *not* usable
+        // as a "was this fd created here" probe: the previous stage leaves
+        // its (already closed in the parent) pipe write end there until the
+        // default wiring below replaces it. Fresh fds are tracked explicitly
+        // instead — entry values only tell where to restore the slots to.
+        let entry_infile = ctx.infile;
+        let entry_outfile = ctx.outfile;
+        let entry_errfile = ctx.errfile;
+        // Write ends created by this call and now living in `ctx`, if any.
+        let mut created_out: Option<RawFd> = None;
+        let mut created_err: Option<RawFd> = None;
+
         let pipe_out = match next_process {
             Some(_) => {
-                create_pipe(ctx)? // create pipe
+                let pipe = create_pipe(ctx)?; // create pipe
+                created_out = Some(ctx.outfile);
+                pipe
             }
             None => {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
@@ -427,6 +465,7 @@ impl JobProcess {
                 {
                     let (pout, pin) = cloexec_pipe().context("failed pipe")?;
                     ctx.outfile = pin.into_raw_fd();
+                    created_out = Some(ctx.outfile);
                     let pout_raw = pout.into_raw_fd();
                     match self {
                         JobProcess::Builtin(p) => p.cap_stdout = Some(pout_raw),
@@ -444,6 +483,7 @@ impl JobProcess {
         if observe_foreground_external && ctx.errfile == STDERR_FILENO {
             let (pout, pin) = cloexec_pipe().context("failed stderr pipe")?;
             ctx.errfile = pin.into_raw_fd();
+            created_err = Some(ctx.errfile);
             let pout_raw = pout.into_raw_fd();
             if let JobProcess::Command(p) = self {
                 p.cap_stderr = Some(pout_raw);
@@ -472,7 +512,25 @@ impl JobProcess {
         // chance to replace it.
         let pipe_write = has_next_process.then_some(ctx.outfile);
 
-        let applied = redirect::apply(&output_redirects, ctx)?;
+        // A redirection failure is an ordinary command failure, not a runtime
+        // error: unwind this call's pipe/capture wiring (the shell lives on,
+        // so a leak here would be a persistent session leak) and report it
+        // without the `?` operator.
+        let applied = match redirect::apply(&output_redirects, ctx) {
+            Ok(applied) => applied,
+            Err(failure) => {
+                self.abort_stage_wiring(
+                    ctx,
+                    (entry_infile, entry_outfile, entry_errfile),
+                    pipe_out,
+                    created_out,
+                    created_err,
+                );
+                return Ok(ProcessLaunchOutcome::CommandFailed(
+                    CommandFailure::redirect(&failure),
+                ));
+            }
+        };
 
         self.set_io(ctx.infile, ctx.outfile, ctx.errfile);
 
@@ -550,7 +608,61 @@ impl JobProcess {
         }
         // return launched process pid, pipeline process, and the descriptors
         // the redirections own (the caller must not close those itself)
-        Ok((pid, next_process, applied))
+        Ok(ProcessLaunchOutcome::Launched {
+            pid,
+            next_process,
+            redirects: applied,
+        })
+    }
+
+    /// Close and unwind the pipe/capture wiring created by [`JobProcess::launch`]
+    /// after a redirection failure, before anything spawned.
+    ///
+    /// Only descriptors created by that call are closed: `pipe_out` (the read
+    /// end for the next stage), `created_out` / `created_err` (fresh pipe
+    /// write ends now living in `ctx`), and the capture-reader ends stashed
+    /// on the process. Everything else in `ctx` is caller-owned (the caller's
+    /// capture pipe, the base stdio) or job-owned (the PTY slave, only
+    /// unwound, never closed), so the slots are simply restored to the entry
+    /// values. No slot comparison is involved: a pipeline stage's entry
+    /// `ctx.outfile` is the previous stage's already-closed pipe write end,
+    /// which a fresh pipe could never be distinguished from by number alone.
+    fn abort_stage_wiring(
+        &mut self,
+        ctx: &mut Context,
+        entry: (RawFd, RawFd, RawFd),
+        pipe_out: Option<RawFd>,
+        created_out: Option<RawFd>,
+        created_err: Option<RawFd>,
+    ) {
+        if let Some(read_end) = pipe_out {
+            let _ = close(read_end);
+        }
+        if let Some(write_end) = created_out {
+            let _ = close(write_end);
+        }
+        if let Some(write_end) = created_err {
+            let _ = close(write_end);
+        }
+        // Capture-reader ends stashed on the process never reached a spawn;
+        // take them back and close so they cannot leak.
+        let (cap_stdout, cap_stderr) = match self {
+            JobProcess::Builtin(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
+            JobProcess::Command(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
+            JobProcess::SyntheticSource(_) => (None, None),
+        };
+        if let Some(fd) = cap_stdout {
+            let _ = close(fd);
+        }
+        if let Some(fd) = cap_stderr {
+            let _ = close(fd);
+        }
+        // `redirect::apply` already rolled its own partial changes back, so
+        // the slots now hold the post-wiring values; put back exactly what
+        // the caller handed us.
+        ctx.infile = entry.0;
+        ctx.outfile = entry.1;
+        ctx.errfile = entry.2;
     }
 
     pub fn kill(&self) -> Result<()> {
@@ -584,215 +696,5 @@ impl JobProcess {
             JobProcess::Command(process) => process.update_state(),
             JobProcess::SyntheticSource(process) => process.update_state(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::process::state::ProcessState;
-
-    fn init() {
-        let _ = tracing_subscriber::fmt::try_init();
-    }
-
-    #[test]
-    fn running_producer_with_completed_consumer_is_not_tree_completed() {
-        init();
-
-        // Create a pipeline: cat | less
-        let mut cat_process = Process::new("cat".to_string(), vec!["cat".to_string()]);
-        let mut less_process = Process::new("less".to_string(), vec!["less".to_string()]);
-
-        // Set initial states: producer running, consumer completed.
-        cat_process.state = ProcessState::Running;
-        less_process.state = ProcessState::Completed(0, None);
-
-        // Link them in pipeline
-        cat_process.next = Some(Box::new(JobProcess::Command(less_process)));
-
-        let cat_job_process = JobProcess::Command(cat_process);
-
-        // Strict tree completion: a completed final stage alone is not
-        // completion while the producer is still running.
-        assert!(!cat_job_process.is_completed());
-    }
-
-    #[test]
-    fn completed_process_is_not_stopped() {
-        init();
-        let mut process = Process::new("test".to_string(), vec![]);
-        process.state = ProcessState::Completed(0, None);
-
-        let pipeline = JobProcess::Command(process);
-        assert!(!pipeline.has_stopped_process());
-        assert!(!pipeline.is_fully_stopped());
-    }
-
-    fn pipeline_with_states(states: &[ProcessState]) -> JobProcess {
-        let mut states = states.iter().copied();
-        let first = states.next().expect("pipeline needs at least one stage");
-        let mut process = Process::new("stage-1".to_string(), vec![]);
-        process.state = first;
-        let mut pipeline = JobProcess::Command(process);
-        for (index, state) in states.enumerate() {
-            let mut process = Process::new(format!("stage-{}", index + 2), vec![]);
-            process.state = state;
-            pipeline.link(JobProcess::Command(process));
-        }
-        pipeline
-    }
-
-    fn pipeline_states(process: &JobProcess) -> Vec<ProcessState> {
-        let mut states = Vec::new();
-        let mut current = Some(process);
-        while let Some(process) = current {
-            states.push(process.get_state());
-            current = process.next_process();
-        }
-        states
-    }
-
-    #[test]
-    fn stopped_query_sees_stopped_tail_behind_running_pipeline_head() {
-        let pipeline = pipeline_with_states(&[
-            ProcessState::Running,
-            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
-        ]);
-
-        assert!(pipeline.has_stopped_process());
-    }
-
-    /// Strict tree completion: only all-`Completed` pipelines complete.
-    /// A completed final stage alone (or a successful intermediate stage)
-    /// never completes the tree.
-    #[test]
-    fn pipeline_tree_completion_truth_table() {
-        use ProcessState::{Completed, Running, Stopped};
-        let stopped = || Stopped(Pid::from_raw(12), Signal::SIGTSTP);
-        let signaled = || Completed(0, Some(Signal::SIGPIPE));
-        let cases: &[(&[ProcessState], bool)] = &[
-            (&[Running], false),
-            (&[Completed(0, None)], true),
-            (&[Running, Running], false),
-            (&[Running, Completed(0, None)], false),
-            (&[Running, Completed(1, None)], false),
-            (&[Running, signaled()], false),
-            (&[Running, Completed(0, None), Running], false),
-            (&[Running, Completed(0, None), stopped()], false),
-            (&[Running, Running, Completed(0, None)], false),
-            (&[Completed(0, None), Completed(0, None), Running], false),
-            (&[Completed(0, None), Running, Completed(0, None)], false),
-            (
-                &[Completed(0, None), Completed(0, None), Completed(0, None)],
-                true,
-            ),
-            (
-                &[Completed(3, None), Completed(0, None)],
-                // Non-zero upstream still counts as completed: exit codes
-                // never affect tree completion.
-                true,
-            ),
-            (&[Completed(1, None), Completed(0, None), Running], false),
-            (&[Completed(1, None), Running, Completed(0, None)], false),
-        ];
-        for (states, expected) in cases {
-            let pipeline = pipeline_with_states(states);
-            assert_eq!(
-                pipeline.is_completed(),
-                *expected,
-                "tree completion for {:?}",
-                states,
-            );
-        }
-    }
-
-    #[test]
-    fn mark_stopped_processes_running_updates_single_process() {
-        let mut process =
-            pipeline_with_states(&[ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP)]);
-
-        process.mark_stopped_processes_running();
-
-        assert_eq!(pipeline_states(&process), vec![ProcessState::Running]);
-    }
-
-    #[test]
-    fn mark_stopped_processes_running_updates_all_stopped_pipeline_stages() {
-        let mut process = pipeline_with_states(&[
-            ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP),
-            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGSTOP),
-            ProcessState::Stopped(Pid::from_raw(13), Signal::SIGTTIN),
-        ]);
-
-        process.mark_stopped_processes_running();
-
-        assert_eq!(
-            pipeline_states(&process),
-            vec![
-                ProcessState::Running,
-                ProcessState::Running,
-                ProcessState::Running
-            ]
-        );
-    }
-
-    #[test]
-    fn mark_stopped_processes_running_preserves_completed_pipeline_stage() {
-        let mut process = pipeline_with_states(&[
-            ProcessState::Completed(0, None),
-            ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTSTP),
-            ProcessState::Running,
-        ]);
-
-        process.mark_stopped_processes_running();
-
-        assert_eq!(
-            pipeline_states(&process),
-            vec![
-                ProcessState::Completed(0, None),
-                ProcessState::Running,
-                ProcessState::Running
-            ]
-        );
-    }
-
-    #[test]
-    fn test_job_process_variants() {
-        init();
-        let process = Process::new("test".to_string(), vec![]);
-        let job_process = JobProcess::Command(process);
-
-        // JobProcess type check
-        match job_process {
-            JobProcess::Command(_) => {} // Expected variant
-            _ => panic!("Expected Command variant"),
-        }
-    }
-
-    #[test]
-    fn output_only_pty_keeps_stdin_on_real_terminal() {
-        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
-        let slave = 42;
-
-        let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::OutputOnly);
-
-        assert!(applied);
-        assert_eq!(ctx.infile, STDIN_FILENO);
-        assert_eq!(ctx.outfile, slave);
-        assert_eq!(ctx.errfile, slave);
-    }
-
-    #[test]
-    fn full_proxy_pty_replaces_stdin_stdout_and_stderr() {
-        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
-        let slave = 42;
-
-        let applied = apply_pty_stdio(&mut ctx, slave, PtyMode::FullProxy);
-
-        assert!(applied);
-        assert_eq!(ctx.infile, slave);
-        assert_eq!(ctx.outfile, slave);
-        assert_eq!(ctx.errfile, slave);
     }
 }

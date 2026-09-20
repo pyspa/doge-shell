@@ -4,7 +4,7 @@
 //! work applies to it. `$(...)` capture and `<(...)` producers live in
 //! `super::super::substitution`, on the re-exec protocol shared with
 //! background builtins (`crate::process::reexec`).
-use crate::process::{Job, ProcessState};
+use crate::process::{Job, JobLaunchOutcome, ProcessState};
 use crate::shell::Shell;
 use anyhow::{Context as _, Result, anyhow};
 use dsh_types::Context;
@@ -78,6 +78,14 @@ pub async fn execute_with_capture(
     job.disable_pty = original_disable_pty;
     job.foreground = original_foreground;
 
+    // A redirection setup failure is an ordinary command failure: route the
+    // diagnostic through the capture stderr (never a hard-coded process
+    // stderr, which would bypass `|>` / `|:`), then fall through to the
+    // normal reader join so the caller sees `(1, stdout, stderr)`.
+    if let Ok(JobLaunchOutcome::CommandFailed(failure)) = &launch_result {
+        let _ = capture_ctx.write_stderr(&failure.message);
+    }
+
     // Ensure writer ends are closed in parent so reader threads can finish.
     let _ = close(stdout_write_fd);
     let _ = close(stderr_write_fd);
@@ -85,7 +93,16 @@ pub async fn execute_with_capture(
     let stdout = join_pipe_reader(stdout_reader, "stdout")?;
     let stderr = join_pipe_reader(stderr_reader, "stderr")?;
 
-    let state = launch_result?;
+    let state = match launch_result? {
+        JobLaunchOutcome::Process(state) => state,
+        JobLaunchOutcome::CommandFailed(failure) => {
+            debug!(
+                "Capture complete with command failure: exit={}",
+                failure.exit_code
+            );
+            return Ok((failure.exit_code, stdout, stderr));
+        }
+    };
     let exit_code = match state {
         ProcessState::Completed(_, _) => state
             .shell_exit_code()

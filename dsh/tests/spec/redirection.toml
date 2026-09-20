@@ -101,14 +101,139 @@ stdout_contains = ["DONE:0"]
 path = "never-created-xyz.txt"
 exists = false
 
-# Desired: a failed redirect fails that command but the shell continues.
+# A failed redirect fails that command but the shell continues.
 [[case]]
 id = "redirection.failed-redirect-continues-shell"
 class = "posix"
 mode = "command"
 script = "echo hi > /doge-shell-no-such-dir-xyz/f; echo ST:$?"
-xfail = "failed redirect aborts the -c script instead of continuing"
 
 [case.expect]
 status = 0
 stdout_contains = ["ST:1"]
+
+# Runnable output-redirect failure: the list continues with status 1.
+[[case]]
+id = "redirection.runnable-output-failure-continues-list"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > /doge-shell-no-such-dir-xyz/out; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to create redirect file"]
+
+# Runnable input-redirect failure behaves the same way.
+[[case]]
+id = "redirection.runnable-input-failure-continues-list"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} < /doge-shell-no-such-input-xyz; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+# A failed redirect gates `&&`: the right side never runs.
+[[case]]
+id = "redirection.runnable-failure-gates-and"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > /doge-shell-no-such-dir-xyz/out && echo SHOULD_NOT_RUN; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+stderr_contains = ["failed to create redirect file"]
+
+# A failed redirect activates `||`.
+[[case]]
+id = "redirection.runnable-failure-activates-or"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > /doge-shell-no-such-dir-xyz/out || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_contains = ["failed to create redirect file"]
+
+# A clearly regular builtin fails the same way (external-only fix guard).
+[[case]]
+id = "redirection.regular-builtin-failure-is-command-failure"
+class = "posix"
+mode = "command"
+script = "help > /doge-shell-no-such-dir-xyz/out || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_contains = ["failed to create redirect file"]
+
+# A redirect failure inside `$( )` is a command failure, not a helper error.
+[[case]]
+id = "redirection.substitution-inner-failure-is-command-failure"
+class = "posix"
+mode = "command"
+script = "$({{TRUE}} > /doge-shell-no-such-dir-xyz/out) || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_contains = ["failed to create redirect file"]
+
+# A downstream redirect failure must not hang on the upstream producer.
+[[case]]
+id = "redirection.pipeline-downstream-failure-continues"
+class = "posix"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -n 1 > /doge-shell-no-such-dir-xyz/out; echo AFTER"
+timeout_ms = 10000
+
+[case.expect]
+status = 0
+stdout_contains = ["AFTER"]
+stderr_contains = ["failed to create redirect file"]
+
+# The failing command body itself never runs: no marker file appears.
+[[case]]
+id = "redirection.failing-command-body-never-runs"
+class = "posix"
+mode = "command"
+script = "touch marker > /doge-shell-no-such-dir-xyz/out; echo DONE"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE"]
+stderr_contains = ["failed to create redirect file"]
+
+[[case.expect.files]]
+path = "marker"
+exists = false
+
+# A failed mixed duplication leaves stdio intact for the next command.
+[[case]]
+id = "redirection.failed-mixed-dup-does-not-leak-stdio"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} 2>&1 > /doge-shell-no-such-dir-xyz/out; echo NEXT"
+
+[case.expect]
+status = 0
+stdout_contains = ["NEXT"]
+stderr_contains = ["failed to create redirect file"]
+
+# Repeated failures keep the shell usable: pipes and redirects still work.
+[[case]]
+id = "redirection.repeated-failures-keep-shell-usable"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > /doge-shell-no-such-dir-xyz/o1; {{TRUE}} > /doge-shell-no-such-dir-xyz/o2; {{TRUE}} > /doge-shell-no-such-dir-xyz/o3; {{TRUE}} > /doge-shell-no-such-dir-xyz/o4; {{TRUE}} > /doge-shell-no-such-dir-xyz/o5; {{TRUE}} < /doge-shell-no-such-input-xyz; echo piped | {{TR}} a-z A-Z; echo PIPE:$?; echo data > ok.txt; cat ok.txt"
+
+[case.expect]
+status = 0
+stdout_contains = ["PIPED", "PIPE:0", "data"]
+stderr_contains = ["failed to create redirect file"]

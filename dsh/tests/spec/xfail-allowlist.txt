@@ -7,4 +7,3 @@
 
 background.pipeline-in-background
 pipeline.assignment-stage-parent-isolation
-redirection.failed-redirect-continues-shell

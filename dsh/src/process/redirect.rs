@@ -10,13 +10,51 @@
 //! very next command, lets `>>` create a missing file, and stops a foreground
 //! builtin from blocking once it writes more than a pipe buffer.
 
-use anyhow::{Context as _, Result, bail};
 use dsh_types::Context;
 use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::dup;
 use std::fs::{File, OpenOptions};
 use std::os::fd::BorrowedFd;
 use std::os::unix::io::{AsRawFd, RawFd};
+
+/// Exit status for any redirection setup failure, runnable or no-command.
+///
+/// POSIX only requires non-zero; the single shared constant keeps both paths
+/// reporting the same status instead of drifting apart.
+pub(crate) const REDIRECTION_FAILURE_EXIT_CODE: i32 = 1;
+
+/// A redirection setup failure: missing file, permission denied, bad fd,
+/// unsupported slot.
+///
+/// This is an *expected command-level failure*, not a runtime infrastructure
+/// error: the command fails with [`REDIRECTION_FAILURE_EXIT_CODE`] while the
+/// shell stays alive. The message is the user-facing diagnostic (without the
+/// `dsh: ` prefix; the caller that reports it owns the prefix). Callers must
+/// match on this type, never on the message text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RedirectFailure {
+    message: String,
+}
+
+impl RedirectFailure {
+    pub(crate) fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    /// The user-facing diagnostic, e.g.
+    /// `failed to create redirect file '/x': Permission denied (os error 13)`.
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for RedirectFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RedirectFailure {}
 
 /// One redirection, in the order the user wrote it.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -94,6 +132,7 @@ impl Redirect {
 ///
 /// The child inherits the descriptors at fork, and a foreground builtin writes
 /// to them in-process, so these must outlive both.
+#[derive(Debug)]
 pub(crate) struct AppliedRedirects {
     _files: Vec<File>,
     /// Slot number and what it held before, so the change can be undone.
@@ -130,17 +169,27 @@ impl AppliedRedirects {
 }
 
 /// Point `ctx`'s descriptors at what `redirects` asks for, in order.
-pub(crate) fn apply(redirects: &[Redirect], ctx: &mut Context) -> Result<AppliedRedirects> {
+///
+/// A `RedirectFailure` leaves `ctx` exactly as it was: unsupported slots are
+/// rejected before anything is applied, and a mid-list open failure rolls
+/// back the earlier entries first. The caller reports the failure as an
+/// ordinary command failure; this layer never prints anything itself because
+/// the stderr destination differs per execution path (normal, capture,
+/// struct pipe, helper).
+pub(crate) fn apply(
+    redirects: &[Redirect],
+    ctx: &mut Context,
+) -> Result<AppliedRedirects, RedirectFailure> {
     // Reject unsupported slots before touching anything: these are a mistake in
     // the command, not a runtime failure, so they should not half-apply the
     // redirects written before them. Failures that only show up on open are
     // rolled back in the loop below instead.
     for redirect in redirects {
         if !is_standard_slot(redirect.fd) {
-            bail!(
+            return Err(RedirectFailure::new(format!(
                 "redirecting file descriptor {} is not supported",
                 redirect.fd
-            );
+            )));
         }
         // The source matters just as much: only the three standard slots are
         // tracked, so any other number would name one of the *shell's* own
@@ -149,7 +198,9 @@ pub(crate) fn apply(redirects: &[Redirect], ctx: &mut Context) -> Result<Applied
         if let RedirectOp::DupFrom(source) = redirect.op
             && !is_standard_slot(source)
         {
-            bail!("{source}: bad file descriptor");
+            return Err(RedirectFailure::new(format!(
+                "{source}: bad file descriptor"
+            )));
         }
     }
 
@@ -190,18 +241,22 @@ fn open_redirect_source(
     redirect: &Redirect,
     ctx: &Context,
     files: &mut Vec<File>,
-) -> Result<RawFd> {
+) -> Result<RawFd, RedirectFailure> {
     let source = match &redirect.op {
         RedirectOp::ReadFile(path) => {
-            let file = File::open(path)
-                .with_context(|| format!("failed to open input redirect file '{path}'"))?;
+            let file = File::open(path).map_err(|err| {
+                RedirectFailure::new(format!(
+                    "failed to open input redirect file '{path}': {err}"
+                ))
+            })?;
             let fd = file.as_raw_fd();
             files.push(file);
             fd
         }
         RedirectOp::WriteFile(path) => {
-            let file = File::create(path)
-                .with_context(|| format!("failed to create redirect file '{path}'"))?;
+            let file = File::create(path).map_err(|err| {
+                RedirectFailure::new(format!("failed to create redirect file '{path}': {err}"))
+            })?;
             let fd = file.as_raw_fd();
             files.push(file);
             fd
@@ -211,7 +266,9 @@ fn open_redirect_source(
                 .create(true)
                 .append(true)
                 .open(path)
-                .with_context(|| format!("failed to open redirect file '{path}'"))?;
+                .map_err(|err| {
+                    RedirectFailure::new(format!("failed to open redirect file '{path}': {err}"))
+                })?;
             let fd = file.as_raw_fd();
             files.push(file);
             fd
@@ -222,8 +279,11 @@ fn open_redirect_source(
         // why `cmd 2>&1 > f` used to send stderr to the file too.
         RedirectOp::DupFrom(from) => {
             let source = current_slot(ctx, *from);
-            let copy = dup(unsafe { BorrowedFd::borrow_raw(source) })
-                .with_context(|| format!("failed to duplicate file descriptor {source}"))?;
+            let copy = dup(unsafe { BorrowedFd::borrow_raw(source) }).map_err(|err| {
+                RedirectFailure::new(format!(
+                    "failed to duplicate file descriptor {source}: {err}"
+                ))
+            })?;
             let file = File::from(copy);
             let fd = file.as_raw_fd();
             files.push(file);
@@ -234,7 +294,7 @@ fn open_redirect_source(
                 .read(true)
                 .write(true)
                 .open("/dev/null")
-                .context("failed to open /dev/null")?;
+                .map_err(|err| RedirectFailure::new(format!("failed to open /dev/null: {err}")))?;
             let fd = file.as_raw_fd();
             files.push(file);
             fd
@@ -329,6 +389,130 @@ mod tests {
         }];
 
         assert!(apply(&redirects, &mut ctx).is_err());
+        assert_eq!((ctx.infile, ctx.outfile, ctx.errfile), before);
+    }
+
+    /// A bad duplication source rolls back an earlier successful redirect:
+    /// the source check runs up front, but this guards the shape where a
+    /// dup fails at open time after a file was already created.
+    #[test]
+    fn a_bad_duplication_source_restores_the_context() {
+        let mut ctx = test_context();
+        let before = (ctx.infile, ctx.outfile, ctx.errfile);
+
+        let redirects = vec![
+            Redirect::write(STDOUT_FILENO, "/dev/null".to_string()),
+            Redirect::dup(STDERR_FILENO, 9),
+        ];
+
+        let err = match apply(&redirects, &mut ctx) {
+            Ok(_) => panic!("duplicating an untracked descriptor must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("bad file descriptor"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            (ctx.infile, ctx.outfile, ctx.errfile),
+            before,
+            "the context still names descriptors from the failed apply"
+        );
+    }
+
+    /// Every failure kind carries a stable diagnostic category (not an
+    /// exact OS message): callers report these without string-matching.
+    #[test]
+    fn failures_carry_stable_diagnostic_categories() {
+        let missing = "/nonexistent-directory-for-dsh/nope";
+        let cases: Vec<(Redirect, &str)> = vec![
+            (
+                Redirect::input(missing.to_string()),
+                "failed to open input redirect file",
+            ),
+            (
+                Redirect::write(STDOUT_FILENO, missing.to_string()),
+                "failed to create redirect file",
+            ),
+            (
+                Redirect::append(STDOUT_FILENO, missing.to_string()),
+                "failed to open redirect file",
+            ),
+            (Redirect::dup(STDERR_FILENO, 9), "bad file descriptor"),
+            (
+                Redirect {
+                    fd: 7,
+                    op: RedirectOp::WriteFile("/dev/null".to_string()),
+                },
+                "is not supported",
+            ),
+        ];
+        for (redirect, category) in cases {
+            let mut ctx = test_context();
+            let err = match apply(std::slice::from_ref(&redirect), &mut ctx) {
+                Ok(_) => panic!("{redirect:?} must fail"),
+                Err(err) => err,
+            };
+            assert!(
+                err.message().contains(category),
+                "{redirect:?}: {err:?} does not carry {category:?}"
+            );
+        }
+    }
+
+    /// Successful redirects preserve left-to-right ordering: `> f 2>&1`
+    /// points both streams at the file, while `2>&1 > f` leaves stderr on
+    /// the previous stdout.
+    #[test]
+    fn successful_redirects_preserve_left_to_right_ordering() {
+        use std::os::fd::BorrowedFd;
+
+        fn same_file(a: RawFd, b: RawFd) -> bool {
+            let stat = |fd: RawFd| nix::sys::stat::fstat(unsafe { BorrowedFd::borrow_raw(fd) });
+            match (stat(a), stat(b)) {
+                (Ok(a), Ok(b)) => a.st_dev == b.st_dev && a.st_ino == b.st_ino,
+                _ => false,
+            }
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("order.txt");
+
+        // `> f 2>&1`: both streams leave their original homes for the file.
+        let mut ctx = test_context();
+        let before = (ctx.infile, ctx.outfile, ctx.errfile);
+        let redirects = vec![
+            Redirect::write(STDOUT_FILENO, file.to_string_lossy().into_owned()),
+            Redirect::dup(STDERR_FILENO, STDOUT_FILENO),
+        ];
+        let applied = apply(&redirects, &mut ctx).expect("> f 2>&1 applies");
+        assert_ne!(ctx.outfile, before.1, "stdout must point at the file");
+        assert!(
+            same_file(ctx.outfile, ctx.errfile),
+            "stderr must follow stdout into the file"
+        );
+        applied.restore(&mut ctx);
+        assert_eq!((ctx.infile, ctx.outfile, ctx.errfile), before);
+
+        // `2>&1 > f`: stderr keeps the destination stdout had *at that
+        // point*, so only stdout moves to the file.
+        let mut ctx = test_context();
+        let before = (ctx.infile, ctx.outfile, ctx.errfile);
+        let redirects = vec![
+            Redirect::dup(STDERR_FILENO, STDOUT_FILENO),
+            Redirect::write(STDOUT_FILENO, file.to_string_lossy().into_owned()),
+        ];
+        let applied = apply(&redirects, &mut ctx).expect("2>&1 > f applies");
+        assert_ne!(ctx.outfile, before.1, "stdout must point at the file");
+        assert!(
+            same_file(ctx.errfile, before.1),
+            "stderr must keep the previous stdout"
+        );
+        assert!(
+            !same_file(ctx.outfile, ctx.errfile),
+            "stderr must not follow stdout into the file"
+        );
+        applied.restore(&mut ctx);
         assert_eq!((ctx.infile, ctx.outfile, ctx.errfile), before);
     }
 }

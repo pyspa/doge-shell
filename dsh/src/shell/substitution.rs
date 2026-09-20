@@ -499,6 +499,7 @@ use std::os::fd::AsRawFd as _;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process::JobLaunchOutcome;
     use crate::repl::confirmation::ConfirmationAction;
 
     fn allow_all(_: &str) -> Result<ConfirmationAction> {
@@ -709,7 +710,10 @@ mod tests {
         job.foreground = false;
         job.disable_pty = true;
 
-        let state = job.launch(&mut ctx, &mut shell).await.expect("launch");
+        let outcome = job.launch(&mut ctx, &mut shell).await.expect("launch");
+        let JobLaunchOutcome::Process(state) = outcome else {
+            panic!("background launch must not report a command failure: {outcome:?}");
+        };
         assert_eq!(
             state,
             crate::process::state::ProcessState::Running,

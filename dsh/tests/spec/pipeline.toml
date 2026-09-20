@@ -64,6 +64,116 @@ timeout_ms = 8000
 status = 0
 stdout_contains = ["EARLY:0"]
 
+# External large-output pipeline: bounded pipe buffers must not deadlock.
+[[case]]
+id = "pipeline.external-large-output"
+class = "posix"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -c 131072 > big.txt; printf '%s' \"$(cat big.txt)\" | {{HEAD}} -c 10; echo PIPE:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["PIPE:0"]
+
+# Foreground pipeline builtins run isolated: parent cwd is unchanged in
+# first, middle, and last positions.
+[[case]]
+id = "pipeline.builtin-first-isolates-cwd"
+class = "dogesh"
+mode = "command"
+script = "echo here > sentinel; cd /tmp | {{TRUE}}; {{HEAD}} -n 1 sentinel > /dev/null; echo CWD_OK:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CWD_OK:0"]
+
+[[case]]
+id = "pipeline.builtin-last-isolates-cwd"
+class = "dogesh"
+mode = "command"
+script = "echo here > sentinel; echo x | cd /tmp; {{HEAD}} -n 1 sentinel > /dev/null; echo CWD_OK:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CWD_OK:0"]
+
+[[case]]
+id = "pipeline.builtin-middle-isolates-cwd"
+class = "dogesh"
+mode = "command"
+script = "echo here > sentinel; echo x | cd /tmp | {{TRUE}}; {{HEAD}} -n 1 sentinel > /dev/null; echo CWD_OK:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CWD_OK:0"]
+
+[[case]]
+id = "pipeline.builtin-export-isolates"
+class = "dogesh"
+mode = "command"
+script = "PIPE_ISOLATION=parent; export PIPE_ISOLATION; export PIPE_ISOLATION=child | {{TRUE}}; echo VALUE:$PIPE_ISOLATION"
+
+[case.expect]
+status = 0
+stdout_contains = ["VALUE:parent"]
+
+# A directory shorthand in a pipeline dispatches as `cd` (re-exec policy)
+# and never mutates the parent shell.
+[[case]]
+id = "pipeline.dir-shorthand-isolates-cwd"
+class = "dogesh"
+mode = "command"
+script = "echo here > sentinel; /tmp | {{TRUE}}; {{HEAD}} -n 1 sentinel > /dev/null; echo CWD_OK:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CWD_OK:0"]
+
+# A single foreground builtin still runs in the parent shell.
+[[case]]
+id = "pipeline.single-foreground-cd-stays-in-parent"
+class = "dogesh"
+mode = "command"
+script = "cd /tmp; pwd"
+
+[case.expect]
+status = 0
+stdout_contains = ["/tmp"]
+
+# Session-bound builtins cannot run in a pipeline: whole-pipeline preflight
+# rejects before any stage spawns.
+[[case]]
+id = "pipeline.session-bound-builtin-rejected"
+class = "dogesh"
+mode = "command"
+script = "jobs | {{TRUE}}"
+
+[case.expect]
+status = 1
+stderr_contains = ["cannot run in a pipeline"]
+
+[[case]]
+id = "pipeline.session-bound-builtin-reject-gates-list"
+class = "dogesh"
+mode = "command"
+script = "jobs | {{TRUE}} || echo REJECTED"
+
+[case.expect]
+status = 0
+stdout_contains = ["REJECTED"]
+
+[[case]]
+id = "pipeline.session-bound-no-partial-launch"
+class = "dogesh"
+mode = "command"
+script = "{{SH}} -c 'echo launched > marker' | jobs"
+
+[case.expect]
+status = 1
+stderr_contains = ["cannot run in a pipeline"]
+files = [{ path = "marker", exists = false }]
+
 # A pipeline stage that is only an assignment must not leak into the parent.
 # Desired: parent keeps its value and no stage error is reported.
 [[case]]

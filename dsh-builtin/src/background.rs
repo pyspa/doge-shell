@@ -106,7 +106,6 @@ mod tests {
             "lisp",
             "read",
             "out",
-            "__dsh_print_last_stdout",
             "blocks",
             "tm",
             "notebook-play",

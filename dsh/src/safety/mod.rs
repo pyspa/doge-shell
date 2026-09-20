@@ -176,6 +176,12 @@ impl SafetyGuard {
             let mut previous: Option<String> = None;
             let mut stage = job.process.as_deref();
             while let Some(process) = stage {
+                // A synthetic Smart Pipe source is data, not a command: it
+                // never becomes `previous` and is never classified itself.
+                if process.is_synthetic_source() {
+                    stage = process.next_process();
+                    continue;
+                }
                 // `get_cmd` is already just the program for a parsed process, but
                 // keep the assignment-prefix skip so a stage that ever arrives as
                 // a full command line is classified by the command, not by `FOO=bar`.
@@ -213,8 +219,9 @@ impl SafetyGuard {
             // but its concrete stages do.
             let mut stage = job.process.as_deref();
             while let Some(process) = stage {
-                let (program, args) = process.command_argv();
-                if let Some(reason) = self.classify_tokens(program, args) {
+                if let Some((program, args)) = process.command_argv()
+                    && let Some(reason) = self.classify_tokens(program, args)
+                {
                     return SafetyResult::Confirm(reason);
                 }
                 stage = process.next_process();

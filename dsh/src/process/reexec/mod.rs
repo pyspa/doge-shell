@@ -50,7 +50,8 @@ pub use fd_layout::{INTERNAL_FD_MIN, InternalFdLayout, InternalHelperFds};
 pub use helper::run_internal_helper;
 pub use protocol::{
     BuiltinExecRequest, InternalExecKind, InternalExecRequest, MAX_INTERNAL_EXEC_REQUEST,
-    PROTOCOL_VERSION, PlanExecMode, PlanExecRequest, read_internal_request,
+    PROTOCOL_VERSION, PipelineSourceExecRequest, PlanExecMode, PlanExecRequest,
+    read_internal_request,
 };
 
 /// Resolve the binary a helper re-executes.
@@ -248,6 +249,36 @@ pub fn spawn_internal_helper(
     Ok(child)
 }
 
+/// Shared re-exec spawn: snapshot plus an already-materialized builtin argv
+/// into a fresh helper wired to the given stdio. No policy check here; the
+/// callers refuse session-bound builtins before reaching this.
+fn spawn_reexec_builtin_helper(
+    ctx: &Context,
+    process: &BuiltinProcess,
+    shell: &Shell,
+) -> Result<Pid> {
+    let request = InternalExecRequest {
+        version: PROTOCOL_VERSION,
+        snapshot: ChildShellSnapshot::capture(&shell.environment.read()),
+        kind: InternalExecKind::Builtin(BuiltinExecRequest {
+            name: process.name.clone(),
+            argv: process.argv.clone(),
+            env_overrides: process.env_overrides.clone(),
+        }),
+    };
+    let bytes = serde_json::to_vec(&request).context("encode internal request")?;
+    // First pipeline stage starts a new group; later stages join the job's.
+    let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
+    spawn_internal_helper(
+        process.stdin,
+        process.stdout,
+        process.stderr,
+        &bytes,
+        pgroup,
+        None,
+    )
+}
+
 /// Background entry point replacing `fork_builtin_process`.
 ///
 /// The builtin's argv is already materialized by the caller; it crosses to
@@ -271,27 +302,62 @@ pub(crate) fn spawn_background_builtin(
         anyhow::bail!("{} cannot run in background", process.name);
     }
 
+    let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
+    process.pid = Some(child);
+    // A real child joins the foreground wait set like an external command.
+    ctx.process_count += 1;
+    Ok(child)
+}
+
+/// Isolated builtin spawn for foreground pipeline stages.
+///
+/// Shares the background re-exec implementation (snapshot, fresh helper,
+/// materialized argv). Session-bound or unknown builtins fail closed here
+/// too — pipeline preflight rejects them before any spawn, so reaching this
+/// is a defense-in-depth error, never a parent fallback.
+pub(crate) fn spawn_isolated_builtin(
+    ctx: &mut Context,
+    process: &mut BuiltinProcess,
+    shell: &mut Shell,
+) -> Result<Pid> {
+    let background_mode = dsh_builtin::background_builtin_mode(&process.name)
+        .ok_or_else(|| anyhow::anyhow!("unknown builtin isolation policy: {}", process.name))?;
+    if background_mode == dsh_builtin::BackgroundBuiltinMode::ParentSessionRequired {
+        // Same `\r\n` as the background refusal: both go through
+        // `write_process_stderr` to a possibly-PTY stderr.
+        let message = format!(
+            "dogesh: {}: cannot run in a pipeline (needs the live shell session)\r\n",
+            process.name
+        );
+        super::fork::write_process_stderr(process.stderr, message.as_bytes());
+        anyhow::bail!("{} cannot run in a pipeline", process.name);
+    }
+    let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
+    process.pid = Some(child);
+    ctx.process_count += 1;
+    Ok(child)
+}
+
+/// Spawn a synthetic pipeline source helper carrying owned bytes.
+pub(crate) fn spawn_pipeline_source(
+    ctx: &mut Context,
+    shell: &Shell,
+    stdin: RawFd,
+    stdout: RawFd,
+    stderr: RawFd,
+    data: &str,
+) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
         snapshot: ChildShellSnapshot::capture(&shell.environment.read()),
-        kind: InternalExecKind::Builtin(BuiltinExecRequest {
-            name: process.name.clone(),
-            argv: process.argv.clone(),
-            env_overrides: process.env_overrides.clone(),
+        kind: InternalExecKind::PipelineSource(PipelineSourceExecRequest {
+            data: data.to_string(),
         }),
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
-    // First pipeline stage starts a new group; later stages join the job's.
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    let child = spawn_internal_helper(
-        process.stdin,
-        process.stdout,
-        process.stderr,
-        &bytes,
-        pgroup,
-        None,
-    )?;
-    process.pid = Some(child);
+    let child = spawn_internal_helper(stdin, stdout, stderr, &bytes, pgroup, None)?;
+    ctx.process_count += 1;
     Ok(child)
 }
 

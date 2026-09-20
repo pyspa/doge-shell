@@ -166,6 +166,7 @@ impl Job {
             let next = match current {
                 JobProcess::Builtin(process) => process.next.as_deref(),
                 JobProcess::Command(process) => process.next.as_deref(),
+                JobProcess::SyntheticSource(process) => process.next.as_deref(),
             };
             match next {
                 Some(next) => current = next,
@@ -174,7 +175,7 @@ impl Job {
         }
         match current {
             JobProcess::Command(process) => Some(process.argv.clone()),
-            JobProcess::Builtin(_) => None,
+            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) => None,
         }
     }
 
@@ -192,6 +193,7 @@ impl Job {
             let has_next = match &*current {
                 JobProcess::Builtin(process) => process.next.is_some(),
                 JobProcess::Command(process) => process.next.is_some(),
+                JobProcess::SyntheticSource(process) => process.next.is_some(),
             };
             if !has_next {
                 break;
@@ -199,6 +201,7 @@ impl Job {
             current = match current {
                 JobProcess::Builtin(process) => process.next.as_deref_mut().unwrap(),
                 JobProcess::Command(process) => process.next.as_deref_mut().unwrap(),
+                JobProcess::SyntheticSource(process) => process.next.as_deref_mut().unwrap(),
             };
         }
         if let JobProcess::Command(process) = current {
@@ -289,8 +292,12 @@ impl Job {
                 process.get_cmd()
             );
 
+            // Pipeline membership is decided once for the whole job: any
+            // multi-stage pipeline (a synthetic source counts as a stage)
+            // isolates every builtin member, first/middle/last alike.
+            let pipeline_context = process.stage_count() > 1;
             if let Err(e) = self
-                .launch_process(ctx, shell, &mut process, pty_child)
+                .launch_process(ctx, shell, &mut process, pty_child, pipeline_context)
                 .await
             {
                 error!(
@@ -349,6 +356,7 @@ impl Job {
         shell: &mut Shell,
         process: &mut JobProcess,
         pty: Option<PtyChildConfig>,
+        pipeline_context: bool,
     ) -> Result<()> {
         let previous_infile = ctx.infile;
         // Input redirection is applied here, before the process is launched;
@@ -364,18 +372,20 @@ impl Job {
         let input_fd = applied_stdin.changed_stdin().then_some(ctx.infile);
 
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_output) =
-            match process.launch(ctx, shell, self.stdout, pty).await {
-                Ok(launched) => launched,
-                Err(err) => {
-                    // The guard is about to drop and close the input file, so
-                    // put `ctx` back first rather than leaving it naming a
-                    // descriptor that no longer exists.
-                    applied_stdin.restore(ctx);
-                    ctx.infile = previous_infile;
-                    return Err(err);
-                }
-            };
+        let (pid, mut next_process, applied_output) = match process
+            .launch(ctx, shell, self.stdout, pty, pipeline_context)
+            .await
+        {
+            Ok(launched) => launched,
+            Err(err) => {
+                // The guard is about to drop and close the input file, so
+                // put `ctx` back first rather than leaving it naming a
+                // descriptor that no longer exists.
+                applied_stdin.restore(ctx);
+                ctx.infile = previous_infile;
+                return Err(err);
+            }
+        };
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -530,7 +540,8 @@ impl Job {
         // run next pipeline process
         if let Some(mut next_process) = next_process.take()
             && let Err(err) =
-                Box::pin(self.launch_process(ctx, shell, &mut next_process, pty)).await
+                Box::pin(self.launch_process(ctx, shell, &mut next_process, pty, pipeline_context))
+                    .await
         {
             debug!("err {:?}", err);
             return Err(err);

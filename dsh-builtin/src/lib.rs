@@ -780,14 +780,6 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
             new(out::command, out::description(), ParentSessionRequired),
         ),
         (
-            "__dsh_print_last_stdout",
-            new(
-                out::print_last_stdout,
-                out::print_last_stdout_description(),
-                ParentSessionRequired,
-            ),
-        ),
-        (
             "tm",
             new(tm::command, tm::description(), ParentSessionRequired),
         ),

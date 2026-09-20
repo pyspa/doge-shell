@@ -39,6 +39,17 @@ pub struct PlannedJob {
     pub capture_output: bool,
     pub struct_pipe_exprs: Vec<String>,
     pub subshell: SubshellType,
+    /// Synthetic pipeline head (Smart Pipe previous output). `None` for
+    /// ordinary jobs; `Some(PreviousOutput)` makes materialization prepend
+    /// a `SyntheticSource` stage carrying the history bytes.
+    #[serde(default)]
+    pub pipeline_source: Option<PlannedPipelineSource>,
+}
+
+/// A synthetic pipeline head: finite bytes, not a command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PlannedPipelineSource {
+    PreviousOutput,
 }
 
 impl PlannedJob {

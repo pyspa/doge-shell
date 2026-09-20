@@ -20,6 +20,33 @@ use super::wait::{WaitPidObservation, wait_pid_job};
 use crate::shell::Shell;
 use nix::unistd::getpid;
 
+/// Where a builtin stage executes.
+///
+/// Only a single-stage foreground builtin runs in the parent shell. Every
+/// other placement — background, or any member of a multi-stage pipeline
+/// (first/middle/last) — re-execs into an isolated helper child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinExecutionPlacement {
+    Parent,
+    Reexec,
+}
+
+/// Single decision point for builtin execution placement.
+///
+/// `foreground` is the job's foreground flag; `pipeline_context` is true
+/// when the job holds more than one pipeline stage (a synthetic Smart Pipe
+/// source counts as a stage).
+pub fn builtin_execution_placement(
+    foreground: bool,
+    pipeline_context: bool,
+) -> BuiltinExecutionPlacement {
+    if foreground && !pipeline_context {
+        BuiltinExecutionPlacement::Parent
+    } else {
+        BuiltinExecutionPlacement::Reexec
+    }
+}
+
 #[derive(Clone)]
 pub struct BuiltinProcess {
     pub(crate) name: String,
@@ -406,6 +433,23 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(head.state, ProcessState::Completed(0, None));
+    }
+
+    #[test]
+    fn builtin_placement_single_foreground_runs_in_parent() {
+        assert_eq!(
+            builtin_execution_placement(true, false),
+            BuiltinExecutionPlacement::Parent
+        );
+    }
+
+    #[test]
+    fn builtin_placement_pipeline_and_background_reexec() {
+        use BuiltinExecutionPlacement::Reexec;
+        // First/middle/last pipeline members all isolate, foreground or not.
+        assert_eq!(builtin_execution_placement(true, true), Reexec);
+        assert_eq!(builtin_execution_placement(false, false), Reexec);
+        assert_eq!(builtin_execution_placement(false, true), Reexec);
     }
 
     /// The sync fallback now only serves in-process callers that cannot

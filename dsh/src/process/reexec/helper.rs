@@ -6,7 +6,8 @@
 
 use super::fd_layout::{InternalHelperFds, setup_helper_status_fd};
 use super::protocol::{
-    BuiltinExecRequest, InternalExecKind, PlanExecMode, PlanExecRequest, read_internal_request,
+    BuiltinExecRequest, InternalExecKind, PipelineSourceExecRequest, PlanExecMode, PlanExecRequest,
+    read_internal_request,
 };
 use crate::shell::Shell;
 use anyhow::Result;
@@ -60,6 +61,7 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
         InternalExecKind::Plan(plan_request) => {
             run_helper_plan(&mut shell, plan_request, fds.status).await
         }
+        InternalExecKind::PipelineSource(source) => run_helper_pipeline_source(source).await,
     }
 }
 
@@ -91,6 +93,52 @@ async fn run_helper_builtin(shell: &mut Shell, builtin: &BuiltinExecRequest) -> 
     // their real async implementation, not the sync fallback.
     let status = handler.execute(&ctx, builtin.argv.clone(), shell).await;
     Ok(exit_code_of(status))
+}
+
+/// Write synthetic source bytes to fd 1 (the pipeline write end wired by
+/// `posix_spawn` file actions). A consumer that exited early surfaces as
+/// `SIGPIPE`/`EPIPE`: normal upstream termination, never a user-visible
+/// error. The pipeline's final status comes from its last downstream stage.
+async fn run_helper_pipeline_source(source: &PipelineSourceExecRequest) -> Result<u8> {
+    run_helper_pipeline_source_to_fd(source, libc::STDOUT_FILENO).await
+}
+
+async fn run_helper_pipeline_source_to_fd(
+    source: &PipelineSourceExecRequest,
+    fd: RawFd,
+) -> Result<u8> {
+    let bytes = source.data.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let ret = unsafe {
+            libc::write(
+                fd,
+                bytes[offset..].as_ptr() as *const libc::c_void,
+                bytes.len() - offset,
+            )
+        };
+        if ret < 0 {
+            let errno = std::io::Error::last_os_error();
+            match errno.raw_os_error() {
+                // Interrupted: retry. Closed consumer: quiet normal exit.
+                Some(code) if code == libc::EINTR => continue,
+                Some(code) if code == libc::EPIPE => return Ok(0),
+                _ => {
+                    if errno.kind() == std::io::ErrorKind::BrokenPipe {
+                        return Ok(0);
+                    }
+                    anyhow::bail!("pipeline source write failed: {errno}");
+                }
+            }
+        }
+        if ret == 0 {
+            // Blocking pipe write with remaining bytes must not return 0;
+            // treating it as success would silently truncate the source.
+            anyhow::bail!("pipeline source write returned zero");
+        }
+        offset += ret as usize;
+    }
+    Ok(0)
 }
 
 async fn run_helper_plan(
@@ -239,6 +287,59 @@ mod tests {
         };
         let code = run_internal_helper_inner(fds).await.expect("helper runs");
         assert_ne!(code, 0);
+    }
+
+    #[tokio::test]
+    async fn helper_pipeline_source_writes_exact_bytes_to_pipe() {
+        use super::super::protocol::PipelineSourceExecRequest;
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let data = "hello-smart-pipe\n".to_string();
+        let request = PipelineSourceExecRequest { data: data.clone() };
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        let write_fd = write.into_raw_fd();
+        let code = run_helper_pipeline_source_to_fd(&request, write_fd)
+            .await
+            .expect("source writes");
+        assert_eq!(code, 0);
+        unsafe { libc::close(write_fd) };
+        let mut output = Vec::new();
+        use std::io::Read as _;
+        unsafe { std::fs::File::from_raw_fd(read.into_raw_fd()) }
+            .read_to_end(&mut output)
+            .expect("read");
+        assert_eq!(String::from_utf8_lossy(&output), data);
+    }
+
+    #[tokio::test]
+    async fn helper_pipeline_source_empty_and_large_roundtrip() {
+        use super::super::protocol::PipelineSourceExecRequest;
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        // Empty fits any buffer; large needs a concurrent drainer so the
+        // blocking writer never stalls on a full pipe.
+        let cases = [String::new(), "y\n".repeat(70_000)];
+        for data in cases {
+            let request = PipelineSourceExecRequest { data: data.clone() };
+            let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+            let write_fd = write.into_raw_fd();
+            let read_fd = read.into_raw_fd();
+            let reader = std::thread::spawn(move || {
+                let mut output = Vec::new();
+                use std::io::Read as _;
+                unsafe { std::fs::File::from_raw_fd(read_fd) }
+                    .read_to_end(&mut output)
+                    .expect("read");
+                output
+            });
+            let code = run_helper_pipeline_source_to_fd(&request, write_fd)
+                .await
+                .expect("source writes");
+            assert_eq!(code, 0);
+            unsafe { libc::close(write_fd) };
+            let output = reader.join().expect("reader thread");
+            assert_eq!(String::from_utf8_lossy(&output), data);
+        }
     }
 
     #[tokio::test]

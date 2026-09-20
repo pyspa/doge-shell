@@ -995,3 +995,49 @@ fn dynamic_git_and_interpreter_bodies_are_detected_without_duplication() {
         "dynamic `python3 -c` must ask"
     );
 }
+
+/// A synthetic Smart Pipe source is safety-neutral data: it is skipped for
+/// both the dangerous-pipeline walk and the concrete argv classification,
+/// while the actual downstream command is still judged normally.
+#[test]
+fn synthetic_source_is_skipped_but_downstream_is_judged() {
+    use crate::process::{JobProcess, PipelineSourceProcess, Process};
+
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+
+    // Downstream `sh -c` must still ask even behind a source head.
+    let mut job = mock_job("| sh -c 'echo hi'");
+    job.set_process(JobProcess::SyntheticSource(PipelineSourceProcess::new(
+        "previous\n".to_string(),
+    )));
+    job.set_process(JobProcess::Command(Process::new(
+        "sh".to_string(),
+        vec!["sh".to_string(), "-c".to_string(), "echo hi".to_string()],
+    )));
+    assert!(
+        matches!(
+            guard.check_jobs(&[job], &level, &[]),
+            SafetyResult::Confirm(_)
+        ),
+        "downstream `sh -c` behind a synthetic source must ask"
+    );
+
+    // A source followed by a benign command asks nothing and never treats
+    // the source itself as a network/exec endpoint.
+    let mut benign = mock_job("| true");
+    benign.set_process(JobProcess::SyntheticSource(PipelineSourceProcess::new(
+        String::new(),
+    )));
+    benign.set_process(JobProcess::Command(Process::new(
+        "true".to_string(),
+        vec!["true".to_string()],
+    )));
+    assert!(
+        matches!(
+            guard.check_jobs(&[benign], &level, &[]),
+            SafetyResult::Allowed
+        ),
+        "synthetic source plus benign tail must stay allowed"
+    );
+}

@@ -255,6 +255,7 @@ fn empty_job(source: String, ctx: &ParseContext) -> PlannedJob {
         capture_output: false,
         struct_pipe_exprs: Vec::new(),
         subshell,
+        pipeline_source: None,
     }
 }
 

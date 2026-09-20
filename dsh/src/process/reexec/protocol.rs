@@ -30,6 +30,7 @@ pub struct InternalExecRequest {
 pub enum InternalExecKind {
     Builtin(BuiltinExecRequest),
     Plan(PlanExecRequest),
+    PipelineSource(PipelineSourceExecRequest),
 }
 
 /// An isolated shell-execution body: `$(...)`, `<(...)`, or `( ... )`.
@@ -64,6 +65,12 @@ pub struct BuiltinExecRequest {
     pub name: String,
     pub argv: Vec<String>,
     pub env_overrides: Vec<(String, String)>,
+}
+
+/// A synthetic pipeline head: finite bytes the helper writes to fd 1.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineSourceExecRequest {
+    pub data: String,
 }
 
 /// Read one request from `fd` to EOF, enforcing the size cap and version.
@@ -186,5 +193,54 @@ mod tests {
         let read_fd = read.into_raw_fd();
         // Owned (and closed) by `read_internal_request`.
         assert!(read_internal_request(read_fd).is_err());
+    }
+
+    fn pipeline_source_request(data: &str) -> InternalExecRequest {
+        let env_arc = crate::environment::Environment::new();
+        InternalExecRequest {
+            version: PROTOCOL_VERSION,
+            snapshot: ChildShellSnapshot::capture(&env_arc.read()),
+            kind: InternalExecKind::PipelineSource(PipelineSourceExecRequest {
+                data: data.to_string(),
+            }),
+        }
+    }
+
+    fn roundtrip_data(data: &str) -> String {
+        let request = pipeline_source_request(data);
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let decoded = read_internal_request(read.into_raw_fd()).expect("decode");
+        match decoded.kind {
+            InternalExecKind::PipelineSource(source) => source.data,
+            other => panic!("expected PipelineSource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipeline_source_roundtrips_exact_bytes() {
+        assert_eq!(roundtrip_data("hello\n"), "hello\n");
+        assert_eq!(roundtrip_data(""), "");
+        assert_eq!(roundtrip_data("ABC\n"), "ABC\n");
+    }
+
+    #[test]
+    fn pipeline_source_roundtrips_large_payload() {
+        let large = "y\n".repeat(70_000);
+        let request = pipeline_source_request(&large);
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let decoded: InternalExecRequest =
+            serde_json::from_slice(&bytes).expect("decode without pipe");
+        match decoded.kind {
+            InternalExecKind::PipelineSource(source) => assert_eq!(source.data, large),
+            other => panic!("expected PipelineSource, got {other:?}"),
+        }
     }
 }

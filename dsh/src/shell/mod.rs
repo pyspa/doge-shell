@@ -5,6 +5,7 @@ pub mod job;
 pub mod materialize;
 pub mod no_command;
 pub mod parse;
+pub mod pipeline_isolation;
 pub mod plan;
 pub mod struct_pipe;
 pub mod substitution;

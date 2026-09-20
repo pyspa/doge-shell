@@ -125,15 +125,11 @@ pub async fn eval_str(
         return Ok(code);
     }
 
-    // Smart Pipe transformation
-    let input = transform_input_for_smart_pipe(input);
-
-    // Pure planning: no command runs and no shell state changes here.
-    // Substitution bodies stay deferred inside the plan until their own
-    // gating and authorization below.
-    // A syntax error still happened: publish a non-zero `$?` so the next
-    // line does not see the previous line's success.
-    let plan = match parse_execution_plan(&input, Arc::clone(&shell.environment)) {
+    // Smart Pipe: a line-head `|` reuses previous output as a synthetic
+    // pipeline source. The downstream text alone goes to the parser; the
+    // first job is marked with `PreviousOutput` and keeps the original
+    // `| ...` line as its user-facing source.
+    let plan = match parse_plan_with_smart_pipe(&input, Arc::clone(&shell.environment)) {
         Ok(plan) => plan,
         Err(err) => {
             publish_exit_status(shell, 1);
@@ -537,19 +533,53 @@ pub(crate) fn publish_exit_status(shell: &Shell, code: i32) {
 /// Fail closed: malformed input is a syntax error here, so callers never
 /// judge a parsed prefix while the whole line runs.
 pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
-    let plan = parse_execution_plan(input, Arc::clone(&shell.environment))?;
+    let plan = parse_plan_with_smart_pipe(input, Arc::clone(&shell.environment))?;
     crate::shell::materialize::dry_materialize_plan(&plan, shell)
 }
 
-fn transform_input_for_smart_pipe(input: String) -> String {
+/// Whether a line is a Smart Pipe continuation: line-head `|` that is not
+/// the `|>` capture syntax and not the `||` OR operator. Leading whitespace
+/// is allowed.
+pub(crate) fn is_smart_pipe_input(input: &str) -> bool {
     let trimmed = input.trim_start();
-    // Check if it starts with | but not |> (capture) or || (OR operator)
-    if trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||") {
-        debug!("Smart Pipe triggered: prepending output history");
-        format!("__dsh_print_last_stdout {}", input)
-    } else {
-        input
+    trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||")
+}
+
+/// Parse with Smart Pipe support: a line-head `|` parses only its
+/// downstream text, marks the first job with `PreviousOutput`, and keeps the
+/// original `| ...` line as the user-facing source.
+pub(crate) fn parse_plan_with_smart_pipe(
+    input: &str,
+    environment: Arc<parking_lot::RwLock<crate::environment::Environment>>,
+) -> Result<crate::shell::plan::ExecutionPlan> {
+    use crate::shell::plan::PlannedPipelineSource;
+    if !is_smart_pipe_input(input) {
+        return parse_execution_plan(input, environment);
     }
+    let trimmed = input.trim_start();
+    // SAFETY: `is_smart_pipe_input` verified the leading `|`.
+    let downstream = trimmed[1..].trim_start();
+    if downstream.is_empty() {
+        // A bare `|` is a no-op success, consistent with an empty line:
+        // there is no downstream command to materialize. This differs from
+        // `| FOO=bar`, which has a downstream stage that expands to no
+        // command and is rejected as a pipeline failure.
+        return Ok(crate::shell::plan::ExecutionPlan::default());
+    }
+    let mut plan = parse_execution_plan(downstream, environment)?;
+    if let Some(first) = plan.jobs.first_mut() {
+        first.pipeline_source = Some(PlannedPipelineSource::PreviousOutput);
+        // User-facing source keeps the line-head pipe, but only for this
+        // job: with `| grep foo; echo hi` the second job must stay `echo hi`,
+        // not inherit the whole line (which would pollute history, safety
+        // messages, and exact-source allowlist matching).
+        first.source = format!("| {}", first.source.trim_start());
+    }
+    debug!(
+        "Smart Pipe: downstream={downstream:?} jobs={}",
+        plan.jobs.len()
+    );
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -588,72 +618,65 @@ mod tests {
     }
 
     #[test]
-    fn test_transform_input_for_smart_pipe() {
-        // Normal cases (no change)
-        assert_eq!(
-            transform_input_for_smart_pipe("ls -la".to_string()),
-            "ls -la"
-        );
-        assert_eq!(
-            transform_input_for_smart_pipe("echo hello".to_string()),
-            "echo hello"
-        );
-        assert_eq!(
-            transform_input_for_smart_pipe("|| echo fail".to_string()),
-            "|| echo fail"
-        );
-        assert_eq!(
-            transform_input_for_smart_pipe("|> out.txt".to_string()),
-            "|> out.txt"
-        );
-
-        // Smart pipe cases
-        assert_eq!(
-            transform_input_for_smart_pipe("| grep foo".to_string()),
-            "__dsh_print_last_stdout | grep foo"
-        );
-        assert_eq!(
-            transform_input_for_smart_pipe("  | grep foo".to_string()),
-            "__dsh_print_last_stdout   | grep foo"
-        );
+    fn test_smart_pipe_detection() {
+        assert!(!is_smart_pipe_input("ls -la"));
+        assert!(!is_smart_pipe_input("echo hello"));
+        assert!(!is_smart_pipe_input("|| echo fail"));
+        assert!(!is_smart_pipe_input("|> out.txt"));
+        assert!(!is_smart_pipe_input("ls -la |>"));
+        assert!(!is_smart_pipe_input("|| true"));
+        assert!(is_smart_pipe_input("| grep foo"));
+        assert!(is_smart_pipe_input("  | grep foo"));
+        assert!(is_smart_pipe_input("| head -10 | tail -5"));
+        assert!(is_smart_pipe_input("| wc -l"));
+        assert!(is_smart_pipe_input("\t| sed 's/a/b/g'"));
     }
 
     #[test]
-    fn test_transform_smart_pipe_edge_cases() {
-        // Capture mode should NOT trigger smart pipe
+    fn test_smart_pipe_plan_marks_source_and_keeps_original() {
+        use crate::shell::plan::PlannedPipelineSource;
+        let env = Environment::new();
+        let plan = parse_plan_with_smart_pipe("| grep foo", Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs.len(), 1);
         assert_eq!(
-            transform_input_for_smart_pipe("|> output.txt".to_string()),
-            "|> output.txt"
+            plan.jobs[0].pipeline_source,
+            Some(PlannedPipelineSource::PreviousOutput)
+        );
+        assert_eq!(plan.jobs[0].source, "| grep foo");
+        assert_eq!(plan.jobs[0].stages.len(), 1);
+
+        let plan = parse_plan_with_smart_pipe("  | grep foo", Arc::clone(&env)).expect("plan");
+        assert_eq!(
+            plan.jobs[0].pipeline_source,
+            Some(PlannedPipelineSource::PreviousOutput)
         );
 
-        // Capture mode with command should not change
+        let plan =
+            parse_plan_with_smart_pipe("| head -10 | tail -5", Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs[0].stages.len(), 2);
         assert_eq!(
-            transform_input_for_smart_pipe("ls -la |>".to_string()),
-            "ls -la |>"
+            plan.jobs[0].pipeline_source,
+            Some(PlannedPipelineSource::PreviousOutput)
         );
 
-        // OR operator should NOT trigger smart pipe
-        assert_eq!(
-            transform_input_for_smart_pipe("|| true".to_string()),
-            "|| true"
-        );
+        // Ordinary lines carry no source marker.
+        let plan = parse_plan_with_smart_pipe("echo hello", Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs[0].pipeline_source, None);
+    }
 
-        // Multiple pipes with leading pipe should transform
+    #[test]
+    fn test_smart_pipe_multi_job_keeps_per_job_source() {
+        use crate::shell::plan::PlannedPipelineSource;
+        let env = Environment::new();
+        let plan =
+            parse_plan_with_smart_pipe("| grep foo; echo hi", Arc::clone(&env)).expect("plan");
+        assert_eq!(plan.jobs.len(), 2);
         assert_eq!(
-            transform_input_for_smart_pipe("| head -10 | tail -5".to_string()),
-            "__dsh_print_last_stdout | head -10 | tail -5"
+            plan.jobs[0].pipeline_source,
+            Some(PlannedPipelineSource::PreviousOutput)
         );
-
-        // Just pipe character alone should transform
-        assert_eq!(
-            transform_input_for_smart_pipe("| wc -l".to_string()),
-            "__dsh_print_last_stdout | wc -l"
-        );
-
-        // Pipe with various whitespace
-        assert_eq!(
-            transform_input_for_smart_pipe("\t| sed 's/a/b/g'".to_string()),
-            "__dsh_print_last_stdout \t| sed 's/a/b/g'"
-        );
+        assert_eq!(plan.jobs[0].source, "| grep foo");
+        assert_eq!(plan.jobs[1].pipeline_source, None);
+        assert_eq!(plan.jobs[1].source, "echo hi");
     }
 }

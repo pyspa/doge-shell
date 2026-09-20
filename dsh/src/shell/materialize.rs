@@ -72,6 +72,15 @@ impl CommandMaterializationFailure {
             message: "dsh: pipeline stage expanded to no command".to_string(),
         }
     }
+
+    pub(crate) fn pipeline_builtin_requires_parent(name: &str) -> Self {
+        Self {
+            exit_code: 1,
+            message: format!(
+                "dogesh: {name}: cannot run in a pipeline (needs the live shell session)"
+            ),
+        }
+    }
 }
 
 /// Explicit materialization result.
@@ -124,8 +133,9 @@ fn build_stage_process(
         && crate::dirs::is_dir(&cmd)
         && let Some(handler) = dsh_builtin::get_handler("cd")
     {
+        // Dispatch identity is `cd`; `Job.cmd` keeps the user-facing path.
         JobProcess::Builtin(crate::process::BuiltinProcess::new_handler(
-            cmd.clone(),
+            "cd".to_string(),
             handler,
             vec!["cd".to_string(), cmd],
         ))
@@ -142,6 +152,7 @@ fn assemble_job(
     planned: &PlannedJob,
     expanded: Vec<ExpandedStage>,
     job_id: usize,
+    pipeline_source_data: Option<String>,
 ) -> Result<Job, CommandMaterializationFailure> {
     let mut job = Job::new(planned.source.clone(), shell.pgid);
     job.job_id = job_id;
@@ -150,6 +161,11 @@ fn assemble_job(
     job.struct_pipe_exprs = planned.struct_pipe_exprs.clone();
     job.subshell = planned.subshell.clone();
     job.list_op = planned.list_op.clone();
+    if let Some(data) = pipeline_source_data {
+        job.set_process(JobProcess::SyntheticSource(
+            crate::process::PipelineSourceProcess::new(data),
+        ));
+    }
     for mut stage in expanded {
         // Fail closed: expansion must have ruled out empty stages before this
         // point. Silently dropping one would rewire `A | empty | C` into
@@ -171,6 +187,7 @@ fn assemble_job(
         job.has_process(),
         "assemble_job called with no runnable stage"
     );
+    super::pipeline_isolation::reject_session_bound_pipeline(&job, shell)?;
     Ok(job)
 }
 
@@ -258,13 +275,18 @@ pub fn materialize_job<'a>(
                 last_command_substitution_status: trace.last_command_substitution_status,
             });
         }
+        // A synthetic source never forms a no-command job on its own: an
+        // empty downstream (`| FOO=bar`) fails closed as a pipeline refusal.
+        let source_data = planned
+            .pipeline_source
+            .map(|_| super::pipeline_isolation::smart_pipe_source_data(shell));
         // Single-stage expansion with no command name is not a refusal and
         // not an empty pipeline: it is a no-command simple command whose
         // assignments, redirections, and substitution status the shared
         // executor handles. Nothing is applied to the shell here;
         // `execute_no_command` owns those side effects so the top-level and
         // helper evaluators share one semantics.
-        if expanded.len() == 1 && expanded[0].argv.is_empty() {
+        if source_data.is_none() && expanded.len() == 1 && expanded[0].argv.is_empty() {
             let stage = expanded.pop().expect("single stage");
             return Ok(MaterializeOutcome::NoCommand(Box::new(
                 NoCommandMaterialization {
@@ -287,7 +309,7 @@ pub fn materialize_job<'a>(
         }
         let job_id = shell.get_next_job_id();
         let had_dynamic = planned.contains_dynamic_expansion();
-        match assemble_job(shell, planned, expanded, job_id) {
+        match assemble_job(shell, planned, expanded, job_id, source_data) {
             Ok(job) => Ok(MaterializeOutcome::Runnable(Box::new(MaterializedJob {
                 job,
                 had_dynamic_expansion: had_dynamic,
@@ -348,9 +370,13 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
             last_command_substitution_status: None,
         });
     }
+    // A synthetic source counts as a stage for dry projection too, so the
+    // guard sees the same topology the live path launches (source skipped
+    // as safety-neutral). An empty downstream with a source fails closed.
+    let source_data = planned.pipeline_source.map(|_| String::new());
     // A single no-command stage carries no argv to authorize: report "no job",
     // as before for standalone assignments.
-    if expanded.len() == 1 && expanded[0].argv.is_empty() {
+    if source_data.is_none() && expanded.len() == 1 && expanded[0].argv.is_empty() {
         return Ok(None);
     }
     // Fail closed: never show a collapsed pipeline to SafetyGuard. Both a
@@ -361,7 +387,7 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
     if expanded.iter().any(|stage| stage.argv.is_empty()) {
         anyhow::bail!("dsh: pipeline stage expanded to no command");
     }
-    match assemble_job(shell, planned, expanded, 0) {
+    match assemble_job(shell, planned, expanded, 0, source_data) {
         Ok(job) => Ok(Some(job)),
         Err(failure) => anyhow::bail!("{}", failure.message),
     }
@@ -453,7 +479,8 @@ mod tests {
             .process
             .as_ref()
             .expect("process")
-            .command_argv();
+            .command_argv()
+            .expect("concrete argv");
         assert_eq!(argv.0, "rm");
         assert_eq!(
             argv.1.to_vec(),
@@ -555,7 +582,8 @@ mod tests {
                     .process
                     .as_ref()
                     .expect("process")
-                    .command_argv();
+                    .command_argv()
+                    .expect("concrete argv");
                 assert_eq!(argv.0, "probe-external-cmd");
             }
             MaterializeOutcome::Rejected(failure) => {

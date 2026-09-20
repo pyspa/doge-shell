@@ -295,13 +295,26 @@ pub async fn capture_output_and_history(
             Err(e) => return Err(e.into()),
         }
     } else {
+        // History captures the pipeline tail's output, not the head's: the
+        // head of `a | b` holds no capture fd while the tail does. Checking
+        // only the head left every pipeline out of history (and starved Smart
+        // Pipe after a pipeline).
+        let tail_cap = {
+            let mut current = job.process.as_deref();
+            let mut tail = None;
+            while let Some(node) = current {
+                tail = Some(node);
+                current = node.next_process();
+            }
+            tail.map(|t| t.get_cap_out())
+        };
         let mut monitors_iter = job.monitors.iter();
-        if let Some((Some(_), _)) = job.process.as_ref().map(|p| p.get_cap_out())
+        if let Some((Some(_), _)) = tail_cap
             && let Some(m) = monitors_iter.next()
         {
             stdout_cap = m.captured_output.clone();
         }
-        if let Some((_, Some(_))) = job.process.as_ref().map(|p| p.get_cap_out())
+        if let Some((_, Some(_))) = tail_cap
             && let Some(m) = monitors_iter.next()
         {
             stderr_cap = m.captured_output.clone();

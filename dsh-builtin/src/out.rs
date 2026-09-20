@@ -219,33 +219,9 @@ fn help_text() -> &'static str {
     )
 }
 
-/// Description for the internal print last stdout command
-pub fn print_last_stdout_description() -> &'static str {
-    "Internal command to print the last stdout (used for Smart Pipe)"
-}
-
-/// Internal command to print the last stdout
-///
-/// This is used for the Smart Pipe feature where starting a command with `|`
-/// pipes the previous output to the new command.
-pub fn print_last_stdout(
-    _ctx: &Context,
-    _argv: Vec<String>,
-    proxy: &mut dyn ShellProxy,
-) -> ExitStatus {
-    if let Some(output) = proxy.get_var("OUT") {
-        print!("{}", output);
-        if !output.ends_with('\n') {
-            println!();
-        }
-    }
-    ExitStatus::ExitedWith(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::TestShellProxy;
 
     #[test]
     fn parse_options_supports_list_limit_and_clear() {
@@ -276,19 +252,5 @@ mod tests {
     fn preview_line_truncates_on_char_boundaries() {
         assert_eq!(preview_line("abcdef", 3), "abc...");
         assert_eq!(preview_line("あいうえお", 3), "あいう...");
-    }
-
-    #[test]
-    fn test_print_last_stdout() {
-        use nix::unistd::Pid;
-        let mut proxy = TestShellProxy::default();
-        proxy
-            .vars
-            .insert("OUT".to_string(), "hello world".to_string());
-
-        let ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), true);
-        let status = print_last_stdout(&ctx, vec![], &mut proxy);
-
-        assert_eq!(status, ExitStatus::ExitedWith(0));
     }
 }

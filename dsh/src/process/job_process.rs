@@ -6,13 +6,15 @@ use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
-use super::builtin::BuiltinProcess;
+use super::builtin::BuiltinExecutionPlacement;
+use super::builtin::{BuiltinProcess, builtin_execution_placement};
 use super::fork::fork_process;
 use super::io::{cloexec_pipe, create_pipe, default_output_wiring};
+use super::pipeline_source::PipelineSourceProcess;
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use super::redirect::{self, AppliedRedirects, Redirect};
-use super::reexec::spawn_background_builtin;
+use super::reexec::{spawn_background_builtin, spawn_isolated_builtin};
 use super::state::ProcessState;
 use crate::shell::Shell;
 use dsh_types::Context;
@@ -21,6 +23,7 @@ use dsh_types::Context;
 pub enum JobProcess {
     Builtin(BuiltinProcess),
     Command(Process),
+    SyntheticSource(PipelineSourceProcess),
 }
 
 impl std::fmt::Debug for JobProcess {
@@ -41,6 +44,11 @@ impl std::fmt::Debug for JobProcess {
                 .field("stderr", &jprocess.stderr)
                 .field("has_next", &jprocess.next.is_some())
                 .field("state", &jprocess.state)
+                .finish(),
+            JobProcess::SyntheticSource(jprocess) => f
+                .debug_struct("JobProcess::SyntheticSource")
+                .field("data_len", &jprocess.data.len())
+                .field("has_next", &jprocess.next.is_some())
                 .finish(),
         }
     }
@@ -77,6 +85,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
+            JobProcess::SyntheticSource(jprocess) => jprocess.link(process),
         }
     }
 
@@ -85,6 +94,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => p.next.as_deref(),
             JobProcess::Command(p) => p.next.as_deref(),
+            JobProcess::SyntheticSource(p) => p.next.as_deref(),
         }
     }
 
@@ -92,6 +102,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::SyntheticSource(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
 
@@ -99,6 +110,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::SyntheticSource(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
 
@@ -106,6 +118,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => jprocess.next.take(),
             JobProcess::Command(jprocess) => jprocess.next.take(),
+            JobProcess::SyntheticSource(jprocess) => jprocess.next.take(),
         }
     }
 
@@ -121,6 +134,11 @@ impl JobProcess {
                 jprocess.stdout = stdout;
                 jprocess.stderr = stderr;
             }
+            JobProcess::SyntheticSource(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
+            }
         }
     }
 
@@ -128,6 +146,9 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
             JobProcess::Command(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
+            JobProcess::SyntheticSource(jprocess) => {
+                (jprocess.stdin, jprocess.stdout, jprocess.stderr)
+            }
         }
     }
 
@@ -139,6 +160,9 @@ impl JobProcess {
             JobProcess::Command(process) => {
                 process.pid = pid;
             }
+            JobProcess::SyntheticSource(process) => {
+                process.pid = pid;
+            }
         }
     }
 
@@ -146,6 +170,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(process) => process.pid,
             JobProcess::Command(process) => process.pid,
+            JobProcess::SyntheticSource(process) => process.pid,
         }
     }
 
@@ -163,6 +188,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => p.state = state,
             JobProcess::Command(p) => p.state = state,
+            JobProcess::SyntheticSource(p) => p.state = state,
         }
     }
 
@@ -180,6 +206,10 @@ impl JobProcess {
                 debug!("🔄 STATE: Setting state for command process: {}", p.cmd);
                 p.set_state(pid, state)
             }
+            JobProcess::SyntheticSource(p) => {
+                debug!("🔄 STATE: Setting state for pipeline source");
+                p.set_state(pid, state)
+            }
         };
         debug!("🔄 STATE: set_state_pid result: {}", result);
         result
@@ -189,6 +219,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => p.state,
             JobProcess::Command(p) => p.state,
+            JobProcess::SyntheticSource(p) => p.state,
         }
     }
 
@@ -259,6 +290,14 @@ impl JobProcess {
                     next.mark_stopped_processes_running();
                 }
             }
+            JobProcess::SyntheticSource(process) => {
+                if matches!(process.state, ProcessState::Stopped(_, _)) {
+                    process.state = ProcessState::Running;
+                }
+                if let Some(next) = process.next.as_deref_mut() {
+                    next.mark_stopped_processes_running();
+                }
+            }
         }
     }
 
@@ -282,6 +321,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => (p.cap_stdout, p.cap_stderr),
             JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
+            JobProcess::SyntheticSource(_) => (None, None),
         }
     }
 
@@ -289,6 +329,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => &p.name,
             JobProcess::Command(p) => &p.cmd,
+            JobProcess::SyntheticSource(_) => "<smart-pipe-source>",
         }
     }
 
@@ -300,18 +341,24 @@ impl JobProcess {
     /// takes the program separately and would otherwise see it twice, which
     /// broke `git` subcommand and interpreter-flag detection for dynamic
     /// commands (`$(printf git) push --force`).
-    pub(crate) fn command_argv(&self) -> (&str, &[String]) {
+    ///
+    /// A synthetic source is not a command: it yields `None` and the guard
+    /// skips it.
+    pub(crate) fn command_argv(&self) -> Option<(&str, &[String])> {
         match self {
-            JobProcess::Builtin(p) => (p.name.as_str(), strip_argv0(&p.name, &p.argv)),
-            JobProcess::Command(p) => (p.cmd.as_str(), strip_argv0(&p.cmd, &p.argv)),
+            JobProcess::Builtin(p) => Some((p.name.as_str(), strip_argv0(&p.name, &p.argv))),
+            JobProcess::Command(p) => Some((p.cmd.as_str(), strip_argv0(&p.cmd, &p.argv))),
+            JobProcess::SyntheticSource(_) => None,
         }
     }
 
     /// Redirections written on this command.
     pub(crate) fn redirects(&self) -> &[Redirect] {
+        static EMPTY_REDIRECTS: &[Redirect] = &[];
         match self {
             JobProcess::Builtin(p) => &p.redirects,
             JobProcess::Command(p) => &p.redirects,
+            JobProcess::SyntheticSource(_) => EMPTY_REDIRECTS,
         }
     }
 
@@ -319,6 +366,9 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => p.redirects = redirects,
             JobProcess::Command(p) => p.redirects = redirects,
+            JobProcess::SyntheticSource(_) => {
+                super::pipeline_source::assert_no_source_redirects(redirects.len());
+            }
         }
     }
 
@@ -326,6 +376,9 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => p.env_overrides = overrides,
             JobProcess::Command(p) => p.env_overrides = overrides,
+            JobProcess::SyntheticSource(_) => {
+                super::pipeline_source::assert_no_source_env(overrides.len());
+            }
         }
     }
 
@@ -335,6 +388,7 @@ impl JobProcess {
         shell: &mut Shell,
         stdout: RawFd,
         pty: Option<PtyChildConfig>,
+        pipeline_context: bool,
     ) -> Result<(Pid, Option<Box<JobProcess>>, AppliedRedirects)> {
         // has pipelines process ?
         let next_process = self.take_next();
@@ -377,6 +431,7 @@ impl JobProcess {
                     match self {
                         JobProcess::Builtin(p) => p.cap_stdout = Some(pout_raw),
                         JobProcess::Command(p) => p.cap_stdout = Some(pout_raw),
+                        JobProcess::SyntheticSource(_) => {}
                     }
                     None
                 } else {
@@ -427,22 +482,32 @@ impl JobProcess {
         let launched: Result<Pid> = async {
             Ok(match self {
                 JobProcess::Builtin(process) => {
-                    if ctx.foreground {
-                        process.pid = Some(current_pid);
-                        process.launch(ctx, shell).await?;
-                        current_pid
-                    } else {
-                        // Background builtins re-exec into a fresh helper
-                        // process (no fork-copy, no post-fork Rust).
-                        let child_pid = spawn_background_builtin(ctx, process, shell)?;
-                        process.pid = Some(child_pid);
-                        child_pid
+                    match builtin_execution_placement(ctx.foreground, pipeline_context) {
+                        BuiltinExecutionPlacement::Parent => {
+                            process.pid = Some(current_pid);
+                            process.launch(ctx, shell).await?;
+                            current_pid
+                        }
+                        BuiltinExecutionPlacement::Reexec => {
+                            // Pipeline members and background builtins share
+                            // the isolated re-exec helper path.
+                            let child_pid = if ctx.foreground && pipeline_context {
+                                spawn_isolated_builtin(ctx, process, shell)?
+                            } else {
+                                spawn_background_builtin(ctx, process, shell)?
+                            };
+                            process.pid = Some(child_pid);
+                            child_pid
+                        }
                     }
                 }
                 JobProcess::Command(process) => {
                     ctx.process_count += 1;
                     // fork
                     fork_process(ctx, ctx.pgid, process, shell, pty)?
+                }
+                JobProcess::SyntheticSource(process) => {
+                    super::pipeline_source::spawn_synthetic_source(ctx, shell, process)?
                 }
             })
         }
@@ -517,6 +582,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(process) => process.update_state(),
             JobProcess::Command(process) => process.update_state(),
+            JobProcess::SyntheticSource(process) => process.update_state(),
         }
     }
 }

@@ -625,11 +625,23 @@ mod tests {
             pgid: Some(shell.pgid),
             process_count: 0,
         };
-        let materialized =
-            crate::shell::materialize::materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
-                .await
-                .expect("materialize")
-                .expect("job");
+        let materialized = match crate::shell::materialize::materialize_job(
+            &mut shell,
+            &ctx,
+            &plan.jobs[0],
+            allow_all,
+        )
+        .await
+        .expect("materialize")
+        {
+            crate::shell::materialize::MaterializeOutcome::Runnable(materialized) => materialized,
+            crate::shell::materialize::MaterializeOutcome::AssignmentOnly => {
+                panic!("expected runnable job")
+            }
+            crate::shell::materialize::MaterializeOutcome::Rejected(failure) => {
+                panic!("expected runnable job, got rejection: {failure:?}")
+            }
+        };
         let mut job = materialized.job;
         job.resources = materialized.resources;
         job.foreground = false;

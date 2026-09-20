@@ -2,7 +2,7 @@ use crate::process::{Job, ListOp, ProcessState};
 use crate::shell::{
     Shell,
     authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
-    materialize::materialize_job,
+    materialize::{MaterializeOutcome, materialize_job},
     parse::parse_execution_plan,
 };
 use crate::terminal::title;
@@ -179,6 +179,12 @@ pub async fn eval_str(
 
         // Materialize only the selected job. Nested substitution bodies were
         // authorized inside this call; a nested denial aborts the whole line.
+        // A rejected builtin prefix is an ordinary command failure: publish
+        // its status and continue the list so `&&`/`||` gate correctly.
+        // Diagnostic goes through `ctx` (not a hard-coded process stderr) so
+        // capture/helper/test stdio stays coherent. Redirects are not yet
+        // applied here, so `2>` on the same line does not catch this message;
+        // status/gating correctness is what this path guarantees.
         let materialized = match materialize_job(
             shell,
             ctx,
@@ -187,15 +193,20 @@ pub async fn eval_str(
         )
         .await
         {
-            Ok(Some(materialized)) => materialized,
-            Ok(None) => {
+            Ok(MaterializeOutcome::Runnable(materialized)) => materialized,
+            Ok(MaterializeOutcome::AssignmentOnly) => {
                 // Assignment-only: its values were applied during
                 // materialization, so the job succeeded and publishes zero
                 // rather than leaving the previous job's status stale.
-                if planned.is_assignment_only() {
-                    last_exit_code = 0;
-                    publish_exit_status(shell, last_exit_code);
-                }
+                last_exit_code = 0;
+                publish_exit_status(shell, last_exit_code);
+                gate_op = next_gate_op;
+                continue;
+            }
+            Ok(MaterializeOutcome::Rejected(failure)) => {
+                let _ = ctx.write_stderr(&failure.message);
+                last_exit_code = failure.exit_code;
+                publish_exit_status(shell, last_exit_code);
                 gate_op = next_gate_op;
                 continue;
             }

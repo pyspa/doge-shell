@@ -186,6 +186,187 @@ fn refusing_a_builtin_prefix_does_not_abandon_the_line() {
         stdout.lines().any(|line| line.trim() == "still-running"),
         "the rest of the line should still run: {stdout:?}"
     );
+    // The trailing `echo` succeeded, so the line as a whole exits zero even
+    // though the refused command itself failed (see the `$?` tests below).
+    assert!(
+        output.status.success(),
+        "the succeeding tail must carry the line: {:?}",
+        output.status
+    );
+}
+
+/// The refusal is a real command failure: stderr names it and the `dogesh`
+/// process exits non-zero, instead of looking like success.
+#[test]
+fn builtin_assignment_prefix_refusal_is_nonzero() {
+    let output = run_command("FOO=bar alias");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("not supported for builtins"),
+        "expected a clear refusal, got {stderr:?}"
+    );
+    assert!(
+        !output.status.success(),
+        "a refused builtin prefix must fail: {:?}",
+        output.status
+    );
+}
+
+/// `&&` is gated off by the refusal: the branch must not run.
+#[test]
+fn builtin_assignment_prefix_refusal_blocks_and_branch() {
+    let output = run_command("FOO=bar alias && echo SHOULD_NOT_RUN");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("SHOULD_NOT_RUN"),
+        "the && branch must not run after a refusal: {stdout:?}"
+    );
+    assert!(
+        !output.status.success(),
+        "the gated line must stay failed: {:?}",
+        output.status
+    );
+}
+
+/// `||` is gated on by the refusal: the branch must run.
+#[test]
+fn builtin_assignment_prefix_refusal_runs_or_branch() {
+    let output = run_command("FOO=bar alias || echo EXPECTED_FAILURE");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "EXPECTED_FAILURE"),
+        "the || branch must run after a refusal: {stdout:?}"
+    );
+}
+
+/// The refusal publishes its own status: a previous success must not linger
+/// in `$?`.
+#[test]
+fn builtin_assignment_prefix_refusal_updates_last_status() {
+    let output = run_command("true; FOO=bar alias; echo status=$?");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "status=1"),
+        "expected the refusal status, got {stdout:?}"
+    );
+}
+
+/// A previous failure must not linger either: the refusal overwrites `$?`
+/// with its own status instead of keeping the stale one (127 here).
+#[test]
+fn builtin_assignment_prefix_refusal_overwrites_previous_failure() {
+    let output = run_command("dsh-nonexistent-probe-xyz; FOO=bar alias; echo status=$?");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout.lines().any(|line| line.trim() == "status=1"),
+        "expected the refusal status, not the stale 127: {stdout:?}"
+    );
+}
+
+fn write_marker_script(
+    dir: &tempfile::TempDir,
+    name: &str,
+    marker_name: &str,
+) -> std::path::PathBuf {
+    let marker = dir.path().join(marker_name);
+    let path = dir.path().join(name);
+    std::fs::write(
+        &path,
+        format!("#!/bin/sh\nprintf BAD > \"{}\"", marker.display()),
+    )
+    .expect("write marker script");
+    let mut permissions = std::fs::metadata(&path)
+        .expect("stat marker script")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&path, permissions).expect("chmod marker script");
+    path
+}
+
+/// A rejected stage must not be dropped from its pipeline: the whole job is
+/// refused before launch, so the downstream stage never runs.
+#[test]
+fn rejected_builtin_prefix_aborts_pipeline_before_launch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("downstream_marker");
+    let downstream = write_marker_script(&dir, "downstream.sh", "downstream_marker");
+    let line = format!("FOO=bar alias | {}", downstream.display());
+    let output = run_interactive(&[line.as_str()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("not supported for builtins"),
+        "expected the refusal diagnostic, got {stderr:?}"
+    );
+    assert!(
+        !marker.exists(),
+        "the downstream stage must not launch after a rejection"
+    );
+}
+
+/// Same invariant for a rejected middle stage: neither the upstream nor the
+/// downstream stage may launch, and the pipeline must not collapse to the
+/// surviving stages.
+#[test]
+fn rejected_middle_builtin_stage_does_not_collapse_pipeline() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let up_marker = dir.path().join("up_marker");
+    let down_marker = dir.path().join("down_marker");
+    let upstream = write_marker_script(&dir, "upstream.sh", "up_marker");
+    let downstream = write_marker_script(&dir, "downstream2.sh", "down_marker");
+    let line = format!(
+        "{} | FOO=bar alias | {}",
+        upstream.display(),
+        downstream.display()
+    );
+    let output = run_interactive(&[line.as_str()]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("not supported for builtins"),
+        "expected the refusal diagnostic, got {stderr:?}"
+    );
+    assert!(
+        !up_marker.exists(),
+        "the upstream stage must not launch after a rejection"
+    );
+    assert!(
+        !down_marker.exists(),
+        "the downstream stage must not launch after a rejection"
+    );
+}
+
+/// The isolated helper evaluator shares the top-level semantics: `||`
+/// observes the refusal inside `$(...)`.
+#[test]
+fn builtin_prefix_refusal_in_command_substitution_runs_or_branch() {
+    let output = run_command("echo \"$(FOO=bar alias || echo helper-refusal-observed)\"");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "helper-refusal-observed"),
+        "the helper || branch must run: {stdout:?}"
+    );
+}
+
+/// The isolated helper evaluator gates `&&` off the refusal like the top
+/// level does.
+#[test]
+fn builtin_prefix_refusal_in_command_substitution_blocks_and_branch() {
+    let output = run_command("echo \"$(FOO=bar alias && echo SHOULD_NOT_RUN)\"");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("SHOULD_NOT_RUN"),
+        "the helper && branch must not run: {stdout:?}"
+    );
 }
 
 /// The shell has to look commands up in the `PATH` it hands its children.

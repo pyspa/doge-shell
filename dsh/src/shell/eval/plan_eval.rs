@@ -18,7 +18,7 @@ use super::super::Shell;
 use super::super::authorize::{
     AuthorizationCancelled, AuthorizationDecision, ConfirmFn, authorize_job_with,
 };
-use super::super::materialize::materialize_job;
+use super::super::materialize::{MaterializeOutcome, materialize_job};
 use super::super::plan::ExecutionPlan;
 use anyhow::Result;
 use dsh_types::Context;
@@ -60,13 +60,20 @@ pub(crate) async fn evaluate_plan(
             continue;
         }
 
+        // Mirrors the top-level loop: a rejected builtin prefix is an
+        // ordinary command failure (publish + continue), not an abort.
         let materialized = match materialize_job(shell, ctx, planned, confirm).await? {
-            Some(materialized) => materialized,
-            None => {
-                if planned.is_assignment_only() {
-                    last_exit_code = 0;
-                    super::publish_exit_status(shell, last_exit_code);
-                }
+            MaterializeOutcome::Runnable(materialized) => materialized,
+            MaterializeOutcome::AssignmentOnly => {
+                last_exit_code = 0;
+                super::publish_exit_status(shell, last_exit_code);
+                gate_op = next_gate_op;
+                continue;
+            }
+            MaterializeOutcome::Rejected(failure) => {
+                let _ = ctx.write_stderr(&failure.message);
+                last_exit_code = failure.exit_code;
+                super::publish_exit_status(shell, last_exit_code);
                 gate_op = next_gate_op;
                 continue;
             }

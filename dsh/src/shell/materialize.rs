@@ -36,20 +36,58 @@ pub(crate) struct ExpandedStage {
     pub env_overrides: Vec<(String, String)>,
 }
 
-/// Build one pipeline stage process. `None` means "skip this stage": a
-/// `NAME=value` prefix on a builtin, which the shell reports and drops.
+/// Exit status for a rejected `NAME=value` builtin prefix. This is an
+/// ordinary non-zero command failure, matching the syntax-error convention —
+/// deliberately not 127 (command-not-found) and not 130 (SIGINT/cancel).
+pub const BUILTIN_ENV_PREFIX_EXIT_CODE: i32 = 1;
+
+/// An expected shell-level command refusal: the command was understood but
+/// must not run (e.g. a `NAME=value` prefix on a builtin). This is a normal
+/// non-zero command result, not an infrastructure error, so evaluators must
+/// publish its status and continue the `;`/`&&`/`||` list instead of
+/// aborting with `anyhow::Error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandMaterializationFailure {
+    pub exit_code: i32,
+    pub message: String,
+}
+
+impl CommandMaterializationFailure {
+    fn builtin_env_prefix(cmd: &str) -> Self {
+        Self {
+            exit_code: BUILTIN_ENV_PREFIX_EXIT_CODE,
+            // No trailing newline: `Context::write_stderr` appends exactly one.
+            message: format!("dsh: {cmd}: a NAME=value prefix is not supported for builtins"),
+        }
+    }
+}
+
+/// Explicit materialization result: `None` used to conflate assignment-only
+/// jobs with rejected builtin prefixes, letting a refusal masquerade as
+/// success. The three cases are now typed apart. (`Runnable` is boxed: the
+/// job plus its substitution resources are several hundred bytes, and the
+/// other variants are tiny.)
+pub enum MaterializeOutcome {
+    Runnable(Box<MaterializedJob>),
+    AssignmentOnly,
+    Rejected(CommandMaterializationFailure),
+}
+
+/// Build one pipeline stage process. A `NAME=value` prefix on a builtin (or
+/// an exported Lisp command, which runs through the same builtin path) is an
+/// expected command-level refusal, returned as `Err` so the caller can turn
+/// it into a non-zero status without aborting the command list.
 fn build_stage_process(
     shell: &Shell,
     argv: Vec<String>,
     redirects: Vec<Redirect>,
     env_overrides: Vec<(String, String)>,
-) -> Option<JobProcess> {
+) -> Result<JobProcess, CommandMaterializationFailure> {
     let cmd = argv[0].clone();
     if !env_overrides.is_empty()
         && (dsh_builtin::get_handler(&cmd).is_some() || shell.lisp_engine.borrow().is_export(&cmd))
     {
-        eprintln!("dsh: {cmd}: a NAME=value prefix is not supported for builtins");
-        return None;
+        return Err(CommandMaterializationFailure::builtin_env_prefix(&cmd));
     }
     let mut process = if let Some(handler) = dsh_builtin::get_handler(&cmd) {
         JobProcess::Builtin(crate::process::BuiltinProcess::new_handler(
@@ -75,7 +113,7 @@ fn build_stage_process(
     };
     process.set_redirects(redirects);
     process.set_env_overrides(env_overrides);
-    Some(process)
+    Ok(process)
 }
 
 fn assemble_job(
@@ -83,7 +121,7 @@ fn assemble_job(
     planned: &PlannedJob,
     expanded: Vec<ExpandedStage>,
     job_id: usize,
-) -> Option<Job> {
+) -> Result<Job, CommandMaterializationFailure> {
     let mut job = Job::new(planned.source.clone(), shell.pgid);
     job.job_id = job_id;
     job.foreground = planned.foreground;
@@ -99,13 +137,17 @@ fn assemble_job(
             stage.argv.remove(0);
             job.disable_pty = true;
         }
-        if let Some(process) =
-            build_stage_process(shell, stage.argv, stage.redirects, stage.env_overrides)
-        {
-            job.set_process(process);
-        }
+        // Fail fast: one rejected stage rejects the whole pipeline before any
+        // process spawns. Dropping just that stage would silently rewire
+        // `A | rejected-B | C` into `A | C`.
+        let process = build_stage_process(shell, stage.argv, stage.redirects, stage.env_overrides)?;
+        job.set_process(process);
     }
-    job.has_process().then_some(job)
+    debug_assert!(
+        job.has_process(),
+        "assemble_job called with no runnable stage"
+    );
+    Ok(job)
 }
 
 async fn expand_redirects(
@@ -145,7 +187,7 @@ pub fn materialize_job<'a>(
     ctx: &'a Context,
     planned: &'a PlannedJob,
     confirm: ConfirmFn,
-) -> Pin<Box<dyn Future<Output = Result<Option<MaterializedJob>>> + 'a>> {
+) -> Pin<Box<dyn Future<Output = Result<MaterializeOutcome>> + 'a>> {
     Box::pin(async move {
         let mut resources = ExecutionResources::new();
         let mut expanded = Vec::with_capacity(planned.stages.len());
@@ -188,17 +230,25 @@ pub fn materialize_job<'a>(
                 env.set_shell_var(name.clone(), value.clone());
             }
         }
+        // Intentionally unconditional: anything with no runnable stage after
+        // expansion (standalone assignments, redirect-only lines, words that
+        // expanded to zero fields) reports success once its pending
+        // assignments are applied, instead of leaving the previous `$?`
+        // stale. Redirect-only stages carry no process, so their redirects
+        // stay unapplied here, exactly as before this change.
         if concrete.is_empty() {
-            return Ok(None);
+            return Ok(MaterializeOutcome::AssignmentOnly);
         }
         let job_id = shell.get_next_job_id();
         let had_dynamic = planned.contains_dynamic_expansion();
-        let job = assemble_job(shell, planned, concrete, job_id);
-        Ok(job.map(|job| MaterializedJob {
-            job,
-            had_dynamic_expansion: had_dynamic,
-            resources,
-        }))
+        match assemble_job(shell, planned, concrete, job_id) {
+            Ok(job) => Ok(MaterializeOutcome::Runnable(Box::new(MaterializedJob {
+                job,
+                had_dynamic_expansion: had_dynamic,
+                resources,
+            }))),
+            Err(failure) => Ok(MaterializeOutcome::Rejected(failure)),
+        }
     })
 }
 
@@ -258,7 +308,14 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
         .into_iter()
         .filter(|stage| !stage.argv.is_empty())
         .collect();
-    Ok(assemble_job(shell, planned, concrete, 0))
+    // Fail closed: a rejected stage must not let the dry projection show the
+    // remaining stages as a different, runnable pipeline to SafetyGuard
+    // (e.g. `FOO=bar alias | dangerous-command` must not become just
+    // `dangerous-command`). Surface it as an error instead.
+    match assemble_job(shell, planned, concrete, 0) {
+        Ok(job) => Ok(Some(job)),
+        Err(failure) => anyhow::bail!("{}", failure.message),
+    }
 }
 
 pub fn dry_materialize_plan(plan: &super::plan::ExecutionPlan, shell: &Shell) -> Result<Vec<Job>> {
@@ -331,10 +388,16 @@ mod tests {
         .expect("plan");
         assert!(plan.jobs[0].contains_dynamic_expansion());
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        let materialized = materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        let materialized = match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
             .await
             .expect("materialize")
-            .expect("job");
+        {
+            MaterializeOutcome::Runnable(materialized) => materialized,
+            MaterializeOutcome::AssignmentOnly => panic!("expected runnable job"),
+            MaterializeOutcome::Rejected(failure) => {
+                panic!("expected runnable job, got rejection: {failure:?}")
+            }
+        };
         assert!(materialized.had_dynamic_expansion);
         let argv = materialized
             .job
@@ -346,6 +409,187 @@ mod tests {
         assert_eq!(
             argv.1.to_vec(),
             vec!["-rf".to_string(), "victim".to_string()]
+        );
+    }
+
+    /// A `NAME=value` prefix on a builtin is an expected command failure, not
+    /// a silently dropped stage: the outcome is `Rejected` with a non-zero
+    /// status and a diagnostic, never `Runnable` and never `AssignmentOnly`.
+    #[tokio::test]
+    async fn builtin_prefix_is_rejected_as_command_failure() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan("FOO=bar alias", Arc::clone(&env))
+            .expect("plan");
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::Rejected(failure) => {
+                assert_eq!(failure.exit_code, BUILTIN_ENV_PREFIX_EXIT_CODE);
+                assert_ne!(failure.exit_code, 0);
+                assert!(failure.message.contains("not supported for builtins"));
+                assert!(failure.message.contains("alias"));
+            }
+            MaterializeOutcome::Runnable(_) => panic!("builtin prefix must not be runnable"),
+            MaterializeOutcome::AssignmentOnly => panic!("builtin prefix is not assignment-only"),
+        }
+    }
+
+    /// An exported Lisp command uses the same builtin path, so it shares the
+    /// same refusal semantics.
+    #[tokio::test]
+    async fn exported_lisp_prefix_is_rejected_like_builtin() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        // Only `fn` marks the lambda as exported (`LispEngine::is_export`);
+        // `defun` would never be callable as a shell command.
+        shell
+            .lisp_engine
+            .borrow()
+            .run("(fn exported-prefix-probe () 1)")
+            .expect("fn");
+        let plan = super::super::parse::parse_execution_plan(
+            "FOO=bar exported-prefix-probe",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::Rejected(failure) => {
+                assert_eq!(failure.exit_code, BUILTIN_ENV_PREFIX_EXIT_CODE);
+            }
+            MaterializeOutcome::Runnable(_) => panic!("expected rejection, got runnable"),
+            MaterializeOutcome::AssignmentOnly => panic!("expected rejection, got assignment-only"),
+        }
+    }
+
+    /// An external command with a prefix stays runnable and keeps the
+    /// overrides on the process, not in the shell.
+    #[tokio::test]
+    async fn external_prefix_stays_runnable() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        // Materialization never spawns, so the probe name needs no real
+        // executable on disk (which keeps this unit test free of
+        // OS-specific absolute paths); it only has to miss the builtin and
+        // Lisp-export tables to take the external path.
+        let plan = super::super::parse::parse_execution_plan(
+            "FOO=bar probe-external-cmd",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::Runnable(materialized) => {
+                let argv = materialized
+                    .job
+                    .process
+                    .as_ref()
+                    .expect("process")
+                    .command_argv();
+                assert_eq!(argv.0, "probe-external-cmd");
+            }
+            MaterializeOutcome::Rejected(failure) => {
+                panic!("external prefix must not be rejected: {failure:?}")
+            }
+            MaterializeOutcome::AssignmentOnly => panic!("external prefix is not assignment-only"),
+        }
+    }
+
+    /// One rejected stage rejects the whole pipeline: no partial job with
+    /// stages 1 and 3 is produced.
+    #[tokio::test]
+    async fn mixed_pipeline_with_rejected_middle_stage_is_rejected() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan(
+            "probe-upstream-cmd | FOO=bar alias | probe-downstream-cmd",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        assert_eq!(plan.jobs[0].stages.len(), 3);
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::Rejected(_) => {}
+            MaterializeOutcome::Runnable(_) => {
+                panic!("pipeline with a rejected stage must not be runnable")
+            }
+            MaterializeOutcome::AssignmentOnly => panic!("pipeline is not assignment-only"),
+        }
+    }
+
+    /// Standalone assignments stay `AssignmentOnly`: the value lands in the
+    /// shell exactly once and the evaluator can publish status 0.
+    #[tokio::test]
+    async fn standalone_assignment_is_assignment_only() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan("FOO=standalone", Arc::clone(&env))
+            .expect("plan");
+        assert!(plan.jobs[0].is_assignment_only());
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+            .await
+            .expect("materialize")
+        {
+            MaterializeOutcome::AssignmentOnly => {}
+            MaterializeOutcome::Runnable(_) => panic!("standalone assignment must not run"),
+            MaterializeOutcome::Rejected(failure) => {
+                panic!("standalone assignment must not be rejected: {failure:?}")
+            }
+        }
+        assert_eq!(
+            shell.environment.read().lookup_variable("FOO").as_deref(),
+            Some("standalone")
+        );
+    }
+
+    /// The dry projection must not show a rejected pipeline as a smaller
+    /// runnable one to SafetyGuard: it errors fail-closed instead.
+    #[test]
+    fn dry_materialization_rejects_builtin_prefix_pipeline() {
+        let env = crate::environment::Environment::new();
+        let shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan(
+            "FOO=bar alias | probe-downstream-cmd",
+            Arc::clone(&env),
+        )
+        .expect("plan");
+        let err = dry_materialize_job(&plan.jobs[0], &shell).expect_err("dry must reject");
+        assert!(
+            err.to_string().contains("not supported for builtins"),
+            "unexpected dry error: {err:?}"
         );
     }
 

@@ -172,6 +172,12 @@ impl DshTestProcess {
     /// Success is `ESRCH` from `killpg(pgid, 0)`. On failure the group is
     /// `SIGKILL`ed and reaped so CI never inherits strays, then an error
     /// describing the leak is returned.
+    ///
+    /// Assumption: the poll starts immediately after the shell's own exit
+    /// and lasts at most 3s, so a passing result cannot observe an
+    /// unrelated group that recycled the pgid — recycling within that
+    /// window would require pid wraparound on a busy host. A failure only
+    /// ever escalates to `SIGKILL`, never to a green assertion.
     pub fn assert_group_drained(self, timeout: Duration) -> Result<Output, String> {
         let pgid = self.pgid;
         let output = self.wait(timeout).map_err(|err| match err {

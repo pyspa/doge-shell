@@ -124,7 +124,7 @@ jobs:
   stress:
     name: stress (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -146,9 +146,10 @@ jobs:
 
       # Pinned cargo-nextest 0.9.145 (supports retries, flaky-result=fail,
       # slow-timeout, leak-timeout, --stress-count). The installer itself is
-      # pinned by commit SHA like every other action in this file.
+      # pinned by commit SHA like every other action in this file
+      # (install-action 2.87.16 at pin time).
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # install-action 2.87.16
         with:
           tool: nextest@0.9.145
 
@@ -156,8 +157,10 @@ jobs:
       # retries diagnose flakes, `flaky-result = "fail"` keeps them red, and
       # an empty selection fails instead of going green. Serial (`-j 1`):
       # races are created explicitly inside tests, never by the runner.
+      # Budget: ~1 min per iteration locally, x10 fits the step timeout
+      # with margin for slower CI hosts.
       - name: Targeted stress
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10 -E 'binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(pipeline_semantics) or binary(background_builtin) or test(lifecycle_property)' < /dev/null
 
   lint:

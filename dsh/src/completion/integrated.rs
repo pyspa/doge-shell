@@ -420,6 +420,11 @@ impl IntegratedCompletionEngine {
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
         let dynamic_generation = self.dynamic.refresh_generation();
+        // A request that starts while dynamic data is in flight stays
+        // non-cacheable for its lifetime: the refresh may finish after this
+        // request has already observed only part of the old/new state, so a
+        // later "pending became false" is not proof that this request built a
+        // stable snapshot. A later request may publish the settled result.
         let mut cache_allowed = completion_cache_allowed(&parsed_command_line)
             && !self.dynamic.has_async_fallback()
             && !self.dynamic.has_pending_refresh();
@@ -478,6 +483,10 @@ impl IntegratedCompletionEngine {
 
         // 1. Project-aware dynamic completion
         let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        // The pre-collection `cache_allowed` is only ever narrowed here, never
+        // widened: a refresh scheduled mid-collection means this result may be
+        // an old/new mix, so it must not be published even if nothing is
+        // pending anymore by the time collection finishes.
         cache_allowed = cache_allowed
             && dynamic_generation == self.dynamic.refresh_generation()
             && !self.dynamic.has_pending_refresh();

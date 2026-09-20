@@ -32,6 +32,74 @@ async fn wait_for_candidate(
     }
 }
 
+/// Wait until a completion result both shows `expected` and has been published
+/// as an exact top-level cache entry containing `expected`.
+///
+/// A refresh finishing mid-request can make the dynamic candidate visible in a
+/// result that started while the refresh was still pending. Such a request
+/// stays non-cacheable for its lifetime (see `complete()`), so "candidate
+/// visible" and "top-level cache published" are two separate conditions that
+/// must both hold. Synchronization uses the existing completion refresh
+/// notifier instead of arbitrary sleeps: each iteration re-checks state and
+/// otherwise waits for the next refresh notification under a deadline.
+async fn wait_for_candidate_and_exact_cache(
+    engine: &IntegratedCompletionEngine,
+    notifications: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+    input: &str,
+    cwd: &Path,
+    expected: &str,
+) -> CompletionResult {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let result = engine.complete(input, input.len(), cwd, 50, None).await;
+        let candidate_ready = result
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == expected);
+        let cached = engine.cache.lookup(input);
+        let cache_ready = cached.as_ref().is_some_and(|cached| {
+            cached.exact
+                && cached
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.text == expected)
+        });
+        if candidate_ready && cache_ready {
+            return result;
+        }
+
+        let now = Instant::now();
+        let last_candidates: Vec<_> = result
+            .candidates
+            .iter()
+            .map(|candidate| candidate.text.clone())
+            .collect();
+        let cached_summary = cached.as_ref().map(|cached| {
+            (
+                cached.exact,
+                cached
+                    .candidates
+                    .iter()
+                    .map(|candidate| candidate.text.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert!(
+            now < deadline,
+            "timed out waiting for completion to settle: input={input:?} expected={expected:?} \
+             generation={} pending={} last_candidates={last_candidates:?} cached={cached_summary:?}",
+            engine.dynamic.refresh_generation(),
+            engine.dynamic.has_pending_refresh(),
+        );
+
+        let remaining = deadline.saturating_duration_since(now);
+        tokio::time::timeout(remaining, notifications.recv())
+            .await
+            .expect("timed out waiting for dynamic completion refresh")
+            .expect("completion notifier closed unexpectedly");
+    }
+}
+
 fn write_executable_script(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
     let mut permissions = fs::metadata(path).unwrap().permissions();
@@ -817,6 +885,10 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         "#!/bin/sh\nif [ \"$1\" = \"config\" ]; then printf 'alias.cheat status\\n'; fi\n",
     );
     let engine = engine_with_path(&bin_dir);
+    // Connect the refresh notifier before the cold request so the worker
+    // completion event is queued instead of racing receiver registration.
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.set_notifier(notify_tx);
 
     let input = "git che";
     let first = engine
@@ -830,11 +902,24 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         "expected git checkout from JSON subcommand completion"
     );
     assert!(
+        !first
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "cheat"),
+        "cold result must not publish dynamic alias data before refresh completion"
+    );
+    assert!(
         engine.cache.lookup(input).is_none(),
         "a cold dynamic refresh must keep the partial result out of the top-level cache"
     );
 
-    let second = wait_for_candidate(&engine, input, dir.path(), "cheat").await;
+    // A refresh finishing mid-request can make "cheat" visible in a result
+    // that remains non-cacheable for its lifetime, so wait for the settled
+    // state where both the candidate and its exact top-level cache entry are
+    // observable.
+    let second =
+        wait_for_candidate_and_exact_cache(&engine, &mut notify_rx, input, dir.path(), "cheat")
+            .await;
     let cached = engine
         .cache
         .lookup(input)
@@ -847,11 +932,6 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
             .any(|candidate| candidate.text == "cheat")
     );
 
-    let first_texts = first
-        .candidates
-        .iter()
-        .map(|candidate| candidate.text.as_str())
-        .collect::<Vec<_>>();
     let second_texts = second
         .candidates
         .iter()
@@ -859,7 +939,6 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         .collect::<Vec<_>>();
     assert!(second_texts.contains(&"checkout"));
     assert!(second_texts.contains(&"cheat"));
-    assert!(!first_texts.contains(&"cheat"));
 }
 
 #[tokio::test]

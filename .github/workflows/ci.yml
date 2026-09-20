@@ -78,6 +78,88 @@ jobs:
         timeout-minutes: 15
         run: cargo test --workspace < /dev/null
 
+  contract:
+    name: contract (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      # Never let one platform's failure hide the other's; which of the two
+      # broke is the first thing worth knowing.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: contract-${{ matrix.os }}
+
+      # .cargo/config.toml points the Linux linker at mold unconditionally, so
+      # without this every link on this leg fails with "cannot find -fuse-ld=mold".
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y mold
+
+      - name: Shell execution contract
+        timeout-minutes: 15
+        run: cargo test -p doge-shell --test shell_contract < /dev/null
+
+      - name: Resource ownership contract
+        timeout-minutes: 15
+        run: cargo test -p doge-shell --test resource_contract < /dev/null
+
+      - name: Lifecycle property
+        timeout-minutes: 10
+        run: cargo test -p doge-shell --lib lifecycle_property < /dev/null
+
+      - name: Execution boundary regressions
+        timeout-minutes: 15
+        run: cargo test -p doge-shell --test fd_ownership --test reexec_subshell --test pipeline_semantics --test background_builtin < /dev/null
+
+  stress:
+    name: stress (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: stress-${{ matrix.os }}
+
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y mold
+
+      # Pinned cargo-nextest 0.9.145 (supports retries, flaky-result=fail,
+      # slow-timeout, leak-timeout, --stress-count). The installer itself is
+      # pinned by commit SHA like every other action in this file.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        with:
+          tool: nextest@0.9.145
+
+      # Targeted process/execution lane only (see .config/nextest.toml):
+      # retries diagnose flakes, `flaky-result = "fail"` keeps them red, and
+      # an empty selection fails instead of going green. Serial (`-j 1`):
+      # races are created explicitly inside tests, never by the runner.
+      - name: Targeted stress
+        timeout-minutes: 25
+        run: cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10 -E 'binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(pipeline_semantics) or binary(background_builtin) or test(lifecycle_property)' < /dev/null
+
   lint:
     name: lint
     runs-on: ubuntu-latest

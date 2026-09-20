@@ -1,0 +1,23 @@
+# Targeted execution/process lane (Layer 4).
+#
+# Retries diagnose flakes; they never green them: `flaky-result = "fail"`
+# turns run1-fail/run2-pass into FLAKY, which fails CI. Deterministic
+# failures stay failures.
+#
+# The serial `static Mutex` in `dsh/tests/common` does not cross nextest's
+# per-test processes, so this lane starts at `-j 1`: races are created
+# explicitly inside tests, never by the runner.
+
+[profile.ci]
+retries = 2
+flaky-result = "fail"
+failure-output = "immediate-final"
+success-output = "never"
+slow-timeout = { period = "60s", terminate-after = 2, grace-period = "5s" }
+
+# Process-heavy binaries get leak detection: nextest watches the test
+# process's own children, while `DshTestProcess::assert_group_drained`
+# watches dogesh's descendants. Different responsibilities, both kept.
+[[profile.ci.overrides]]
+filter = "binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(pipeline_semantics) or binary(background_builtin)"
+leak-timeout = "10s"

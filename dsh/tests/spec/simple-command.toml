@@ -1,0 +1,66 @@
+version = 1
+
+# Simple commands: status propagation is the shell's most basic contract.
+# `dogesh -c` exits with the last command's status.
+
+[[case]]
+id = "simple-command.true-status"
+class = "posix"
+mode = "command"
+script = "{{TRUE}}"
+
+[case.expect]
+status = 0
+stdout_exact = ""
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.false-status"
+class = "posix"
+mode = "command"
+script = "{{FALSE}}"
+
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.not-found-status"
+class = "posix"
+mode = "command"
+script = "doge-shell-no-such-command-xyz"
+
+[case.expect]
+status = 127
+stderr_contains = ["command not found"]
+
+[[case]]
+id = "simple-command.exit-seven-propagates"
+class = "posix"
+mode = "command"
+script = "printf 'exit 7\\n' > exit7.sh; {{SH}} exit7.sh; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:7"]
+
+[[case]]
+id = "simple-command.sequence-keeps-last-status"
+class = "posix"
+mode = "command"
+script = "{{TRUE}}; {{FALSE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "simple-command.echo-args"
+class = "posix"
+mode = "command"
+script = "echo hello world"
+
+[case.expect]
+status = 0
+stdout_contains = ["hello world"]

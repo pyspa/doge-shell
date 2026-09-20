@@ -1,0 +1,88 @@
+version = 1
+
+# `&&` / `||` gating on command status.
+
+[[case]]
+id = "list.and-runs-after-success"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} && echo RAN"
+
+[case.expect]
+status = 0
+stdout_contains = ["RAN"]
+
+[[case]]
+id = "list.and-skips-after-failure"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} && echo SHOULD_NOT_RUN; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:1"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "list.or-runs-after-failure"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+
+[[case]]
+id = "list.or-skips-after-success"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} || echo SHOULD_NOT_RUN; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:0"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "list.and-chain-stops-at-first-failure"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} && {{FALSE}} && echo SHOULD_NOT_RUN; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:1"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "list.or-chain-stops-at-first-success"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} || {{TRUE}} || echo SHOULD_NOT_RUN; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:0"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "list.bare-substitution-failure-gates-and"
+class = "posix"
+mode = "command"
+script = "$({{FALSE}}) && echo SHOULD_NOT_RUN; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+stdout_contains = ["DONE:1"]
+
+[[case]]
+id = "list.bare-substitution-failure-gates-or"
+class = "posix"
+mode = "command"
+script = "$({{FALSE}}) || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]

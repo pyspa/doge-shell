@@ -1,0 +1,83 @@
+version = 1
+
+# Command substitution: capture, nesting, pipelines, and status rules.
+
+[[case]]
+id = "substitution.simple-capture"
+class = "posix"
+mode = "command"
+script = "echo $(echo inner)"
+
+[case.expect]
+status = 0
+stdout_contains = ["inner"]
+
+[[case]]
+id = "substitution.quoted-capture"
+class = "posix"
+mode = "command"
+script = "echo \"quoted $(echo inner) end\""
+
+[case.expect]
+status = 0
+stdout_contains = ["quoted inner end"]
+
+[[case]]
+id = "substitution.nested"
+class = "posix"
+mode = "command"
+script = "echo $(echo $(echo deep))"
+
+[case.expect]
+status = 0
+stdout_contains = ["deep"]
+
+[[case]]
+id = "substitution.pipeline-inside"
+class = "posix"
+mode = "command"
+script = "echo $(echo hi | {{TR}} a-z A-Z)"
+
+[case.expect]
+status = 0
+stdout_contains = ["HI"]
+
+[[case]]
+id = "substitution.bare-failure-status"
+class = "posix"
+mode = "command"
+script = "$({{FALSE}}); echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "substitution.bare-success-status"
+class = "posix"
+mode = "command"
+script = "$({{TRUE}}); echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+[[case]]
+id = "substitution.surviving-command-ignores-body-status"
+class = "posix"
+mode = "command"
+script = "echo $({{FALSE}}); echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+[[case]]
+id = "substitution.external-helper-output-capture"
+class = "posix"
+mode = "command"
+script = "printf 'echo outer-out\\n' > outer.sh; echo $({{SH}} outer.sh)"
+
+[case.expect]
+status = 0
+stdout_contains = ["outer-out"]

@@ -1,0 +1,114 @@
+version = 1
+
+# Redirections: ordering, append, input, and failure semantics.
+
+[[case]]
+id = "redirection.output-only-creates-empty-file"
+class = "posix"
+mode = "command"
+script = "> out.txt; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:0"]
+stderr_exact = ""
+
+[[case.expect.files]]
+path = "out.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.truncate-then-write"
+class = "posix"
+mode = "command"
+script = "echo first > data.txt; echo second > data.txt; cat data.txt"
+
+[case.expect]
+status = 0
+stdout_contains = ["second"]
+stdout_not_contains = ["first"]
+
+[[case]]
+id = "redirection.append"
+class = "posix"
+mode = "command"
+script = "echo one > data.txt; echo two >> data.txt; cat data.txt"
+
+[case.expect]
+status = 0
+stdout_contains = ["one", "two"]
+
+[[case]]
+id = "redirection.input"
+class = "posix"
+mode = "command"
+script = "echo payload > in.txt; cat < in.txt; echo IN:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["payload", "IN:0"]
+
+[[case]]
+id = "redirection.stderr-to-stdout"
+class = "posix"
+mode = "command"
+script = "echo hi 2>&1; echo MERGE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["hi", "MERGE:0"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.both-to-file"
+class = "posix"
+mode = "command"
+script = "echo hi > both.txt 2>&1; echo SEP; cat both.txt"
+
+[case.expect]
+status = 0
+stdout_contains = ["SEP", "hi"]
+
+[[case.expect.files]]
+path = "both.txt"
+exists = true
+content_contains = ["hi"]
+
+# `2>&1 > file`: stderr follows the *old* stdout (the harness), stdout goes
+# to the file. `ls` produces both streams so the order is observable.
+[[case]]
+id = "redirection.stderr-order-before-truncate"
+class = "posix"
+mode = "command"
+script = "ls /tmp /doge-shell-no-such-dir-xyz 2>&1 > ordered.txt; echo SEP"
+
+[case.expect]
+status = 0
+stdout_contains = ["No such file", "SEP"]
+
+[[case]]
+id = "redirection.missing-file-marker-absent"
+class = "posix"
+mode = "command"
+script = "echo hi > present.txt; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:0"]
+
+[[case.expect.files]]
+path = "never-created-xyz.txt"
+exists = false
+
+# Desired: a failed redirect fails that command but the shell continues.
+[[case]]
+id = "redirection.failed-redirect-continues-shell"
+class = "posix"
+mode = "command"
+script = "echo hi > /doge-shell-no-such-dir-xyz/f; echo ST:$?"
+xfail = "failed redirect aborts the -c script instead of continuing"
+
+[case.expect]
+status = 0
+stdout_contains = ["ST:1"]

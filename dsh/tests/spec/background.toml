@@ -1,0 +1,36 @@
+version = 1
+
+# Background execution: prompt returns at once, output still drains.
+
+[[case]]
+id = "background.external-returns-zero-promptly"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} & echo BG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["BG:0"]
+
+[[case]]
+id = "background.output-drains-before-shell-exit"
+class = "posix"
+mode = "command"
+script = "echo bg-marker & echo ALL:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["bg-marker", "ALL:0"]
+
+[[case]]
+id = "background.pipeline-in-background"
+class = "posix"
+mode = "command"
+script = "echo hi | {{TR}} a-z A-Z & echo BG:$?"
+timeout_ms = 8000
+xfail = "pipeline followed by & plus a trailing command is a syntax error"
+
+[case.expect]
+status = 0
+stdout_contains = ["BG:0"]

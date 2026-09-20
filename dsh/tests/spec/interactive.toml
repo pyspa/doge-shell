@@ -1,0 +1,44 @@
+version = 1
+
+# Interactive mode (`dogesh` reading lines from stdin): same semantics,
+# prompt-wrapped output, so only containment assertions are used.
+
+[[case]]
+id = "interactive.echo-line"
+class = "posix"
+mode = "interactive"
+script = "echo hello-interactive"
+
+[case.expect]
+status = 0
+stdout_contains = ["hello-interactive"]
+
+[[case]]
+id = "interactive.pipeline-line"
+class = "posix"
+mode = "interactive"
+script = "echo hello | {{TR}} a-z A-Z"
+
+[case.expect]
+status = 0
+stdout_contains = ["HELLO"]
+
+[[case]]
+id = "interactive.status-across-lines"
+class = "posix"
+mode = "interactive"
+script = "{{FALSE}}\necho GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "interactive.assignment-persists-across-lines"
+class = "posix"
+mode = "interactive"
+script = "FOO=interactive-bar\necho VAL:$FOO"
+
+[case.expect]
+status = 0
+stdout_contains = ["VAL:interactive-bar"]

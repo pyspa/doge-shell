@@ -1,0 +1,43 @@
+version = 1
+
+# Signal deaths map to 128 + signal number.
+
+[[case]]
+id = "signal.sigint-maps-to-130"
+class = "posix"
+mode = "command"
+script = "printf 'kill -INT $$\\n' > sigint.sh; {{SH}} sigint.sh; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:130"]
+
+[[case]]
+id = "signal.sigterm-maps-to-143"
+class = "posix"
+mode = "command"
+script = "printf 'kill -TERM $$\\n' > sigterm.sh; {{SH}} sigterm.sh; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:143"]
+
+[[case]]
+id = "signal.sigkill-maps-to-137"
+class = "posix"
+mode = "command"
+script = "printf 'kill -KILL $$\\n' > sigkill.sh; {{SH}} sigkill.sh; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:137"]
+
+[[case]]
+id = "signal.sigpipe-maps-to-141"
+class = "posix"
+mode = "command"
+script = "printf 'trap - PIPE\\nkill -PIPE $$\\n' > sigpipe.sh; {{SH}} sigpipe.sh; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:141"]

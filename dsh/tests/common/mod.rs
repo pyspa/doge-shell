@@ -1,4 +1,18 @@
+//! Shared integration-test runner for `dogesh` children.
+//!
+//! The historical helpers below keep their exact behavior: isolated XDG
+//! dirs, stdin isolation, captured output, child process group, bounded
+//! wait with group `SIGKILL` on timeout, and serialization behind a global
+//! lock. New structure lives in modules:
+//!
+//! - [`process`]: [`process::DshTestProcess`] RAII handle plus the explicit
+//!   unlocked spawner (concurrency tests only).
+//! - [`contract`]: declarative TOML contract harness (Layer 1).
+
 #![allow(dead_code)]
+
+pub mod contract;
+pub mod process;
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -15,6 +29,17 @@ fn child_process_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Hold the serial child-execution lock for a scope larger than one spawn
+/// (e.g. a whole contract file). Ordinary tests never need this; they use
+/// the serial helpers which lock per call.
+///
+/// While the guard is held, spawn only via [`process::spawn_dsh_unlocked`]:
+/// the serial helpers (`run_dsh`, `run_command`, ...) lock the same mutex
+/// and would self-deadlock.
+pub fn serial_guard() -> std::sync::MutexGuard<'static, ()> {
+    child_process_lock()
 }
 
 pub fn run_dsh<I, S>(args: I, timeout: Duration) -> Output
@@ -111,6 +136,11 @@ pub fn yes_path() -> &'static str {
 /// Absolute path to an external `head`. See [`true_path`].
 pub fn head_path() -> &'static str {
     first_existing(&["/bin/head", "/usr/bin/head"])
+}
+
+/// Absolute path to an external `sh` for helper scripts. See [`true_path`].
+pub fn sh_path() -> &'static str {
+    process::sh_path()
 }
 
 fn first_existing(candidates: &'static [&'static str]) -> &'static str {

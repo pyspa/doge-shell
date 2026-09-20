@@ -1,0 +1,39 @@
+version = 1
+
+# doge-shell Smart Pipe: `|` at line head continues the previous pipeline
+# and downstream stages must observe transformed data (not duplicated text).
+
+[[case]]
+id = "smart-pipe.downstream-consumes-transformed-data"
+class = "dogesh"
+mode = "command"
+script = "echo abcdef | {{TR}} a-z A-Z"
+
+[case.expect]
+status = 0
+stdout_contains = ["ABCDEF"]
+stdout_not_contains = ["abcdef"]
+
+[[case]]
+id = "smart-pipe.multi-stage-transform"
+class = "dogesh"
+mode = "command"
+script = "echo hello | {{TR}} a-z A-Z | {{TR}} H h"
+
+[case.expect]
+status = 0
+stdout_contains = ["hELLO"]
+
+# Foreground builtin with large piped output: the in-process producer must
+# not deadlock against a bounded pipe buffer. (Previously a deadlock
+# candidate; verified green within 1.5s, so no xfail.)
+[[case]]
+id = "smart-pipe.foreground-builtin-large-output"
+class = "dogesh"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -c 131072 > big.txt; printf '%s' \"$(cat big.txt)\" | {{HEAD}} -c 10; echo PIPE:$?"
+timeout_ms = 1500
+
+[case.expect]
+status = 0
+stdout_contains = ["PIPE:0"]

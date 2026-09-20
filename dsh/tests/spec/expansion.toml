@@ -1,0 +1,54 @@
+version = 1
+
+# Variable and tilde-adjacent word expansion (runtime PlannedWord path).
+
+[[case]]
+id = "expansion.simple-variable"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo $FOO"
+
+[case.expect]
+status = 0
+stdout_contains = ["bar"]
+
+[[case]]
+id = "expansion.braced-variable"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo ${FOO}"
+
+[case.expect]
+status = 0
+stdout_contains = ["bar"]
+
+[[case]]
+id = "expansion.variable-inside-double-quotes"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo \"VAL:$FOO\""
+
+[case.expect]
+status = 0
+stdout_contains = ["VAL:bar"]
+
+[[case]]
+id = "expansion.adjacent-text"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo x$FOO"
+
+[case.expect]
+status = 0
+stdout_contains = ["xbar"]
+
+[[case]]
+id = "expansion.single-quotes-suppress"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo '$FOO'"
+
+[case.expect]
+status = 0
+stdout_contains = ["$FOO"]
+stdout_not_contains = ["bar"]

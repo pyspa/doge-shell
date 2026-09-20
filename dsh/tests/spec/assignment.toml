@@ -1,0 +1,33 @@
+version = 1
+
+# Variable assignment: persistence, env-prefix visibility, and scope.
+
+[[case]]
+id = "assignment.simple-persists-in-session"
+class = "posix"
+mode = "command"
+script = "FOO=bar; echo VAL:$FOO"
+
+[case.expect]
+status = 0
+stdout_contains = ["VAL:bar"]
+
+[[case]]
+id = "assignment.multiple-in-one-line"
+class = "posix"
+mode = "command"
+script = "A=1 B=2; echo $A-$B"
+
+[case.expect]
+status = 0
+stdout_contains = ["1-2"]
+
+[[case]]
+id = "assignment.env-prefix-visible-to-external"
+class = "posix"
+mode = "command"
+script = "printf 'echo FOO:$FOO\\n' > showfoo.sh; FOO=bar {{SH}} showfoo.sh"
+
+[case.expect]
+status = 0
+stdout_contains = ["FOO:bar"]

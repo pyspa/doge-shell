@@ -1,0 +1,79 @@
+version = 1
+
+# Pipelines: default status is the last stage's; a failing stage never kills
+# its siblings.
+
+[[case]]
+id = "pipeline.default-status-false-true"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+[[case]]
+id = "pipeline.default-status-true-false"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} | {{FALSE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "pipeline.default-status-exit-seven-true"
+class = "posix"
+mode = "command"
+script = "printf 'exit 7\\n' > exit7.sh; {{SH}} exit7.sh | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+[[case]]
+id = "pipeline.data-flows-through-stages"
+class = "posix"
+mode = "command"
+script = "echo hello | {{TR}} a-z A-Z"
+
+[case.expect]
+status = 0
+stdout_contains = ["HELLO"]
+
+[[case]]
+id = "pipeline.three-stages"
+class = "posix"
+mode = "command"
+script = "echo hello | {{TR}} a-z A-Z | {{TR}} H h"
+
+[case.expect]
+status = 0
+stdout_contains = ["hELLO"]
+
+[[case]]
+id = "pipeline.early-consumer-exit-completes"
+class = "posix"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -n 1; echo EARLY:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["EARLY:0"]
+
+# A pipeline stage that is only an assignment must not leak into the parent.
+# Desired: parent keeps its value and no stage error is reported.
+[[case]]
+id = "pipeline.assignment-stage-parent-isolation"
+class = "posix"
+mode = "command"
+script = "FOO=top; FOO=bar | {{TRUE}}; echo VAL:$FOO"
+xfail = "assignment-only pipeline stage reports 'expanded to no command' on stderr"
+
+[case.expect]
+status = 0
+stdout_contains = ["VAL:top"]
+stderr_exact = ""

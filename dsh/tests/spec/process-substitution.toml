@@ -1,0 +1,55 @@
+version = 1
+
+# Process substitution: producers behind /dev/fd handles.
+
+[[case]]
+id = "process-substitution.basic-producer"
+class = "bash"
+mode = "command"
+script = "cat <(printf PROC-MARKER); echo SUB:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["PROC-MARKER", "SUB:0"]
+
+[[case]]
+id = "process-substitution.multiple-producers"
+class = "bash"
+mode = "command"
+script = "diff <(printf 'a\\n') <(printf 'a\\n'); echo DIFF:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DIFF:0"]
+
+[[case]]
+id = "process-substitution.slow-producer"
+class = "bash"
+mode = "command"
+script = "printf 'sleep 1\\nprintf SLOW-MARKER\\n' > slow.sh; cat <({{SH}} slow.sh); echo SLOW:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["SLOW-MARKER", "SLOW:0"]
+
+[[case]]
+id = "process-substitution.large-producer-128kib"
+class = "bash"
+mode = "command"
+script = "cat <({{YES}} | {{HEAD}} -c 131072) | wc -c"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["131072"]
+
+[[case]]
+id = "process-substitution.failing-producer-empty-output"
+class = "bash"
+mode = "command"
+script = "cat <({{FALSE}}); echo SUB:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["SUB:0"]

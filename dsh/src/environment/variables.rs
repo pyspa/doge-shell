@@ -32,6 +32,16 @@ impl Environment {
         match name {
             "?" => return Some(self.last_exit_status.to_string()),
             "$" => return Some(std::process::id().to_string()),
+            // `$!`: PID of the most recently launched async job, empty
+            // before the first one. Like `?`/`$`, resolved before any
+            // user-settable name so `!` can never be shadowed.
+            "!" => {
+                return Some(
+                    self.last_async_pid
+                        .map(|pid| pid.to_string())
+                        .unwrap_or_default(),
+                );
+            }
             _ => {}
         }
 

@@ -60,7 +60,7 @@ pub(super) async fn spawn_async_list_job(
     match outcome {
         // The helper is running: success-at-start, never the body status.
         JobLaunchOutcome::Process(ProcessState::Running) => {
-            shell.wait_jobs.push(job);
+            shell.track_async_job(job)?;
             Ok(0)
         }
         JobLaunchOutcome::Process(state) => {
@@ -68,7 +68,7 @@ pub(super) async fn spawn_async_list_job(
             // launch from the parent's point of view; reconcile through
             // the job table like any completed background job.
             debug!("async list '{source}' finished during launch: {state:?}");
-            shell.wait_jobs.push(job);
+            shell.track_async_job(job)?;
             Ok(0)
         }
         JobLaunchOutcome::CommandFailed(failure) => {
@@ -122,7 +122,7 @@ pub(super) async fn spawn_whole_plan_background(
     }
     match outcome {
         JobLaunchOutcome::Process(_) => {
-            shell.wait_jobs.push(job);
+            shell.track_async_job(job)?;
             Ok(0)
         }
         JobLaunchOutcome::CommandFailed(failure) => {

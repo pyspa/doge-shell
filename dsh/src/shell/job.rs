@@ -1,4 +1,5 @@
 use crate::process::Job;
+use crate::process::job_wait::{check_background_all_output, drain_completed_output};
 use crate::shell::Shell;
 use anyhow::Result;
 use nix::sys::signal::Signal;
@@ -136,33 +137,18 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
 
     // Indices of jobs that are completed and need to be removed (now we will collect completed jobs)
 
-    // 1. First pass (Async): Update states for all jobs
+    // 1. First pass (Async): Update states for all jobs.
+    // No output drain here: completed jobs drain exactly once inside
+    // the canonical finalizer below, and active background jobs drain
+    // in pass 3. Draining in both places doubled the per-monitor poll
+    // budget and stalled reconciliation on descendant-held pipes.
     for (i, job) in shell.wait_jobs.iter_mut().enumerate() {
         debug!(
             "CHECK_JOB_STATE_CHECKING: Checking job {} (index: {}, pid: {:?}, state: {:?}, foreground: {})",
             job.job_id, i, job.pid, job.state, job.foreground
         );
 
-        let is_completed_now = job.update_status();
-
-        if !job.foreground {
-            debug!(
-                "CHECK_JOB_STATE_BACKGROUND: Checking background output for job {}",
-                job.job_id
-            );
-            // Check background output asynchronously
-            if let Err(e) = job.check_background_all_output().await {
-                error!(
-                    "CHECK_JOB_STATE_BG_ERROR: Failed to check background output for job {}: {}",
-                    job.job_id, e
-                );
-            }
-        }
-
-        if !is_completed_now {
-            // Re-evaluate status after checking output
-            job.update_status();
-        }
+        job.update_status();
     }
 
     // 2. Partition jobs into completed and active
@@ -174,7 +160,42 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
         .partition(|job: &Job| job.is_process_tree_completed());
 
     shell.wait_jobs = active;
-    let completed_jobs = completed;
+
+    // 3. Canonical finalization: every completed job polls its monitors
+    // once (never EOF-blocking: a descendant may hold the pipe) and
+    // archives its status in the known-async ledger before the heavy
+    // `Job` is handed out (and dropped). No direct `remove()`.
+    let mut completed_jobs = Vec::with_capacity(completed.len());
+    for job in completed {
+        completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::Available).await?);
+    }
+
+    // 4. Active background jobs keep streaming their available output.
+    for job in shell.wait_jobs.iter_mut() {
+        if !job.foreground
+            && let Err(e) = job.check_background_all_output().await
+        {
+            error!(
+                "CHECK_JOB_STATE_BG_ERROR: Failed to check background output for job {}: {}",
+                job.job_id, e
+            );
+        }
+    }
+
+    // 5. Re-poll: a straggler may have completed during the output poll
+    // above (previously this fell out of the drain-then-reevaluate
+    // interleaving). Newly completed jobs finalize through the same
+    // canonical path with `Skip`: their monitors were polled in pass 4
+    // milliseconds ago, so a fresh poll would only double the budget.
+    let active_jobs = std::mem::take(&mut shell.wait_jobs);
+    for mut job in active_jobs {
+        job.update_status();
+        if job.is_process_tree_completed() {
+            completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::Skip).await?);
+        } else {
+            shell.wait_jobs.push(job);
+        }
+    }
 
     // Logging for completed jobs
     for job in &completed_jobs {
@@ -200,6 +221,110 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     }
 
     Ok(completed_jobs)
+}
+
+/// Canonical final status of a completed job: the tail stage's
+/// [`ProcessState::shell_exit_code`](crate::process::ProcessState::shell_exit_code).
+///
+/// Borrow-traverses the canonical tree (no clones) so normal exits,
+/// `128+N` signals, pipeline tails, `NoCommand` stages, and builtin or
+/// async-list helpers all report through one source of truth. Returns
+/// `None` for a missing tree or a tail that has not completed.
+///
+/// A free function (not a `Job` method) so the 800-line `process/job.rs`
+/// budget stays intact; the canonical consumer is the finalizer below.
+pub(crate) fn final_exit_status(job: &Job) -> Option<i32> {
+    let mut process = job.process.as_deref()?;
+    while let Some(next) = process.next_process() {
+        process = next;
+    }
+    process.get_state().shell_exit_code()
+}
+
+/// How a completed job's output monitors are drained during finalization.
+///
+/// Reconciliation (`check_job_state`, hence `jobs`, notices, the
+/// background tick) polls and must never block: a descendant may hold the
+/// pipe open long after every job stage completed, and waiting for EOF
+/// there would stall the prompt. Ownership waits (`wait PID`, `fg`)
+/// already block by contract, so they drain to EOF and return only once
+/// the job's output is complete.
+pub(crate) enum FinalizeDrain {
+    /// Block until every monitor reaches EOF. Ownership waits only.
+    ToEof,
+    /// Poll once (`drain_available`), never block. Reconciliation only.
+    ///
+    /// Sound because a fully-completed tree has closed every write end it
+    /// owns: everything still in the pipe buffer is consumed, and only a
+    /// descendant-held pipe can withhold the rest (which no poll-style
+    /// check may wait for).
+    Available,
+    /// Drain nothing: the caller polled these exact monitors earlier in
+    /// the same round. Second-pass use only (`check_job_state` re-poll
+    /// after the active-output pass); a fresh `Available` poll there would
+    /// double the per-monitor budget and stall on descendant-held pipes.
+    /// Sound for the same reason as `Available`, shifted by milliseconds.
+    /// Residual known limitation: bytes written between the pass-4 poll
+    /// and pass-5 completion observation can be dropped on finalize
+    /// (sub-millisecond writer-exit interleave, pre-existing in baseline
+    /// single-drain behavior).
+    Skip,
+}
+
+/// Canonical completed-job finalizer: the only path that may drop a
+/// completed `Job`.
+///
+/// Refreshes the lifecycle summary, requires a fully-completed canonical
+/// tree (anything else bails loudly instead of dropping live ownership),
+/// resolves the final status from the pipeline tail, drains every output
+/// monitor according to `drain`, and archives the status in the
+/// known-async ledger for later `wait PID` consumption. A drain error is
+/// logged but never loses the status or the ownership: the ledger archive
+/// still happens.
+///
+/// Reconciliation (`check_job_state`, `jobs`, notices, `fg`/`bg`, `wait`)
+/// archives here but never consumes: only `wait PID` consumes the ledger.
+pub(crate) async fn finalize_completed_job(
+    shell: &mut Shell,
+    mut job: Job,
+    drain: FinalizeDrain,
+) -> Result<Job> {
+    job.refresh_lifecycle_state();
+    if !job.is_process_tree_completed() {
+        anyhow::bail!(
+            "cannot finalize active job {} ('{}', state: {:?})",
+            job.job_id,
+            job.cmd,
+            job.state,
+        );
+    }
+    let status = final_exit_status(&job);
+    let drain_result = match drain {
+        FinalizeDrain::ToEof => drain_completed_output(&mut job).await,
+        FinalizeDrain::Available => check_background_all_output(&mut job).await,
+        FinalizeDrain::Skip => Ok(()),
+    };
+    if let Err(err) = drain_result {
+        // The tree already completed: losing the retained status over a
+        // monitor read error would be worse than losing the tail output.
+        warn!(
+            "finalize: output drain for completed job {} failed: {err:#}",
+            job.job_id,
+        );
+    }
+    if let Some(exit_status) = status {
+        let pid = match job.pid {
+            Some(pid) => Some(pid),
+            None => shell
+                .known_async
+                .entry_by_job_id(job.job_id)
+                .map(|entry| entry.pid),
+        };
+        if let Some(pid) = pid {
+            shell.known_async.mark_completed(pid, exit_status);
+        }
+    }
+    Ok(job)
 }
 
 /// Command-mode exit boundary: wait out background jobs so their output

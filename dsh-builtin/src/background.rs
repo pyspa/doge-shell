@@ -92,6 +92,7 @@ mod tests {
             "jobs",
             "fg",
             "bg",
+            "wait",
             "history",
             "reload",
             "include",

@@ -106,6 +106,7 @@ pub mod tm;
 mod trigger;
 mod uuid;
 mod var;
+mod wait;
 mod z;
 
 /// Shell-owned operations that cannot be implemented inside `dsh-builtin`.
@@ -202,7 +203,9 @@ impl CoreShellAction {
 /// reason: `output_gen.rs` needs `ask_ai_json_async` reachable through a
 /// plain `&mut dyn ShellProxy`.
 pub trait ShellProxy:
-    shell_capabilities::AgentCommandPolicy + shell_capabilities::AiJsonRequest
+    shell_capabilities::AgentCommandPolicy
+    + shell_capabilities::AiJsonRequest
+    + shell_capabilities::JobControlCapability
 {
     /// Initiates shell exit process
     fn exit_shell(&mut self);

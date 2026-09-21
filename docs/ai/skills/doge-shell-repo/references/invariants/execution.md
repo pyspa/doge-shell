@@ -37,6 +37,22 @@
 - NoCommand の redirection は通常の parent pipeline wiring（`Job::launch_process` → `JobProcess::launch`）で exactly once 適用する。helper request に redirection を含めないし、helper 側で再適用しない。helper が受け取るのは確定済み stdio のみ。
 - helper へ送るのは assignments + `last_command_substitution_status` のみ。command substitution は materialization 時に実行・authorize 済みで、helper で再実行・再 parse（`dogesh -c "<source>"`）しない。status 伝搬: substitution なし → 0、あり → 最後の substitution status。
 
+## Background job completion / `$!` / `wait`
+
+- 非同期 AND-OR list は parent shell において associated PID を1つだけ持つ。doge-shell では managed AsyncList helper PID。nested internal command PID を外へ露出させない（helper が subshell environment そのもの・process-group leader・AND-OR 全体の status を持つ・parent が canonical に所有する waitable child）。
+- `$!` は最後に登録された associated PID を展開する（`Environment.last_async_pid`）。PID の wait status を consume しても `$!` 自体は消さない（2回目の `wait $!` は値自体は展開できるが ledger から消えているため127）。
+- wait ownership は `Shell.known_async`（`KnownAsyncLedger`）が持つ。`Environment` に ledger を入れない（parameter expansion と lifecycle ownership の分離）。subshell snapshot は `last_async_pid` の値だけ引き継ぎ、ledger は引き継がない。
+- Active job は `wait_jobs` に住む。重い `Job` オブジェクトの削除は、monitor を EOF まで drain（running は `drain_available`、completed は `drain_to_eof`）し、known async job なら final status を ledger に archive してから。completed `Job` の直接 `remove()` は禁止。全経路（`check_job_state`・`jobs`・notices・`fg`・`bg`・`wait`）は canonical finalizer を通す。
+- drain error で status を失わない。exit status 確定と ledger archive を先に保証し、monitor error は diagnostic に留める。
+- final status は canonical tail process の `ProcessState::shell_exit_code()` から取る（`job.state` の blind read 禁止）。signal 死は128+N。
+- `ECHILD` は completion を捏造しない。canonical tree が `Completed` でなければ status を invent しない。`wait(-1)`/`waitpid(-1)` 禁止。ledger→Job→canonical PID set 経由でのみ待つ。
+- `wait` semantics: 引数なし→全 known を待って0（個別 failure を反映しない）・全 consume。`wait PID` は active→take/termination-wait/finalize/consume、completed→即返却+consume、unknown→127（ alien PID を `waitpid` しない）。複数 operand は順に処理し最後の status。repeat は127。`-n/-p/-f` は usage error（exit 1）。`%spec`/非数値は 127 として扱い次の operand へ進む（code behavior）。
+- wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
+- ledger は bounded（`CHILD_MAX` 相当、fallback 4096）。prune は oldest Completed から。Active は捨てない。PID reuse は new register が勝つ。completed retention は metadata/status のみで process resource を所有しない。
+- `jobs`・completion notice・`fg`/`bg` は archive するが consume しない。consume するのは `wait` だけ。
+- command-mode exit drain（`drain_background_jobs_for_exit`）は user command ではない。ledger status を consume せず `$?` を書き換えない。今回 policy 変更なし。
+- テストは `dsh/tests/wait_semantics.rs`。sandbox の SafetyGuard が nested shell（`sh`/`bash`）を deny するため、exact status には `false`(1)/`true`(0)/self-`kill`(143)/unknown-command(127) を使う。`sh -c 'exit N'` 前提にしない。
+
 ## 1件の execution / process bug を直すときの5点
 
 1. Minimal reproducer 2. Opposite case 3. Adjacent execution context（`FOO=bar` builtin を直すなら external env prefix・assignment-only・pipeline・`&&`/`||`・`$?` まで見る） 4. Resource / lifecycle invariant 5. Regression sibling。

@@ -92,7 +92,11 @@ pub fn execute_bg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
                 ))
             };
 
-            let result = finalize_background_resume(shell, job, resume_result);
+            let result = super::block_on_job_control_future(finalize_background_resume(
+                shell,
+                job,
+                resume_result,
+            ))?;
             match result {
                 Ok(()) => {
                     debug!(
@@ -176,12 +180,14 @@ mod tests {
         job
     }
 
-    #[test]
-    fn bg_success_requeues_resumed_producer_after_consumer_completed() {
+    #[tokio::test]
+    async fn bg_success_requeues_resumed_producer_after_consumer_completed() {
         let mut shell = Shell::new(Environment::new());
         let job = stopped_producer_completed_consumer_job(18);
 
-        finalize_background_resume(&mut shell, job, Ok(())).expect("finalize");
+        finalize_background_resume(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
 
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -250,15 +256,17 @@ mod tests {
         job
     }
 
-    #[test]
-    fn foreground_finalizer_requeues_running_producer_after_consumer_completion() {
+    #[tokio::test]
+    async fn foreground_finalizer_requeues_running_producer_after_consumer_completion() {
         let mut shell = Shell::new(Environment::new());
         let job = pipeline_job(
             20,
             &[ProcessState::Running, ProcessState::Completed(0, None)],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+        finalize_foreground_job(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
 
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -266,8 +274,8 @@ mod tests {
         assert_eq!(requeued.state, ProcessState::Running);
     }
 
-    #[test]
-    fn foreground_finalizer_requeues_stopped_producer_after_consumer_completion() {
+    #[tokio::test]
+    async fn foreground_finalizer_requeues_stopped_producer_after_consumer_completion() {
         let mut shell = Shell::new(Environment::new());
         let stopped_pid = Pid::from_raw(425200);
         let job = pipeline_job(
@@ -278,7 +286,9 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+        finalize_foreground_job(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
 
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -290,8 +300,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn foreground_finalizer_drops_all_completed_pipeline() {
+    #[tokio::test]
+    async fn foreground_finalizer_drops_all_completed_pipeline() {
         let mut shell = Shell::new(Environment::new());
         let job = pipeline_job(
             22,
@@ -301,7 +311,9 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+        finalize_foreground_job(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
 
         assert!(
             shell.wait_jobs.is_empty(),

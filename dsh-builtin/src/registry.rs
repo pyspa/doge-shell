@@ -22,7 +22,7 @@ use crate::{
     comp_gen, cron, dashboard, dirstack, dmv, doctor, eproject, eview, exit, exit_description,
     export, fg, ga, gco, gh_notify, glog, gpr, gwt, help, history, include, jobs, lisp, magit, mcp,
     notebook_play, out, output_gen, procs, project, read, reload, removed_sched, safe_run, serve,
-    set, skill, snippet, task, tm, trigger, uuid, var, z,
+    set, skill, snippet, task, tm, trigger, uuid, var, wait, z,
 };
 
 pub type BuiltinFuture<'a> = Pin<Box<dyn Future<Output = ExitStatus> + 'a>>;
@@ -189,6 +189,10 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
         (
             "bg",
             new(bg::command, bg::description(), ParentSessionRequired),
+        ),
+        (
+            "wait",
+            new(wait::command, wait::description(), ParentSessionRequired),
         ),
         // Include command
         (

@@ -54,7 +54,27 @@ enum KnownWaitResult {
     NoKnownPids,
 }
 
-/// Poll delay bounds for the `WNOHANG` wait loops.
+/// Which termination semantics a wait loop enforces.
+///
+/// `fg` resumes a job into the terminal session: a `SIGINT` belongs to
+/// the job and a fully-stopped tree ends the wait back at the prompt.
+/// `wait PID` only wants termination: stops are not completions, and a
+/// `SIGINT` interrupts the builtin instead of reaching the background job.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobWaitPolicy {
+    Foreground,
+    TerminationOnly,
+}
+
+/// How a [`wait_loop`] finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobWaitOutcome {
+    Completed,
+    Stopped,
+    /// `SIGINT` arrived during a [`JobWaitPolicy::TerminationOnly`] wait.
+    /// The job stays active; the caller requeues it and reports 130.
+    Interrupted,
+}
 ///
 /// The first `waitpid` of a loop runs immediately after `fork`, so it practically
 /// always reports `StillAlive`. With a single fixed delay every command — even one
@@ -197,17 +217,44 @@ pub async fn wait_job(job: &mut Job, no_hang: bool) -> Result<()> {
 }
 
 pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
-    debug!("wait_process_no_hang started for job: {}", job.id);
+    let _ = wait_loop(job, JobWaitPolicy::Foreground).await?;
+    Ok(())
+}
+
+/// Wait until a background job's canonical tree terminates, for `wait PID`.
+///
+/// Unlike [`wait_process_no_hang`], a fully-stopped tree is never a result:
+/// the loop keeps polling until termination (or interruption). Stops are
+/// not archived as exit statuses.
+pub async fn wait_for_termination(job: &mut Job) -> Result<JobWaitOutcome> {
+    wait_loop(job, JobWaitPolicy::TerminationOnly).await
+}
+
+async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcome> {
+    debug!("wait_loop started for job: {} ({policy:?})", job.id);
     let mut backoff = WaitBackoff::new();
-    loop {
-        if crate::process::signal::check_and_clear_sigint() {
-            debug!("wait_process_no_hang: Detected SIGINT in parent shell, forwarding to job");
-            if let Some(pgid) = job.pgid {
-                debug!("Forwarding SIGINT to pgid: {}", pgid);
-                let _ = killpg(pgid, Signal::SIGINT);
-            } else if let Some(pid) = job.pid {
-                debug!("Forwarding SIGINT to pid: {}", pid);
-                let _ = nix::sys::signal::kill(pid, Signal::SIGINT);
+    let outcome = loop {
+        match policy {
+            JobWaitPolicy::Foreground => {
+                if crate::process::signal::check_and_clear_sigint() {
+                    debug!("wait_loop: Detected SIGINT in parent shell, forwarding to job");
+                    if let Some(pgid) = job.pgid {
+                        debug!("Forwarding SIGINT to pgid: {}", pgid);
+                        let _ = killpg(pgid, Signal::SIGINT);
+                    } else if let Some(pid) = job.pid {
+                        debug!("Forwarding SIGINT to pid: {}", pid);
+                        let _ = nix::sys::signal::kill(pid, Signal::SIGINT);
+                    }
+                }
+            }
+            // A `wait PID` SIGINT interrupts the builtin instead of
+            // reaching the background job: no forwarding here. The job
+            // stays active and the caller requeues it.
+            JobWaitPolicy::TerminationOnly => {
+                if crate::process::signal::check_and_clear_sigint() {
+                    debug!("wait_loop: SIGINT during termination wait, interrupting");
+                    break JobWaitOutcome::Interrupted;
+                }
             }
         }
 
@@ -235,13 +282,30 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
                 // (non-blocking) output first, then consult the tree.
                 check_background_all_output(job).await?;
                 if job.is_process_tree_completed() {
-                    drain_foreground_completed_output(job).await?;
-                    break;
+                    drain_completed_output(job).await?;
+                    break JobWaitOutcome::Completed;
                 }
                 if job.is_fully_stopped() {
-                    job.refresh_lifecycle_state();
-                    print_stopped_notice(job);
-                    break;
+                    match policy {
+                        JobWaitPolicy::Foreground => {
+                            job.refresh_lifecycle_state();
+                            print_stopped_notice(job);
+                            break JobWaitOutcome::Stopped;
+                        }
+                        // A stopped tree with no waitable child left is an
+                        // infrastructure error, never a wait result: stops
+                        // are not archived as exit statuses.
+                        JobWaitPolicy::TerminationOnly => {
+                            anyhow::bail!(
+                                "no waitable child remains ({:?}) for stopped job {} ('{}', state: {:?}, known pids: {:?})",
+                                no_waitable,
+                                job.job_id,
+                                job.cmd,
+                                job.state,
+                                wait_pids_for_error,
+                            );
+                        }
+                    }
                 }
                 anyhow::bail!(
                     "no waitable child remains ({:?}) for active job {} ('{}', state: {:?}, known pids: {:?})",
@@ -258,7 +322,11 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
             }
             status => {
                 error!("unexpected waitpid event: {:?}", status);
-                break;
+                anyhow::bail!(
+                    "unexpected waitpid event for job {}: {:?}",
+                    job.job_id,
+                    status
+                );
             }
         };
 
@@ -273,23 +341,32 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
         // completes the job and never kills siblings (not even
         // `Stopped / Completed(0)`).
         if job.is_process_tree_completed() {
-            debug!("Job completed, breaking from wait_process_no_hang loop");
-            drain_foreground_completed_output(job).await?;
-            break;
+            debug!("Job completed, breaking from wait loop");
+            drain_completed_output(job).await?;
+            break JobWaitOutcome::Completed;
         }
 
         // Only a fully-stopped job (every live stage stopped) ends the
         // foreground wait. A single stopped stage in a still-running
         // pipeline must keep polling until its siblings stop as well.
+        // A termination wait never ends on a stop: it keeps polling
+        // until the tree completes or the wait is interrupted.
         if job.is_fully_stopped() {
-            job.refresh_lifecycle_state();
-            print_stopped_notice(job);
-            debug!("Job stopped, breaking from wait_process_no_hang loop");
-            break;
+            match policy {
+                JobWaitPolicy::Foreground => {
+                    job.refresh_lifecycle_state();
+                    print_stopped_notice(job);
+                    debug!("Job stopped, breaking from wait loop");
+                    break JobWaitOutcome::Stopped;
+                }
+                JobWaitPolicy::TerminationOnly => {
+                    job.refresh_lifecycle_state();
+                }
+            }
         }
-    }
-    debug!("wait_process_no_hang completed for job: {}", job.id);
-    Ok(())
+    };
+    debug!("wait_loop completed for job: {} ({outcome:?})", job.id);
+    Ok(outcome)
 }
 
 fn wait_known_pids(pids: &[Pid], flags: WaitPidFlag) -> nix::Result<KnownWaitResult> {
@@ -378,9 +455,9 @@ pub async fn check_background_all_output(job: &mut Job) -> Result<()> {
     Ok(())
 }
 
-pub async fn drain_foreground_completed_output(job: &mut Job) -> Result<()> {
+pub async fn drain_completed_output(job: &mut Job) -> Result<()> {
     debug!(
-        "drain_foreground_completed_output: monitors.len() = {}",
+        "drain_completed_output: monitors.len() = {}",
         job.monitors.len()
     );
     let mut i = 0;

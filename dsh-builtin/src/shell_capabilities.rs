@@ -420,6 +420,17 @@ pub trait AiJsonRequest {
     ) -> ProxyFuture<'a, String>;
 }
 
+/// Job-control wait operations owned by the shell core.
+///
+/// `wait PID` reports the waited child's status itself — not just success
+/// or failure — so it cannot travel through [`crate::CoreShellAction`]
+/// (whose dispatch shape is `Result<()>`). Like `AgentCommandPolicy`, this
+/// is a supertrait bound on [`crate::ShellProxy`], not a new facade
+/// method: no entry is added to the frozen compatibility surface.
+pub trait JobControlCapability {
+    fn wait_for_jobs(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32>;
+}
+
 /// What the shell's safety policy says about a command the agent wants to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCommandVerdict {

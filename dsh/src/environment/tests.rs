@@ -462,3 +462,31 @@ fn user_asset_override_dirs_honors_xdg_config_home() {
         Some(&dir.path().join(APP_NAME).join("completions"))
     );
 }
+
+#[test]
+fn bang_is_empty_before_any_async_launch() {
+    init();
+    let env = Environment::new();
+    assert_eq!(env.read().lookup_variable("!"), Some(String::new()));
+}
+
+#[test]
+fn bang_reports_last_async_pid() {
+    init();
+    let env = Environment::new();
+    env.write().last_async_pid = Some(1234);
+    assert_eq!(env.read().lookup_variable("!"), Some("1234".to_string()));
+}
+
+#[test]
+fn user_variable_cannot_shadow_bang() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .variable_state
+        .variables
+        .insert("!".to_string(), "shadowed".to_string());
+    env.write().last_async_pid = Some(4242);
+    // Special parameters resolve before user variables, like `?` and `$`.
+    assert_eq!(env.read().lookup_variable("!"), Some("4242".to_string()));
+}

@@ -3,6 +3,7 @@ pub mod dry_materialize;
 pub mod eval;
 pub mod hooks;
 pub mod job;
+pub mod job_ledger;
 pub mod materialize;
 pub mod no_command;
 pub mod parse;
@@ -45,6 +46,10 @@ pub struct Shell {
     pub cmd_history: Option<Arc<ParkingMutex<crate::history::History>>>,
     pub path_history: Option<Arc<ParkingMutex<FrecencyHistory>>>,
     pub(crate) wait_jobs: Vec<Job>,
+    /// Wait ownership for async launches: `Active` while the job runs,
+    /// retained `Completed(status)` after finalization until `wait`
+    /// consumes it. Never snapshotted into helpers — per-`Shell` only.
+    pub(crate) known_async: job_ledger::KnownAsyncLedger,
     pub lisp_engine: Rc<RefCell<lisp::LispEngine>>,
     pub(crate) next_job_id: usize,
     pub notebook_session: Option<NotebookSession>,
@@ -111,6 +116,7 @@ impl Shell {
             cmd_history: None,
             path_history: None,
             wait_jobs: Vec::new(),
+            known_async: job_ledger::KnownAsyncLedger::default(),
             lisp_engine,
             next_job_id: 1,
             notebook_session: None,
@@ -264,6 +270,22 @@ impl Shell {
         } else {
             1
         }
+    }
+
+    /// Register a successfully launched async job in one place.
+    ///
+    /// Records the associated PID in the [`KnownAsyncLedger`](job_ledger)
+    /// as `Active`, publishes it as `$!`, and owns the `Job` in
+    /// `wait_jobs`. Call only after the spawn succeeded: a spawn-level
+    /// failure must leave `$!` and the ledger untouched.
+    pub(crate) fn track_async_job(&mut self, job: Job) -> Result<Pid> {
+        let pid = job
+            .pid
+            .ok_or_else(|| anyhow::anyhow!("async job '{}' has no associated PID", job.cmd))?;
+        self.known_async.register(pid, job.job_id);
+        self.environment.write().last_async_pid = Some(pid.as_raw());
+        self.wait_jobs.push(job);
+        Ok(pid)
     }
 
     pub async fn check_job_state(&mut self) -> Result<Vec<Job>> {

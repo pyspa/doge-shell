@@ -146,6 +146,13 @@ pub struct Environment {
     /// `EnvironmentSnapshot` rolls back *configuration* only — restoring a
     /// stale exit status after a failed config reload would be wrong.
     pub(crate) last_exit_status: i32,
+    /// PID of the most recently launched asynchronous job, for `$!`.
+    ///
+    /// Parameter-expansion state only: like `last_exit_status`, it lives
+    /// outside `variable_state` so user variables can never shadow the `!`
+    /// special parameter. Wait ownership itself lives in
+    /// `Shell::known_async`, never here.
+    pub(crate) last_async_pid: Option<i32>,
     pub(crate) variable_state: VariableState,
     pub(crate) policy_state: PolicyState,
     pub(crate) integration_state: IntegrationState,
@@ -206,6 +213,7 @@ impl Environment {
 
         let env_arc = Arc::new(RwLock::new(Environment {
             last_exit_status: 0,
+            last_async_pid: None,
             variable_state: VariableState {
                 alias: HashMap::new(),
                 abbreviations: HashMap::new(),
@@ -328,6 +336,7 @@ impl Environment {
 
         Arc::new(RwLock::new(Environment {
             last_exit_status: 0,
+            last_async_pid: None,
             variable_state,
             policy_state,
             integration_state,

@@ -58,8 +58,6 @@ pub struct BuiltinProcess {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
-    pub(crate) cap_stdout: Option<RawFd>,
-    pub(crate) cap_stderr: Option<RawFd>,
     /// Redirections written on *this* command, in order. Per process,
     /// not per job: in `a 2>&1 | b` the duplication belongs to `a`.
     pub(crate) redirects: Vec<Redirect>,
@@ -109,8 +107,6 @@ impl BuiltinProcess {
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
-            cap_stdout: None,
-            cap_stderr: None,
             redirects: Vec::new(),
             env_overrides: Vec::new(),
         }

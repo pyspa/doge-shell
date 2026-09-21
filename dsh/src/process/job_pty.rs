@@ -450,29 +450,25 @@ pub async fn capture_output_and_history(
             Err(e) => return Err(e.into()),
         }
     } else {
-        // History captures the pipeline tail's output, not the head's: the
-        // head of `a | b` holds no capture fd while the tail does. Checking
-        // only the head left every pipeline out of history (and starved Smart
-        // Pipe after a pipeline).
-        let tail_cap = {
-            let mut current = job.process.as_deref();
-            let mut tail = None;
-            while let Some(node) = current {
-                tail = Some(node);
-                current = node.next_process();
-            }
-            tail.map(|t| t.get_cap_out())
-        };
-        let mut monitors_iter = job.monitors.iter();
-        if let Some((Some(_), _)) = tail_cap
-            && let Some(m) = monitors_iter.next()
+        // History captures the pipeline tail's output, not the head's: only
+        // the tail ever owns capture monitors (a head stage feeds the pipe,
+        // never a capture pipe), so the first monitor per stream is the
+        // tail's. Selecting by stream keeps this true without raw-fd
+        // bookkeeping on the process tree.
+        use dsh_types::observed_output::ObservedStream;
+        if let Some(monitor) = job
+            .monitors
+            .iter()
+            .find(|monitor| monitor.stream() == ObservedStream::Stdout)
         {
-            stdout_cap = m.captured_output.clone();
+            stdout_cap = monitor.captured_output.clone();
         }
-        if let Some((_, Some(_))) = tail_cap
-            && let Some(m) = monitors_iter.next()
+        if let Some(monitor) = job
+            .monitors
+            .iter()
+            .find(|monitor| monitor.stream() == ObservedStream::Stderr)
         {
-            stderr_cap = m.captured_output.clone();
+            stderr_cap = monitor.captured_output.clone();
         }
     }
 

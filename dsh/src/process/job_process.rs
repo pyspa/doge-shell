@@ -96,18 +96,21 @@ fn strip_argv0<'a>(program: &str, argv: &'a [String]) -> &'a [String] {
 
 /// What one `JobProcess::launch` reports.
 ///
-/// `Launched` carries the child pid, the detached downstream stages, and the
+/// `Launched` carries the child pid, the detached downstream stages, the
 /// redirection guard (the caller owns its files and must not close those
-/// descriptors itself). `CommandFailed` is a redirection setup failure: the
-/// stage never spawned, its temporary pipe/capture wiring is already closed
-/// and unwound, and the evaluator reports it as an ordinary command failure.
-/// Only internal failures (pipe creation, spawn protocol) travel as `Err`.
+/// descriptors itself), and the pre-spawn capture monitors (moved once into
+/// `Job.monitors` by the caller). `CommandFailed` is a redirection setup
+/// failure: the stage never spawned, its temporary pipe/capture wiring is
+/// already closed and unwound, and the evaluator reports it as an ordinary
+/// command failure. Only internal failures (pipe creation, monitor setup,
+/// spawn protocol) travel as `Err`.
 #[derive(Debug)]
 pub(crate) enum ProcessLaunchOutcome {
     Launched {
         pid: Pid,
         next_process: Option<Box<JobProcess>>,
         redirects: AppliedRedirects,
+        monitors: Vec<super::io::OutputMonitor>,
     },
     CommandFailed(CommandFailure),
 }
@@ -416,16 +419,6 @@ impl JobProcess {
             current = process.next_process();
         }
         None
-    }
-
-    pub fn get_cap_out(&self) -> (Option<RawFd>, Option<RawFd>) {
-        match self {
-            JobProcess::Builtin(p) => (p.cap_stdout, p.cap_stderr),
-            JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
-            JobProcess::SyntheticSource(_) => (None, None),
-            JobProcess::NoCommand(_) => (None, None),
-            JobProcess::AsyncList(p) => (p.cap_stdout, p.cap_stderr),
-        }
     }
 
     pub fn get_cmd(&self) -> &str {

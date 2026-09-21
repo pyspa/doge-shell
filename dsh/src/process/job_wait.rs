@@ -431,11 +431,15 @@ fn collect_process_wait_pids(process: &JobProcess, current_pid: Pid, pids: &mut 
     }
 }
 
-pub async fn check_background_output(job: &mut Job) -> Result<()> {
-    let mut i = 0;
-    while i < job.monitors.len() {
-        let _ = job.monitors[i].output().await?;
-        i += 1;
+/// Completed-job reconciliation drain: every monitor retires through
+/// [`OutputMonitor::finalize_ready_now`](crate::process::io::OutputMonitor::finalize_ready_now).
+///
+/// Sync because retirement never waits: whatever the kernel already holds
+/// (plus the monitors' pending fragments) is recovered, and a
+/// descendant-held pipe only yields `WouldBlock`, never a stall.
+pub fn finalize_ready_output(job: &mut Job) -> Result<()> {
+    for monitor in &mut job.monitors {
+        monitor.finalize_ready_now()?;
     }
     Ok(())
 }

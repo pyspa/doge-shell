@@ -239,7 +239,7 @@ pub(crate) async fn finalize_foreground_job(
 /// Reconcile a background resume without orphaning an active job on error.
 ///
 /// Async because an already-completed tree leaves through the canonical
-/// finalizer (non-blocking `Available` drain: `bg` must return to the
+/// finalizer (non-blocking `ReadyNow` retirement: `bg` must return to the
 /// prompt even when a descendant holds the pipe).
 pub(crate) async fn finalize_background_resume(
     shell: &mut Shell,
@@ -266,7 +266,7 @@ pub(crate) async fn finalize_background_resume(
         crate::shell::job::finalize_completed_job(
             shell,
             job,
-            crate::shell::job::FinalizeDrain::Available,
+            crate::shell::job::FinalizeDrain::ReadyNow,
         )
         .await?;
     }

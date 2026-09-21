@@ -523,8 +523,6 @@ pub async fn eval_str(
                     if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
                         debug!("Error executing post-exec hooks: {}", e);
                     }
-                    ctx.pid = None;
-                    ctx.pgid = None;
                     // Restore raw mode only in interactive mode
                     if ctx.interactive {
                         enable_raw_mode().ok();
@@ -534,8 +532,6 @@ pub async fn eval_str(
                     continue;
                 }
                 Err(err) => {
-                    ctx.pid = None;
-                    ctx.pgid = None;
                     // Restore raw mode only in interactive mode
                     if ctx.interactive {
                         enable_raw_mode().ok();
@@ -543,11 +539,7 @@ pub async fn eval_str(
                     return Err(err);
                 }
             }
-            // reset
-            ctx.pid = None;
-            ctx.pgid = None;
-
-            // Re-enable raw mode after each job completes (only in interactive mode)
+            // Restore raw mode only in interactive mode
             if ctx.interactive {
                 enable_raw_mode().ok();
             }

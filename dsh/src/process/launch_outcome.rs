@@ -16,9 +16,19 @@
 //! Scope: only redirection setup failures surface as [`CommandFailure`] for
 //! now. POSIX special-builtin exit rules, `pipefail`, and `PIPESTATUS` are
 //! explicitly out of scope.
+//!
+//! [`JobLaunchContext`] is the other half of the launch boundary: the
+//! caller-owned transient state `Job::launch` snapshots on entry and
+//! restores on every exit path, so one job's routing never leaks into the
+//! next. The durable ownership (`Job::pid`, `Job::pgid`, monitors,
+//! `wait_jobs`) stays on the job itself — `ctx.pgid` is temporary routing
+//! state, `job.pgid` is the last-man-standing ownership record.
 
 use super::redirect::RedirectFailure;
 use super::state::ProcessState;
+use dsh_types::Context;
+use nix::unistd::Pid;
+use std::os::unix::io::RawFd;
 
 /// An expected command-level failure: the command fails with `exit_code`,
 /// `message` is reported on the appropriate stderr, and the shell continues.
@@ -60,4 +70,49 @@ pub enum JobLaunchOutcome {
 pub(crate) enum StageLaunchOutcome {
     Launched,
     CommandFailed(CommandFailure),
+}
+
+/// Snapshot of the caller-owned transient state that `Job::launch`
+/// temporarily mutates. Restored on every exit path so stale state never
+/// leaks to the next job or helper boundary.
+///
+/// Only job-local routing is captured: `captured_out`/`output_observer`
+/// (the capture/helper protocol contract) and the session state
+/// (`interactive`, `save_history`, shell ids, terminal state) stay with
+/// the caller. Restoration returns to the *entry value*, never to a
+/// default — a helper's `Some(helper_pid)` group anchor survives the inner
+/// launch exactly as a top-level `None` does.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct JobLaunchContext {
+    foreground: bool,
+    infile: RawFd,
+    outfile: RawFd,
+    errfile: RawFd,
+    pid: Option<Pid>,
+    pgid: Option<Pid>,
+    process_count: u32,
+}
+
+impl JobLaunchContext {
+    pub(crate) fn capture(ctx: &Context) -> Self {
+        Self {
+            foreground: ctx.foreground,
+            infile: ctx.infile,
+            outfile: ctx.outfile,
+            errfile: ctx.errfile,
+            pid: ctx.pid,
+            pgid: ctx.pgid,
+            process_count: ctx.process_count,
+        }
+    }
+
+    pub(crate) fn restore(self, ctx: &mut Context) {
+        ctx.foreground = self.foreground;
+        ctx.infile = self.infile;
+        ctx.outfile = self.outfile;
+        ctx.errfile = self.errfile;
+        ctx.pid = self.pid;
+        ctx.pgid = self.pgid;
+        ctx.process_count = self.process_count;
+    }
 }

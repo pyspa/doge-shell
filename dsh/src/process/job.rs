@@ -7,7 +7,9 @@ use tracing::{debug, error};
 
 use super::io::OutputMonitor;
 use super::job_process::{JobProcess, ProcessLaunchOutcome};
-use super::launch_outcome::{CommandFailure, JobLaunchOutcome, StageLaunchOutcome};
+use super::launch_outcome::{
+    CommandFailure, JobLaunchContext, JobLaunchOutcome, StageLaunchOutcome,
+};
 use super::process::Process;
 use super::redirect::{self, Redirect};
 use super::state::{ListOp, ProcessState, SubshellType};
@@ -229,6 +231,7 @@ impl Job {
         self.stdout = ctx.outfile;
         self.stderr = ctx.errfile;
 
+        let caller_ctx = JobLaunchContext::capture(ctx);
         let result = self.launch_inner(ctx, shell).await;
 
         // Every stage is spawned by now, so each consumer holds its own
@@ -249,13 +252,15 @@ impl Job {
             drop(resources);
         }
 
-        // Launching rewires `ctx` (pipes, capture, redirections) and nothing put
-        // it back. Script mode reuses one `ctx` for every line, so the next line
-        // inherited a descriptor this job had already closed and `2>&1` failed
-        // with `failed to duplicate file descriptor`.
-        ctx.infile = self.stdin;
-        ctx.outfile = self.stdout;
-        ctx.errfile = self.stderr;
+        // Launching rewires `ctx` (pipes, capture, redirections, pgid routing,
+        // foreground flag, process bookkeeping). Script mode reuses one `ctx`
+        // for every line, so without this the next line would inherit a
+        // descriptor this job already closed (`2>&1` failed with `failed to
+        // duplicate file descriptor`) or the previous job's process group.
+        // Every job-local slot returns to the caller's entry value here; the
+        // durable ownership (`job.pid`, `job.pgid`, monitors, `wait_jobs`)
+        // stays on the job itself.
+        caller_ctx.restore(ctx);
 
         result
     }
@@ -270,6 +275,9 @@ impl Job {
             self.job_id, self.cmd, self.foreground, self.pid
         );
 
+        // Job-local transient state: `Job::launch` snapshots the caller's
+        // value and restores it after `launch_inner` returns, so this
+        // assignment never leaks to the next job or list boundary.
         ctx.foreground = self.foreground;
 
         // 1. Setup PTY if needed
@@ -436,6 +444,9 @@ impl Job {
         if ctx.interactive {
             if self.pgid.is_none() {
                 self.pgid = Some(pid);
+                // Temporary routing state for nested spawn grouping inside
+                // this launch. `Job::launch` restores `ctx.pgid` to the
+                // caller's entry value on every exit path.
                 ctx.pgid = Some(pid);
                 debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
             }

@@ -621,6 +621,9 @@ impl JobProcess {
                     }
                 }
                 JobProcess::Command(process) => {
+                    // Bookkeeping for the current launch scope.
+                    // `Job::launch` restores `ctx.process_count` to the
+                    // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
                     fork_process(ctx, ctx.pgid, process, shell, pty)?

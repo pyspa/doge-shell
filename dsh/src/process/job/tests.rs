@@ -157,3 +157,92 @@ fn test_normal_pipeline_completion() {
     // Job should be completed normally
     assert!(is_job_completed(&job));
 }
+
+#[tokio::test]
+async fn launch_restores_caller_context() -> Result<()> {
+    use crate::environment::Environment;
+    use crate::shell::Shell;
+    use anyhow::Context as _;
+    use std::os::fd::AsRawFd as _;
+
+    let env = Environment::new();
+    let mut shell = Shell::new(env);
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    // Non-default entry values: restoration must return to these, not to
+    // defaults. stdio uses real (but inert) descriptors so the launch below
+    // runs the success path instead of failing on bad fds.
+    let stdin_file = std::fs::File::open("/dev/null").context("open /dev/null")?;
+    let stdout_file = std::fs::File::open("/dev/null").context("open /dev/null")?;
+    let stderr_file = std::fs::File::open("/dev/null").context("open /dev/null")?;
+    ctx.foreground = false;
+    ctx.pgid = Some(Pid::from_raw(1234));
+    ctx.process_count = 7;
+    ctx.infile = stdin_file.as_raw_fd();
+    ctx.outfile = stdout_file.as_raw_fd();
+    ctx.errfile = stderr_file.as_raw_fd();
+    ctx.pid = Some(Pid::from_raw(5678));
+
+    let mut job = Job::new("true".to_string(), shell.pgid);
+    // Bare `true` resolves via `PATH`: Linux and macOS place it
+    // differently, and `check-portability.py` flags absolute literals.
+    job.set_process(JobProcess::Command(Process::new(
+        "true".to_string(),
+        vec!["true".to_string()],
+    )));
+
+    let _ = job.launch(&mut ctx, &mut shell).await;
+
+    assert!(!ctx.foreground, "foreground must be restored");
+    assert_eq!(ctx.pgid, Some(Pid::from_raw(1234)), "pgid must be restored");
+    assert_eq!(ctx.process_count, 7, "process_count must be restored");
+    assert_eq!(
+        ctx.infile,
+        stdin_file.as_raw_fd(),
+        "infile must be restored"
+    );
+    assert_eq!(
+        ctx.outfile,
+        stdout_file.as_raw_fd(),
+        "outfile must be restored"
+    );
+    assert_eq!(
+        ctx.errfile,
+        stderr_file.as_raw_fd(),
+        "errfile must be restored"
+    );
+    assert_eq!(ctx.pid, Some(Pid::from_raw(5678)), "pid must be restored");
+    Ok(())
+}
+
+#[tokio::test]
+async fn launch_restores_context_on_redirect_failure() {
+    use crate::environment::Environment;
+    use crate::process::redirect::Redirect;
+    use crate::shell::Shell;
+
+    let env = Environment::new();
+    let mut shell = Shell::new(env);
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    ctx.pgid = Some(Pid::from_raw(9999));
+    ctx.process_count = 3;
+
+    let mut job = Job::new("cat < /nonexistent_file_for_test".to_string(), shell.pgid);
+    let mut process = Process::new("cat".to_string(), vec!["cat".to_string()]);
+    process.redirects = vec![Redirect::input("/nonexistent_file_for_test".to_string())];
+    job.set_process(JobProcess::Command(process));
+
+    let result = job.launch(&mut ctx, &mut shell).await;
+    assert!(
+        matches!(result, Ok(super::JobLaunchOutcome::CommandFailed(_))),
+        "expected CommandFailed, got {result:?}"
+    );
+    assert_eq!(
+        ctx.pgid,
+        Some(Pid::from_raw(9999)),
+        "pgid must be restored after failure"
+    );
+    assert_eq!(
+        ctx.process_count, 3,
+        "process_count must be restored after failure"
+    );
+}

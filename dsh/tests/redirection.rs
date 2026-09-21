@@ -440,7 +440,8 @@ fn runnable_redirect_failure_reports_exactly_one_diagnostic() {
 
 /// A redirection failure inside an async list fails the helper, not the
 /// parent launch: the parent reports 0 for the successful spawn and
-/// continues, while the helper's diagnostic drains through its own output.
+/// continues, while the helper's diagnostic inherits the caller stderr
+/// directly (non-interactive helpers use no capture monitor).
 #[test]
 fn background_redirect_failure_is_not_a_job() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -457,8 +458,8 @@ fn background_redirect_failure_is_not_a_job() {
         "async launch status must stay 0: {stdout:?} {stderr:?}"
     );
     assert!(
-        stdout.contains("failed to create redirect file"),
-        "missing helper diagnostic: {stdout:?} {stderr:?}"
+        stderr.contains("failed to create redirect file"),
+        "missing helper diagnostic on stderr: {stdout:?} {stderr:?}"
     );
 }
 

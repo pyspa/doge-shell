@@ -409,10 +409,10 @@ pub async fn cleanup_pty_tasks(job: &mut Job) {
 pub async fn manage_execution(job: &mut Job, ctx: &mut Context) -> Result<()> {
     // An asynchronous launch never waits here — not even in
     // non-interactive (`-c`) runs. The next AND-OR list must start without
-    // waiting for background completion; command mode drains finite
-    // background output once at its exit boundary instead (see
-    // `drain_background_jobs_for_exit`). Foreground jobs still wait
-    // synchronously in every mode.
+    // waiting for background completion; command mode releases known-async
+    // ownership once at its normal-exit boundary instead (see
+    // `Shell::detach_known_async_jobs_for_normal_exit`). Foreground jobs
+    // still wait synchronously in every mode.
     if ctx.foreground {
         if ctx.interactive {
             if ctx.process_count > 0 {

@@ -32,7 +32,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           components: clippy
 
@@ -40,8 +41,9 @@ jobs:
         with:
           key: ${{ matrix.os }}
 
-      # .cargo/config.toml points the Linux linker at mold unconditionally, so
-      # without this every link on this leg fails with "cannot find -fuse-ld=mold".
+      # .cargo/config.toml points the Linux linker at mold unconditionally,
+      # so without this every link on this leg fails with
+      # "cannot find -fuse-ld=mold".
       - name: Install mold
         if: runner.os == 'Linux'
         run: |
@@ -59,17 +61,23 @@ jobs:
           node-version: 22
 
       - name: Install pinned agent sandbox
-        run: npm install --global --ignore-scripts @anthropic-ai/sandbox-runtime@0.0.75
+        run: >
+          npm install --global --ignore-scripts
+          @anthropic-ai/sandbox-runtime@0.0.75
 
       - name: Install Linux sandbox dependencies
         if: runner.os == 'Linux'
         # bubblewrap/socat drive the OS sandbox; ripgrep is required by the
         # pinned sandbox runtime (it fails startup with "ripgrep (rg) not
         # found" without it).
-        run: sudo apt-get install --no-install-recommends -y bubblewrap socat ripgrep
+        run: >
+          sudo apt-get install --no-install-recommends -y
+          bubblewrap socat ripgrep
 
       - name: Agent OS sandbox boundary
-        run: cargo test -p dsh-builtin --lib agent::sandbox::tests::real_sandbox -- --ignored
+        run: >
+          cargo test -p dsh-builtin --lib
+          agent::sandbox::tests::real_sandbox -- --ignored
 
       # Fail fast on a runaway suite: a healthy workspace run takes a few
       # minutes, so hitting this 15-minute step timeout means a regression,
@@ -91,14 +99,16 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: contract-${{ matrix.os }}
 
-      # .cargo/config.toml points the Linux linker at mold unconditionally, so
-      # without this every link on this leg fails with "cannot find -fuse-ld=mold".
+      # .cargo/config.toml points the Linux linker at mold unconditionally,
+      # so without this every link on this leg fails with
+      # "cannot find -fuse-ld=mold".
       - name: Install mold
         if: runner.os == 'Linux'
         run: |
@@ -122,7 +132,8 @@ jobs:
         run: >
           cargo test -p doge-shell --test fd_ownership
           --test reexec_subshell --test pipeline_semantics
-          --test background_builtin --test wait_semantics < /dev/null
+          --test background_builtin --test wait_semantics
+          --test async_exit_semantics < /dev/null
 
   stress:
     name: stress (${{ matrix.os }})
@@ -135,7 +146,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -152,7 +164,8 @@ jobs:
       # pinned by commit SHA like every other action in this file
       # (install-action 2.87.16 at pin time).
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # install-action 2.87.16
+        # install-action 2.87.16 at pin time
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
         with:
           tool: nextest@0.9.145
 
@@ -169,7 +182,8 @@ jobs:
           -E 'binary(shell_contract) or binary(resource_contract)
           or binary(fd_ownership) or binary(reexec_subshell)
           or binary(pipeline_semantics) or binary(background_builtin)
-          or binary(wait_semantics) or test(lifecycle_property)'
+          or binary(wait_semantics) or binary(async_exit_semantics)
+          or test(lifecycle_property)'
           < /dev/null
 
   lint:
@@ -179,7 +193,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           components: rustfmt
 
@@ -208,7 +223,8 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.95
 

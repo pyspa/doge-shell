@@ -215,10 +215,14 @@ fn jobs_reconciliation_keeps_background_output() {
 }
 
 #[test]
-fn wait_drains_background_output_before_returning() {
+fn wait_returns_only_after_background_termination() {
+    // `wait`'s contract is termination ordering, not output plumbing:
+    // non-interactive background helpers inherit stdout directly, so the
+    // marker reaches the pipe without any monitor drain. What `wait`
+    // guarantees is that it returns only after the target job terminates.
     let stdout = stdout_of("printf 'WAIT-MARKER\\n' & pid=$!; wait $pid");
     assert!(
         stdout.contains("WAIT-MARKER"),
-        "wait must drain output to EOF: {stdout:?}"
+        "background output must be observable after wait returns: {stdout:?}"
     );
 }

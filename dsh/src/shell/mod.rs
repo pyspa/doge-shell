@@ -3,6 +3,7 @@ pub mod dry_materialize;
 pub mod eval;
 pub mod hooks;
 pub mod job;
+pub mod job_exit;
 pub mod job_ledger;
 pub mod materialize;
 pub mod no_command;
@@ -86,6 +87,13 @@ impl std::fmt::Debug for Shell {
 
 impl Drop for Shell {
     fn drop(&mut self) {
+        // Abnormal-path safety cleanup only — never normal async-exit
+        // semantics. Normal async jobs that may outlive this shell must have
+        // been explicitly detached via
+        // `detach_known_async_jobs_for_normal_exit` before this point;
+        // anything still in `wait_jobs` here keeps shell ownership and is
+        // killed (unexpected error, panic unwind, early return,
+        // infrastructure failure).
         let _ = self.kill_wait_jobs();
         // Producer helpers outlive nothing: group-kill any still-registered
         // group so grandchildren cannot hold session pipes open past exit.
@@ -455,8 +463,12 @@ mod tests {
         async fn run_observed(command: &str) -> dsh_types::observed_output::ObservedOutputSnapshot {
             let environment = crate::environment::Environment::new();
             let mut shell = Shell::new(environment);
-            *shell.environment.read().policy_state.safety_level.write() =
-                crate::safety::SafetyLevel::Loose;
+            // Drop both guards before any await below: holding a
+            // parking_lot guard across an await can stall the executor.
+            {
+                let env = shell.environment.read();
+                *env.policy_state.safety_level.write() = crate::safety::SafetyLevel::Loose;
+            }
             let observer = ObservedOutput::shared(1024);
             let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
             ctx.interactive = false;
@@ -509,7 +521,12 @@ mod tests {
         let environment = crate::environment::Environment::new();
         let mut shell = Shell::new(environment);
         let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
-        ctx.interactive = false;
+        // `force_background` is the interactive REPL shortcut: the helper
+        // takes the managed-capture path, so its output lands in the job
+        // monitors. (Non-interactive helpers inherit the caller fds with
+        // no monitor instead.) Synthetic context only — no real terminal
+        // is touched: capture triggers on the slot still naming fd 1/2.
+        ctx.interactive = true;
 
         let exit_code = shell
             .eval_str(&mut ctx, "FOO=one; FOO=two; echo $FOO".to_string(), true)
@@ -617,14 +634,26 @@ mod tests {
     async fn background_job_check_does_not_wait_for_stdout_holding_descendant() {
         use std::time::Duration;
 
-        let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+        // Process-test serialization: `tokio::sync::Mutex` is an async
+        // mutex, so holding its guard across await is the designed usage
+        // (waiters queue without stalling the executor). The guard must
+        // span the timing-sensitive section below for the bounds to be
+        // meaningful under full-suite load.
+        let _guard: tokio::sync::MutexGuard<'_, ()> = SHELL_PROCESS_TEST_LOCK.lock().await;
 
         let environment = crate::environment::Environment::new();
         let mut shell = Shell::new(environment);
-        *shell.environment.read().policy_state.safety_level.write() =
-            crate::safety::SafetyLevel::Loose;
+        // Drop both guards before any await below: holding a parking_lot
+        // guard across an await can stall the executor.
+        {
+            let env = shell.environment.read();
+            *env.policy_state.safety_level.write() = crate::safety::SafetyLevel::Loose;
+        }
         let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
-        ctx.interactive = false;
+        // Like the `force_background` test above, this exercises the
+        // interactive REPL shortcut path (managed capture): the
+        // descendant-held pipe below only exists with monitors.
+        ctx.interactive = true;
 
         let exit_code = shell
             .eval_str(&mut ctx, "sh -c '(sleep 1) & exit 0'".to_string(), true)
@@ -633,7 +662,22 @@ mod tests {
         assert_eq!(exit_code, 0);
         assert_eq!(shell.wait_jobs.len(), 1);
 
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Readiness is polled, never sleep-assumed: a cold helper binary
+        // (first exec after relink) may take longer than any fixed sleep
+        // to finish spawning, and that startup latency must not flake this
+        // test. `update_status` only observes (no table mutation), so the
+        // timed reconciliation below still exercises the full drain path.
+        let ready = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if shell.wait_jobs[0].update_status() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < ready,
+                "whole-plan helper never completed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         // The check probes each capture monitor once (200ms per monitor,
         // stdout + stderr here) without waiting for the descendant-held
         // pipe to close: ~400ms proves EOF-waiting is gone, while the old

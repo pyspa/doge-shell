@@ -3,9 +3,11 @@
 //! `&` separates whole AND-OR lists, so `a && b &` spawns one helper that
 //! evaluates `a && b` as an ordinary foreground chain in its own shell:
 //! `cd` and assignments persist across the list inside the helper but never
-//! leak into the parent. The helper pid, its process group, and its capture
-//! pipes live in the normal `Job` lifecycle (`wait_jobs`, `OutputMonitor`,
-//! group-kill on shutdown) — never as a detached spawn.
+//! leak into the parent. The helper pid, its process group, and (in
+//! interactive sessions) its capture pipes live in the normal `Job`
+//! lifecycle (`wait_jobs`, `OutputMonitor`, group-kill on shutdown) — never
+//! as a detached spawn. Non-interactive helpers inherit the caller fds
+//! directly so they outlive the parent shell (see [`AsyncOutputMode`]).
 
 use super::io::{OutputMonitor, cloexec_pipe};
 use super::job_process::JobProcess;
@@ -124,6 +126,32 @@ impl AsyncListProcess {
     }
 }
 
+/// How a background helper's stdout/stderr reach their destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AsyncOutputMode {
+    /// Interactive session: capture pipe plus a parent-owned
+    /// `OutputMonitor`, so background output renders without destroying
+    /// the prompt. The job holds parent-side resources and must stay
+    /// shell-owned while the session runs.
+    ManagedCapture,
+    /// Non-interactive execution (`-c`, script, helper): inherit the
+    /// caller's fds directly with no parent-side monitor. The helper keeps
+    /// working after the parent shell exits, which is what makes normal-exit
+    /// detachment sound: there is no parent-owned pipe for the exit to
+    /// close underneath it.
+    Inherit,
+}
+
+impl AsyncOutputMode {
+    fn select(ctx: &Context) -> Self {
+        if ctx.interactive {
+            Self::ManagedCapture
+        } else {
+            Self::Inherit
+        }
+    }
+}
+
 /// Spawn the helper for one async list and wire it into `job`.
 ///
 /// Returns the helper pid. The caller records group ownership and pushes
@@ -157,14 +185,26 @@ pub(crate) fn spawn_async_list(
         _null_stdin = None;
         ctx.infile
     };
-    // Same background-capture contract as external commands: when stdout
-    // (stderr) still names the terminal, route the helper through a pipe
-    // into an `OutputMonitor` instead of interleaving on the terminal.
+    // Output routing depends on the session kind (see `AsyncOutputMode`):
+    // interactive sessions keep the historical capture contract (a slot
+    // that still names the terminal goes through a pipe into an
+    // `OutputMonitor` instead of interleaving on the terminal), while
+    // non-interactive execution inherits the caller fds directly with no
+    // parent-side monitor, so the helper survives the parent shell's exit.
     let mut held_write_ends: Vec<std::os::fd::OwnedFd> = Vec::new();
-    let (helper_stdout, cap_stdout) =
-        capture_or_direct(ctx.outfile, STDOUT_FILENO, &mut held_write_ends)?;
-    let (helper_stderr, cap_stderr) =
-        capture_or_direct(ctx.errfile, STDERR_FILENO, &mut held_write_ends)?;
+    let mode = AsyncOutputMode::select(ctx);
+    let (helper_stdout, cap_stdout) = match mode {
+        AsyncOutputMode::ManagedCapture => {
+            capture_or_direct(ctx.outfile, STDOUT_FILENO, &mut held_write_ends)?
+        }
+        AsyncOutputMode::Inherit => (ctx.outfile, None),
+    };
+    let (helper_stderr, cap_stderr) = match mode {
+        AsyncOutputMode::ManagedCapture => {
+            capture_or_direct(ctx.errfile, STDERR_FILENO, &mut held_write_ends)?
+        }
+        AsyncOutputMode::Inherit => (ctx.errfile, None),
+    };
     process.cap_stdout = cap_stdout;
     process.cap_stderr = cap_stderr;
 
@@ -388,14 +428,18 @@ mod tests {
             .expect("kill on completed state is a no-op");
     }
 
-    /// Spawn a real helper through `spawn_async_list`: fresh process group
-    /// recorded on the job, helper output captured, completion observed via
-    /// `waitpid` (never synthesized).
+    /// Interactive spawn through `spawn_async_list`: fresh process group
+    /// recorded on the job, helper output managed-captured, completion
+    /// observed via `waitpid` (never synthesized).
+    ///
+    /// Synthetic context only (`interactive = true` on inherited fds): no
+    /// real terminal is touched — the capture triggers on the slot still
+    /// naming fd 1/2, never on terminal IO.
     ///
     /// Needs the sibling `dogesh` binary: run a full `cargo test -p
     /// doge-shell` first, like the other re-exec tests.
     #[tokio::test]
-    async fn async_list_spawn_records_fresh_group_and_captures_output() {
+    async fn interactive_async_list_uses_managed_output_capture() {
         use crate::environment::Environment;
         use crate::shell::Shell;
         use std::sync::Arc;
@@ -412,7 +456,7 @@ mod tests {
 
         let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
         ctx.foreground = false;
-        ctx.interactive = false;
+        ctx.interactive = true;
         let mut job =
             crate::process::job::Job::new("echo async-list-marker &".to_string(), shell.pgid);
         let child = match spawn_async_list(&mut process, &mut ctx, &shell, &mut job) {
@@ -423,8 +467,8 @@ mod tests {
         // A top-level list founds a fresh group led by the helper itself.
         assert_eq!(job.pgid, Some(child));
         assert_eq!(job.pid, Some(child));
-        // Background capture for both streams, like external background
-        // commands: no double capture, no direct terminal wiring.
+        // Managed capture for both streams: no double capture, no direct
+        // terminal wiring.
         assert_eq!(job.monitors.len(), 2);
 
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -452,6 +496,90 @@ mod tests {
         assert!(
             captured.contains("async-list-marker"),
             "helper output missing from capture: {captured:?}"
+        );
+    }
+
+    /// Non-interactive spawn through `spawn_async_list`: the helper inherits
+    /// the caller fds directly with no parent-side monitor, so nothing the
+    /// parent drops at exit can close the helper's outputs underneath it.
+    ///
+    /// Needs the sibling `dogesh` binary, like the other re-exec tests.
+    #[tokio::test]
+    async fn noninteractive_async_list_inherits_output_without_monitors() {
+        use crate::environment::Environment;
+        use crate::shell::Shell;
+        use std::os::fd::AsRawFd as _;
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let env = Environment::new();
+        let shell = Shell::new(env.clone());
+        let plan = crate::shell::parse::parse_execution_plan(
+            "echo async-inherit-marker",
+            Arc::clone(&env),
+        )
+        .expect("parse async body");
+        assert_eq!(plan.lists.len(), 1);
+        let list = &plan.lists[0];
+        let mut process = AsyncListProcess::new(list.display_source(), list.isolated_body_plan());
+
+        let dir = tempfile::tempdir().expect("temp dir for inherited helper output");
+        let out_path = dir.path().join("out.txt");
+        let outfile = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&out_path)
+            .expect("create inherited-output file");
+        let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        ctx.foreground = false;
+        ctx.interactive = false;
+        ctx.outfile = outfile.as_raw_fd();
+        ctx.errfile = outfile.as_raw_fd();
+        // `ctx` borrows the file's fds; the owner must outlive the spawn
+        // and the helper's writes (the tempdir lives to the end of the test).
+        let mut job =
+            crate::process::job::Job::new("echo async-inherit-marker &".to_string(), shell.pgid);
+        let child = match spawn_async_list(&mut process, &mut ctx, &shell, &mut job) {
+            Ok(pid) => pid,
+            Err(err) => panic!("dogesh helper binary missing for async spawn test: {err:#}"),
+        };
+        assert_eq!(process.pid, Some(child));
+        assert_eq!(job.pgid, Some(child));
+        assert_eq!(job.pid, Some(child));
+        // No parent-owned capture: the detached-exit safety invariant.
+        assert!(
+            job.monitors.is_empty(),
+            "non-interactive async job must own no OutputMonitor"
+        );
+        assert!(
+            job.resources.is_empty(),
+            "async job must carry no ExecutionResources"
+        );
+        assert!(job.pty.is_none(), "async job must own no PTY");
+        assert_eq!(process.stdout, ctx.outfile);
+        assert_eq!(process.stderr, ctx.errfile);
+        assert_eq!(process.cap_stdout, None);
+        assert_eq!(process.cap_stderr, None);
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = process
+                .update_state()
+                .expect("async update_state always returns the node state");
+            if matches!(state, ProcessState::Completed(0, None)) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "async helper never completed: {state:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let written = std::fs::read_to_string(&out_path).expect("read inherited helper output");
+        assert!(
+            written.contains("async-inherit-marker"),
+            "helper output missing from inherited fd: {written:?}"
         );
     }
 

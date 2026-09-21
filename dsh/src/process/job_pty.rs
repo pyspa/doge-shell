@@ -196,7 +196,7 @@ fn prepare_pty_input_writer(master: File) -> std::io::Result<AsyncPtyMasterWrite
 /// Spawn the input proxy task for an already-constructed writer.
 ///
 /// `open_input` runs inside the task so a slow `/dev/tty` open never blocks
-/// PTY setup; see [`setup_pty_input_proxy_with`] for why it is injectable.
+/// PTY setup; see [`setup_pty_with`] for why it is injectable.
 fn spawn_pty_input_proxy_with<F>(
     mut writer: AsyncPtyMasterWriter,
     open_input: F,
@@ -234,7 +234,9 @@ pub(crate) async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option
     setup_pty_with(job, ctx, AsyncStdin::open_tty).await
 }
 
-/// See [`setup_pty_input_proxy_with`] for why the input source is injectable.
+/// `open_input` is injectable so tests can point the proxy at a PTY of their
+/// own instead of the real controlling terminal (which would swallow the
+/// developer's keystrokes under `cargo test`).
 pub(crate) async fn setup_pty_with<F>(
     job: &mut Job,
     ctx: &mut Context,
@@ -385,26 +387,6 @@ where
     job.pty_output_task = Some(output_task);
     job.pty_input_task = input_task;
     Ok(Some(child_config))
-}
-
-pub async fn setup_pty_input_proxy(job: &mut Job, pty_in: Pty) {
-    setup_pty_input_proxy_with(job, pty_in, AsyncStdin::open_tty).await
-}
-
-/// `open_input` exists so tests can point the proxy at a PTY of their own.
-/// The default opens the *real* controlling terminal, which under `cargo test`
-/// means swallowing the developer's keystrokes.
-pub(crate) async fn setup_pty_input_proxy_with<F>(job: &mut Job, pty_in: Pty, open_input: F)
-where
-    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
-{
-    let Pty { master, .. } = pty_in;
-    match prepare_pty_input_writer(master) {
-        Ok(writer) => {
-            job.pty_input_task = Some(spawn_pty_input_proxy_with(writer, open_input));
-        }
-        Err(e) => error!("Failed to create AsyncPtyMasterWriter: {}", e),
-    }
 }
 
 async fn stop_pty_input_proxy(job: &mut Job) {

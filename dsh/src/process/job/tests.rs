@@ -190,7 +190,14 @@ async fn launch_restores_caller_context() -> Result<()> {
         vec!["true".to_string()],
     )));
 
-    let _ = job.launch(&mut ctx, &mut shell).await;
+    // The restoration asserts below only cover the success path if the
+    // spawn itself succeeded: fail the test on `Err` or `CommandFailed`
+    // instead of silently checking context restore after a failed launch.
+    let outcome = job.launch(&mut ctx, &mut shell).await?;
+    assert!(
+        matches!(outcome, super::JobLaunchOutcome::Process(_)),
+        "expected successful launch, got {outcome:?}"
+    );
 
     assert!(!ctx.foreground, "foreground must be restored");
     assert_eq!(ctx.pgid, Some(Pid::from_raw(1234)), "pgid must be restored");

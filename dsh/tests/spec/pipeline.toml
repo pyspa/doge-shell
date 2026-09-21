@@ -181,7 +181,6 @@ id = "pipeline.assignment-stage-parent-isolation"
 class = "posix"
 mode = "command"
 script = "FOO=top; FOO=bar | {{TRUE}}; echo VAL:$FOO"
-xfail = "assignment-only pipeline stage reports 'expanded to no command' on stderr"
 
 [case.expect]
 status = 0

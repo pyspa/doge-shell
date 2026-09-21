@@ -18,6 +18,39 @@ fn test_smart_pipe_via_stdin() {
     );
 }
 
+/// A synthetic source feeding a no-command downstream is a formal two-stage
+/// pipeline (`SyntheticSource | NoCommand`), never a collapsed stage: the
+/// helper applies the assignment in isolation, the parent keeps its value,
+/// and the pipeline status is 0.
+#[test]
+fn test_smart_pipe_into_no_command_stage_is_isolated() {
+    let output = common::run_interactive(&[
+        "FOO=sp_parent",
+        "echo hello-sp-source",
+        "| FOO=child_sp",
+        "echo SPSTATUS:$?",
+        "echo SPFOO:$FOO",
+    ]);
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("SPSTATUS:0"),
+        "synthetic-source plus no-command pipeline must succeed. Output:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.lines().any(|line| line.trim() == "SPFOO:sp_parent"),
+        "the pipeline assignment leaked into the parent: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("no command"),
+        "no no-command refusal diagnostic may remain. stderr:\n{}",
+        stderr
+    );
+}
+
 /// Large synthetic source (> typical 64KiB pipe capacity) must not deadlock:
 /// the source helper and the downstream consumer run concurrently, and an
 /// early-exiting consumer (`head -c 1`) terminates the pipeline cleanly with

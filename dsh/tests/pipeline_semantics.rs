@@ -273,25 +273,29 @@ fn dollar_question_reflects_normalized_signal_status() {
 }
 
 /// A stage that expands to no command never rewires the pipeline:
-/// `producer | $(false) | consumer` launches nothing and fails non-zero.
+/// `producer | $(false) | consumer` keeps all three stages, so the middle
+/// stage relays no bytes and the consumer never sees the producer payload.
+/// The pipeline status follows the tail stage.
 #[test]
 fn empty_middle_stage_does_not_rewire_pipeline() {
     let dir = tempfile::TempDir::new().expect("tempdir");
     let prod_marker = dir.path().join("prod_marker");
     let cons_marker = dir.path().join("cons_marker");
+    let received = dir.path().join("received");
     let producer = write_executable_script(
         &dir,
-        "prod_empty.sh",
+        "prod_norewire.sh",
         &format!(
-            "#!/bin/sh\nprintf produced > \"{}\"\n",
+            "#!/bin/sh\nprintf produced > \"{}\"\nprintf produced-payload\n",
             prod_marker.display()
         ),
     );
     let consumer = write_executable_script(
         &dir,
-        "cons_empty.sh",
+        "cons_norewire.sh",
         &format!(
-            "#!/bin/sh\nprintf consumed > \"{}\"\n",
+            "#!/bin/sh\ncat > \"{}\"\nprintf consumed > \"{}\"\n",
+            received.display(),
             cons_marker.display()
         ),
     );
@@ -302,19 +306,245 @@ fn empty_middle_stage_does_not_rewire_pipeline() {
         consumer.display()
     );
     let output = common::run_command(&line);
+    let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
+        output.status.success(),
+        "pipeline status follows the tail stage (0). stderr:\n{}",
+        stderr
+    );
+    assert!(prod_marker.exists(), "the upstream stage must launch");
+    assert!(cons_marker.exists(), "the downstream stage must launch");
+    let got = std::fs::read_to_string(&received).unwrap_or_else(|_| {
+        panic!(
+            "the consumer must record what it received: {}",
+            received.display()
+        )
+    });
+    assert!(
+        got.is_empty(),
+        "the no-command middle stage must not relay bytes; \
+         producer output must not reach the consumer directly, got: {got:?}"
+    );
+    assert!(
+        !stderr.contains("no command"),
+        "no no-command refusal diagnostic may remain. stderr:\n{}",
+        stderr
+    );
+}
+
+/// Assignment-only first stage: isolated, pipeline status 0, no parent leak.
+#[test]
+fn no_command_first_stage_assignment_is_isolated() {
+    let output = run_interactive(&[
+        "FOO=nc_first_parent",
+        format!("FOO=child | {}", true_path()).as_str(),
+        "echo FIRST_STATUS:$?",
+        "echo FIRST_FOO:[$FOO]",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("FIRST_STATUS:0"),
+        "assignment-only first stage must report 0. Output:\n{}",
+        stdout
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "FIRST_FOO:[nc_first_parent]"),
+        "the pipeline assignment leaked into the parent: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("no command"),
+        "no no-command refusal diagnostic may remain. stderr:\n{}",
+        stderr
+    );
+}
+
+/// Assignment-only middle stage: keeps its position and relays no bytes.
+#[test]
+fn no_command_middle_stage_assignment_is_isolated_not_a_relay() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let cons_marker = dir.path().join("cons_marker_mid");
+    let received = dir.path().join("received_mid");
+    let consumer = write_executable_script(
+        &dir,
+        "cons_mid.sh",
+        &format!(
+            "#!/bin/sh\ncat > \"{}\"\nprintf consumed > \"{}\"\n",
+            received.display(),
+            cons_marker.display()
+        ),
+    );
+    let line = format!("echo producer-payload | FOO=child | {}", consumer.display());
+    let output = common::run_command(&line);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "pipeline status follows the tail stage (0). stderr:\n{}",
+        stderr
+    );
+    assert!(cons_marker.exists(), "the downstream stage must launch");
+    let got = std::fs::read_to_string(&received).unwrap_or_else(|_| {
+        panic!(
+            "the consumer must record what it received: {}",
+            received.display()
+        )
+    });
+    assert!(
+        got.is_empty(),
+        "the assignment-only middle stage must not relay producer bytes, got: {got:?}"
+    );
+    assert!(
+        !stderr.contains("no command"),
+        "no no-command refusal diagnostic may remain. stderr:\n{}",
+        stderr
+    );
+}
+
+/// Assignment-only last stage: pipeline status 0, no parent leak.
+#[test]
+fn no_command_last_stage_assignment_is_isolated() {
+    let output = run_interactive(&[
+        "FOO=nc_last_parent",
+        format!("{} | FOO=child", true_path()).as_str(),
+        "echo LAST_STATUS:$?",
+        "echo LAST_FOO:[$FOO]",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("LAST_STATUS:0"),
+        "assignment-only last stage must report 0. Output:\n{}",
+        stdout
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "LAST_FOO:[nc_last_parent]"),
+        "the pipeline assignment leaked into the parent: {stdout:?}"
+    );
+}
+
+/// Command-substitution first stage: the stage itself exits 1, but the
+/// default pipeline status follows the last stage (0).
+#[test]
+fn no_command_substitution_first_stage_tail_status_wins() {
+    let output = run_interactive(&[
+        format!("$({}) | {}", false_path(), true_path()).as_str(),
+        "echo HEAD_STATUS:$?",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("HEAD_STATUS:0"),
+        "pipeline status follows the last stage (0). Output:\n{}",
+        stdout
+    );
+    assert!(
+        !stderr.contains("no command"),
+        "no no-command refusal diagnostic may remain. stderr:\n{}",
+        stderr
+    );
+}
+
+/// Command-substitution last stage: its status becomes the pipeline status.
+#[test]
+fn no_command_substitution_last_stage_status_reaches_pipeline() {
+    let output = run_interactive(&[
+        format!("{} | $({})", true_path(), false_path()).as_str(),
+        "echo TAIL_STATUS:$?",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line.trim() == "TAIL_STATUS:1"),
+        "the no-command tail status (1) must become the pipeline status. Output:\n{}",
+        stdout
+    );
+}
+
+/// Redirection-only first stage creates its target; pipeline status 0.
+#[test]
+fn no_command_redirection_only_first_stage_creates_target() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let marker = dir.path().join("nc_first_marker");
+    let line = format!("> {} | {}", marker.display(), true_path());
+    let output = common::run_command(&line);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "redirection-only first stage must succeed. stderr:\n{}",
+        stderr
+    );
+    assert!(
+        marker.exists(),
+        "the redirection-only first stage must create its target"
+    );
+}
+
+/// Redirection-only last stage creates its target; pipeline status 0.
+#[test]
+fn no_command_redirection_only_last_stage_creates_target() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let marker = dir.path().join("nc_last_marker");
+    let line = format!("{} | > {}", true_path(), marker.display());
+    let output = common::run_command(&line);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "redirection-only last stage must succeed. stderr:\n{}",
+        stderr
+    );
+    assert!(
+        marker.exists(),
+        "the redirection-only last stage must create its target"
+    );
+}
+
+/// Assignment plus redirection: the target is created, the parent keeps
+/// its own value.
+#[test]
+fn no_command_assignment_with_redirection_stays_isolated() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let marker = dir.path().join("nc_assign_marker");
+    let output = run_interactive(&[
+        "FOO=nc_redir_parent",
+        format!("FOO=child > {} | {}", marker.display(), true_path()).as_str(),
+        "echo REDIR_STATUS:$?",
+        "echo REDIR_FOO:[$FOO]",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("REDIR_STATUS:0"),
+        "assignment-plus-redirect stage must succeed. Output:\n{}",
+        stdout
+    );
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "REDIR_FOO:[nc_redir_parent]"),
+        "the pipeline assignment leaked into the parent: {stdout:?}"
+    );
+    assert!(
+        marker.exists(),
+        "the assignment-plus-redirect stage must create its target"
+    );
+}
+
+/// A no-command downstream with a failing redirect is an ordinary command
+/// failure, not a shell infrastructure error and not a no-command refusal.
+#[test]
+fn no_command_redirection_failure_is_ordinary_command_failure() {
+    let output = common::run_command("echo hello | > /definitely/missing/dsh-probe-dir/out");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
         !output.status.success(),
-        "a pipeline with an empty stage must fail closed: {:?}",
-        output.status.code()
+        "a downstream redirect failure must fail the pipeline"
     );
     assert!(
-        !prod_marker.exists(),
-        "the upstream stage must not launch after fail-closed materialization"
-    );
-    assert!(
-        !cons_marker.exists(),
-        "the downstream stage must not launch after fail-closed materialization"
+        !stderr.contains("no command"),
+        "must not report a no-command refusal. stderr:\n{}",
+        stderr
     );
 }
 

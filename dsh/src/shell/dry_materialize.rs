@@ -73,14 +73,14 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
     if source_data.is_none() && expanded.len() == 1 && expanded[0].argv.is_empty() {
         return Ok(None);
     }
-    // Fail closed: never show a collapsed pipeline to SafetyGuard. Both a
-    // rejected stage and an empty stage must surface as an error instead of
-    // a smaller runnable job (e.g. `A | empty | dangerous-C` must not become
-    // just `A | dangerous-C`, and `FOO=bar alias | dangerous-command` must
-    // not become just `dangerous-command`).
-    if expanded.iter().any(|stage| stage.argv.is_empty()) {
-        anyhow::bail!("dsh: pipeline stage expanded to no command");
-    }
+    // Never show a collapsed pipeline to SafetyGuard: a rejected stage
+    // surfaces as an error instead of a smaller runnable job (e.g.
+    // `FOO=bar alias | dangerous-command` must not become just
+    // `dangerous-command`). An empty stage keeps its position as a
+    // no-command member of the projected topology, so the guard judges the
+    // same stage sequence the live path launches (`A | empty | dangerous-C`
+    // must not become just `A | dangerous-C`). The no-command node carries
+    // no argv, so `command_argv` skips it exactly like a synthetic source.
     match assemble_job(shell, planned, expanded, 0, source_data) {
         Ok(job) => Ok(Some(job)),
         Err(failure) => anyhow::bail!("{}", failure.message),

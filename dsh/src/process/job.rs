@@ -170,9 +170,10 @@ impl Job {
         }
         match current {
             JobProcess::Command(process) => Some(process.argv.clone()),
-            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) | JobProcess::AsyncList(_) => {
-                None
-            }
+            JobProcess::Builtin(_)
+            | JobProcess::SyntheticSource(_)
+            | JobProcess::AsyncList(_)
+            | JobProcess::NoCommand(_) => None,
         }
     }
 

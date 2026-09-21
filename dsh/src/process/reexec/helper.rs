@@ -6,8 +6,8 @@
 
 use super::fd_layout::{InternalHelperFds, setup_helper_status_fd};
 use super::protocol::{
-    BuiltinExecRequest, InternalExecKind, PipelineSourceExecRequest, PlanExecMode, PlanExecRequest,
-    read_internal_request,
+    BuiltinExecRequest, InternalExecKind, NoCommandExecRequest, PipelineSourceExecRequest,
+    PlanExecMode, PlanExecRequest, read_internal_request,
 };
 use crate::shell::Shell;
 use anyhow::Result;
@@ -62,6 +62,9 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
             run_helper_plan(&mut shell, plan_request, fds.status).await
         }
         InternalExecKind::PipelineSource(source) => run_helper_pipeline_source(source).await,
+        InternalExecKind::NoCommand(no_command) => {
+            run_helper_no_command(&mut shell, no_command).await
+        }
     }
 }
 
@@ -93,6 +96,45 @@ async fn run_helper_builtin(shell: &mut Shell, builtin: &BuiltinExecRequest) -> 
     // their real async implementation, not the sync fallback.
     let status = handler.execute(&ctx, builtin.argv.clone(), shell).await;
     Ok(exit_code_of(status))
+}
+
+/// Run one materialized no-command pipeline stage in the helper's fresh
+/// shell snapshot: apply assignments, report the last command-substitution
+/// status (or 0 when there was none).
+///
+/// Redirections cross as an empty list on purpose: the parent pipeline
+/// launch path already applied them exactly once before spawning, so the
+/// helper's stdio is already final. Reopening targets here would run the
+/// side effect twice.
+async fn run_helper_no_command(shell: &mut Shell, no_command: &NoCommandExecRequest) -> Result<u8> {
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    ctx.foreground = false;
+    ctx.interactive = false;
+    ctx.save_history = false;
+    let result = crate::shell::no_command::execute_no_command(
+        shell,
+        &mut ctx,
+        crate::shell::no_command::NoCommandMaterialization {
+            assignments: no_command.assignments.clone(),
+            redirects: Vec::new(),
+            last_command_substitution_status: no_command.last_command_substitution_status,
+            resources: crate::shell::substitution::ExecutionResources::new(),
+        },
+    );
+    match result {
+        crate::shell::no_command::NoCommandExecutionResult::Completed(code) => {
+            Ok(code.clamp(0, 255) as u8)
+        }
+        crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
+            // Unreachable with an empty redirect list, but fail closed by
+            // type rather than by assumption.
+            eprintln!(
+                "dogesh: internal exec no-command failed: {}",
+                failure.message
+            );
+            Ok(failure.exit_code.clamp(0, 255) as u8)
+        }
+    }
 }
 
 /// Write synthetic source bytes to fd 1 (the pipeline write end wired by
@@ -361,6 +403,43 @@ mod tests {
             let output = reader.join().expect("reader thread");
             assert_eq!(String::from_utf8_lossy(&output), data);
         }
+    }
+
+    #[tokio::test]
+    async fn helper_no_command_applies_assignments_and_reports_status() {
+        use super::super::protocol::NoCommandExecRequest;
+
+        let mut shell = Shell::new(crate::environment::Environment::new());
+        // Assignment-only: exit 0, assignments land in the helper shell.
+        let code = run_helper_no_command(
+            &mut shell,
+            &NoCommandExecRequest {
+                assignments: vec![("HELPER_NO_CMD".to_string(), "bar".to_string())],
+                last_command_substitution_status: None,
+            },
+        )
+        .await
+        .expect("helper runs");
+        assert_eq!(code, 0);
+        assert_eq!(
+            shell
+                .environment
+                .read()
+                .lookup_variable("HELPER_NO_CMD")
+                .as_deref(),
+            Some("bar")
+        );
+        // The last command-substitution status becomes the exit code.
+        let code = run_helper_no_command(
+            &mut shell,
+            &NoCommandExecRequest {
+                assignments: vec![],
+                last_command_substitution_status: Some(7),
+            },
+        )
+        .await
+        .expect("helper runs");
+        assert_eq!(code, 7);
     }
 
     #[tokio::test]

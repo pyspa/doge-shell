@@ -304,7 +304,9 @@ pub(crate) fn spawn_background_builtin(
 
     let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
     process.pid = Some(child);
-    // A real child joins the foreground wait set like an external command.
+    // Bookkeeping for the current launch scope.
+    // `Job::launch` restores `ctx.process_count` to the caller's entry
+    // value on return.
     ctx.process_count += 1;
     Ok(child)
 }
@@ -334,6 +336,9 @@ pub(crate) fn spawn_isolated_builtin(
     }
     let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
     process.pid = Some(child);
+    // Bookkeeping for the current launch scope.
+    // `Job::launch` restores `ctx.process_count` to the caller's entry
+    // value on return.
     ctx.process_count += 1;
     Ok(child)
 }
@@ -357,6 +362,9 @@ pub(crate) fn spawn_pipeline_source(
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
     let child = spawn_internal_helper(stdin, stdout, stderr, &bytes, pgroup, None)?;
+    // Bookkeeping for the current launch scope.
+    // `Job::launch` restores `ctx.process_count` to the caller's entry
+    // value on return.
     ctx.process_count += 1;
     Ok(child)
 }

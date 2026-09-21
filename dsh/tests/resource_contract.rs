@@ -202,3 +202,53 @@ fn concurrent_shells_are_isolated_and_drained() {
         }
     }
 }
+
+/// Two consecutive top-level async lists must not share a process group.
+///
+/// Each helper body runs `sh <script>` in the script-file form (allowed by
+/// the safety policy without confirmation — `sh -c` would fail closed with
+/// exit 130) where the script records its own pgid via `ps`. `ps -o pgid=`
+/// works on both Linux (procps) and macOS, and `$$` is expanded by the `sh`
+/// running the script — dogesh passes it through untouched. The shell
+/// drains both helpers before `-c` exit, so no `sleep` synchronization is
+/// needed; the 10s bound only caps a hung shell.
+#[test]
+fn consecutive_async_jobs_own_distinct_process_groups() {
+    let _serial = serial_guard();
+    let script = "printf 'ps -o pgid= -p $$ > a.pgid\\n' > pgid_a.sh; \
+        printf 'ps -o pgid= -p $$ > b.pgid\\n' > pgid_b.sh; \
+        sh pgid_a.sh & sh pgid_b.sh &";
+    let process = spawn_dsh_unlocked(["-c", script], None);
+    let output = process
+        .wait_keep_dirs(Duration::from_secs(10))
+        .expect("dsh must exit");
+    let stdout = String::from_utf8_lossy(&output.output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.output.stderr).to_string();
+    assert!(
+        output.output.status.success(),
+        "shell failed: stdout={stdout:?} stderr={stderr:?}"
+    );
+
+    let a_path = output.workdir.join("a.pgid");
+    let b_path = output.workdir.join("b.pgid");
+
+    let a_pgid = std::fs::read_to_string(&a_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let b_pgid = std::fs::read_to_string(&b_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    assert!(
+        !a_pgid.is_empty(),
+        "a.pgid is empty: workdir={:?}",
+        output.workdir
+    );
+    assert!(
+        !b_pgid.is_empty(),
+        "b.pgid is empty: workdir={:?}",
+        output.workdir
+    );
+    assert_ne!(a_pgid, b_pgid, "async jobs shared pgid: {a_pgid}");
+}

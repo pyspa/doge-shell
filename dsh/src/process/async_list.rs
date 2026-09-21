@@ -170,9 +170,15 @@ pub(crate) fn spawn_async_list(
 
     let snapshot =
         crate::environment::child_snapshot::ChildShellSnapshot::capture(&shell.environment.read());
-    // A top-level list (`ctx.pgid` unset) founds a fresh process group so
-    // shutdown can group-kill the helper and everything it started. A
-    // nested list inside a helper joins the existing async group instead.
+    // `ctx.pgid` here is the caller's value:
+    // - Top-level: `None` → the helper creates a fresh process group so
+    //   shutdown can group-kill the helper and everything it started.
+    //   `ctx.pgid` is temporarily set to the child pid inside `Job::launch`
+    //   for pipeline/group propagation, then restored to `None` when
+    //   `Job::launch` returns.
+    // - Inside a helper: `Some(helper_pid)` → the nested helper joins that
+    //   existing group. `ctx.pgid` is restored to `Some(helper_pid)` after
+    //   `Job::launch` returns.
     let fresh_group = ctx.pgid.is_none();
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
     let child = match spawn_plan_helper(
@@ -219,10 +225,16 @@ pub(crate) fn spawn_async_list(
     process.stdout = helper_stdout;
     process.stderr = helper_stderr;
     process.pid = Some(child);
+    // Bookkeeping for the current launch scope. `Job::launch` restores
+    // `ctx.process_count` to the caller's entry value on return, so this
+    // increment never leaks to the next job.
     ctx.process_count += 1;
 
     if fresh_group {
         job.pgid = Some(child);
+        // Temporary routing state for nested spawn grouping inside this
+        // launch. `Job::launch` restores `ctx.pgid` to the caller's entry
+        // value (top-level `None`, helper `Some(helper_pid)`) on return.
         ctx.pgid = Some(child);
     }
     if job.pid.is_none() {

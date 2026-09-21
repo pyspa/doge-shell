@@ -215,6 +215,45 @@ async fn launch_restores_caller_context() -> Result<()> {
 }
 
 #[tokio::test]
+async fn launch_failure_cleans_up_committed_pty_state() {
+    use crate::environment::Environment;
+    use crate::process::redirect::Redirect;
+    use crate::shell::Shell;
+
+    let env = Environment::new();
+    let mut shell = Shell::new(env);
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    // Force the PTY path: `launch_inner` overwrites `ctx.foreground` from
+    // the job, but `interactive` stays as set here. The input redirect below
+    // makes the setup select OutputOnly, so the production input opener is
+    // never called and the real terminal is untouched.
+    ctx.foreground = true;
+    ctx.interactive = true;
+
+    let mut job = Job::new("cat < /nonexistent_file_for_test".to_string(), shell.pgid);
+    job.foreground = true;
+    let mut process = Process::new("cat".to_string(), vec!["cat".to_string()]);
+    process.redirects = vec![Redirect::input("/nonexistent_file_for_test".to_string())];
+    job.set_process(JobProcess::Command(process));
+
+    let result = job.launch(&mut ctx, &mut shell).await;
+    assert!(
+        matches!(result, Ok(super::JobLaunchOutcome::CommandFailed(_))),
+        "expected CommandFailed, got {result:?}"
+    );
+    // The `CommandFailed` path in `launch_inner` must reclaim the PTY state
+    // committed by `setup_pty` (a `JoinHandle` is not cancelled by `Drop`,
+    // so leaving the output monitor behind would leak a task per failure).
+    assert!(
+        job.pty.is_none(),
+        "PTY fd must be released on launch failure"
+    );
+    assert!(job.pty_mode.is_none());
+    assert!(job.pty_output_task.is_none());
+    assert!(job.pty_input_task.is_none());
+}
+
+#[tokio::test]
 async fn launch_restores_context_on_redirect_failure() {
     use crate::environment::Environment;
     use crate::process::redirect::Redirect;

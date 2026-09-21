@@ -66,16 +66,6 @@ impl Pty {
         })
     }
 
-    pub fn try_clone(&self) -> Result<Self> {
-        let master = self.try_clone_master()?;
-        let slave = self.slave.try_clone().context("failed to clone slave")?;
-        Ok(Self {
-            master,
-            slave,
-            name: self.name.clone(),
-        })
-    }
-
     /// Clone only the master side.
     ///
     /// The PTY output monitor and the input proxy both use the master only;

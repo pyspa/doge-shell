@@ -31,6 +31,45 @@ pub(crate) fn smart_pipe_source_data(shell: &Shell) -> String {
     }
 }
 
+/// Selected-job background policy for async-list helpers.
+///
+/// Unlike the whole-pipeline preflight above, this checks exactly one
+/// already-selected single builtin *after* `&&`/`||` gating: a gated-out
+/// `jobs` in `false && jobs &` never reaches here and stays silent.
+/// Session-bound builtins (and anything without a re-exec policy) fail
+/// closed as an ordinary command failure inside the helper — the helper's
+/// session is empty by construction, so running them would silently answer
+/// from nothing. An exported Lisp command cannot be reproduced in the
+/// fresh helper either; it surfaces as a command failure rather than a
+/// mis-execution.
+///
+/// Single foreground builtins in the helper are unaffected: only the async
+/// evaluator calls this, never the substitution/subshell path.
+pub(crate) fn reject_session_bound_background(
+    job: &Job,
+    shell: &Shell,
+) -> Result<(), CommandMaterializationFailure> {
+    let Some(head) = job.process.as_deref() else {
+        return Ok(());
+    };
+    // Pipelines already passed the whole-pipeline preflight during
+    // materialization; only a lone builtin can still need the live session.
+    if head.stage_count() > 1 {
+        return Ok(());
+    }
+    let JobProcess::Builtin(builtin) = head else {
+        return Ok(());
+    };
+    let reexecable = matches!(
+        dsh_builtin::background_builtin_mode(&builtin.name),
+        Some(dsh_builtin::BackgroundBuiltinMode::Reexec)
+    ) && !shell.lisp_engine.borrow().is_export(&builtin.name);
+    if reexecable {
+        return Ok(());
+    }
+    Err(CommandMaterializationFailure::background_builtin_requires_parent(&builtin.name))
+}
+
 /// Whole-pipeline preflight: any multi-stage pipeline containing a
 /// session-bound builtin (or an exported Lisp command the helper cannot
 /// reproduce, or an unknown policy) is rejected before any stage spawns.

@@ -164,13 +164,34 @@ async fn run_helper_plan(
     // Process-substitution producers lead their own process group (spawned
     // with a fresh pgid): preset it so every nested spawn joins the group
     // and the parent's group-kill reaper reaches the whole tree, including
-    // grandchildren that outlive the helper itself.
-    if plan_request.mode == PlanExecMode::ProcessSubstitution {
+    // grandchildren that outlive the helper itself. Async AND-OR lists
+    // work the same way: the helper founds (or joins) the async group and
+    // everything it starts must stay inside it.
+    if matches!(
+        plan_request.mode,
+        PlanExecMode::ProcessSubstitution | PlanExecMode::AsyncAndOrList
+    ) {
         ctx.pgid = Some(shell.pid);
     }
-    let outcome =
-        crate::shell::eval::evaluate_plan(shell, &mut ctx, &plan_request.plan, helper_confirm)
-            .await;
+    // Async-list helpers evaluate under the background policy: a selected
+    // session-bound builtin fails closed instead of reading the helper's
+    // empty session. All other isolated bodies keep historical behavior.
+    let env = match plan_request.mode {
+        PlanExecMode::AsyncAndOrList => crate::shell::eval::PlanEvaluationEnvironment::AsyncList,
+        PlanExecMode::Subshell
+        | PlanExecMode::CommandSubstitution
+        | PlanExecMode::ProcessSubstitution => {
+            crate::shell::eval::PlanEvaluationEnvironment::Isolated
+        }
+    };
+    let outcome = crate::shell::eval::evaluate_plan_in(
+        shell,
+        &mut ctx,
+        &plan_request.plan,
+        helper_confirm,
+        env,
+    )
+    .await;
     match outcome {
         Ok(code) => {
             report_status_byte(status_fd, b'A');

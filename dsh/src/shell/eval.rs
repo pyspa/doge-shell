@@ -4,6 +4,7 @@ use crate::shell::{
     authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
     materialize::{MaterializeOutcome, materialize_job},
     parse::parse_execution_plan,
+    plan::ListExecutionMode,
 };
 use crate::terminal::title;
 use anyhow::Result;
@@ -16,12 +17,14 @@ use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use tracing::debug;
 
+mod async_spawn;
 mod plan_eval;
 mod subshell;
-pub(crate) use plan_eval::evaluate_plan;
+use async_spawn::{spawn_async_list_job, spawn_whole_plan_background};
+pub(crate) use plan_eval::{PlanEvaluationEnvironment, evaluate_plan_in};
 pub use subshell::execute_with_capture;
 
-struct TitleGuard {
+pub(crate) struct TitleGuard {
     active: bool,
 }
 
@@ -138,229 +141,208 @@ pub async fn eval_str(
     };
 
     let mut last_exit_code = 0_i32;
-    // Operator that gates execution of the *current* job based on the previous job result.
-    // This is effectively "the separator between previous and current job".
-    let mut gate_op = ListOp::None;
-    // Every job in the list starts from the stdio the caller handed us. Launching
+    // Every list starts from the stdio the caller handed us. Launching
     // a job rewires `ctx` (pipes, capture, redirections) and nothing put it back,
-    // so without this the second job of `a; b` inherits the first one's pipe.
+    // so without this the second list of `a; b` inherits the first one's pipe.
     let base_infile = ctx.infile;
     let base_outfile = ctx.outfile;
     let base_errfile = ctx.errfile;
-    for planned in &plan.jobs {
-        // `list_op` is stored on the *previous* job by the parser.
-        // We keep it here before moving `job` into wait_jobs.
-        let next_gate_op = planned.list_op.clone();
 
+    if force_background {
+        // Whole-plan isolation (e.g. the REPL background shortcut): the
+        // entire line runs in one helper shell, so `cd /tmp; pwd` shares
+        // one environment instead of splitting per job. Explicit
+        // `;`/`&&`/`||`/`&` inside still evaluate normally in the helper.
+        last_exit_code = spawn_whole_plan_background(
+            shell,
+            ctx,
+            &plan,
+            &input,
+            base_infile,
+            base_outfile,
+            base_errfile,
+        )
+        .await?;
+        publish_exit_status(shell, last_exit_code);
+        return Ok(last_exit_code);
+    }
+
+    'lists: for list in &plan.lists {
         ctx.infile = base_infile;
         ctx.outfile = base_outfile;
         ctx.errfile = base_errfile;
 
-        // Gating comes before materialization: a skipped branch performs no
-        // substitution, no pipe, and no authorization prompt.
-        let should_run = match gate_op {
-            ListOp::None => true,
-            ListOp::And => last_exit_code == 0,
-            ListOp::Or => last_exit_code != 0,
-        };
-
-        if !should_run {
-            debug!(
-                "skip job '{}' due to gate_op:{:?} last_exit_code:{}",
-                planned.source, gate_op, last_exit_code
-            );
-            gate_op = next_gate_op;
-            continue;
-        }
-
-        // Materialize only the selected job. Nested substitution bodies were
-        // authorized inside this call; a nested denial aborts the whole line.
-        // A rejected builtin prefix is an ordinary command failure: publish
-        // its status and continue the list so `&&`/`||` gate correctly.
-        // Diagnostic goes through `ctx` (not a hard-coded process stderr) so
-        // capture/helper/test stdio stays coherent. Redirects are not yet
-        // applied here, so `2>` on the same line does not catch this message;
-        // status/gating correctness is what this path guarantees.
-        let materialized = match materialize_job(
-            shell,
-            ctx,
-            planned,
-            crate::repl::confirmation::confirm_action,
-        )
-        .await
-        {
-            Ok(MaterializeOutcome::Runnable(materialized)) => materialized,
-            Ok(MaterializeOutcome::NoCommand(no_command)) => {
-                // Expansion left no command name: assignments, redirections,
-                // and the last substitution status still run through the
-                // shared no-command executor, exactly as in helpers.
-                match crate::shell::no_command::execute_no_command(shell, ctx, *no_command) {
-                    crate::shell::no_command::NoCommandExecutionResult::Completed(code) => {
-                        last_exit_code = code;
-                    }
-                    crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
-                        let _ = ctx.write_stderr(&failure.message);
-                        last_exit_code = failure.exit_code;
-                    }
-                }
-                publish_exit_status(shell, last_exit_code);
-                gate_op = next_gate_op;
-                continue;
-            }
-            Ok(MaterializeOutcome::Rejected(failure)) => {
-                let _ = ctx.write_stderr(&failure.message);
-                last_exit_code = failure.exit_code;
-                publish_exit_status(shell, last_exit_code);
-                gate_op = next_gate_op;
-                continue;
-            }
-            Err(err) if is_authorization_cancelled(&err) => {
-                tracing::info!("Command execution cancelled by user (nested)");
-                publish_exit_status(shell, 130);
-                return Ok(130);
-            }
-            Err(err) => return Err(err),
-        };
-        let mut job = materialized.job;
-        let had_dynamic = materialized.had_dynamic_expansion;
-        job.resources = materialized.resources;
-        match authorize_job(shell, &job, had_dynamic)? {
-            AuthorizationDecision::Allow => {}
-            AuthorizationDecision::Deny => {
-                tracing::info!("Command execution cancelled by user");
-                publish_exit_status(shell, 130);
-                return Ok(130);
-            }
-        }
-
-        // Execute pre-exec hooks
-        if let Err(e) = shell.exec_pre_exec_hooks(&job.cmd) {
-            debug!("Error executing pre-exec hooks: {}", e);
-        }
-
-        // Disable raw mode for command execution (cooked mode allows proper newline handling)
-        if let Err(e) = disable_raw_mode() {
-            debug!("EVAL_STR: Failed to disable raw mode: {}", e);
-        } else {
-            debug!("EVAL_STR: Successfully disabled raw mode");
-        }
-
-        if force_background {
-            // all job run background
-            job.foreground = false;
-        }
-
-        job.job_id = shell.get_job_id(); // set job id
-
-        debug!(
-            "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?} capture:{:?}",
-            job.cmd, job.foreground, job.redirects, job.list_op, job.capture_output,
-        );
-        let _title_guard = TitleGuard::new(ctx, &job);
-        // Hand this pane's Herdr lifecycle authority to a recognized agent
-        // CLI (`codex`, `claude`, ...) for as long as it runs in the
-        // foreground, so Herdr's own detection can classify the pane
-        // instead of leaving it stuck on whatever this shell last reported.
-        // A complete no-op when Herdr isn't active or `job` isn't such a
-        // command. See `agent_lifecycle::yield_to_foreground_agent`.
-        let _agent_handoff = crate::agent_lifecycle::yield_to_foreground_agent(
-            shell,
-            &job,
-            ctx.interactive,
-            job.foreground,
-        );
-
-        // Handle capture mode with |>
-        if job.capture_output {
-            let (exit, stdout, stderr) = execute_with_capture(shell, ctx, &mut job).await?;
-            last_exit_code = exit;
-
-            // Save to output history
-            {
-                use dsh_types::output_history::OutputEntry;
-                let entry = OutputEntry::new(job.cmd.clone(), stdout.clone(), stderr.clone(), exit);
-                shell
-                    .environment
-                    .write()
-                    .session_output_state
-                    .output_history
-                    .push(entry);
-                debug!(
-                    "Captured output for '{}': {} bytes stdout, {} bytes stderr",
-                    job.cmd,
-                    stdout.len(),
-                    stderr.len()
-                );
-            }
-
-            // Also print to terminal
-            if !stdout.is_empty() {
-                print!("{}", stdout);
-                std::io::stdout().flush().ok();
-            }
-            if !stderr.is_empty() {
-                eprint!("{}", stderr);
-                std::io::stderr().flush().ok();
-            }
-
-            // Execute post-exec hooks
-            if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
-                debug!("Error executing post-exec hooks: {}", e);
-            }
-
-            // Re-enable raw mode after capture job (only in interactive mode)
-            if ctx.interactive {
-                enable_raw_mode().ok();
-            }
+        if list.execution == ListExecutionMode::Asynchronous {
+            // One helper for the whole AND-OR list: the parent records
+            // success-at-start (0) and immediately runs the next list.
+            // The helper body failure never rewrites this status later.
+            last_exit_code = spawn_async_list_job(shell, ctx, list).await?;
             publish_exit_status(shell, last_exit_code);
-            gate_op = next_gate_op;
             continue;
         }
 
-        // Handle struct_pipe mode with |: (Lisp expressions on command output)
-        if !job.struct_pipe_exprs.is_empty() {
-            use crate::lisp::{Symbol, Value};
+        // Operator that gates execution of the *current* job based on the previous job result.
+        // This is effectively "the separator between previous and current job".
+        // The gate resets per AND-OR list: `;`/`&` never carry `&&`/`||` forward.
+        let mut gate_op = ListOp::None;
+        for planned in &list.jobs {
+            // `list_op` is stored on the *previous* job by the parser.
+            // We keep it here before moving `job` into wait_jobs.
+            let next_gate_op = planned.list_op.clone();
 
-            if !job.has_process() {
-                debug!("Struct pipe: no executable process, skipping");
+            ctx.infile = base_infile;
+            ctx.outfile = base_outfile;
+            ctx.errfile = base_errfile;
+
+            // Gating comes before materialization: a skipped branch performs no
+            // substitution, no pipe, and no authorization prompt.
+            let should_run = match gate_op {
+                ListOp::None => true,
+                ListOp::And => last_exit_code == 0,
+                ListOp::Or => last_exit_code != 0,
+            };
+
+            if !should_run {
+                debug!(
+                    "skip job '{}' due to gate_op:{:?} last_exit_code:{}",
+                    planned.source, gate_op, last_exit_code
+                );
                 gate_op = next_gate_op;
                 continue;
             }
 
+            // Materialize only the selected job. Nested substitution bodies were
+            // authorized inside this call; a nested denial aborts the whole line.
+            // A rejected builtin prefix is an ordinary command failure: publish
+            // its status and continue the list so `&&`/`||` gate correctly.
+            // Diagnostic goes through `ctx` (not a hard-coded process stderr) so
+            // capture/helper/test stdio stays coherent. Redirects are not yet
+            // applied here, so `2>` on the same line does not catch this message;
+            // status/gating correctness is what this path guarantees.
+            let materialized = match materialize_job(
+                shell,
+                ctx,
+                planned,
+                crate::repl::confirmation::confirm_action,
+            )
+            .await
+            {
+                Ok(MaterializeOutcome::Runnable(materialized)) => materialized,
+                Ok(MaterializeOutcome::NoCommand(no_command)) => {
+                    // Expansion left no command name: assignments, redirections,
+                    // and the last substitution status still run through the
+                    // shared no-command executor, exactly as in helpers.
+                    match crate::shell::no_command::execute_no_command(shell, ctx, *no_command) {
+                        crate::shell::no_command::NoCommandExecutionResult::Completed(code) => {
+                            last_exit_code = code;
+                        }
+                        crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
+                            let _ = ctx.write_stderr(&failure.message);
+                            last_exit_code = failure.exit_code;
+                        }
+                    }
+                    publish_exit_status(shell, last_exit_code);
+                    gate_op = next_gate_op;
+                    continue;
+                }
+                Ok(MaterializeOutcome::Rejected(failure)) => {
+                    let _ = ctx.write_stderr(&failure.message);
+                    last_exit_code = failure.exit_code;
+                    publish_exit_status(shell, last_exit_code);
+                    gate_op = next_gate_op;
+                    continue;
+                }
+                Err(err) if is_authorization_cancelled(&err) => {
+                    tracing::info!("Command execution cancelled by user (nested)");
+                    publish_exit_status(shell, 130);
+                    return Ok(130);
+                }
+                Err(err) => return Err(err),
+            };
+            let mut job = materialized.job;
+            let had_dynamic = materialized.had_dynamic_expansion;
+            job.resources = materialized.resources;
+            match authorize_job(shell, &job, had_dynamic)? {
+                AuthorizationDecision::Allow => {}
+                AuthorizationDecision::Deny => {
+                    tracing::info!("Command execution cancelled by user");
+                    publish_exit_status(shell, 130);
+                    return Ok(130);
+                }
+            }
+
+            // Execute pre-exec hooks
+            if let Err(e) = shell.exec_pre_exec_hooks(&job.cmd) {
+                debug!("Error executing pre-exec hooks: {}", e);
+            }
+
+            // Disable raw mode for command execution (cooked mode allows proper newline handling)
+            if let Err(e) = disable_raw_mode() {
+                debug!("EVAL_STR: Failed to disable raw mode: {}", e);
+            } else {
+                debug!("EVAL_STR: Successfully disabled raw mode");
+            }
+
+            job.job_id = shell.get_job_id(); // set job id
+
             debug!(
-                "Struct pipe: executing command '{}' with {} Lisp expressions",
-                job.cmd,
-                job.struct_pipe_exprs.len()
+                "start job '{:?}' foreground:{:?} redirect:{:?} list_op:{:?} capture:{:?}",
+                job.cmd, job.foreground, job.redirects, job.list_op, job.capture_output,
+            );
+            let _title_guard = TitleGuard::new(ctx, &job);
+            // Hand this pane's Herdr lifecycle authority to a recognized agent
+            // CLI (`codex`, `claude`, ...) for as long as it runs in the
+            // foreground, so Herdr's own detection can classify the pane
+            // instead of leaving it stuck on whatever this shell last reported.
+            // A complete no-op when Herdr isn't active or `job` isn't such a
+            // command. See `agent_lifecycle::yield_to_foreground_agent`.
+            let _agent_handoff = crate::agent_lifecycle::yield_to_foreground_agent(
+                shell,
+                &job,
+                ctx.interactive,
+                job.foreground,
             );
 
-            // Declarative output schema for the pipeline's last external
-            // command: inject preferred machine-readable flags before the
-            // run, parse the captured output into a table after it.
-            let schema_spec = job
-                .last_external_argv()
-                .and_then(|argv| crate::output_schema::lookup(&argv));
-            if let Some(prefer) = schema_spec.as_ref().and_then(|spec| spec.prefer.as_ref()) {
-                debug!(
-                    "Struct pipe: injecting schema args {:?}",
-                    prefer.inject_args
-                );
-                job.append_args_to_last_external(&prefer.inject_args);
-            }
+            // Handle capture mode with |>
+            if job.capture_output {
+                let (exit, stdout, stderr) = execute_with_capture(shell, ctx, &mut job).await?;
+                last_exit_code = exit;
 
-            // Execute command through regular job launch path and capture output.
-            let (exit_code, output, stderr_output) =
-                execute_with_capture(shell, ctx, &mut job).await?;
-            last_exit_code = exit_code;
+                // Save to output history
+                {
+                    use dsh_types::output_history::OutputEntry;
+                    let entry =
+                        OutputEntry::new(job.cmd.clone(), stdout.clone(), stderr.clone(), exit);
+                    shell
+                        .environment
+                        .write()
+                        .session_output_state
+                        .output_history
+                        .push(entry);
+                    debug!(
+                        "Captured output for '{}': {} bytes stdout, {} bytes stderr",
+                        job.cmd,
+                        stdout.len(),
+                        stderr.len()
+                    );
+                }
 
-            // Output stderr to terminal (struct_pipe only processes stdout)
-            if !stderr_output.is_empty() {
-                eprint!("{}", stderr_output);
-                std::io::stderr().flush().ok();
-            }
+                // Also print to terminal
+                if !stdout.is_empty() {
+                    print!("{}", stdout);
+                    std::io::stdout().flush().ok();
+                }
+                if !stderr.is_empty() {
+                    eprint!("{}", stderr);
+                    std::io::stderr().flush().ok();
+                }
 
-            // If command failed and no output, skip Lisp evaluation
-            if last_exit_code != 0 && output.is_empty() {
-                debug!("Struct pipe: command failed with no output, skipping Lisp eval");
+                // Execute post-exec hooks
+                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
+                    debug!("Error executing post-exec hooks: {}", e);
+                }
+
+                // Re-enable raw mode after capture job (only in interactive mode)
                 if ctx.interactive {
                     enable_raw_mode().ok();
                 }
@@ -369,129 +351,131 @@ pub async fn eval_str(
                 continue;
             }
 
-            // With a matching schema and a successful run, hand the Lisp side
-            // a typed table in `$_`. Parse failures fall back to the plain
-            // string: a schema must never break the pipeline.
-            let table = (last_exit_code == 0)
-                .then_some(schema_spec.as_ref())
-                .flatten()
-                .and_then(
-                    |spec| match crate::output_schema::parse_with_spec(spec, &output) {
-                        Ok(table) => Some(table),
-                        Err(err) => {
-                            debug!("Struct pipe: schema parse failed, using raw string: {err}");
-                            None
-                        }
-                    },
+            // Handle struct_pipe mode with |: (Lisp expressions on command output)
+            if !job.struct_pipe_exprs.is_empty() {
+                use crate::lisp::{Symbol, Value};
+
+                if !job.has_process() {
+                    debug!("Struct pipe: no executable process, skipping");
+                    gate_op = next_gate_op;
+                    continue;
+                }
+
+                debug!(
+                    "Struct pipe: executing command '{}' with {} Lisp expressions",
+                    job.cmd,
+                    job.struct_pipe_exprs.len()
                 );
 
-            // `$RAW` is the raw text of *this* command. The Lisp root
-            // environment outlives the pipeline, so it is rebound on every run
-            // — leaving a previous command's output in place would silently
-            // feed stale data to a later `|:`.
-            {
-                let engine = shell.lisp_engine.borrow();
-                engine
-                    .env
-                    .borrow_mut()
-                    .define(Symbol::from("$RAW"), Value::String(output.clone()));
-            }
-
-            // Evaluate Lisp expressions in sequence, passing output through $_
-            let mut current_value = match table {
-                Some(table) => {
-                    Value::Table(crate::lisp::TableRc::new(std::cell::RefCell::new(table)))
+                // Declarative output schema for the pipeline's last external
+                // command: inject preferred machine-readable flags before the
+                // run, parse the captured output into a table after it.
+                let schema_spec = job
+                    .last_external_argv()
+                    .and_then(|argv| crate::output_schema::lookup(&argv));
+                if let Some(prefer) = schema_spec.as_ref().and_then(|spec| spec.prefer.as_ref()) {
+                    debug!(
+                        "Struct pipe: injecting schema args {:?}",
+                        prefer.inject_args
+                    );
+                    job.append_args_to_last_external(&prefer.inject_args);
                 }
-                None => Value::String(output),
-            };
 
-            for lisp_expr in &job.struct_pipe_exprs {
-                debug!("Struct pipe: evaluating Lisp expression: {}", lisp_expr);
+                // Execute command through regular job launch path and capture output.
+                let (exit_code, output, stderr_output) =
+                    execute_with_capture(shell, ctx, &mut job).await?;
+                last_exit_code = exit_code;
 
-                // Bind $_ to current value
+                // Output stderr to terminal (struct_pipe only processes stdout)
+                if !stderr_output.is_empty() {
+                    eprint!("{}", stderr_output);
+                    std::io::stderr().flush().ok();
+                }
+
+                // If command failed and no output, skip Lisp evaluation
+                if last_exit_code != 0 && output.is_empty() {
+                    debug!("Struct pipe: command failed with no output, skipping Lisp eval");
+                    if ctx.interactive {
+                        enable_raw_mode().ok();
+                    }
+                    publish_exit_status(shell, last_exit_code);
+                    gate_op = next_gate_op;
+                    continue;
+                }
+
+                // With a matching schema and a successful run, hand the Lisp side
+                // a typed table in `$_`. Parse failures fall back to the plain
+                // string: a schema must never break the pipeline.
+                let table = (last_exit_code == 0)
+                    .then_some(schema_spec.as_ref())
+                    .flatten()
+                    .and_then(
+                        |spec| match crate::output_schema::parse_with_spec(spec, &output) {
+                            Ok(table) => Some(table),
+                            Err(err) => {
+                                debug!("Struct pipe: schema parse failed, using raw string: {err}");
+                                None
+                            }
+                        },
+                    );
+
+                // `$RAW` is the raw text of *this* command. The Lisp root
+                // environment outlives the pipeline, so it is rebound on every run
+                // — leaving a previous command's output in place would silently
+                // feed stale data to a later `|:`.
                 {
                     let engine = shell.lisp_engine.borrow();
                     engine
                         .env
                         .borrow_mut()
-                        .define(Symbol::from("$_"), current_value.clone());
+                        .define(Symbol::from("$RAW"), Value::String(output.clone()));
                 }
 
-                // Evaluate the Lisp expression
-                match shell.lisp_engine.borrow().run(lisp_expr) {
-                    Ok(result) => {
-                        debug!("Struct pipe: Lisp result: {:?}", result);
-                        current_value = result;
+                // Evaluate Lisp expressions in sequence, passing output through $_
+                let mut current_value = match table {
+                    Some(table) => {
+                        Value::Table(crate::lisp::TableRc::new(std::cell::RefCell::new(table)))
                     }
-                    Err(e) => {
-                        eprintln!("Struct pipe error: {}", e);
-                        last_exit_code = 1;
-                        break;
+                    None => Value::String(output),
+                };
+
+                for lisp_expr in &job.struct_pipe_exprs {
+                    debug!("Struct pipe: evaluating Lisp expression: {}", lisp_expr);
+
+                    // Bind $_ to current value
+                    {
+                        let engine = shell.lisp_engine.borrow();
+                        engine
+                            .env
+                            .borrow_mut()
+                            .define(Symbol::from("$_"), current_value.clone());
+                    }
+
+                    // Evaluate the Lisp expression
+                    match shell.lisp_engine.borrow().run(lisp_expr) {
+                        Ok(result) => {
+                            debug!("Struct pipe: Lisp result: {:?}", result);
+                            current_value = result;
+                        }
+                        Err(e) => {
+                            eprintln!("Struct pipe error: {}", e);
+                            last_exit_code = 1;
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Print final result (unless it's NIL)
-            if current_value != Value::NIL {
-                println!("{}", current_value);
-            }
-
-            // Execute post-exec hooks
-            if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
-                debug!("Error executing post-exec hooks: {}", e);
-            }
-
-            // Re-enable raw mode after struct_pipe job (only in interactive mode)
-            if ctx.interactive {
-                enable_raw_mode().ok();
-            }
-            publish_exit_status(shell, last_exit_code);
-            gate_op = next_gate_op;
-            continue;
-        }
-
-        let launch_result = job.launch(ctx, shell).await;
-        let mut stop_processing = false;
-        match launch_result {
-            Ok(JobLaunchOutcome::Process(ProcessState::Running)) => {
-                debug!("job '{}' still running", job.cmd);
-                shell.wait_jobs.push(job);
-                // Background jobs are considered successfully started.
-                last_exit_code = 0;
-            }
-            Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, _signal))) => {
-                debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
-                shell.wait_jobs.push(job);
-                // If a job is stopped, we return control to the user and do not continue
-                // evaluating the rest of the command list.
-                stop_processing = true;
-            }
-            Ok(JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _))) => {
-                let exit = state
-                    .shell_exit_code()
-                    .expect("completed state has exit code");
-                debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
-                last_exit_code = exit;
+                // Print final result (unless it's NIL)
+                if current_value != Value::NIL {
+                    println!("{}", current_value);
+                }
 
                 // Execute post-exec hooks
-                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit) {
+                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, last_exit_code) {
                     debug!("Error executing post-exec hooks: {}", e);
                 }
-            }
-            // A redirection setup failure is an ordinary command failure:
-            // report it on the shell's stderr, publish status 1 for `&&` /
-            // `||` / `$?`, and continue the list. The pre-exec hook already
-            // ran, so the post-exec hook runs too, exactly like a normal
-            // completion.
-            Ok(JobLaunchOutcome::CommandFailed(failure)) => {
-                let _ = ctx.write_stderr(&failure.message);
-                last_exit_code = failure.exit_code;
-                if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
-                    debug!("Error executing post-exec hooks: {}", e);
-                }
-                ctx.pid = None;
-                ctx.pgid = None;
-                // Restore raw mode only in interactive mode
+
+                // Re-enable raw mode after struct_pipe job (only in interactive mode)
                 if ctx.interactive {
                     enable_raw_mode().ok();
                 }
@@ -499,32 +483,83 @@ pub async fn eval_str(
                 gate_op = next_gate_op;
                 continue;
             }
-            Err(err) => {
-                ctx.pid = None;
-                ctx.pgid = None;
-                // Restore raw mode only in interactive mode
-                if ctx.interactive {
-                    enable_raw_mode().ok();
+
+            let launch_result = job.launch(ctx, shell).await;
+            let mut stop_processing = false;
+            match launch_result {
+                Ok(JobLaunchOutcome::Process(ProcessState::Running)) => {
+                    debug!("job '{}' still running", job.cmd);
+                    shell.wait_jobs.push(job);
+                    // Background jobs are considered successfully started.
+                    last_exit_code = 0;
                 }
-                return Err(err);
+                Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, _signal))) => {
+                    debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
+                    shell.wait_jobs.push(job);
+                    // If a job is stopped, we return control to the user and do not continue
+                    // evaluating the rest of the command list.
+                    stop_processing = true;
+                }
+                Ok(JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _))) => {
+                    let exit = state
+                        .shell_exit_code()
+                        .expect("completed state has exit code");
+                    debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
+                    last_exit_code = exit;
+
+                    // Execute post-exec hooks
+                    if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, exit) {
+                        debug!("Error executing post-exec hooks: {}", e);
+                    }
+                }
+                // A redirection setup failure is an ordinary command failure:
+                // report it on the shell's stderr, publish status 1 for `&&` /
+                // `||` / `$?`, and continue the list. The pre-exec hook already
+                // ran, so the post-exec hook runs too, exactly like a normal
+                // completion.
+                Ok(JobLaunchOutcome::CommandFailed(failure)) => {
+                    let _ = ctx.write_stderr(&failure.message);
+                    last_exit_code = failure.exit_code;
+                    if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
+                        debug!("Error executing post-exec hooks: {}", e);
+                    }
+                    ctx.pid = None;
+                    ctx.pgid = None;
+                    // Restore raw mode only in interactive mode
+                    if ctx.interactive {
+                        enable_raw_mode().ok();
+                    }
+                    publish_exit_status(shell, last_exit_code);
+                    gate_op = next_gate_op;
+                    continue;
+                }
+                Err(err) => {
+                    ctx.pid = None;
+                    ctx.pgid = None;
+                    // Restore raw mode only in interactive mode
+                    if ctx.interactive {
+                        enable_raw_mode().ok();
+                    }
+                    return Err(err);
+                }
             }
-        }
-        // reset
-        ctx.pid = None;
-        ctx.pgid = None;
+            // reset
+            ctx.pid = None;
+            ctx.pgid = None;
 
-        // Re-enable raw mode after each job completes (only in interactive mode)
-        if ctx.interactive {
-            enable_raw_mode().ok();
-        }
+            // Re-enable raw mode after each job completes (only in interactive mode)
+            if ctx.interactive {
+                enable_raw_mode().ok();
+            }
 
-        publish_exit_status(shell, last_exit_code);
-        gate_op = next_gate_op;
+            publish_exit_status(shell, last_exit_code);
+            gate_op = next_gate_op;
 
-        if stop_processing {
-            break;
-        }
-    }
+            if stop_processing {
+                break 'lists;
+            }
+        } // for planned in &list.jobs
+    } // 'lists: for list in &plan.lists
 
     debug!("EVAL_STR: Job loop completed");
     publish_exit_status(shell, last_exit_code);
@@ -552,7 +587,7 @@ pub(crate) fn publish_exit_status(shell: &Shell, code: i32) {
 /// judge a parsed prefix while the whole line runs.
 pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
     let plan = parse_plan_with_smart_pipe(input, Arc::clone(&shell.environment))?;
-    crate::shell::materialize::dry_materialize_plan(&plan, shell)
+    crate::shell::dry_materialize::dry_materialize_plan(&plan, shell)
 }
 
 /// Whether a line is a Smart Pipe continuation: line-head `|` that is not
@@ -585,7 +620,7 @@ pub(crate) fn parse_plan_with_smart_pipe(
         return Ok(crate::shell::plan::ExecutionPlan::default());
     }
     let mut plan = parse_execution_plan(downstream, environment)?;
-    if let Some(first) = plan.jobs.first_mut() {
+    if let Some(first) = plan.first_job_mut() {
         first.pipeline_source = Some(PlannedPipelineSource::PreviousOutput);
         // User-facing source keeps the line-head pipe, but only for this
         // job: with `| grep foo; echo hi` the second job must stay `echo hi`,
@@ -594,8 +629,8 @@ pub(crate) fn parse_plan_with_smart_pipe(
         first.source = format!("| {}", first.source.trim_start());
     }
     debug!(
-        "Smart Pipe: downstream={downstream:?} jobs={}",
-        plan.jobs.len()
+        "Smart Pipe: downstream={downstream:?} lists={}",
+        plan.lists.len()
     );
     Ok(plan)
 }
@@ -627,12 +662,14 @@ mod tests {
 
     #[test]
     fn test_get_jobs_background() {
+        // Static projection flattens lists: asynchrony lives on the list,
+        // so the projected job is the foreground body `echo a`.
         let env = Environment::new();
         let mut shell = Shell::new(env);
         let jobs = get_jobs(&mut shell, "echo a &").unwrap();
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].cmd, "echo a &");
-        assert!(!jobs[0].foreground);
+        assert_eq!(jobs[0].cmd, "echo a");
+        assert!(jobs[0].foreground);
     }
 
     #[test]
@@ -655,31 +692,31 @@ mod tests {
         use crate::shell::plan::PlannedPipelineSource;
         let env = Environment::new();
         let plan = parse_plan_with_smart_pipe("| grep foo", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs.len(), 1);
+        assert_eq!(plan.lists.len(), 1);
         assert_eq!(
-            plan.jobs[0].pipeline_source,
+            plan.lists[0].jobs[0].pipeline_source,
             Some(PlannedPipelineSource::PreviousOutput)
         );
-        assert_eq!(plan.jobs[0].source, "| grep foo");
-        assert_eq!(plan.jobs[0].stages.len(), 1);
+        assert_eq!(plan.lists[0].jobs[0].source, "| grep foo");
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 1);
 
         let plan = parse_plan_with_smart_pipe("  | grep foo", Arc::clone(&env)).expect("plan");
         assert_eq!(
-            plan.jobs[0].pipeline_source,
+            plan.lists[0].jobs[0].pipeline_source,
             Some(PlannedPipelineSource::PreviousOutput)
         );
 
         let plan =
             parse_plan_with_smart_pipe("| head -10 | tail -5", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs[0].stages.len(), 2);
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 2);
         assert_eq!(
-            plan.jobs[0].pipeline_source,
+            plan.lists[0].jobs[0].pipeline_source,
             Some(PlannedPipelineSource::PreviousOutput)
         );
 
         // Ordinary lines carry no source marker.
         let plan = parse_plan_with_smart_pipe("echo hello", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs[0].pipeline_source, None);
+        assert_eq!(plan.lists[0].jobs[0].pipeline_source, None);
     }
 
     #[test]
@@ -688,13 +725,13 @@ mod tests {
         let env = Environment::new();
         let plan =
             parse_plan_with_smart_pipe("| grep foo; echo hi", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs.len(), 2);
+        assert_eq!(plan.lists.len(), 2);
         assert_eq!(
-            plan.jobs[0].pipeline_source,
+            plan.lists[0].jobs[0].pipeline_source,
             Some(PlannedPipelineSource::PreviousOutput)
         );
-        assert_eq!(plan.jobs[0].source, "| grep foo");
-        assert_eq!(plan.jobs[1].pipeline_source, None);
-        assert_eq!(plan.jobs[1].source, "echo hi");
+        assert_eq!(plan.lists[0].jobs[0].source, "| grep foo");
+        assert_eq!(plan.lists[1].jobs[0].pipeline_source, None);
+        assert_eq!(plan.lists[1].jobs[0].source, "echo hi");
     }
 }

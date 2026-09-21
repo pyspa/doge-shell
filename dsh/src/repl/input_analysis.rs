@@ -118,6 +118,16 @@ pub(crate) fn analyze_input(
             }
         }
         Err(err) => {
+            // Whitespace alone is not a command: execution maps it to an
+            // empty plan, so there is nothing to mark as an error either.
+            if input.trim().is_empty() {
+                return InputAnalysis {
+                    completion_full: None,
+                    completion: None,
+                    color_ranges: Some(Vec::new()),
+                    can_execute: false,
+                };
+            }
             // Parsing failed, highlight the error
             let mut ranges = Vec::new();
             if let Some(range) = cached_tail_argument_path_range(input) {

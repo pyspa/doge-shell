@@ -252,23 +252,23 @@ pub async fn cleanup_pty_tasks(job: &mut Job) {
 }
 
 pub async fn manage_execution(job: &mut Job, ctx: &mut Context) -> Result<()> {
-    if !ctx.interactive {
-        debug!(
-            "JOB_LAUNCH_NON_INTERACTIVE: Non-interactive mode, waiting for job {} completion",
-            job.job_id
-        );
-        // Note: wait_job call needs to be dispatched appropriately
-        // Since wait_job is now possibly in job_wait.rs (not yet created) or still in job.rs
-        // We will assume for now it is available via job instance or moved to helper.
-        // But since we are MOVING logic out of job.rs, we should call the free function version if available.
-        // For now, let's assume we call a method on Job, or a helper function.
-        // To break circular dependency, this should likely call `wait_job(job, false)`.
-        wait_job(job, false).await?;
-    } else if ctx.foreground {
-        if ctx.process_count > 0 {
-            // Similarly, put_in_foreground will be moved or refactored.
-            // Assuming it's available on Job or as a helper.
-            crate::process::job_wait::put_in_foreground(job, false, false).await?;
+    // An asynchronous launch never waits here — not even in
+    // non-interactive (`-c`) runs. The next AND-OR list must start without
+    // waiting for background completion; command mode drains finite
+    // background output once at its exit boundary instead (see
+    // `drain_background_jobs_for_exit`). Foreground jobs still wait
+    // synchronously in every mode.
+    if ctx.foreground {
+        if ctx.interactive {
+            if ctx.process_count > 0 {
+                crate::process::job_wait::put_in_foreground(job, false, false).await?;
+            }
+        } else {
+            debug!(
+                "JOB_LAUNCH_NON_INTERACTIVE: Non-interactive mode, waiting for job {} completion",
+                job.job_id
+            );
+            wait_job(job, false).await?;
         }
     } else {
         crate::process::job_wait::put_in_background(job).await?;

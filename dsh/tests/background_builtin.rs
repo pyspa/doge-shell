@@ -76,40 +76,50 @@ fn background_export_does_not_leak_into_parent() {
 
 #[test]
 fn session_bound_builtin_fails_clearly_in_background() {
-    let output = common::run_command("jobs &");
+    // `jobs &` is an async AND-OR list: the parent launch succeeds (exit 0)
+    // while the helper refuses the session-bound builtin inside itself.
+    // The refusal drains to stderr before process exit.
+    let output = common::run_command("jobs & echo AFTER");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        !output.status.success(),
-        "session-bound background builtin unexpectedly succeeded: {:?}",
-        output
+        stdout.contains("AFTER"),
+        "parent line aborted by background refusal: {stdout:?}"
     );
+    // Background streams drain through the capture monitor to stdout, like
+    // every other background child.
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("cannot run in background"),
-        "clear refusal missing from stderr: {:?}",
-        String::from_utf8_lossy(&output.stderr)
+        stdout.contains("cannot run in background"),
+        "clear refusal missing from background output: {stdout:?}"
     );
 }
 
 #[test]
 fn terminal_bound_builtins_are_refused_before_handler_in_background() {
-    // The policy gate runs before the helper spawns, so these never reach
-    // their Skim/TUI/editor handlers: no hang, no UI, non-zero exit, and
-    // the shared refusal diagnostic on stderr.
+    // The policy gate runs for the selected builtin inside the helper, so
+    // these never reach their Skim/TUI/editor handlers: no hang, no UI.
+    // The parent launch itself succeeds; the refusal surfaces on stderr.
     for name in ["dashboard", "gco", "procs", "gwt", "timing"] {
-        let output = common::run_command(&format!("{name} &"));
+        let output = common::run_command(&format!("{name} & echo AFTER"));
         assert!(
-            !output.status.success(),
-            "{name} in background unexpectedly succeeded: {output:?}"
+            output.status.success(),
+            "{name} in background unexpectedly failed the parent line: {output:?}"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("AFTER"),
+            "{name}: parent line aborted by background refusal: {output:?}"
         );
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("cannot run in background"),
-            "{name}: clear refusal missing from stderr: {output:?}"
+            stdout.contains("cannot run in background"),
+            "{name}: clear refusal missing from background output: {output:?}"
         );
     }
 }
 
 #[test]
 fn pipeline_with_background_builtin_stage_works() {
-    let output = common::run_command("dirs | cat & ; sleep 2");
+    let output = common::run_command("dirs | cat & sleep 2");
     assert!(output.status.success(), "command failed: {:?}", output);
     assert!(
         !String::from_utf8_lossy(&output.stdout).trim().is_empty(),
@@ -122,12 +132,11 @@ fn pipeline_with_background_builtin_stage_works() {
 /// helper's exit flows through `waitpid` into the canonical tree, and `jobs`
 /// reconciles (then drops) completed jobs before listing.
 ///
-/// Non-interactive mode waits for background jobs synchronously at launch,
-/// so the helper is guaranteed done before `jobs` runs — no sleep-polling
-/// flakiness by design.
+/// An async launch never waits, so `jobs` runs after a foreground `sleep`
+/// that outlives the fast helper — no sleep-polling flakiness by design.
 #[test]
 fn background_reexec_builtin_leaves_job_table_after_completion() {
-    let output = common::run_command("dirs & ; jobs");
+    let output = common::run_command("dirs & sleep 1; jobs");
     assert!(output.status.success(), "command failed: {:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -141,7 +150,7 @@ fn background_reexec_builtin_leaves_job_table_after_completion() {
 /// tree completion together empty the table.
 #[test]
 fn completed_background_builtin_pipeline_leaves_job_table() {
-    let output = common::run_command("dirs | cat & ; jobs");
+    let output = common::run_command("dirs | cat & sleep 1; jobs");
     assert!(output.status.success(), "command failed: {:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

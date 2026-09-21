@@ -14,6 +14,20 @@ fn init() {
     let _ = tracing_subscriber::fmt::try_init();
 }
 
+/// Descend one `commands` child to its `command` nodes.
+///
+/// `commands` yields `and_or_list` nodes (plus `list_separator`s); a test
+/// that wants the commands unwraps one level here.
+fn child_commands(pair: pest::iterators::Pair<Rule>) -> Vec<pest::iterators::Pair<Rule>> {
+    if pair.as_rule() == Rule::and_or_list {
+        pair.into_inner()
+            .filter(|inner| inner.as_rule() == Rule::command)
+            .collect()
+    } else {
+        vec![pair]
+    }
+}
+
 type JobLink = Rc<RefCell<Job>>;
 
 #[derive(Debug)]
@@ -366,53 +380,46 @@ fn parse_command4() {
 #[test]
 fn parse_command_sp() {
     init();
-    let pairs = ShellParser::parse(Rule::command, "   ").unwrap_or_else(|e| panic!("{}", e));
-    for pair in pairs {
-        assert_eq!(Rule::command, pair.as_rule());
-        let count = pair.clone().into_inner().count();
-        assert_eq!(0, count);
-    }
+    // A `command` always starts from a `simple_command`, so whitespace alone
+    // is not a command. Execution maps it to an empty plan before parsing.
+    assert!(ShellParser::parse(Rule::command, "   ").is_err());
+    assert!(ShellParser::parse(Rule::commands, "   ").is_err());
 }
 
 #[test]
-fn parse_simple_command_bg1() {
+fn parse_background_list_separator() {
     init();
-    let pairs = ShellParser::parse(Rule::simple_command_bg, "sleep 20 &")
+    // `&` is a list separator between AND-OR lists, not a command suffix.
+    let pairs = ShellParser::parse(Rule::commands, "sleep 20 & sleep 30 &")
         .unwrap_or_else(|e| panic!("{}", e));
     for pair in pairs {
-        assert_eq!(Rule::simple_command_bg, pair.as_rule());
-        let count = pair.clone().into_inner().count();
-        assert_eq!(2, count);
-
-        for inner_pair in pair.into_inner() {
-            if inner_pair.as_rule() == Rule::simple_command {
-                let cmd = inner_pair.as_str();
-                assert_eq!("sleep 20", cmd);
-            }
-        }
+        assert_eq!(Rule::commands, pair.as_rule());
+        let inners: Vec<_> = pair.into_inner().collect();
+        // and_or_list, list_separator, and_or_list, list_separator (trailing).
+        assert_eq!(4, inners.len());
+        assert_eq!(Rule::and_or_list, inners[0].as_rule());
+        assert_eq!("sleep 20", inners[0].as_str().trim());
+        assert_eq!(Rule::list_separator, inners[1].as_rule());
+        assert_eq!(Rule::and_or_list, inners[2].as_rule());
+        assert_eq!("sleep 30", inners[2].as_str().trim());
+        assert_eq!(Rule::list_separator, inners[3].as_rule());
     }
 }
 
 #[test]
 fn parse_command_bg() {
     init();
-    let pairs = ShellParser::parse(Rule::command, "sleep 20 & sleep 30 &")
+    // One `command` never spans `&`: each side is its own AND-OR list.
+    let pairs = ShellParser::parse(Rule::commands, "sleep 20 & sleep 30")
         .unwrap_or_else(|e| panic!("{}", e));
     for pair in pairs {
-        assert_eq!(Rule::command, pair.as_rule());
-        let count = pair.clone().into_inner().count();
-        assert_eq!(2, count);
-        for (i, inner_pair) in pair.into_inner().enumerate() {
-            if inner_pair.as_rule() == Rule::simple_command_bg {
-                let inner_pair = inner_pair.into_inner();
-                let cmd = inner_pair.as_str();
-                if i == 0 {
-                    assert_eq!("sleep 20 &", cmd);
-                } else if i == 1 {
-                    assert_eq!("sleep 30 &", cmd);
-                }
-            }
-        }
+        assert_eq!(Rule::commands, pair.as_rule());
+        let inners: Vec<_> = pair.into_inner().collect();
+        assert_eq!(3, inners.len());
+        assert_eq!(Rule::and_or_list, inners[0].as_rule());
+        assert_eq!(Rule::list_separator, inners[1].as_rule());
+        assert_eq!("&", inners[1].as_str().trim());
+        assert_eq!(Rule::and_or_list, inners[2].as_rule());
     }
 }
 
@@ -599,21 +606,29 @@ fn parse_commands() {
     for pair in pairs {
         for pair in pair.into_inner() {
             match pair.as_rule() {
-                Rule::command => {
-                    debug!("{:?} {:?}", pair.as_rule(), pair.as_str());
-                    let job = Job::new(pair.as_str().to_string());
-                    match result.take() {
-                        Some(prev) => {
-                            prev.borrow_mut().next = Some(Rc::clone(&job));
-                            result = Some(Rc::clone(&job));
-                        }
-                        None => {
-                            result = Some(Rc::clone(&job));
-                            root = Some(Rc::clone(&job));
+                Rule::and_or_list => {
+                    for pair in pair.into_inner() {
+                        match pair.as_rule() {
+                            Rule::command => {
+                                debug!("{:?} {:?}", pair.as_rule(), pair.as_str());
+                                let job = Job::new(pair.as_str().to_string());
+                                match result.take() {
+                                    Some(prev) => {
+                                        prev.borrow_mut().next = Some(Rc::clone(&job));
+                                        result = Some(Rc::clone(&job));
+                                    }
+                                    None => {
+                                        result = Some(Rc::clone(&job));
+                                        root = Some(Rc::clone(&job));
+                                    }
+                                }
+                            }
+                            Rule::and_or_op => {}
+                            _ => {}
                         }
                     }
                 }
-                Rule::command_list_sep => {}
+                Rule::list_separator => {}
                 _ => {}
             }
         }
@@ -628,47 +643,52 @@ fn parse_subshell() {
     let pairs = ShellParser::parse(Rule::commands, "sudo docker rm -v (sudo docker ps -a -q)")
         .unwrap_or_else(|e| panic!("{}", e));
 
+    let mut found_subshell = false;
     for pair in pairs {
         for pair in pair.into_inner() {
-            match pair.as_rule() {
-                Rule::command => {
-                    for pair in pair.into_inner() {
-                        match pair.as_rule() {
-                            Rule::simple_command => {
-                                for pair in pair.into_inner() {
-                                    match pair.as_rule() {
-                                        Rule::argv0 => {}
-                                        Rule::args => {
-                                            for pair in pair.into_inner() {
-                                                if pair.as_rule() == Rule::span {
-                                                    for pair in pair.into_inner() {
-                                                        if pair.as_rule() == Rule::subshell {
-                                                            assert_eq!(
-                                                                pair.as_str(),
-                                                                "(sudo docker ps -a -q)"
-                                                            )
+            for pair in child_commands(pair) {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::subshell {
+                                                                assert_eq!(
+                                                                    pair.as_str(),
+                                                                    "(sudo docker ps -a -q)"
+                                                                );
+                                                                found_subshell = true;
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        _ => {}
+                                            _ => {}
+                                        }
                                     }
                                 }
-                            }
-                            _ => {
-                                println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
                             }
                         }
                     }
-                }
-                _ => {
-                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
                 }
             }
         }
     }
+    assert!(found_subshell);
 }
 
 #[test]
@@ -678,29 +698,26 @@ fn parse_subshell2() {
     let cmd = format!("echo {sub}");
     let pairs = ShellParser::parse(Rule::commands, &cmd).unwrap_or_else(|e| panic!("{}", e));
 
+    let mut found_subshell = false;
     for pair in pairs {
         for pair in pair.into_inner() {
-            match pair.as_rule() {
-                Rule::command => {
-                    for pair in pair.into_inner() {
-                        match pair.as_rule() {
-                            Rule::simple_command => {
-                                for pair in pair.into_inner() {
-                                    match pair.as_rule() {
-                                        Rule::argv0 => {}
-                                        Rule::args => {
-                                            for pair in pair.into_inner() {
-                                                if pair.as_rule() == Rule::span {
-                                                    for pair in pair.into_inner() {
-                                                        if pair.as_rule() == Rule::subshell {
-                                                            assert_eq!(pair.as_str(), sub);
-                                                            println!("{}", pair.as_str());
-                                                            for pair in pair.into_inner() {
-                                                                println!(
-                                                                    "{:?} {:?}",
-                                                                    pair.as_rule(),
-                                                                    pair.as_str()
-                                                                );
+            for pair in child_commands(pair) {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::subshell {
+                                                                assert_eq!(pair.as_str(), sub);
+                                                                found_subshell = true;
+                                                                println!("{}", pair.as_str());
                                                                 for pair in pair.into_inner() {
                                                                     println!(
                                                                         "{:?} {:?}",
@@ -713,6 +730,15 @@ fn parse_subshell2() {
                                                                             pair.as_rule(),
                                                                             pair.as_str()
                                                                         );
+                                                                        for pair in
+                                                                            pair.into_inner()
+                                                                        {
+                                                                            println!(
+                                                                                "{:?} {:?}",
+                                                                                pair.as_rule(),
+                                                                                pair.as_str()
+                                                                            );
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -720,24 +746,25 @@ fn parse_subshell2() {
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        _ => {}
+                                            _ => {}
+                                        }
                                     }
                                 }
-                            }
-                            _ => {
-                                println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
                             }
                         }
                     }
-                }
-                _ => {
-                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
                 }
             }
         }
     }
+    assert!(found_subshell);
 }
 
 #[test]
@@ -746,44 +773,49 @@ fn parse_proc_subst() {
     let pairs =
         ShellParser::parse(Rule::commands, "echo <(ls)").unwrap_or_else(|e| panic!("{}", e));
 
+    let mut found_proc_subst = false;
     for pair in pairs {
         for pair in pair.into_inner() {
-            match pair.as_rule() {
-                Rule::command => {
-                    for pair in pair.into_inner() {
-                        match pair.as_rule() {
-                            Rule::simple_command => {
-                                for pair in pair.into_inner() {
-                                    match pair.as_rule() {
-                                        Rule::argv0 => {}
-                                        Rule::args => {
-                                            for pair in pair.into_inner() {
-                                                if pair.as_rule() == Rule::span {
-                                                    for pair in pair.into_inner() {
-                                                        if pair.as_rule() == Rule::proc_subst {
-                                                            assert_eq!(pair.as_str(), "<(ls)")
+            for pair in child_commands(pair) {
+                match pair.as_rule() {
+                    Rule::command => {
+                        for pair in pair.into_inner() {
+                            match pair.as_rule() {
+                                Rule::simple_command => {
+                                    for pair in pair.into_inner() {
+                                        match pair.as_rule() {
+                                            Rule::argv0 => {}
+                                            Rule::args => {
+                                                for pair in pair.into_inner() {
+                                                    if pair.as_rule() == Rule::span {
+                                                        for pair in pair.into_inner() {
+                                                            if pair.as_rule() == Rule::proc_subst {
+                                                                assert_eq!(pair.as_str(), "<(ls)");
+                                                                found_proc_subst = true;
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
-                                        }
 
-                                        _ => {}
+                                            _ => {}
+                                        }
                                     }
                                 }
-                            }
-                            _ => {
-                                println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                _ => {
+                                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                                }
                             }
                         }
                     }
-                }
-                _ => {
-                    println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    _ => {
+                        println!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                    }
                 }
             }
         }
     }
+    assert!(found_proc_subst);
 }
 
 #[test]
@@ -1259,6 +1291,9 @@ fn parse_struct_pipe_dsl_stops_at_statement_terminators() {
         "ps aux |: where cpu > 5 ; echo done",
         "ps aux |: where cpu > 5 && echo done",
         "ps aux |: where cpu > 5 || echo done",
+        // A single `&` ends the DSL too: `& next` is the next AND-OR list,
+        // not DSL text.
+        "ps aux |: where cpu > 5 & echo done",
     ] {
         let pairs =
             ShellParser::parse(Rule::commands, input).unwrap_or_else(|e| panic!("{input}: {e}"));
@@ -1266,10 +1301,12 @@ fn parse_struct_pipe_dsl_stops_at_statement_terminators() {
         for pair in pairs {
             assert_eq!(Rule::commands, pair.as_rule());
             for inner_pair in pair.into_inner() {
-                if let Rule::command = inner_pair.as_rule() {
-                    command_count += 1;
-                    if command_count == 1 {
-                        assert!(!inner_pair.as_str().contains("echo"));
+                for command_pair in child_commands(inner_pair) {
+                    if let Rule::command = command_pair.as_rule() {
+                        command_count += 1;
+                        if command_count == 1 {
+                            assert!(!command_pair.as_str().contains("echo"));
+                        }
                     }
                 }
             }

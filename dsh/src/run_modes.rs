@@ -361,7 +361,12 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     // Set appropriate context flags for non-interactive execution
     ctx.interactive = false;
 
-    match shell.eval_str(&mut ctx, command.to_string(), false).await {
+    let evaluated = shell.eval_str(&mut ctx, command.to_string(), false).await;
+    // Asynchronous lists return before their helpers finish; drain finite
+    // background output here so `-c` still prints it before exiting. The
+    // foreground status is never rewritten by the drain.
+    crate::shell::job::drain_background_jobs_for_exit(shell).await;
+    match evaluated {
         Ok(code) => {
             shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);
             debug!("run command mode {:?} : {:?}", command, &code);

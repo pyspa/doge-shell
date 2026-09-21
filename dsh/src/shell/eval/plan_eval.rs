@@ -1,14 +1,14 @@
 //! Shared `ExecutionPlan` evaluator for isolated (helper) execution.
 //!
-//! The order mirrors the top-level `eval_str` loop exactly — gate on
-//! `&&`/`||` first, materialize only the selected job (per-job runtime word
-//! expansion), authorize the final concrete argv through `SafetyGuard`, then
-//! launch and publish the status for the next job — minus everything that
-//! belongs to the interactive session: no hooks, no title, no agent handoff,
-//! no `|>` capture or `|:` struct-pipe branches (a nested job's own `launch`
-//! already wires its stdio; capture flags on nested jobs behave as they did
-//! in the old in-process substitution loop, i.e. output flows to the
-//! helper's stdout).
+//! The order mirrors the top-level `eval_str` loop exactly — per AND-OR
+//! list, gate on `&&`/`||` first, materialize only the selected job
+//! (per-job runtime word expansion), authorize the final concrete argv
+//! through `SafetyGuard`, then launch and publish the status for the next
+//! job — minus everything that belongs to the interactive session: no
+//! hooks, no title, no agent handoff, no `|>` capture or `|:` struct-pipe
+//! branches (a nested job's own `launch` already wires its stdio; capture
+//! flags on nested jobs behave as they did in the old in-process
+//! substitution loop, i.e. output flows to the helper's stdout).
 //!
 //! Both the top-level shell and every re-exec helper judge nested dynamic
 //! commands through the same funnel, so `$(...)` and `<(...)` bodies cannot
@@ -19,33 +19,79 @@ use super::super::authorize::{
     AuthorizationCancelled, AuthorizationDecision, ConfirmFn, authorize_job_with,
 };
 use super::super::materialize::{MaterializeOutcome, materialize_job};
-use super::super::plan::ExecutionPlan;
+use super::super::pipeline_isolation::reject_session_bound_background;
+use super::super::plan::{ExecutionPlan, ListExecutionMode, PlannedAndOrList};
 use crate::process::JobLaunchOutcome;
 use anyhow::Result;
 use dsh_types::Context;
 use tracing::debug;
 
-/// Run every selected job of `plan` to completion. Returns the last exit
-/// status. A nested denial aborts with `AuthorizationCancelled`, exactly like
-/// the top-level loop.
+/// Which isolated body is being evaluated: only an async-list helper must
+/// refuse session-bound builtins (its session is empty by construction).
+/// Substitution and subshell helpers keep the historical in-process
+/// behavior for the builtins they select.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanEvaluationEnvironment {
+    Isolated,
+    AsyncList,
+}
+
+/// Run every selected list of `plan` to completion in `env`. Returns the
+/// last exit status. A nested denial aborts with `AuthorizationCancelled`,
+/// exactly like the top-level loop.
 ///
 /// Jobs run sequentially and each completion steers the next gate, so inner
 /// `&&`/`||` behave exactly as on the top level. An infinite producer tail
 /// (`<(yes)`) blocks its helper the way it would block any shell — the
 /// parent never waits on producers; its group-kill reaper bounds their
 /// lifetime instead.
-pub(crate) async fn evaluate_plan(
+///
+/// Async-list helpers pass [`PlanEvaluationEnvironment::AsyncList`] so a
+/// *selected* session-bound builtin fails closed instead of reading the
+/// helper's empty session.
+pub(crate) async fn evaluate_plan_in(
     shell: &mut Shell,
     ctx: &mut Context,
     plan: &ExecutionPlan,
     confirm: ConfirmFn,
+    env: PlanEvaluationEnvironment,
+) -> Result<i32> {
+    let mut last_exit_code = 0_i32;
+    for list in &plan.lists {
+        match list.execution {
+            ListExecutionMode::Foreground => {
+                last_exit_code = evaluate_foreground_list(shell, ctx, list, confirm, env).await?;
+            }
+            ListExecutionMode::Asynchronous => {
+                // A nested async list (e.g. inside `$(...)`): spawn a nested
+                // helper joining this helper's process group, then continue
+                // without waiting — exactly like the top level.
+                spawn_nested_async_list(shell, ctx, list).await?;
+                last_exit_code = 0;
+                super::publish_exit_status(shell, last_exit_code);
+            }
+        }
+    }
+    super::publish_exit_status(shell, last_exit_code);
+    Ok(last_exit_code)
+}
+
+/// Evaluate one foreground AND-OR list: gate, materialize, authorize,
+/// launch. The gate resets per list — a `;`/`&` boundary never carries the
+/// previous list's `ListOp` forward.
+async fn evaluate_foreground_list(
+    shell: &mut Shell,
+    ctx: &mut Context,
+    list: &PlannedAndOrList,
+    confirm: ConfirmFn,
+    env: PlanEvaluationEnvironment,
 ) -> Result<i32> {
     use crate::process::ListOp;
     use crate::process::ProcessState;
 
     let mut last_exit_code = 0_i32;
     let mut gate_op = ListOp::None;
-    for planned in &plan.jobs {
+    for planned in &list.jobs {
         let next_gate_op = planned.list_op.clone();
         let should_run = match gate_op {
             ListOp::None => true,
@@ -92,6 +138,19 @@ pub(crate) async fn evaluate_plan(
         };
         let mut job = materialized.job;
         job.resources = materialized.resources;
+        // Async helpers own no live session: a *selected* session-bound
+        // builtin fails closed here. Gated-out jobs never reach this point,
+        // so `false && jobs &` stays silent. Pipelines already passed the
+        // whole-pipeline preflight during materialization.
+        if env == PlanEvaluationEnvironment::AsyncList
+            && let Err(failure) = reject_session_bound_background(&job, shell)
+        {
+            let _ = ctx.write_stderr(&failure.message);
+            last_exit_code = failure.exit_code;
+            super::publish_exit_status(shell, last_exit_code);
+            gate_op = next_gate_op;
+            continue;
+        }
         match authorize_job_with(shell, &job, materialized.had_dynamic_expansion, confirm)? {
             AuthorizationDecision::Allow => {}
             AuthorizationDecision::Deny => {
@@ -131,4 +190,33 @@ pub(crate) async fn evaluate_plan(
     }
     super::publish_exit_status(shell, last_exit_code);
     Ok(last_exit_code)
+}
+
+/// Spawn one nested async list from inside a helper.
+///
+/// The nested helper joins this helper's process group (`ctx.pgid` is the
+/// outer helper's pid by the time we run here), so the parent's group-kill
+/// reaper still reaches the whole tree. The job is tracked on the helper's
+/// own `wait_jobs`; the helper never waits for it here.
+async fn spawn_nested_async_list(
+    shell: &mut Shell,
+    ctx: &mut Context,
+    list: &PlannedAndOrList,
+) -> Result<()> {
+    use crate::process::{AsyncListProcess, Job, JobProcess};
+
+    let source = list.display_source();
+    let mut job = Job::new(source.clone(), shell.pgid);
+    job.job_id = shell.get_job_id();
+    job.foreground = false;
+    job.set_process(JobProcess::AsyncList(AsyncListProcess::new(
+        source.clone(),
+        list.isolated_body_plan(),
+    )));
+    // `Job::launch` snapshots base stdio and restores `ctx` on the way
+    // out; the helper's own stdio is untouched after this returns.
+    let outcome = job.launch(ctx, shell).await?;
+    debug!("nested async list '{source}' launched: {outcome:?}");
+    shell.wait_jobs.push(job);
+    Ok(())
 }

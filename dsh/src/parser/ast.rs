@@ -120,11 +120,13 @@ fn unescape_s_quoted(text: &str) -> String {
 }
 
 pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span<'_>)>> {
-    let pairs = ShellParser::parse(Rule::command, input).map_err(|e| anyhow!(e))?;
+    // Parse whole lists: a cursor line may hold `;`/`&&`/`||`/`&`
+    // separators, which no single `command` spans.
+    let pairs = ShellParser::parse(Rule::commands, input).map_err(|e| anyhow!(e))?;
 
     for pair in pairs {
         match pair.as_rule() {
-            Rule::command => {
+            Rule::commands | Rule::and_or_list | Rule::command => {
                 for pair in pair.into_inner() {
                     let res = search_pos_word(pair, pos);
                     if res.is_some() {
@@ -141,12 +143,14 @@ pub fn get_pos_word(input: &str, pos: usize) -> Result<Option<(Rule, Span<'_>)>>
 fn search_pos_word(pair: Pair<Rule>, pos: usize) -> Option<(Rule, Span)> {
     match pair.as_rule() {
         Rule::commands
+        | Rule::and_or_list
         | Rule::command
         | Rule::simple_command
-        | Rule::simple_command_bg
         | Rule::span
         | Rule::proc_subst
-        | Rule::subshell => {
+        | Rule::subshell
+        | Rule::and_or_op
+        | Rule::list_separator => {
             for pair in pair.into_inner() {
                 let res = search_pos_word(pair, pos);
                 if res.is_some() {
@@ -236,7 +240,7 @@ pub fn get_words_from_pairs<'a>(pairs: Pairs<'a, Rule>, pos: usize) -> Vec<(Rule
     let mut result: Vec<(Rule, Span<'a>, bool)> = Vec::with_capacity(16);
     for pair in pairs {
         match pair.as_rule() {
-            Rule::commands | Rule::command => {
+            Rule::commands | Rule::and_or_list | Rule::command => {
                 for pair in pair.into_inner() {
                     to_words(pair, pos, &mut result);
                 }
@@ -282,7 +286,7 @@ fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>,
                 // );
 
                 match inner_pair.as_rule() {
-                    Rule::simple_command | Rule::simple_command_bg => {
+                    Rule::simple_command => {
                         for inner_pair in inner_pair.into_inner() {
                             to_words(inner_pair, pos, out);
                         }
@@ -306,12 +310,12 @@ fn to_words<'a>(pair: Pair<'a, Rule>, pos: usize, out: &mut Vec<(Rule, Span<'a>,
                         }
                     }
 
-                    Rule::commands | Rule::command => {
-                        // Handle nested commands (with &&, ||, ;)
+                    Rule::commands | Rule::and_or_list | Rule::command => {
+                        // Handle nested commands (with &&, ||, ;, &)
                         to_words(inner_pair, pos, out);
                     }
-                    Rule::command_list_sep => {
-                        // Skip command separators like &&, ||, ;
+                    Rule::and_or_op | Rule::list_separator => {
+                        // Skip command separators like &&, ||, ;, &
                     }
                     _ => {
                         // debug!(
@@ -343,7 +347,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::proc_subst
         | Rule::subshell
         | Rule::simple_command
-        | Rule::simple_command_bg
+        | Rule::and_or_list
         | Rule::command
         | Rule::commands => {
             for pair in pair.into_inner() {

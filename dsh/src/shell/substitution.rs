@@ -665,8 +665,8 @@ mod tests {
         let mut shell = Shell::new(env.clone());
         let plan = crate::shell::parse::parse_execution_plan(&input, std::sync::Arc::clone(&env))
             .expect("parse background plan");
-        // Headless interactive context: no tty, but background is genuinely
-        // not waited (unlike piped `-c` runs, which wait even for `&`).
+        // Headless interactive context: no tty, and background launches are
+        // genuinely not waited (async lists return at spawn; `-c` drains at exit).
         let null = std::fs::File::open("/dev/null").expect("open /dev/null");
         use std::os::fd::AsRawFd as _;
         let null_fd = null.as_raw_fd();
@@ -691,7 +691,7 @@ mod tests {
         let materialized = match crate::shell::materialize::materialize_job(
             &mut shell,
             &ctx,
-            &plan.jobs[0],
+            &plan.lists[0].jobs[0],
             allow_all,
         )
         .await

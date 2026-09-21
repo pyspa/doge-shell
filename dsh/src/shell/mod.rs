@@ -1,4 +1,5 @@
 pub mod authorize;
+pub mod dry_materialize;
 pub mod eval;
 pub mod hooks;
 pub mod job;
@@ -471,6 +472,65 @@ mod tests {
         ExitStatus::ExitedWith(0)
     }
 
+    /// `force_background` runs the whole plan in one isolated helper: every
+    /// job of the line shares a single shell environment instead of one
+    /// helper per job, and nothing leaks into the parent.
+    ///
+    /// Needs the sibling `dogesh` binary: run a full `cargo test -p
+    /// doge-shell` first, like the other re-exec tests.
+    #[tokio::test]
+    async fn force_background_runs_whole_plan_in_one_helper() {
+        use std::time::Duration;
+
+        let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+
+        let environment = crate::environment::Environment::new();
+        let mut shell = Shell::new(environment);
+        let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, true);
+        ctx.interactive = false;
+
+        let exit_code = shell
+            .eval_str(&mut ctx, "FOO=one; FOO=two; echo $FOO".to_string(), true)
+            .await
+            .unwrap();
+        assert_eq!(exit_code, 0);
+        // One managed job for the whole line, not one per `;` job.
+        assert_eq!(shell.wait_jobs.len(), 1);
+        assert!(!shell.wait_jobs[0].foreground);
+        // The parent shell never sees the helper's assignments.
+        assert_eq!(
+            shell.environment.read().lookup_variable("FOO").as_deref(),
+            None
+        );
+
+        // The helper's own chain shared one environment: the last job saw
+        // `FOO=two`. Poll to completion, then read the capture monitor.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let done = shell.wait_jobs[0].update_status();
+            if done {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "whole-plan helper never completed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        for monitor in shell.wait_jobs[0].monitors.iter_mut() {
+            monitor.drain_to_eof().await.expect("drain helper output");
+        }
+        let captured: String = shell.wait_jobs[0]
+            .monitors
+            .iter()
+            .map(|monitor| monitor.captured_output.clone())
+            .collect();
+        assert!(
+            captured.contains("two"),
+            "helper jobs did not share one environment: {captured:?}"
+        );
+    }
+
     /// End-to-end background-builtin lifecycle through the real job table:
     /// `waitpid` observation → canonical `BuiltinProcess` state → strict
     /// tree completion → removal from `wait_jobs`.
@@ -552,7 +612,11 @@ mod tests {
         assert_eq!(shell.wait_jobs.len(), 1);
 
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let completed = tokio::time::timeout(Duration::from_millis(300), shell.check_job_state())
+        // The check probes each capture monitor once (200ms per monitor,
+        // stdout + stderr here) without waiting for the descendant-held
+        // pipe to close: ~400ms proves EOF-waiting is gone, while the old
+        // drain-to-EOF behavior would block ~900ms until `sleep 1` exits.
+        let completed = tokio::time::timeout(Duration::from_millis(700), shell.check_job_state())
             .await
             .expect("background job check should not wait for descendant-held stdout")
             .unwrap();

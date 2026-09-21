@@ -59,7 +59,9 @@ fn last_external_process_name(process: &JobProcess) -> Option<String> {
         Some(next) => last_external_process_name(&next),
         None => match process {
             JobProcess::Command(_) => Some(process.get_cmd().to_string()),
-            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) => None,
+            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) | JobProcess::AsyncList(_) => {
+                None
+            }
         },
     }
 }

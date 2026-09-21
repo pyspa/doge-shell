@@ -23,14 +23,178 @@ timeout_ms = 8000
 status = 0
 stdout_contains = ["bg-marker", "ALL:0"]
 
+# `&` backgrounds the whole AND-OR list: the pipeline runs asynchronously
+# and the next list starts without waiting for it.
 [[case]]
 id = "background.pipeline-in-background"
 class = "posix"
 mode = "command"
 script = "echo hi | {{TR}} a-z A-Z & echo BG:$?"
 timeout_ms = 8000
-xfail = "pipeline followed by & plus a trailing command is a syntax error"
 
 [case.expect]
 status = 0
 stdout_contains = ["BG:0"]
+
+# The parent-visible status of an async launch is 0 even when the
+# background body itself fails.
+[[case]]
+id = "background.async-parent-status"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} & echo BG:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["BG:0"]
+
+# `a && b &` backgrounds the whole AND chain; output order is scheduler
+# dependent, so only presence is asserted.
+[[case]]
+id = "background.and-list-whole-background"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} && echo INNER & echo OUTER"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["INNER", "OUTER"]
+
+# Gating happens inside the helper: the skipped branch never runs.
+[[case]]
+id = "background.and-list-skip"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} && echo SHOULD_NOT_RUN & echo AFTER"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["AFTER"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "background.or-list"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} || echo RECOVERED & echo AFTER"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED", "AFTER"]
+
+# `false || echo A && echo B & echo C`: the async body is the whole
+# `false || echo A && echo B`, `echo C` is the next foreground list.
+[[case]]
+id = "background.mixed-and-or-list"
+class = "posix"
+mode = "command"
+script = "{{FALSE}} || echo A && echo B & echo C"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["A", "B", "C"]
+
+# State isolation: mutations persist across the list inside the helper but
+# never leak into the parent.
+[[case]]
+id = "background.state-isolation"
+class = "posix"
+mode = "command"
+script = "ASYNC_SCOPE=parent; ASYNC_SCOPE=child && echo INNER:$ASYNC_SCOPE & echo OUTER:$ASYNC_SCOPE"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["INNER:child", "OUTER:parent"]
+
+# `cd` runs in the helper itself, so the rest of the async list sees it
+# while the parent cwd is unchanged.
+[[case]]
+id = "background.cd-stays-in-helper"
+class = "posix"
+mode = "command"
+script = "cd /tmp && pwd & echo AFTER"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["AFTER", "tmp"]
+
+# The next list starts before background completion: when the foreground
+# check runs, the marker file does not exist yet. (The shell still drains
+# the helper before process exit, so the file exists afterwards.)
+[[case]]
+id = "background.next-command-does-not-wait"
+class = "posix"
+mode = "command"
+script = "rm -f marker; sleep 1 && echo done > marker & test ! -e marker && echo EARLY"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["EARLY"]
+
+[[case.expect.files]]
+path = "marker"
+exists = true
+content_contains = ["done"]
+
+# An explicit `< file` redirection inside the list overrides the async
+# `/dev/null` stdin default.
+[[case]]
+id = "background.explicit-input-redirect"
+class = "posix"
+mode = "command"
+script = "echo hello > input; cat < input & echo NEXT"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["hello", "NEXT"]
+
+# A selected session-bound builtin fails closed inside the helper without
+# aborting the parent line. Like every other background stream, the helper
+# diagnostic drains through the capture monitor to stdout.
+[[case]]
+id = "background.session-bound-builtin"
+class = "dogesh"
+mode = "command"
+script = "jobs & echo AFTER"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["AFTER", "cannot run in background"]
+
+# A short-lived pipeline in the background must not hang the shell.
+[[case]]
+id = "background.pipeline-lifecycle"
+class = "posix"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -n 1 & echo NEXT"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["NEXT"]
+
+# Large background pipe output must flow without deadlock.
+[[case]]
+id = "background.large-output-no-deadlock"
+class = "posix"
+mode = "command"
+script = "{{YES}} | {{HEAD}} -c 131072 > bg.txt & echo NEXT"
+timeout_ms = 15000
+
+[case.expect]
+status = 0
+stdout_contains = ["NEXT"]
+
+[[case.expect.files]]
+path = "bg.txt"
+exists = true

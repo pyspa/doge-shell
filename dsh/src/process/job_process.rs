@@ -6,6 +6,7 @@ use std::os::fd::IntoRawFd;
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
+use super::async_list::AsyncListProcess;
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::{BuiltinProcess, builtin_execution_placement};
 use super::fork::fork_process;
@@ -25,6 +26,7 @@ pub enum JobProcess {
     Builtin(BuiltinProcess),
     Command(Process),
     SyntheticSource(PipelineSourceProcess),
+    AsyncList(AsyncListProcess),
 }
 
 impl std::fmt::Debug for JobProcess {
@@ -50,6 +52,12 @@ impl std::fmt::Debug for JobProcess {
                 .debug_struct("JobProcess::SyntheticSource")
                 .field("data_len", &jprocess.data.len())
                 .field("has_next", &jprocess.next.is_some())
+                .finish(),
+            JobProcess::AsyncList(jprocess) => f
+                .debug_struct("JobProcess::AsyncList")
+                .field("source", &jprocess.source)
+                .field("pid", &jprocess.pid)
+                .field("state", &jprocess.state)
                 .finish(),
         }
     }
@@ -105,6 +113,7 @@ impl JobProcess {
             JobProcess::Builtin(jprocess) => jprocess.link(process),
             JobProcess::Command(jprocess) => jprocess.link(process),
             JobProcess::SyntheticSource(jprocess) => jprocess.link(process),
+            JobProcess::AsyncList(jprocess) => jprocess.link(process),
         }
     }
 
@@ -114,6 +123,17 @@ impl JobProcess {
             JobProcess::Builtin(p) => p.next.as_deref(),
             JobProcess::Command(p) => p.next.as_deref(),
             JobProcess::SyntheticSource(p) => p.next.as_deref(),
+            JobProcess::AsyncList(p) => p.next.as_deref(),
+        }
+    }
+
+    /// The next stage of the pipeline, borrowed mutably.
+    pub(crate) fn next_process_mut(&mut self) -> Option<&mut JobProcess> {
+        match self {
+            JobProcess::Builtin(p) => p.next.as_deref_mut(),
+            JobProcess::Command(p) => p.next.as_deref_mut(),
+            JobProcess::SyntheticSource(p) => p.next.as_deref_mut(),
+            JobProcess::AsyncList(p) => p.next.as_deref_mut(),
         }
     }
 
@@ -122,6 +142,7 @@ impl JobProcess {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::SyntheticSource(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::AsyncList(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
 
@@ -130,6 +151,7 @@ impl JobProcess {
             JobProcess::Builtin(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::Command(jprocess) => jprocess.next.as_ref().cloned(),
             JobProcess::SyntheticSource(jprocess) => jprocess.next.as_ref().cloned(),
+            JobProcess::AsyncList(jprocess) => jprocess.next.as_ref().cloned(),
         }
     }
 
@@ -138,6 +160,7 @@ impl JobProcess {
             JobProcess::Builtin(jprocess) => jprocess.next.take(),
             JobProcess::Command(jprocess) => jprocess.next.take(),
             JobProcess::SyntheticSource(jprocess) => jprocess.next.take(),
+            JobProcess::AsyncList(jprocess) => jprocess.next.take(),
         }
     }
 
@@ -158,6 +181,11 @@ impl JobProcess {
                 jprocess.stdout = stdout;
                 jprocess.stderr = stderr;
             }
+            JobProcess::AsyncList(jprocess) => {
+                jprocess.stdin = stdin;
+                jprocess.stdout = stdout;
+                jprocess.stderr = stderr;
+            }
         }
     }
 
@@ -168,6 +196,7 @@ impl JobProcess {
             JobProcess::SyntheticSource(jprocess) => {
                 (jprocess.stdin, jprocess.stdout, jprocess.stderr)
             }
+            JobProcess::AsyncList(jprocess) => (jprocess.stdin, jprocess.stdout, jprocess.stderr),
         }
     }
 
@@ -182,6 +211,9 @@ impl JobProcess {
             JobProcess::SyntheticSource(process) => {
                 process.pid = pid;
             }
+            JobProcess::AsyncList(process) => {
+                process.pid = pid;
+            }
         }
     }
 
@@ -190,6 +222,7 @@ impl JobProcess {
             JobProcess::Builtin(process) => process.pid,
             JobProcess::Command(process) => process.pid,
             JobProcess::SyntheticSource(process) => process.pid,
+            JobProcess::AsyncList(process) => process.pid,
         }
     }
 
@@ -208,6 +241,7 @@ impl JobProcess {
             JobProcess::Builtin(p) => p.state = state,
             JobProcess::Command(p) => p.state = state,
             JobProcess::SyntheticSource(p) => p.state = state,
+            JobProcess::AsyncList(p) => p.state = state,
         }
     }
 
@@ -229,6 +263,10 @@ impl JobProcess {
                 debug!("🔄 STATE: Setting state for pipeline source");
                 p.set_state(pid, state)
             }
+            JobProcess::AsyncList(p) => {
+                debug!("🔄 STATE: Setting state for async list");
+                p.set_state(pid, state)
+            }
         };
         debug!("🔄 STATE: set_state_pid result: {}", result);
         result
@@ -239,6 +277,7 @@ impl JobProcess {
             JobProcess::Builtin(p) => p.state,
             JobProcess::Command(p) => p.state,
             JobProcess::SyntheticSource(p) => p.state,
+            JobProcess::AsyncList(p) => p.state,
         }
     }
 
@@ -317,6 +356,14 @@ impl JobProcess {
                     next.mark_stopped_processes_running();
                 }
             }
+            JobProcess::AsyncList(process) => {
+                if matches!(process.state, ProcessState::Stopped(_, _)) {
+                    process.state = ProcessState::Running;
+                }
+                if let Some(next) = process.next.as_deref_mut() {
+                    next.mark_stopped_processes_running();
+                }
+            }
         }
     }
 
@@ -341,6 +388,7 @@ impl JobProcess {
             JobProcess::Builtin(p) => (p.cap_stdout, p.cap_stderr),
             JobProcess::Command(p) => (p.cap_stdout, p.cap_stderr),
             JobProcess::SyntheticSource(_) => (None, None),
+            JobProcess::AsyncList(p) => (p.cap_stdout, p.cap_stderr),
         }
     }
 
@@ -349,6 +397,7 @@ impl JobProcess {
             JobProcess::Builtin(p) => &p.name,
             JobProcess::Command(p) => &p.cmd,
             JobProcess::SyntheticSource(_) => "<smart-pipe-source>",
+            JobProcess::AsyncList(p) => &p.source,
         }
     }
 
@@ -367,7 +416,9 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => Some((p.name.as_str(), strip_argv0(&p.name, &p.argv))),
             JobProcess::Command(p) => Some((p.cmd.as_str(), strip_argv0(&p.cmd, &p.argv))),
-            JobProcess::SyntheticSource(_) => None,
+            // Neither a synthetic source nor an async list is a classifiable
+            // command: the guard skips both.
+            JobProcess::SyntheticSource(_) | JobProcess::AsyncList(_) => None,
         }
     }
 
@@ -377,7 +428,7 @@ impl JobProcess {
         match self {
             JobProcess::Builtin(p) => &p.redirects,
             JobProcess::Command(p) => &p.redirects,
-            JobProcess::SyntheticSource(_) => EMPTY_REDIRECTS,
+            JobProcess::SyntheticSource(_) | JobProcess::AsyncList(_) => EMPTY_REDIRECTS,
         }
     }
 
@@ -388,6 +439,9 @@ impl JobProcess {
             JobProcess::SyntheticSource(_) => {
                 super::pipeline_source::assert_no_source_redirects(redirects.len());
             }
+            JobProcess::AsyncList(_) => {
+                super::async_list::assert_no_async_list_redirects(redirects.len());
+            }
         }
     }
 
@@ -397,6 +451,9 @@ impl JobProcess {
             JobProcess::Command(p) => p.env_overrides = overrides,
             JobProcess::SyntheticSource(_) => {
                 super::pipeline_source::assert_no_source_env(overrides.len());
+            }
+            JobProcess::AsyncList(_) => {
+                super::async_list::assert_no_async_list_env(overrides.len());
             }
         }
     }
@@ -457,10 +514,13 @@ impl JobProcess {
             None => {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
                 // We don't do this in interactive mode to preserve TTY (colors, etc.)
+                // Async lists own their capture in `spawn_async_list`; the
+                // generic pipe here would capture them twice.
                 if (!ctx.interactive
                     && !has_redirect
                     && pty.is_none()
-                    && ctx.captured_out.is_none())
+                    && ctx.captured_out.is_none()
+                    && !matches!(self, JobProcess::AsyncList(_)))
                     || observe_foreground_external
                 {
                     let (pout, pin) = cloexec_pipe().context("failed pipe")?;
@@ -471,6 +531,7 @@ impl JobProcess {
                         JobProcess::Builtin(p) => p.cap_stdout = Some(pout_raw),
                         JobProcess::Command(p) => p.cap_stdout = Some(pout_raw),
                         JobProcess::SyntheticSource(_) => {}
+                        JobProcess::AsyncList(_) => {}
                     }
                     None
                 } else {
@@ -567,6 +628,13 @@ impl JobProcess {
                 JobProcess::SyntheticSource(process) => {
                     super::pipeline_source::spawn_synthetic_source(ctx, shell, process)?
                 }
+                JobProcess::AsyncList(_) => {
+                    // Async lists never launch through the per-stage path:
+                    // `Job::launch_process` routes them to
+                    // `spawn_async_list`, which also owns the job-level
+                    // pgid and monitor bookkeeping this path cannot do.
+                    anyhow::bail!("async list cannot launch as a pipeline stage");
+                }
             })
         }
         .await;
@@ -650,6 +718,9 @@ impl JobProcess {
             JobProcess::Builtin(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
             JobProcess::Command(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
             JobProcess::SyntheticSource(_) => (None, None),
+            JobProcess::AsyncList(process) => {
+                (process.cap_stdout.take(), process.cap_stderr.take())
+            }
         };
         if let Some(fd) = cap_stdout {
             let _ = close(fd);
@@ -695,6 +766,7 @@ impl JobProcess {
             JobProcess::Builtin(process) => process.update_state(),
             JobProcess::Command(process) => process.update_state(),
             JobProcess::SyntheticSource(process) => process.update_state(),
+            JobProcess::AsyncList(process) => process.update_state(),
         }
     }
 }

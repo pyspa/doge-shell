@@ -562,7 +562,7 @@ mod tests {
             Arc::clone(&shell.environment),
         )
         .expect("plan");
-        let word = &plan.jobs[0].stages[0].argv[1];
+        let word = &plan.lists[0].jobs[0].stages[0].argv[1];
         let mut resources = ExecutionResources::new();
         let mut trace = ExpansionTrace::default();
         let fields = expand_argument_word(

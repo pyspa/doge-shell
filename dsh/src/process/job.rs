@@ -163,20 +163,14 @@ impl Job {
     /// match against; a builtin tail returns `None`.
     pub(crate) fn last_external_argv(&self) -> Option<Vec<String>> {
         let mut current = self.process.as_deref()?;
-        loop {
-            let next = match current {
-                JobProcess::Builtin(process) => process.next.as_deref(),
-                JobProcess::Command(process) => process.next.as_deref(),
-                JobProcess::SyntheticSource(process) => process.next.as_deref(),
-            };
-            match next {
-                Some(next) => current = next,
-                None => break,
-            }
+        while let Some(next) = current.next_process() {
+            current = next;
         }
         match current {
             JobProcess::Command(process) => Some(process.argv.clone()),
-            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) => None,
+            JobProcess::Builtin(_) | JobProcess::SyntheticSource(_) | JobProcess::AsyncList(_) => {
+                None
+            }
         }
     }
 
@@ -191,19 +185,12 @@ impl Job {
             return;
         };
         loop {
-            let has_next = match &*current {
-                JobProcess::Builtin(process) => process.next.is_some(),
-                JobProcess::Command(process) => process.next.is_some(),
-                JobProcess::SyntheticSource(process) => process.next.is_some(),
-            };
-            if !has_next {
+            if current.next_process().is_none() {
                 break;
             }
-            current = match current {
-                JobProcess::Builtin(process) => process.next.as_deref_mut().unwrap(),
-                JobProcess::Command(process) => process.next.as_deref_mut().unwrap(),
-                JobProcess::SyntheticSource(process) => process.next.as_deref_mut().unwrap(),
-            };
+            current = current
+                .next_process_mut()
+                .expect("next stage checked above");
         }
         if let JobProcess::Command(process) = current {
             // argv[0] is the command name, so start the search at 1.
@@ -379,6 +366,12 @@ impl Job {
         pty: Option<PtyChildConfig>,
         pipeline_context: bool,
     ) -> Result<StageLaunchOutcome> {
+        // An async AND-OR list is one managed helper, not a pipeline (see
+        // `async_list::launch_async_list_process`): routing it through the
+        // per-stage wiring below would double-capture its output.
+        if matches!(process, JobProcess::AsyncList(_)) {
+            return super::async_list::launch_async_list_process(self, ctx, shell, process);
+        }
         let previous_infile = ctx.infile;
         // Input redirection is applied here, before the process is launched;
         // the output side is applied inside `launch`, after the pipe and PTY

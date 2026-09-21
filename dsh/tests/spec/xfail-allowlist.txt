@@ -5,5 +5,4 @@
 # hidden behind an ad-hoc xfail and forces stale markers to be removed once
 # the bug is fixed (the fix surfaces as XPASS -> suite failure).
 
-background.pipeline-in-background
 pipeline.assignment-stage-parent-isolation

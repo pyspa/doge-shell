@@ -15,19 +15,76 @@ use crate::process::redirect::RedirectOp as ConcreteRedirectOp;
 use std::os::unix::io::RawFd;
 
 /// A whole input line, parsed without running anything.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionPlan {
-    pub jobs: Vec<PlannedJob>,
+    pub lists: Vec<PlannedAndOrList>,
 }
 
 impl ExecutionPlan {
     pub fn is_empty(&self) -> bool {
-        self.jobs.is_empty()
+        self.lists.iter().all(|list| list.jobs.is_empty())
+    }
+
+    /// Flattened job projection for static inspection (safety checks,
+    /// tests). Never starts async execution.
+    pub fn iter_jobs(&self) -> impl Iterator<Item = &PlannedJob> {
+        self.lists.iter().flat_map(|list| list.jobs.iter())
+    }
+
+    pub fn first_job_mut(&mut self) -> Option<&mut PlannedJob> {
+        self.lists.iter_mut().find_map(|list| list.jobs.first_mut())
     }
 }
 
-/// One `;`/`&&`/`||`-separated job: a pipeline plus its gating and flags.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+/// One AND-OR list: `&&`/`||`-gated pipelines sharing one execution
+/// environment, separated from the next list by `;` (foreground) or `&`
+/// (asynchronous). `&` is ownership of the whole list, never a
+/// per-command flag.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedAndOrList {
+    /// User-facing source text of the list body (without the separator).
+    pub source: String,
+    /// `&&`/`||`-gated pipelines in execution order.
+    pub jobs: Vec<PlannedJob>,
+    pub execution: ListExecutionMode,
+}
+
+/// Whether an AND-OR list runs inline or as an isolated background helper.
+///
+/// `&&`/`||` gating (`ListOp`) stays intra-list control flow on a separate
+/// axis; it is never mixed into this enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ListExecutionMode {
+    Foreground,
+    Asynchronous,
+}
+
+impl PlannedAndOrList {
+    /// The body a helper evaluates: the same list, normalized to foreground
+    /// so the helper runs it as an ordinary chain instead of re-spawning
+    /// itself asynchronously.
+    pub fn isolated_body_plan(&self) -> ExecutionPlan {
+        let mut body = self.clone();
+        body.execution = ListExecutionMode::Foreground;
+        ExecutionPlan { lists: vec![body] }
+    }
+
+    /// User-facing source for the job table and notices.
+    pub fn display_source(&self) -> String {
+        match self.execution {
+            ListExecutionMode::Foreground => self.source.clone(),
+            ListExecutionMode::Asynchronous => format!("{} &", self.source),
+        }
+    }
+}
+
+/// One `&&`/`||`-gated pipeline: stages plus its gating and flags.
+///
+/// `ListOp` gates the *next* pipeline inside the same AND-OR list. There is
+/// no background flag here: a job always runs in the foreground of its own
+/// list's execution environment, and asynchrony belongs to
+/// [`PlannedAndOrList::execution`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedJob {
     /// User-facing source text (for safety messages and `Job.cmd`).
     pub source: String,
@@ -35,7 +92,6 @@ pub struct PlannedJob {
     pub stages: Vec<PlannedCommand>,
     /// Separator after this job: None / && / ||.
     pub list_op: ListOp,
-    pub foreground: bool,
     pub capture_output: bool,
     pub struct_pipe_exprs: Vec<String>,
     pub subshell: SubshellType,
@@ -74,7 +130,7 @@ impl PlannedJob {
 }
 
 /// One pipeline stage: word templates plus per-process redirections and env.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedCommand {
     pub argv: Vec<PlannedWord>,
     pub redirects: Vec<PlannedRedirect>,
@@ -100,7 +156,7 @@ pub enum QuoteMode {
 ///
 /// A `PlannedWord` is not one final argv entry. Runtime expansion may turn it
 /// into zero, one, or many fields.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedWord {
     /// User source for diagnostics/tests.
     pub source: String,
@@ -128,7 +184,7 @@ impl PlannedWord {
 
 /// A fragment of a word: static text, a deferred variable, or a deferred
 /// substitution body.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WordPart {
     Literal(PlannedLiteral),
     Variable {
@@ -142,7 +198,7 @@ pub enum WordPart {
 }
 
 /// Static text inside a word, with the flags runtime expansion needs.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedLiteral {
     /// Quote/escape-removed text for argv.
     pub text: String,
@@ -159,7 +215,7 @@ pub struct PlannedLiteral {
 
 /// A deferred substitution body: its own plan, evaluated only after gating
 /// and authorization.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedSubstitution {
     pub source: String,
     pub kind: SubshellType,
@@ -168,7 +224,7 @@ pub struct PlannedSubstitution {
 
 /// One `NAME=value` prefix or standalone assignment. The value stays a word
 /// until the selected job is materialized.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedAssignment {
     pub name: String,
     pub value: PlannedWord,
@@ -182,7 +238,7 @@ impl PlannedAssignment {
 
 /// One redirection in source order. File targets stay words until the
 /// selected job is materialized.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedRedirect {
     pub fd: RawFd,
     pub op: PlannedRedirectOp,
@@ -224,7 +280,7 @@ impl PlannedRedirect {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlannedRedirectOp {
     ReadFile(PlannedWord),
     WriteFile(PlannedWord),

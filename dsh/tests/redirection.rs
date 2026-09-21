@@ -438,8 +438,9 @@ fn runnable_redirect_failure_reports_exactly_one_diagnostic() {
     );
 }
 
-/// A background job whose redirection fails before spawn is never registered:
-/// the status is non-zero and the shell continues.
+/// A redirection failure inside an async list fails the helper, not the
+/// parent launch: the parent reports 0 for the successful spawn and
+/// continues, while the helper's diagnostic drains through its own output.
 #[test]
 fn background_redirect_failure_is_not_a_job() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -452,12 +453,12 @@ fn background_redirect_failure_is_not_a_job() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(
-        stdout.lines().any(|line| line.trim() == "BG:1"),
-        "background redirect failure must report non-zero: {stdout:?} {stderr:?}"
+        stdout.lines().any(|line| line.trim() == "BG:0"),
+        "async launch status must stay 0: {stdout:?} {stderr:?}"
     );
     assert!(
-        stderr.contains("failed to create redirect file"),
-        "missing diagnostic: {stderr:?}"
+        stdout.contains("failed to create redirect file"),
+        "missing helper diagnostic: {stdout:?} {stderr:?}"
     );
 }
 

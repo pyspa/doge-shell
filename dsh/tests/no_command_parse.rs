@@ -25,9 +25,9 @@ fn redirect_only_and_assignment_redirect_plan_no_command_stage() {
         ("FOO=bar 2> err", 0, 1, 1),
     ] {
         let plan = parse_execution_plan(input, Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs.len(), 1, "for {input:?}");
-        assert_eq!(plan.jobs[0].stages.len(), 1, "for {input:?}");
-        let stage = &plan.jobs[0].stages[0];
+        assert_eq!(plan.lists.len(), 1, "for {input:?}");
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 1, "for {input:?}");
+        let stage = &plan.lists[0].jobs[0].stages[0];
         assert_eq!(stage.argv.len(), argv_len, "argv for {input:?}");
         assert_eq!(
             stage.redirects.len(),
@@ -40,23 +40,23 @@ fn redirect_only_and_assignment_redirect_plan_no_command_stage() {
 
     let plan = parse_execution_plan("> out", Arc::clone(&env)).expect("plan");
     assert!(matches!(
-        plan.jobs[0].stages[0].redirects[0].op,
+        plan.lists[0].jobs[0].stages[0].redirects[0].op,
         PlannedRedirectOp::WriteFile(_)
     ));
     let plan = parse_execution_plan(">> out", Arc::clone(&env)).expect("plan");
     assert!(matches!(
-        plan.jobs[0].stages[0].redirects[0].op,
+        plan.lists[0].jobs[0].stages[0].redirects[0].op,
         PlannedRedirectOp::AppendFile(_)
     ));
     let plan = parse_execution_plan("< in", Arc::clone(&env)).expect("plan");
     assert!(matches!(
-        plan.jobs[0].stages[0].redirects[0].op,
+        plan.lists[0].jobs[0].stages[0].redirects[0].op,
         PlannedRedirectOp::ReadFile(_)
     ));
     let plan = parse_execution_plan("2> err", Arc::clone(&env)).expect("plan");
-    assert_eq!(plan.jobs[0].stages[0].redirects[0].fd, 2);
+    assert_eq!(plan.lists[0].jobs[0].stages[0].redirects[0].fd, 2);
     let plan = parse_execution_plan("FOO=bar > out", Arc::clone(&env)).expect("plan");
-    assert_eq!(plan.jobs[0].stages[0].env_overrides[0].name, "FOO");
+    assert_eq!(plan.lists[0].jobs[0].stages[0].env_overrides[0].name, "FOO");
 }
 
 /// A command-prefix redirect keeps both the redirect and the command:
@@ -65,9 +65,9 @@ fn redirect_only_and_assignment_redirect_plan_no_command_stage() {
 fn command_prefix_redirect_keeps_command_and_redirect() {
     let env = Environment::new();
     let plan = parse_execution_plan("> out /bin/echo hello", Arc::clone(&env)).expect("plan");
-    assert_eq!(plan.jobs.len(), 1);
-    assert_eq!(plan.jobs[0].stages.len(), 1);
-    let stage = &plan.jobs[0].stages[0];
+    assert_eq!(plan.lists.len(), 1);
+    assert_eq!(plan.lists[0].jobs[0].stages.len(), 1);
+    let stage = &plan.lists[0].jobs[0].stages[0];
     assert_eq!(stage.argv.len(), 2);
     assert_eq!(stage.argv[0].source, "/bin/echo");
     assert_eq!(stage.redirects.len(), 1);

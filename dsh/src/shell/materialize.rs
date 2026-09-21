@@ -12,8 +12,7 @@ use super::parse::planned_to_concrete;
 use super::plan::{PlannedJob, PlannedRedirectOp};
 use super::substitution::ExecutionResources;
 use super::word_expand::{
-    ExpansionTrace, dry_expand_argument_word, dry_expand_scalar_word, expand_argument_word,
-    expand_assignment_value, expand_redirect_target,
+    ExpansionTrace, expand_argument_word, expand_assignment_value, expand_redirect_target,
 };
 use crate::process::{Job, JobProcess, Redirect};
 use crate::shell::Shell;
@@ -78,6 +77,15 @@ impl CommandMaterializationFailure {
             exit_code: 1,
             message: format!(
                 "dogesh: {name}: cannot run in a pipeline (needs the live shell session)"
+            ),
+        }
+    }
+
+    pub(crate) fn background_builtin_requires_parent(name: &str) -> Self {
+        Self {
+            exit_code: 1,
+            message: format!(
+                "dogesh: {name}: cannot run in background (needs the live shell session)"
             ),
         }
     }
@@ -147,7 +155,7 @@ fn build_stage_process(
     Ok(process)
 }
 
-fn assemble_job(
+pub(crate) fn assemble_job(
     shell: &Shell,
     planned: &PlannedJob,
     expanded: Vec<ExpandedStage>,
@@ -156,7 +164,6 @@ fn assemble_job(
 ) -> Result<Job, CommandMaterializationFailure> {
     let mut job = Job::new(planned.source.clone(), shell.pgid);
     job.job_id = job_id;
-    job.foreground = planned.foreground;
     job.capture_output = planned.capture_output;
     job.struct_pipe_exprs = planned.struct_pipe_exprs.clone();
     job.subshell = planned.subshell.clone();
@@ -320,92 +327,10 @@ pub fn materialize_job<'a>(
     })
 }
 
-/// Static materialization for safety checks: no execution, no env mutation.
-pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option<Job>> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let mut expanded = Vec::with_capacity(planned.stages.len());
-    for stage in &planned.stages {
-        let mut argv = Vec::new();
-        for word in &stage.argv {
-            argv.extend(dry_expand_argument_word(word, shell, &cwd));
-        }
-        let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
-        for assignment in &stage.env_overrides {
-            env_overrides.push((
-                assignment.name.clone(),
-                dry_expand_scalar_word(&assignment.value, shell),
-            ));
-        }
-        let mut redirects = Vec::new();
-        for redirect in &stage.redirects {
-            match &redirect.op {
-                PlannedRedirectOp::DupFrom(from) => {
-                    redirects.push(Redirect::dup(redirect.fd, *from));
-                }
-                PlannedRedirectOp::Close => redirects.push(Redirect::close(redirect.fd)),
-                PlannedRedirectOp::ReadFile(word)
-                | PlannedRedirectOp::WriteFile(word)
-                | PlannedRedirectOp::AppendFile(word)
-                | PlannedRedirectOp::BothWrite(word)
-                | PlannedRedirectOp::BothAppend(word) => {
-                    let fields = dry_expand_argument_word(word, shell, &cwd);
-                    if fields.len() != 1 {
-                        anyhow::bail!(
-                            "ambiguous redirect: '{}' expands to {} fields",
-                            word.source,
-                            fields.len()
-                        );
-                    }
-                    redirects.extend(planned_to_concrete(
-                        redirect,
-                        fields.into_iter().next().expect("one field"),
-                    ));
-                }
-            }
-        }
-        expanded.push(ExpandedStage {
-            argv,
-            redirects,
-            env_overrides,
-            last_command_substitution_status: None,
-        });
-    }
-    // A synthetic source counts as a stage for dry projection too, so the
-    // guard sees the same topology the live path launches (source skipped
-    // as safety-neutral). An empty downstream with a source fails closed.
-    let source_data = planned.pipeline_source.map(|_| String::new());
-    // A single no-command stage carries no argv to authorize: report "no job",
-    // as before for standalone assignments.
-    if source_data.is_none() && expanded.len() == 1 && expanded[0].argv.is_empty() {
-        return Ok(None);
-    }
-    // Fail closed: never show a collapsed pipeline to SafetyGuard. Both a
-    // rejected stage and an empty stage must surface as an error instead of
-    // a smaller runnable job (e.g. `A | empty | dangerous-C` must not become
-    // just `A | dangerous-C`, and `FOO=bar alias | dangerous-command` must
-    // not become just `dangerous-command`).
-    if expanded.iter().any(|stage| stage.argv.is_empty()) {
-        anyhow::bail!("dsh: pipeline stage expanded to no command");
-    }
-    match assemble_job(shell, planned, expanded, 0, source_data) {
-        Ok(job) => Ok(Some(job)),
-        Err(failure) => anyhow::bail!("{}", failure.message),
-    }
-}
-
-pub fn dry_materialize_plan(plan: &super::plan::ExecutionPlan, shell: &Shell) -> Result<Vec<Job>> {
-    let mut jobs = Vec::new();
-    for planned in &plan.jobs {
-        if let Some(job) = dry_materialize_job(planned, shell)? {
-            jobs.push(job);
-        }
-    }
-    Ok(jobs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::authorize::is_authorization_cancelled;
+    use super::super::dry_materialize::dry_materialize_job;
     use super::*;
     use crate::repl::confirmation::ConfirmationAction;
     use std::sync::Arc;
@@ -427,10 +352,10 @@ mod tests {
         let plan =
             super::super::parse::parse_execution_plan(&input, Arc::clone(&shell.environment))
                 .expect("plan");
-        assert_eq!(plan.jobs.len(), 1);
-        assert!(plan.jobs[0].contains_dynamic_expansion());
+        assert_eq!(plan.lists.len(), 1);
+        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], deny_all).await {
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], deny_all).await {
             Err(err) => assert!(
                 is_authorization_cancelled(&err),
                 "nested denial must surface as cancellation, got {err:?}"
@@ -461,18 +386,19 @@ mod tests {
             Arc::clone(&shell.environment),
         )
         .expect("plan");
-        assert!(plan.jobs[0].contains_dynamic_expansion());
+        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        let materialized = match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
-            .await
-            .expect("materialize")
-        {
-            MaterializeOutcome::Runnable(materialized) => materialized,
-            MaterializeOutcome::NoCommand(_) => panic!("expected runnable job"),
-            MaterializeOutcome::Rejected(failure) => {
-                panic!("expected runnable job, got rejection: {failure:?}")
-            }
-        };
+        let materialized =
+            match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
+                .await
+                .expect("materialize")
+            {
+                MaterializeOutcome::Runnable(materialized) => materialized,
+                MaterializeOutcome::NoCommand(_) => panic!("expected runnable job"),
+                MaterializeOutcome::Rejected(failure) => {
+                    panic!("expected runnable job, got rejection: {failure:?}")
+                }
+            };
         assert!(materialized.had_dynamic_expansion);
         let argv = materialized
             .job
@@ -502,7 +428,7 @@ mod tests {
         let plan = super::super::parse::parse_execution_plan("FOO=bar alias", Arc::clone(&env))
             .expect("plan");
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -540,7 +466,7 @@ mod tests {
         )
         .expect("plan");
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -572,7 +498,7 @@ mod tests {
         )
         .expect("plan");
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -608,9 +534,9 @@ mod tests {
             Arc::clone(&env),
         )
         .expect("plan");
-        assert_eq!(plan.jobs[0].stages.len(), 3);
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 3);
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -637,9 +563,9 @@ mod tests {
         let mut shell = Shell::new(env.clone());
         let plan = super::super::parse::parse_execution_plan("FOO=standalone", Arc::clone(&env))
             .expect("plan");
-        assert!(plan.jobs[0].is_assignment_only());
+        assert!(plan.lists[0].jobs[0].is_assignment_only());
         let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        let no_command = match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        let no_command = match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -682,9 +608,9 @@ mod tests {
         let mut shell = Shell::new(env.clone());
         let plan = super::super::parse::parse_execution_plan("FOO=bar | cat", Arc::clone(&env))
             .expect("plan");
-        assert_eq!(plan.jobs[0].stages.len(), 2);
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 2);
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -712,7 +638,7 @@ mod tests {
             Arc::clone(&env),
         )
         .expect("plan");
-        let err = dry_materialize_job(&plan.jobs[0], &shell).expect_err("dry must reject");
+        let err = dry_materialize_job(&plan.lists[0].jobs[0], &shell).expect_err("dry must reject");
         assert!(
             err.to_string().contains("not supported for builtins"),
             "unexpected dry error: {err:?}"
@@ -731,8 +657,9 @@ mod tests {
             Arc::clone(&env),
         )
         .expect("plan");
-        assert_eq!(plan.jobs[0].stages.len(), 3);
-        let err = dry_materialize_job(&plan.jobs[0], &shell).expect_err("dry must fail closed");
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 3);
+        let err =
+            dry_materialize_job(&plan.lists[0].jobs[0], &shell).expect_err("dry must fail closed");
         assert!(
             err.to_string().contains("no command"),
             "unexpected dry error: {err:?}"
@@ -754,9 +681,9 @@ mod tests {
             Arc::clone(&env),
         )
         .expect("plan");
-        assert_eq!(plan.jobs[0].stages.len(), 3);
+        assert_eq!(plan.lists[0].jobs[0].stages.len(), 3);
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        match materialize_job(&mut shell, &ctx, &plan.jobs[0], allow_all)
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
@@ -780,12 +707,12 @@ mod tests {
             Arc::clone(&env),
         )
         .expect("plan");
-        assert!(plan.jobs[0].contains_dynamic_expansion());
+        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
         let plan = super::super::parse::parse_execution_plan(
             "FOO=$(some-command) command",
             Arc::clone(&env),
         )
         .expect("plan");
-        assert!(plan.jobs[0].contains_dynamic_expansion());
+        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
     }
 }

@@ -12,8 +12,9 @@
 //! validates alias-rewritten input again.
 
 use super::plan::{
-    ExecutionPlan, PlannedAssignment, PlannedCommand, PlannedJob, PlannedLiteral, PlannedRedirect,
-    PlannedRedirectOp, PlannedSubstitution, PlannedWord, QuoteMode, WordPart,
+    ExecutionPlan, ListExecutionMode, PlannedAndOrList, PlannedAssignment, PlannedCommand,
+    PlannedJob, PlannedLiteral, PlannedRedirect, PlannedRedirectOp, PlannedSubstitution,
+    PlannedWord, QuoteMode, WordPart,
 };
 use super::struct_pipe;
 use crate::environment::Environment;
@@ -28,18 +29,20 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
-/// Pure parse context: pipeline flags only, no shell handle.
-#[derive(Debug)]
+/// Pure parse context: nesting flags only, no shell handle.
+///
+/// Background state is not tracked here: `&` separates whole AND-OR lists
+/// (see [`PlannedAndOrList`]), so nested substitutions never inherit a
+/// background flag.
+#[derive(Debug, Default)]
 pub struct ParseContext {
-    pub foreground: bool,
     pub subshell: bool,
     pub proc_subst: bool,
 }
 
 impl ParseContext {
-    pub fn new(foreground: bool) -> Self {
+    pub fn new() -> Self {
         Self {
-            foreground,
             subshell: false,
             proc_subst: false,
         }
@@ -70,9 +73,12 @@ pub fn parse_execution_plan(
     }
 
     // 3. Parse the (possibly rewritten) line strictly.
+    if aliased.trim().is_empty() {
+        return Ok(ExecutionPlan::default());
+    }
     let mut pairs = parse_commands_strict(aliased.as_ref())?;
 
-    let mut ctx = ParseContext::new(true);
+    let mut ctx = ParseContext::new();
     let Some(pair) = pairs.next() else {
         return Ok(ExecutionPlan::default());
     };
@@ -251,7 +257,6 @@ fn empty_job(source: String, ctx: &ParseContext) -> PlannedJob {
         source,
         stages: Vec::new(),
         list_op: ListOp::None,
-        foreground: ctx.foreground,
         capture_output: false,
         struct_pipe_exprs: Vec::new(),
         subshell,
@@ -269,10 +274,10 @@ fn build_simple_command(ctx: &ParseContext, pair: Pair<Rule>) -> Result<PlannedC
 fn make_substitution(
     kind: SubshellType,
     commands_pair: Pair<Rule>,
-    ctx: &ParseContext,
+    _ctx: &ParseContext,
 ) -> Result<Option<PlannedSubstitution>> {
     let cmd_str = commands_pair.as_str().to_string();
-    let mut nested = ParseContext::new(ctx.foreground);
+    let mut nested = ParseContext::new();
     match kind {
         SubshellType::Subshell | SubshellType::CommandSubstitution => nested.subshell = true,
         SubshellType::ProcessSubstitution => nested.proc_subst = true,
@@ -486,10 +491,57 @@ fn build_commands(ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<ExecutionP
     if let Rule::commands = pair.as_rule() {
         for pair in pair.into_inner() {
             match pair.as_rule() {
-                Rule::command => build_jobs(ctx, pair, &mut plan.jobs)?,
-                Rule::command_list_sep => {
+                Rule::and_or_list => {
+                    let mut list = PlannedAndOrList {
+                        source: pair.as_str().trim().to_string(),
+                        jobs: Vec::new(),
+                        execution: ListExecutionMode::Foreground,
+                    };
+                    build_and_or_list(ctx, pair, &mut list)?;
+                    if !list.jobs.is_empty() {
+                        plan.lists.push(list);
+                    }
+                }
+                Rule::list_separator => {
+                    // Both inter-list separators (`a & b`, `a; b`) and the
+                    // trailing terminator (`sleep 1 &`, `echo hi;`) arrive
+                    // here. A separator always follows a list: the grammar
+                    // cannot start `commands` with one.
+                    let Some(last) = plan.lists.last_mut() else {
+                        anyhow::bail!("syntax error: unexpected list separator");
+                    };
+                    if let Some(sep) = pair.into_inner().next() {
+                        debug!("last list {:?} sep {:?}", &last.source, sep.as_rule());
+                        if sep.as_rule() == Rule::background_op {
+                            last.execution = ListExecutionMode::Asynchronous;
+                        }
+                    }
+                }
+                _ => {
+                    debug!("unknown {:?} {:?}", pair.as_rule(), pair.as_str());
+                }
+            }
+        }
+    }
+    debug!("planned lists len: {}", plan.lists.len());
+    Ok(plan)
+}
+
+/// Build one AND-OR list: `&&`/`||`-gated pipelines sharing one execution
+/// environment. The gate resets per list — a `;`/`&` boundary never carries
+/// the previous list's `ListOp` forward.
+fn build_and_or_list(
+    ctx: &mut ParseContext,
+    pair: Pair<Rule>,
+    list: &mut PlannedAndOrList,
+) -> Result<()> {
+    if let Rule::and_or_list = pair.as_rule() {
+        for pair in pair.into_inner() {
+            match pair.as_rule() {
+                Rule::command => build_jobs(ctx, pair, &mut list.jobs)?,
+                Rule::and_or_op => {
                     if let Some(sep) = pair.into_inner().next()
-                        && let Some(last) = plan.jobs.last_mut()
+                        && let Some(last) = list.jobs.last_mut()
                     {
                         debug!("last job {:?}", &last.source);
                         match sep.as_rule() {
@@ -505,8 +557,7 @@ fn build_commands(ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<ExecutionP
             }
         }
     }
-    debug!("planned jobs len: {}", plan.jobs.len());
-    Ok(plan)
+    Ok(())
 }
 
 fn mark_nested_job(job: &mut PlannedJob, ctx: &ParseContext) {
@@ -519,7 +570,9 @@ fn mark_nested_job(job: &mut PlannedJob, ctx: &ParseContext) {
 }
 
 fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJob>) -> Result<()> {
-    let job_str = pair.as_str().to_string();
+    // Pest spans may carry surrounding whitespace (e.g. the space before a
+    // `&` separator); user-facing sources stay trimmed.
+    let job_str = pair.as_str().trim().to_string();
 
     for inner_pair in pair.into_inner() {
         debug!(
@@ -537,22 +590,6 @@ fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJo
                     jobs.push(job);
                 }
             }
-            Rule::simple_command_bg => {
-                let mut job = empty_job(inner_pair.as_str().to_string(), ctx);
-                job.foreground = false;
-                for bg_pair in inner_pair.into_inner() {
-                    if let Rule::simple_command = bg_pair.as_rule() {
-                        let stage = build_simple_command(ctx, bg_pair)?;
-                        job.stages.push(stage);
-                        mark_nested_job(&mut job, ctx);
-                        job.foreground = false;
-                        if !job.stages.iter().all(|stage| stage.is_empty()) {
-                            jobs.push(job);
-                        }
-                        break;
-                    }
-                }
-            }
             Rule::pipe_command => {
                 if jobs.is_empty() {
                     let mut job = empty_job(job_str.clone(), ctx);
@@ -560,25 +597,12 @@ fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJo
                     jobs.push(job);
                 }
                 if let Some(job) = jobs.last_mut() {
-                    let saved_foreground = ctx.foreground;
                     for stage_pair in inner_pair.into_inner() {
                         if let Rule::simple_command = stage_pair.as_rule() {
-                            ctx.foreground = true;
                             let stage = build_simple_command(ctx, stage_pair)?;
                             job.stages.push(stage);
-                        } else if let Rule::simple_command_bg = stage_pair.as_rule() {
-                            ctx.foreground = false;
-                            for bg_pair in stage_pair.into_inner() {
-                                if let Rule::simple_command = bg_pair.as_rule() {
-                                    let stage = build_simple_command(ctx, bg_pair)?;
-                                    job.stages.push(stage);
-                                    job.foreground = false;
-                                    break;
-                                }
-                            }
                         }
                     }
-                    ctx.foreground = saved_foreground;
                 }
             }
             Rule::capture_suffix => {
@@ -639,8 +663,8 @@ mod tests {
             guard.variable_state.variables.clone()
         };
         let plan = parse_execution_plan(&input, Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs.len(), 1);
-        assert!(plan.jobs[0].contains_dynamic_expansion());
+        assert_eq!(plan.lists.len(), 1);
+        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
         assert!(
             !marker.exists(),
             "planning executed a substitution it must only record"
@@ -663,9 +687,9 @@ mod tests {
         let env = test_env();
         let plan =
             parse_execution_plan("DOGESH_TEST_PARSE_ONLY=value", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.jobs.len(), 1);
+        assert_eq!(plan.lists.len(), 1);
         assert!(env.read().get_var("DOGESH_TEST_PARSE_ONLY").is_none());
-        assert!(plan.jobs[0].is_assignment_only());
+        assert!(plan.lists[0].jobs[0].is_assignment_only());
     }
 
     /// Raw validation runs before rewriting: `echo $FOO )` must still reject
@@ -743,10 +767,10 @@ mod tests {
             .set_shell_var("FOO".to_string(), "bbb".to_string());
         let plan_a = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_a)).expect("plan");
         let plan_b = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_b)).expect("plan");
-        assert_eq!(plan_a.jobs.len(), 1);
-        assert_eq!(plan_b.jobs.len(), 1);
-        let argv_a = &plan_a.jobs[0].stages[0].argv;
-        let argv_b = &plan_b.jobs[0].stages[0].argv;
+        assert_eq!(plan_a.lists.len(), 1);
+        assert_eq!(plan_b.lists.len(), 1);
+        let argv_a = &plan_a.lists[0].jobs[0].stages[0].argv;
+        let argv_b = &plan_b.lists[0].jobs[0].stages[0].argv;
         assert_eq!(argv_a.len(), argv_b.len());
         assert!(matches!(
             argv_a[1].parts[0],
@@ -755,7 +779,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(plan_a.jobs[0].contains_dynamic_expansion());
-        assert!(plan_b.jobs[0].contains_dynamic_expansion());
+        assert!(plan_a.lists[0].jobs[0].contains_dynamic_expansion());
+        assert!(plan_b.lists[0].jobs[0].contains_dynamic_expansion());
     }
 }

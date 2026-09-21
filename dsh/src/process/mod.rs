@@ -1,6 +1,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod async_io;
+pub mod async_list;
 pub mod builtin;
 pub mod child_exec;
 pub mod fork;
@@ -21,6 +22,7 @@ pub mod signal;
 pub mod state;
 pub mod wait;
 
+pub use async_list::AsyncListProcess;
 pub use builtin::{BuiltinExecutionPlacement, BuiltinProcess, builtin_execution_placement};
 pub use job::Job;
 pub use job_process::JobProcess;

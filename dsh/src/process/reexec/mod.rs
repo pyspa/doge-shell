@@ -50,8 +50,8 @@ pub use fd_layout::{INTERNAL_FD_MIN, InternalFdLayout, InternalHelperFds};
 pub use helper::run_internal_helper;
 pub use protocol::{
     BuiltinExecRequest, InternalExecKind, InternalExecRequest, MAX_INTERNAL_EXEC_REQUEST,
-    PROTOCOL_VERSION, PipelineSourceExecRequest, PlanExecMode, PlanExecRequest,
-    read_internal_request,
+    NoCommandExecRequest, PROTOCOL_VERSION, PipelineSourceExecRequest, PlanExecMode,
+    PlanExecRequest, read_internal_request,
 };
 
 /// Resolve the binary a helper re-executes.
@@ -336,6 +336,39 @@ pub(crate) fn spawn_isolated_builtin(
     }
     let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
     process.pid = Some(child);
+    // Bookkeeping for the current launch scope.
+    // `Job::launch` restores `ctx.process_count` to the caller's entry
+    // value on return.
+    ctx.process_count += 1;
+    Ok(child)
+}
+
+/// Spawn a no-command pipeline stage helper carrying assignments plus the
+/// last command-substitution status.
+///
+/// Redirections are deliberately not part of the request: the parent
+/// pipeline launch path already applied them exactly once before spawning,
+/// so the helper receives final stdio.
+pub(crate) fn spawn_no_command(
+    ctx: &mut Context,
+    shell: &Shell,
+    stdin: RawFd,
+    stdout: RawFd,
+    stderr: RawFd,
+    assignments: &[(String, String)],
+    last_command_substitution_status: Option<i32>,
+) -> Result<Pid> {
+    let request = InternalExecRequest {
+        version: PROTOCOL_VERSION,
+        snapshot: ChildShellSnapshot::capture(&shell.environment.read()),
+        kind: InternalExecKind::NoCommand(NoCommandExecRequest {
+            assignments: assignments.to_vec(),
+            last_command_substitution_status,
+        }),
+    };
+    let bytes = serde_json::to_vec(&request).context("encode internal request")?;
+    let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
+    let child = spawn_internal_helper(stdin, stdout, stderr, &bytes, pgroup, None)?;
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
     // value on return.

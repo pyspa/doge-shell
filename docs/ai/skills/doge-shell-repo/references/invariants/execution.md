@@ -30,6 +30,13 @@
 - property test で実 process を spawn しない。OS 依存（`waitpid`・`ECHILD`・`SIGSTOP` 配送・PGID・実 child exit）は deterministic test / Resource Harness 側。
 - `cargo test` と nextest は process isolation が違う。nextest の `static Mutex` は binary を跨いだ exclusion にならない。targeted lane は `-j 1`。
 
+## No-command pipeline stage
+
+- runtime expansion 後に command name がない stage も正式な pipeline stage。drop / rewire（`A | empty | C` → `A | C`）・`/bin/true` 置換は禁止。位置を保ったまま isolated re-exec helper（`NoCommandProcess` + `InternalExecKind::NoCommand`）で実行する。
+- single-stage no-command は現在の shell で `execute_no_command()`（assignment は parent へ反映）。multi-stage の no-command member は helper snapshot 内だけで assignment を適用し、parent へ漏らさない。
+- NoCommand の redirection は通常の parent pipeline wiring（`Job::launch_process` → `JobProcess::launch`）で exactly once 適用する。helper request に redirection を含めないし、helper 側で再適用しない。helper が受け取るのは確定済み stdio のみ。
+- helper へ送るのは assignments + `last_command_substitution_status` のみ。command substitution は materialization 時に実行・authorize 済みで、helper で再実行・再 parse（`dogesh -c "<source>"`）しない。status 伝搬: substitution なし → 0、あり → 最後の substitution status。
+
 ## 1件の execution / process bug を直すときの5点
 
 1. Minimal reproducer 2. Opposite case 3. Adjacent execution context（`FOO=bar` builtin を直すなら external env prefix・assignment-only・pipeline・`&&`/`||`・`$?` まで見る） 4. Resource / lifecycle invariant 5. Regression sibling。

@@ -14,7 +14,9 @@ use std::os::unix::io::RawFd;
 ///
 /// Bumped to 2 when `ExecutionPlan` moved from a flat `jobs` list to
 /// `lists` of AND-OR lists and `PlanExecMode` gained `AsyncAndOrList`.
-pub const PROTOCOL_VERSION: u32 = 2;
+/// Bumped to 3 for materialized no-command pipeline stage helper support
+/// (`InternalExecKind::NoCommand`).
+pub const PROTOCOL_VERSION: u32 = 3;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -34,6 +36,7 @@ pub enum InternalExecKind {
     Builtin(BuiltinExecRequest),
     Plan(PlanExecRequest),
     PipelineSource(PipelineSourceExecRequest),
+    NoCommand(NoCommandExecRequest),
 }
 
 /// An isolated shell-execution body: `$(...)`, `<(...)`, or `( ... )`.
@@ -79,6 +82,16 @@ pub struct BuiltinExecRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSourceExecRequest {
     pub data: String,
+}
+
+/// An already-materialized no-command pipeline stage: assignments plus the
+/// last command-substitution status. Redirections are deliberately absent:
+/// redirections are already applied exactly once by the parent pipeline
+/// launch path before spawning the helper; the helper receives final stdio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoCommandExecRequest {
+    pub assignments: Vec<(String, String)>,
+    pub last_command_substitution_status: Option<i32>,
 }
 
 /// Read one request from `fd` to EOF, enforcing the size cap and version.
@@ -191,6 +204,37 @@ mod tests {
     }
 
     #[test]
+    fn request_rejects_legacy_v2() {
+        // The v2 schema (no `NoCommand` helper kind) must fail closed
+        // after the v3 migration, never parse as a v3 request.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 2,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        // Owned (and closed) by `read_internal_request`.
+        let err = read_internal_request(read_fd).expect_err("legacy v2 must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
+    }
+
+    #[test]
     fn request_rejects_legacy_v1() {
         // The v1 schema (flat `jobs` plan, no `AsyncAndOrList` mode) must
         // fail closed after the v2 migration, never parse as a v2 request.
@@ -267,6 +311,59 @@ mod tests {
         assert_eq!(roundtrip_data("hello\n"), "hello\n");
         assert_eq!(roundtrip_data(""), "");
         assert_eq!(roundtrip_data("ABC\n"), "ABC\n");
+    }
+
+    fn no_command_request(
+        assignments: Vec<(String, String)>,
+        last_command_substitution_status: Option<i32>,
+    ) -> InternalExecRequest {
+        let env_arc = crate::environment::Environment::new();
+        InternalExecRequest {
+            version: PROTOCOL_VERSION,
+            snapshot: ChildShellSnapshot::capture(&env_arc.read()),
+            kind: InternalExecKind::NoCommand(NoCommandExecRequest {
+                assignments,
+                last_command_substitution_status,
+            }),
+        }
+    }
+
+    fn roundtrip_no_command(
+        assignments: Vec<(String, String)>,
+        last_command_substitution_status: Option<i32>,
+    ) -> (Vec<(String, String)>, Option<i32>) {
+        let request = no_command_request(assignments, last_command_substitution_status);
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let decoded = read_internal_request(read.into_raw_fd()).expect("decode");
+        match decoded.kind {
+            InternalExecKind::NoCommand(no_command) => (
+                no_command.assignments,
+                no_command.last_command_substitution_status,
+            ),
+            other => panic!("expected NoCommand, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_command_roundtrips_assignments_and_status() {
+        // Spaces and Unicode in values must survive the JSON payload.
+        let assignments = vec![
+            ("FOO".to_string(), "bar baz".to_string()),
+            ("UNICODE".to_string(), "日本語 ☃".to_string()),
+            ("EMPTY".to_string(), String::new()),
+        ];
+        assert_eq!(
+            roundtrip_no_command(assignments.clone(), Some(7)),
+            (assignments, Some(7))
+        );
+        assert_eq!(roundtrip_no_command(vec![], None), (vec![], None));
     }
 
     #[test]

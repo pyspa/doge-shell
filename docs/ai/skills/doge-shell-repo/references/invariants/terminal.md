@@ -13,6 +13,14 @@
 - 画面を占有するもの（picker、補完グリッド、外部エディタ、前景コマンド）は `StatusLinePause` で囲む。子プロセスが実行され**終わる**まで pause を保持すること。
 - プロンプト上への割り込み出力は `render::print_above_prompt` を通す。
 
+## PTY setup
+- FullProxy は output monitor + input proxy が揃った場合のみ commit する。input 側だけ失敗したら OutputOnly に downgrade し、output 側が作れなければ PTY を捨てて通常実行へ fallback する。
+- OutputOnly は output monitor 必須。output monitoring が作れなければ normal execution。
+- `setup_pty()` が返す `PtyChildConfig.mode` が effective mode の唯一の真実であり、`job.pty_mode` と必ず一致させる。`unwrap_or(FullProxy)` のような fail-open default で推測しない。
+- Job への PTY 状態反映は prepare-then-commit の一括反映のみ。途中で `job.pty*` を逐次代入しない。
+- PTY setup 後の error return は spawned proxy task を残さない。`JoinHandle` は Drop で abort されないため、`manage_execution` / `capture` の Err 経路では `cleanup_pty_tasks` で回収する。
+- tests は real terminal を使用しない。input proxy の `open_input` は scratch PTY からの handle を注入し、OutputOnly/downgrade/failure 経路では opener を呼ばずに捨てる。
+
 ## テストと実端末
 - テストは**開発者の実端末を触ってはいけない**。`cargo test` の test binary は fd 0 にユーザーの tty をそのまま継承するので、そこへの書き込み・termios 変更・`tcsetpgrp` はすべて開発者の端末に届く。しかも test binary は終了時に何も戻さない。
 - 実端末を変更するコードは `crate::terminal::terminal_control_enabled()` を通す（unit test ビルドでは常に false）。`flush_stdout_bytes` / `Drop for Repl` / `job_wait` の `owns_terminal` / PTY input proxy の stdin フォールバックが実例。

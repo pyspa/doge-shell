@@ -275,17 +275,12 @@ impl Job {
             self.job_id, self.cmd, self.foreground, self.pid
         );
 
-        // Job-local transient state: `Job::launch` snapshots the caller's
-        // value and restores it after `launch_inner` returns, so this
-        // assignment never leaks to the next job or list boundary.
+        // Job-local state restored by `Job::launch`; never leaks to next job.
         ctx.foreground = self.foreground;
 
-        // 1. Setup PTY if needed
-        let pty_slave_fd = self.setup_pty(ctx).await?;
-        let pty_child = pty_slave_fd.map(|slave| PtyChildConfig {
-            slave,
-            mode: self.pty_mode.unwrap_or(PtyMode::FullProxy),
-        });
+        // 1. Setup PTY. The returned `PtyChildConfig.mode` is the single
+        // source of truth for the committed `job.pty_mode` (no side channel).
+        let pty_child = self.setup_pty(ctx).await?;
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
 
         // 2. Launch processes
@@ -306,9 +301,8 @@ impl Job {
             {
                 Ok(StageLaunchOutcome::Launched) => {}
                 Ok(StageLaunchOutcome::CommandFailed(failure)) => {
-                    // A redirection setup failure is an expected command
-                    // failure, not a runtime error: the stages are already
-                    // cleaned up, so report the outcome without `?`.
+                    // Redirection failure is a command failure, not a runtime
+                    // error; stages are already cleaned up, so no `?`.
                     self.state =
                         ProcessState::Completed(failure.exit_code.clamp(0, 255) as u8, None);
                     self.cleanup_pty_tasks().await;
@@ -324,8 +318,12 @@ impl Job {
                 }
             }
 
-            // 3. Manage execution (Foreground/Background)
-            self.manage_execution(ctx).await?;
+            // 3. Manage execution. `JoinHandle` survives `Drop`, so reclaim
+            // PTY proxy tasks before returning an error (no detached input).
+            if let Err(err) = self.manage_execution(ctx).await {
+                self.cleanup_pty_tasks().await;
+                return Err(err);
+            }
         } else {
             debug!(
                 "JOB_LAUNCH_NO_PROCESS: Job {} has no process to launch",
@@ -333,8 +331,12 @@ impl Job {
             );
         }
 
-        // 4. Capture output and save to history
-        self.capture_output_and_history(ctx, shell).await?;
+        // 4. Capture output and history. The callee already reclaims tasks
+        // on its error paths, so this cleanup is a no-op `take()` there.
+        if let Err(err) = self.capture_output_and_history(ctx, shell).await {
+            self.cleanup_pty_tasks().await;
+            return Err(err);
+        }
 
         let final_state = if ctx.foreground {
             self.last_process_state()
@@ -350,7 +352,7 @@ impl Job {
         Ok(JobLaunchOutcome::Process(final_state))
     }
 
-    pub(crate) async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<RawFd>> {
+    pub(crate) async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<PtyChildConfig>> {
         job_pty::setup_pty(self, ctx).await
     }
 

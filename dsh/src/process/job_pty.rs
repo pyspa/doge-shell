@@ -1,14 +1,24 @@
+//! Foreground PTY setup, proxy tasks, and output capture.
+//!
+//! `setup_pty` commits transactionally: FullProxy needs output monitor plus
+//! input proxy, OutputOnly needs output monitor, otherwise normal execution.
+//! Every `launch_inner` error path reclaims proxy tasks via `cleanup_pty_tasks`.
+//! Tests live in `job_pty/tests.rs` and never touch the real terminal.
+
 use super::async_io::{AsyncPtyMasterWriter, AsyncStdin};
 use super::job::Job;
 use super::job_process::JobProcess;
-use super::pty::{Pty, PtyMode};
+use super::pty::{Pty, PtyChildConfig, PtyMode};
+use crate::process::io::PtyMonitor;
 use crate::process::job_wait::wait_job;
 use crate::shell::Shell;
 use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_types::Context;
+use dsh_types::observed_output::SharedOutputObserver;
 use libc::{STDIN_FILENO, STDOUT_FILENO};
-use std::os::unix::io::{AsRawFd, IntoRawFd, RawFd};
+use std::fs::File;
+use std::os::unix::io::{AsRawFd, IntoRawFd};
 use tracing::{debug, error, warn};
 
 const DOGESH_NO_PTY_ENV: &str = "DOGESH_NO_PTY";
@@ -107,7 +117,120 @@ pub(crate) fn uses_full_pty_proxy(job: &Job) -> bool {
     job.pty.is_some() && job.pty_mode == Some(PtyMode::FullProxy)
 }
 
-pub async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<RawFd>> {
+/// PTY setup transaction invariant.
+///
+/// `setup_pty()` returns only one of three committed states:
+///
+/// A. FullProxy: `job.pty` + `job.pty_mode == FullProxy` + output task +
+///    input task, and the returned [`PtyChildConfig`]`mode` is FullProxy.
+/// B. OutputOnly: `job.pty` + `job.pty_mode == OutputOnly` + output task and
+///    no input task, and the returned config mode is OutputOnly.
+/// C. Normal execution: no PTY state on the job and `Ok(None)` returned.
+///
+/// Forbidden states: FullProxy without an input task, any PTY without an
+/// output monitor, a returned child mode that differs from `job.pty_mode`,
+/// or leftover proxy tasks after returning `None`.
+///
+/// PTY state is committed to `Job` only after required output monitoring
+/// has been prepared. A committed FullProxy always has both output monitoring
+/// and an input proxy. Failure to prepare input downgrades to OutputOnly;
+/// failure to prepare output monitoring discards the PTY entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PtyMasterUse {
+    Output,
+    Input,
+}
+
+/// Deterministic failure-injection seam for PTY setup.
+///
+/// Production uses [`SystemPtySetupOps`]; tests implement this trait with a
+/// fault-injecting struct. The seam covers the five fallible PTY
+/// infrastructure steps (`Pty::new`, output master clone, `PtyMonitor::new`,
+/// input master clone, `AsyncPtyMasterWriter::new`) without touching fd
+/// limits, timing, or the real terminal.
+trait PtySetupOps {
+    fn new_pty(&self) -> Result<Pty>;
+    fn clone_master(&self, pty: &Pty, purpose: PtyMasterUse) -> Result<File>;
+    fn new_monitor(
+        &self,
+        master: File,
+        observer: Option<SharedOutputObserver>,
+    ) -> Result<PtyMonitor>;
+    fn new_writer(&self, master: File) -> std::io::Result<AsyncPtyMasterWriter>;
+}
+
+struct SystemPtySetupOps;
+
+impl PtySetupOps for SystemPtySetupOps {
+    fn new_pty(&self) -> Result<Pty> {
+        Pty::new()
+    }
+
+    fn clone_master(&self, pty: &Pty, _purpose: PtyMasterUse) -> Result<File> {
+        pty.try_clone_master()
+    }
+
+    fn new_monitor(
+        &self,
+        master: File,
+        observer: Option<SharedOutputObserver>,
+    ) -> Result<PtyMonitor> {
+        let master_fd = master.into_raw_fd();
+        PtyMonitor::new(master_fd, observer)
+    }
+
+    fn new_writer(&self, master: File) -> std::io::Result<AsyncPtyMasterWriter> {
+        prepare_pty_input_writer(master)
+    }
+}
+
+/// Synchronous construction of the PTY input writer.
+///
+/// This is the fallible sync half of the input proxy: failure here must keep
+/// the caller from committing FullProxy (downgrade to OutputOnly instead).
+/// Task spawning happens separately in [`spawn_pty_input_proxy_with`].
+fn prepare_pty_input_writer(master: File) -> std::io::Result<AsyncPtyMasterWriter> {
+    AsyncPtyMasterWriter::new(master)
+}
+
+/// Spawn the input proxy task for an already-constructed writer.
+///
+/// `open_input` runs inside the task so a slow `/dev/tty` open never blocks
+/// PTY setup; see [`setup_pty_input_proxy_with`] for why it is injectable.
+fn spawn_pty_input_proxy_with<F>(
+    mut writer: AsyncPtyMasterWriter,
+    open_input: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
+    tokio::spawn(async move {
+        match open_input() {
+            Ok(mut async_stdin) => {
+                if let Err(err) = tokio::io::copy(&mut async_stdin, &mut writer).await {
+                    debug!("PTY input proxy stopped: {}", err);
+                }
+            }
+            // Falling back to stdin means reading the real terminal, so
+            // it is off-limits when we do not own it (tests).
+            Err(err) if crate::terminal::terminal_control_enabled() => {
+                warn!(
+                    "Failed to open an independent /dev/tty input handle, falling back to Tokio stdin: {}",
+                    err
+                );
+                let mut std_stdin = tokio::io::stdin();
+                if let Err(err) = tokio::io::copy(&mut std_stdin, &mut writer).await {
+                    debug!("Fallback PTY input proxy stopped: {}", err);
+                }
+            }
+            Err(err) => {
+                debug!("PTY input proxy not started: {}", err);
+            }
+        }
+    })
+}
+
+pub(crate) async fn setup_pty(job: &mut Job, ctx: &mut Context) -> Result<Option<PtyChildConfig>> {
     setup_pty_with(job, ctx, AsyncStdin::open_tty).await
 }
 
@@ -116,8 +239,29 @@ pub(crate) async fn setup_pty_with<F>(
     job: &mut Job,
     ctx: &mut Context,
     open_input: F,
-) -> Result<Option<RawFd>>
+) -> Result<Option<PtyChildConfig>>
 where
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
+    let ops = SystemPtySetupOps;
+    setup_pty_with_ops(job, ctx, open_input, &ops).await
+}
+
+/// Transactional PTY setup: prepare everything with locals, then commit once.
+///
+/// No `job.pty*` field is touched until output monitoring (mandatory) and,
+/// for FullProxy, the input writer (downgradable) are both resolved. The
+/// effective mode decided here is the single source of truth for both the
+/// committed `job.pty_mode` and the returned [`PtyChildConfig`], so the child
+/// stdio wiring and the parent process-group path can never see a stale mode.
+async fn setup_pty_with_ops<Ops, F>(
+    job: &mut Job,
+    ctx: &mut Context,
+    open_input: F,
+    ops: &Ops,
+) -> Result<Option<PtyChildConfig>>
+where
+    Ops: PtySetupOps,
     F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
 {
     if !should_create_pty(
@@ -128,66 +272,119 @@ where
         return Ok(None);
     }
 
-    match Pty::new() {
+    // PTY itself is an optional optimization: failure falls back to normal
+    // execution instead of failing the user command.
+    let pty = match ops.new_pty() {
         Ok(pty) => {
             debug!("PTY created: {:?}", pty);
-            let pty_mode = if should_use_full_proxy(job, ctx) {
-                PtyMode::FullProxy
-            } else {
-                PtyMode::OutputOnly
-            };
-            if let Ok((cols, rows)) = crossterm::terminal::size() {
-                let _ = pty.resize(rows, cols);
-            }
-
-            match pty.try_clone() {
-                Ok(pty_clone) => {
-                    let master_fd = pty_clone.master.into_raw_fd();
-                    let mut monitor = crate::process::io::PtyMonitor::new(
-                        master_fd,
-                        ctx.output_observer.clone(),
-                    )?;
-
-                    let output_task = tokio::spawn(async move {
-                        monitor.process_output().await?;
-                        Ok(String::from_utf8_lossy(&monitor.captured_output).to_string())
-                    });
-                    job.pty_output_task = Some(output_task);
-
-                    if pty_mode == PtyMode::FullProxy {
-                        match pty.try_clone() {
-                            Ok(pty_in) => {
-                                setup_pty_input_proxy_with(job, pty_in, open_input).await;
-                            }
-                            Err(e) => {
-                                // A clone failure here is transient (e.g. fd
-                                // exhaustion). Fall back to output-only so the
-                                // command still runs instead of failing entirely.
-                                error!(
-                                    "Failed to clone PTY for input proxy, falling back to output-only: {}",
-                                    e
-                                );
-                                job.pty_mode = Some(PtyMode::OutputOnly);
-                            }
-                        }
-                    }
-                }
-                Err(e) => error!("Failed to clone PTY for output: {}", e),
-            }
-
-            let slave_fd = pty.slave.as_raw_fd();
-            job.pty_mode = Some(pty_mode);
-            job.pty = Some(pty);
-            Ok(Some(slave_fd))
+            pty
         }
         Err(e) => {
             error!(
                 "Failed to create PTY: {}, falling back to normal execution",
                 e
             );
-            Ok(None)
+            return Ok(None);
+        }
+    };
+
+    let intended_mode = if should_use_full_proxy(job, ctx) {
+        PtyMode::FullProxy
+    } else {
+        PtyMode::OutputOnly
+    };
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        let _ = pty.resize(rows, cols);
+    }
+
+    // Output monitoring is mandatory: a PTY without a master reader would
+    // hide output or block the child once the PTY buffer fills, so any
+    // failure here discards the PTY entirely.
+    let output_master = match ops.clone_master(&pty, PtyMasterUse::Output) {
+        Ok(master) => master,
+        Err(e) => {
+            error!(
+                "Failed to clone PTY for output: {}, falling back to normal execution",
+                e
+            );
+            drop(pty);
+            return Ok(None);
+        }
+    };
+    let mut monitor = match ops.new_monitor(output_master, ctx.output_observer.clone()) {
+        Ok(monitor) => monitor,
+        Err(e) => {
+            error!(
+                "Failed to create PTY output monitor: {}, falling back to normal execution",
+                e
+            );
+            drop(pty);
+            return Ok(None);
+        }
+    };
+
+    // Input is best-effort: when only the input side fails, output
+    // monitoring is still useful, so downgrade to OutputOnly instead of
+    // discarding the PTY.
+    let mut effective_mode = intended_mode;
+    let mut prepared_writer = None;
+    if intended_mode == PtyMode::FullProxy {
+        match ops.clone_master(&pty, PtyMasterUse::Input) {
+            Ok(input_master) => match ops.new_writer(input_master) {
+                Ok(writer) => {
+                    prepared_writer = Some(writer);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to create PTY input writer, falling back to output-only: {}",
+                        e
+                    );
+                    effective_mode = PtyMode::OutputOnly;
+                }
+            },
+            Err(e) => {
+                // A clone failure here is transient (e.g. fd exhaustion).
+                // Fall back to output-only so the command still runs.
+                error!(
+                    "Failed to clone PTY for input proxy, falling back to output-only: {}",
+                    e
+                );
+                effective_mode = PtyMode::OutputOnly;
+            }
         }
     }
+
+    // All fallible preparation is done: spawn tasks, then commit at once.
+    let output_task = tokio::spawn(async move {
+        monitor.process_output().await?;
+        Ok(String::from_utf8_lossy(&monitor.captured_output).to_string())
+    });
+    let input_task = match (effective_mode, prepared_writer) {
+        (PtyMode::FullProxy, Some(writer)) => Some(spawn_pty_input_proxy_with(writer, open_input)),
+        // Defensive: FullProxy without a writer must never commit (forbidden
+        // state). Unreachable today because every writer failure already
+        // downgrades `effective_mode`, but an explicit arm keeps a future
+        // edit from silently reintroducing FullProxy + no input task.
+        (PtyMode::FullProxy, None) => {
+            error!("PTY input writer missing for FullProxy, falling back to output-only");
+            effective_mode = PtyMode::OutputOnly;
+            None
+        }
+        // Downgraded or output-only: drop the unused input opener without
+        // calling it so tests (and non-terminal runs) never touch a terminal.
+        _ => None,
+    };
+
+    let slave_fd = pty.slave.as_raw_fd();
+    let child_config = PtyChildConfig {
+        slave: slave_fd,
+        mode: effective_mode,
+    };
+    job.pty = Some(pty);
+    job.pty_mode = Some(effective_mode);
+    job.pty_output_task = Some(output_task);
+    job.pty_input_task = input_task;
+    Ok(Some(child_config))
 }
 
 pub async fn setup_pty_input_proxy(job: &mut Job, pty_in: Pty) {
@@ -201,34 +398,10 @@ pub(crate) async fn setup_pty_input_proxy_with<F>(job: &mut Job, pty_in: Pty, op
 where
     F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
 {
-    match AsyncPtyMasterWriter::new(pty_in.master) {
-        Ok(mut master_write) => {
-            let input_task = tokio::spawn(async move {
-                match open_input() {
-                    Ok(mut async_stdin) => {
-                        if let Err(err) = tokio::io::copy(&mut async_stdin, &mut master_write).await
-                        {
-                            debug!("PTY input proxy stopped: {}", err);
-                        }
-                    }
-                    // Falling back to stdin means reading the real terminal, so
-                    // it is off-limits when we do not own it (tests).
-                    Err(err) if crate::terminal::terminal_control_enabled() => {
-                        warn!(
-                            "Failed to open an independent /dev/tty input handle, falling back to Tokio stdin: {}",
-                            err
-                        );
-                        let mut std_stdin = tokio::io::stdin();
-                        if let Err(err) = tokio::io::copy(&mut std_stdin, &mut master_write).await {
-                            debug!("Fallback PTY input proxy stopped: {}", err);
-                        }
-                    }
-                    Err(err) => {
-                        debug!("PTY input proxy not started: {}", err);
-                    }
-                }
-            });
-            job.pty_input_task = Some(input_task);
+    let Pty { master, .. } = pty_in;
+    match prepare_pty_input_writer(master) {
+        Ok(writer) => {
+            job.pty_input_task = Some(spawn_pty_input_proxy_with(writer, open_input));
         }
         Err(e) => error!("Failed to create AsyncPtyMasterWriter: {}", e),
     }
@@ -340,288 +513,4 @@ pub async fn capture_output_and_history(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        AsyncStdin, capture_output_and_history, cleanup_pty_tasks, is_builtin_job, setup_pty,
-        setup_pty_with, should_create_pty, should_enable_foreground_pty_raw_mode,
-        uses_full_pty_proxy,
-    };
-    use crate::environment::Environment;
-    use crate::process::pty::PtyMode;
-    use crate::process::{BuiltinProcess, Job, JobProcess, Process, ProcessState, Pty};
-    use crate::shell::Shell;
-    use dsh_types::Context;
-    use dsh_types::ExitStatus;
-    use dsh_types::terminal::{ShellMode, TerminalState};
-    use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-    use nix::unistd::Pid;
-    use std::os::fd::{AsRawFd, BorrowedFd};
-    use std::time::Duration;
-    use tokio::sync::oneshot;
-
-    struct DropNotify(Option<oneshot::Sender<()>>);
-
-    impl Drop for DropNotify {
-        fn drop(&mut self) {
-            if let Some(sender) = self.0.take() {
-                let _ = sender.send(());
-            }
-        }
-    }
-
-    fn test_context(foreground: bool, interactive: bool) -> Context {
-        Context {
-            shell_pid: Pid::from_raw(1),
-            shell_pgid: Pid::from_raw(1),
-            shell_tmode: None,
-            terminal_state: TerminalState::non_terminal(),
-            shell_mode: if interactive {
-                ShellMode::Interactive
-            } else {
-                ShellMode::Script
-            },
-            foreground,
-            interactive,
-            infile: STDIN_FILENO,
-            outfile: STDOUT_FILENO,
-            errfile: STDERR_FILENO,
-            captured_out: None,
-            output_observer: None,
-            save_history: true,
-            pid: None,
-            pgid: None,
-            process_count: 0,
-        }
-    }
-
-    fn test_builtin(
-        _ctx: &Context,
-        _argv: Vec<String>,
-        _proxy: &mut dyn dsh_builtin::ShellProxy,
-    ) -> ExitStatus {
-        ExitStatus::ExitedWith(0)
-    }
-
-    fn test_job_with_process(process: JobProcess, with_pty: bool) -> Job {
-        let mut job = Job::new("test".to_string(), Pid::from_raw(1));
-        job.set_process(process);
-        if with_pty {
-            job.pty = Some(Pty::new().expect("failed to create test pty"));
-            job.pty_mode = Some(PtyMode::FullProxy);
-        }
-        job
-    }
-
-    #[test]
-    fn should_create_pty_only_for_foreground_interactive_jobs() {
-        let interactive_foreground = test_context(true, true);
-        let interactive_background = test_context(false, true);
-        let non_interactive_foreground = test_context(true, false);
-
-        assert!(should_create_pty(&interactive_foreground, false, false));
-        assert!(!should_create_pty(&interactive_background, false, false));
-        assert!(!should_create_pty(
-            &non_interactive_foreground,
-            false,
-            false
-        ));
-    }
-
-    #[test]
-    fn should_create_pty_respects_disable_flags() {
-        let ctx = test_context(true, true);
-
-        assert!(!should_create_pty(&ctx, true, false));
-        assert!(!should_create_pty(&ctx, false, true));
-    }
-
-    #[test]
-    fn detects_builtin_jobs() {
-        let builtin_job = test_job_with_process(
-            JobProcess::Builtin(BuiltinProcess::new(
-                "aic".to_string(),
-                test_builtin,
-                vec!["aic".to_string()],
-            )),
-            false,
-        );
-        let command_job = test_job_with_process(
-            JobProcess::Command(Process::new(
-                "/bin/echo".to_string(),
-                vec!["echo".to_string()],
-            )),
-            false,
-        );
-
-        assert!(is_builtin_job(&builtin_job));
-        assert!(!is_builtin_job(&command_job));
-    }
-
-    #[test]
-    fn foreground_raw_mode_is_limited_to_full_proxy_pty_jobs() {
-        let ctx = test_context(true, true);
-        let builtin_job = test_job_with_process(
-            JobProcess::Builtin(BuiltinProcess::new(
-                "aic".to_string(),
-                test_builtin,
-                vec!["aic".to_string()],
-            )),
-            true,
-        );
-        let command_job = test_job_with_process(
-            JobProcess::Command(Process::new(
-                "/bin/echo".to_string(),
-                vec!["echo".to_string()],
-            )),
-            true,
-        );
-        let mut output_only_job = test_job_with_process(
-            JobProcess::Command(Process::new(
-                "/bin/echo".to_string(),
-                vec!["echo".to_string()],
-            )),
-            true,
-        );
-        output_only_job.pty_mode = Some(PtyMode::OutputOnly);
-
-        assert!(!should_enable_foreground_pty_raw_mode(&builtin_job, &ctx));
-        assert!(should_enable_foreground_pty_raw_mode(&command_job, &ctx));
-        assert!(!should_enable_foreground_pty_raw_mode(
-            &output_only_job,
-            &ctx
-        ));
-        assert!(uses_full_pty_proxy(&command_job));
-        assert!(!uses_full_pty_proxy(&output_only_job));
-    }
-
-    #[tokio::test]
-    async fn setup_pty_uses_full_proxy_with_input_proxy_for_terminal_output() {
-        let mut ctx = test_context(true, true);
-        let mut job = test_job_with_process(
-            JobProcess::Command(Process::new(
-                "/bin/echo".to_string(),
-                vec!["echo".to_string()],
-            )),
-            false,
-        );
-
-        // The production opener reads the real controlling terminal, which
-        // would eat the keystrokes of whoever is running `cargo test`. Give
-        // the proxy a PTY of its own instead. `scratch` outlives the proxy
-        // task so the reopen below cannot fail into the stdin fallback.
-        let scratch = Pty::new().expect("scratch pty for the input proxy");
-        let scratch_fd = scratch.slave.as_raw_fd();
-        let slave = setup_pty_with(&mut job, &mut ctx, move || {
-            AsyncStdin::open_tty_from_fd(unsafe { BorrowedFd::borrow_raw(scratch_fd) })
-        })
-        .await
-        .expect("setup pty");
-
-        assert!(slave.is_some());
-        assert_eq!(job.pty_mode, Some(PtyMode::FullProxy));
-        assert!(job.pty.is_some());
-        assert!(job.pty_output_task.is_some());
-        assert!(job.pty_input_task.is_some());
-
-        cleanup_pty_tasks(&mut job).await;
-        drop(scratch);
-    }
-
-    #[tokio::test]
-    async fn setup_pty_falls_back_to_output_only_when_redirected() {
-        let mut ctx = test_context(true, true);
-        // Output is redirected away from the terminal, so no full proxy.
-        ctx.outfile = 5;
-        let mut job = test_job_with_process(
-            JobProcess::Command(Process::new(
-                "/bin/echo".to_string(),
-                vec!["echo".to_string()],
-            )),
-            false,
-        );
-
-        let slave = setup_pty(&mut job, &mut ctx).await.expect("setup pty");
-
-        assert!(slave.is_some());
-        assert_eq!(job.pty_mode, Some(PtyMode::OutputOnly));
-        assert!(job.pty.is_some());
-        assert!(job.pty_output_task.is_some());
-        assert!(job.pty_input_task.is_none());
-
-        cleanup_pty_tasks(&mut job).await;
-    }
-
-    #[tokio::test]
-    async fn cleanup_pty_tasks_awaits_aborted_input_proxy() {
-        let mut job = Job::new("test".to_string(), Pid::from_raw(1));
-        let (started_tx, started_rx) = oneshot::channel();
-        let (stopped_tx, stopped_rx) = oneshot::channel();
-
-        job.pty_input_task = Some(tokio::spawn(async move {
-            let _notify = DropNotify(Some(stopped_tx));
-            let _ = started_tx.send(());
-            std::future::pending::<()>().await;
-        }));
-        started_rx.await.expect("input proxy task started");
-
-        cleanup_pty_tasks(&mut job).await;
-
-        tokio::time::timeout(Duration::from_secs(1), stopped_rx)
-            .await
-            .expect("input proxy task was not awaited")
-            .expect("input proxy task did not stop");
-        assert!(job.pty_input_task.is_none());
-        assert!(job.pty.is_none());
-        assert!(job.pty_mode.is_none());
-    }
-
-    #[tokio::test]
-    async fn capture_stops_pty_input_before_waiting_for_output_task() {
-        let mut job = Job::new("pty-test".to_string(), Pid::from_raw(1));
-        job.state = ProcessState::Completed(0, None);
-        job.pty = Some(Pty::new().expect("failed to create test pty"));
-        job.pty_mode = Some(PtyMode::OutputOnly);
-
-        let (started_tx, started_rx) = oneshot::channel();
-        let (stopped_tx, stopped_rx) = oneshot::channel();
-
-        job.pty_input_task = Some(tokio::spawn(async move {
-            let _notify = DropNotify(Some(stopped_tx));
-            let _ = started_tx.send(());
-            std::future::pending::<()>().await;
-        }));
-        started_rx.await.expect("input proxy task started");
-
-        job.pty_output_task = Some(tokio::spawn(async move {
-            stopped_rx
-                .await
-                .expect("output task waited for input proxy stop");
-            Ok("late pty output".to_string())
-        }));
-
-        let ctx = test_context(true, true);
-        let mut shell = Shell::new(Environment::new());
-
-        tokio::time::timeout(
-            Duration::from_secs(1),
-            capture_output_and_history(&mut job, &ctx, &mut shell),
-        )
-        .await
-        .expect("capture waited for output before stopping input proxy")
-        .expect("capture output and history");
-
-        assert!(job.pty_input_task.is_none());
-        assert!(job.pty_output_task.is_none());
-        assert!(job.pty.is_none());
-        assert!(job.pty_mode.is_none());
-        assert_eq!(
-            shell
-                .environment
-                .read()
-                .session_output_state
-                .output_history
-                .last_stdout(),
-            Some("late pty output")
-        );
-    }
-}
+mod tests;

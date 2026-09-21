@@ -67,13 +67,22 @@ impl Pty {
     }
 
     pub fn try_clone(&self) -> Result<Self> {
-        let master = self.master.try_clone().context("failed to clone master")?;
+        let master = self.try_clone_master()?;
         let slave = self.slave.try_clone().context("failed to clone slave")?;
         Ok(Self {
             master,
             slave,
             name: self.name.clone(),
         })
+    }
+
+    /// Clone only the master side.
+    ///
+    /// The PTY output monitor and the input proxy both use the master only;
+    /// cloning the slave as well would waste an fd and couple output/input
+    /// setup failures together.
+    pub(crate) fn try_clone_master(&self) -> Result<std::fs::File> {
+        self.master.try_clone().context("failed to clone master")
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {

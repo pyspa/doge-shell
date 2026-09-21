@@ -217,6 +217,18 @@ async fn spawn_nested_async_list(
     // out; the helper's own stdio is untouched after this returns.
     let outcome = job.launch(ctx, shell).await?;
     debug!("nested async list '{source}' launched: {outcome:?}");
-    shell.wait_jobs.push(job);
+    match outcome {
+        // A nested async launch registers `$!` and wait ownership on the
+        // helper's own table, exactly like the top level — but the ledger
+        // stays local and never propagates to the outer parent.
+        crate::process::JobLaunchOutcome::Process(_) => {
+            shell.track_async_job(job)?;
+        }
+        // A spawn-level failure is an ordinary command failure, like the
+        // top-level paths: report it without touching `$!` or the ledger.
+        crate::process::JobLaunchOutcome::CommandFailed(failure) => {
+            let _ = ctx.write_stderr(&failure.message);
+        }
+    }
     Ok(())
 }

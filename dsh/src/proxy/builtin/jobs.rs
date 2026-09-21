@@ -8,6 +8,7 @@ use tracing::{debug, error};
 
 mod bg;
 mod list;
+mod wait;
 pub use bg::execute_bg;
 pub use list::execute_jobs;
 
@@ -114,33 +115,33 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
     }
 }
 
-/// Sync → async bridge for the `fg` foreground driver.
+/// Sync → async bridge for job-control drivers (`fg`, `jobs`, `wait`).
 ///
 /// The shell runs on a multi-thread Tokio runtime, so `block_in_place` hands
 /// other tasks to a fresh worker while this thread blocks in `block_on`.
 /// Never construct a nested `Runtime` here: that panics inside the existing
 /// runtime. When no runtime exists (plain sync callers/tests), a fresh
 /// runtime is created instead. `block_in_place` is multi-thread-only, so
-/// unit tests must either call [`foreground_selected_job`] directly or run
+/// unit tests must either call the async driver directly or run
 /// on `#[tokio::test(flavor = "multi_thread")]`.
 ///
 /// The runtime flavor is checked before entering `block_in_place`.
 /// Current-thread runtimes are rejected without polling the foreground
 /// future, so the job remains in `wait_jobs`. Internal panics inside the
-/// foreground future propagate as panics and are never converted into
+/// future propagate as panics and are never converted into
 /// runtime-compatibility errors.
 fn run_foreground_driver(shell: &mut Shell, ctx: &Context, job_index: usize) -> Result<()> {
-    block_on_fg_future(foreground_selected_job(shell, ctx, job_index))?
+    block_on_job_control_future(foreground_selected_job(shell, ctx, job_index))?
 }
 
-/// Block a foreground future on the current Tokio runtime when possible.
+/// Block a job-control future on the current Tokio runtime when possible.
 ///
 /// Compatibility is decided up front via [`tokio::runtime::Handle::runtime_flavor`],
 /// before the future is polled: multi-thread runtimes use
 /// `block_in_place` + `block_on`, current-thread (and any unknown future
 /// flavor) is rejected with an error, and callers outside any runtime get a
 /// fresh `Runtime`. No `catch_unwind` is used here on purpose.
-fn block_on_fg_future<F, T>(future: F) -> Result<T>
+fn block_on_job_control_future<F, T>(future: F) -> Result<T>
 where
     F: std::future::Future<Output = T>,
 {
@@ -150,10 +151,10 @@ where
                 Ok(tokio::task::block_in_place(|| handle.block_on(future)))
             }
             tokio::runtime::RuntimeFlavor::CurrentThread => Err(anyhow::anyhow!(
-                "fg requires a multi-thread Tokio runtime (current_thread is unsupported)"
+                "job control requires a multi-thread Tokio runtime (current_thread is unsupported)"
             )),
             flavor => Err(anyhow::anyhow!(
-                "fg does not support Tokio runtime flavor: {flavor:?}"
+                "job control does not support Tokio runtime flavor: {flavor:?}"
             )),
         },
         Err(_) => Ok(tokio::runtime::Runtime::new()?.block_on(future)),
@@ -238,7 +239,7 @@ pub(crate) async fn foreground_selected_job(
         job_id,
         wait_result.as_ref().map(|_| ()).map_err(|e| e.to_string())
     );
-    finalize_foreground_job(shell, job, wait_result)
+    finalize_foreground_job(shell, job, wait_result).await
 }
 
 /// Reconcile a foreground wait and requeue the job when it is still active.
@@ -248,15 +249,20 @@ pub(crate) async fn foreground_selected_job(
 /// tree says completed. Retention runs before `wait_result` propagation so
 /// an error path never orphans an active process group; a completed job is
 /// still dropped even when the wait errored.
-pub(crate) fn finalize_foreground_job(
+/// Finalize a foreground wait: completed trees go through the canonical
+/// completed-job finalizer (output drain to EOF, known-async status
+/// archive); anything else returns to the job table.
+///
+/// Async because the canonical finalizer drains output monitors.
+pub(crate) async fn finalize_foreground_job(
     shell: &mut Shell,
     mut job: crate::process::Job,
     wait_result: Result<()>,
 ) -> Result<()> {
     job.refresh_lifecycle_state();
-    // Strict ownership: only a fully-completed tree may be dropped.
-    let still_active = !job.is_process_tree_completed();
-    if still_active {
+    // Strict ownership: only a fully-completed tree may be dropped, and
+    // only through the canonical finalizer.
+    if !job.is_process_tree_completed() {
         debug!(
             "FG_CMD_REQUEUE: Job {} still active after foreground wait (state: {:?}), returning to job table",
             job.job_id, job.state
@@ -264,15 +270,25 @@ pub(crate) fn finalize_foreground_job(
         shell.wait_jobs.push(job);
     } else {
         debug!(
-            "FG_CMD_DONE: Job {} completed, not returning to job table",
+            "FG_CMD_DONE: Job {} completed, finalizing through the canonical path",
             job.job_id
         );
+        crate::shell::job::finalize_completed_job(
+            shell,
+            job,
+            crate::shell::job::FinalizeDrain::ToEof,
+        )
+        .await?;
     }
     wait_result
 }
 
 /// Reconcile a background resume without orphaning an active job on error.
-fn finalize_background_resume(
+///
+/// Async because an already-completed tree leaves through the canonical
+/// finalizer (non-blocking `Available` drain: `bg` must return to the
+/// prompt even when a descendant holds the pipe).
+async fn finalize_background_resume(
     shell: &mut Shell,
     mut job: crate::process::Job,
     resume_result: Result<()>,
@@ -291,9 +307,15 @@ fn finalize_background_resume(
         shell.wait_jobs.push(job);
     } else {
         debug!(
-            "BG_CMD_DONE: Job {} is already completed, not returning to job table",
+            "BG_CMD_DONE: Job {} is already completed, finalizing through the canonical path",
             job.job_id
         );
+        crate::shell::job::finalize_completed_job(
+            shell,
+            job,
+            crate::shell::job::FinalizeDrain::Available,
+        )
+        .await?;
     }
 
     resume_result
@@ -359,14 +381,14 @@ mod tests {
         job
     }
 
-    #[test]
-    fn fg_requeues_job_that_stops_again() {
+    #[tokio::test]
+    async fn fg_requeues_job_that_stops_again() {
         let mut shell = test_shell();
         let job_id = 7;
         let pid = Pid::from_raw(424242);
         let job = stopped_tree_job(job_id, NixSignal::SIGTSTP);
 
-        let result = finalize_foreground_job(&mut shell, job, Ok(()));
+        let result = finalize_foreground_job(&mut shell, job, Ok(())).await;
         assert!(result.is_ok());
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -381,13 +403,15 @@ mod tests {
         let _ = test_ctx();
     }
 
-    #[test]
-    fn fg_requeues_job_stopped_by_sigstop() {
+    #[tokio::test]
+    async fn fg_requeues_job_stopped_by_sigstop() {
         let mut shell = test_shell();
         let pid = Pid::from_raw(424242);
         let job = stopped_tree_job(8, NixSignal::SIGSTOP);
 
-        finalize_foreground_job(&mut shell, job, Ok(())).expect("finalize");
+        finalize_foreground_job(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
         assert_eq!(shell.wait_jobs.len(), 1);
         assert_eq!(
             shell.wait_jobs[0].state,
@@ -395,12 +419,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fg_does_not_requeue_completed_job() {
+    #[tokio::test]
+    async fn fg_does_not_requeue_completed_job() {
         let mut shell = test_shell();
         let job = completed_tree_job(3);
 
-        let result = finalize_foreground_job(&mut shell, job, Ok(()));
+        let result = finalize_foreground_job(&mut shell, job, Ok(())).await;
         assert!(result.is_ok());
         assert!(
             shell.wait_jobs.is_empty(),
@@ -408,12 +432,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fg_requeues_active_job_after_wait_error() {
+    #[tokio::test]
+    async fn fg_completion_archives_known_async_status() {
+        use nix::unistd::Pid;
+
+        let mut shell = test_shell();
+        let job = completed_tree_job(21);
+        let pid = Pid::from_raw(424243);
+        shell.known_async.register(pid, 21);
+
+        finalize_foreground_job(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
+
+        assert!(shell.wait_jobs.is_empty());
+        let status = shell
+            .known_async
+            .consume_completed(pid)
+            .expect("fg completion must archive the async status");
+        assert_eq!(status, 0);
+    }
+
+    #[tokio::test]
+    async fn fg_requeues_active_job_after_wait_error() {
         let mut shell = test_shell();
         let job = running_tree_job(9);
 
-        let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom")));
+        let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom"))).await;
         assert!(result.is_err(), "primary wait error must propagate");
         assert_eq!(
             shell.wait_jobs.len(),
@@ -424,12 +469,12 @@ mod tests {
         assert_eq!(shell.wait_jobs[0].state, ProcessState::Running);
     }
 
-    #[test]
-    fn fg_does_not_resurrect_completed_job_on_wait_error() {
+    #[tokio::test]
+    async fn fg_does_not_resurrect_completed_job_on_wait_error() {
         let mut shell = test_shell();
         let job = completed_tree_job(11);
 
-        let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom")));
+        let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom"))).await;
         assert!(result.is_err());
         assert!(
             shell.wait_jobs.is_empty(),
@@ -437,12 +482,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bg_success_marks_stopped_process_tree_running() {
+    #[tokio::test]
+    async fn bg_success_marks_stopped_process_tree_running() {
         let mut shell = test_shell();
         let job = stopped_tree_job(12, NixSignal::SIGTSTP);
 
-        finalize_background_resume(&mut shell, job, Ok(())).expect("finalize");
+        finalize_background_resume(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
 
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -454,14 +501,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bg_sigcont_error_requeues_stopped_job() {
+    #[tokio::test]
+    async fn bg_sigcont_error_requeues_stopped_job() {
         let mut shell = test_shell();
         let pid = Pid::from_raw(424242);
         let job = stopped_tree_job(13, NixSignal::SIGTTIN);
 
         let result =
-            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")));
+            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")))
+                .await;
 
         assert!(result.is_err());
         assert_eq!(shell.wait_jobs.len(), 1);
@@ -477,16 +525,38 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bg_error_does_not_resurrect_completed_job() {
+    #[tokio::test]
+    async fn bg_error_does_not_resurrect_completed_job() {
         let mut shell = test_shell();
         let job = completed_tree_job(14);
 
         let result =
-            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")));
+            finalize_background_resume(&mut shell, job, Err(anyhow::anyhow!("SIGCONT failed")))
+                .await;
 
         assert!(result.is_err());
         assert!(shell.wait_jobs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bg_completion_archives_known_async_status() {
+        use nix::unistd::Pid;
+
+        let mut shell = test_shell();
+        let job = completed_tree_job(23);
+        let pid = Pid::from_raw(424243);
+        shell.known_async.register(pid, 23);
+
+        finalize_background_resume(&mut shell, job, Ok(()))
+            .await
+            .expect("finalize");
+
+        assert!(shell.wait_jobs.is_empty());
+        let status = shell
+            .known_async
+            .consume_completed(pid)
+            .expect("bg completion must archive the async status");
+        assert_eq!(status, 0);
     }
 
     #[test]
@@ -556,14 +626,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn fg_bridge_runs_future_on_multi_thread_runtime() {
-        let value =
-            block_on_fg_future(async { 42 }).expect("multi-thread runtime should support fg");
+    async fn job_control_bridge_runs_future_on_multi_thread_runtime() {
+        let value = block_on_job_control_future(async { 42 })
+            .expect("multi-thread runtime should support fg");
         assert_eq!(value, 42);
     }
 
     #[test]
-    fn fg_bridge_rejects_current_thread_without_polling_future() {
+    fn job_control_bridge_rejects_current_thread_without_polling_future() {
         use std::sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -576,7 +646,7 @@ mod tests {
         runtime.block_on(async {
             let polled = Arc::new(AtomicBool::new(false));
             let marker = polled.clone();
-            let result = block_on_fg_future(async move {
+            let result = block_on_job_control_future(async move {
                 marker.store(true, Ordering::SeqCst);
                 123
             });
@@ -593,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn fg_bridge_current_thread_rejection_keeps_job_table_intact() {
+    fn job_control_bridge_current_thread_rejection_keeps_job_table_intact() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -618,12 +688,12 @@ mod tests {
     }
 
     /// `catch_unwind` here only observes that the panic passes through the
-    /// bridge; production `block_on_fg_future` never converts it to an error.
+    /// bridge; production `block_on_job_control_future` never converts it to an error.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn fg_bridge_does_not_mask_inner_future_panic() {
+    async fn job_control_bridge_does_not_mask_inner_future_panic() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = block_on_fg_future(async {
-                panic!("fg bridge sentinel panic");
+            let _ = block_on_job_control_future(async {
+                panic!("job-control bridge sentinel panic");
             });
         }));
         let payload = result.expect_err("inner panic must propagate, not become a runtime error");
@@ -631,13 +701,13 @@ mod tests {
             .downcast_ref::<&'static str>()
             .copied()
             .or_else(|| payload.downcast_ref::<String>().map(String::as_str));
-        assert_eq!(message, Some("fg bridge sentinel panic"));
+        assert_eq!(message, Some("job-control bridge sentinel panic"));
     }
 
     #[test]
-    fn fg_bridge_runs_future_outside_existing_runtime() {
-        let value =
-            block_on_fg_future(async { 42 }).expect("outside-runtime path should build a runtime");
+    fn job_control_bridge_runs_future_outside_existing_runtime() {
+        let value = block_on_job_control_future(async { 42 })
+            .expect("outside-runtime path should build a runtime");
         assert_eq!(value, 42);
     }
 

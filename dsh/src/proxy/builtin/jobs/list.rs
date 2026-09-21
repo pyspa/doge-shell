@@ -41,25 +41,16 @@ impl Tabled for Job {
 /// Execute the `jobs` builtin command.
 ///
 /// Lists all background jobs. This builtin has a side effect: the table is
-/// reconciled before listing.
-///
-/// Each job's canonical process tree is polled (non-blocking, no new
-/// waiters) and jobs whose tree has completed leave the table here, exactly
-/// as `check_job_state` would remove them — but silently, with no completion
-/// notice and without draining output monitors (`check_job_state` drains
-/// background output first; in practice the foreground/background waits
-/// already drained it). Without this, non-interactive mode — which has no
-/// background tick — would list long-dead re-exec helpers as `running`
-/// forever.
+/// reconciled before listing through the same canonical
+/// [`Shell::check_job_state`](crate::shell::Shell::check_job_state) path as
+/// the background tick, so completed jobs drain their output monitors to
+/// EOF and archive their status in the known-async ledger before leaving
+/// the table. Listing never consumes retained statuses: a later
+/// `wait PID` still reports them. Without reconciliation, non-interactive
+/// mode — which has no background tick — would list long-dead re-exec
+/// helpers as `running` forever.
 pub fn execute_jobs(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Result<()> {
-    let mut index = 0;
-    while index < shell.wait_jobs.len() {
-        if shell.wait_jobs[index].update_status() {
-            shell.wait_jobs.remove(index);
-        } else {
-            index += 1;
-        }
-    }
+    super::block_on_job_control_future(shell.check_job_state())??;
     if shell.wait_jobs.is_empty() {
         ctx.write_stdout("jobs: there are no jobs")?;
     } else {

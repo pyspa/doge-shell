@@ -25,6 +25,10 @@ use std::path::PathBuf;
 pub struct ChildShellSnapshot {
     pub cwd: PathBuf,
     pub last_exit_status: i32,
+    /// `$!` string value at capture time: the helper inherits what `$!`
+    /// expands to, but never the parent's wait ownership (see
+    /// `KnownAsyncLedger`: it is per-`Shell` and never snapshotted).
+    pub last_async_pid: Option<i32>,
     pub variables: HashMap<String, String>,
     pub exported_vars: HashSet<String>,
     pub system_env_vars: HashMap<String, String>,
@@ -64,6 +68,7 @@ impl ChildShellSnapshot {
         Self {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             last_exit_status: env.last_exit_status,
+            last_async_pid: env.last_async_pid,
             variables: env.variable_state.variables.clone(),
             exported_vars: env.variable_state.exported_vars.clone(),
             system_env_vars: env.variable_state.system_env_vars.clone(),
@@ -85,6 +90,7 @@ impl ChildShellSnapshot {
     /// must not depend on `posix_spawn` cwd inheritance alone.
     pub fn apply_to(&self, env: &mut Environment) {
         env.last_exit_status = self.last_exit_status;
+        env.last_async_pid = self.last_async_pid;
         env.variable_state.variables = self.variables.clone();
         env.variable_state.exported_vars = self.exported_vars.clone();
         env.variable_state.system_env_vars = self.system_env_vars.clone();
@@ -119,6 +125,7 @@ mod tests {
                 .alias
                 .insert("ll".to_string(), "ls -l".to_string());
             env.last_exit_status = 3;
+            env.last_async_pid = Some(424242);
             *env.policy_state.safety_level.write() = SafetyLevel::Strict;
         }
         let snapshot = ChildShellSnapshot::capture(&env_arc.read());
@@ -131,6 +138,7 @@ mod tests {
         assert!(back.exported_vars.contains("SNAP_VAR"));
         assert_eq!(back.aliases.get("ll"), Some(&"ls -l".to_string()));
         assert_eq!(back.last_exit_status, 3);
+        assert_eq!(back.last_async_pid, Some(424242));
         assert_eq!(back.safety_level, "strict");
 
         let fresh = Environment::new();
@@ -142,6 +150,7 @@ mod tests {
                 Some(&"snap_value".to_string())
             );
             assert_eq!(env.last_exit_status, 3);
+            assert_eq!(env.last_async_pid, Some(424242));
             assert_eq!(*env.policy_state.safety_level.read(), SafetyLevel::Strict);
         }
     }

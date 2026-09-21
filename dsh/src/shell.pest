@@ -11,7 +11,7 @@ var_name            =  { var_name_char+ }
 // Only the specials the shell can actually answer. Adding a name here without
 // a resolver would turn `$x` into the literal string `$x`, which is a silently
 // wrong value rather than an error.
-special_var         =  { "?" | "$" }
+special_var         =  { "?" | "$" | "!" }
 variable_braced     =  { "${" ~ var_name ~ "}" }
 variable_special    =  { "$" ~ special_var }
 variable_named      =  { "$" ~ var_name }

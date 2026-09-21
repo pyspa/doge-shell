@@ -119,7 +119,10 @@ jobs:
 
       - name: Execution boundary regressions
         timeout-minutes: 15
-        run: cargo test -p doge-shell --test fd_ownership --test reexec_subshell --test pipeline_semantics --test background_builtin < /dev/null
+        run: >
+          cargo test -p doge-shell --test fd_ownership
+          --test reexec_subshell --test pipeline_semantics
+          --test background_builtin --test wait_semantics < /dev/null
 
   stress:
     name: stress (${{ matrix.os }})
@@ -161,7 +164,13 @@ jobs:
       # with margin for slower CI hosts.
       - name: Targeted stress
         timeout-minutes: 35
-        run: cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10 -E 'binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(pipeline_semantics) or binary(background_builtin) or test(lifecycle_property)' < /dev/null
+        run: >
+          cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10
+          -E 'binary(shell_contract) or binary(resource_contract)
+          or binary(fd_ownership) or binary(reexec_subshell)
+          or binary(pipeline_semantics) or binary(background_builtin)
+          or binary(wait_semantics) or test(lifecycle_property)'
+          < /dev/null
 
   lint:
     name: lint

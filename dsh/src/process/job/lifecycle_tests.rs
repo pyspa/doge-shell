@@ -5,6 +5,7 @@
 //! drives foreground-wait termination and the `Job.state` summary.
 
 use super::*;
+use crate::shell::job::final_exit_status;
 use nix::sys::signal::Signal;
 use nix::unistd::{Pid, getpgrp};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -234,4 +235,42 @@ fn signal_falls_back_to_tree_when_pgid_is_shell_group() {
     job.signal(Signal::SIGKILL).expect("tree fallback signal");
     let status = child.wait().expect("reap child");
     assert_eq!(status.signal(), Some(Signal::SIGKILL as i32));
+}
+
+#[test]
+fn final_exit_status_reads_single_process_exit() {
+    let job = job_with_stage_states(&[ProcessState::Completed(7, None)]);
+    assert_eq!(final_exit_status(&job), Some(7));
+}
+
+#[test]
+fn final_exit_status_normalizes_signal_death() {
+    let job = job_with_stage_states(&[ProcessState::Completed(0, Some(Signal::SIGTERM))]);
+    assert_eq!(final_exit_status(&job), Some(143));
+}
+
+#[test]
+fn final_exit_status_reads_pipeline_tail() {
+    // `false | true`: head fails, tail decides.
+    let job = job_with_stage_states(&[
+        ProcessState::Completed(1, None),
+        ProcessState::Completed(0, None),
+    ]);
+    assert_eq!(final_exit_status(&job), Some(0));
+
+    // `true | false`: tail failure is the status.
+    let job = job_with_stage_states(&[
+        ProcessState::Completed(0, None),
+        ProcessState::Completed(9, None),
+    ]);
+    assert_eq!(final_exit_status(&job), Some(9));
+}
+
+#[test]
+fn final_exit_status_is_none_without_completed_tail() {
+    let job = job_with_stage_states(&[ProcessState::Running]);
+    assert_eq!(final_exit_status(&job), None);
+
+    let job = Job::new("test".to_string(), Pid::from_raw(1));
+    assert_eq!(final_exit_status(&job), None);
 }

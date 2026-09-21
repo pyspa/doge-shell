@@ -104,6 +104,11 @@ pub(crate) struct TestShellProxy {
     /// When set, `cron_tool_call` fails with this message instead of
     /// returning `cron_tool_response`.
     pub cron_tool_error: Option<String>,
+    /// `wait_for_jobs`'s canned reply: the status the host reports.
+    pub wait_status: i32,
+    /// When set, `wait_for_jobs` fails with this message instead of
+    /// returning `wait_status`.
+    pub wait_error: Option<String>,
 }
 
 impl Default for TestShellProxy {
@@ -153,6 +158,8 @@ impl Default for TestShellProxy {
             cron_tool_calls: Vec::new(),
             cron_tool_response: None,
             cron_tool_error: None,
+            wait_status: 0,
+            wait_error: None,
         }
     }
 }
@@ -570,6 +577,15 @@ impl crate::shell_capabilities::AiJsonRequest for TestShellProxy {
         Box::pin(
             async move { response.ok_or_else(|| anyhow::anyhow!("no ai response configured")) },
         )
+    }
+}
+
+impl crate::shell_capabilities::JobControlCapability for TestShellProxy {
+    fn wait_for_jobs(&mut self, _ctx: &Context, _argv: Vec<String>) -> Result<i32> {
+        match &self.wait_error {
+            Some(message) => Err(anyhow::anyhow!(message.clone())),
+            None => Ok(self.wait_status),
+        }
     }
 }
 

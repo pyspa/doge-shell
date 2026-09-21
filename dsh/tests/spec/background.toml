@@ -1,6 +1,11 @@
 version = 1
 
-# Background execution: prompt returns at once, output still drains.
+# Background execution: an async launch reports status 0 at once, the next
+# list starts without waiting, and helper stdout/stderr follow ordinary fd
+# inheritance. The shell process itself never waits for background
+# completion at exit (see the dedicated `async_exit_semantics` integration
+# test for the process-level proof: this pipe-capturing harness holds EOF
+# until inherited write ends close, so it cannot observe prompt exit).
 
 [[case]]
 id = "background.external-returns-zero-promptly"
@@ -13,7 +18,7 @@ status = 0
 stdout_contains = ["BG:0"]
 
 [[case]]
-id = "background.output-drains-before-shell-exit"
+id = "background.async-output-inherits-stdout"
 class = "posix"
 mode = "command"
 script = "echo bg-marker & echo ALL:$?"
@@ -126,8 +131,8 @@ status = 0
 stdout_contains = ["AFTER", "tmp"]
 
 # The next list starts before background completion: when the foreground
-# check runs, the marker file does not exist yet. (The shell still drains
-# the helper before process exit, so the file exists afterwards.)
+# check runs, the marker file does not exist yet. The helper writes it on
+# its own afterwards, independent of the parent shell's exit.
 [[case]]
 id = "background.next-command-does-not-wait"
 class = "posix"
@@ -158,8 +163,8 @@ status = 0
 stdout_contains = ["hello", "NEXT"]
 
 # A selected session-bound builtin fails closed inside the helper without
-# aborting the parent line. Like every other background stream, the helper
-# diagnostic drains through the capture monitor to stdout.
+# aborting the parent line. Non-interactive helpers inherit the caller fds
+# directly (no capture monitor), so the helper diagnostic lands on stderr.
 [[case]]
 id = "background.session-bound-builtin"
 class = "dogesh"
@@ -169,7 +174,8 @@ timeout_ms = 8000
 
 [case.expect]
 status = 0
-stdout_contains = ["AFTER", "cannot run in background"]
+stdout_contains = ["AFTER"]
+stderr_contains = ["cannot run in background"]
 
 # A short-lived pipeline in the background must not hang the shell.
 [[case]]

@@ -78,7 +78,7 @@ fn background_export_does_not_leak_into_parent() {
 fn session_bound_builtin_fails_clearly_in_background() {
     // `jobs &` is an async AND-OR list: the parent launch succeeds (exit 0)
     // while the helper refuses the session-bound builtin inside itself.
-    // The refusal drains to stderr before process exit.
+    // The refusal inherits the caller stderr directly (no drain).
     let output = common::run_command("jobs & echo AFTER");
     assert!(output.status.success(), "command failed: {:?}", output);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -86,11 +86,12 @@ fn session_bound_builtin_fails_clearly_in_background() {
         stdout.contains("AFTER"),
         "parent line aborted by background refusal: {stdout:?}"
     );
-    // Background streams drain through the capture monitor to stdout, like
-    // every other background child.
+    // Non-interactive background helpers inherit the caller fds directly
+    // (no capture monitor), so the helper diagnostic lands on stderr.
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("cannot run in background"),
-        "clear refusal missing from background output: {stdout:?}"
+        stderr.contains("cannot run in background"),
+        "clear refusal missing from background stderr: {stderr:?}"
     );
 }
 
@@ -110,9 +111,13 @@ fn terminal_bound_builtins_are_refused_before_handler_in_background() {
             stdout.contains("AFTER"),
             "{name}: parent line aborted by background refusal: {output:?}"
         );
+        // Like every other non-interactive background stream, the helper
+        // refusal inherits the caller fds: it surfaces on stderr, never on
+        // the parent's stdout.
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stdout.contains("cannot run in background"),
-            "{name}: clear refusal missing from background output: {output:?}"
+            stderr.contains("cannot run in background"),
+            "{name}: clear refusal missing from background stderr: {stderr:?}"
         );
     }
 }

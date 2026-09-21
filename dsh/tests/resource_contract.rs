@@ -209,9 +209,10 @@ fn concurrent_shells_are_isolated_and_drained() {
 /// the safety policy without confirmation — `sh -c` would fail closed with
 /// exit 130) where the script records its own pgid via `ps`. `ps -o pgid=`
 /// works on both Linux (procps) and macOS, and `$$` is expanded by the `sh`
-/// running the script — dogesh passes it through untouched. The shell
-/// drains both helpers before `-c` exit, so no `sleep` synchronization is
-/// needed; the 10s bound only caps a hung shell.
+/// running the script — dogesh passes it through untouched. Both helpers
+/// are short-lived, so the pgid files exist once the harness observes exit
+/// (its pipe EOF follows the inherited write ends); no `sleep`
+/// synchronization is needed and the 10s bound only caps a hung shell.
 #[test]
 fn consecutive_async_jobs_own_distinct_process_groups() {
     let _serial = serial_guard();

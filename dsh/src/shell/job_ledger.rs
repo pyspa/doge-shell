@@ -112,6 +112,10 @@ impl KnownAsyncLedger {
             return false;
         }
         entry.state = KnownAsyncState::Completed { exit_status };
+        // The entry just became prunable: re-apply the bound now instead
+        // of waiting for the next `register`. `Active` rows are still
+        // never pruned (see `prune_completed`).
+        self.prune_completed();
         true
     }
 
@@ -124,6 +128,14 @@ impl KnownAsyncLedger {
     #[cfg(test)]
     pub(crate) fn entry(&self, pid: Pid) -> Option<&KnownAsyncEntry> {
         self.entries.get(&pid.as_raw())
+    }
+
+    /// Borrow the entry for `pid`, but only while this shell still holds
+    /// `Active` wait ownership of it. Detach decisions (`job_exit`) must
+    /// never treat a retained `Completed` status as a live child.
+    pub(crate) fn active_entry(&self, pid: Pid) -> Option<&KnownAsyncEntry> {
+        let entry = self.entries.get(&pid.as_raw())?;
+        (entry.state == KnownAsyncState::Active).then_some(entry)
     }
 
     /// Find a PID by its job id (for completion paths that own a `Job`
@@ -296,6 +308,27 @@ mod tests {
         // 102 is still active: pruning must evict 101, never 102.
         ledger.register(pid(103), 3);
         assert!(ledger.entry(pid(102)).is_some());
+        assert_eq!(
+            ledger.entry(pid(102)).map(|entry| entry.state),
+            Some(KnownAsyncState::Active)
+        );
+    }
+
+    #[test]
+    fn active_overflow_is_pruned_when_one_becomes_completed() {
+        let mut ledger = KnownAsyncLedger::with_limit(1);
+        ledger.register(pid(101), 1);
+        ledger.register(pid(102), 2);
+        // Both rows are `Active` ownership: neither may be pruned yet.
+        assert!(ledger.entry(pid(101)).is_some());
+        assert!(ledger.entry(pid(102)).is_some());
+        // Completing 101 makes it prunable immediately — the bound is
+        // re-applied here, not on the next `register`.
+        assert!(ledger.mark_completed(pid(101), 3));
+        assert!(
+            ledger.entry(pid(101)).is_none(),
+            "completed entry must be pruned as soon as the bound can apply"
+        );
         assert_eq!(
             ledger.entry(pid(102)).map(|entry| entry.state),
             Some(KnownAsyncState::Active)

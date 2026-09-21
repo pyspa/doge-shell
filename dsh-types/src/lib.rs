@@ -136,9 +136,16 @@ impl Context {
         }
     }
 
-    /// Check if job control is supported
+    /// Check if job control is enabled for this execution context.
+    ///
+    /// Terminal capability (`terminal_state`) and shell mode alone are not
+    /// enough: a non-interactive `-c` invocation on a TTY must still count
+    /// as disabled, so background helpers default their stdin to `/dev/null`
+    /// there too. `interactive` is the commit point for that decision.
     pub fn supports_job_control(&self) -> bool {
-        self.terminal_state.supports_job_control && self.shell_mode.supports_job_control()
+        self.interactive
+            && self.terminal_state.supports_job_control
+            && self.shell_mode.supports_job_control()
     }
 
     /// Check if in interactive mode
@@ -219,4 +226,47 @@ pub enum ExitStatus {
     Break,
     Continue,
     Return,
+}
+
+#[cfg(test)]
+mod context_job_control_tests {
+    use super::*;
+
+    fn tty_capable_context(interactive: bool) -> Context {
+        Context {
+            shell_pid: Pid::from_raw(100),
+            shell_pgid: Pid::from_raw(100),
+            shell_tmode: None,
+            terminal_state: TerminalState {
+                is_terminal: true,
+                tmodes: None,
+                supports_job_control: true,
+            },
+            shell_mode: ShellMode::Interactive,
+            foreground: false,
+            interactive,
+            infile: STDIN_FILENO,
+            outfile: STDOUT_FILENO,
+            errfile: STDERR_FILENO,
+            captured_out: None,
+            output_observer: None,
+            save_history: false,
+            pid: None,
+            pgid: None,
+            process_count: 0,
+        }
+    }
+
+    #[test]
+    fn noninteractive_tty_capable_context_disables_job_control() {
+        // `dogesh -c` attached to a TTY: capability is present but the
+        // execution context is not interactive, so job control stays off
+        // and async helpers default their stdin to `/dev/null`.
+        assert!(!tty_capable_context(false).supports_job_control());
+    }
+
+    #[test]
+    fn interactive_tty_capable_context_enables_job_control() {
+        assert!(tty_capable_context(true).supports_job_control());
+    }
 }

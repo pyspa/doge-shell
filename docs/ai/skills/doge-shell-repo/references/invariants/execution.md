@@ -50,8 +50,22 @@
 - wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
 - ledger は bounded（`CHILD_MAX` 相当、fallback 4096）。prune は oldest Completed から。Active は捨てない。PID reuse は new register が勝つ。completed retention は metadata/status のみで process resource を所有しない。
 - `jobs`・completion notice・`fg`/`bg` は archive するが consume しない。consume するのは `wait` だけ。
-- command-mode exit drain（`drain_background_jobs_for_exit`）は user command ではない。ledger status を consume せず `$?` を書き換えない。今回 policy 変更なし。
+- normal-exit detach（`Shell::detach_known_async_jobs_for_normal_exit`）は user command ではない。ledger status を consume せず `$?`/`foreground status` を書き換えない。detach failure は infrastructure failure（exit 1）で ownership を維持し、`Drop` cleanup が kill する。
 - テストは `dsh/tests/wait_semantics.rs`。sandbox の SafetyGuard が nested shell（`sh`/`bash`）を deny するため、exact status には `false`(1)/`true`(0)/self-`kill`(143)/unknown-command(127) を使う。`sh -c 'exit N'` 前提にしない。
+
+## Normal exit / detached asynchronous AND-OR lists
+
+- explicit async AND-OR list は shell 実行中は shell-owned のまま（`wait_jobs` + `KnownAsyncLedger::Active`）。`$!`/`wait` ownership はその間ずっと有効。
+- normal execution-environment exit（command-mode return・helper-plan return）でのみ active known async job を明示 release する。launch 直後ではない（`sleep 1 & wait $!` を壊すため）。
+- `Shell::Drop` は abnormal/safety cleanup であり POSIX async exit semantics ではない。detach 済み job は table から消えている。残っているものは kill する。
+- detachment は wait/signal しない。double-fork・`setsid`・`setpgid`・`killpg` を追加しない。process group setup は spawn boundary で完了済み。orphan/reparent は OS に任せる。
+- detached job は parent-only resource を持たない（`OutputMonitor`・PTY task・`ExecutionResources` なし）。`validate_detach_safe` が fail-closed で検査する。transactional two-pass（全 validate→commit）で partial detach 禁止。
+- noninteractive async stdout/stderr は caller fd を direct inherit（monitor なし）。interactive async output は monitor-managed capture を維持（prompt-safe rendering）。
+- no-job-control async stdin default は `/dev/null`。`supports_job_control()` は `interactive` を含む enabled 判定。body 内の explicit `< file` は override する。
+- helper execution environment も同じ normal-exit rule（`run_helper_plan` return 前に detach）。substitution outer group ownership・`ProducerRegistry` は触らない。
+- output-pipe EOF lifetime と parent shell process lifetime は別物。capture pipe を grandchild が保持する場合の EOF 待ちは shell wait ではない（`$(...)`・subshell capture の既知の挙動）。command-mode でも helper でも fd を閉じる処理を足さない。
+- detach 対象は ledger `Active` + job id 一致のものだけ。unknown/stopped/session-owned job は `Drop` cleanup へ残す。completed async job も detach 対象外（`Drop` の kill は completed tree には no-op）。
+- SIGHUP/`disown`/`wait -n/-p/-f` は scope 外。`!` chat jobs・`ProducerRegistry` shutdown は触らない。
 
 ## 1件の execution / process bug を直すときの5点
 

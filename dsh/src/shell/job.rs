@@ -327,53 +327,6 @@ pub(crate) async fn finalize_completed_job(
     Ok(job)
 }
 
-/// Command-mode exit boundary: wait out background jobs so their output
-/// drains before the process exits.
-///
-/// This preserves the historical `-c` semantics now that an async launch
-/// itself never waits: the next list still starts immediately, and only the
-/// final process exit waits. Historically the per-job launch wait blocked
-/// the same way, so a still-running (or infinite) background job blocks
-/// exit here exactly as it used to block the launch — this is relocated
-/// waiting, not a new hang. Lifecycle cleanup only — the foreground status
-/// is never rewritten here. Stopped jobs are left to shutdown cleanup
-/// instead of hanging the exit.
-pub async fn drain_background_jobs_for_exit(shell: &mut Shell) {
-    for job in shell.wait_jobs.iter_mut() {
-        if job.foreground {
-            continue;
-        }
-        job.update_status();
-        let stopped = job
-            .process
-            .as_deref()
-            .is_some_and(|process| process.is_fully_stopped());
-        if stopped {
-            debug!(
-                "exit drain: leaving stopped background job {} to shutdown cleanup",
-                job.job_id
-            );
-            continue;
-        }
-        // Wait out running jobs, then drain every job's monitors —
-        // including already-completed ones whose output no wait ever
-        // collected (an async launch never waits, so completion alone must
-        // not skip the drain or the output is lost).
-        if !job.is_process_tree_completed() {
-            debug!("exit drain: waiting for background job {}", job.job_id);
-            if let Err(err) = job.wait_job(false).await {
-                warn!("exit drain: wait for job {} failed: {err:#}", job.job_id);
-            }
-        }
-        if let Err(err) = job.check_background_all_output().await {
-            warn!(
-                "exit drain: output drain for job {} failed: {err:#}",
-                job.job_id
-            );
-        }
-    }
-}
-
 pub fn kill_wait_jobs(shell: &mut Shell) -> Result<()> {
     let mut i = 0;
     while i < shell.wait_jobs.len() {

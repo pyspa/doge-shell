@@ -362,10 +362,20 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     ctx.interactive = false;
 
     let evaluated = shell.eval_str(&mut ctx, command.to_string(), false).await;
-    // Asynchronous lists return before their helpers finish; drain finite
-    // background output here so `-c` still prints it before exiting. The
-    // foreground status is never rewritten by the drain.
-    crate::shell::job::drain_background_jobs_for_exit(shell).await;
+    // Normal execution-environment exit: release `Active` known-async
+    // ownership so background helpers outlive this process instead of being
+    // waited on (the old exit drain) or killed (`Drop` safety cleanup).
+    // Detach runs for `Ok` and `Err` alike: an already-launched helper is
+    // not un-launched by a later foreground failure. A validation failure
+    // keeps ownership (the `Drop` cleanup still kills) and reports an
+    // infrastructure failure rather than orphaning live state.
+    if let Err(err) = shell.detach_known_async_jobs_for_normal_exit() {
+        display_user_error(
+            &anyhow::anyhow!("failed to detach background jobs for normal exit: {err:#}"),
+            true,
+        );
+        return ExitCode::FAILURE;
+    }
     match evaluated {
         Ok(code) => {
             shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);

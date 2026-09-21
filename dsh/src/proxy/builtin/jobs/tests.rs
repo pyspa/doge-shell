@@ -400,7 +400,6 @@ fn job_control_bridge_runs_future_outside_existing_runtime() {
 async fn foreground_resume_drains_background_capture() {
     use crate::process::io::OutputMonitor;
     use dsh_types::observed_output::ObservedStream;
-    use std::os::unix::io::IntoRawFd;
     use std::process::{Command as StdCommand, Stdio};
     use std::time::Duration;
 
@@ -435,16 +434,22 @@ async fn foreground_resume_drains_background_capture() {
     );
     proc.pid = Some(child_pid);
     job.set_process(JobProcess::Command(proc));
-    job.monitors.push(OutputMonitor::new(
-        stdout.into_raw_fd(),
-        Some(observer.clone()),
-        ObservedStream::Stdout,
-    ));
-    job.monitors.push(OutputMonitor::new(
-        stderr.into_raw_fd(),
-        Some(observer.clone()),
-        ObservedStream::Stderr,
-    ));
+    job.monitors.push(
+        OutputMonitor::new(
+            stdout.into(),
+            Some(observer.clone()),
+            ObservedStream::Stdout,
+        )
+        .expect("create stdout monitor"),
+    );
+    job.monitors.push(
+        OutputMonitor::new(
+            stderr.into(),
+            Some(observer.clone()),
+            ObservedStream::Stderr,
+        )
+        .expect("create stderr monitor"),
+    );
     assert!(!job.monitors.is_empty());
 
     shell.wait_jobs.push(job);

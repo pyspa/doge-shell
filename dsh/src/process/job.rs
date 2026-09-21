@@ -409,7 +409,7 @@ impl Job {
         let input_fd = applied_stdin.changed_stdin().then_some(ctx.infile);
 
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_output) = match process
+        let (pid, mut next_process, applied_output, launched_monitors) = match process
             .launch(ctx, shell, self.stdout, pty, pipeline_context)
             .await
         {
@@ -417,7 +417,8 @@ impl Job {
                 pid,
                 next_process,
                 redirects,
-            }) => (pid, next_process, redirects),
+                monitors,
+            }) => (pid, next_process, redirects, monitors),
             // The stage never spawned and its own wiring is already unwound:
             // restore the input redirection, stop upstream stages, and
             // report the command failure.
@@ -513,24 +514,9 @@ impl Job {
             }
         }
 
-        let (stdout, stderr) = process.get_cap_out();
-        if let Some(stdout) = stdout {
-            let monitor = OutputMonitor::new(
-                stdout,
-                ctx.output_observer.clone(),
-                dsh_types::observed_output::ObservedStream::Stdout,
-            );
-            self.monitors.push(monitor);
-        }
-
-        if let Some(stderr) = stderr {
-            let monitor = OutputMonitor::new(
-                stderr,
-                ctx.output_observer.clone(),
-                dsh_types::observed_output::ObservedStream::Stderr,
-            );
-            self.monitors.push(monitor);
-        }
+        // The child exists now: move the pre-spawn capture monitors into
+        // job ownership exactly once. No raw-fd reader stays on the process.
+        self.monitors.extend(launched_monitors);
 
         let (stdin, stdout, stderr) = process.get_io();
         let pty_slave = pty.map(|pty| pty.slave);
@@ -679,10 +665,6 @@ impl Job {
         if let Some(process) = self.process.as_mut() {
             process.set_state_pid(pid, state);
         }
-    }
-
-    pub async fn check_background_output(&mut self) -> Result<()> {
-        job_wait::check_background_output(self).await
     }
 
     pub async fn check_background_all_output(&mut self) -> Result<()> {

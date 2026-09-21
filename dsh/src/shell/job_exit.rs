@@ -218,11 +218,10 @@ mod tests {
         reap_child(pid);
     }
 
-    #[test]
-    fn detach_rejects_monitor_bearing_job_and_keeps_ownership() {
+    #[tokio::test]
+    async fn detach_rejects_monitor_bearing_job_and_keeps_ownership() {
         use crate::process::io::{OutputMonitor, cloexec_pipe};
         use dsh_types::observed_output::ObservedStream;
-        use std::os::unix::io::IntoRawFd as _;
 
         let mut shell = test_shell();
         let pid = live_child();
@@ -233,11 +232,7 @@ mod tests {
             .last_mut()
             .expect("job pushed")
             .monitors
-            .push(OutputMonitor::new(
-                read.into_raw_fd(),
-                None,
-                ObservedStream::Stdout,
-            ));
+            .push(OutputMonitor::new(read, None, ObservedStream::Stdout).expect("monitor"));
 
         let err = shell
             .detach_known_async_jobs_for_normal_exit()
@@ -281,11 +276,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn detach_is_transactional_across_candidates() {
+    #[tokio::test]
+    async fn detach_is_transactional_across_candidates() {
         use crate::process::io::{OutputMonitor, cloexec_pipe};
         use dsh_types::observed_output::ObservedStream;
-        use std::os::unix::io::IntoRawFd as _;
 
         let mut shell = test_shell();
         let pid_a = live_child();
@@ -299,11 +293,7 @@ mod tests {
             .last_mut()
             .expect("job pushed")
             .monitors
-            .push(OutputMonitor::new(
-                read.into_raw_fd(),
-                None,
-                ObservedStream::Stdout,
-            ));
+            .push(OutputMonitor::new(read, None, ObservedStream::Stdout).expect("monitor"));
 
         let err = shell
             .detach_known_async_jobs_for_normal_exit()

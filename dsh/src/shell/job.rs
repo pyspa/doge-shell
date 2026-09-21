@@ -1,5 +1,13 @@
+//! Background-job reconciliation and the canonical completed-job finalizer.
+//!
+//! `check_job_state` partitions the job table into completed and active,
+//! retires every completed tree through `finalize_completed_job` (ReadyNow
+//! monitor retirement, known-async ledger archive), streams active
+//! background output, and re-polls stragglers through the same finalizer.
+//! Completed `Job` values are dropped only on this path.
+
 use crate::process::Job;
-use crate::process::job_wait::{check_background_all_output, drain_completed_output};
+use crate::process::job_wait::{drain_completed_output, finalize_ready_output};
 use crate::shell::Shell;
 use anyhow::Result;
 use nix::sys::signal::Signal;
@@ -161,13 +169,13 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
 
     shell.wait_jobs = active;
 
-    // 3. Canonical finalization: every completed job polls its monitors
-    // once (never EOF-blocking: a descendant may hold the pipe) and
-    // archives its status in the known-async ledger before the heavy
+    // 3. Canonical finalization: every completed job retires its monitors
+    // through `ReadyNow` (never waiting: a descendant may hold the pipe)
+    // and archives its status in the known-async ledger before the heavy
     // `Job` is handed out (and dropped). No direct `remove()`.
     let mut completed_jobs = Vec::with_capacity(completed.len());
     for job in completed {
-        completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::Available).await?);
+        completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::ReadyNow).await?);
     }
 
     // 4. Active background jobs keep streaming their available output.
@@ -183,15 +191,15 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     }
 
     // 5. Re-poll: a straggler may have completed during the output poll
-    // above (previously this fell out of the drain-then-reevaluate
-    // interleaving). Newly completed jobs finalize through the same
-    // canonical path with `Skip`: their monitors were polled in pass 4
-    // milliseconds ago, so a fresh poll would only double the budget.
+    // above. Newly completed jobs finalize through the same canonical path
+    // with `ReadyNow`, which drains whatever the kernel holds without
+    // waiting — including bytes written between the pass-4 poll and this
+    // pass-5 completion observation.
     let active_jobs = std::mem::take(&mut shell.wait_jobs);
     for mut job in active_jobs {
         job.update_status();
         if job.is_process_tree_completed() {
-            completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::Skip).await?);
+            completed_jobs.push(finalize_completed_job(shell, job, FinalizeDrain::ReadyNow).await?);
         } else {
             shell.wait_jobs.push(job);
         }
@@ -241,34 +249,29 @@ pub(crate) fn final_exit_status(job: &Job) -> Option<i32> {
     process.get_state().shell_exit_code()
 }
 
-/// How a completed job's output monitors are drained during finalization.
+/// How a completed job's output monitors retire during finalization.
 ///
-/// Reconciliation (`check_job_state`, hence `jobs`, notices, the
-/// background tick) polls and must never block: a descendant may hold the
-/// pipe open long after every job stage completed, and waiting for EOF
-/// there would stall the prompt. Ownership waits (`wait PID`, `fg`)
-/// already block by contract, so they drain to EOF and return only once
-/// the job's output is complete.
+/// A completed `Job` may never be dropped before its monitors execute one
+/// terminal retirement action: an explicit ownership wait drains to EOF,
+/// and non-blocking reconciliation retires ready-now. No third option
+/// exists: skipping the drain would drop bytes a completed child already
+/// committed to the pipe.
 pub(crate) enum FinalizeDrain {
-    /// Block until every monitor reaches EOF. Ownership waits only.
+    /// Block until every monitor reaches EOF. Explicit ownership waits
+    /// (`wait PID`, `fg`) only: they own the wait by contract.
     ToEof,
-    /// Poll once (`drain_available`), never block. Reconciliation only.
+    /// Retire without waiting. Reconciliation (`check_job_state`, hence
+    /// `jobs`, notices, the background tick, `bg`) only.
     ///
     /// Sound because a fully-completed tree has closed every write end it
-    /// owns: everything still in the pipe buffer is consumed, and only a
-    /// descendant-held pipe can withhold the rest (which no poll-style
-    /// check may wait for).
-    Available,
-    /// Drain nothing: the caller polled these exact monitors earlier in
-    /// the same round. Second-pass use only (`check_job_state` re-poll
-    /// after the active-output pass); a fresh `Available` poll there would
-    /// double the per-monitor budget and stall on descendant-held pipes.
-    /// Sound for the same reason as `Available`, shifted by milliseconds.
-    /// Residual known limitation: bytes written between the pass-4 poll
-    /// and pass-5 completion observation can be dropped on finalize
-    /// (sub-millisecond writer-exit interleave, pre-existing in baseline
-    /// single-drain behavior).
-    Skip,
+    /// owns: a direct non-blocking drain consumes everything still in the
+    /// pipe buffer — including bytes written between an earlier poll and
+    /// this completion observation — and only a descendant-held pipe can
+    /// withhold the rest (its future output is out of scope, and no
+    /// reconciliation may wait for its EOF without stalling the prompt).
+    /// The pending fragment publishes at retirement with or without EOF,
+    /// because monitor ownership ends here.
+    ReadyNow,
 }
 
 /// Canonical completed-job finalizer: the only path that may drop a
@@ -301,8 +304,7 @@ pub(crate) async fn finalize_completed_job(
     let status = final_exit_status(&job);
     let drain_result = match drain {
         FinalizeDrain::ToEof => drain_completed_output(&mut job).await,
-        FinalizeDrain::Available => check_background_all_output(&mut job).await,
-        FinalizeDrain::Skip => Ok(()),
+        FinalizeDrain::ReadyNow => finalize_ready_output(&mut job),
     };
     if let Err(err) = drain_result {
         // The tree already completed: losing the retained status over a
@@ -334,4 +336,110 @@ pub fn kill_wait_jobs(shell: &mut Shell) -> Result<()> {
         i += 1;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FinalizeDrain, finalize_completed_job};
+    use crate::environment::Environment;
+    use crate::process::io::OutputMonitor;
+    use crate::process::{Job, JobProcess, Process, ProcessState};
+    use crate::shell::Shell;
+    use dsh_types::observed_output::ObservedStream;
+    use std::io::Write as _;
+    use std::time::Duration;
+
+    fn test_shell() -> Shell {
+        Shell::new(Environment::new())
+    }
+
+    /// A canonically-completed job carrying one monitor: no child is
+    /// spawned (the tree state is already `Completed`), so the drain path
+    /// itself is exercised deterministically.
+    fn completed_job_with_monitor(pgid: nix::unistd::Pid, monitor: OutputMonitor) -> Job {
+        let mut job = Job::new("test-completed &".to_string(), pgid);
+        job.foreground = false;
+        let mut process = Process::new(
+            "test-completed".to_string(),
+            vec!["test-completed".to_string()],
+        );
+        process.state = ProcessState::Completed(0, None);
+        job.set_process(JobProcess::Command(process));
+        job.refresh_lifecycle_state();
+        job.monitors.push(monitor);
+        assert!(
+            job.is_process_tree_completed(),
+            "test job must be canonically completed"
+        );
+        job
+    }
+
+    /// Bytes committed between an earlier poll and the completion
+    /// observation survive reconciliation: the writer stays open (no EOF),
+    /// so a `ToEof` drain would hang where `ReadyNow` returns.
+    #[tokio::test]
+    async fn finalize_ready_now_recovers_bytes_written_after_poll() {
+        let mut shell = test_shell();
+        let pgid = shell.pgid;
+        let (read, write) = nix::unistd::pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read, None, ObservedStream::Stdout).expect("monitor");
+        let mut writer = std::fs::File::from(write);
+
+        // Pass-4 style poll observes nothing.
+        monitor
+            .drain_available_for(Duration::from_millis(5))
+            .await
+            .expect("poll");
+        assert_eq!(monitor.captured_output, "");
+
+        // Committed after the poll, before completion is observed.
+        writer.write_all(b"FINAL-MARKER\n").expect("write marker");
+        writer.flush().expect("flush");
+
+        let job = completed_job_with_monitor(pgid, monitor);
+        let finalized = finalize_completed_job(&mut shell, job, FinalizeDrain::ReadyNow)
+            .await
+            .expect("finalize");
+        let captured: String = finalized
+            .monitors
+            .iter()
+            .map(|monitor| monitor.captured_output.clone())
+            .collect();
+        assert!(
+            captured.contains("FINAL-MARKER\n"),
+            "bytes written after the poll were lost: {captured:?}"
+        );
+        drop(writer);
+    }
+
+    /// A no-newline fragment held across the running drain publishes at
+    /// retirement even with the writer open and no EOF in sight.
+    #[tokio::test]
+    async fn finalize_ready_now_publishes_pending_fragment() {
+        let mut shell = test_shell();
+        let pgid = shell.pgid;
+        let (read, write) = nix::unistd::pipe().expect("pipe");
+        let mut monitor = OutputMonitor::new(read, None, ObservedStream::Stdout).expect("monitor");
+        let mut writer = std::fs::File::from(write);
+
+        writer.write_all(b"NO-NEWLINE").expect("write fragment");
+        writer.flush().expect("flush");
+        monitor
+            .drain_available_for(Duration::from_millis(5))
+            .await
+            .expect("running drain holds the fragment");
+        assert_eq!(monitor.captured_output, "");
+
+        let job = completed_job_with_monitor(pgid, monitor);
+        let finalized = finalize_completed_job(&mut shell, job, FinalizeDrain::ReadyNow)
+            .await
+            .expect("finalize");
+        let captured: String = finalized
+            .monitors
+            .iter()
+            .map(|monitor| monitor.captured_output.clone())
+            .collect();
+        assert_eq!(captured, "NO-NEWLINE");
+        drop(writer);
+    }
 }

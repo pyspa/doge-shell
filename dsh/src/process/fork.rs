@@ -16,16 +16,17 @@ use crate::process::child_exec::{
     STAGE_DUP2_STDOUT, STAGE_EXECVE, STAGE_SETPGID, STAGE_SETSID, STAGE_SIGNAL,
     exec_external_child,
 };
-use crate::process::io::cloexec_pipe;
+use crate::process::io::{OutputMonitor, cloexec_pipe};
 use anyhow::{Context as _, Result};
-use nix::unistd::{ForkResult, Pid, fork};
-use std::os::fd::{BorrowedFd, IntoRawFd};
+use nix::unistd::{ForkResult, Pid, close, fork};
+use std::os::fd::{BorrowedFd, IntoRawFd, RawFd};
 use tracing::debug;
 
 use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use crate::shell::Shell;
 use dsh_types::Context;
+use dsh_types::observed_output::ObservedStream;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 
 pub(crate) fn fork_process(
@@ -34,7 +35,7 @@ pub(crate) fn fork_process(
     process: &mut Process,
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
-) -> Result<Pid> {
+) -> Result<(Pid, Vec<OutputMonitor>)> {
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
     debug!(
@@ -46,16 +47,26 @@ pub(crate) fn fork_process(
         ctx.infile, ctx.outfile, ctx.errfile
     );
 
-    // capture
+    // Capture monitors are built before the fork: construction failure drops
+    // both pipe ends via RAII with no child spawned. The write ends move
+    // into the child wiring; the monitors travel back to the caller for the
+    // single move into `Job.monitors` once the child exists.
+    let mut monitors = Vec::new();
+    // Write ends installed on `process` below; closed here when a pre-fork
+    // step fails after their creation.
+    let mut created_writes: Vec<RawFd> = Vec::new();
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
         debug!("FORK: Creating capture pipe for stdout (background process)");
-        let (pout, pin) = cloexec_pipe().context("failed pipe")?;
-        process.stdout = pin.into_raw_fd();
-        let pout_raw = pout.into_raw_fd();
-        process.cap_stdout = Some(pout_raw);
+        let (read, write) = cloexec_pipe().context("failed pipe")?;
+        let monitor =
+            OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stdout)?;
+        let write_fd = write.into_raw_fd();
+        process.stdout = write_fd;
+        created_writes.push(write_fd);
+        monitors.push(monitor);
         debug!(
-            "FORK: Created capture pipe for stdout: read={}, write={}",
-            pout_raw, process.stdout
+            "FORK: Created capture pipe for stdout: write={}",
+            process.stdout
         );
     } else {
         debug!(
@@ -66,13 +77,16 @@ pub(crate) fn fork_process(
 
     if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty.is_none() {
         debug!("FORK: Creating capture pipe for stderr (background process)");
-        let (pout, pin) = cloexec_pipe().context("failed pipe")?;
-        process.stderr = pin.into_raw_fd();
-        let pout_raw = pout.into_raw_fd();
-        process.cap_stderr = Some(pout_raw);
+        let (read, write) = cloexec_pipe().context("failed pipe")?;
+        let monitor =
+            OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stderr)?;
+        let write_fd = write.into_raw_fd();
+        process.stderr = write_fd;
+        created_writes.push(write_fd);
+        monitors.push(monitor);
         debug!(
-            "FORK: Created capture pipe for stderr: read={}, write={}",
-            pout_raw, process.stderr
+            "FORK: Created capture pipe for stderr: write={}",
+            process.stderr
         );
     } else {
         debug!(
@@ -98,9 +112,15 @@ pub(crate) fn fork_process(
 
     // Prepare execution data BEFORE forking, including the null-terminated
     // pointer arrays: the child only reads, never allocates.
-    let bundle = process
-        .prepare_execution(shell.environment.clone())?
-        .into_bundle();
+    let bundle = match process.prepare_execution(shell.environment.clone()) {
+        Ok(prepared) => prepared.into_bundle(),
+        Err(err) => {
+            for fd in created_writes {
+                let _ = close(fd);
+            }
+            return Err(err);
+        }
+    };
 
     // Exec-error pipe: CLOEXEC write end closes on `execve` success (parent
     // sees EOF); the child writes one `ChildExecError` record on failure.
@@ -114,7 +134,17 @@ pub(crate) fn fork_process(
     // Later pipeline stages receive the existing job PGID.
     let pgid_raw = job_pgid.map(Pid::as_raw).unwrap_or(0);
 
-    let pid = unsafe { fork().context("failed fork")? };
+    let pid = match unsafe { fork().context("failed fork") } {
+        Ok(pid) => pid,
+        Err(err) => {
+            unsafe { libc::close(err_read_fd) };
+            unsafe { libc::close(err_write_fd) };
+            for fd in created_writes {
+                let _ = close(fd);
+            }
+            return Err(err);
+        }
+    };
 
     match pid {
         ForkResult::Parent { child } => {
@@ -123,7 +153,7 @@ pub(crate) fn fork_process(
             unsafe { libc::close(err_write_fd) };
             drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
             unsafe { libc::close(err_read_fd) };
-            Ok(child)
+            Ok((child, monitors))
         }
         ForkResult::Child => {
             // The ONLY post-fork logic: raw syscalls, then execve/_exit.
@@ -302,8 +332,9 @@ mod tests {
         let mut shell = Shell::new(env);
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
-        let child =
+        let (child, monitors) =
             fork_process(&ctx, None, &mut process, &mut shell, None).expect("fork_process failed");
+        assert!(monitors.is_empty());
 
         // `fork_process` drains the exec-error pipe, so return means the
         // child already passed `setpgid` + `execve`. No timing sleep needed.

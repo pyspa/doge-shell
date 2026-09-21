@@ -678,10 +678,10 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        // The check probes each capture monitor once (200ms per monitor,
-        // stdout + stderr here) without waiting for the descendant-held
-        // pipe to close: ~400ms proves EOF-waiting is gone, while the old
-        // drain-to-EOF behavior would block ~900ms until `sleep 1` exits.
+        // Completed reconciliation uses ReadyNow and therefore never waits
+        // for the descendant-held EOF: it retires each monitor with a
+        // direct non-blocking drain. The old drain-to-EOF behavior would
+        // block ~900ms until `sleep 1` exits.
         let completed = tokio::time::timeout(Duration::from_millis(700), shell.check_job_state())
             .await
             .expect("background job check should not wait for descendant-held stdout")

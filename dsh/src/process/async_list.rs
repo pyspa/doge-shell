@@ -17,9 +17,10 @@ use super::wait::{WaitPidObservation, wait_pid_job};
 use crate::shell::plan::ExecutionPlan;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
+use dsh_types::observed_output::ObservedStream;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::unistd::{Pid, getpid};
-use std::os::fd::{AsRawFd as _, IntoRawFd as _};
+use std::os::fd::AsRawFd as _;
 use std::os::unix::io::RawFd;
 
 /// A background AND-OR list: source text, the foreground-normalized body
@@ -34,8 +35,6 @@ pub struct AsyncListProcess {
     pub stdin: RawFd,
     pub stdout: RawFd,
     pub stderr: RawFd,
-    pub(crate) cap_stdout: Option<RawFd>,
-    pub(crate) cap_stderr: Option<RawFd>,
 }
 
 impl std::fmt::Debug for AsyncListProcess {
@@ -63,8 +62,6 @@ impl AsyncListProcess {
             stdin: STDIN_FILENO,
             stdout: STDOUT_FILENO,
             stderr: STDERR_FILENO,
-            cap_stdout: None,
-            cap_stderr: None,
         }
     }
 
@@ -193,20 +190,28 @@ pub(crate) fn spawn_async_list(
     // parent-side monitor, so the helper survives the parent shell's exit.
     let mut held_write_ends: Vec<std::os::fd::OwnedFd> = Vec::new();
     let mode = AsyncOutputMode::select(ctx);
-    let (helper_stdout, cap_stdout) = match mode {
-        AsyncOutputMode::ManagedCapture => {
-            capture_or_direct(ctx.outfile, STDOUT_FILENO, &mut held_write_ends)?
-        }
+    // Monitors are built before the spawn: construction failure drops both
+    // pipe ends via RAII with no helper spawned.
+    let (helper_stdout, stdout_monitor) = match mode {
+        AsyncOutputMode::ManagedCapture => capture_or_direct(
+            ctx.outfile,
+            STDOUT_FILENO,
+            ctx.output_observer.clone(),
+            ObservedStream::Stdout,
+            &mut held_write_ends,
+        )?,
         AsyncOutputMode::Inherit => (ctx.outfile, None),
     };
-    let (helper_stderr, cap_stderr) = match mode {
-        AsyncOutputMode::ManagedCapture => {
-            capture_or_direct(ctx.errfile, STDERR_FILENO, &mut held_write_ends)?
-        }
+    let (helper_stderr, stderr_monitor) = match mode {
+        AsyncOutputMode::ManagedCapture => capture_or_direct(
+            ctx.errfile,
+            STDERR_FILENO,
+            ctx.output_observer.clone(),
+            ObservedStream::Stderr,
+            &mut held_write_ends,
+        )?,
         AsyncOutputMode::Inherit => (ctx.errfile, None),
     };
-    process.cap_stdout = cap_stdout;
-    process.cap_stderr = cap_stderr;
 
     let snapshot =
         crate::environment::child_snapshot::ChildShellSnapshot::capture(&shell.environment.read());
@@ -235,16 +240,9 @@ pub(crate) fn spawn_async_list(
     ) {
         Ok(child) => child,
         Err(err) => {
-            // The capture readers never reached a monitor: close them here
-            // so a spawn failure leaks no fd. Write ends and `/dev/null`
-            // drop via their owners; the spawn itself left no child behind
-            // (or reaped it — see `spawn_internal_helper`).
-            if let Some(fd) = process.cap_stdout.take() {
-                let _ = nix::unistd::close(fd);
-            }
-            if let Some(fd) = process.cap_stderr.take() {
-                let _ = nix::unistd::close(fd);
-            }
+            // The local monitors and held write ends drop here via RAII,
+            // so a spawn failure leaks no fd. The spawn itself left no
+            // child behind (or reaped it — see `spawn_internal_helper`).
             return Err(err);
         }
     };
@@ -280,7 +278,14 @@ pub(crate) fn spawn_async_list(
     if job.pid.is_none() {
         job.pid = Some(child);
     }
-    attach_monitors(process, ctx, job);
+    // The helper exists now: move the pre-spawn monitors into job
+    // ownership exactly once.
+    if let Some(monitor) = stdout_monitor {
+        job.monitors.push(monitor);
+    }
+    if let Some(monitor) = stderr_monitor {
+        job.monitors.push(monitor);
+    }
     Ok(child)
 }
 
@@ -305,19 +310,21 @@ pub(crate) fn launch_async_list_process(
 }
 
 /// One stdio slot: a fresh capture pipe (returning the helper-side write
-/// end plus the parent-side read end) when the slot still names the
-/// terminal, otherwise the slot itself.
+/// end plus a pre-spawn parent-side monitor) when the slot still names the
+/// terminal, otherwise the slot itself with no monitor.
 fn capture_or_direct(
     slot: RawFd,
     terminal_fd: RawFd,
+    observer: Option<dsh_types::observed_output::SharedOutputObserver>,
+    stream: ObservedStream,
     held_write_ends: &mut Vec<std::os::fd::OwnedFd>,
-) -> Result<(RawFd, Option<RawFd>)> {
+) -> Result<(RawFd, Option<OutputMonitor>)> {
     if slot == terminal_fd {
         let (read, write) = cloexec_pipe().context("async list capture pipe")?;
-        let read_fd = read.into_raw_fd();
+        let monitor = OutputMonitor::new(read, observer, stream)?;
         let write_fd = write.as_raw_fd();
         held_write_ends.push(write);
-        Ok((write_fd, Some(read_fd)))
+        Ok((write_fd, Some(monitor)))
     } else {
         Ok((slot, None))
     }
@@ -339,25 +346,6 @@ pub(crate) fn assert_no_async_list_env(overrides_len: usize) {
     debug_assert!(overrides_len == 0, "async list takes no env");
     if overrides_len != 0 {
         tracing::error!("async list ignoring unexpected env overrides");
-    }
-}
-
-/// Move fresh capture readers into `OutputMonitor`s owned by the job.
-fn attach_monitors(process: &AsyncListProcess, ctx: &Context, job: &mut super::job::Job) {
-    use dsh_types::observed_output::ObservedStream;
-    if let Some(stdout) = process.cap_stdout {
-        job.monitors.push(OutputMonitor::new(
-            stdout,
-            ctx.output_observer.clone(),
-            ObservedStream::Stdout,
-        ));
-    }
-    if let Some(stderr) = process.cap_stderr {
-        job.monitors.push(OutputMonitor::new(
-            stderr,
-            ctx.output_observer.clone(),
-            ObservedStream::Stderr,
-        ));
     }
 }
 
@@ -559,8 +547,6 @@ mod tests {
         assert!(job.pty.is_none(), "async job must own no PTY");
         assert_eq!(process.stdout, ctx.outfile);
         assert_eq!(process.stderr, ctx.errfile);
-        assert_eq!(process.cap_stdout, None);
-        assert_eq!(process.cap_stderr, None);
 
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {

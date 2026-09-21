@@ -12,7 +12,7 @@ use tracing::debug;
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::builtin_execution_placement;
 use super::fork::fork_process;
-use super::io::{cloexec_pipe, create_pipe, default_output_wiring};
+use super::io::{OutputMonitor, cloexec_pipe, create_pipe, default_output_wiring};
 use super::job_process::{JobProcess, ProcessLaunchOutcome, apply_pty_stdio};
 use super::launch_outcome::CommandFailure;
 use super::pty::PtyChildConfig;
@@ -20,6 +20,7 @@ use super::redirect::{self, Redirect};
 use super::reexec::{spawn_background_builtin, spawn_isolated_builtin};
 use crate::shell::Shell;
 use dsh_types::Context;
+use dsh_types::observed_output::ObservedStream;
 
 impl JobProcess {
     pub(crate) async fn launch(
@@ -68,6 +69,11 @@ impl JobProcess {
         // Write ends created by this call and now living in `ctx`, if any.
         let mut created_out: Option<RawFd> = None;
         let mut created_err: Option<RawFd> = None;
+        // Capture monitors built before the spawn below. They stay local
+        // until the child exists; only then does the outcome move them to
+        // the job. Any earlier return drops them (closing the read ends)
+        // with no child spawned, so no orphan path opens.
+        let mut monitors: Vec<OutputMonitor> = Vec::new();
 
         let pipe_out = match next_process {
             Some(_) => {
@@ -87,22 +93,18 @@ impl JobProcess {
                     && !matches!(self, JobProcess::AsyncList(_) | JobProcess::NoCommand(_)))
                     || observe_foreground_external
                 {
-                    let (pout, pin) = cloexec_pipe().context("failed pipe")?;
-                    ctx.outfile = pin.into_raw_fd();
+                    let (read, write) = cloexec_pipe().context("failed pipe")?;
+                    // The monitor is built before the write end leaves this
+                    // scope: construction failure drops both ends via RAII
+                    // with `ctx` untouched and no child spawned.
+                    let monitor = OutputMonitor::new(
+                        read,
+                        ctx.output_observer.clone(),
+                        ObservedStream::Stdout,
+                    )?;
+                    ctx.outfile = write.into_raw_fd();
                     created_out = Some(ctx.outfile);
-                    let pout_raw = pout.into_raw_fd();
-                    match self {
-                        JobProcess::Builtin(p) => p.cap_stdout = Some(pout_raw),
-                        JobProcess::Command(p) => p.cap_stdout = Some(pout_raw),
-                        // Unreachable: no-command stages are excluded from
-                        // automatic capture above (they emit no stdout
-                        // bytes of their own), as are synthetic sources
-                        // (never a capture tail) and async lists (own
-                        // their capture).
-                        JobProcess::SyntheticSource(_) => {}
-                        JobProcess::NoCommand(_) => {}
-                        JobProcess::AsyncList(_) => {}
-                    }
+                    monitors.push(monitor);
                     None
                 } else {
                     default_output_wiring(ctx, stdout);
@@ -112,12 +114,26 @@ impl JobProcess {
         };
 
         if observe_foreground_external && ctx.errfile == STDERR_FILENO {
-            let (pout, pin) = cloexec_pipe().context("failed stderr pipe")?;
-            ctx.errfile = pin.into_raw_fd();
-            created_err = Some(ctx.errfile);
-            let pout_raw = pout.into_raw_fd();
-            if let JobProcess::Command(p) = self {
-                p.cap_stderr = Some(pout_raw);
+            let (read, write) = cloexec_pipe().context("failed stderr pipe")?;
+            match OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stderr) {
+                Ok(monitor) => {
+                    ctx.errfile = write.into_raw_fd();
+                    created_err = Some(ctx.errfile);
+                    monitors.push(monitor);
+                }
+                Err(err) => {
+                    // `read` closed inside the failed constructor, `write`
+                    // drops here. The stdout capture wired above never
+                    // reached a child: close its write end and restore the
+                    // entry slots so nothing leaks and `ctx` names nothing
+                    // closed.
+                    if let Some(write_end) = created_out.take() {
+                        let _ = close(write_end);
+                    }
+                    ctx.outfile = entry_outfile;
+                    ctx.errfile = entry_errfile;
+                    return Err(err);
+                }
             }
         }
 
@@ -196,7 +212,9 @@ impl JobProcess {
                     // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
-                    fork_process(ctx, ctx.pgid, process, shell, pty)?
+                    let (child, fork_monitors) = fork_process(ctx, ctx.pgid, process, shell, pty)?;
+                    monitors.extend(fork_monitors);
+                    child
                 }
                 JobProcess::SyntheticSource(process) => {
                     super::pipeline_source::spawn_synthetic_source(ctx, shell, process)?
@@ -221,6 +239,19 @@ impl JobProcess {
         let pid = match launched {
             Ok(pid) => pid,
             Err(err) => {
+                // The child never spawned: `monitors` drops its readers
+                // here. Close this call's capture write ends (the parent
+                // copies the child never inherited) and the unread next-stage
+                // pipe end before restoring the slots.
+                if let Some(write_end) = created_out.take() {
+                    let _ = close(write_end);
+                }
+                if let Some(write_end) = created_err.take() {
+                    let _ = close(write_end);
+                }
+                if let Some(read_end) = pipe_out {
+                    let _ = close(read_end);
+                }
                 applied.restore(ctx);
                 return Err(err);
             }
@@ -250,12 +281,15 @@ impl JobProcess {
         if let Some(pipe_out) = pipe_out {
             ctx.infile = pipe_out;
         }
-        // return launched process pid, pipeline process, and the descriptors
-        // the redirections own (the caller must not close those itself)
+        // return launched process pid, pipeline process, the descriptors
+        // the redirections own (the caller must not close those itself),
+        // and the pre-spawn capture monitors (moved once into the job by
+        // the caller now that the child exists)
         Ok(ProcessLaunchOutcome::Launched {
             pid,
             next_process,
             redirects: applied,
+            monitors,
         })
     }
 
@@ -263,14 +297,15 @@ impl JobProcess {
     /// after a redirection failure, before anything spawned.
     ///
     /// Only descriptors created by that call are closed: `pipe_out` (the read
-    /// end for the next stage), `created_out` / `created_err` (fresh pipe
-    /// write ends now living in `ctx`), and the capture-reader ends stashed
-    /// on the process. Everything else in `ctx` is caller-owned (the caller's
-    /// capture pipe, the base stdio) or job-owned (the PTY slave, only
-    /// unwound, never closed), so the slots are simply restored to the entry
-    /// values. No slot comparison is involved: a pipeline stage's entry
-    /// `ctx.outfile` is the previous stage's already-closed pipe write end,
-    /// which a fresh pipe could never be distinguished from by number alone.
+    /// end for the next stage) and `created_out` / `created_err` (fresh pipe
+    /// write ends now living in `ctx`). Pre-spawn capture readers live in the
+    /// local monitor vec and drop via RAII. Everything else in `ctx` is
+    /// caller-owned (the caller's capture pipe, the base stdio) or job-owned
+    /// (the PTY slave, only unwound, never closed), so the slots are simply
+    /// restored to the entry values. No slot comparison is involved: a
+    /// pipeline stage's entry `ctx.outfile` is the previous stage's
+    /// already-closed pipe write end, which a fresh pipe could never be
+    /// distinguished from by number alone.
     fn abort_stage_wiring(
         &mut self,
         ctx: &mut Context,
@@ -287,23 +322,6 @@ impl JobProcess {
         }
         if let Some(write_end) = created_err {
             let _ = close(write_end);
-        }
-        // Capture-reader ends stashed on the process never reached a spawn;
-        // take them back and close so they cannot leak.
-        let (cap_stdout, cap_stderr) = match self {
-            JobProcess::Builtin(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
-            JobProcess::Command(process) => (process.cap_stdout.take(), process.cap_stderr.take()),
-            JobProcess::SyntheticSource(_) => (None, None),
-            JobProcess::NoCommand(_) => (None, None),
-            JobProcess::AsyncList(process) => {
-                (process.cap_stdout.take(), process.cap_stderr.take())
-            }
-        };
-        if let Some(fd) = cap_stdout {
-            let _ = close(fd);
-        }
-        if let Some(fd) = cap_stderr {
-            let _ = close(fd);
         }
         // `redirect::apply` already rolled its own partial changes back, so
         // the slots now hold the post-wiring values; put back exactly what

@@ -45,6 +45,12 @@
 - Active job は `wait_jobs` に住む。重い `Job` オブジェクトの削除は、monitor へ terminal retirement action を1回実行（running は bounded `drain_available`、canonical completed tree の reconciliation は `ReadyNow`、explicit ownership wait（`wait PID`・`fg`）は `drain_to_eof`）し、known async job なら final status を ledger に archive してから。completed `Job` の直接 `remove()` は禁止。全経路（`check_job_state`・`jobs`・notices・`fg`・`bg`・`wait`）は canonical finalizer を通す。
 - running background monitor は bounded `drain_available` を使う。canonical completed tree の reconciliation は `ReadyNow`（await なし・timeout なし・O_NONBLOCK fd への直接 drain）。`ReadyNow` は monitor ownership がそこで終了するため pending fragment を publish する。explicit ownership wait（`wait PID`・`fg`）は `ToEof` を使う。descendant が pipe を保持していても reconciliation は EOF を待たない。`FinalizeDrain::Skip` は存在しない。
 - drain error で status を失わない。exit status 確定と ledger archive を先に保証し、monitor error は diagnostic に留める。
+- OutputMonitor terminal rendering is best-effort presentation only.
+- A renderer write/flush failure disables rendering for that monitor exactly once.
+- Renderer failure never terminates a drain, changes wait status, or releases the capture-pipe reader early.
+- After renderer failure, pipe drain, captured_output, and SharedOutputObserver continue normally.
+- ReadyNow still reads until EOF/WouldBlock; ToEof still owns the reader until EOF.
+- Actual read/readiness/framing errors retain their existing Result semantics.
 - final status は canonical tail process の `ProcessState::shell_exit_code()` から取る（`job.state` の blind read 禁止）。signal 死は128+N。
 - `ECHILD` は completion を捏造しない。canonical tree が `Completed` でなければ status を invent しない。`wait(-1)`/`waitpid(-1)` 禁止。ledger→Job→canonical PID set 経由でのみ待つ。
 - `wait` semantics: 引数なし→全 known を待って0（個別 failure を反映しない）・全 consume。`wait PID` は active→take/termination-wait/finalize/consume、completed→即返却+consume、unknown→127（ alien PID を `waitpid` しない）。複数 operand は順に処理し最後の status。repeat は127。`-n/-p/-f` は usage error（exit 1）。`%spec`/非数値は 127 として扱い次の operand へ進む（code behavior）。

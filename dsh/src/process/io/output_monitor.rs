@@ -21,6 +21,10 @@
 //! `waitpid` observes completion, bytes the child wrote before exiting are
 //! already committed to the pipe, and a direct non-blocking `read` recovers
 //! them even if the reactor has not delivered a readiness event yet.
+//!
+//! Terminal rendering is best-effort and isolated from pipe ownership:
+//! once rendering fails, this monitor stops rendering but continues draining,
+//! capturing and observing output for the rest of its lifetime.
 
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -71,6 +75,7 @@ pub struct OutputMonitor {
     // Cached renderer to avoid repeated allocations.
     // Safe to hold as it no longer holds StdoutLock persistently.
     pub(crate) renderer: TerminalRenderer,
+    renderer_failed: bool,
     observer: Option<SharedOutputObserver>,
     observed_stream: ObservedStream,
 }
@@ -99,6 +104,7 @@ impl OutputMonitor {
             outputed: false,
             captured_output: String::new(),
             renderer: TerminalRenderer::new(),
+            renderer_failed: false,
             observer,
             observed_stream,
         })
@@ -120,14 +126,41 @@ impl OutputMonitor {
         }
     }
 
-    fn flush_buffer(&mut self, buffer: &str) -> Result<()> {
+    fn flush_terminal(renderer: &mut TerminalRenderer, buffer: &str) -> Result<()> {
         if buffer.is_empty() {
             return Ok(());
         }
 
-        self.renderer.write_all(buffer.as_bytes())?;
-        self.renderer.flush()?;
+        renderer.write_all(buffer.as_bytes())?;
+        renderer.flush()?;
         Ok(())
+    }
+
+    /// Best-effort display flush: a renderer failure disables rendering for
+    /// the rest of this monitor's lifetime (sticky `renderer_failed`), logs
+    /// one diagnostic, and never propagates as a drain `Err`. The display
+    /// scratch buffer is always cleared so a long-running job cannot grow it
+    /// without bound; capture and observer data is already recorded.
+    fn flush_display_with<F>(&mut self, display: &mut String, flush: &mut F)
+    where
+        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+    {
+        if display.is_empty() {
+            return;
+        }
+
+        if !self.renderer_failed
+            && let Err(err) = flush(&mut self.renderer, display)
+        {
+            self.renderer_failed = true;
+            tracing::warn!(
+                stream = ?self.observed_stream,
+                error = %err,
+                "OutputMonitor renderer failed; terminal rendering disabled for this monitor"
+            );
+        }
+
+        display.clear();
     }
 
     /// Publish one complete record exactly once to the renderer buffer, the
@@ -194,6 +227,19 @@ impl OutputMonitor {
     }
 
     pub(crate) async fn drain_available_for(&mut self, quiet_period: Duration) -> Result<()> {
+        let mut flush = Self::flush_terminal;
+        self.drain_available_for_with(quiet_period, &mut flush)
+            .await
+    }
+
+    async fn drain_available_for_with<F>(
+        &mut self,
+        quiet_period: Duration,
+        flush: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+    {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
         let mut display = String::new();
         loop {
@@ -216,9 +262,8 @@ impl OutputMonitor {
                     // A bad record drops itself; later records in the same
                     // chunk still publish, and the running drain stays `Ok`.
                     let _ = self.feed_bytes(&mut display, &chunk[..n]);
-                    if display.len() >= RENDER_FLUSH_BYTES {
-                        self.flush_buffer(&display)?;
-                        display.clear();
+                    if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
+                        self.flush_display_with(&mut display, flush);
                     }
                 }
                 Ok(Err(err)) if is_would_block(&err) => {
@@ -232,7 +277,7 @@ impl OutputMonitor {
             }
         }
         if !display.is_empty() {
-            self.flush_buffer(&display)?;
+            self.flush_display_with(&mut display, flush);
         }
         Ok(())
     }
@@ -240,6 +285,14 @@ impl OutputMonitor {
     /// Explicit-ownership-wait drain: consume until EOF, publishing the
     /// pending fragment there. `wait PID` / `fg` only.
     pub async fn drain_to_eof(&mut self) -> Result<()> {
+        let mut flush = Self::flush_terminal;
+        self.drain_to_eof_with(&mut flush).await
+    }
+
+    async fn drain_to_eof_with<F>(&mut self, flush: &mut F) -> Result<()>
+    where
+        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+    {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
         let mut display = String::new();
         let mut first_error: Option<anyhow::Error> = None;
@@ -262,9 +315,8 @@ impl OutputMonitor {
                     {
                         first_error = Some(err);
                     }
-                    if display.len() >= RENDER_FLUSH_BYTES {
-                        self.flush_buffer(&display)?;
-                        display.clear();
+                    if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
+                        self.flush_display_with(&mut display, flush);
                     }
                 }
                 Ok(Err(err)) if is_would_block(&err) => {
@@ -281,7 +333,7 @@ impl OutputMonitor {
             }
         }
         if !display.is_empty() {
-            self.flush_buffer(&display)?;
+            self.flush_display_with(&mut display, flush);
         }
         if let Some(err) = first_error {
             return Err(err);
@@ -305,6 +357,14 @@ impl OutputMonitor {
     /// without EOF or a trailing newline: this monitor retires here, so
     /// keeping it would drop those bytes with the monitor.
     pub fn finalize_ready_now(&mut self) -> Result<()> {
+        let mut flush = Self::flush_terminal;
+        self.finalize_ready_now_with(&mut flush)
+    }
+
+    fn finalize_ready_now_with<F>(&mut self, flush: &mut F) -> Result<()>
+    where
+        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+    {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
         let mut display = String::new();
         let mut first_error: Option<anyhow::Error> = None;
@@ -320,9 +380,8 @@ impl OutputMonitor {
                     {
                         first_error = Some(err);
                     }
-                    if display.len() >= RENDER_FLUSH_BYTES {
-                        self.flush_buffer(&display)?;
-                        display.clear();
+                    if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
+                        self.flush_display_with(&mut display, flush);
                     }
                 }
                 Err(err) if is_would_block(&err) => break,
@@ -340,7 +399,7 @@ impl OutputMonitor {
             first_error = Some(err);
         }
         if !display.is_empty() {
-            self.flush_buffer(&display)?;
+            self.flush_display_with(&mut display, flush);
         }
         if let Some(err) = first_error {
             return Err(err);
@@ -348,6 +407,9 @@ impl OutputMonitor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod renderer_failure_tests;
 
 #[cfg(test)]
 mod tests {

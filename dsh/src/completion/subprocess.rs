@@ -3,6 +3,8 @@
 //! non-zero exit, runtime timeout, or stdout-limit exhaustion. Timeouts and
 //! limit exhaustion kill the whole process group and reap the child; only a
 //! genuinely completed process yields a successful (possibly empty) result.
+//! The limit is inclusive: exactly MAX_STDOUT_BYTES is valid; the first byte
+//! beyond it is overflow.
 
 use anyhow::Result;
 use std::io::{self, Read};
@@ -55,7 +57,7 @@ enum DrainStatus {
     Eof,
     WouldBlock,
     DeadlineReached,
-    OutputLimitReached,
+    OutputLimitExceeded,
 }
 
 pub(crate) fn command(program: &str) -> Command {
@@ -135,7 +137,7 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Colle
                 let _ = child.wait();
                 return Ok(CollectStdoutOutcome::TimedOut { timeout });
             }
-            DrainStatus::OutputLimitReached => {
+            DrainStatus::OutputLimitExceeded => {
                 terminate_child(child);
                 let _ = child.wait();
                 return Ok(CollectStdoutOutcome::OutputLimitExceeded {
@@ -148,7 +150,7 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Colle
         match child.try_wait() {
             Ok(Some(status)) => {
                 let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
-                if drain_status == DrainStatus::OutputLimitReached {
+                if drain_status == DrainStatus::OutputLimitExceeded {
                     terminate_child(child);
                     return Ok(CollectStdoutOutcome::OutputLimitExceeded {
                         limit: MAX_STDOUT_BYTES,
@@ -171,7 +173,7 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Colle
             Ok(None) => {}
             Err(err) if child_was_reaped(&err) => {
                 let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
-                if drain_status == DrainStatus::OutputLimitReached {
+                if drain_status == DrainStatus::OutputLimitExceeded {
                     terminate_child(child);
                     return Ok(CollectStdoutOutcome::OutputLimitExceeded {
                         limit: MAX_STDOUT_BYTES,
@@ -222,7 +224,7 @@ fn drain_stdout_after_exit(
         match drain_available_stdout(stdout, output, deadline)? {
             DrainStatus::Eof => return Ok(DrainStatus::Eof),
             DrainStatus::DeadlineReached => return Ok(DrainStatus::DeadlineReached),
-            DrainStatus::OutputLimitReached => return Ok(DrainStatus::OutputLimitReached),
+            DrainStatus::OutputLimitExceeded => return Ok(DrainStatus::OutputLimitExceeded),
             DrainStatus::WouldBlock => {}
         }
         if Instant::now() >= deadline {
@@ -244,13 +246,19 @@ fn drain_available_stdout(
         if Instant::now() >= deadline {
             return Ok(DrainStatus::DeadlineReached);
         }
-        if output.len() >= MAX_STDOUT_BYTES {
-            return Ok(DrainStatus::OutputLimitReached);
-        }
 
-        let read_len = buf.len().min(MAX_STDOUT_BYTES - output.len());
+        debug_assert!(output.len() <= MAX_STDOUT_BYTES);
+
+        let remaining = MAX_STDOUT_BYTES - output.len();
+        let read_len = buf.len().min(remaining.saturating_add(1));
+
+        debug_assert!(read_len > 0);
+
         match stdout.read(&mut buf[..read_len]) {
             Ok(0) => return Ok(DrainStatus::Eof),
+            Ok(n) if n > remaining => {
+                return Ok(DrainStatus::OutputLimitExceeded);
+            }
             Ok(n) => output.extend_from_slice(&buf[..n]),
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
@@ -382,32 +390,74 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
-    #[test]
-    fn oversized_output_hits_limit_not_timeout() {
-        // A temp file just over the limit makes the output-limit path
-        // deterministic: `cat` finishes far too fast for the generous timeout
-        // to fire first.
-        let dir = tempdir().unwrap();
-        let big = dir.path().join("big.txt");
-        let chunk = vec![b'x'; 8192];
-        let mut file = fs::File::create(&big).unwrap();
-        let mut remaining = MAX_STDOUT_BYTES + 4096;
+    fn write_repeated_file(path: &Path, len: usize, byte: u8) {
+        let chunk = vec![byte; 8192];
+        let mut file = fs::File::create(path).unwrap();
+        let mut remaining = len;
+
         while remaining > 0 {
             let take = chunk.len().min(remaining);
             std::io::Write::write_all(&mut file, &chunk[..take]).unwrap();
+
             remaining -= take;
         }
-        drop(file);
+    }
+
+    #[test]
+    fn stdout_exactly_at_limit_is_completed() {
+        // Inclusive ceiling: exactly MAX bytes followed by EOF is success.
+        // The file content is fixed before the child spawns, so no sleep
+        // synchronization is needed.
+        let dir = tempdir().unwrap();
+        let exact = dir.path().join("exact.txt");
+        write_repeated_file(&exact, MAX_STDOUT_BYTES, b'x');
 
         let mut command = command("cat");
-        command.arg(&big);
+        command.arg(&exact);
+        let outcome = collect_stdout_outcome(command, Duration::from_secs(30)).unwrap();
+
+        match outcome {
+            CollectStdoutOutcome::Completed(stdout) => {
+                assert_eq!(stdout.len(), MAX_STDOUT_BYTES);
+                assert!(stdout.bytes().all(|byte| byte == b'x'));
+            }
+            CollectStdoutOutcome::OutputLimitExceeded { .. } => {
+                panic!("exact limit must not be classified as overflow");
+            }
+            CollectStdoutOutcome::TimedOut { .. } => {
+                panic!("exact limit unexpectedly timed out");
+            }
+            CollectStdoutOutcome::NonZeroExit { status } => {
+                panic!("cat unexpectedly exited with {status}");
+            }
+        }
+    }
+
+    #[test]
+    fn stdout_one_byte_over_limit_is_rejected() {
+        // Opposite boundary: MAX + 1 bytes must observe the overflow byte and
+        // fail as OutputLimitExceeded, not time out.
+        let dir = tempdir().unwrap();
+        let over = dir.path().join("over.txt");
+        write_repeated_file(&over, MAX_STDOUT_BYTES + 1, b'x');
+
+        let mut command = command("cat");
+        command.arg(&over);
         let outcome = collect_stdout_outcome(command, Duration::from_secs(30)).unwrap();
 
         match outcome {
             CollectStdoutOutcome::OutputLimitExceeded { limit } => {
                 assert_eq!(limit, MAX_STDOUT_BYTES);
             }
-            other => panic!("expected OutputLimitExceeded, got {other:?}"),
+            CollectStdoutOutcome::Completed(_) => {
+                panic!("max-plus-one output must not complete successfully");
+            }
+            CollectStdoutOutcome::TimedOut { .. } => {
+                panic!("max-plus-one output unexpectedly timed out");
+            }
+            CollectStdoutOutcome::NonZeroExit { status } => {
+                panic!("cat unexpectedly exited with {status}");
+            }
         }
     }
 

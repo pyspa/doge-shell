@@ -14,6 +14,8 @@
 - JSON を**新規追加**しただけでは release ビルドが再実行されない（rust-embed は `include_bytes!` でファイル単位に依存を張るのでディレクトリの変化を追わない）。出荷前に `touch dsh/src/completion/json_loader.rs`。`output-schemas/` も同じ仕組み（`dsh/src/output_schema/loader.rs`）なので、スキーマ追加時は同様に loader を touch する。
 - `completions/` はクレートディレクトリの外なので `cargo package -p doge-shell` には入らない。path 依存があり現状 publish できないため実害は無いが、crates.io 公開が必要になったら `dsh/` 配下へ戻す。
 - completion subprocess timeout and stdout-limit exhaustion are failure outcomes, never successful empty candidate sets.
+- `MAX_STDOUT_BYTES` is an inclusive capture ceiling: exactly that many bytes may complete successfully; `OutputLimitExceeded` requires observing at least one byte beyond the ceiling.
+- EOF at the exact limit must be established with a non-empty overflow probe; a zero-length `Read::read` result is not evidence of EOF.
 - successful exit with empty stdout is a valid empty result.
 - non-zero exit remains soft-empty for compatibility unless a provider explicitly defines stronger semantics.
 - a canonical child that has already exited is not retroactively classified as timed out merely because a descendant keeps the stdout write end open during the post-exit drain grace period.

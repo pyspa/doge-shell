@@ -41,6 +41,7 @@ use nix::unistd::Pid;
 use std::ffi::CString;
 use std::os::fd::{AsFd as _, AsRawFd as _, BorrowedFd};
 use std::os::unix::io::RawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod fd_layout;
 mod helper;
@@ -51,8 +52,89 @@ pub use helper::run_internal_helper;
 pub use protocol::{
     BuiltinExecRequest, InternalExecKind, InternalExecRequest, MAX_INTERNAL_EXEC_REQUEST,
     NoCommandExecRequest, PROTOCOL_VERSION, PipelineSourceExecRequest, PlanExecMode,
-    PlanExecRequest, read_internal_request,
+    PlanExecRequest, PlanSignalPolicy, read_internal_request, validate_plan_signal_policy,
 };
+
+/// Spawn-time signal posture for one internal helper.
+///
+/// This is a spawn implementation detail, never serialized: the wire policy
+/// is [`PlanSignalPolicy`]. `Normal` keeps the existing empty spawn mask;
+/// `BlockInterruptAndQuitDuringInit` starts the child with SIGINT/SIGQUIT
+/// blocked so the helper can install `SIG_IGN` before unblocking, closing
+/// the spawn-to-`sigaction` race window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelperSpawnSignalPolicy {
+    Normal,
+    BlockInterruptAndQuitDuringInit,
+}
+
+/// Whether this process runs under the async no-job-control signal
+/// environment (SIGINT/SIGQUIT ignored from helper commit onward).
+///
+/// Set exactly once by an async-list helper when it commits
+/// `PlanSignalPolicy::IgnoreInterruptAndQuit`, and inherited by any nested
+/// helper that observes both dispositions already ignored, before any nested
+/// spawn. Nested internal helpers consult it to preserve the ignored
+/// dispositions instead of resetting them to default: POSIX requires the
+/// commands in an async list to inherit the ignore, including pipeline
+/// builtins, no-command stages, and substitutions that re-exec as nested
+/// helpers. Top-level shells and `Normal` helpers never set it, so their
+/// existing reset-to-default semantics are unchanged.
+///
+/// Test hygiene: never commit the `IgnoreInterruptAndQuit` path (or arrange
+/// both-ignored dispositions) in-process — the cargo-test process shares
+/// this flag and its own dispositions, so doing so would pollute every later
+/// `spawn_sigdefault` expectation in the same process. The fail-closed
+/// validation tests are in-process safe precisely because they return before
+/// any signal commit.
+static ASYNC_INT_QUIT_IGNORED: AtomicBool = AtomicBool::new(false);
+
+/// Record that this process now runs under the async no-job-control signal
+/// environment. Write-once: helpers execute a single request and exit.
+fn mark_async_int_quit_ignored() {
+    ASYNC_INT_QUIT_IGNORED.store(true, Ordering::SeqCst);
+}
+
+/// Whether nested helper spawns must preserve (rather than reset) the
+/// inherited SIGINT/SIGQUIT dispositions.
+fn async_int_quit_ignored() -> bool {
+    ASYNC_INT_QUIT_IGNORED.load(Ordering::SeqCst)
+}
+
+/// The `posix_spawn` signal mask for one spawn policy. Pure: unit tests pin
+/// the race protection without spawning processes.
+fn spawn_sigmask(policy: HelperSpawnSignalPolicy) -> SigSet {
+    let mut mask = SigSet::empty();
+    if policy == HelperSpawnSignalPolicy::BlockInterruptAndQuitDuringInit {
+        mask.add(Signal::SIGINT);
+        mask.add(Signal::SIGQUIT);
+    }
+    mask
+}
+
+/// The `posix_spawn` default-reset set. SIGTSTP/SIGTTIN/SIGTTOU/SIGCHLD/
+/// SIGPIPE are always reset so helpers never inherit the shell's ignored
+/// dispositions. SIGINT/SIGQUIT are reset too — unless this process already
+/// runs under the async no-job-control environment (`preserve_int_quit`),
+/// in which case nested helpers inherit the required ignore instead of
+/// reverting it to default. Pure: both arms are unit-tested.
+fn spawn_sigdefault(preserve_int_quit: bool) -> SigSet {
+    let mut sigdefault = SigSet::empty();
+    if !preserve_int_quit {
+        sigdefault.add(Signal::SIGINT);
+        sigdefault.add(Signal::SIGQUIT);
+    }
+    for sig in [
+        Signal::SIGTSTP,
+        Signal::SIGTTIN,
+        Signal::SIGTTOU,
+        Signal::SIGCHLD,
+        Signal::SIGPIPE,
+    ] {
+        sigdefault.add(sig);
+    }
+    sigdefault
+}
 
 /// Resolve the binary a helper re-executes.
 ///
@@ -111,6 +193,7 @@ pub fn spawn_internal_helper(
     request_bytes: &[u8],
     pgroup: Pid,
     status_write: Option<RawFd>,
+    signal_policy: HelperSpawnSignalPolicy,
 ) -> Result<Pid> {
     use nix::spawn::{PosixSpawnAttr, PosixSpawnFileActions, PosixSpawnFlags, posix_spawn};
 
@@ -202,23 +285,17 @@ pub fn spawn_internal_helper(
     spawn_flags.insert(PosixSpawnFlags::POSIX_SPAWN_SETSIGMASK);
     attr.set_flags(spawn_flags).context("spawn flags")?;
     attr.set_pgroup(pgroup).context("spawn pgroup")?;
-    // The helper must not inherit the shell's ignored dispositions: reset
-    // the same job-control set the raw external-child path resets.
-    let mut sigdefault = SigSet::empty();
-    for sig in [
-        Signal::SIGINT,
-        Signal::SIGQUIT,
-        Signal::SIGTSTP,
-        Signal::SIGTTIN,
-        Signal::SIGTTOU,
-        Signal::SIGCHLD,
-        Signal::SIGPIPE,
-    ] {
-        sigdefault.add(sig);
-    }
+    // Normal helpers reset the job-control set to default so they never
+    // inherit the shell's ignored dispositions. Async no-job-control plan
+    // helpers additionally start with SIGINT/SIGQUIT blocked; the helper
+    // converts them to `SIG_IGN` before unblocking and executing the plan,
+    // so no `SIG_DFL` delivery window exists after spawn. Nested helpers
+    // spawned inside that environment preserve the inherited ignore instead
+    // of resetting it (see `spawn_sigdefault`).
+    let sigdefault = spawn_sigdefault(async_int_quit_ignored());
     attr.set_sigdefault(&sigdefault)
         .context("spawn sigdefault")?;
-    attr.set_sigmask(&SigSet::empty())
+    attr.set_sigmask(&spawn_sigmask(signal_policy))
         .context("spawn sigmask")?;
 
     let child = match posix_spawn(&exe, &actions, &attr, &argv, &envp) {
@@ -276,6 +353,7 @@ fn spawn_reexec_builtin_helper(
         &bytes,
         pgroup,
         None,
+        HelperSpawnSignalPolicy::Normal,
     )
 }
 
@@ -368,7 +446,15 @@ pub(crate) fn spawn_no_command(
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    let child = spawn_internal_helper(stdin, stdout, stderr, &bytes, pgroup, None)?;
+    let child = spawn_internal_helper(
+        stdin,
+        stdout,
+        stderr,
+        &bytes,
+        pgroup,
+        None,
+        HelperSpawnSignalPolicy::Normal,
+    )?;
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
     // value on return.
@@ -394,7 +480,15 @@ pub(crate) fn spawn_pipeline_source(
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    let child = spawn_internal_helper(stdin, stdout, stderr, &bytes, pgroup, None)?;
+    let child = spawn_internal_helper(
+        stdin,
+        stdout,
+        stderr,
+        &bytes,
+        pgroup,
+        None,
+        HelperSpawnSignalPolicy::Normal,
+    )?;
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
     // value on return.
@@ -423,6 +517,7 @@ pub fn spawn_plan_helper(
     snapshot: &ChildShellSnapshot,
     plan: &crate::shell::plan::ExecutionPlan,
     mode: PlanExecMode,
+    signal_policy: PlanSignalPolicy,
     stdio: ChildStdio,
     pgroup: Pid,
     status_write: Option<RawFd>,
@@ -433,9 +528,19 @@ pub fn spawn_plan_helper(
         kind: InternalExecKind::Plan(PlanExecRequest {
             plan: plan.clone(),
             mode,
+            signal_policy,
         }),
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
+    // The wire policy doubles as the spawn posture: only the async
+    // no-job-control policy needs the blocked-during-init mask. Every other
+    // mode spawns with the historical empty mask.
+    let spawn_signal_policy = match signal_policy {
+        PlanSignalPolicy::Normal => HelperSpawnSignalPolicy::Normal,
+        PlanSignalPolicy::IgnoreInterruptAndQuit => {
+            HelperSpawnSignalPolicy::BlockInterruptAndQuitDuringInit
+        }
+    };
     spawn_internal_helper(
         stdio.stdin,
         stdio.stdout,
@@ -443,6 +548,7 @@ pub fn spawn_plan_helper(
         &bytes,
         pgroup,
         status_write,
+        spawn_signal_policy,
     )
 }
 
@@ -490,6 +596,7 @@ mod tests {
             &snapshot,
             &plan,
             PlanExecMode::CommandSubstitution,
+            PlanSignalPolicy::Normal,
             ChildStdio {
                 stdin: null_in.as_raw_fd(),
                 stdout: cap_write.as_raw_fd(),
@@ -538,5 +645,67 @@ mod tests {
         let err = spawn_background_builtin(&mut ctx, &mut process, &mut shell)
             .expect_err("jobs must not re-exec");
         assert!(err.to_string().contains("cannot run in background"));
+    }
+
+    #[test]
+    fn normal_spawn_mask_does_not_block_int_or_quit() {
+        // The historical spawn posture: helpers start with an empty mask.
+        // No real process is spawned; this pins the race-free structure.
+        let mask = spawn_sigmask(HelperSpawnSignalPolicy::Normal);
+        assert!(!mask.contains(Signal::SIGINT));
+        assert!(!mask.contains(Signal::SIGQUIT));
+        assert!(!mask.contains(Signal::SIGTERM));
+        assert_eq!(mask, SigSet::empty());
+    }
+
+    #[test]
+    fn async_no_job_control_spawn_mask_blocks_int_and_quit() {
+        // The race closure: an async no-job-control helper starts with
+        // SIGINT/SIGQUIT blocked, installs `SIG_IGN`, then unblocks — so no
+        // `SIG_DFL` delivery window exists after spawn. Nothing else is
+        // blocked: SIGTERM in particular must stay deliverable.
+        let mask = spawn_sigmask(HelperSpawnSignalPolicy::BlockInterruptAndQuitDuringInit);
+        assert!(mask.contains(Signal::SIGINT));
+        assert!(mask.contains(Signal::SIGQUIT));
+        assert!(!mask.contains(Signal::SIGTERM));
+        assert!(!mask.contains(Signal::SIGTSTP));
+        assert!(!mask.contains(Signal::SIGCHLD));
+    }
+
+    #[test]
+    fn spawn_sigdefault_resets_job_control_set_without_preservation() {
+        // Top-level and `Normal` spawns: the full job-control set reverts to
+        // default so helpers never inherit the shell's ignored dispositions.
+        let set = spawn_sigdefault(false);
+        for sig in [
+            Signal::SIGINT,
+            Signal::SIGQUIT,
+            Signal::SIGTSTP,
+            Signal::SIGTTIN,
+            Signal::SIGTTOU,
+            Signal::SIGCHLD,
+            Signal::SIGPIPE,
+        ] {
+            assert!(set.contains(sig), "{sig:?} must reset to default");
+        }
+        assert!(!set.contains(Signal::SIGTERM));
+    }
+
+    #[test]
+    fn spawn_sigdefault_preserves_int_quit_inside_async_environment() {
+        // Nested helpers spawned inside an async no-job-control helper keep
+        // the inherited ignore; every other disposition still resets.
+        let set = spawn_sigdefault(true);
+        assert!(!set.contains(Signal::SIGINT));
+        assert!(!set.contains(Signal::SIGQUIT));
+        for sig in [
+            Signal::SIGTSTP,
+            Signal::SIGTTIN,
+            Signal::SIGTTOU,
+            Signal::SIGCHLD,
+            Signal::SIGPIPE,
+        ] {
+            assert!(set.contains(sig), "{sig:?} must still reset to default");
+        }
     }
 }

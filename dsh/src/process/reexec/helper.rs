@@ -5,9 +5,11 @@
 //! of the parent session, not a new interactive agent.
 
 use super::fd_layout::{InternalHelperFds, setup_helper_status_fd};
+use super::mark_async_int_quit_ignored;
 use super::protocol::{
     BuiltinExecRequest, InternalExecKind, NoCommandExecRequest, PipelineSourceExecRequest,
-    PlanExecMode, PlanExecRequest, read_internal_request,
+    PlanExecMode, PlanExecRequest, PlanSignalPolicy, read_internal_request,
+    validate_plan_signal_policy,
 };
 use crate::shell::Shell;
 use anyhow::Result;
@@ -33,6 +35,22 @@ pub async fn run_internal_helper(fds: InternalHelperFds) -> std::process::ExitCo
 async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
     fds.validate()?;
     let request = read_internal_request(fds.request)?;
+    // Commit the request's signal policy before any other helper state
+    // exists (environment, cwd, shell, plan evaluation): malformed
+    // mode/policy combinations fail closed here, and the async
+    // no-job-control policy installs `SIG_IGN` before unblocking, so the
+    // helper can never observe SIGINT/SIGQUIT under `SIG_DFL`.
+    if let InternalExecKind::Plan(plan_request) = &request.kind {
+        validate_plan_signal_policy(plan_request.mode, plan_request.signal_policy)?;
+    }
+    // Every helper kind inherits the async no-job-control environment when
+    // spawned inside one (both dispositions already ignored): without this,
+    // a `Normal` nested helper (substitution, pipeline builtin) would lose
+    // the transitivity and its own nested helpers would revert to default.
+    inherit_async_signal_environment();
+    if let InternalExecKind::Plan(plan_request) = &request.kind {
+        apply_plan_signal_policy(plan_request)?;
+    }
     // The status fd arrives non-CLOEXEC (`dup2` clears the flag on its
     // target): mark it close-on-exec here so nested external children and
     // sub-helpers cannot hold it open past their own `execve`, which would
@@ -66,6 +84,83 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
             run_helper_no_command(&mut shell, no_command).await
         }
     }
+}
+
+/// Inherit the async no-job-control environment when this helper was itself
+/// spawned inside one: if both SIGINT and SIGQUIT arrive ignored, record it
+/// so nested internal helpers preserve (rather than reset) the ignore.
+///
+/// This is what makes preservation transitive. A `Normal` nested helper
+/// (command substitution, pipeline builtin, no-command stage) carries no
+/// policy of its own, yet its own nested spawns must keep inheriting the
+/// async ignore — the disposition itself is the environment record. Querying
+/// (never modifying) keeps this safe to run for every helper kind before
+/// any spawn: top-level shells and `Normal` helpers observe default or
+/// handler dispositions and record nothing.
+fn inherit_async_signal_environment() {
+    use nix::sys::signal::Signal;
+
+    if disposition_is_ignored(Signal::SIGINT) && disposition_is_ignored(Signal::SIGQUIT) {
+        mark_async_int_quit_ignored();
+    }
+}
+
+/// Whether `sig` is currently `SIG_IGN` in this process. Read-only raw
+/// `sigaction(2)` query (null new action): no allocator, no runtime, safe
+/// to call during helper startup before any spawn. A failed query reports
+/// "not ignored" rather than failing the helper — worst case, one nested
+/// spawn resets to default exactly as before this change.
+fn disposition_is_ignored(sig: nix::sys::signal::Signal) -> bool {
+    let mut current: libc::sigaction = unsafe { std::mem::zeroed() };
+    let queried =
+        unsafe { libc::sigaction(sig as libc::c_int, std::ptr::null(), &mut current) } == 0;
+    queried && current.sa_sigaction == libc::SIG_IGN
+}
+
+/// Commit one plan request's signal policy before the helper evaluates.
+///
+/// `Normal` performs no syscall at all: the spawn boundary already left the
+/// existing dispositions and an empty mask in place. `IgnoreInterruptAndQuit`
+/// installs `SIG_IGN` for SIGINT/SIGQUIT and only then unblocks them.
+///
+/// Ordering invariant (never reversed): the helper starts with both signals
+/// blocked at spawn, so a signal arriving before this commit stays pending
+/// instead of killing the helper under `SIG_DFL`. Installing `SIG_IGN`
+/// first discards any such pending signal; unblocking afterwards can only
+/// deliver to the ignored disposition. Unblocking first would re-open the
+/// default-termination window this design closes.
+///
+/// The committed environment is recorded process-wide so nested internal
+/// helpers preserve (rather than reset) the inherited ignore; external
+/// children inherit it with no `child_exec` special case.
+///
+/// This is the async-list *execution environment* initial action, not
+/// permanent shell metadata: a future `trap` implementation may override
+/// these dispositions inside the helper.
+fn apply_plan_signal_policy(plan_request: &PlanExecRequest) -> Result<()> {
+    use anyhow::Context as _;
+    use nix::sys::signal::{
+        SaFlags, SigAction, SigHandler, SigSet, SigmaskHow, Signal, sigaction, sigprocmask,
+    };
+
+    if plan_request.signal_policy == PlanSignalPolicy::Normal {
+        return Ok(());
+    }
+    // Only `AsyncAndOrList` reaches here: the caller validated the
+    // mode/policy combination fail-closed above.
+    debug_assert_eq!(plan_request.mode, PlanExecMode::AsyncAndOrList);
+    let ignore = SigAction::new(SigHandler::SigIgn, SaFlags::empty(), SigSet::empty());
+    unsafe {
+        sigaction(Signal::SIGINT, &ignore).context("ignore SIGINT in async helper")?;
+        sigaction(Signal::SIGQUIT, &ignore).context("ignore SIGQUIT in async helper")?;
+    }
+    mark_async_int_quit_ignored();
+    let mut unblock = SigSet::empty();
+    unblock.add(Signal::SIGINT);
+    unblock.add(Signal::SIGQUIT);
+    sigprocmask(SigmaskHow::SIG_UNBLOCK, Some(&unblock), None)
+        .context("unblock SIGINT/SIGQUIT in async helper")?;
+    Ok(())
 }
 
 async fn run_helper_builtin(shell: &mut Shell, builtin: &BuiltinExecRequest) -> Result<u8> {
@@ -333,7 +428,6 @@ fn exit_code_of(status: dsh_types::ExitStatus) -> u8 {
 mod tests {
     use super::super::protocol::{builtin_request, pipe_with_request};
     use super::*;
-
     #[tokio::test]
     async fn helper_runs_builtin_and_reports_status() {
         // `cd` to a missing directory: the async handler runs for real in
@@ -451,6 +545,36 @@ mod tests {
         .await
         .expect("helper runs");
         assert_eq!(code, 7);
+    }
+
+    #[tokio::test]
+    async fn helper_rejects_non_async_ignore_policy_fail_closed() {
+        // A hand-crafted `Subshell + IgnoreInterruptAndQuit` request must
+        // fail during validation, before any signal commit or plan
+        // evaluation. Failing before the commit keeps this test safe to run
+        // in-process: the test runner's own SIGINT/SIGQUIT dispositions are
+        // never touched.
+        use super::super::protocol::plan_request_for_test;
+
+        for mode in [
+            PlanExecMode::Subshell,
+            PlanExecMode::CommandSubstitution,
+            PlanExecMode::ProcessSubstitution,
+        ] {
+            let request = plan_request_for_test(mode, PlanSignalPolicy::IgnoreInterruptAndQuit);
+            let fd = pipe_with_request(&request);
+            let fds = InternalHelperFds {
+                request: fd,
+                status: None,
+            };
+            let err = run_internal_helper_inner(fds)
+                .await
+                .expect_err("malformed signal policy must fail");
+            assert!(
+                err.to_string().contains("invalid signal policy"),
+                "unexpected error for {mode:?}: {err:#}"
+            );
+        }
     }
 
     #[tokio::test]

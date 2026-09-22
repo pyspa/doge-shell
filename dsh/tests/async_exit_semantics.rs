@@ -178,6 +178,64 @@ fn parent_pid_of(pid: Pid) -> Option<i32> {
         .ok()
 }
 
+/// Process group of another process, via `ps` (portable across
+/// Linux/macOS; no `/proc` dependency). `None` when already gone.
+fn pgid_of(pid: Pid) -> Option<i32> {
+    let output = Command::new("ps")
+        .arg("-o")
+        .arg("pgid=")
+        .arg("-p")
+        .arg(pid.as_raw().to_string())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<i32>()
+        .ok()
+}
+
+/// Assert `pid` stays alive for the whole window: repeated `kill(pid, 0)`
+/// probes, never one sleep-then-check, so a mid-window death cannot hide
+/// behind a live probe at either end.
+fn assert_survives_for(pid: Pid, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    loop {
+        assert!(
+            kill(pid, None).is_ok(),
+            "process {pid} died during the survival window"
+        );
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Start `script` (an async list recording `$!` in `async.pid`) without job
+/// control and return its surviving helper after the parent shell exited.
+/// The helper leads its own process group by contract, so group signals
+/// reach the helper and its inner commands.
+fn spawn_detached_sleep_helper(script: &str) -> (ObservedParent, SurvivingChild) {
+    let mut parent = spawn_parent(script, Stdio::null(), Stdio::null());
+    let status = parent.wait_exit(Duration::from_secs(15));
+    assert!(
+        status.success(),
+        "parent launch must report 0, got {status:?}"
+    );
+    let helper = read_helper_pid(&parent.workdir, "async.pid");
+    assert_eq!(
+        pgid_of(helper),
+        Some(helper.as_raw()),
+        "async helper {helper} must lead its own process group"
+    );
+    let survivor = SurvivingChild::new(helper, helper);
+    survivor.assert_alive();
+    (parent, survivor)
+}
+
 fn read_helper_pid(workdir: &std::path::Path, name: &str) -> Pid {
     let path = workdir.join(name);
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -195,6 +253,32 @@ fn read_helper_pid(workdir: &std::path::Path, name: &str) -> Pid {
             "helper pid file {name} never appeared"
         );
         std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Wait until a `sleep` process exists in `pgid`. Nested helpers take time
+/// to spawn, and the group signal below must demonstrably reach the full
+/// tree — not land before the inner levels exist. `pgrep -g`/`-x` exist on
+/// both Linux (procps) and macOS; no `/proc` dependency.
+fn poll_group_sleep(pgid: Pid, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let found = Command::new("pgrep")
+            .arg("-g")
+            .arg(pgid.as_raw().to_string())
+            .arg("-x")
+            .arg("sleep")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if found {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no sleep process appeared in group {pgid}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -384,5 +468,80 @@ fn nested_async_child_survives_outer_async_helper_exit() {
     // outer group to reap the whole tree without touching anyone else's.
     let mut survivor = SurvivingChild::new(nested, outer);
     survivor.assert_alive();
+    survivor.cleanup();
+}
+
+/// Without job control an async AND-OR list starts with SIGINT ignored
+/// (POSIX.1-2024): a group SIGINT must kill neither the helper nor the
+/// inner command. Either death would end the helper's foreground plan and
+/// take the helper down with it, so helper survival proves both.
+#[test]
+fn non_job_control_async_group_ignores_sigint() {
+    let _guard = common::serial_guard();
+    let (_parent, mut survivor) = spawn_detached_sleep_helper("sleep 30 & echo $! > async.pid");
+    killpg(survivor.pgid, Signal::SIGINT).expect("group SIGINT must deliver");
+    assert_survives_for(survivor.pid, Duration::from_secs(2));
+    survivor.cleanup();
+}
+
+/// Same contract for SIGQUIT, kept as its own test so a failure names the
+/// broken disposition instead of hiding inside a combined case.
+#[test]
+fn non_job_control_async_group_ignores_sigquit() {
+    let _guard = common::serial_guard();
+    let (_parent, mut survivor) = spawn_detached_sleep_helper("sleep 30 & echo $! > async.pid");
+    killpg(survivor.pgid, Signal::SIGQUIT).expect("group SIGQUIT must deliver");
+    assert_survives_for(survivor.pid, Duration::from_secs(2));
+    survivor.cleanup();
+}
+
+/// Opposite case: SIGTERM must still terminate the group. This proves the
+/// group targeting, signal delivery, and liveness observation above really
+/// work — and catches an implementation that blocks or ignores every
+/// signal instead of just SIGINT/SIGQUIT.
+#[test]
+fn non_job_control_async_group_does_not_ignore_sigterm() {
+    let _guard = common::serial_guard();
+    let (_parent, mut survivor) = spawn_detached_sleep_helper("sleep 30 & echo $! > async.pid");
+    killpg(survivor.pgid, Signal::SIGTERM).expect("group SIGTERM must deliver");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while kill(survivor.pid, None).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "async helper {} survived group SIGTERM",
+            survivor.pid
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    survivor.cleanup();
+}
+
+/// One substitution level inside the async list: the `Normal`
+/// command-substitution helper preserves the inherited ignore, and the
+/// external `sleep` beneath it inherits in turn. Group SIGINT must kill
+/// neither.
+#[test]
+fn non_job_control_nested_substitution_group_ignores_sigint() {
+    let _guard = common::serial_guard();
+    let (_parent, mut survivor) =
+        spawn_detached_sleep_helper("echo $(sleep 30) & echo $! > async.pid");
+    poll_group_sleep(survivor.pgid, Duration::from_secs(10));
+    killpg(survivor.pgid, Signal::SIGINT).expect("group SIGINT must deliver");
+    assert_survives_for(survivor.pid, Duration::from_secs(2));
+    survivor.cleanup();
+}
+
+/// Two substitution levels: preservation must be transitive. The outer
+/// `Normal` helper carries no policy of its own, yet the inner helper and
+/// the `sleep` beneath it must still inherit the async ignore — any level
+/// reverting to default would cascade into the helper's exit.
+#[test]
+fn non_job_control_doubly_nested_substitution_group_ignores_sigint() {
+    let _guard = common::serial_guard();
+    let (_parent, mut survivor) =
+        spawn_detached_sleep_helper("echo $(echo $(sleep 30)) & echo $! > async.pid");
+    poll_group_sleep(survivor.pgid, Duration::from_secs(10));
+    killpg(survivor.pgid, Signal::SIGINT).expect("group SIGINT must deliver");
+    assert_survives_for(survivor.pid, Duration::from_secs(2));
     survivor.cleanup();
 }

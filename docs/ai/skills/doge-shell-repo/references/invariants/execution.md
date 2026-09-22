@@ -68,6 +68,18 @@
 - detach 対象は ledger `Active` + job id 一致のものだけ。unknown/stopped/session-owned job は `Drop` cleanup へ残す。completed async job も detach 対象外（`Drop` の kill は completed tree には no-op）。
 - SIGHUP/`disown`/`wait -n/-p/-f` は scope 外。`!` chat jobs・`ProducerRegistry` shutdown は触らない。
 
+## Async AND-OR signal disposition
+
+- job-control-disabled async AND-OR list starts with SIGINT/SIGQUIT ignored
+- decision is captured at parent launch boundary via supports_job_control()
+- request carries explicit PlanSignalPolicy
+- race-free transition is spawn-mask block -> SIG_IGN install -> unblock
+- parent process signal dispositions are never temporarily modified
+- normal/job-control-enabled helpers keep existing signal semantics
+- external commands inherit SIG_IGN; child_exec does not duplicate the async policy
+- nested async lists re-evaluate their own job-control state
+- async initial ignore is not "ignored on shell entry" metadata; future trap support must be able to override it
+
 ## 1件の execution / process bug を直すときの5点
 
 1. Minimal reproducer 2. Opposite case 3. Adjacent execution context（`FOO=bar` builtin を直すなら external env prefix・assignment-only・pipeline・`&&`/`||`・`$?` まで見る） 4. Resource / lifecycle invariant 5. Regression sibling。

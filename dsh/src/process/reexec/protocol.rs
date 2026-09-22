@@ -16,7 +16,10 @@ use std::os::unix::io::RawFd;
 /// `lists` of AND-OR lists and `PlanExecMode` gained `AsyncAndOrList`.
 /// Bumped to 3 for materialized no-command pipeline stage helper support
 /// (`InternalExecKind::NoCommand`).
-pub const PROTOCOL_VERSION: u32 = 3;
+/// Bumped to 4: `PlanExecRequest` carries an explicit `PlanSignalPolicy`
+/// because async AND-OR signal semantics depend on the caller's job-control
+/// state, which a non-interactive helper cannot reconstruct.
+pub const PROTOCOL_VERSION: u32 = 4;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -47,6 +50,7 @@ pub enum InternalExecKind {
 pub struct PlanExecRequest {
     pub plan: crate::shell::plan::ExecutionPlan,
     pub mode: PlanExecMode,
+    pub signal_policy: PlanSignalPolicy,
 }
 
 /// The stdio/capture contract for one plan execution.
@@ -76,6 +80,35 @@ pub struct BuiltinExecRequest {
     pub name: String,
     pub argv: Vec<String>,
     pub env_overrides: Vec<(String, String)>,
+}
+
+/// The initial signal disposition contract for one plan execution.
+///
+/// A plan request includes an execution signal policy because async AND-OR
+/// signal semantics depend on the caller's job-control state, which cannot
+/// be reconstructed by the non-interactive helper: `supports_job_control()`
+/// is false inside every helper, so the parent must capture its own
+/// decision at the spawn boundary and carry it here explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanSignalPolicy {
+    /// Existing semantics: no helper-side signal change. Used by every
+    /// substitution/subshell helper and by job-control-enabled async lists.
+    Normal,
+    /// Async AND-OR list without job control: the helper starts with
+    /// SIGINT/SIGQUIT blocked at spawn, installs `SIG_IGN` for both, then
+    /// unblocks before evaluating the plan (POSIX.1-2024 async-list
+    /// semantics). Only valid with `PlanExecMode::AsyncAndOrList`.
+    IgnoreInterruptAndQuit,
+}
+
+/// Validate a mode/policy combination. `IgnoreInterruptAndQuit` is an
+/// async-list-only policy: any other mode carrying it is a malformed
+/// internal request and must fail closed, never execute.
+pub fn validate_plan_signal_policy(mode: PlanExecMode, policy: PlanSignalPolicy) -> Result<()> {
+    if policy == PlanSignalPolicy::IgnoreInterruptAndQuit && mode != PlanExecMode::AsyncAndOrList {
+        anyhow::bail!("invalid signal policy {policy:?} for plan mode {mode:?}");
+    }
+    Ok(())
 }
 
 /// A synthetic pipeline head: finite bytes the helper writes to fd 1.
@@ -168,6 +201,26 @@ pub(crate) fn builtin_request(name: &str, argv: Vec<String>) -> InternalExecRequ
     }
 }
 
+/// Test-only plan request with an explicit mode/policy pair, for
+/// fail-closed validation tests (including malformed combinations no
+/// production call site ever builds).
+#[cfg(test)]
+pub(crate) fn plan_request_for_test(
+    mode: PlanExecMode,
+    signal_policy: PlanSignalPolicy,
+) -> InternalExecRequest {
+    let env_arc = crate::environment::Environment::new();
+    InternalExecRequest {
+        version: PROTOCOL_VERSION,
+        snapshot: ChildShellSnapshot::capture(&env_arc.read()),
+        kind: InternalExecKind::Plan(PlanExecRequest {
+            plan: crate::shell::plan::ExecutionPlan { lists: Vec::new() },
+            mode,
+            signal_policy,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +250,37 @@ mod tests {
         let read_fd = read.into_raw_fd();
         // `read_internal_request` owns and closes the fd; no second close.
         let err = read_internal_request(read_fd).expect_err("unknown version must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
+    }
+
+    #[test]
+    fn request_rejects_legacy_v3() {
+        // The v3 schema (plan requests without `signal_policy`) must fail
+        // closed after the v4 migration, never parse as a v4 request.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 3,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        // Owned (and closed) by `read_internal_request`.
+        let err = read_internal_request(read_fd).expect_err("legacy v3 must fail");
         assert!(
             err.to_string()
                 .contains("unsupported internal exec version")
@@ -377,6 +461,85 @@ mod tests {
         match decoded.kind {
             InternalExecKind::PipelineSource(source) => assert_eq!(source.data, large),
             other => panic!("expected PipelineSource, got {other:?}"),
+        }
+    }
+
+    fn plan_request(mode: PlanExecMode, signal_policy: PlanSignalPolicy) -> InternalExecRequest {
+        plan_request_for_test(mode, signal_policy)
+    }
+
+    fn roundtrip_plan_policy(
+        mode: PlanExecMode,
+        signal_policy: PlanSignalPolicy,
+    ) -> (PlanExecMode, PlanSignalPolicy) {
+        let request = plan_request(mode, signal_policy);
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let decoded = read_internal_request(read.into_raw_fd()).expect("decode");
+        match decoded.kind {
+            InternalExecKind::Plan(plan) => {
+                assert_eq!(decoded.version, PROTOCOL_VERSION);
+                (plan.mode, plan.signal_policy)
+            }
+            other => panic!("expected Plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plan_signal_policy_roundtrips_through_pipe() {
+        // The async pair must survive serialization: the helper commits its
+        // signal dispositions from exactly these two fields.
+        assert_eq!(
+            roundtrip_plan_policy(
+                PlanExecMode::AsyncAndOrList,
+                PlanSignalPolicy::IgnoreInterruptAndQuit
+            ),
+            (
+                PlanExecMode::AsyncAndOrList,
+                PlanSignalPolicy::IgnoreInterruptAndQuit
+            )
+        );
+        assert_eq!(
+            roundtrip_plan_policy(PlanExecMode::AsyncAndOrList, PlanSignalPolicy::Normal),
+            (PlanExecMode::AsyncAndOrList, PlanSignalPolicy::Normal)
+        );
+        assert_eq!(
+            roundtrip_plan_policy(PlanExecMode::Subshell, PlanSignalPolicy::Normal),
+            (PlanExecMode::Subshell, PlanSignalPolicy::Normal)
+        );
+    }
+
+    #[test]
+    fn plan_signal_policy_validation_accepts_known_combinations() {
+        use PlanExecMode::*;
+        use PlanSignalPolicy::*;
+        for mode in [
+            AsyncAndOrList,
+            Subshell,
+            CommandSubstitution,
+            ProcessSubstitution,
+        ] {
+            validate_plan_signal_policy(mode, Normal)
+                .unwrap_or_else(|_| panic!("{mode:?} + Normal must be valid"));
+        }
+        validate_plan_signal_policy(AsyncAndOrList, IgnoreInterruptAndQuit)
+            .expect("AsyncAndOrList + IgnoreInterruptAndQuit must be valid");
+    }
+
+    #[test]
+    fn plan_signal_policy_validation_rejects_non_async_ignore() {
+        use PlanExecMode::*;
+        use PlanSignalPolicy::*;
+        for mode in [Subshell, CommandSubstitution, ProcessSubstitution] {
+            let err = validate_plan_signal_policy(mode, IgnoreInterruptAndQuit)
+                .expect_err("non-async ignore must fail closed");
+            assert!(err.to_string().contains("invalid signal policy"));
         }
     }
 }

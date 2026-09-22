@@ -17,14 +17,14 @@
 
 use super::authorize::{AuthorizationCancelled, ConfirmFn};
 use super::plan::ExecutionPlan;
-use crate::process::reexec::{ChildStdio, PlanExecMode, spawn_plan_helper};
+use crate::process::reexec::{ChildStdio, PlanExecMode, PlanSignalPolicy, spawn_plan_helper};
 use crate::process::{ProcessState, WaitPidObservation};
 use crate::shell::Shell;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
 use nix::unistd::Pid;
 use std::future::Future;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd as _, FromRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
 use std::pin::Pin;
 
@@ -330,6 +330,7 @@ pub fn capture_subshell_plan_stdout<'a>(
             &snapshot,
             plan,
             mode,
+            PlanSignalPolicy::Normal,
             ChildStdio {
                 stdin: parent_ctx.infile,
                 stdout: write_end.as_raw_fd(),
@@ -466,6 +467,7 @@ pub fn start_process_substitution<'a>(
             &snapshot,
             plan,
             PlanExecMode::ProcessSubstitution,
+            PlanSignalPolicy::Normal,
             ChildStdio {
                 stdin: parent_ctx.infile,
                 stdout: write_end.as_raw_fd(),
@@ -493,8 +495,6 @@ pub fn start_process_substitution<'a>(
         })
     })
 }
-
-use std::os::fd::AsRawFd as _;
 
 #[cfg(test)]
 mod tests {

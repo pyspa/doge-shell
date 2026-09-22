@@ -11,7 +11,7 @@
 
 use super::io::{OutputMonitor, cloexec_pipe};
 use super::job_process::JobProcess;
-use super::reexec::{ChildStdio, PlanExecMode, spawn_plan_helper};
+use super::reexec::{ChildStdio, PlanExecMode, PlanSignalPolicy, spawn_plan_helper};
 use super::state::ProcessState;
 use super::wait::{WaitPidObservation, wait_pid_job};
 use crate::shell::plan::ExecutionPlan;
@@ -149,6 +149,26 @@ impl AsyncOutputMode {
     }
 }
 
+/// The signal policy for one async-list spawn, decided at the parent launch
+/// boundary from the caller's job-control state.
+///
+/// Without job control the async AND-OR list must start with SIGINT/SIGQUIT
+/// ignored (POSIX.1-2024); with job control the inherited policy stays
+/// normal and terminal/process-group ownership isolates background groups
+/// instead. The caller evaluates `supports_job_control()` once and reuses
+/// the outcome for the `/dev/null` stdin default below — never two
+/// evaluations that could drift apart.
+///
+/// Helpers cannot re-derive this: `supports_job_control()` is always false
+/// inside a non-interactive helper, so the decision travels in the request.
+pub(crate) fn async_signal_policy(job_control_enabled: bool) -> PlanSignalPolicy {
+    if job_control_enabled {
+        PlanSignalPolicy::Normal
+    } else {
+        PlanSignalPolicy::IgnoreInterruptAndQuit
+    }
+}
+
 /// Spawn the helper for one async list and wire it into `job`.
 ///
 /// Returns the helper pid. The caller records group ownership and pushes
@@ -173,7 +193,10 @@ pub(crate) fn spawn_async_list(
     // stays alive on this stack until the spawn below returns, then drops.
     use std::os::fd::AsRawFd as _;
     let _null_stdin: Option<std::fs::File>;
-    let helper_stdin = if !ctx.supports_job_control() {
+    // Single job-control evaluation for this spawn: the stdin default and
+    // the signal policy below share it, so the two cannot drift apart.
+    let job_control = ctx.supports_job_control();
+    let helper_stdin = if !job_control {
         let null = std::fs::File::open("/dev/null").context("open /dev/null for async stdin")?;
         let fd = null.as_raw_fd();
         _null_stdin = Some(null);
@@ -226,10 +249,14 @@ pub(crate) fn spawn_async_list(
     //   `Job::launch` returns.
     let fresh_group = ctx.pgid.is_none();
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
+    // Signal policy shares the stdin commit point above: the same
+    // `supports_job_control()` outcome, captured once at this boundary.
+    let signal_policy = async_signal_policy(job_control);
     let child = match spawn_plan_helper(
         &snapshot,
         &process.plan,
         PlanExecMode::AsyncAndOrList,
+        signal_policy,
         ChildStdio {
             stdin: helper_stdin,
             stdout: helper_stdout,
@@ -365,6 +392,69 @@ mod tests {
                 execution: ListExecutionMode::Foreground,
             }],
         }
+    }
+
+    fn policy_context(interactive: bool, job_control_capable: bool) -> Context {
+        use dsh_types::terminal::{ShellMode, TerminalState};
+        Context {
+            shell_pid: Pid::from_raw(100),
+            shell_pgid: Pid::from_raw(100),
+            shell_tmode: None,
+            terminal_state: TerminalState {
+                is_terminal: interactive,
+                tmodes: None,
+                supports_job_control: job_control_capable,
+            },
+            shell_mode: ShellMode::Interactive,
+            foreground: false,
+            interactive,
+            infile: STDIN_FILENO,
+            outfile: STDOUT_FILENO,
+            errfile: STDERR_FILENO,
+            captured_out: None,
+            output_observer: None,
+            save_history: false,
+            pid: None,
+            pgid: None,
+            process_count: 0,
+        }
+    }
+
+    #[test]
+    fn async_signal_policy_ignores_int_quit_without_job_control() {
+        // Non-interactive execution (`-c`, script, helper): no job control,
+        // so the async list must start with SIGINT/SIGQUIT ignored.
+        let ctx = policy_context(false, false);
+        assert!(!ctx.supports_job_control());
+        assert_eq!(
+            async_signal_policy(ctx.supports_job_control()),
+            PlanSignalPolicy::IgnoreInterruptAndQuit
+        );
+    }
+
+    #[test]
+    fn async_signal_policy_is_normal_with_job_control() {
+        // Interactive session on a capable terminal: job control owns
+        // background isolation, so the async policy stays normal.
+        let ctx = policy_context(true, true);
+        assert!(ctx.supports_job_control());
+        assert_eq!(
+            async_signal_policy(ctx.supports_job_control()),
+            PlanSignalPolicy::Normal
+        );
+    }
+
+    #[test]
+    fn async_signal_policy_ignores_int_quit_for_command_mode_on_tty() {
+        // Command mode on a capable TTY: capability is present but the
+        // execution context is not interactive, so job control stays off
+        // and the async list still ignores SIGINT/SIGQUIT.
+        let ctx = policy_context(false, true);
+        assert!(!ctx.supports_job_control());
+        assert_eq!(
+            async_signal_policy(ctx.supports_job_control()),
+            PlanSignalPolicy::IgnoreInterruptAndQuit
+        );
     }
 
     #[test]

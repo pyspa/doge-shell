@@ -29,9 +29,17 @@
 - Linux でできる近似: 対象ファイルの `#[cfg(target_os = "macos")]` を `#[cfg(all())]`、`#[cfg(not(target_os = "macos"))]` を `#[cfg(any())]` に一時置換し、`dsh/Cargo.toml` の macOS 限定 dep を一時的に無条件へ移して `cargo check -p doge-shell`。終わったら必ず戻す。`59855e1` / `f45fcc2` はこの手順 (を macOS 側から見たもの) で検証された。
 - **唯一の実証は CI の macos-latest ジョブか実機**。`.github/workflows/ci.yml` がそれ。
 
+## テストの両 OS 実行
+
+- Linux/macOS は同格サポートなので、共通 contract test を片方だけ `#[cfg_attr(target_os = "macos", ignore)]` で無効化しない。`cargo test --workspace` はどちらの OS でも同じ contract を実際に実行すること。
+- path spelling 差は canonicalized expected path で扱う。production の `workspace_root` / `canonicalize_or_normalize` は正であり、test の expected 側を canonical な既存 project directory から組み立てる (`.dogesh/skills` 自体のような未存在パスは canonicalize しない)。
+- timing-sensitive policy は sleep を同期機構にせず、pure helper / injected runner / explicit event で検証する。hook budget policy は `fire_with_runner` に fake `HookRun` + deterministic `Duration` を渡し、actual subprocess timeout mechanics は `runner.rs` の integration test へ分離する。
+- shell-level observer test は wiring + final data だけを assert し、chunking/race は `OutputMonitor` unit test の責務とする。
+- `scripts/check-portability.py` が macOS-only ignored test の再導入を拒否する (allowlist なし)。本当に platform-specific な test なら、その test 自体の責務/構造を review する。
+
 ## `scripts/check-portability.py` が見るもの / 見ないもの
 
-- 見る: allowlist に無い OS 固有パスリテラル、**ファイル単位で**片肺になった `target_os` 分岐、`else` の無い `cfg!(target_os = ..)`、`[target.'cfg(..)']` の外の `rustflags`、`compile_error!` ガードの消失。コメント行は走査しない。
+- 見る: allowlist に無い OS 固有パスリテラル、**ファイル単位で**片肺になった `target_os` 分岐、`else` の無い `cfg!(target_os = ..)`、`[target.'cfg(..)']` の外の `rustflags`、`compile_error!` ガードの消失、macOS-only ignored test (`#[cfg_attr(target_os = "macos", ignore)]`)。コメント行は走査しない。
 - 見ないもの 1: **関数単位の対応漏れ**。判定はファイル単位なので、既に対を持つファイルに片肺の関数を足しても通る。これは意図的な妥協で、`dynamic.rs` の `collect_sysctl_keys`（Linux 側の腕だけが持つ再帰ヘルパ）や `user.rs` の macOS 限定テストヘルパのように、片側だけが正しい項目が実際に多いため。関数単位の保証は CI の macos ジョブが担う。
 - 見ないもの 2: macOS 側の腕が**コンパイルできるか**。Linux ホストでは型検査すらされない。
 - 新しいリテラルを足したいときは `--update` で allowlist を再生成し、その差分をレビューで見せる。エントリが消えたときも落ちる（ratchet は緩まない方向にだけ動く）。

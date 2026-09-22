@@ -10,9 +10,10 @@ still prove:
   1. OS-specific path literals stay inside the files allowed to read them.
   2. A `target_os` arm is never written without its counterpart.
   3. Tests reach external commands through `common::first_existing`, not a
-     hardcoded `/bin/true` that macOS does not ship.
+      hardcoded `/bin/true` that macOS does not ship.
   4. Linker tuning stays scoped to the target that accepts it.
   5. The two-platform guard itself is still in place.
+  6. No supported-platform test is ignored on macOS only.
 
 See docs/ai/skills/doge-shell-repo/references/platform-support.md.
 """
@@ -334,6 +335,34 @@ def check_config_dir_resolution() -> list[str]:
     return failures
 
 
+# Linux and macOS are equally supported, so a shared-contract test must run
+# on both. `#[cfg_attr(target_os = "macos", ignore)]` keeps CI green by
+# skipping the test where it flakes instead of fixing the timing/path
+# contract underneath. Ordinary `#[cfg(target_os = ...)]` arms are fine and
+# are checked by `unpaired_cfg_arms` above; only the macOS-only ignore is
+# rejected here, with no allowlist.
+MACOS_TEST_IGNORE = re.compile(
+    r'#\[\s*cfg_attr\(\s*'
+    r'target_os\s*=\s*"macos"\s*,\s*'
+    r'ignore\s*'
+    r'\)\s*\]'
+)
+
+
+def check_macos_ignored_tests() -> list[str]:
+    failures: list[str] = []
+    for path in rust_sources():
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        source = strip_comment_lines(path.read_text(encoding="utf-8"))
+        for number, line in enumerate(source.splitlines(), start=1):
+            if MACOS_TEST_IGNORE.search(line):
+                failures.append(
+                    f"{relative}:{number}: supported-platform test is ignored on "
+                    "macOS; fix the timing/path contract instead of skipping it"
+                )
+    return failures
+
+
 def check_platform_guard() -> list[str]:
     failures: list[str] = []
     for relative in GUARDED_CRATE_ROOTS:
@@ -407,6 +436,7 @@ def main() -> int:
     failures.extend(check_cargo_config())
     failures.extend(check_platform_guard())
     failures.extend(check_config_dir_resolution())
+    failures.extend(check_macos_ignored_tests())
 
     if failures:
         for failure in failures:

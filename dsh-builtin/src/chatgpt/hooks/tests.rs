@@ -1,4 +1,6 @@
 use super::*;
+use std::cell::Cell;
+use std::time::Duration;
 
 fn ask(hook: &str) -> HookDecision {
     HookDecision::Ask {
@@ -259,30 +261,45 @@ fn the_loop_state_reaches_a_hook_as_an_env_var() {
 }
 
 /// "A gate that can be got past by being slow is not a gate" has to survive
-/// the budget too, so the budget never skips one.
-// macOS-only ignore: the 100ms turn budget does not leave enough room to
-// spawn the hook there, so the gate times out instead of returning its
-// deny verdict. Passes on Linux. Under investigation.
-#[cfg_attr(target_os = "macos", ignore)]
+/// the budget too, so the budget never skips one. The runner is fake and the
+/// elapsed time deterministic: spawning a real process is the runner's own
+/// test surface, not this policy's.
 #[test]
 fn a_gate_is_never_skipped_by_an_exhausted_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx = context(
-        &dir,
-        r#"["pre-tool-use"]"#,
-        r#"echo '{"decision":"deny","reason":"still watching"}'"#,
+    // The command is never spawned: the fake runner below answers instead.
+    let ctx = HookContext::with_hooks(
+        hooks_from(
+            r#"{"version":1,"hooks":[{"id":"probe","events":["pre-tool-use"],"command":["/nonexistent/hook"]}]}"#,
+        ),
+        dir.path().to_path_buf(),
     )
     .with_turn_budget(100);
     // Everything the budget allowed is already gone.
     ctx.spent_ms.set(10_000);
 
-    let outcome = ctx.fire(
+    let calls = Cell::new(0usize);
+    let outcome = ctx.fire_with_runner(
         HookEvent::PreToolUse,
         HookSubject::tool("execute", "{}"),
         || json!({}),
         &never_cancelled,
+        |_hook, _payload, _env, _cwd, timeout, _cancel| {
+            // An exhausted budget still gives a gate its minimum slice.
+            assert_eq!(timeout, Duration::from_millis(config::MIN_TIMEOUT_MS));
+            calls.set(calls.get() + 1);
+            (
+                runner::HookRun::Answered(runner::HookResponse {
+                    decision: Some("deny".to_string()),
+                    reason: Some("still watching".to_string()),
+                    ..Default::default()
+                }),
+                Duration::from_millis(1),
+            )
+        },
     );
 
+    assert_eq!(calls.get(), 1, "the gate must still have run");
     let (hook, reason) = outcome.denied().expect("the gate must still have run");
     assert_eq!(hook, "probe");
     assert!(reason.contains("still watching"), "{reason}");
@@ -315,19 +332,32 @@ fn an_exhausted_budget_skips_an_observer() {
 }
 
 /// The budget shortens a gate instead of skipping it, and a shortened gate
-/// that times out lands on the existing fail-closed rule.
+/// that times out lands on the existing fail-closed rule. The timeout itself
+/// is fake: real process killing is covered in `runner.rs`.
 #[test]
 fn a_gate_shortened_by_the_budget_that_times_out_denies() {
     let dir = tempfile::tempdir().unwrap();
-    let ctx =
-        timed_context(&dir, r#"["pre-tool-use"]"#, 60_000, "sleep 30\n").with_turn_budget(1_000);
+    let ctx = HookContext::with_hooks(
+        hooks_from(
+            r#"{"version":1,"hooks":[{"id":"probe","events":["pre-tool-use"],"timeout_ms":60000,"command":["/nonexistent/hook"]}]}"#,
+        ),
+        dir.path().to_path_buf(),
+    )
+    .with_turn_budget(1_000);
     ctx.spent_ms.set(850);
 
-    let outcome = ctx.fire(
+    let outcome = ctx.fire_with_runner(
         HookEvent::PreToolUse,
         HookSubject::tool("execute", "{}"),
         || json!({}),
         &never_cancelled,
+        |_hook, _payload, _env, _cwd, timeout, _cancel| {
+            assert_eq!(timeout, Duration::from_millis(150));
+            (
+                runner::HookRun::Failed("timed out after 150ms".to_string()),
+                Duration::from_millis(150),
+            )
+        },
     );
 
     let (_, reason) = outcome.denied().expect("a timed-out gate must refuse");
@@ -335,34 +365,41 @@ fn a_gate_shortened_by_the_budget_that_times_out_denies() {
     assert!(reason.contains(HOOK_TURN_BUDGET_KEY), "{reason}");
 }
 
-// macOS-only ignore: timing-sensitive (`sleep 0.3` against a 200ms
-// budget). Passes on Linux; on macOS the spent accounting lands on the
-// wrong side. Under investigation.
-#[cfg_attr(target_os = "macos", ignore)]
+/// An observer carries no decision, so cutting it is the cost the user chose
+/// when they set a budget. The elapsed time is fake and deterministic: the
+/// first fire consumes the budget through the real `fire` policy, and the
+/// rest are skipped without the runner being called.
 #[test]
 fn the_budget_accumulates_across_fires() {
     let dir = tempfile::tempdir().unwrap();
-    let marker = dir.path().join("count");
-    let ctx = timed_context(
-        &dir,
-        r#"["post-tool-use"]"#,
-        1_000,
-        &format!("printf x >> {}\nsleep 0.3\n", marker.display()),
+    let ctx = HookContext::with_hooks(
+        hooks_from(
+            r#"{"version":1,"hooks":[{"id":"probe","events":["post-tool-use"],"timeout_ms":1000,"command":["/nonexistent/hook"]}]}"#,
+        ),
+        dir.path().to_path_buf(),
     )
     .with_turn_budget(200);
 
+    let calls = Cell::new(0usize);
     for _ in 0..3 {
-        ctx.fire(
+        ctx.fire_with_runner(
             HookEvent::PostToolUse,
             HookSubject::tool("execute", "{}"),
             || json!({}),
             &never_cancelled,
+            |_hook, _payload, _env, _cwd, _timeout, _cancel| {
+                calls.set(calls.get() + 1);
+                (
+                    runner::HookRun::Answered(runner::HookResponse::default()),
+                    Duration::from_millis(200),
+                )
+            },
         );
     }
 
     // The first run spends the budget; the rest are skipped.
-    let runs = std::fs::read_to_string(&marker).unwrap_or_default().len();
-    assert_eq!(runs, 1, "spent_ms = {}", ctx.spent_ms.get());
+    assert_eq!(calls.get(), 1, "spent_ms = {}", ctx.spent_ms.get());
+    assert_eq!(ctx.spent_ms.get(), 200);
 }
 
 #[test]

@@ -22,7 +22,7 @@
 use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 use tracing::debug;
@@ -271,6 +271,50 @@ impl HookContext {
         detail: impl FnOnce() -> Value,
         cancel: &dyn Fn() -> bool,
     ) -> HookOutcome {
+        self.fire_with_runner(
+            event,
+            subject,
+            detail,
+            cancel,
+            |hook, payload, env, cwd, timeout, cancel| {
+                let started = std::time::Instant::now();
+                let run = runner::run_hook(hook, payload, env, cwd, timeout, cancel);
+                (run, started.elapsed())
+            },
+        )
+    }
+
+    /// Charge one hook run against the turn budget, saturating rather than
+    /// overflowing on sessions that run absurdly long.
+    fn charge_hook_time(&self, elapsed: Duration) {
+        let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+        self.spent_ms
+            .set(self.spent_ms.get().saturating_add(elapsed_ms));
+    }
+
+    /// The `fire` policy with the subprocess boundary injected: production
+    /// passes the real `runner::run_hook` plus a measured `Duration`, while
+    /// tests pass a fake `HookRun` plus a deterministic `Duration`. Matching,
+    /// re-entry, payload, budget slicing, env generation, decision merging
+    /// and fail-closed gates all live here, unchanged.
+    fn fire_with_runner<F>(
+        &self,
+        event: HookEvent,
+        subject: HookSubject<'_>,
+        detail: impl FnOnce() -> Value,
+        cancel: &dyn Fn() -> bool,
+        mut run_one: F,
+    ) -> HookOutcome
+    where
+        F: FnMut(
+            &config::HookDefinition,
+            &str,
+            &[(String, String)],
+            &Path,
+            Duration,
+            &dyn Fn() -> bool,
+        ) -> (runner::HookRun, Duration),
+    {
         // Ahead of building `MatchInput` on purpose: the overwhelmingly common
         // shell has no hooks at all, and it must not pay to find that out.
         if self.hooks.is_empty() {
@@ -311,16 +355,11 @@ impl HookContext {
             };
             let shortened = timeout < Duration::from_millis(hook.timeout_ms());
             let env = self.env_for(hook, event, subject.tool, timeout);
-            let started = std::time::Instant::now();
-            let run = runner::run_hook(hook, &payload, &env, &self.cwd, timeout, cancel);
+            let (run, elapsed) = run_one(hook, &payload, &env, &self.cwd, timeout, cancel);
             // Only the hook's own time. The approval prompt a gate may raise
             // lives in the caller, so a person thinking about a question cannot
             // spend the budget that decides the next gate.
-            self.spent_ms.set(
-                self.spent_ms
-                    .get()
-                    .saturating_add(started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)),
-            );
+            self.charge_hook_time(elapsed);
             match run {
                 runner::HookRun::Answered(response) => {
                     if let Some(message) = response.message.as_deref().map(str::trim)

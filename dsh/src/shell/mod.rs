@@ -450,10 +450,10 @@ mod tests {
         );
     }
 
-    // macOS-only ignore: timing-sensitive (`sleep 0.05` output interleaving).
-    // Passes alone and on Linux, but flakes under full-suite load on macOS.
-    // Under investigation; kept running on Linux so the regression signal stays.
-    #[cfg_attr(target_os = "macos", ignore)]
+    /// Shell-level wiring for the foreground output observer: commands run
+    /// to completion, the monitors retire, and the final snapshot holds the
+    /// data. Chunking and race semantics belong to the `OutputMonitor` unit
+    /// tests, so this case issues plain back-to-back writes with no sleeps.
     #[tokio::test]
     async fn foreground_output_observer_captures_stdout_and_stderr() {
         use dsh_types::observed_output::ObservedOutput;
@@ -490,10 +490,8 @@ mod tests {
         assert_eq!(stderr.stdout, "");
         assert_eq!(stderr.stderr, "err");
 
-        let delayed = run_observed(
-            "sh -c 'printf out; sleep 0.05; printf tail; printf err >&2; sleep 0.05; printf done >&2'",
-        )
-        .await;
+        let delayed =
+            run_observed("sh -c 'printf out; printf tail; printf err >&2; printf done >&2'").await;
         assert_eq!(delayed.stdout, "outtail");
         assert_eq!(delayed.stderr, "errdone");
     }

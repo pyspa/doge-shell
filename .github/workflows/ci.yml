@@ -183,7 +183,8 @@ jobs:
           or binary(fd_ownership) or binary(reexec_subshell)
           or binary(pipeline_semantics) or binary(background_builtin)
           or binary(wait_semantics) or binary(async_exit_semantics)
-          or test(lifecycle_property) or test(output_monitor_completion)'
+          or test(lifecycle_property) or test(output_monitor_completion)
+          or test(foreground_output_observer)'
           < /dev/null
 
   lint:

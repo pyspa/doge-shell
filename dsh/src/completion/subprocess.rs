@@ -1,3 +1,9 @@
+//! Completion helper subprocesses: spawn a helper with piped stdout, drain it
+//! under an overall runtime deadline, and classify the outcome as completed,
+//! non-zero exit, runtime timeout, or stdout-limit exhaustion. Timeouts and
+//! limit exhaustion kill the whole process group and reap the child; only a
+//! genuinely completed process yields a successful (possibly empty) result.
+
 use anyhow::Result;
 use std::io::{self, Read};
 #[cfg(unix)]
@@ -9,7 +15,30 @@ use std::time::{Duration, Instant};
 
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const EXIT_DRAIN_GRACE: Duration = Duration::from_millis(200);
-const MAX_STDOUT_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_STDOUT_BYTES: usize = 1024 * 1024;
+
+/// Typed outcome of a completion helper subprocess.
+///
+/// `Completed` is the only successful outcome; every other variant describes a
+/// normal process event that the caller must classify. Spawn/read/wait system
+/// failures and invalid UTF-8 remain `Result::Err`.
+#[derive(Debug)]
+pub(crate) enum CollectStdoutOutcome {
+    Completed(String),
+    NonZeroExit {
+        // Kept typed (not yet surfaced to diagnostics: non-zero exit stays
+        // soft-empty for compatibility). A future task can report exit codes
+        // without re-plumbing the subprocess layer.
+        #[allow(dead_code)]
+        status: std::process::ExitStatus,
+    },
+    TimedOut {
+        timeout: Duration,
+    },
+    OutputLimitExceeded {
+        limit: usize,
+    },
+}
 
 #[cfg(test)]
 static EXTERNAL_PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -63,7 +92,10 @@ pub(crate) fn shell_command(command_template: &str) -> Command {
     cmd
 }
 
-pub(crate) fn collect_stdout(mut command: Command, timeout: Duration) -> Result<String> {
+pub(crate) fn collect_stdout_outcome(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<CollectStdoutOutcome> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -72,7 +104,20 @@ pub(crate) fn collect_stdout(mut command: Command, timeout: Duration) -> Result<
     wait_and_collect_stdout(&mut child, timeout)
 }
 
-fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<String> {
+/// Explicitly lossy compatibility wrapper: timeout, output-limit exhaustion
+/// and non-zero exit all collapse to an empty string, preserving the historic
+/// script-completion behavior. Dynamic completion must use
+/// `collect_stdout_outcome` instead so timeouts are not cached as successes.
+pub(crate) fn collect_stdout_or_empty(command: Command, timeout: Duration) -> Result<String> {
+    match collect_stdout_outcome(command, timeout)? {
+        CollectStdoutOutcome::Completed(stdout) => Ok(stdout),
+        CollectStdoutOutcome::NonZeroExit { .. }
+        | CollectStdoutOutcome::TimedOut { .. }
+        | CollectStdoutOutcome::OutputLimitExceeded { .. } => Ok(String::new()),
+    }
+}
+
+fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<CollectStdoutOutcome> {
     let mut stdout = child
         .stdout
         .take()
@@ -85,10 +130,17 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Strin
 
     loop {
         match drain_available_stdout(&mut stdout, &mut output, deadline)? {
-            DrainStatus::DeadlineReached | DrainStatus::OutputLimitReached => {
+            DrainStatus::DeadlineReached => {
                 terminate_child(child);
                 let _ = child.wait();
-                return Ok(String::new());
+                return Ok(CollectStdoutOutcome::TimedOut { timeout });
+            }
+            DrainStatus::OutputLimitReached => {
+                terminate_child(child);
+                let _ = child.wait();
+                return Ok(CollectStdoutOutcome::OutputLimitExceeded {
+                    limit: MAX_STDOUT_BYTES,
+                });
             }
             DrainStatus::Eof | DrainStatus::WouldBlock => {}
         }
@@ -98,15 +150,22 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Strin
                 let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
                 if drain_status == DrainStatus::OutputLimitReached {
                     terminate_child(child);
-                    return Ok(String::new());
+                    return Ok(CollectStdoutOutcome::OutputLimitExceeded {
+                        limit: MAX_STDOUT_BYTES,
+                    });
                 }
                 if drain_status == DrainStatus::DeadlineReached {
+                    // The child has already exited here; EXIT_DRAIN_GRACE expiry is an
+                    // output-ownership boundary, not a command runtime timeout.
+                    // Typically a background descendant still holds the stdout
+                    // write end open. Clean up descendants, then report whatever
+                    // the canonical child produced as a normal completion.
                     terminate_child(child);
                 }
                 return if status.success() {
-                    Ok(String::from_utf8(output)?)
+                    Ok(CollectStdoutOutcome::Completed(String::from_utf8(output)?))
                 } else {
-                    Ok(String::new())
+                    Ok(CollectStdoutOutcome::NonZeroExit { status })
                 };
             }
             Ok(None) => {}
@@ -114,12 +173,16 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Strin
                 let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
                 if drain_status == DrainStatus::OutputLimitReached {
                     terminate_child(child);
-                    return Ok(String::new());
+                    return Ok(CollectStdoutOutcome::OutputLimitExceeded {
+                        limit: MAX_STDOUT_BYTES,
+                    });
                 }
                 if drain_status == DrainStatus::DeadlineReached {
+                    // Same output-ownership boundary as above: canonical status is
+                    // unavailable (ECHILD), so report drained output as completed.
                     terminate_child(child);
                 }
-                return Ok(String::from_utf8(output)?);
+                return Ok(CollectStdoutOutcome::Completed(String::from_utf8(output)?));
             }
             Err(err) => return Err(err.into()),
         }
@@ -127,7 +190,7 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Strin
         if started.elapsed() >= timeout {
             terminate_child(child);
             let _ = child.wait();
-            return Ok(String::new());
+            return Ok(CollectStdoutOutcome::TimedOut { timeout });
         }
 
         let remaining = timeout.saturating_sub(started.elapsed());
@@ -263,6 +326,113 @@ mod tests {
         command
     }
 
+    #[test]
+    fn successful_stdout_is_completed() {
+        let outcome =
+            collect_stdout_outcome(shell_command("printf ok"), Duration::from_millis(1500))
+                .unwrap();
+
+        assert!(
+            matches!(outcome, CollectStdoutOutcome::Completed(ref stdout) if stdout == "ok"),
+            "expected Completed(\"ok\"), got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn successful_empty_stdout_is_completed_empty() {
+        // The opposite case of a timeout: exit 0 with no output is a
+        // legitimate empty result, not a failure.
+        let outcome =
+            collect_stdout_outcome(shell_command("exit 0"), Duration::from_millis(1500)).unwrap();
+
+        assert!(
+            matches!(outcome, CollectStdoutOutcome::Completed(ref stdout) if stdout.is_empty()),
+            "expected Completed(\"\"), got {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn non_zero_exit_is_typed_but_distinct_from_timeout() {
+        let outcome =
+            collect_stdout_outcome(shell_command("exit 7"), Duration::from_millis(1500)).unwrap();
+
+        match outcome {
+            CollectStdoutOutcome::NonZeroExit { status } => {
+                assert_eq!(status.code(), Some(7));
+            }
+            other => panic!("expected NonZeroExit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slow_producer_hits_runtime_timeout_not_empty_success() {
+        // A slow drip stays far below the output limit, so only the runtime
+        // deadline can fire here.
+        let started = Instant::now();
+        let outcome = collect_stdout_outcome(
+            shell_command("while :; do printf x; sleep 0.05; done"),
+            Duration::from_millis(200),
+        )
+        .unwrap();
+
+        assert!(
+            matches!(outcome, CollectStdoutOutcome::TimedOut { .. }),
+            "expected TimedOut, got {outcome:?}"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn oversized_output_hits_limit_not_timeout() {
+        // A temp file just over the limit makes the output-limit path
+        // deterministic: `cat` finishes far too fast for the generous timeout
+        // to fire first.
+        let dir = tempdir().unwrap();
+        let big = dir.path().join("big.txt");
+        let chunk = vec![b'x'; 8192];
+        let mut file = fs::File::create(&big).unwrap();
+        let mut remaining = MAX_STDOUT_BYTES + 4096;
+        while remaining > 0 {
+            let take = chunk.len().min(remaining);
+            std::io::Write::write_all(&mut file, &chunk[..take]).unwrap();
+            remaining -= take;
+        }
+        drop(file);
+
+        let mut command = command("cat");
+        command.arg(&big);
+        let outcome = collect_stdout_outcome(command, Duration::from_secs(30)).unwrap();
+
+        match outcome {
+            CollectStdoutOutcome::OutputLimitExceeded { limit } => {
+                assert_eq!(limit, MAX_STDOUT_BYTES);
+            }
+            other => panic!("expected OutputLimitExceeded, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lossy_wrapper_preserves_empty_compatibility() {
+        // Script completion keeps the historic behavior: timeout, output
+        // limit and non-zero exit all collapse to an empty string.
+        assert_eq!(
+            collect_stdout_or_empty(
+                shell_command("while :; do printf x; sleep 0.05; done"),
+                Duration::from_millis(100),
+            )
+            .unwrap(),
+            ""
+        );
+        assert_eq!(
+            collect_stdout_or_empty(shell_command("exit 7"), Duration::from_millis(1500)).unwrap(),
+            ""
+        );
+        assert_eq!(
+            collect_stdout_or_empty(shell_command("exit 0"), Duration::from_millis(1500)).unwrap(),
+            ""
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn timeout_kills_descendants_in_process_group() {
@@ -278,9 +448,12 @@ mod tests {
         let mut command = script_command(&script);
         command.current_dir(dir.path());
         let started = Instant::now();
-        let output = collect_stdout(command, Duration::from_millis(300)).unwrap();
+        let outcome = collect_stdout_outcome(command, Duration::from_millis(300)).unwrap();
 
-        assert_eq!(output, "");
+        assert!(
+            matches!(outcome, CollectStdoutOutcome::TimedOut { .. }),
+            "expected TimedOut, got {outcome:?}"
+        );
         assert!(started.elapsed() < Duration::from_secs(2));
         std::thread::sleep(Duration::from_millis(1800));
         assert!(
@@ -292,6 +465,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn successful_child_does_not_wait_for_stdout_holding_background_process() {
+        // The canonical child already exited here, so the post-exit drain
+        // grace expiring is an output-ownership boundary, not a runtime
+        // timeout: this must stay Completed, never TimedOut.
         let dir = tempdir().unwrap();
         let script = dir.path().join("background-stdout.sh");
         write_executable_script(&script, "#!/bin/sh\n(sleep 4; printf late) &\nexit 0\n");
@@ -299,23 +475,12 @@ mod tests {
         let mut command = script_command(&script);
         command.current_dir(dir.path());
         let started = Instant::now();
-        let output = collect_stdout(command, Duration::from_millis(1500)).unwrap();
+        let outcome = collect_stdout_outcome(command, Duration::from_millis(1500)).unwrap();
 
-        assert_eq!(output, "");
+        assert!(
+            matches!(outcome, CollectStdoutOutcome::Completed(ref stdout) if stdout.is_empty()),
+            "expected Completed(\"\"), got {outcome:?}"
+        );
         assert!(started.elapsed() < Duration::from_secs(4));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn continuous_stdout_is_bounded_by_timeout() {
-        let started = Instant::now();
-        let output = collect_stdout(
-            shell_command("while :; do printf 0123456789abcdef; done"),
-            Duration::from_millis(100),
-        )
-        .unwrap();
-
-        assert_eq!(output, "");
-        assert!(started.elapsed() < Duration::from_secs(1));
     }
 }

@@ -1001,61 +1001,210 @@ fn shell_state_dynamic_providers_read_environment_maps() {
     );
 }
 
-// macOS-only ignore: the background refresh never populates the `api`
-// candidate within 20s on macOS (Linux passes). Under investigation.
-// Kept compiling on both platforms so the macOS arm does not rot.
-#[cfg_attr(target_os = "macos", ignore)]
-#[test]
-fn helm_release_completion_passes_namespace_and_context() {
-    let _guard = crate::completion::subprocess::external_process_test_guard();
-    let dir = tempdir().unwrap();
-    let bin_dir = dir.path().join("bin");
-    fs::create_dir_all(&bin_dir).unwrap();
-    write_executable_script(
-        &bin_dir.join("helm"),
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > helm-args.txt\nprintf 'api\\nworker\\n'\n",
-    );
+async fn await_command_settlement(rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>) {
+    tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("command refresh should settle promptly")
+        .expect("completion notifier closed unexpectedly");
+}
 
-    let environment = Environment::new();
-    {
-        let mut env = environment.write();
-        env.variable_state.paths = vec![bin_dir.display().to_string()];
-        env.clear_command_cache();
+fn timeout_cache_key() -> DynamicCommandCacheKey {
+    DynamicCommandCacheKey {
+        kind: DynamicCommandCacheKind::CommandValue {
+            command: "helm".to_string(),
+            value_kind: "release:apps:prod".to_string(),
+        },
+        scope_dir: PathBuf::from("/tmp/dogesh-timeout-contract"),
     }
-    let provider = DynamicCompletionProvider::new(environment);
-    let cold = provider.collect_declared_dynamic_candidates(
-        "helm.release",
-        None,
-        &parsed("helm --kube-context prod -n apps status ap"),
-        dir.path(),
-        CachePolicy::RefreshInBackground,
+}
+
+fn short_ttl_long_backoff() -> CommandQueryPolicy {
+    CommandQueryPolicy {
+        ttl: Duration::from_millis(50),
+        error_backoff: Duration::from_secs(60),
+    }
+}
+
+#[tokio::test]
+async fn command_refresh_timeout_is_error_not_successful_empty_cache() {
+    let provider = DynamicCompletionProvider::new(Environment::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    provider.runtime.set_notifier(tx);
+    let key = timeout_cache_key();
+    let policy = short_ttl_long_backoff();
+
+    let cold = provider.load_command_values_with_policy(
+        key.kind.clone(),
+        key.scope_dir.clone(),
+        policy,
+        || {
+            Err(anyhow::anyhow!(
+                "completion subprocess timed out after 1500ms"
+            ))
+        },
     );
-    assert!(cold.is_empty(), "cold provider must not block TAB");
-    assert!(wait_until(Duration::from_secs(20), || {
-        provider
-            .collect_declared_dynamic_candidates(
-                "helm.release",
-                None,
-                &parsed("helm --kube-context prod -n apps status ap"),
-                dir.path(),
-                CachePolicy::CachedOnly,
-            )
-            .iter()
-            .any(|candidate| candidate.text == "api")
-    }));
-    let candidates = provider.collect_declared_dynamic_candidates(
-        "helm.release",
-        None,
-        &parsed("helm --kube-context prod -n apps status ap"),
-        dir.path(),
-        CachePolicy::CachedOnly,
+    assert!(cold.is_empty(), "cold load must not block");
+    assert!(
+        provider.cache.read().command_pending.contains(&key),
+        "cold load should schedule a refresh"
     );
 
-    assert!(candidates.iter().any(|candidate| candidate.text == "api"));
-    assert_eq!(
-        fs::read_to_string(dir.path().join("helm-args.txt")).unwrap(),
-        "list\n--short\n--namespace\napps\n--kube-context\nprod\n"
+    await_command_settlement(&mut rx).await;
+
+    // The notification must fire after the state is committed.
+    let cache = provider.cache.read();
+    assert!(
+        !cache.commands.contains_key(&key),
+        "a timed-out refresh must not create a successful (empty) cache entry"
     );
+    assert!(
+        cache.command_errors.contains_key(&key),
+        "a timed-out refresh must be recorded as a command error"
+    );
+    assert!(
+        !cache.command_pending.contains(&key),
+        "settlement must clear pending state"
+    );
+    assert!(
+        cache
+            .command_errors
+            .get(&key)
+            .is_some_and(|entry| entry.error.contains("timed out")),
+        "the recorded error should name the failure class"
+    );
+}
+
+#[tokio::test]
+async fn command_refresh_error_backoff_suppresses_immediate_retry() {
+    let provider = DynamicCompletionProvider::new(Environment::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    provider.runtime.set_notifier(tx);
+    let key = timeout_cache_key();
+    let policy = short_ttl_long_backoff();
+
+    provider.load_command_values_with_policy(
+        key.kind.clone(),
+        key.scope_dir.clone(),
+        policy,
+        || {
+            Err(anyhow::anyhow!(
+                "completion subprocess timed out after 1500ms"
+            ))
+        },
+    );
+    await_command_settlement(&mut rx).await;
+
+    let loads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let retry = provider.load_command_values_with_policy(
+        key.kind.clone(),
+        key.scope_dir.clone(),
+        policy,
+        {
+            let loads = Arc::clone(&loads);
+            move || {
+                loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec!["api".to_string()])
+            }
+        },
+    );
+    assert!(retry.is_empty());
+    assert_eq!(
+        loads.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "error backoff must suppress scheduling a new worker"
+    );
+    assert!(
+        !provider.cache.read().command_pending.contains(&key),
+        "backoff must not mark the key pending"
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "a suppressed retry must not emit a settlement notification"
+    );
+}
+
+#[tokio::test]
+async fn failed_refresh_preserves_stale_successful_cache() {
+    let provider = DynamicCompletionProvider::new(Environment::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    provider.runtime.set_notifier(tx);
+    let key = timeout_cache_key();
+    provider.cache.write().commands.insert(
+        key.clone(),
+        CommandValueCacheEntry {
+            values: vec!["old".to_string()],
+            cached_at: Instant::now() - Duration::from_secs(120),
+            last_load_duration: None,
+            last_error: None,
+        },
+    );
+    let policy = short_ttl_long_backoff();
+
+    // The stale entry is still served while the refresh runs.
+    let stale = provider.load_command_values_with_policy(
+        key.kind.clone(),
+        key.scope_dir.clone(),
+        policy,
+        || {
+            Err(anyhow::anyhow!(
+                "completion subprocess timed out after 1500ms"
+            ))
+        },
+    );
+    assert_eq!(stale, vec!["old".to_string()]);
+
+    await_command_settlement(&mut rx).await;
+
+    let cache = provider.cache.read();
+    assert_eq!(
+        cache.commands.get(&key).map(|entry| entry.values.clone()),
+        Some(vec!["old".to_string()]),
+        "a failed refresh must keep the previous successful entry usable"
+    );
+    assert!(
+        cache.command_errors.contains_key(&key),
+        "the failed refresh must still be remembered as an error"
+    );
+    assert!(!cache.command_pending.contains(&key));
+}
+
+#[tokio::test]
+async fn successful_retry_after_error_clears_error_state() {
+    let provider = DynamicCompletionProvider::new(Environment::new());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    provider.runtime.set_notifier(tx);
+    let key = timeout_cache_key();
+    provider.cache.write().command_errors.insert(
+        key.clone(),
+        CommandValueErrorEntry {
+            // Expire the backoff without a real 2s sleep.
+            recorded_at: Instant::now() - Duration::from_secs(120),
+            last_load_duration: Duration::from_millis(1500),
+            error: "completion subprocess timed out after 1500ms".to_string(),
+        },
+    );
+    let policy = short_ttl_long_backoff();
+
+    let cold = provider.load_command_values_with_policy(
+        key.kind.clone(),
+        key.scope_dir.clone(),
+        policy,
+        || Ok(vec!["api".to_string()]),
+    );
+    assert!(cold.is_empty());
+
+    await_command_settlement(&mut rx).await;
+
+    let cache = provider.cache.read();
+    assert_eq!(
+        cache.commands.get(&key).map(|entry| entry.values.clone()),
+        Some(vec!["api".to_string()])
+    );
+    assert!(
+        !cache.command_errors.contains_key(&key),
+        "a successful retry must clear the error state"
+    );
+    assert!(!cache.command_pending.contains(&key));
 }
 
 #[test]
@@ -1885,9 +2034,13 @@ fn timed_out_completion_command_kills_stdout_holding_descendants() {
     );
 
     let started = Instant::now();
-    let output = run_command_stdout(script.to_str().unwrap(), &[], dir.path()).unwrap();
+    let err = run_command_stdout(script.to_str().unwrap(), &[], dir.path())
+        .expect_err("slow command must time out");
 
-    assert_eq!(output, "");
+    assert!(
+        err.to_string().contains("timed out"),
+        "a runtime timeout is a failure, never a successful empty result: {err}"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(8),
         "the test runner lock may queue this probe, but it must remain bounded"

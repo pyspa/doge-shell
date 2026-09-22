@@ -39,7 +39,6 @@ pub(super) fn spawn_command_refresh<F>(
                 );
                 prune_command_cache(&mut cache);
                 update_diagnostics_from_cache(&job_runtime, &cache, None);
-                job_runtime.notify();
             }
             Err(err) => {
                 warn!("Dynamic command completion refresh failed: {}", err);
@@ -55,6 +54,15 @@ pub(super) fn spawn_command_refresh<F>(
                 update_diagnostics_from_cache(&job_runtime, &cache, None);
             }
         }
+        // Both success and error settle the pending refresh: notify exactly
+        // once after the cache state is committed (and the write lock is
+        // released) so a woken REPL re-reads settled state. The error branch
+        // is safe to wake because `command_errors` + `error_backoff` suppress
+        // an immediate re-refresh. Queue rejection stays outside this
+        // contract: it has no error-backoff entry, so notifying there could
+        // loop `queue full -> notify -> rerun -> queue full`.
+        drop(cache);
+        job_runtime.notify();
     })) {
         let mut cache = rejected_cache.write();
         cache.command_pending.remove(&rejected_key);

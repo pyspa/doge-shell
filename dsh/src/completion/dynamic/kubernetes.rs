@@ -133,13 +133,8 @@ impl DynamicCompletionProvider {
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
         let command_path = self.resolve_command_path("helm");
-        let namespace = selected_namespace(parsed_command_line).map(str::to_string);
-        let kube_context = selected_helm_context(parsed_command_line).map(str::to_string);
-        let value_kind = format!(
-            "release:{}:{}",
-            namespace.as_deref().unwrap_or("_"),
-            kube_context.as_deref().unwrap_or("_")
-        );
+        let query = helm_release_query(parsed_command_line);
+        let value_kind = query.value_kind.clone();
         let current_dir = current_dir.to_path_buf();
         self.collect_cached_value_candidates(
             "helm",
@@ -152,14 +147,7 @@ impl DynamicCompletionProvider {
                 let Some(command_path) = command_path else {
                     return Ok(Vec::new());
                 };
-                let mut command = runner::command(&command_path);
-                command.arg("list").arg("--short").current_dir(&current_dir);
-                if let Some(namespace) = namespace.as_deref() {
-                    command.arg("--namespace").arg(namespace);
-                }
-                if let Some(kube_context) = kube_context.as_deref() {
-                    command.arg("--kube-context").arg(kube_context);
-                }
+                let command = helm_release_command(&command_path, &current_dir, &query);
                 Ok(parse_non_empty_lines(&collect_command_lines(command)?))
             },
         )
@@ -400,6 +388,46 @@ pub(super) fn selected_resource(parsed_command_line: &ParsedCommandLine) -> Opti
     Some(resource)
 }
 
+/// Everything `helm list` needs for one namespace/context scope: the cache
+/// `value_kind` (so scopes never share a cache entry) and the exact argv.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HelmReleaseQuery {
+    pub(super) value_kind: String,
+    pub(super) args: Vec<String>,
+}
+
+pub(super) fn helm_release_query(parsed_command_line: &ParsedCommandLine) -> HelmReleaseQuery {
+    let namespace = selected_namespace(parsed_command_line);
+    let kube_context = selected_helm_context(parsed_command_line);
+    let mut args = vec!["list".to_string(), "--short".to_string()];
+    if let Some(namespace) = namespace {
+        args.push("--namespace".to_string());
+        args.push(namespace.to_string());
+    }
+    if let Some(kube_context) = kube_context {
+        args.push("--kube-context".to_string());
+        args.push(kube_context.to_string());
+    }
+    HelmReleaseQuery {
+        value_kind: format!(
+            "release:{}:{}",
+            namespace.unwrap_or("_"),
+            kube_context.unwrap_or("_")
+        ),
+        args,
+    }
+}
+
+pub(super) fn helm_release_command(
+    command_path: &str,
+    current_dir: &Path,
+    query: &HelmReleaseQuery,
+) -> std::process::Command {
+    let mut command = runner::command(command_path);
+    command.args(&query.args).current_dir(current_dir);
+    command
+}
+
 pub(super) fn selected_namespace(parsed_command_line: &ParsedCommandLine) -> Option<&str> {
     selected_option_value(parsed_command_line, &["-n", "--namespace"])
 }
@@ -509,16 +537,146 @@ fn is_inline_option_value(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{CommandValueCacheEntry, DynamicCommandCacheKey};
     use super::*;
     use crate::completion::parser::CommandLineParser;
+    use crate::environment::Environment;
+    use std::path::PathBuf;
+    use std::time::Instant;
+
+    fn parsed(input: &str) -> ParsedCommandLine {
+        CommandLineParser::new().parse(input, input.len())
+    }
 
     #[test]
     fn kubectl_context_parser_keeps_resource_and_namespace_separate() {
         let input = "kubectl get pods --namespace=staging ";
-        let parsed = CommandLineParser::new().parse(input, input.len());
+        let parsed = parsed(input);
 
         assert_eq!(selected_resource(&parsed), Some("pods"));
         assert_eq!(selected_namespace(&parsed), Some("staging"));
         assert_eq!(split_resource_name_token("pod/api"), Some(("pod", "api")));
+    }
+
+    #[test]
+    fn helm_release_query_forwards_namespace_and_context() {
+        let query = helm_release_query(&parsed("helm --kube-context prod -n apps status ap"));
+
+        assert_eq!(query.value_kind, "release:apps:prod");
+        assert_eq!(
+            query.args,
+            vec![
+                "list",
+                "--short",
+                "--namespace",
+                "apps",
+                "--kube-context",
+                "prod",
+            ]
+        );
+    }
+
+    #[test]
+    fn helm_release_query_without_scope_lists_everything() {
+        let query = helm_release_query(&parsed("helm status ap"));
+
+        assert_eq!(query.value_kind, "release:_:_");
+        assert_eq!(query.args, vec!["list", "--short"]);
+    }
+
+    #[test]
+    fn helm_release_query_scopes_cache_key() {
+        let kinds = [
+            helm_release_query(&parsed("helm -n apps --kube-context prod status ")).value_kind,
+            helm_release_query(&parsed("helm -n apps --kube-context dev status ")).value_kind,
+            helm_release_query(&parsed("helm -n default --kube-context prod status ")).value_kind,
+            helm_release_query(&parsed("helm status ")).value_kind,
+        ];
+
+        assert_eq!(kinds[0], "release:apps:prod");
+        assert_eq!(kinds[1], "release:apps:dev");
+        assert_eq!(kinds[2], "release:default:prod");
+        assert_eq!(kinds[3], "release:_:_");
+        let mut unique = kinds.clone().to_vec();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            kinds.len(),
+            "helm release cache keys must not collide across scopes: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn helm_release_candidates_read_the_scoped_cache_key() {
+        // Wiring check: `collect_helm_release_candidates` must look up the
+        // cache under the scoped `query.value_kind`, never spawn here
+        // (`cached_only`), and never leak one scope's releases into another.
+        let provider = DynamicCompletionProvider::new(Environment::new());
+        let scope = PathBuf::from("/tmp/dogesh-helm-key-wiring");
+        provider.cache.write().commands.insert(
+            DynamicCommandCacheKey {
+                kind: DynamicCommandCacheKind::CommandValue {
+                    command: "helm".to_string(),
+                    value_kind: "release:apps:prod".to_string(),
+                },
+                scope_dir: scope.clone(),
+            },
+            CommandValueCacheEntry {
+                values: vec!["api".to_string()],
+                cached_at: Instant::now(),
+                last_load_duration: None,
+                last_error: None,
+            },
+        );
+
+        let hit = provider.collect_helm_release_candidates(
+            &parsed("helm --kube-context prod -n apps status ap"),
+            &scope,
+            "ap",
+            true,
+        );
+        assert!(
+            hit.iter().any(|candidate| candidate.text == "api"),
+            "expected the apps/prod release cache entry to be served"
+        );
+
+        let miss = provider.collect_helm_release_candidates(
+            &parsed("helm --kube-context dev -n apps status ap"),
+            &scope,
+            "ap",
+            true,
+        );
+        assert!(
+            miss.is_empty(),
+            "a different context must not read the apps/prod cache entry"
+        );
+    }
+
+    #[test]
+    fn helm_release_command_uses_query_and_workdir() {
+        let dir = std::env::temp_dir();
+        let query = helm_release_query(&parsed("helm --kube-context prod -n apps status ap"));
+        // A bare program name: this path is never executed here, only
+        // inspected, so no OS-specific lookup is involved.
+        let command = helm_release_command("helm", &dir, &query);
+
+        assert_eq!(command.get_program(), std::ffi::OsStr::new("helm"));
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "list",
+                "--short",
+                "--namespace",
+                "apps",
+                "--kube-context",
+                "prod",
+            ]
+        );
+        assert_eq!(command.get_current_dir(), Some(dir.as_path()));
     }
 }

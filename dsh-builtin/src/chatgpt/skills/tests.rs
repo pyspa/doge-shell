@@ -547,19 +547,18 @@ fn project_root_is_skipped_without_a_project_marker() {
     assert!(project_skills_root(&plain).is_none());
 }
 
-// macOS-only ignore: `tempfile` lives under `/var/folders`, a symlink to
-// `/private/var/folders` there, so the rooted path canonicalizes and the
-// uncanonicalized expectation below fails. Linux has no such symlink.
-#[cfg_attr(target_os = "macos", ignore)]
+// workspace_root canonicalizes project paths, so expected roots are built
+// from the canonical existing project directory.
 #[test]
 fn a_project_marker_makes_a_project_skills_root() {
     let dir = tempdir().unwrap();
     let project = dir.path().join("proj");
     std::fs::create_dir_all(project.join(".git")).unwrap();
+    let canonical_project = std::fs::canonicalize(&project).unwrap();
 
     assert_eq!(
         project_skills_root(&project),
-        Some(project.join(".dogesh").join("skills"))
+        Some(canonical_project.join(".dogesh").join("skills"))
     );
 }
 
@@ -577,9 +576,6 @@ fn turning_project_skills_off_drops_both_project_roots() {
     assert_eq!(roots[0].scope, SkillScope::User);
 }
 
-// macOS-only ignore: same `/var/folders` -> `/private/var/folders`
-// canonicalization as above.
-#[cfg_attr(target_os = "macos", ignore)]
 #[test]
 fn the_agents_root_needs_a_project_marker_like_the_dsh_one() {
     let dir = tempdir().unwrap();
@@ -589,9 +585,10 @@ fn the_agents_root_needs_a_project_marker_like_the_dsh_one() {
 
     let project = dir.path().join("proj");
     std::fs::create_dir_all(project.join(".git")).unwrap();
+    let canonical_project = std::fs::canonicalize(&project).unwrap();
     assert_eq!(
         project_agents_skills_root(&project),
-        Some(project.join(".agents").join("skills"))
+        Some(canonical_project.join(".agents").join("skills"))
     );
 }
 

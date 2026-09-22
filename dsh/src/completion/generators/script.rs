@@ -15,7 +15,7 @@ const SCRIPT_TIMEOUT: Duration = Duration::from_millis(2000);
 
 impl ScriptRunner for DefaultScriptRunner {
     fn run(&self, command: &str) -> Result<String> {
-        subprocess::collect_stdout(subprocess::shell_command(command), SCRIPT_TIMEOUT)
+        subprocess::collect_stdout_or_empty(subprocess::shell_command(command), SCRIPT_TIMEOUT)
     }
 }
 

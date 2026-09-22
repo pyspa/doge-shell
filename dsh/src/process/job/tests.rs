@@ -239,8 +239,10 @@ async fn launch_failure_cleans_up_committed_pty_state() {
 
     let mut job = Job::new("cat < /nonexistent_file_for_test".to_string(), shell.pgid);
     job.foreground = true;
-    let mut process = Process::new("cat".to_string(), vec!["cat".to_string()]);
-    process.redirects = vec![Redirect::input("/nonexistent_file_for_test".to_string())];
+    let process = Process::new("cat".to_string(), vec!["cat".to_string()]).with_execution_metadata(
+        vec![Redirect::input("/nonexistent_file_for_test".to_string())],
+        Vec::new(),
+    );
     job.set_process(JobProcess::Command(process));
 
     let result = job.launch(&mut ctx, &mut shell).await;
@@ -273,8 +275,10 @@ async fn launch_restores_context_on_redirect_failure() {
     ctx.process_count = 3;
 
     let mut job = Job::new("cat < /nonexistent_file_for_test".to_string(), shell.pgid);
-    let mut process = Process::new("cat".to_string(), vec!["cat".to_string()]);
-    process.redirects = vec![Redirect::input("/nonexistent_file_for_test".to_string())];
+    let process = Process::new("cat".to_string(), vec!["cat".to_string()]).with_execution_metadata(
+        vec![Redirect::input("/nonexistent_file_for_test".to_string())],
+        Vec::new(),
+    );
     job.set_process(JobProcess::Command(process));
 
     let result = job.launch(&mut ctx, &mut shell).await;

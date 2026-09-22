@@ -112,6 +112,21 @@ impl BuiltinProcess {
         }
     }
 
+    /// Attach command-scoped execution metadata at the construction boundary.
+    ///
+    /// Same contract as `Process::with_execution_metadata`: only real command
+    /// stages (`Process`, `BuiltinProcess`) own this metadata. No such method
+    /// exists on `PipelineSourceProcess` or `AsyncListProcess` by design.
+    pub(crate) fn with_execution_metadata(
+        mut self,
+        redirects: Vec<Redirect>,
+        env_overrides: Vec<(String, String)>,
+    ) -> Self {
+        self.redirects = redirects;
+        self.env_overrides = env_overrides;
+        self
+    }
+
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
         if let Some(self_pid) = self.pid
             && self_pid == pid
@@ -267,6 +282,34 @@ mod tests {
             .expect("builtin launch should succeed");
 
         process.state
+    }
+
+    /// Same construction-boundary contract as `Process`: `new()` starts
+    /// empty, `with_execution_metadata()` keeps both halves.
+    #[test]
+    fn builtin_execution_metadata_is_attached_by_constructor_boundary() {
+        let fresh = BuiltinProcess::new(
+            "dirs".to_string(),
+            builtin_exit_zero,
+            vec!["dirs".to_string()],
+        );
+        assert!(fresh.redirects.is_empty());
+        assert!(fresh.env_overrides.is_empty());
+
+        let attached = BuiltinProcess::new(
+            "dirs".to_string(),
+            builtin_exit_zero,
+            vec!["dirs".to_string()],
+        )
+        .with_execution_metadata(
+            vec![Redirect::write(1, "/tmp/dsh-probe".to_string())],
+            vec![("FOO".to_string(), "bar".to_string())],
+        );
+        assert_eq!(attached.redirects.len(), 1);
+        assert_eq!(
+            attached.env_overrides,
+            vec![("FOO".to_string(), "bar".to_string())]
+        );
     }
 
     #[test]

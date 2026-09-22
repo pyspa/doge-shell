@@ -471,37 +471,6 @@ impl JobProcess {
         }
     }
 
-    pub(crate) fn set_redirects(&mut self, redirects: Vec<Redirect>) {
-        match self {
-            JobProcess::Builtin(p) => p.redirects = redirects,
-            JobProcess::Command(p) => p.redirects = redirects,
-            JobProcess::NoCommand(p) => p.redirects = redirects,
-            JobProcess::SyntheticSource(_) => {
-                super::pipeline_source::assert_no_source_redirects(redirects.len());
-            }
-            JobProcess::AsyncList(_) => {
-                super::async_list::assert_no_async_list_redirects(redirects.len());
-            }
-        }
-    }
-
-    pub(crate) fn set_env_overrides(&mut self, overrides: Vec<(String, String)>) {
-        match self {
-            JobProcess::Builtin(p) => p.env_overrides = overrides,
-            JobProcess::Command(p) => p.env_overrides = overrides,
-            // Same data shape as external-command env overrides, but the
-            // semantics are simple-command assignments, applied by the
-            // isolated helper only.
-            JobProcess::NoCommand(p) => p.assignments = overrides,
-            JobProcess::SyntheticSource(_) => {
-                super::pipeline_source::assert_no_source_env(overrides.len());
-            }
-            JobProcess::AsyncList(_) => {
-                super::async_list::assert_no_async_list_env(overrides.len());
-            }
-        }
-    }
-
     pub fn kill(&self) -> Result<()> {
         use super::signal::send_signal_allow_gone;
 

@@ -14,7 +14,7 @@ use super::substitution::ExecutionResources;
 use super::word_expand::{
     ExpansionTrace, expand_argument_word, expand_assignment_value, expand_redirect_target,
 };
-use crate::process::{Job, JobProcess, Redirect};
+use crate::process::{BuiltinProcess, Job, JobProcess, Process, Redirect};
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
@@ -101,6 +101,34 @@ pub enum MaterializeOutcome {
     Rejected(CommandMaterializationFailure),
 }
 
+/// A stage that owns command-scoped execution metadata.
+///
+/// `build_stage_process` dispatches to exactly one of these concrete types
+/// and attaches the expanded redirects/env overrides at the single
+/// `finish_stage_process` site. A future dispatch arm must yield one of
+/// these two types, so it cannot silently skip the metadata attach. This is
+/// deliberately not a generic `JobProcess` setter: synthetic sources and
+/// async-list outer nodes are not constructible here by type.
+enum StageProcess {
+    Builtin(BuiltinProcess),
+    Command(Process),
+}
+
+fn finish_stage_process(
+    process: StageProcess,
+    redirects: Vec<Redirect>,
+    env_overrides: Vec<(String, String)>,
+) -> JobProcess {
+    match process {
+        StageProcess::Builtin(inner) => {
+            JobProcess::Builtin(inner.with_execution_metadata(redirects, env_overrides))
+        }
+        StageProcess::Command(inner) => {
+            JobProcess::Command(inner.with_execution_metadata(redirects, env_overrides))
+        }
+    }
+}
+
 /// Build one pipeline stage process. A `NAME=value` prefix on a builtin (or
 /// an exported Lisp command, which runs through the same builtin path) is an
 /// expected command-level refusal, returned as `Err` so the caller can turn
@@ -117,32 +145,24 @@ fn build_stage_process(
     {
         return Err(CommandMaterializationFailure::builtin_env_prefix(&cmd));
     }
-    let mut process = if let Some(handler) = dsh_builtin::get_handler(&cmd) {
-        JobProcess::Builtin(crate::process::BuiltinProcess::new_handler(
-            cmd, handler, argv,
-        ))
+    let stage = if let Some(handler) = dsh_builtin::get_handler(&cmd) {
+        StageProcess::Builtin(BuiltinProcess::new_handler(cmd, handler, argv))
     } else if shell.lisp_engine.borrow().is_export(&cmd) {
-        JobProcess::Builtin(crate::process::BuiltinProcess::new(
-            cmd,
-            dsh_builtin::lisp::run,
-            argv,
-        ))
+        StageProcess::Builtin(BuiltinProcess::new(cmd, dsh_builtin::lisp::run, argv))
     } else if shell.environment.read().lookup(&cmd).is_none()
         && crate::dirs::is_dir(&cmd)
         && let Some(handler) = dsh_builtin::get_handler("cd")
     {
         // Dispatch identity is `cd`; `Job.cmd` keeps the user-facing path.
-        JobProcess::Builtin(crate::process::BuiltinProcess::new_handler(
+        StageProcess::Builtin(BuiltinProcess::new_handler(
             "cd".to_string(),
             handler,
             vec!["cd".to_string(), cmd],
         ))
     } else {
-        JobProcess::Command(crate::process::Process::new(cmd, argv))
+        StageProcess::Command(Process::new(cmd, argv))
     };
-    process.set_redirects(redirects);
-    process.set_env_overrides(env_overrides);
-    Ok(process)
+    Ok(finish_stage_process(stage, redirects, env_overrides))
 }
 
 pub(crate) fn assemble_job(
@@ -472,41 +492,86 @@ mod tests {
     /// overrides on the process, not in the shell.
     #[tokio::test]
     async fn external_prefix_stays_runnable() {
+        // Materialization never spawns, so the probe name needs no real
+        // executable on disk (which keeps this unit test free of
+        // OS-specific absolute paths); it only has to miss the builtin and
+        // Lisp-export tables to take the external path.
+        let job = materialize_runnable("FOO=bar probe-external-cmd").await;
+        let head = job.process.as_deref().expect("process");
+        // Construction attaches the prefix to the command itself.
+        let JobProcess::Command(cmd) = head else {
+            panic!("external prefix must stay a command, got {head:?}");
+        };
+        assert_eq!(
+            cmd.env_overrides,
+            vec![("FOO".to_string(), "bar".to_string())]
+        );
+        let argv = head.command_argv().expect("concrete argv");
+        assert_eq!(argv.0, "probe-external-cmd");
+    }
+
+    /// Materialize one input string and return the runnable job.
+    ///
+    /// Test-only shortcut for the metadata regressions below: they all share
+    /// the same parse → materialize → unwrap-runnable prologue.
+    async fn materialize_runnable(input: &str) -> Job {
         fn allow_all(_: &str) -> Result<ConfirmationAction> {
             Ok(ConfirmationAction::Yes)
         }
 
         let env = crate::environment::Environment::new();
         let mut shell = Shell::new(env.clone());
-        // Materialization never spawns, so the probe name needs no real
-        // executable on disk (which keeps this unit test free of
-        // OS-specific absolute paths); it only has to miss the builtin and
-        // Lisp-export tables to take the external path.
-        let plan = super::super::parse::parse_execution_plan(
-            "FOO=bar probe-external-cmd",
-            Arc::clone(&env),
-        )
-        .expect("plan");
+        let plan =
+            super::super::parse::parse_execution_plan(input, Arc::clone(&env)).expect("plan");
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
         match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], allow_all)
             .await
             .expect("materialize")
         {
-            MaterializeOutcome::Runnable(materialized) => {
-                let argv = materialized
-                    .job
-                    .process
-                    .as_ref()
-                    .expect("process")
-                    .command_argv()
-                    .expect("concrete argv");
-                assert_eq!(argv.0, "probe-external-cmd");
-            }
+            MaterializeOutcome::Runnable(materialized) => materialized.job,
             MaterializeOutcome::Rejected(failure) => {
-                panic!("external prefix must not be rejected: {failure:?}")
+                panic!("expected runnable job for {input:?}, got rejection: {failure:?}")
             }
-            MaterializeOutcome::NoCommand(_) => panic!("external prefix is not no-command"),
+            MaterializeOutcome::NoCommand(_) => panic!("expected runnable job for {input:?}"),
         }
+    }
+
+    /// An external command keeps its redirection on the process: metadata is
+    /// attached at construction, never through a generic post-hoc setter.
+    #[tokio::test]
+    async fn external_redirect_is_retained_on_command() {
+        // Materialization never opens the target, so a static path keeps
+        // this unit test free of filesystem side effects.
+        let job = materialize_runnable("probe-external-cmd > /tmp/dsh-metadata-probe").await;
+        let head = job.process.as_deref().expect("process");
+        let JobProcess::Command(cmd) = head else {
+            panic!("expected command, got {head:?}");
+        };
+        assert_eq!(cmd.redirects.len(), 1);
+        assert!(cmd.env_overrides.is_empty());
+    }
+
+    /// A builtin keeps its redirection on the process (`dirs` is a safe
+    /// registry probe: materialization never spawns).
+    #[tokio::test]
+    async fn builtin_redirect_is_retained_on_builtin_process() {
+        let job = materialize_runnable("dirs > /tmp/dsh-metadata-probe").await;
+        let head = job.process.as_deref().expect("process");
+        let JobProcess::Builtin(builtin) = head else {
+            panic!("expected builtin, got {head:?}");
+        };
+        assert_eq!(builtin.redirects.len(), 1);
+        assert!(builtin.env_overrides.is_empty());
+    }
+
+    /// A synthetic source owns no command metadata: the read-only query
+    /// stays empty, and no construction API can attach any.
+    #[test]
+    fn synthetic_source_redirects_query_stays_empty() {
+        let source = JobProcess::SyntheticSource(crate::process::PipelineSourceProcess::new(
+            "cached output\n".to_string(),
+        ));
+        assert!(source.redirects().is_empty());
     }
 
     /// One rejected stage rejects the whole pipeline: no partial job with

@@ -134,6 +134,23 @@ impl Process {
         }
     }
 
+    /// Attach command-scoped execution metadata at the construction boundary.
+    ///
+    /// Only `Process` (and `BuiltinProcess`, via its own same-named method)
+    /// owns this metadata. `PipelineSourceProcess` and the outer
+    /// `AsyncListProcess` node intentionally expose no such API: their
+    /// redirects/env overrides belong to real command stages, never to the
+    /// synthetic/outer node itself.
+    pub(crate) fn with_execution_metadata(
+        mut self,
+        redirects: Vec<Redirect>,
+        env_overrides: Vec<(String, String)>,
+    ) -> Self {
+        self.redirects = redirects;
+        self.env_overrides = env_overrides;
+        self
+    }
+
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
         if let Some(ppid) = self.pid
             && ppid == pid
@@ -488,6 +505,28 @@ mod tests {
             "ECHILD must leave Stopped untouched, not invent Completed(1)"
         );
     }
+
+    /// Command-scoped metadata is attached at the construction boundary:
+    /// `new()` starts empty, `with_execution_metadata()` keeps both halves.
+    #[test]
+    fn process_execution_metadata_is_attached_by_constructor_boundary() {
+        init();
+        let fresh = Process::new("cmd".to_string(), vec!["cmd".to_string()]);
+        assert!(fresh.redirects.is_empty());
+        assert!(fresh.env_overrides.is_empty());
+
+        let attached = Process::new("cmd".to_string(), vec!["cmd".to_string()])
+            .with_execution_metadata(
+                vec![Redirect::write(1, "/tmp/dsh-probe".to_string())],
+                vec![("FOO".to_string(), "bar".to_string())],
+            );
+        assert_eq!(attached.redirects.len(), 1);
+        assert_eq!(
+            attached.env_overrides,
+            vec![("FOO".to_string(), "bar".to_string())]
+        );
+    }
+
     #[test]
     fn test_prepare_execution() {
         init();

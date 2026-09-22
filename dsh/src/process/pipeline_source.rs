@@ -58,23 +58,8 @@ impl super::job_process::JobProcess {
     }
 }
 
-/// By construction `assemble_job` never attaches redirects/env to a source;
-/// dropping them silently would be fail-open, so log loudly in release too
-/// (`debug_assert` only fires in dev).
-pub(crate) fn assert_no_source_redirects(redirects_len: usize) {
-    debug_assert!(redirects_len == 0, "synthetic source takes no redirects");
-    if redirects_len != 0 {
-        tracing::error!("synthetic source ignoring unexpected redirects");
-    }
-}
-
-/// Same fail-closed guard for `NAME=value` overrides (see above).
-pub(crate) fn assert_no_source_env(overrides_len: usize) {
-    debug_assert!(overrides_len == 0, "synthetic source takes no env");
-    if overrides_len != 0 {
-        tracing::error!("synthetic source ignoring unexpected env overrides");
-    }
-}
+// `PipelineSourceProcess` intentionally has no redirect/env metadata:
+// those properties belong only to real command/no-command stages.
 
 /// Spawn the synthetic source helper for one pipeline stage.
 pub(crate) fn spawn_synthetic_source(

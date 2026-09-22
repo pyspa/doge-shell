@@ -80,6 +80,17 @@
 - nested async lists re-evaluate their own job-control state
 - async initial ignore is not "ignored on shell entry" metadata; future trap support must be able to override it
 
+## JobProcess metadata legality
+
+- Command/Builtin own command-scoped redirects/env overrides.
+- NoCommand owns assignments + its own redirects.
+- SyntheticSource owns neither redirects nor env overrides.
+- AsyncList outer node owns neither; its serialized inner stages own their own metadata.
+- JobProcess must not expose generic mutation APIs that can attach command metadata to every variant.
+- `build_stage_process` dispatches to `StageProcess` (`Builtin`/`Command` only) and attaches metadata at the single `finish_stage_process` site, so a new dispatch arm cannot silently skip the attach.
+- Illegal metadata states are prevented at construction/API boundaries, not discarded at runtime.
+- Never log-and-ignore unexpected execution metadata.
+
 ## 1件の execution / process bug を直すときの5点
 
 1. Minimal reproducer 2. Opposite case 3. Adjacent execution context（`FOO=bar` builtin を直すなら external env prefix・assignment-only・pipeline・`&&`/`||`・`$?` まで見る） 4. Resource / lifecycle invariant 5. Regression sibling。

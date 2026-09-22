@@ -357,24 +357,10 @@ fn capture_or_direct(
     }
 }
 
-/// By construction an async list carries no per-node redirects or env
-/// overrides (redirections live on the list's own stages, evaluated inside
-/// the helper); dropping them silently would be fail-open, so log loudly in
-/// release too (`debug_assert` only fires in dev).
-pub(crate) fn assert_no_async_list_redirects(redirects_len: usize) {
-    debug_assert!(redirects_len == 0, "async list takes no redirects");
-    if redirects_len != 0 {
-        tracing::error!("async list ignoring unexpected redirects");
-    }
-}
-
-/// Same fail-closed guard for `NAME=value` overrides (see above).
-pub(crate) fn assert_no_async_list_env(overrides_len: usize) {
-    debug_assert!(overrides_len == 0, "async list takes no env");
-    if overrides_len != 0 {
-        tracing::error!("async list ignoring unexpected env overrides");
-    }
-}
+// The outer `AsyncListProcess` node intentionally has no redirect/env
+// metadata. Redirections and env overrides live on the list's own stages
+// (evaluated inside the helper from the serialized plan), never on the
+// outer node itself.
 
 #[cfg(test)]
 mod tests {

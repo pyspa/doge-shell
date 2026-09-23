@@ -44,6 +44,14 @@ impl PipelineStatusPolicy {
     /// exactly like external or builtin stages.
     pub(crate) fn resolve(&self, job: &Job) -> Option<i32> {
         let first = job.process.as_deref()?;
+        // Logical status exists only for a completed tree. Pipefail OFF
+        // would otherwise invent `Some(tail)` for `Running | Completed(0)`
+        // or `Stopped | Completed(0)`; pipefail ON already returns `None`
+        // via `shell_exit_code()?`, but the explicit gate keeps both
+        // policies incomplete-tree safe by construction.
+        if !job.is_process_tree_completed() {
+            return None;
+        }
         if !self.pipefail() {
             let mut current = first;
             while let Some(next) = current.next_process() {
@@ -152,6 +160,51 @@ mod tests {
     fn pipefail_off_returns_none_for_incomplete_tail() {
         let job = job_with_codes(&[completed(1), ProcessState::Running], false);
         assert_eq!(job.final_exit_status(), None);
+    }
+
+    #[test]
+    fn pipefail_off_returns_none_for_incomplete_head() {
+        // `Running | Completed(0)`: tail-only logic would invent `Some(0)`.
+        let stopped = || ProcessState::Stopped(Pid::from_raw(42), Signal::SIGTSTP);
+        assert_eq!(
+            job_with_codes(&[ProcessState::Running, completed(0)], false).final_exit_status(),
+            None
+        );
+        assert_eq!(
+            job_with_codes(&[stopped(), completed(0)], false).final_exit_status(),
+            None
+        );
+        assert_eq!(
+            job_with_codes(&[completed(1), completed(0)], false).final_exit_status(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn pipefail_on_returns_none_for_incomplete_head() {
+        let stopped = || ProcessState::Stopped(Pid::from_raw(42), Signal::SIGTSTP);
+        assert_eq!(
+            job_with_codes(&[ProcessState::Running, completed(0)], true).final_exit_status(),
+            None
+        );
+        assert_eq!(
+            job_with_codes(&[stopped(), completed(0)], true).final_exit_status(),
+            None
+        );
+        assert_eq!(
+            job_with_codes(&[completed(7), completed(3), completed(0)], true).final_exit_status(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn pipefail_on_lifecycle_stays_tail_while_status_is_rightmost_nonzero() {
+        // `false | true` with pipefail ON: lifecycle is tail success,
+        // logical status is the upstream failure.
+        let mut job = job_with_codes(&[completed(1), completed(0)], true);
+        job.refresh_lifecycle_state();
+        assert_eq!(job.state, ProcessState::Completed(0, None));
+        assert_eq!(job.final_exit_status(), Some(1));
     }
 
     #[test]

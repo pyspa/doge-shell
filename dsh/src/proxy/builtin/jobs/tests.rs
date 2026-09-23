@@ -67,7 +67,7 @@ async fn fg_requeues_job_that_stops_again() {
     let pid = Pid::from_raw(424242);
     let job = stopped_tree_job(job_id, NixSignal::SIGTSTP);
 
-    let result = finalize_foreground_job(&mut shell, job, Ok(())).await;
+    let result = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx()).await;
     assert!(result.is_ok());
     assert_eq!(shell.wait_jobs.len(), 1);
     let requeued = &shell.wait_jobs[0];
@@ -88,7 +88,7 @@ async fn fg_requeues_job_stopped_by_sigstop() {
     let pid = Pid::from_raw(424242);
     let job = stopped_tree_job(8, NixSignal::SIGSTOP);
 
-    finalize_foreground_job(&mut shell, job, Ok(()))
+    finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
         .await
         .expect("finalize");
     assert_eq!(shell.wait_jobs.len(), 1);
@@ -103,7 +103,7 @@ async fn fg_does_not_requeue_completed_job() {
     let mut shell = test_shell();
     let job = completed_tree_job(3);
 
-    let result = finalize_foreground_job(&mut shell, job, Ok(())).await;
+    let result = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx()).await;
     assert!(result.is_ok());
     assert!(
         shell.wait_jobs.is_empty(),
@@ -120,7 +120,7 @@ async fn fg_completion_archives_known_async_status() {
     let pid = Pid::from_raw(424243);
     shell.known_async.register(pid, 21);
 
-    finalize_foreground_job(&mut shell, job, Ok(()))
+    finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
         .await
         .expect("finalize");
 
@@ -137,7 +137,8 @@ async fn fg_requeues_active_job_after_wait_error() {
     let mut shell = test_shell();
     let job = running_tree_job(9);
 
-    let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom"))).await;
+    let result =
+        finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom")), &test_ctx()).await;
     assert!(result.is_err(), "primary wait error must propagate");
     assert_eq!(
         shell.wait_jobs.len(),
@@ -153,7 +154,8 @@ async fn fg_does_not_resurrect_completed_job_on_wait_error() {
     let mut shell = test_shell();
     let job = completed_tree_job(11);
 
-    let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom"))).await;
+    let result =
+        finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom")), &test_ctx()).await;
     assert!(result.is_err());
     assert!(
         shell.wait_jobs.is_empty(),
@@ -497,4 +499,103 @@ async fn foreground_resume_drains_background_capture() {
         let _ = nix::sys::wait::waitpid(child_pid, None);
         panic!("child survived the foreground wait");
     }
+}
+
+fn stopped_full_proxy_job_for_fg(job_id: usize) -> ProcJob {
+    use crate::process::Pty;
+    use crate::process::pty::PtyMode;
+    let mut job = stopped_tree_job(job_id, NixSignal::SIGTSTP);
+    job.pty = Some(Pty::new().expect("test pty"));
+    job.pty_mode = Some(PtyMode::FullProxy);
+    // Stopped ownership: output stays, input already suspended.
+    job.pty_output_task = Some(tokio::spawn(async { Ok("pending".to_string()) }));
+    job.pty_input_task = None;
+    job
+}
+
+/// `fg` on a stopped FullProxy tree requeues with PTY/output kept and no
+/// terminal input proxy.
+#[tokio::test]
+async fn fg_stopped_full_proxy_requeues_with_pty_ownership() {
+    let mut shell = test_shell();
+    let job = stopped_full_proxy_job_for_fg(31);
+    let ctx = test_ctx();
+
+    finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
+        .await
+        .expect("finalize");
+    assert_eq!(shell.wait_jobs.len(), 1);
+    let requeued = &shell.wait_jobs[0];
+    assert_eq!(requeued.job_id, 31);
+    assert!(requeued.pty.is_some(), "PTY must stay with stopped job");
+    assert_eq!(
+        requeued.pty_mode,
+        Some(crate::process::pty::PtyMode::FullProxy)
+    );
+    assert!(
+        requeued.pty_output_task.is_some(),
+        "output ownership must stay"
+    );
+    assert!(
+        requeued.pty_input_task.is_none(),
+        "input proxy must stay inactive at the prompt"
+    );
+    crate::process::job_pty::cleanup_pty_tasks(&mut shell.wait_jobs[0]).await;
+}
+
+/// `fg` completing a FullProxy job retires every PTY resource, archives the
+/// canonical status, and never requeues.
+#[tokio::test]
+async fn fg_completed_full_proxy_retires_all_resources() {
+    use crate::process::Pty;
+    use crate::process::pty::PtyMode;
+    let mut shell = test_shell();
+    let mut job = completed_tree_job(32);
+    let pid = Pid::from_raw(424243);
+    shell.known_async.register(pid, 32);
+    job.pty = Some(Pty::new().expect("test pty"));
+    job.pty_mode = Some(PtyMode::FullProxy);
+    job.pty_input_task = Some(tokio::spawn(std::future::pending::<()>()));
+    job.pty_output_task = Some(tokio::spawn(async { Ok("fg-final".to_string()) }));
+    let ctx = test_ctx();
+
+    finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
+        .await
+        .expect("finalize");
+    assert!(
+        shell.wait_jobs.is_empty(),
+        "completed fg job must not return to the table"
+    );
+    let status = shell
+        .known_async
+        .consume_completed(pid)
+        .expect("fg completion must archive the async status");
+    assert_eq!(status, 0);
+}
+
+/// Wait errors on a FullProxy job still suspend terminal input before
+/// requeueing, so the prompt never shares `/dev/tty` with the job.
+#[tokio::test]
+async fn fg_wait_error_suspends_full_proxy_input_before_requeue() {
+    use crate::process::Pty;
+    use crate::process::pty::PtyMode;
+    let mut shell = test_shell();
+    let mut job = running_tree_job(33);
+    job.pty = Some(Pty::new().expect("test pty"));
+    job.pty_mode = Some(PtyMode::FullProxy);
+    job.pty_output_task = Some(tokio::spawn(async { Ok("pending".to_string()) }));
+    job.pty_input_task = Some(tokio::spawn(std::future::pending::<()>()));
+    let ctx = test_ctx();
+
+    let result = finalize_foreground_job(&mut shell, job, Err(anyhow::anyhow!("boom")), &ctx).await;
+    assert!(result.is_err(), "primary wait error must propagate");
+    assert_eq!(shell.wait_jobs.len(), 1);
+    let requeued = &shell.wait_jobs[0];
+    assert!(requeued.pty.is_some());
+    assert!(requeued.pty_output_task.is_some());
+    assert!(
+        requeued.pty_input_task.is_none(),
+        "input proxy must stop even on wait error"
+    );
+    crate::process::job_pty::cleanup_pty_tasks(&mut shell.wait_jobs[0]).await;
 }

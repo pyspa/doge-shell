@@ -1,7 +1,8 @@
 use super::{
-    AsyncStdin, PtyMasterUse, PtySetupOps, capture_output_and_history, cleanup_pty_tasks,
-    is_builtin_job, setup_pty, setup_pty_with, setup_pty_with_ops, should_create_pty,
-    should_enable_foreground_pty_raw_mode, uses_full_pty_proxy,
+    AsyncStdin, PtyMasterUse, PtySetupOps, capture_completed_output_and_history, cleanup_pty_tasks,
+    is_builtin_job, resume_pty_input_proxy_with, resume_pty_input_proxy_with_ops, setup_pty,
+    setup_pty_with, setup_pty_with_ops, should_create_pty, should_enable_foreground_pty_raw_mode,
+    suspend_stopped_pty_input, uses_full_pty_proxy,
 };
 use crate::environment::Environment;
 use crate::process::async_io::AsyncPtyMasterWriter;
@@ -552,7 +553,7 @@ async fn setup_pty_child_config_mode_matches_job_mode() {
 
 #[tokio::test]
 async fn capture_output_task_failure_cleans_up_tasks() {
-    // `capture_output_and_history` reclaims task ownership before
+    // `capture_completed_output_and_history` reclaims task ownership before
     // awaiting the output task, so even when that await fails no proxy
     // task or PTY fd may be left behind for the next command.
     let mut job = Job::new("pty-test".to_string(), Pid::from_raw(1));
@@ -566,7 +567,7 @@ async fn capture_output_task_failure_cleans_up_tasks() {
 
     let ctx = test_context(true, true);
     let mut shell = Shell::new(Environment::new());
-    let result = capture_output_and_history(&mut job, &ctx, &mut shell).await;
+    let result = capture_completed_output_and_history(&mut job, &ctx, &mut shell).await;
     assert!(result.is_err());
     assert!(job.pty_input_task.is_none());
     assert!(job.pty_output_task.is_none());
@@ -663,7 +664,7 @@ async fn capture_stops_pty_input_before_waiting_for_output_task() {
 
     tokio::time::timeout(
         Duration::from_secs(1),
-        capture_output_and_history(&mut job, &ctx, &mut shell),
+        capture_completed_output_and_history(&mut job, &ctx, &mut shell),
     )
     .await
     .expect("capture waited for output before stopping input proxy")
@@ -682,4 +683,259 @@ async fn capture_stops_pty_input_before_waiting_for_output_task() {
             .last_stdout(),
         Some("late pty output")
     );
+}
+
+fn stopped_full_proxy_job_with_tasks(
+    input: Option<tokio::task::JoinHandle<()>>,
+    output: Option<tokio::task::JoinHandle<Result<String, anyhow::Error>>>,
+) -> Job {
+    use nix::sys::signal::Signal;
+    let mut job = Job::new("stopped-pty-test".to_string(), Pid::from_raw(1));
+    job.job_id = 999;
+    let pid = Pid::from_raw(424242);
+    let mut process = Process::new("stopped-cmd".to_string(), vec!["stopped-cmd".to_string()]);
+    process.pid = Some(pid);
+    process.state = ProcessState::Stopped(pid, Signal::SIGTSTP);
+    job.set_process(JobProcess::Command(process));
+    job.refresh_lifecycle_state();
+    assert!(job.is_fully_stopped());
+    job.pty = Some(Pty::new().expect("test pty"));
+    job.pty_mode = Some(PtyMode::FullProxy);
+    job.pty_input_task = input;
+    job.pty_output_task = output;
+    job
+}
+
+/// Stopped FullProxy settlement never waits for output EOF: only the input
+/// proxy is stopped, PTY/output ownership stays with the job, and no
+/// history is recorded.
+#[tokio::test]
+async fn stopped_full_proxy_suspend_keeps_output_without_waiting_for_eof() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let input = tokio::spawn(async move {
+        let _ = started_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    started_rx.await.expect("input proxy started");
+    // Pending forever: a stopped child holds the slave, so EOF never comes.
+    let output = tokio::spawn(async {
+        std::future::pending::<()>().await;
+        Ok(String::new())
+    });
+
+    let mut job = stopped_full_proxy_job_with_tasks(Some(input), Some(output));
+    let mut shell = Shell::new(Environment::new());
+    let history_before = shell
+        .environment
+        .read()
+        .session_output_state
+        .output_history
+        .len();
+
+    tokio::time::timeout(Duration::from_secs(1), suspend_stopped_pty_input(&mut job))
+        .await
+        .expect("suspend must not wait for output EOF");
+
+    assert!(job.pty_input_task.is_none(), "input proxy must stop");
+    assert!(job.pty_output_task.is_some(), "output ownership stays");
+    assert!(job.pty.is_some(), "PTY stays");
+    assert_eq!(job.pty_mode, Some(PtyMode::FullProxy));
+    assert!(
+        job.pty_output_task
+            .as_ref()
+            .is_none_or(|task| !task.is_finished()),
+        "output task must not have been awaited"
+    );
+    assert_eq!(
+        shell
+            .environment
+            .read()
+            .session_output_state
+            .output_history
+            .len(),
+        history_before,
+        "stopped jobs never record completed history"
+    );
+
+    // Completion-only finalization must refuse the incomplete tree loudly
+    // instead of inventing `0` or hanging on EOF.
+    let ctx = test_context(true, true);
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        capture_completed_output_and_history(&mut job, &ctx, &mut shell),
+    )
+    .await
+    .expect("incomplete capture must not hang");
+    assert!(
+        result.is_err(),
+        "stopped tree must not finalize as completed"
+    );
+
+    cleanup_pty_tasks(&mut job).await;
+}
+
+/// Resume creates exactly one input proxy and never duplicates an existing
+/// reader.
+#[tokio::test]
+async fn resume_creates_exactly_one_input_proxy() {
+    let mut job = stopped_full_proxy_job_with_tasks(
+        None,
+        Some(tokio::spawn(async { Ok("pending-output".to_string()) })),
+    );
+    let scratch = Pty::new().expect("scratch pty");
+    let scratch_fd = scratch.slave.as_raw_fd();
+    resume_pty_input_proxy_with(&mut job, move || {
+        AsyncStdin::open_tty_from_fd(unsafe { BorrowedFd::borrow_raw(scratch_fd) })
+    })
+    .await
+    .expect("resume must create one input proxy");
+    assert!(job.pty_input_task.is_some());
+    assert!(job.pty.is_some());
+    assert!(job.pty_output_task.is_some());
+
+    // A second resume must be a no-op: the injected opener would fail the
+    // test if it were ever called (no duplicate reader).
+    let called = Arc::new(AtomicBool::new(false));
+    let called_clone = Arc::clone(&called);
+    resume_pty_input_proxy_with(&mut job, move || {
+        called_clone.store(true, Ordering::SeqCst);
+        Err(std::io::Error::other("duplicate input proxy must not open"))
+    })
+    .await
+    .expect("second resume must be a no-op");
+    assert!(job.pty_input_task.is_some());
+    assert!(
+        !called.load(Ordering::SeqCst),
+        "second resume must not open terminal input again"
+    );
+
+    cleanup_pty_tasks(&mut job).await;
+    drop(scratch);
+}
+
+/// Resume preparation failure leaves the stopped job resumable: PTY/output
+/// preserved, input still `None`, before any SIGCONT.
+#[tokio::test]
+async fn resume_preparation_failure_keeps_job_resumable() {
+    for fail_input_clone in [true, false] {
+        let mut job = stopped_full_proxy_job_with_tasks(
+            None,
+            Some(tokio::spawn(async { Ok("pending-output".to_string()) })),
+        );
+        let ops = FaultInjectingOps {
+            fail_input_clone,
+            fail_writer: !fail_input_clone,
+            ..FaultInjectingOps::clean()
+        };
+        let result = resume_pty_input_proxy_with_ops(
+            &mut job,
+            recording_opener(Arc::new(AtomicBool::new(false))),
+            &ops,
+        )
+        .await;
+        assert!(result.is_err(), "injected preparation failure must fail");
+        assert!(job.pty.is_some(), "PTY must be preserved");
+        assert_eq!(job.pty_mode, Some(PtyMode::FullProxy));
+        assert!(job.pty_output_task.is_some(), "output must be preserved");
+        assert!(job.pty_input_task.is_none());
+        assert!(job.is_fully_stopped(), "tree stays stopped for requeue");
+        cleanup_pty_tasks(&mut job).await;
+    }
+}
+
+/// Completed FullProxy retires every PTY resource and records history once.
+#[tokio::test]
+async fn completed_full_proxy_retires_all_resources_once() {
+    let mut job = Job::new("completed-pty-test".to_string(), Pid::from_raw(1));
+    let pid = Pid::from_raw(424243);
+    let mut process = Process::new("done-cmd".to_string(), vec!["done-cmd".to_string()]);
+    process.pid = Some(pid);
+    process.state = ProcessState::Completed(0, None);
+    job.set_process(JobProcess::Command(process));
+    job.refresh_lifecycle_state();
+    assert!(job.is_process_tree_completed());
+    job.pty = Some(Pty::new().expect("test pty"));
+    job.pty_mode = Some(PtyMode::FullProxy);
+    job.pty_input_task = Some(tokio::spawn(std::future::pending::<()>()));
+    job.pty_output_task = Some(tokio::spawn(async { Ok("final output".to_string()) }));
+
+    let ctx = test_context(true, true);
+    let mut shell = Shell::new(Environment::new());
+    capture_completed_output_and_history(&mut job, &ctx, &mut shell)
+        .await
+        .expect("completed capture");
+
+    assert!(job.pty_input_task.is_none());
+    assert!(job.pty_output_task.is_none());
+    assert!(job.pty.is_none());
+    assert!(job.pty_mode.is_none());
+    let history = &shell.environment.read().session_output_state.output_history;
+    assert_eq!(history.len(), 1, "completion records exactly one entry");
+    assert_eq!(history.last_stdout(), Some("final output"));
+}
+
+/// Synthetic stop/resume/complete ownership machine without a real terminal.
+#[tokio::test]
+async fn repeated_stop_resume_owns_pty_resources() {
+    let mut job = stopped_full_proxy_job_with_tasks(
+        None,
+        Some(tokio::spawn(async { Ok("repeated-final".to_string()) })),
+    );
+    let scratch = Pty::new().expect("scratch pty");
+    let open_scratch = || {
+        let fd = scratch.slave.as_raw_fd();
+        move || AsyncStdin::open_tty_from_fd(unsafe { BorrowedFd::borrow_raw(fd) })
+    };
+
+    // stop → resume → stop → resume → complete
+    tokio::time::timeout(Duration::from_secs(1), suspend_stopped_pty_input(&mut job))
+        .await
+        .expect("first suspend");
+    assert!(job.pty_input_task.is_none());
+    assert!(job.pty.is_some());
+
+    resume_pty_input_proxy_with(&mut job, open_scratch())
+        .await
+        .expect("first resume");
+    assert!(job.pty_input_task.is_some());
+
+    suspend_stopped_pty_input(&mut job).await;
+    assert!(job.pty_input_task.is_none());
+    assert!(job.pty_output_task.is_some());
+
+    // Second resume needs its own opener (the first was consumed).
+    let scratch_fd = scratch.slave.as_raw_fd();
+    resume_pty_input_proxy_with(&mut job, move || {
+        AsyncStdin::open_tty_from_fd(unsafe { BorrowedFd::borrow_raw(scratch_fd) })
+    })
+    .await
+    .expect("second resume");
+    assert!(job.pty_input_task.is_some());
+
+    // Complete the tree, then run the shared completion-only finalizer.
+    {
+        let pid = Pid::from_raw(424242);
+        job.set_process_state(pid, ProcessState::Completed(0, None));
+    }
+    job.refresh_lifecycle_state();
+    assert!(job.is_process_tree_completed());
+
+    let ctx = test_context(true, true);
+    let mut shell = Shell::new(Environment::new());
+    capture_completed_output_and_history(&mut job, &ctx, &mut shell)
+        .await
+        .expect("final completion");
+    assert!(job.pty.is_none());
+    assert!(job.pty_output_task.is_none());
+    assert!(job.pty_input_task.is_none());
+    assert_eq!(
+        shell
+            .environment
+            .read()
+            .session_output_state
+            .output_history
+            .len(),
+        1
+    );
+    drop(scratch);
 }

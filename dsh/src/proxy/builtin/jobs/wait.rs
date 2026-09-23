@@ -3,9 +3,9 @@
 //! Operands are decimal PIDs only (`wait`, `wait PID`, `wait PID1 PID2
 //! ...`). Job specs (`%1`) and `wait -n/-p/-f` are out of scope and
 //! rejected: bare numbers are PIDs here, never job numbers. Statuses come
-//! from the canonical tail process via the completed-job finalizer; the
-//! ledger is consumed only here, never by reconciliation (`jobs`,
-//! notices, `fg`/`bg`).
+//! from `Job::final_exit_status()` using the frozen pipeline policy via the
+//! completed-job finalizer; the ledger is consumed only here, never by
+//! reconciliation (`jobs`, notices, `fg`/`bg`).
 
 use crate::process::job_wait::{JobWaitOutcome, wait_for_termination};
 use crate::shell::Shell;

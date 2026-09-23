@@ -8,7 +8,9 @@
 use super::async_io::{AsyncPtyMasterWriter, AsyncStdin};
 use super::job::Job;
 use super::job_process::JobProcess;
+use super::launch_outcome::JobLaunchOutcome;
 use super::pty::{Pty, PtyChildConfig, PtyMode};
+use super::state::ProcessState;
 use crate::process::io::PtyMonitor;
 use crate::process::job_wait::wait_job;
 use crate::shell::Shell;
@@ -35,6 +37,35 @@ impl ForegroundPtyRawModeGuard {
                 Ok(()) => Self { enabled: true },
                 Err(err) => {
                     error!("Failed to enable raw mode for PTY job: {}", err);
+                    Self { enabled: false }
+                }
+            }
+        } else {
+            Self { enabled: false }
+        }
+    }
+
+    /// Raw-mode scope for an `fg`-resumed FullProxy interval.
+    ///
+    /// The initial launch uses [`Self::new`] (which also requires a
+    /// foreground interactive `ctx`); a resume does not go through
+    /// `launch_inner`, so this covers `resume input proxy → SIGCONT /
+    /// foreground wait` with the same guard type. No new raw-mode
+    /// mechanism: enablement still funnels through `enable_raw_mode` and
+    /// restoration through `Drop`.
+    ///
+    /// The predicate is intentionally narrower than [`Self::new`]: this
+    /// constructor is only called from `foreground_selected_job`, i.e. when
+    /// a stopped FullProxy job is being brought into the foreground, so the
+    /// foreground-interactive interval holds by construction. A bare
+    /// `enable_raw_mode` failure (no TTY, tests) degrades to disabled
+    /// without touching terminal state.
+    pub(crate) fn for_resume(job: &Job) -> Self {
+        if uses_full_pty_proxy(job) && !is_builtin_job(job) {
+            match enable_raw_mode() {
+                Ok(()) => Self { enabled: true },
+                Err(err) => {
+                    debug!("fg resume raw mode not enabled: {}", err);
                     Self { enabled: false }
                 }
             }
@@ -136,7 +167,7 @@ pub(crate) fn uses_full_pty_proxy(job: &Job) -> bool {
 /// and an input proxy. Failure to prepare input downgrades to OutputOnly;
 /// failure to prepare output monitoring discards the PTY entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PtyMasterUse {
+pub(crate) enum PtyMasterUse {
     Output,
     Input,
 }
@@ -148,7 +179,7 @@ enum PtyMasterUse {
 /// infrastructure steps (`Pty::new`, output master clone, `PtyMonitor::new`,
 /// input master clone, `AsyncPtyMasterWriter::new`) without touching fd
 /// limits, timing, or the real terminal.
-trait PtySetupOps {
+pub(crate) trait PtySetupOps {
     fn new_pty(&self) -> Result<Pty>;
     fn clone_master(&self, pty: &Pty, purpose: PtyMasterUse) -> Result<File>;
     fn new_monitor(
@@ -389,21 +420,91 @@ where
     Ok(Some(child_config))
 }
 
-async fn stop_pty_input_proxy(job: &mut Job) {
+async fn suspend_pty_input_proxy(job: &mut Job) {
     if let Some(input_task) = job.pty_input_task.take() {
         input_task.abort();
         let _ = input_task.await;
     }
 }
 
+/// Suspend foreground terminal-input ownership for a stopped job.
+///
+/// Keeps `job.pty`, `job.pty_mode`, and `job.pty_output_task` (PTY session
+/// and captured output stay owned by the stopped job); only the input
+/// proxy is stopped so the shell prompt never shares `/dev/tty` reads with
+/// a stopped FullProxy job. Never awaits output: a stopped child still
+/// holds the PTY slave, so EOF may never arrive.
+pub(crate) async fn suspend_stopped_pty_input(job: &mut Job) {
+    suspend_pty_input_proxy(job).await;
+}
+
 pub async fn cleanup_pty_tasks(job: &mut Job) {
-    stop_pty_input_proxy(job).await;
+    suspend_pty_input_proxy(job).await;
     if let Some(output_task) = job.pty_output_task.take() {
         output_task.abort();
         let _ = output_task.await;
     }
     job.pty = None;
     job.pty_mode = None;
+}
+
+/// Recreate exactly one input proxy for a stopped FullProxy job being
+/// resumed into the foreground.
+///
+/// Transactional: master clone / writer construction happen before any
+/// `job` mutation, so preparation failure leaves `pty` / `pty_output_task`
+/// / `pty_mode` untouched with `pty_input_task == None`, and the caller
+/// can requeue the job as `Stopped` before any SIGCONT. Non-FullProxy
+/// jobs are a no-op; an existing input task is never duplicated.
+pub(crate) async fn resume_pty_input_proxy(job: &mut Job) -> Result<()> {
+    resume_pty_input_proxy_with(job, AsyncStdin::open_tty).await
+}
+
+pub(crate) async fn resume_pty_input_proxy_with<F>(job: &mut Job, open_input: F) -> Result<()>
+where
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
+    let ops = SystemPtySetupOps;
+    resume_pty_input_proxy_with_ops(job, open_input, &ops).await
+}
+
+pub(crate) async fn resume_pty_input_proxy_with_ops<Ops, F>(
+    job: &mut Job,
+    open_input: F,
+    ops: &Ops,
+) -> Result<()>
+where
+    Ops: PtySetupOps,
+    F: FnOnce() -> std::io::Result<AsyncStdin> + Send + 'static,
+{
+    // Note: `async` for call-site uniformity with the other PTY helpers
+    // (`resume_pty_input_proxy`, `suspend_stopped_pty_input`); the body
+    // itself performs no `.await` — preparation is synchronous and the
+    // spawned proxy task runs detached.
+    if job.pty_mode != Some(PtyMode::FullProxy) {
+        return Ok(());
+    }
+    if job.pty_input_task.is_some() {
+        return Ok(());
+    }
+    let Some(pty) = job.pty.as_ref() else {
+        anyhow::bail!(
+            "cannot resume FullProxy input for job {} without a PTY",
+            job.job_id
+        );
+    };
+    if job.pty_output_task.is_none() {
+        anyhow::bail!(
+            "cannot resume FullProxy input for job {} without output ownership",
+            job.job_id
+        );
+    }
+    let input_master = ops.clone_master(pty, PtyMasterUse::Input)?;
+    let writer = ops
+        .new_writer(input_master)
+        .map_err(|err| anyhow::anyhow!("failed to prepare resumed PTY input writer: {err}"))?;
+    job.pty_input_task = Some(spawn_pty_input_proxy_with(writer, open_input));
+    Ok(())
 }
 
 pub async fn manage_execution(job: &mut Job, ctx: &mut Context) -> Result<()> {
@@ -431,15 +532,84 @@ pub async fn manage_execution(job: &mut Job, ctx: &mut Context) -> Result<()> {
     Ok(())
 }
 
-pub async fn capture_output_and_history(
+/// Canonical foreground launch settlement shared by `Job::launch_inner`.
+///
+/// The outcome is always derived from the canonical tree via
+/// `refresh_lifecycle_state`, never tail-only. Completion-only I/O
+/// finalization runs solely for completed trees; stopped trees keep
+/// PTY/output with only the input proxy suspended.
+pub(crate) async fn settle_foreground_launch(
+    job: &mut Job,
+    ctx: &Context,
+    shell: &mut Shell,
+) -> Result<JobLaunchOutcome> {
+    job.refresh_lifecycle_state();
+    if !job.foreground {
+        debug!(
+            "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+            job.job_id, job.state, job.foreground
+        );
+        return Ok(JobLaunchOutcome::Process(ProcessState::Running));
+    }
+    match job.state {
+        ProcessState::Completed(_, _) => {
+            if let Err(err) = capture_completed_output_and_history(job, ctx, shell).await {
+                cleanup_pty_tasks(job).await;
+                return Err(err);
+            }
+            debug!(
+                "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+                job.job_id, job.state, job.foreground
+            );
+            Ok(JobLaunchOutcome::Process(job.state))
+        }
+        ProcessState::Stopped(_, _) => {
+            suspend_stopped_pty_input(job).await;
+            debug!(
+                "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+                job.job_id, job.state, job.foreground
+            );
+            Ok(JobLaunchOutcome::Process(job.state))
+        }
+        ProcessState::Running => {
+            if job.has_process() {
+                cleanup_pty_tasks(job).await;
+                anyhow::bail!(
+                    "foreground wait returned with active job {} ('{}', state: {:?})",
+                    job.job_id,
+                    job.cmd,
+                    job.state,
+                );
+            }
+            debug!(
+                "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
+                job.job_id, job.state, job.foreground
+            );
+            Ok(JobLaunchOutcome::Process(job.state))
+        }
+    }
+}
+
+pub async fn capture_completed_output_and_history(
     job: &mut Job,
     ctx: &Context,
     shell: &mut Shell,
 ) -> Result<()> {
+    // Completion-only finalization: a stopped or otherwise incomplete
+    // process-bearing tree must never reach output await / history here.
+    // Callers settle stopped jobs via `suspend_stopped_pty_input` instead.
+    if job.has_process() && !job.is_process_tree_completed() {
+        anyhow::bail!(
+            "cannot finalize output for incomplete job {} ('{}', state: {:?})",
+            job.job_id,
+            job.cmd,
+            job.state,
+        );
+    }
     let mut stdout_cap = String::new();
     let mut stderr_cap = String::new();
 
-    stop_pty_input_proxy(job).await;
+    suspend_pty_input_proxy(job).await;
     job.pty = None;
     job.pty_mode = None;
 
@@ -477,7 +647,21 @@ pub async fn capture_output_and_history(
         let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();
         let stderr_stripped = console::strip_ansi_codes(&stderr_cap).to_string();
 
-        let exit_code = job.final_exit_status().unwrap_or(0);
+        // A completed process-bearing tree always has a logical status;
+        // inventing `0` here would record synthetic success for stopped /
+        // incomplete jobs. Process-less jobs keep the historical no-process
+        // semantics.
+        let exit_code = if job.has_process() {
+            job.final_exit_status().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "completed job {} ('{}') has no final status",
+                    job.job_id,
+                    job.cmd
+                )
+            })?
+        } else {
+            job.final_exit_status().unwrap_or(0)
+        };
 
         let entry = OutputEntry::new(job.cmd.clone(), stdout_stripped, stderr_stripped, exit_code);
         shell

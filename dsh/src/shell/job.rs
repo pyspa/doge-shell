@@ -241,6 +241,31 @@ pub(crate) fn final_exit_status(job: &Job) -> Option<i32> {
     job.final_exit_status()
 }
 
+/// Canonical status for a `Completed` launch outcome.
+///
+/// Process-bearing jobs must resolve through the frozen pipeline policy
+/// (`Job::final_exit_status`); a `None` there is an infrastructure
+/// inconsistency, never silently covered by the tail copy. Process-less
+/// jobs keep the historical tail-copy fallback.
+pub(crate) fn completed_job_status(
+    job: &Job,
+    launch_state: crate::process::ProcessState,
+) -> Result<i32> {
+    if job.has_process() {
+        job.final_exit_status().ok_or_else(|| {
+            anyhow::anyhow!(
+                "completed job {} ('{}') has no final status",
+                job.job_id,
+                job.cmd
+            )
+        })
+    } else {
+        launch_state
+            .shell_exit_code()
+            .ok_or_else(|| anyhow::anyhow!("process-less completed job has no exit code"))
+    }
+}
+
 /// How a completed job's output monitors retire during finalization.
 ///
 /// A completed `Job` may never be dropped before its monitors execute one

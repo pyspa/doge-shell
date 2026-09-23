@@ -91,7 +91,7 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         env.borrow()
             .shell_env
             .write()
-            .set_system_env_var("PATH".to_string(), env_path);
+            .set_and_export_shell_var("PATH".to_string(), env_path);
     } else {
         let val = &args[1];
         let val_string = val.to_string();
@@ -100,7 +100,7 @@ pub fn set_env(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         env.borrow()
             .shell_env
             .write()
-            .set_system_env_var(key.clone(), val_string);
+            .set_and_export_shell_var(key.clone(), val_string);
     }
     Ok(Value::NIL)
 }

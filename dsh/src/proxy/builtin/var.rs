@@ -4,49 +4,38 @@ use crate::environment::variables::is_valid_shell_var_name;
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::{Context, ExitStatus};
-use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read as _;
 use std::os::unix::io::FromRawFd;
-use tabled::{Table, Tabled};
-
-struct Var {
-    key: String,
-    value: String,
-}
-
-impl Tabled for Var {
-    const LENGTH: usize = 2;
-
-    fn fields(&self) -> Vec<Cow<'_, str>> {
-        vec![
-            Cow::Borrowed(self.key.as_str()),
-            Cow::Borrowed(self.value.as_str()),
-        ]
-    }
-
-    fn headers() -> Vec<Cow<'static, str>> {
-        vec![Cow::Borrowed("key"), Cow::Borrowed("value")]
-    }
-}
 
 /// Execute the `var` builtin command.
 ///
-/// Displays all shell variables in a table format.
+/// Displays all shell variables, one `KEY=VALUE` per line, sorted by key.
+/// A table renderer was used here before, but with the unified
+/// variable/export namespace `var` now lists every inherited variable too
+/// (90+ rows with a multi-kilobyte `PATH`); the table layout hung rendering
+/// that shape, while line output stays linear and preserves full values.
 pub fn execute_var(shell: &mut Shell, ctx: &Context, _argv: Vec<String>) -> Result<()> {
-    let vars: Vec<Var> = shell
+    let mut vars: Vec<(String, String)> = shell
         .environment
         .read()
         .variable_state
         .variables
         .iter()
-        .map(|x| Var {
-            key: x.0.to_owned(),
-            value: x.1.to_owned(),
-        })
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let table = Table::new(vars).to_string();
-    ctx.write_stdout(table.as_str())?;
+    vars.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut output = String::new();
+    for (key, value) in &vars {
+        output.push_str(key);
+        output.push('=');
+        output.push_str(value);
+        output.push('\n');
+    }
+    let output = output.strip_suffix('\n').unwrap_or("");
+    if !output.is_empty() {
+        ctx.write_stdout(output)?;
+    }
     Ok(())
 }
 

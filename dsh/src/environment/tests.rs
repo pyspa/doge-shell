@@ -26,6 +26,7 @@ fn test_lookup() {
 fn test_extend() {
     init();
     let env = Environment::new();
+    let baseline = env.read().variable_state.variables.len();
     let env1 = Arc::clone(&env);
     env.write()
         .variable_state
@@ -48,7 +49,10 @@ fn test_extend() {
         *env2_clone.variable_state.variables.get("test2").unwrap()
     );
 
-    assert_eq!(2, env1.read().variable_state.variables.len());
+    // Parent sees its own insertion on top of the inherited baseline, but
+    // not the child's later insertion.
+    assert_eq!(baseline + 1, env1.read().variable_state.variables.len());
+    assert!(!env1.read().variable_state.variables.contains_key("test2"));
 }
 
 #[test]
@@ -243,7 +247,7 @@ fn test_system_env_updates_refresh_path_and_child_env() {
 
     {
         let mut guard = env.write();
-        guard.set_system_env_var("PATH".to_string(), "/tmp/bin:/usr/bin".to_string());
+        guard.set_and_export_shell_var("PATH".to_string(), "/tmp/bin:/usr/bin".to_string());
         guard
             .variable_state
             .variables
@@ -275,12 +279,12 @@ fn test_unset_system_env_updates_z_exclude() {
 
     {
         let mut guard = env.write();
-        guard.set_system_env_var("Z_EXCLUDE".to_string(), "/tmp:/var".to_string());
+        guard.set_shell_var("Z_EXCLUDE".to_string(), "/tmp:/var".to_string());
         assert_eq!(
             guard.variable_state.z_exclude,
             vec!["/tmp".to_string(), "/var".to_string()]
         );
-        guard.unset_system_env_var("Z_EXCLUDE");
+        guard.unset_shell_var("Z_EXCLUDE");
     }
 
     assert!(env.read().variable_state.z_exclude.is_empty());
@@ -422,10 +426,25 @@ fn the_shell_starts_at_the_level_it_inherited() {
     let env = Environment::new();
     let guard = env.read();
 
-    // `Environment::new` snapshots the process environment, so this asserts the
-    // seeding path rather than a particular inherited value.
-    let inherited = guard.variable_state.system_env_vars.get("SAFETY_LEVEL");
-    let expected = crate::safety::SafetyLevel::from_env_value(inherited.cloned());
+    // `Environment::new` imports the process environment into `variables`,
+    // so this asserts the seeding path rather than a particular value.
+    // `SAFETY_LEVEL` is seeded as "normal" when absent and never auto-exported.
+    let inherited_exported = guard.variable_state.exported_vars.contains("SAFETY_LEVEL");
+    let expected = crate::safety::SafetyLevel::from_env_value(
+        guard
+            .variable_state
+            .variables
+            .get("SAFETY_LEVEL")
+            .and_then(|v| {
+                // A fresh default "normal" that was not inherited must not count
+                // as an inherited value.
+                if !inherited_exported && v == "normal" {
+                    None
+                } else {
+                    Some(v.clone())
+                }
+            }),
+    );
 
     assert_eq!(*guard.policy_state.safety_level.read(), expected);
     assert_eq!(
@@ -583,4 +602,309 @@ fn empty_name_does_not_alias_the_pid_special() {
     assert_eq!(canonical_shell_var_name("$$"), "$");
     let env = Environment::new();
     assert!(env.read().lookup_variable("").is_none());
+}
+
+// --- Phase 0: single-namespace regressions ---
+
+/// Inherited process environment lands in `variables` as exported.
+#[test]
+fn inherited_environment_stays_exported() {
+    init();
+    let _guard = crate::test_env_lock();
+    let name = "DOGESH_TEST_INHERITED_EXPORT";
+    let value = "inherited-value";
+    let previous = std::env::var_os(name);
+    unsafe { std::env::set_var(name, value) };
+
+    let env = Environment::new();
+    let guard = env.read();
+    assert_eq!(guard.lookup_variable(name), Some(value.to_string()));
+    assert_eq!(
+        guard.variable_state.variables.get(name),
+        Some(&value.to_string())
+    );
+    assert!(guard.variable_state.exported_vars.contains(name));
+    assert_eq!(
+        guard.child_process_env().get(name),
+        Some(&value.to_string())
+    );
+
+    drop(guard);
+    match previous {
+        Some(v) => unsafe { std::env::set_var(name, v) },
+        None => unsafe { std::env::remove_var(name) },
+    }
+}
+
+/// `export INHERITED` must not drop the value from the child environment.
+#[test]
+fn re_export_inherited_value_keeps_child() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.variable_state.variables.clear();
+        guard.variable_state.exported_vars.clear();
+        // Simulate an inherited variable.
+        guard.set_and_export_shell_var("SOME_INHERITED_VAR".to_string(), "original".to_string());
+        // Re-export: value absent from a second store cannot happen any more,
+        // but the operation itself must keep the child value.
+        guard.export_shell_var("SOME_INHERITED_VAR".to_string());
+    }
+    let guard = env.read();
+    assert_eq!(
+        guard.lookup_variable("SOME_INHERITED_VAR"),
+        Some("original".to_string())
+    );
+    assert_eq!(
+        guard.child_process_env().get("SOME_INHERITED_VAR"),
+        Some(&"original".to_string())
+    );
+}
+
+/// `set FOO changed` on an inherited (exported) name keeps the export bit.
+#[test]
+fn assignment_preserves_inherited_export_attribute() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.variable_state.variables.clear();
+        guard.variable_state.exported_vars.clear();
+        guard.set_and_export_shell_var("FOO".to_string(), "inherited".to_string());
+        guard.set_shell_var("FOO".to_string(), "changed".to_string());
+    }
+    let guard = env.read();
+    assert_eq!(guard.lookup_variable("FOO"), Some("changed".to_string()));
+    assert_eq!(
+        guard.child_process_env().get("FOO"),
+        Some(&"changed".to_string())
+    );
+    assert!(guard.variable_state.exported_vars.contains("FOO"));
+}
+
+/// Legacy `set -x` updates the single logical value.
+#[test]
+fn legacy_set_x_updates_one_logical_value() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.variable_state.variables.clear();
+        guard.variable_state.exported_vars.clear();
+        guard.set_shell_var("FOO".to_string(), "old".to_string());
+        // `set -x FOO new` routes through `set_and_export_shell_var`.
+        guard.set_and_export_shell_var("FOO".to_string(), "new".to_string());
+    }
+    let guard = env.read();
+    assert_eq!(
+        guard.variable_state.variables.get("FOO"),
+        Some(&"new".to_string())
+    );
+    assert_eq!(guard.lookup_variable("FOO"), Some("new".to_string()));
+    assert_eq!(
+        guard.child_process_env().get("FOO"),
+        Some(&"new".to_string())
+    );
+}
+
+/// Logical unset removes value, export bit, and child entry together.
+#[test]
+fn unset_exported_variable_removes_everything() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.variable_state.variables.clear();
+        guard.variable_state.exported_vars.clear();
+        guard.set_and_export_shell_var("FOO".to_string(), "value".to_string());
+        guard.unset_shell_var("FOO");
+    }
+    let guard = env.read();
+    assert!(!guard.variable_state.variables.contains_key("FOO"));
+    assert!(!guard.variable_state.exported_vars.contains("FOO"));
+    assert!(!guard.child_process_env().contains_key("FOO"));
+    assert_eq!(guard.lookup_variable("FOO"), None);
+}
+
+/// Export semantics matrix (§56): one logical name, one value, export bit.
+#[test]
+fn export_semantics_regression_matrix() {
+    init();
+    // inherited FOO=a, no op -> shell a, child a, on
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_and_export_shell_var("FOO".to_string(), "a".to_string());
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), Some("a".to_string()));
+        assert_eq!(g.child_process_env().get("FOO"), Some(&"a".to_string()));
+        assert!(g.variable_state.exported_vars.contains("FOO"));
+    }
+    // inherited FOO=a, `set FOO b` -> b/b/on
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_and_export_shell_var("FOO".to_string(), "a".to_string());
+            g.set_shell_var("FOO".to_string(), "b".to_string());
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), Some("b".to_string()));
+        assert_eq!(g.child_process_env().get("FOO"), Some(&"b".to_string()));
+        assert!(g.variable_state.exported_vars.contains("FOO"));
+    }
+    // absent, `set FOO b` -> b/absent/off
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_shell_var("FOO".to_string(), "b".to_string());
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), Some("b".to_string()));
+        assert!(!g.child_process_env().contains_key("FOO"));
+        assert!(!g.variable_state.exported_vars.contains("FOO"));
+    }
+    // absent, `export FOO=b` -> b/b/on
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_and_export_shell_var("FOO".to_string(), "b".to_string());
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), Some("b".to_string()));
+        assert_eq!(g.child_process_env().get("FOO"), Some(&"b".to_string()));
+        assert!(g.variable_state.exported_vars.contains("FOO"));
+    }
+    // local FOO=a, `export FOO` -> a/a/on
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_shell_var("FOO".to_string(), "a".to_string());
+            g.export_shell_var("FOO".to_string());
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), Some("a".to_string()));
+        assert_eq!(g.child_process_env().get("FOO"), Some(&"a".to_string()));
+        assert!(g.variable_state.exported_vars.contains("FOO"));
+    }
+    // exported FOO=a, logical unset -> absent/absent/off
+    {
+        let env = Environment::new();
+        {
+            let mut g = env.write();
+            g.variable_state.variables.clear();
+            g.variable_state.exported_vars.clear();
+            g.set_and_export_shell_var("FOO".to_string(), "a".to_string());
+            g.unset_shell_var("FOO");
+        }
+        let g = env.read();
+        assert_eq!(g.lookup_variable("FOO"), None);
+        assert!(!g.child_process_env().contains_key("FOO"));
+        assert!(!g.variable_state.exported_vars.contains("FOO"));
+    }
+}
+
+/// `Environment::child_process_env` and `Process::prepare_execution` agree.
+#[test]
+fn child_execution_consistency() {
+    init();
+    use crate::process::Process;
+    let env = Environment::new();
+    {
+        let mut g = env.write();
+        g.variable_state.variables.clear();
+        g.variable_state.exported_vars.clear();
+        g.set_and_export_shell_var("SHARED".to_string(), "shared".to_string());
+        g.set_shell_var("LOCAL_ONLY".to_string(), "local".to_string());
+        g.set_and_export_shell_var("TERM".to_string(), "dumb".to_string());
+    }
+    let expected = env.read().child_process_env();
+
+    let process = Process::new("echo".to_string(), vec!["echo".to_string()]);
+    let prepared = process
+        .prepare_execution(env.clone())
+        .expect("prepare execution");
+    let mut actual = std::collections::HashMap::new();
+    for entry in &prepared.envp {
+        let text = entry.to_str().expect("env CString");
+        let (k, v) = text.split_once('=').expect("KEY=VALUE");
+        actual.insert(k.to_string(), v.to_string());
+    }
+    for (key, value) in &expected {
+        assert_eq!(
+            actual.get(key),
+            Some(value),
+            "child_process_env and prepare_execution disagree on {key}"
+        );
+    }
+    assert!(!actual.contains_key("LOCAL_ONLY"));
+    // No command-scoped overrides here, so the sets match exactly.
+    assert_eq!(actual.len(), expected.len());
+
+    // Command-scoped overrides win and appear once.
+    let scoped = Process::new("echo".to_string(), vec!["echo".to_string()])
+        .with_execution_metadata(vec![], vec![("SHARED".to_string(), "override".to_string())]);
+    let prepared = scoped
+        .prepare_execution(env.clone())
+        .expect("prepare scoped");
+    let scoped_map: std::collections::HashMap<String, String> = prepared
+        .envp
+        .iter()
+        .map(|e| {
+            let text = e.to_str().unwrap();
+            let (k, v) = text.split_once('=').unwrap();
+            (k.to_string(), v.to_string())
+        })
+        .collect();
+    assert_eq!(scoped_map.get("SHARED"), Some(&"override".to_string()));
+    assert_eq!(
+        scoped_map.values().filter(|v| *v == "override").count(),
+        1,
+        "duplicate override entries: {scoped_map:?}"
+    );
+}
+
+/// Unsetting a runtime AI key must not resurrect it from the process env.
+#[test]
+fn ai_unset_does_not_resurrect_from_process_env() {
+    init();
+    let _guard = crate::test_env_lock();
+    let key = "AI_CHAT_API_KEY";
+    let previous = std::env::var_os(key);
+    unsafe { std::env::set_var(key, "process-global-key") };
+
+    let env = Environment::new();
+    // Startup import sees the key.
+    assert!(env.read().lookup_variable(key).is_some());
+    {
+        let mut guard = env.write();
+        guard.unset_shell_var(key);
+        guard.refresh_derived_state(key);
+    }
+    assert_eq!(env.read().lookup_variable(key), None);
+    assert!(
+        !env.read().ai_configured(),
+        "unset shell key must not be revived from std::env"
+    );
+
+    match previous {
+        Some(v) => unsafe { std::env::set_var(key, v) },
+        None => unsafe { std::env::remove_var(key) },
+    }
 }

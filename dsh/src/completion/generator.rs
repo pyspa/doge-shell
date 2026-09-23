@@ -9,16 +9,35 @@ use anyhow::Result;
 // Re-export for compatibility
 pub use super::generators::system::{clear_global_system_commands, set_global_system_commands};
 
-/// Completion candidate generator
+/// Completion candidate generator.
+///
+/// Runtime shell variable names are injected explicitly via
+/// `with_environment_names`; pure parser/unit tests use `new` (empty list).
+/// Never falls back to `std::env`: the shell `Environment` is authoritative.
 pub struct CompletionGenerator<'a> {
     /// Command completion database
     database: &'a CommandCompletionDatabase,
+    environment_names: Option<&'a [String]>,
 }
 
 impl<'a> CompletionGenerator<'a> {
-    /// Create a new generator
+    /// Create a new generator without environment names (empty list).
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
-        Self { database }
+        Self {
+            database,
+            environment_names: None,
+        }
+    }
+
+    /// Create a generator with runtime shell variable names.
+    pub fn with_environment_names(
+        database: &'a CommandCompletionDatabase,
+        names: &'a [String],
+    ) -> Self {
+        Self {
+            database,
+            environment_names: Some(names),
+        }
     }
 
     /// Get available command list (for debugging)
@@ -75,30 +94,50 @@ impl<'a> CompletionGenerator<'a> {
         let corrected = self.correct_parsed_command_line(parsed);
 
         match &corrected.completion_context {
-            CompletionContext::Command => CommandGenerator::new(self.database)
+            CompletionContext::Command => self
+                .command_generator()
                 .generate_command_candidates(&corrected.current_token),
-            CompletionContext::SubCommand => CommandGenerator::new(self.database)
+            CompletionContext::SubCommand => self
+                .command_generator()
                 .generate_subcommand_candidates(&corrected, |arg_type, p| {
-                    ArgumentGenerator::new(self.database).generate_candidates_for_type(arg_type, p)
+                    self.argument_generator()
+                        .generate_candidates_for_type(arg_type, p)
                 }),
-            CompletionContext::ShortOption => ArgumentGenerator::new(self.database)
+            CompletionContext::ShortOption => self
+                .argument_generator()
                 .generate_short_option_candidates(&corrected, |p| self.generate_candidates(p)),
-            CompletionContext::LongOption => ArgumentGenerator::new(self.database)
+            CompletionContext::LongOption => self
+                .argument_generator()
                 .generate_long_option_candidates(&corrected, |p| self.generate_candidates(p)),
             CompletionContext::OptionValue {
                 option_name: _,
                 value_type,
-            } => ArgumentGenerator::new(self.database)
+            } => self
+                .argument_generator()
                 .generate_option_value_candidates(&corrected, value_type.as_ref()),
             CompletionContext::Argument {
                 arg_index: _,
                 arg_type,
-            } => ArgumentGenerator::new(self.database).generate_argument_candidates(
+            } => self.argument_generator().generate_argument_candidates(
                 &corrected,
                 arg_type.as_ref(),
                 |p| self.generate_candidates(p),
             ),
             CompletionContext::Unknown => Ok(Vec::new()),
+        }
+    }
+
+    fn command_generator(&self) -> CommandGenerator<'_> {
+        match self.environment_names {
+            Some(names) => CommandGenerator::with_environment_names(self.database, names),
+            None => CommandGenerator::new(self.database),
+        }
+    }
+
+    fn argument_generator(&self) -> ArgumentGenerator<'_> {
+        match self.environment_names {
+            Some(names) => ArgumentGenerator::with_environment_names(self.database, names),
+            None => ArgumentGenerator::new(self.database),
         }
     }
 }

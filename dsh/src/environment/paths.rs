@@ -98,24 +98,21 @@ impl Environment {
         None
     }
 
-    /// Reload PATH from the environment.
+    /// Reload PATH from the logical shell value.
     ///
-    /// Called unconditionally at the end of `direnv::check_path`, i.e. on every
-    /// `cd`, so it must be cheap when PATH did not actually change. Dropping the
-    /// caches when nothing moved is expensive twice over: `command_cache` loses
-    /// its memoized lookups, and an empty `executable_names` makes
-    /// [`Self::search_prefix`] fall back to a synchronous `read_dir` of every PATH
-    /// directory — which runs while the user is typing a command name.
+    /// `PATH` is shell state even when it is not exported: the shell looks
+    /// commands up in it, while `exported_vars` alone decides whether
+    /// children see it.
     pub fn reload_path(&mut self) {
         let mut paths: Vec<String> = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
             .iter()
             .map(|s| s.to_string())
             .collect();
 
-        // Resolve `PATH` the way a child would see it, exported shell variable
-        // included: otherwise `export PATH=...` moved the children and left the
-        // shell's own lookup behind.
-        if let Some(val) = self.effective_env_var("PATH").map(str::to_string) {
+        // Resolve `PATH` the way the shell sees it, exported or not:
+        // otherwise `PATH=...` moved the shell's own lookup only when
+        // exported, and a local assignment left command lookup behind.
+        if let Some(val) = self.lookup_variable("PATH") {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
@@ -132,10 +129,10 @@ impl Environment {
         self.prewarm_executables();
     }
 
-    /// Reload Z_EXCLUDE from the environment.
+    /// Reload Z_EXCLUDE from the logical shell value.
     pub fn reload_z_exclude(&mut self) {
         self.variable_state.z_exclude = self
-            .effective_env_var("Z_EXCLUDE")
+            .lookup_variable("Z_EXCLUDE")
             .map(|val| val.split(':').map(|s| s.to_string()).collect())
             .unwrap_or_default();
     }

@@ -21,7 +21,9 @@ use std::os::unix::io::RawFd;
 /// state, which a non-interactive helper cannot reconstruct.
 /// Bumped to 5: `ChildShellSnapshot` carries `ShellOptions` / pipefail
 /// state, so re-exec helpers inherit `set -o pipefail`.
-pub const PROTOCOL_VERSION: u32 = 5;
+/// Bumped to 6: unified shell variable/export namespace; `ChildShellSnapshot`
+/// no longer carries `system_env_vars`.
+pub const PROTOCOL_VERSION: u32 = 6;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -252,6 +254,37 @@ mod tests {
         let read_fd = read.into_raw_fd();
         // `read_internal_request` owns and closes the fd; no second close.
         let err = read_internal_request(read_fd).expect_err("unknown version must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
+    }
+
+    #[test]
+    fn request_rejects_legacy_v5() {
+        // The v5 schema (`ChildShellSnapshot` with `system_env_vars`) must
+        // fail closed after the v6 unification, never parse as a v6 request.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 5,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        // Owned (and closed) by `read_internal_request`.
+        let err = read_internal_request(read_fd).expect_err("legacy v5 must fail");
         assert!(
             err.to_string()
                 .contains("unsupported internal exec version")

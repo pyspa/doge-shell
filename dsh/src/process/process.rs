@@ -193,71 +193,50 @@ impl Process {
             .collect();
         let argv = argv?;
 
-        // Build environment for child process without intermediate HashMap cloning
+        // Build environment for child process without intermediate HashMap cloning.
+        // Single source: exported shell variables only, matching
+        // `Environment::child_process_env`. Command-scoped `NAME=value`
+        // overrides win and appear exactly once.
         let env_guard = environment.read();
 
-        // Calculate minimal capacity to avoid re-allocations
-        // (system vars + exported vars, though some might overlap)
-        let estimated_cap = env_guard.variable_state.system_env_vars.len()
-            + env_guard.variable_state.exported_vars.len();
+        // Calculate minimal capacity to avoid re-allocations.
+        let estimated_cap = env_guard.variable_state.exported_vars.len();
         let mut envp: Vec<CString> = Vec::with_capacity(estimated_cap + 2); // +2 for TERM, LS_COLORS fallback
 
-        // A `NAME=value` prefix wins over both the shell's exported vars and
-        // the inherited environment, and must appear only once: with a
-        // duplicate key it is the *first* entry the child sees, so the
-        // overridden value has to be left out rather than shadowed.
+        // A `NAME=value` prefix wins over the shell's exported vars and must
+        // appear only once: with a duplicate key it is the *first* entry the
+        // child sees, so the overridden value has to be left out rather than
+        // shadowed.
         let overridden: std::collections::HashSet<&str> = self
             .env_overrides
             .iter()
             .map(|(key, _)| key.as_str())
             .collect();
 
-        // 1. Add system vars that are NOT overridden by exported vars
-        for (key, val) in &env_guard.variable_state.system_env_vars {
-            if overridden.contains(key.as_str()) {
-                continue;
-            }
-            if !env_guard.variable_state.exported_vars.contains(key) {
-                // Special handling for TERM: if empty, skip so we can default it later
-                if key == "TERM" && val.is_empty() {
-                    continue;
-                }
-                if let Ok(c_str) = CString::new(format!("{}={}", key, val)) {
-                    envp.push(c_str);
-                }
-            }
-        }
-
-        // Environment map for quick lookups for special vars like TERM
-        // We only populate this lightly or check directly if possible.
-        // Actually, we need to check if TERM/LS_COLORS are set in the FINAL environment.
-        // We can track this with booleans.
         let mut term_set = false;
         let mut ls_colors_set = false;
 
-        // 2. Add exported vars (overriding system vars)
-        for key in &env_guard.variable_state.exported_vars {
-            if overridden.contains(key.as_str()) {
-                continue;
+        // 1. Exported variables.
+        env_guard.for_each_exported_var(|key, value| {
+            if overridden.contains(key) {
+                return;
             }
-            if let Some(value) = env_guard.variable_state.variables.get(key) {
-                if key == "TERM" {
-                    if value.is_empty() {
-                        continue;
-                    }
-                    term_set = true;
+            if key == "TERM" {
+                if value.is_empty() {
+                    return;
                 }
-                if key == "LS_COLORS" {
-                    ls_colors_set = true;
-                }
-
-                if let Ok(c_str) = CString::new(format!("{}={}", key, value)) {
-                    envp.push(c_str);
-                }
+                term_set = true;
             }
-        }
+            if key == "LS_COLORS" {
+                ls_colors_set = true;
+            }
 
-        // 3. The command's own `NAME=value` prefix. `A=1 A=2 cmd` must give the
+            if let Ok(c_str) = CString::new(format!("{key}={value}")) {
+                envp.push(c_str);
+            }
+        });
+
+        // 2. The command's own `NAME=value` prefix. `A=1 A=2 cmd` must give the
         // child `A=2`: it resolves the first duplicate, so the earlier value is
         // dropped instead of being shadowed by a later entry.
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -276,26 +255,7 @@ impl Process {
             }
         }
 
-        // Check whether TERM was already copied from system vars or exported shell vars.
-        if !term_set {
-            if env_guard.variable_state.exported_vars.contains("TERM") {
-                // Exported but missing/empty TERM is treated as unset and falls back below.
-            } else {
-                if let Some(val) = env_guard.variable_state.system_env_vars.get("TERM")
-                    && !val.is_empty()
-                {
-                    term_set = true;
-                }
-            }
-        }
-
-        if !ls_colors_set
-            && (env_guard.variable_state.exported_vars.contains("LS_COLORS")
-                || env_guard
-                    .variable_state
-                    .system_env_vars
-                    .contains_key("LS_COLORS"))
-        {
+        if !ls_colors_set && env_guard.variable_state.exported_vars.contains("LS_COLORS") {
             ls_colors_set = true;
         }
 
@@ -568,8 +528,8 @@ mod tests {
             "Environment should contain TEST_VAR"
         );
 
-        // Check for TERM (should be defaulted to xterm-256color since we removed it from system_env_vars in the mock)
-        // Note: Environment::new() copies real env vars into system_env_vars.
+        // Check for TERM (should be defaulted to xterm-256color when absent;
+        // `Environment::new()` seeds inherited names as exported).
         assert!(
             env_vec.iter().any(|s| s.starts_with("TERM=")),
             "Environment should contain TERM"
@@ -581,13 +541,13 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            // Clear default system vars to have a predictable test state
-            env.variable_state.system_env_vars.clear();
+            // Clear to have a predictable test state: only exported shell
+            // variables reach the child.
+            env.variable_state.variables.clear();
+            env.variable_state.exported_vars.clear();
 
-            // 1. Set a system var
-            env.variable_state
-                .system_env_vars
-                .insert("SYSTEM_VAR".into(), "sys_val".into());
+            // 1. A local (unexported) variable must not reach the child.
+            env.set_shell_var("LOCAL_VAR".to_string(), "local_val".to_string());
             // 2. Set an exported var
             env.variable_state
                 .exported_vars
@@ -595,14 +555,13 @@ mod tests {
             env.variable_state
                 .variables
                 .insert("EXPORTED_VAR".into(), "exp_val".into());
-            // 3. Set a var that is both (override)
-            env.variable_state
-                .system_env_vars
-                .insert("OVERRIDDEN".into(), "old_val".into());
+            // 3. Exported value is the single value (no second store).
             env.variable_state.exported_vars.insert("OVERRIDDEN".into());
             env.variable_state
                 .variables
                 .insert("OVERRIDDEN".into(), "new_val".into());
+            // An exported bit without a value contributes nothing.
+            env.variable_state.exported_vars.insert("NO_VALUE".into());
         }
 
         let process = Process::new("echo".into(), vec![]);
@@ -615,10 +574,10 @@ mod tests {
             .collect();
 
         // Check content
-        assert!(env_strs.contains(&"SYSTEM_VAR=sys_val".to_string()));
+        assert!(!env_strs.iter().any(|s| s.starts_with("LOCAL_VAR=")));
         assert!(env_strs.contains(&"EXPORTED_VAR=exp_val".to_string()));
         assert!(env_strs.contains(&"OVERRIDDEN=new_val".to_string()));
-        assert!(!env_strs.contains(&"OVERRIDDEN=old_val".to_string()));
+        assert!(!env_strs.iter().any(|s| s.starts_with("NO_VALUE=")));
 
         // Term default check (since cleared, should add default)
         assert!(env_strs.contains(&"TERM=xterm-256color".to_string()));
@@ -627,14 +586,13 @@ mod tests {
     #[test]
     fn test_prepare_execution_term_handling_edge_cases() {
         init();
-        // Case 1: TERM in system env, not exported -> Should be preserved
+        // Case 1: exported TERM is preserved.
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.variable_state.system_env_vars.clear();
-            env.variable_state
-                .system_env_vars
-                .insert("TERM".into(), "dumb".into());
+            env.variable_state.variables.clear();
+            env.variable_state.exported_vars.clear();
+            env.set_and_export_shell_var("TERM".to_string(), "dumb".to_string());
         }
         let process = Process::new("echo".into(), vec![]);
         let prepared = process.prepare_execution(env_arc).unwrap();
@@ -650,7 +608,8 @@ mod tests {
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.variable_state.system_env_vars.clear();
+            env.variable_state.variables.clear();
+            env.variable_state.exported_vars.clear();
             env.variable_state.exported_vars.insert("TERM".into());
             env.variable_state
                 .variables
@@ -666,14 +625,13 @@ mod tests {
             .collect();
         assert!(env_strs.contains(&"TERM=xterm-256color".to_string()));
 
-        // Case 3: TERM in system env is EMPTY -> Should fall back to default
+        // Case 3: local (unexported) TERM does not reach the child.
         let env_arc = Environment::new();
         {
             let mut env = env_arc.write();
-            env.variable_state.system_env_vars.clear();
-            env.variable_state
-                .system_env_vars
-                .insert("TERM".into(), "".into());
+            env.variable_state.variables.clear();
+            env.variable_state.exported_vars.clear();
+            env.set_shell_var("TERM".to_string(), "".to_string());
         }
 
         let process = Process::new("echo".into(), vec![]);

@@ -958,7 +958,7 @@ fn shell_state_dynamic_providers_read_environment_maps() {
             .abbreviations
             .insert("gco".to_string(), "git checkout".to_string());
         env.variable_state
-            .system_env_vars
+            .variables
             .insert("DOGESH_TEST_ENV".to_string(), "1".to_string());
     }
     let provider = DynamicCompletionProvider::new(environment);

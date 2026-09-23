@@ -265,12 +265,9 @@ impl ConversationManager {
         let _spinner = SpinnerGuard::start("Summarizing conversation history...");
 
         // Determine which model to use for summarization:
-        // 1. Check for AI_SUMMARY_MODEL environment variable
+        // 1. Check for AI_SUMMARY_MODEL shell variable
         // 2. Fall back to the main chat model (model_override or default)
-        let summary_model = proxy
-            .get_var(SUMMARY_MODEL_KEY)
-            .or_else(|| std::env::var(SUMMARY_MODEL_KEY).ok())
-            .or(model_override);
+        let summary_model = resolve_summary_model(proxy, model_override);
 
         let mut summary_messages = Vec::new();
         summary_messages.push(json!({
@@ -531,4 +528,54 @@ pub(super) fn message_serialized_len(message: &Value) -> usize {
 
 pub(super) fn sum_message_lengths(messages: &[Value]) -> usize {
     messages.iter().map(message_serialized_len).sum()
+}
+
+/// Which model a summarization request uses.
+///
+/// Precedence: the `AI_SUMMARY_MODEL` shell variable, then the turn's own
+/// model. There is no process-environment fallback: like every other runtime
+/// chat setting this resolves exclusively from the shell `Environment`
+/// (see `settings::resolve_setting`), so a shell-level unset stays unset.
+pub(super) fn resolve_summary_model(
+    proxy: &mut dyn ChatToolHost,
+    model_override: Option<String>,
+) -> Option<String> {
+    proxy.get_var(SUMMARY_MODEL_KEY).or(model_override)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{ProcessEnvGuard, TestShellProxy};
+
+    /// A stale process-only `AI_SUMMARY_MODEL` must not win over the turn's
+    /// own model: the shell state is the authority, and it says nothing.
+    #[test]
+    fn process_only_summary_model_is_ignored() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set(SUMMARY_MODEL_KEY, "stale-summary");
+        let mut proxy = TestShellProxy::default();
+
+        assert_eq!(
+            resolve_summary_model(&mut proxy, Some("main-model".to_string())),
+            Some("main-model".to_string())
+        );
+    }
+
+    /// A shell `AI_SUMMARY_MODEL` beats both the process value and the
+    /// turn's model.
+    #[test]
+    fn shell_summary_model_wins() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set(SUMMARY_MODEL_KEY, "stale-summary");
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert(SUMMARY_MODEL_KEY.to_string(), "shell-summary".to_string());
+
+        assert_eq!(
+            resolve_summary_model(&mut proxy, Some("main-model".to_string())),
+            Some("shell-summary".to_string())
+        );
+    }
 }

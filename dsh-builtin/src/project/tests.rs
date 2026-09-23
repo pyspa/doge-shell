@@ -1,6 +1,6 @@
 //! Tests for `pm` subcommands: dotenv/envrc parsing, activation safety gates, mise provider detection, and the JSON status shape.
 use super::*;
-use crate::test_support::TestShellProxy as TestProxy;
+use crate::test_support::{ProcessEnvGuard, TestShellProxy as TestProxy};
 use dsh_types::observed_output::ObservedOutput;
 use std::io::Write;
 use std::os::fd::IntoRawFd;
@@ -239,5 +239,36 @@ fn project_status_json_reports_provider_lock_and_dev_container_shape() {
             .as_str()
             .unwrap()
             .ends_with(".devcontainer/devcontainer.json")
+    );
+}
+
+/// A logically unset shell `PATH` stays unset: activation prepends onto the
+/// shell value alone and must not resurrect a stale process `PATH`.
+#[test]
+fn prepend_path_does_not_resurrect_a_process_only_path() {
+    let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+    let _guard = ProcessEnvGuard::set("PATH", "/old/process/path");
+    let mut proxy = TestProxy::default();
+    let root = Path::new("/proj");
+
+    assert!(prepend_path(&mut proxy, root, "/project/bin"));
+    assert_eq!(proxy.vars.get("PATH"), Some(&"/project/bin".to_string()));
+}
+
+/// A shell `PATH` is the base activation prepends onto.
+#[test]
+fn prepend_path_builds_on_the_shell_path() {
+    let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+    let _guard = ProcessEnvGuard::set("PATH", "/old/process/path");
+    let mut proxy = TestProxy::default();
+    proxy
+        .vars
+        .insert("PATH".to_string(), "/shell/path".to_string());
+    let root = Path::new("/proj");
+
+    assert!(prepend_path(&mut proxy, root, "/project/bin"));
+    assert_eq!(
+        proxy.vars.get("PATH"),
+        Some(&"/project/bin:/shell/path".to_string())
     );
 }

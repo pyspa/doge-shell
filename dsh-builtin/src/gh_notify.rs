@@ -104,16 +104,15 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 
     // Get PAT
-    let pat = if let Some(token) = proxy.get_var("*github-pat*") {
-        token
-    } else if let Some(token) = proxy.get_lisp_var("*github-pat*") {
-        token
-    } else if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        token
-    } else {
-        ctx.write_stderr("gh-notify: *github-pat* variable or GITHUB_TOKEN env not set")
+    let pat = match resolve_github_token(proxy) {
+        Some(token) => token,
+        None => {
+            ctx.write_stderr(
+                "gh-notify: *github-pat* variable or GITHUB_TOKEN shell variable not set",
+            )
             .ok();
-        return ExitStatus::ExitedWith(1);
+            return ExitStatus::ExitedWith(1);
+        }
     };
 
     // Configure client with timeout
@@ -356,11 +355,71 @@ fn format_notification_display(n: &Notification) -> String {
     )
 }
 
+/// Resolve the GitHub token without touching the network.
+///
+/// Precedence: the Lisp `*github-pat*` shell variable, then the Lisp value,
+/// then the `GITHUB_TOKEN` shell variable. A shell-level miss stays a miss
+/// even when the process environment holds a stale `GITHUB_TOKEN`: the
+/// shell `Environment` is the runtime authority.
+fn resolve_github_token(proxy: &mut dyn ShellProxy) -> Option<String> {
+    proxy
+        .get_var("*github-pat*")
+        .or_else(|| proxy.get_lisp_var("*github-pat*"))
+        .or_else(|| proxy.get_var("GITHUB_TOKEN"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{ProcessEnvGuard, TestShellProxy};
 
     use std::time::Duration;
+
+    /// A stale process-only `GITHUB_TOKEN` must not configure the token:
+    /// with no shell value, there is no token.
+    #[test]
+    fn process_only_github_token_is_not_configured() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("GITHUB_TOKEN", "stale");
+        let mut proxy = TestShellProxy::default();
+
+        assert_eq!(resolve_github_token(&mut proxy), None);
+    }
+
+    /// A `GITHUB_TOKEN` shell value wins over the stale process value.
+    #[test]
+    fn shell_github_token_wins_over_process() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("GITHUB_TOKEN", "stale");
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert("GITHUB_TOKEN".to_string(), "current".to_string());
+
+        assert_eq!(
+            resolve_github_token(&mut proxy),
+            Some("current".to_string())
+        );
+    }
+
+    /// The Lisp `*github-pat*` shell variable keeps its top precedence.
+    #[test]
+    fn lisp_pat_shell_variable_keeps_top_precedence() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("GITHUB_TOKEN", "stale");
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert("*github-pat*".to_string(), "lisp-pat".to_string());
+        proxy
+            .vars
+            .insert("GITHUB_TOKEN".to_string(), "current".to_string());
+
+        assert_eq!(
+            resolve_github_token(&mut proxy),
+            Some("lisp-pat".to_string())
+        );
+    }
 
     #[test]
     fn test_format_notification_display() {

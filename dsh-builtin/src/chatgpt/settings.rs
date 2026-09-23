@@ -1,7 +1,8 @@
 //! Environment-variable keys and the `resolve_*` functions that read them
-//! (shell variable first, then process environment - see `resolve_setting`).
-//! One place per setting so `chat_reset`/`chat_status`/`chat_with_tools`
-//! cannot drift about what a key means or defaults to.
+//! (resolved exclusively from the shell `Environment` via `ShellProxy` -
+//! see `resolve_setting`). One place per setting so
+//! `chat_reset`/`chat_status`/`chat_with_tools` cannot drift about what a
+//! key means or defaults to.
 use super::*;
 
 /// Environment variable key for storing the chat prompt template
@@ -88,10 +89,19 @@ pub(super) const VERIFY_AFTER_MUTATION_KEY: &str = "AI_CHAT_VERIFY_AFTER_MUTATIO
 /// Told to the model after a rewound turn (`ConversationManager::note_turn_rewound`).
 pub(super) const REWIND_NOTICE: &str = "The previous turn was removed from this conversation because it did not finish. Any tool calls it made may already have taken effect; check the actual state rather than assuming.";
 
-/// Read a setting shell-variable first, then the process environment.
+/// Read a setting from the shell `Environment` only, via `ShellProxy`.
 ///
-/// `proxy.set_var` (and `(vset ...)`) writes into the shell `Environment`, not
-/// the process env, so an env-only lookup silently ignores it.
+/// The startup process environment was already imported into `Environment`
+/// by `Environment::new()`, so there is nothing left to fall back to: a
+/// shell-level unset is final, and a stale process-global value must never
+/// resurrect the setting. `proxy.set_var` (and `(vset ...)`) writes into the
+/// shell `Environment`, not the process env, so an env-only lookup would
+/// silently ignore it - and a process-env fallback would silently override
+/// an explicit `unset`.
+pub(super) fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
+    proxy.get_var(key).filter(|value| !value.trim().is_empty())
+}
+
 /// How long an interactive `execute` waits for the command before yielding.
 ///
 /// `0` is allowed and means "always hand back a handle", which is what an
@@ -108,13 +118,6 @@ pub(crate) fn resolve_execute_timeout_ms(proxy: &mut dyn ShellProxy, default: u6
     resolve_setting(proxy, EXECUTE_TIMEOUT_MS_KEY)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .unwrap_or(default)
-}
-
-pub(super) fn resolve_setting(proxy: &mut dyn ShellProxy, key: &str) -> Option<String> {
-    proxy
-        .get_var(key)
-        .or_else(|| std::env::var(key).ok())
-        .filter(|value| !value.trim().is_empty())
 }
 
 /// The one place `AI_CHAT_SESSION_TTL_SECS` is read, so `chat_reset`,
@@ -254,4 +257,58 @@ pub fn response_language(proxy: &mut dyn ShellProxy) -> Option<String> {
         .get_var(LANGUAGE_KEY)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{ProcessEnvGuard, TestShellProxy};
+
+    /// A process-only `AI_CHAT_STREAM=0` must not disable streaming: runtime
+    /// chat settings come from the shell `Environment` alone, so a missing
+    /// shell value means the default (on), not the stale process value.
+    #[test]
+    fn process_only_stream_setting_is_ignored() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set(STREAM_KEY, "0");
+        let mut proxy = TestShellProxy::default();
+
+        assert!(resolve_stream_enabled(&mut proxy));
+    }
+
+    /// A shell `AI_CHAT_STREAM=0` disables streaming even when the process
+    /// environment says otherwise: the shell value wins.
+    #[test]
+    fn shell_stream_setting_wins_over_process() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set(STREAM_KEY, "1");
+        let mut proxy = TestShellProxy::default();
+        proxy.vars.insert(STREAM_KEY.to_string(), "0".to_string());
+
+        assert!(!resolve_stream_enabled(&mut proxy));
+    }
+
+    /// `resolve_setting` never falls back to the process environment: a
+    /// shell-level value wins, and a shell-level miss stays a miss even when
+    /// the process environment holds a stale value for the same key.
+    #[test]
+    fn resolve_setting_never_reads_the_process_environment() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("DOGESH_REGRESSION_SETTING", "process-value");
+
+        let mut proxy = TestShellProxy::default();
+        assert_eq!(
+            resolve_setting(&mut proxy, "DOGESH_REGRESSION_SETTING"),
+            None
+        );
+
+        proxy.vars.insert(
+            "DOGESH_REGRESSION_SETTING".to_string(),
+            "shell-value".to_string(),
+        );
+        assert_eq!(
+            resolve_setting(&mut proxy, "DOGESH_REGRESSION_SETTING"),
+            Some("shell-value".to_string())
+        );
+    }
 }

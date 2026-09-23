@@ -5,7 +5,7 @@ use super::*;
 use crate::markdown::render_markdown_with_fallback;
 
 pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
-    OpenAiConfig::from_getter(|key| proxy.get_var(key).or_else(|| std::env::var(key).ok()))
+    OpenAiConfig::from_getter(|key| proxy.get_var(key))
 }
 
 /// Execute a chat request using the configured OpenAI client
@@ -357,7 +357,7 @@ pub fn chat_session_description(proxy: &mut dyn ShellProxy) -> Option<String> {
 mod tests {
     use super::*;
     use crate::shell_capabilities::AgentCommandPolicy;
-    use crate::test_support::TestShellProxy;
+    use crate::test_support::{ProcessEnvGuard, TestShellProxy};
     use nix::unistd::getpid;
 
     fn test_ctx() -> Context {
@@ -523,5 +523,55 @@ mod tests {
         let notice = invalid_ttl_notice(&mut proxy).expect("typo must warn");
         assert!(notice.contains("ten-minutes"), "{notice}");
         assert!(notice.contains("1800s"), "{notice}");
+    }
+
+    /// A shell-level unset is final: a stale process-only `AI_CHAT_API_KEY`
+    /// must not resurrect the key for `!` chat.
+    #[test]
+    fn load_openai_config_ignores_a_process_only_api_key() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("AI_CHAT_API_KEY", "stale-process-key");
+        let mut proxy = TestShellProxy::default();
+
+        assert_eq!(load_openai_config(&mut proxy).api_key(), None);
+    }
+
+    /// Whatever the process environment holds, the shell value is what
+    /// `!` chat uses.
+    #[test]
+    fn load_openai_config_prefers_the_shell_api_key() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set("AI_CHAT_API_KEY", "stale-process-key");
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert("AI_CHAT_API_KEY".to_string(), "shell-key".to_string());
+
+        assert_eq!(load_openai_config(&mut proxy).api_key(), Some("shell-key"));
+    }
+
+    /// The same authority boundary holds for the other config keys: a
+    /// process-only base URL or model never wins, a shell value does.
+    #[test]
+    fn load_openai_config_resolves_base_url_and_model_from_the_shell_only() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _base = ProcessEnvGuard::set("AI_CHAT_BASE_URL", "https://stale.example/v1");
+        let _model = ProcessEnvGuard::set("AI_CHAT_MODEL", "stale-model");
+
+        let mut proxy = TestShellProxy::default();
+        let config = load_openai_config(&mut proxy);
+        assert_eq!(config.base_url(), "https://api.openai.com/v1");
+        assert_eq!(config.default_model(), dsh_openai::DEFAULT_MODEL);
+
+        proxy.vars.insert(
+            "AI_CHAT_BASE_URL".to_string(),
+            "https://shell.example/v1".to_string(),
+        );
+        proxy
+            .vars
+            .insert("AI_CHAT_MODEL".to_string(), "shell-model".to_string());
+        let config = load_openai_config(&mut proxy);
+        assert_eq!(config.base_url(), "https://shell.example/v1");
+        assert_eq!(config.default_model(), "shell-model");
     }
 }

@@ -1,14 +1,30 @@
-use crate::prompt::Prompt;
+use crate::environment::Environment;
+use crate::prompt::{
+    Prompt, PromptEnvironment, fetch_aws_profile_from, fetch_docker_context_async_from,
+};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
 pub(crate) struct PromptRefreshCoordinator {
     prompt: Arc<RwLock<Prompt>>,
+    environment: Arc<RwLock<Environment>>,
 }
 
 impl PromptRefreshCoordinator {
-    pub fn new(prompt: Arc<RwLock<Prompt>>) -> Self {
-        Self { prompt }
+    pub fn new(prompt: Arc<RwLock<Prompt>>, environment: Arc<RwLock<Environment>>) -> Self {
+        Self {
+            prompt,
+            environment,
+        }
+    }
+
+    /// One snapshot per refresh tick: every probe in the tick reads the same
+    /// shell values, and a shell-level unset stays unset no matter what the
+    /// process environment still holds. The `Prompt` itself never owns the
+    /// `Environment` (that would tangle the chpwd-hook ownership); the
+    /// coordinator holds it and hands the prompt explicit input.
+    fn snapshot(&self) -> PromptEnvironment {
+        PromptEnvironment::from_environment(&self.environment.read())
     }
 
     pub fn schedule(&self) {
@@ -16,9 +32,10 @@ impl PromptRefreshCoordinator {
         self.schedule_node();
         self.schedule_python();
         self.schedule_go();
-        self.schedule_kubernetes();
-        self.refresh_aws();
-        self.schedule_docker();
+        let snapshot = self.snapshot();
+        self.schedule_kubernetes(&snapshot);
+        self.refresh_aws(&snapshot);
+        self.schedule_docker(&snapshot);
     }
 
     fn schedule_rust(&self) {
@@ -77,8 +94,8 @@ impl PromptRefreshCoordinator {
         });
     }
 
-    fn schedule_kubernetes(&self) {
-        if !self.prompt.read().should_check_k8s() {
+    fn schedule_kubernetes(&self, snapshot: &PromptEnvironment) {
+        if !self.prompt.read().should_check_k8s(snapshot) {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
@@ -91,20 +108,21 @@ impl PromptRefreshCoordinator {
         });
     }
 
-    fn refresh_aws(&self) {
+    fn refresh_aws(&self, snapshot: &PromptEnvironment) {
         if self.prompt.read().should_check_aws() {
-            let profile = crate::prompt::fetch_aws_profile();
+            let profile = fetch_aws_profile_from(snapshot);
             self.prompt.write().update_aws_profile(profile);
         }
     }
 
-    fn schedule_docker(&self) {
-        if !self.prompt.read().should_check_docker() {
+    fn schedule_docker(&self, snapshot: &PromptEnvironment) {
+        if !self.prompt.read().should_check_docker(snapshot) {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
+        let snapshot = snapshot.clone();
         tokio::spawn(async move {
-            if let Some(context) = crate::prompt::fetch_docker_context_async().await {
+            if let Some(context) = fetch_docker_context_async_from(&snapshot).await {
                 prompt.write().update_docker_context(Some(context));
             } else {
                 prompt.write().mark_docker_check_failed();

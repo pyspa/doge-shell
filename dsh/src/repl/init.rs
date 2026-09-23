@@ -167,7 +167,7 @@ impl<'a> Repl<'a> {
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_io_tx, background_io_rx) = tokio::sync::mpsc::unbounded_channel();
         let background_io = BackgroundIoCoordinator::new(background_io_tx);
-        let integrated_completion = IntegratedCompletionEngine::new(envronment);
+        let integrated_completion = IntegratedCompletionEngine::new(Arc::clone(&envronment));
         integrated_completion.set_notifier(completion_tx.clone());
         shell.completion_runtime = Some(integrated_completion.runtime());
         // Legacy path completion still uses its own cache; keep it connected
@@ -191,6 +191,7 @@ impl<'a> Repl<'a> {
                 ai_service,
                 command_timing::create_shared_timing(),
                 Arc::clone(&prompt),
+                Arc::clone(&envronment),
             ),
             terminal_ui: TerminalUiState {
                 columns: 0,

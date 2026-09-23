@@ -317,3 +317,161 @@ fn kube_config_present_empty_env_falls_back_to_home_file() {
         Some(dir.path())
     ));
 }
+
+use super::version_probes::{PromptEnvironment, fetch_aws_profile_from, resolve_aws_profile};
+use crate::ProcessEnvGuard;
+use crate::environment::Environment;
+
+/// A shell with none of the prompt-relevant keys set, even if the ambient
+/// process environment happens to carry them.
+fn shell_only_environment() -> std::sync::Arc<parking_lot::RwLock<Environment>> {
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        for key in [
+            "AWS_PROFILE",
+            "AWS_DEFAULT_PROFILE",
+            "DOCKER_CONTEXT",
+            "KUBECONFIG",
+            "HOME",
+        ] {
+            env.unset_shell_var(key);
+        }
+    }
+    environment
+}
+
+#[test]
+fn resolve_aws_profile_prefers_the_profile_over_the_default() {
+    assert_eq!(
+        resolve_aws_profile(Some("shell-profile"), Some("shell-default")),
+        Some("shell-profile".to_string())
+    );
+    assert_eq!(
+        resolve_aws_profile(None, Some("shell-default")),
+        Some("shell-default".to_string())
+    );
+    assert_eq!(resolve_aws_profile(None, None), None);
+    assert_eq!(
+        resolve_aws_profile(Some("   "), Some("shell-default")),
+        Some("shell-default".to_string()),
+        "a blank profile counts as unset and falls through"
+    );
+}
+
+#[test]
+fn aws_profile_snapshot_wins_over_the_default_profile() {
+    let environment = PromptEnvironment {
+        aws_profile: Some("shell-profile".to_string()),
+        aws_default_profile: Some("shell-default".to_string()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        fetch_aws_profile_from(&environment),
+        Some("shell-profile".to_string())
+    );
+}
+
+/// A process-only stale `AWS_PROFILE` never reaches the prompt: the shell
+/// snapshot says nothing, so the resolver says nothing.
+#[test]
+fn process_only_aws_profile_is_ignored() {
+    let _lock = crate::test_env_lock();
+    let environment = shell_only_environment();
+    let _stale = ProcessEnvGuard::set("AWS_PROFILE", "stale-profile");
+    let _stale_default = ProcessEnvGuard::set("AWS_DEFAULT_PROFILE", "stale-default");
+
+    let snapshot = PromptEnvironment::from_environment(&environment.read());
+    assert_eq!(snapshot.aws_profile, None);
+    assert_eq!(snapshot.aws_default_profile, None);
+    assert_eq!(fetch_aws_profile_from(&snapshot), None);
+}
+
+/// A shell `DOCKER_CONTEXT` is used as-is, without spawning `docker`.
+#[test]
+fn shell_docker_context_is_used_without_a_subprocess() {
+    let _lock = crate::test_env_lock();
+    let environment = shell_only_environment();
+    environment
+        .write()
+        .set_shell_var("DOCKER_CONTEXT".to_string(), "shell-context".to_string());
+    let _stale = ProcessEnvGuard::set("DOCKER_CONTEXT", "stale-context");
+
+    let snapshot = PromptEnvironment::from_environment(&environment.read());
+    assert_eq!(snapshot.docker_context.as_deref(), Some("shell-context"));
+}
+
+/// A shell-level unset of `DOCKER_CONTEXT` does not resurrect the stale
+/// process value in the snapshot.
+#[test]
+fn unset_docker_context_does_not_resurrect_the_process_value() {
+    let _lock = crate::test_env_lock();
+    let environment = shell_only_environment();
+    let _stale = ProcessEnvGuard::set("DOCKER_CONTEXT", "stale-context");
+
+    let snapshot = PromptEnvironment::from_environment(&environment.read());
+    assert_eq!(snapshot.docker_context, None);
+}
+
+/// A shell `DOCKER_CONTEXT` enables the docker gate without needing the
+/// `docker` binary to be present.
+#[test]
+fn shell_docker_context_enables_the_docker_gate() {
+    use super::version_probes::should_attempt_docker_context_check_from;
+    let environment = PromptEnvironment {
+        docker_context: Some("shell-context".to_string()),
+        ..Default::default()
+    };
+
+    assert!(should_attempt_docker_context_check_from(&environment));
+}
+
+/// The snapshot's shell `HOME` backs the `~/.kube/config` fallback, and an
+/// explicit shell `KUBECONFIG` wins over it.
+#[test]
+fn kube_snapshot_uses_shell_home_and_kubeconfig() {
+    use super::version_probes::kube_config_present_with;
+    let dir = tempdir().unwrap();
+    let kube_dir = dir.path().join(".kube");
+    std::fs::create_dir_all(&kube_dir).unwrap();
+    std::fs::write(kube_dir.join("config"), "apiVersion: v1\n").unwrap();
+
+    let with_home = PromptEnvironment {
+        home: Some(dir.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    assert!(kube_config_present_with(&with_home));
+
+    let empty = tempdir().unwrap();
+    let without_home_config = PromptEnvironment {
+        home: Some(empty.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    assert!(!kube_config_present_with(&without_home_config));
+
+    let config = dir.path().join("kubeconfig");
+    std::fs::write(&config, "apiVersion: v1\n").unwrap();
+    let with_explicit = PromptEnvironment {
+        kubeconfig: Some(config.to_string_lossy().into_owned()),
+        home: Some(empty.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    assert!(kube_config_present_with(&with_explicit));
+}
+
+#[test]
+fn kubeconfig_helper_consumes_the_supplied_shell_value() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("kubeconfig");
+    std::fs::write(&config, "apiVersion: v1\n").unwrap();
+
+    assert!(super::kube_config_present_from(
+        Some(config.as_os_str()),
+        None
+    ));
+    assert!(!super::kube_config_present_from(
+        Some(std::ffi::OsStr::new("/missing/kubeconfig")),
+        None
+    ));
+}

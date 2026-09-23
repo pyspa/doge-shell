@@ -29,11 +29,16 @@ pub(crate) use git_status::parse_git_status_output;
 pub use git_status::{fetch_git_status_async, fetch_git_status_sync, find_git_root_async};
 #[cfg(test)]
 use version_probes::kube_config_present_from;
-pub use version_probes::{
-    fetch_aws_profile, fetch_docker_context_async, fetch_go_version_async, fetch_k8s_info_async,
-    fetch_node_version_async, fetch_python_version_async, fetch_rust_version_async,
+pub(crate) use version_probes::{
+    PromptEnvironment, fetch_aws_profile_from, fetch_docker_context_async_from,
 };
-use version_probes::{should_attempt_docker_context_check, should_attempt_k8s_context_check};
+pub use version_probes::{
+    fetch_go_version_async, fetch_k8s_info_async, fetch_node_version_async,
+    fetch_python_version_async, fetch_rust_version_async,
+};
+use version_probes::{
+    should_attempt_docker_context_check_from, should_attempt_k8s_context_check_with,
+};
 
 use context::PromptContext;
 use modules::PromptModule;
@@ -616,20 +621,20 @@ impl Prompt {
         self.docker_check_backoff.reset();
     }
 
-    pub fn should_check_k8s(&self) -> bool {
+    pub(crate) fn should_check_k8s(&self, environment: &PromptEnvironment) -> bool {
         self.k8s_context_cache.is_none()
             && self.k8s_check_backoff.should_check()
-            && should_attempt_k8s_context_check()
+            && should_attempt_k8s_context_check_with(environment)
     }
 
     pub fn should_check_aws(&self) -> bool {
         self.aws_profile_cache.is_none()
     }
 
-    pub fn should_check_docker(&self) -> bool {
+    pub(crate) fn should_check_docker(&self, environment: &PromptEnvironment) -> bool {
         self.docker_context_cache.is_none()
             && self.docker_check_backoff.should_check()
-            && should_attempt_docker_context_check()
+            && should_attempt_docker_context_check_from(environment)
     }
 
     pub fn mark_rust_check_failed(&mut self) {

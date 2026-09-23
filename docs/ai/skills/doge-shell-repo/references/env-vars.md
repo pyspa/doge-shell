@@ -34,7 +34,10 @@
 | `DOGESH_HOOK_DEPTH` | 同上 | hook プロセスに立つ。立っているシェルは hooks を全面無効化する。**プロセス環境だけを見る**（シェル変数で消せると無限再帰する） |
 | `SAFETY_LEVEL` | `dsh-types/src/safety_policy.rs` | 起動時に `policy_state.safety_level` へ seed される。**単一ソースは policy_state のほう**、変数は表示用 |
 
-これらは **シェル変数 → プロセス環境** の順に解決する（`chatgpt::load_openai_config`）。`std::env::var` だけを見る新しいキーを足さない。
+これらは起動時 process environment を `Environment::new()` で import 済みの
+**shell 変数として**解決する（`chatgpt::load_openai_config` は
+`ShellProxy::get_var` のみを見る）。runtime に `std::env` への fallback は
+ない。`unset` は final で、起動時 process の同名値は復活しない。
 この表の中での例外は `DOGESH_HOOK_DEPTH` で、これは意図的にプロセス環境だけを見る（理由はコードのコメントにある）。同種の例外は下の「Herdr 連携の変数」にもある。
 
 ## Herdr 連携の変数
@@ -47,4 +50,4 @@
 | `DOGESH_HERDR_AGENT_COMMANDS` | `dsh/src/agent_lifecycle/agent_command.rs` | `codex`/`claude` など前景で認識するエージェント CLI 名の `:` 区切りリスト。素の名前は追加、`-name` は既定リストから除外 |
 | `DOGESH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
 
-`DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく **シェル変数 → プロセス環境** の順（`Environment::get_var`）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。
+`DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく shell 変数として解決する（`Environment::get_var`。起動時 process environment は `Environment::new()` で import 済み）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。

@@ -563,9 +563,44 @@ impl DynamicCompletionProvider {
     }
 
     fn env_var(&self, key: &str) -> Option<String> {
-        self.environment
-            .read()
-            .get_var(key)
-            .or_else(|| std::env::var(key).ok())
+        self.environment.read().get_var(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ProcessEnvGuard;
+    use crate::completion::dynamic::DynamicCompletionProvider;
+    use crate::environment::Environment;
+
+    /// A key the shell logically unset stays unset: mutating the process
+    /// environment after `Environment::new()` must not resurrect it for
+    /// dynamic completion.
+    #[test]
+    fn env_var_does_not_resurrect_a_process_only_value() {
+        let _lock = crate::test_env_lock();
+        let environment = Environment::new();
+        environment.write().unset_shell_var("AWS_CONFIG_FILE");
+        let _guard = ProcessEnvGuard::set("AWS_CONFIG_FILE", "/stale");
+
+        let provider = DynamicCompletionProvider::new(environment);
+        assert_eq!(provider.env_var("AWS_CONFIG_FILE"), None);
+    }
+
+    /// A shell value wins over whatever the process environment holds.
+    #[test]
+    fn env_var_reads_the_shell_value() {
+        let _lock = crate::test_env_lock();
+        let environment = Environment::new();
+        environment
+            .write()
+            .set_shell_var("AWS_CONFIG_FILE".to_string(), "/shell".to_string());
+        let _guard = ProcessEnvGuard::set("AWS_CONFIG_FILE", "/stale");
+
+        let provider = DynamicCompletionProvider::new(environment);
+        assert_eq!(
+            provider.env_var("AWS_CONFIG_FILE"),
+            Some("/shell".to_string())
+        );
     }
 }

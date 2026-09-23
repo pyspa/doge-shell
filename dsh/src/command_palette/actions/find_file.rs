@@ -7,6 +7,32 @@ use std::process::{Command, Stdio};
 
 pub struct FindFileAction;
 
+/// Which editor the find-file action opens.
+///
+/// Resolution order: the `EDITOR` shell variable, then `VISUAL`, then `vim`.
+/// A blank value counts as unset. A shell-level miss stays a miss even when
+/// the process environment holds a stale value: the shell `Environment` is
+/// the runtime authority.
+fn resolve_editor(shell: &Shell) -> String {
+    let environment = shell.environment.read();
+    resolve_editor_from(&environment)
+}
+
+/// The `EDITOR` / `VISUAL` lookup behind [`resolve_editor`], split out so
+/// tests can assert the precedence without building a `Shell`.
+fn resolve_editor_from(environment: &crate::environment::Environment) -> String {
+    for key in ["EDITOR", "VISUAL"] {
+        if let Some(value) = environment
+            .get_var(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        {
+            return value;
+        }
+    }
+    "vim".to_string()
+}
+
 #[async_trait(?Send)]
 impl Action for FindFileAction {
     fn name(&self) -> &str {
@@ -19,7 +45,7 @@ impl Action for FindFileAction {
         "🔍"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Try fd first, fall back to find
         let output = Command::new("fd")
             .args(["--type", "f", "--hidden", "--exclude", ".git"])
@@ -67,9 +93,7 @@ impl Action for FindFileAction {
             let file_path = item.output().to_string();
 
             // Get editor from environment
-            let editor = std::env::var("EDITOR")
-                .or_else(|_| std::env::var("VISUAL"))
-                .unwrap_or_else(|_| "vim".to_string());
+            let editor = resolve_editor(shell);
 
             Command::new(&editor)
                 .arg(&file_path)
@@ -78,5 +102,70 @@ impl Action for FindFileAction {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ProcessEnvGuard;
+    use crate::environment::Environment;
+
+    /// A stale process-only `EDITOR` must not resurrect: with no shell
+    /// value, the action falls back to `vim`.
+    #[test]
+    fn process_only_editor_is_ignored() {
+        let _lock = crate::test_env_lock();
+        let _guard = ProcessEnvGuard::set("EDITOR", "stale-editor");
+        let environment = Environment::new();
+        environment.write().unset_shell_var("EDITOR");
+        environment.write().unset_shell_var("VISUAL");
+        let shell = Shell::new(environment);
+
+        assert_eq!(resolve_editor(&shell), "vim");
+    }
+
+    /// A shell `EDITOR` wins over the stale process value.
+    #[test]
+    fn shell_editor_wins_over_process() {
+        let _lock = crate::test_env_lock();
+        let _guard = ProcessEnvGuard::set("EDITOR", "stale-editor");
+        let environment = Environment::new();
+        environment
+            .write()
+            .set_shell_var("EDITOR".to_string(), "nvim".to_string());
+        let shell = Shell::new(environment);
+
+        assert_eq!(resolve_editor(&shell), "nvim");
+    }
+
+    /// With no shell `EDITOR`, a shell `VISUAL` is used.
+    #[test]
+    fn shell_visual_is_the_fallback() {
+        let _lock = crate::test_env_lock();
+        let environment = Environment::new();
+        environment.write().unset_shell_var("EDITOR");
+        environment
+            .write()
+            .set_shell_var("VISUAL".to_string(), "emacs".to_string());
+        let shell = Shell::new(environment);
+
+        assert_eq!(resolve_editor(&shell), "emacs");
+    }
+
+    /// A blank shell `EDITOR` counts as unset and falls through to `VISUAL`.
+    #[test]
+    fn blank_shell_editor_falls_through_to_visual() {
+        let _lock = crate::test_env_lock();
+        let environment = Environment::new();
+        environment
+            .write()
+            .set_shell_var("EDITOR".to_string(), "   ".to_string());
+        environment
+            .write()
+            .set_shell_var("VISUAL".to_string(), "emacs".to_string());
+        let shell = Shell::new(environment);
+
+        assert_eq!(resolve_editor(&shell), "emacs");
     }
 }

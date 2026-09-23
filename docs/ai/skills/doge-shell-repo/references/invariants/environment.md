@@ -18,6 +18,14 @@
 - child environment は `variables` + `exported_vars` から materialize する。
 - runtime shell state の fallback として `std::env` を再読込しない。
 - `std::env` は bootstrap/process-global integration boundary に限定する。
+- consumer が `Environment` を利用可能な runtime path では、shell variable
+  の miss を `std::env::var` へ fallback しない。startup process environment
+  は `Environment::new()` で import 済みなので、再読込するものが何もない。
+- logical unset は final。process-global startup value を再発見しない。
+  (`AI_CHAT_API_KEY` を `unset` しても、起動時 process env の同名値で
+  `!` chat が復活してはいけない、等)
+- shell で変更された value は runtime consumer が即座に見る
+  (`set AI_CHAT_MODEL` が次の `!` turn に効く、等)。
 - shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。
 - raw map の bulk restore/apply 後は variable-derived projections を再構築する。
 - direnv restore state は root 登録時ではなく activation 時に capture する。

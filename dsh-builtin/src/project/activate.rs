@@ -116,10 +116,7 @@ pub(super) fn display_activation_path(root: &Path, path: &str) -> String {
 pub(super) fn prepend_path(proxy: &mut dyn ShellProxy, root: &Path, path: &str) -> bool {
     let path = normalize_activation_path(root, path);
     let path = path.to_string_lossy().into_owned();
-    let current_path = proxy
-        .get_var("PATH")
-        .or_else(|| std::env::var("PATH").ok())
-        .unwrap_or_default();
+    let current_path = proxy.get_var("PATH").unwrap_or_default();
 
     if current_path.split(':').any(|entry| entry == path) {
         return false;

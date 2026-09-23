@@ -4,8 +4,11 @@
 デバッグ/テスト用の環境変数は [../env-vars.md](../env-vars.md) にある（この表が正典で、
 あちらは「探しに行く先」だけの短いポインタ）。
 
-解決順は **シェル変数 → プロセス環境**。`chatgpt::load_openai_config` がその形。
-新しいキーもこの順で読む。`std::env::var` だけを見ない。
+解決順は **shell 変数のみ**。起動時 process environment は
+`Environment::new()` で import 済みなので、runtime の `chatgpt::load_openai_config`
+は `ShellProxy::get_var`（= shell `Environment`）だけを見る。`unset` は final で、
+起動時 process の同名値は復活しない。新しいキーもこの形で読む。
+`std::env::var` だけを見ない。
 
 | キー | 既定 | 定義 |
 |---|---|---|

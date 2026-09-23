@@ -71,6 +71,42 @@ pub(crate) fn test_env_lock() -> parking_lot::MutexGuard<'static, ()> {
     LOCK.lock()
 }
 
+/// Restores one process-global variable on drop, for tests that plant a
+/// stale process-only value to prove a runtime consumer ignores it.
+///
+/// Every test using this holds `test_env_lock()` while the guard is alive,
+/// so the planted value cannot leak into a concurrently running test.
+#[cfg(test)]
+pub(crate) struct ProcessEnvGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+#[cfg(test)]
+impl ProcessEnvGuard {
+    pub(crate) fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        // SAFETY: the caller holds `test_env_lock()`, the crate's single
+        // serialization mechanism for process-global mutation.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ProcessEnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: same lock as `set` above.
+        unsafe {
+            if let Some(value) = &self.previous {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+}
+
 /// Custom error type representing normal exit
 #[derive(Debug)]
 pub enum ShellExit {

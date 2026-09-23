@@ -200,20 +200,12 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     for arg in args {
         let root = arg.to_string();
         let root = shellexpand::tilde(root.as_str());
-        // Create DirEnvironment with error handling
-        match DirEnvironment::new(root.to_string()) {
-            Ok(direnv) => {
-                env.borrow()
-                    .shell_env
-                    .write()
-                    .variable_state
-                    .direnv_roots
-                    .push(direnv);
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to create direnv for {root}: {e}");
-            }
-        }
+        env.borrow()
+            .shell_env
+            .write()
+            .variable_state
+            .direnv_roots
+            .push(DirEnvironment::new(root.to_string()));
     }
     Ok(Value::NIL)
 }

@@ -1,8 +1,16 @@
+//! Directory-scoped environment overlays (`direnv`).
+//!
+//! Each allowed root is policy (a trusted path), never restoration state.
+//! Activation snapshots the values it is about to replace into exactly one
+//! reversible overlay per root; leaving restores that snapshot. Transitions
+//! always unload deepest-first, then load shallowest-first.
+
 use crate::environment::Environment;
 use anyhow::Result;
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{BufWriter, StdoutLock, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -15,7 +23,6 @@ pub enum Entry {
 #[derive(Debug, Clone)]
 pub struct PathAddEntry {
     pub path: String,
-    pub old: String,
 }
 
 #[derive(Debug, Clone)]
@@ -24,97 +31,187 @@ pub struct EnvEntry {
     pub value: String,
 }
 
+/// Previous value captured at activation time for one overlaid key.
+#[derive(Debug, Clone)]
+struct EnvRestore {
+    key: String,
+    /// `Some` restores the value, `None` unsets the key on deactivation.
+    previous: Option<String>,
+}
+
+/// Runtime activation state owned by exactly one active root.
+#[derive(Debug, Clone)]
+struct ActiveDirEnvironment {
+    /// First-touch order; deactivation unwinds it in reverse.
+    restore: Vec<EnvRestore>,
+}
+
 #[derive(Debug, Clone)]
 pub struct DirEnvironment {
     pub path: String,
-    pub entries: Vec<Entry>,
-    pub env_path: String,
-    loaded: bool,
+    active: Option<ActiveDirEnvironment>,
+}
+
+/// Presentation events; `check_path` renders them after reconciling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirenvEvent {
+    Loaded { path: String, exported: Vec<String> },
+    Unloaded { path: String },
+}
+
+/// A fully materialized activation: what to restore, and what to commit.
+/// Built before any environment mutation so a failure commits nothing.
+struct DirEnvPatch {
+    restore: Vec<EnvRestore>,
+    /// Final value per touched key, in first-touch order.
+    values: Vec<(String, String)>,
+}
+
+struct PatchBuilder<'a> {
+    env: &'a Environment,
+    seen: HashSet<String>,
+    restore: Vec<EnvRestore>,
+    values: Vec<(String, String)>,
+    index: HashMap<String, usize>,
+}
+
+impl<'a> PatchBuilder<'a> {
+    fn new(env: &'a Environment) -> Self {
+        Self {
+            env,
+            seen: HashSet::new(),
+            restore: Vec::new(),
+            values: Vec::new(),
+            index: HashMap::new(),
+        }
+    }
+
+    /// Snapshot the pre-activation value of `key` exactly once.
+    fn touch(&mut self, key: &str) {
+        if self.seen.insert(key.to_string()) {
+            self.restore.push(EnvRestore {
+                key: key.to_string(),
+                previous: self.env.variable_state.system_env_vars.get(key).cloned(),
+            });
+        }
+    }
+
+    fn upsert(&mut self, key: String, value: String) {
+        if let Some(&i) = self.index.get(&key) {
+            self.values[i].1 = value;
+        } else {
+            self.index.insert(key.clone(), self.values.len());
+            self.values.push((key, value));
+        }
+    }
+
+    /// Current working value: earlier entries in this patch win over the
+    /// pre-activation baseline.
+    fn working(&self, key: &str) -> Option<String> {
+        self.index
+            .get(key)
+            .map(|&i| self.values[i].1.clone())
+            .or_else(|| self.env.variable_state.system_env_vars.get(key).cloned())
+    }
+
+    fn finish(self) -> DirEnvPatch {
+        DirEnvPatch {
+            restore: self.restore,
+            values: self.values,
+        }
+    }
+}
+
+fn build_patch(entries: &[Entry], env: &Environment) -> DirEnvPatch {
+    let mut builder = PatchBuilder::new(env);
+    for entry in entries {
+        match entry {
+            Entry::Env(env_entry) => {
+                builder.touch(&env_entry.key);
+                builder.upsert(env_entry.key.clone(), env_entry.value.clone());
+            }
+            Entry::PathAdd(path_entry) => {
+                // PATH_ADD is a PATH mutation: it must snapshot PATH too.
+                builder.touch("PATH");
+                let current = builder.working("PATH").unwrap_or_default();
+                builder.upsert(
+                    "PATH".to_string(),
+                    prepend_path_entry(&path_entry.path, &current),
+                );
+            }
+        }
+    }
+    builder.finish()
 }
 
 impl DirEnvironment {
-    pub fn new(path: String) -> Result<Self> {
-        let env_path = std::env::var("PATH")?;
-        Ok(DirEnvironment {
-            path,
-            entries: Vec::new(),
-            env_path,
-            loaded: false,
-        })
+    /// Register a trusted root. Captures no environment state; the restore
+    /// snapshot is taken later, at activation time.
+    pub fn new(path: String) -> Self {
+        DirEnvironment { path, active: None }
     }
 
-    pub fn set_env(&self, env: &mut Environment, out: &mut BufWriter<StdoutLock>) -> Result<()> {
-        if self.loaded {
-            return Ok(());
-        }
-
-        let mut env_path = env
-            .variable_state
-            .system_env_vars
-            .get("PATH")
-            .cloned()
-            .unwrap_or_default();
-        for entry in &self.entries {
-            match entry {
-                Entry::Env(env_entry) => {
-                    env.set_system_env_var(env_entry.key.clone(), env_entry.value.clone());
-                    out.write_fmt(format_args!("+{} ", env_entry.key)).ok();
-                }
-                Entry::PathAdd(path_entry) => {
-                    env_path = prepend_path_entry(&path_entry.path, &env_path);
-                }
-            }
-        }
-        env.set_system_env_var("PATH".to_string(), env_path);
-
-        Ok(())
+    pub fn is_active(&self) -> bool {
+        self.active.is_some()
     }
 
-    pub fn remove_env(&mut self, env: &mut Environment) {
-        if !self.loaded {
-            return;
-        }
-        let mut require_reset = false;
-        for entry in &self.entries {
-            match entry {
-                Entry::Env(env_entry) => {
-                    env.unset_system_env_var(&env_entry.key);
-                }
-                Entry::PathAdd(_) => {
-                    require_reset = true;
-                }
-            }
-        }
-        if require_reset {
-            env.set_system_env_var("PATH".to_string(), self.env_path.clone());
-        }
-        self.entries = Vec::new();
+    #[cfg(test)]
+    pub(crate) fn restore_len(&self) -> usize {
+        self.active.as_ref().map_or(0, |a| a.restore.len())
     }
 
-    pub fn read_env_file(&mut self) -> Result<()> {
-        if self.loaded {
-            return Ok(());
-        }
-
+    /// Load this root's entries without touching any runtime state.
+    fn read_env_file(&self) -> Result<Vec<Entry>> {
         let root = PathBuf::from(&self.path);
         let env_file = root.join(".env");
         let envrc_file = root.join(".envrc");
         if env_file.exists() {
             if let Some(file) = env_file.to_str() {
-                let cfgs = read_env_config_file(file)?;
-                for data in cfgs {
-                    self.entries.push(data);
-                }
+                return read_env_config_file(file);
             }
         } else if envrc_file.exists()
             && let Some(file) = envrc_file.to_str()
         {
-            let cfgs = read_envrc_config_file(file)?;
-            for data in cfgs {
-                self.entries.push(data);
+            return read_envrc_config_file(file);
+        }
+        Ok(Vec::new())
+    }
+
+    /// Parse, build the complete patch, commit it, then mark active.
+    /// `None` when already active: the original snapshot is never retaken.
+    fn activate(&mut self, env: &mut Environment) -> Result<Option<DirenvEvent>> {
+        if self.active.is_some() {
+            return Ok(None);
+        }
+        let entries = self.read_env_file()?;
+        let patch = build_patch(&entries, env);
+        for (key, value) in &patch.values {
+            env.set_system_env_var(key.clone(), value.clone());
+        }
+        let exported = patch.values.iter().map(|(key, _)| key.clone()).collect();
+        self.active = Some(ActiveDirEnvironment {
+            restore: patch.restore,
+        });
+        Ok(Some(DirenvEvent::Loaded {
+            path: self.path.clone(),
+            exported,
+        }))
+    }
+
+    /// Restore the exact activation-time state, then mark inactive.
+    /// `None` when already inactive.
+    fn deactivate(&mut self, env: &mut Environment) -> Option<DirenvEvent> {
+        let active = self.active.take()?;
+        // Reverse touch order: unwind the overlay in reverse apply order.
+        for saved in active.restore.iter().rev() {
+            match &saved.previous {
+                Some(value) => env.set_system_env_var(saved.key.clone(), value.clone()),
+                None => env.unset_system_env_var(&saved.key),
             }
         }
-        Ok(())
+        Some(DirenvEvent::Unloaded {
+            path: self.path.clone(),
+        })
     }
 }
 
@@ -147,7 +244,6 @@ fn read_env_config_file(file: &str) -> Result<Vec<Entry>> {
 fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
     let mut ret: Vec<Entry> = Vec::new();
     let contents = fs::read_to_string(file)?;
-    let current_path = std::env::var("PATH")?;
 
     for line in contents.lines() {
         let trimmed = line.trim();
@@ -162,10 +258,7 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
         let value = parts[1].trim().to_string();
 
         match cmd.as_str() {
-            "PATH_ADD" => ret.push(Entry::PathAdd(PathAddEntry {
-                path: value,
-                old: current_path.clone(),
-            })),
+            "PATH_ADD" => ret.push(Entry::PathAdd(PathAddEntry { path: value })),
             "EXPORT" => {
                 let Some((raw_key, raw_value)) = value.split_once('=') else {
                     continue;
@@ -189,152 +282,95 @@ fn read_envrc_config_file(file: &str) -> Result<Vec<Entry>> {
     Ok(ret)
 }
 
+fn root_depth(path: &str) -> usize {
+    Path::new(path).components().count()
+}
+
+fn reconcile_roots(
+    pwd: &Path,
+    roots: &mut [DirEnvironment],
+    env: &mut Environment,
+) -> Result<Vec<DirenvEvent>> {
+    // Unload phase first: deepest first, registration index LIFO on ties,
+    // so nested overlays unwind in exact reverse apply order. Loading only
+    // afterwards guarantees a new root snapshots the restored base, never
+    // the previous root's overlay.
+    let mut unload: Vec<(usize, usize)> = roots
+        .iter()
+        .enumerate()
+        .filter(|(_, root)| root.is_active() && !pwd.starts_with(&root.path))
+        .map(|(index, root)| (root_depth(&root.path), index))
+        .collect();
+    unload.sort_by(|a, b| b.cmp(a));
+
+    let mut events = Vec::new();
+    for (_, index) in unload {
+        if let Some(event) = roots[index].deactivate(env) {
+            events.push(event);
+        }
+    }
+
+    // Load phase: shallowest first, registration order on ties, so an
+    // inner root always snapshots its outer root's overlay.
+    let mut load: Vec<(usize, usize)> = roots
+        .iter()
+        .enumerate()
+        .filter(|(_, root)| !root.is_active() && pwd.starts_with(&root.path))
+        .map(|(index, root)| (root_depth(&root.path), index))
+        .collect();
+    load.sort();
+
+    for (_, index) in load {
+        if let Some(event) = roots[index].activate(env)? {
+            events.push(event);
+        }
+    }
+    Ok(events)
+}
+
+/// Reconcile direnv overlays against `pwd`, returning presentation events.
+///
+/// Moves `direnv_roots` out of the environment for the reconciliation and
+/// always moves it back, error or not, so a failed activation can never
+/// lose an allowed root.
+///
+/// This take is sound because nothing called during reconciliation
+/// (`set_system_env_var` / `unset_system_env_var` and the derived-state
+/// refreshes behind them) reads `direnv_roots`. If a future derived-state
+/// hook starts consulting the allow-list, this ownership split must be
+/// revisited.
+fn reconcile_path(pwd: &Path, environment: &mut Environment) -> Result<Vec<DirenvEvent>> {
+    let mut roots = std::mem::take(&mut environment.variable_state.direnv_roots);
+    let result = reconcile_roots(pwd, &mut roots, environment);
+    environment.variable_state.direnv_roots = roots;
+    result
+}
+
 pub fn check_path(pwd: &Path, environment: Arc<RwLock<Environment>>) -> Result<()> {
-    let environment = &mut environment.write();
+    let events = reconcile_path(pwd, &mut environment.write());
+
     let out = std::io::stdout().lock();
     let mut out = BufWriter::new(out);
-
-    let mut idx = 0;
-    while idx < environment.variable_state.direnv_roots.len() {
-        let should_load = {
-            let env = &environment.variable_state.direnv_roots[idx];
-            pwd.starts_with(&env.path) && !env.loaded
-        };
-        let should_unload = {
-            let env = &environment.variable_state.direnv_roots[idx];
-            !pwd.starts_with(&env.path) && env.loaded
-        };
-
-        if should_load {
-            let mut dir_env = environment.variable_state.direnv_roots.remove(idx);
-            dir_env.read_env_file()?;
-            out.write_fmt(format_args!("direnv: loading {}\n", dir_env.path))
-                .ok();
-            out.write_all(b"direnv: export ").ok();
-            dir_env.set_env(environment, &mut out)?;
-            out.write_all(b"\n").ok();
-            dir_env.loaded = true;
-            environment.variable_state.direnv_roots.insert(idx, dir_env);
-        } else if should_unload {
-            let mut dir_env = environment.variable_state.direnv_roots.remove(idx);
-            out.write_fmt(format_args!("direnv: unloading {}\n", dir_env.path))
-                .ok();
-            dir_env.remove_env(environment);
-            dir_env.loaded = false;
-            environment.variable_state.direnv_roots.insert(idx, dir_env);
+    for event in &events? {
+        match event {
+            DirenvEvent::Loaded { path, exported } => {
+                out.write_fmt(format_args!("direnv: loading {path}\n")).ok();
+                out.write_all(b"direnv: export ").ok();
+                for key in exported {
+                    out.write_fmt(format_args!("+{key} ")).ok();
+                }
+                out.write_all(b"\n").ok();
+            }
+            DirenvEvent::Unloaded { path } => {
+                out.write_fmt(format_args!("direnv: unloading {path}\n"))
+                    .ok();
+            }
         }
-
-        idx += 1;
     }
     out.flush().ok();
-    environment.reload_path();
+    environment.write().reload_path();
     Ok(())
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dir_environment_creation() -> Result<()> {
-        let path = "/tmp/test".to_string();
-
-        let dir_env = DirEnvironment::new(path.clone())?;
-        assert_eq!(dir_env.path, path);
-        assert!(dir_env.entries.is_empty());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_dir_environment_basic_functionality() -> Result<()> {
-        let dir_env = DirEnvironment::new("/tmp/test".to_string())?;
-
-        // Basic functionality test
-        assert_eq!(dir_env.path, "/tmp/test");
-        assert!(dir_env.entries.is_empty());
-
-        Ok(())
-    }
-    #[test]
-    fn test_read_envrc_quotes() -> Result<()> {
-        use std::io::Write;
-        let mut file = tempfile::NamedTempFile::new()?;
-        writeln!(file, "export QUOTED=\"value with spaces\"")?;
-        writeln!(file, "export SINGLE='single quoted'")?;
-
-        let path = file.path().to_str().unwrap();
-        let entries = read_envrc_config_file(path)?;
-
-        let mut found_quoted = false;
-        let mut found_single = false;
-
-        for entry in entries {
-            if let Entry::Env(e) = entry {
-                if e.key == "QUOTED" {
-                    assert_eq!(e.value, "value with spaces"); // Expect quotes stripped
-                    found_quoted = true;
-                } else if e.key == "SINGLE" {
-                    assert_eq!(e.value, "single quoted"); // Expect quotes stripped
-                    found_single = true;
-                }
-            }
-        }
-        assert!(found_quoted);
-        assert!(found_single);
-        Ok(())
-    }
-
-    #[test]
-    fn test_read_env_config_file_skips_comments_and_blank_lines() -> Result<()> {
-        use std::io::Write;
-        let mut file = tempfile::NamedTempFile::new()?;
-        writeln!(file, "# a comment")?;
-        writeln!(file)?;
-        writeln!(file, "FOO=bar")?;
-
-        let path = file.path().to_str().unwrap();
-        let entries = read_env_config_file(path)?;
-
-        assert_eq!(entries.len(), 1);
-        match &entries[0] {
-            Entry::Env(e) => {
-                assert_eq!(e.key, "FOO");
-                assert_eq!(e.value, "bar");
-            }
-            _ => panic!("expected env entry"),
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_read_envrc_config_file_skips_blank_and_malformed_lines() -> Result<()> {
-        use std::io::Write;
-        let mut file = tempfile::NamedTempFile::new()?;
-        writeln!(file)?;
-        writeln!(file, "# comment")?;
-        writeln!(file, "PATH_ADD /usr/local/bin")?;
-        writeln!(file, "NOT_A_DIRECTIVE")?;
-        writeln!(file, "export")?;
-
-        let path = file.path().to_str().unwrap();
-        let entries = read_envrc_config_file(path)?;
-
-        assert_eq!(entries.len(), 1);
-        assert!(matches!(entries[0], Entry::PathAdd(_)));
-        Ok(())
-    }
-
-    #[test]
-    fn test_prepend_path_entry_joins_with_separator() {
-        assert_eq!(
-            prepend_path_entry("/usr/local/bin", "/usr/bin:/bin"),
-            "/usr/local/bin:/usr/bin:/bin"
-        );
-    }
-
-    #[test]
-    fn test_prepend_path_entry_on_empty_path() {
-        assert_eq!(prepend_path_entry("/usr/local/bin", ""), "/usr/local/bin");
-    }
-}
+mod tests;

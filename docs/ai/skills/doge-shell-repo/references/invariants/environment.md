@@ -14,3 +14,8 @@
 - sigil/brace 付きスペルは lookup/parser input syntax で、storage key にしない。
 - shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。
 - raw map の bulk restore/apply 後は variable-derived projections を再構築する。
+- direnv restore state は root 登録時ではなく activation 時に capture する。
+- active direnv root は exact previous environment patch を所有し、leave 時に Some(value) は restore、None は unset する。
+- cross-root transition は unload deepest-first → load shallowest-first。
+- direnv read/load failure で allowed root を失わない。
+- direnv PATH restore に process-global std::env を使わない。

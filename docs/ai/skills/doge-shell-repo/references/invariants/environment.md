@@ -10,3 +10,7 @@
 ## Environment の状態
 - `EnvironmentSnapshot`（`dsh/src/lisp/mod.rs`）は config.lisp 失敗時のロールバック対象。**設定**（`keybindings`, `alias`, `abbreviations` …）は追加する。**ランタイム状態**（`dir_stack`, `scheduler`）は追加しない。
 - `config.lisp` は `Repl::new` より前に走る。REPL 起動前に登録できる必要があるものは `Environment` に置く。
+- `variable_state.variables` / `exported_vars` の key は bare variable name のみ。
+- sigil/brace 付きスペルは lookup/parser input syntax で、storage key にしない。
+- shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。
+- raw map の bulk restore/apply 後は variable-derived projections を再構築する。

@@ -518,3 +518,69 @@ fn extend_copies_shell_options_without_sharing() {
     assert!(parent.read().shell_options.enabled(ShellOption::Pipefail));
     assert!(!child.read().shell_options.enabled(ShellOption::Pipefail));
 }
+
+/// Shell variable storage holds bare names only: `FOO`, `$FOO`, `${FOO}`
+/// spellings collapse to one `FOO` key, never two entries.
+#[test]
+fn shell_var_setters_canonicalize_to_bare_names() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.set_shell_var("FOO".to_string(), "a".to_string());
+        guard.set_shell_var("$FOO".to_string(), "b".to_string());
+        guard.set_shell_var("${FOO}".to_string(), "c".to_string());
+    }
+    let guard = env.read();
+    assert_eq!(
+        guard.variable_state.variables.get("FOO"),
+        Some(&"c".to_string())
+    );
+    assert!(!guard.variable_state.variables.contains_key("$FOO"));
+    assert!(!guard.variable_state.variables.contains_key("${FOO}"));
+    assert!(
+        guard
+            .variable_state
+            .variables
+            .keys()
+            .filter(|k| k.contains("FOO"))
+            .count()
+            == 1,
+        "duplicate FOO representations: {:?}",
+        guard.variable_state.variables.keys().collect::<Vec<_>>()
+    );
+    // All three input spellings still resolve.
+    assert_eq!(guard.get_var("FOO"), Some("c".to_string()));
+    assert_eq!(guard.get_var("$FOO"), Some("c".to_string()));
+    assert_eq!(guard.get_var("${FOO}"), Some("c".to_string()));
+    assert_eq!(guard.lookup_variable("$FOO"), Some("c".to_string()));
+    assert_eq!(guard.lookup_variable("${FOO}"), Some("c".to_string()));
+}
+
+/// `exported_vars` is bare names only as well.
+#[test]
+fn export_markers_canonicalize_to_bare_names() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.set_shell_var("FOO".to_string(), "v".to_string());
+        guard.export_shell_var("$FOO".to_string());
+    }
+    let guard = env.read();
+    assert!(guard.variable_state.exported_vars.contains("FOO"));
+    assert!(!guard.variable_state.exported_vars.contains("$FOO"));
+    assert_eq!(guard.child_process_env().get("FOO"), Some(&"v".to_string()));
+}
+
+/// An empty name never aliases the PID special.
+#[test]
+fn empty_name_does_not_alias_the_pid_special() {
+    init();
+    use super::variables::canonical_shell_var_name;
+    assert_eq!(canonical_shell_var_name(""), "");
+    assert_eq!(canonical_shell_var_name("$"), "$");
+    assert_eq!(canonical_shell_var_name("$$"), "$");
+    let env = Environment::new();
+    assert!(env.read().lookup_variable("").is_none());
+}

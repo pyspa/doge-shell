@@ -113,6 +113,9 @@ pub(crate) struct TestShellProxy {
     /// When set, `wait_for_jobs` fails with this message instead of
     /// returning `wait_status`.
     pub wait_error: Option<String>,
+    /// `read_shell_line` canned status (`None` fails closed) / error.
+    pub read_status: Option<dsh_types::ExitStatus>,
+    pub read_error: Option<String>,
     /// `set -o` option state for `ShellOptionCapability` tests.
     pub shell_options: ShellOptions,
 }
@@ -166,6 +169,8 @@ impl Default for TestShellProxy {
             cron_tool_error: None,
             wait_status: 0,
             wait_error: None,
+            read_status: None,
+            read_error: None,
             shell_options: ShellOptions::default(),
         }
     }
@@ -593,6 +598,20 @@ impl crate::shell_capabilities::JobControlCapability for TestShellProxy {
             Some(message) => Err(anyhow::anyhow!(message.clone())),
             None => Ok(self.wait_status),
         }
+    }
+}
+
+impl crate::shell_capabilities::ReadCapability for TestShellProxy {
+    fn read_shell_line(
+        &mut self,
+        _ctx: &Context,
+        _argv: Vec<String>,
+    ) -> anyhow::Result<dsh_types::ExitStatus> {
+        if let Some(message) = &self.read_error {
+            return Err(anyhow::anyhow!(message.clone()));
+        }
+        self.read_status
+            .ok_or_else(|| anyhow::anyhow!("read_shell_line not configured"))
     }
 }
 

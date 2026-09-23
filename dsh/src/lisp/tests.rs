@@ -654,3 +654,159 @@ fn config_rollback_restores_shell_options() {
         "pipefail change survived the snapshot restore"
     );
 }
+
+fn shell_get_for_test(
+    env: std::rc::Rc<std::cell::RefCell<super::Env>>,
+    args: Vec<Value>,
+) -> Result<Value, super::model::RuntimeError> {
+    let name = args.first().map(|v| v.to_string()).unwrap_or_default();
+    let value = env
+        .borrow()
+        .shell_env
+        .read()
+        .lookup_variable(&name)
+        .unwrap_or_default();
+    Ok(Value::String(value))
+}
+
+fn engine_with_shell_get(
+    env: std::sync::Arc<parking_lot::RwLock<Environment>>,
+) -> std::rc::Rc<std::cell::RefCell<LispEngine>> {
+    let engine = LispEngine::new(env);
+    engine.borrow_mut().env.borrow_mut().define(
+        Symbol::from("shell-get"),
+        Value::NativeFunc(shell_get_for_test),
+    );
+    engine
+}
+
+/// `(vset "AI_CHAT_MODEL" ...)` must reach both the variable map and the
+/// runtime projection (no per-key special setter).
+#[test]
+fn vset_publishes_the_chat_model_projection() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env.clone());
+    engine
+        .borrow()
+        .run("(vset \"AI_CHAT_MODEL\" \"test-model\")")
+        .unwrap();
+    assert_eq!(
+        env.read().lookup_variable("AI_CHAT_MODEL"),
+        Some("test-model".to_string())
+    );
+    assert_eq!(
+        env.read().integration_state.chat_model.read().clone(),
+        Some("test-model".to_string())
+    );
+    assert_eq!(
+        env.read().variable_state.variables.get("AI_CHAT_MODEL"),
+        Some(&"test-model".to_string())
+    );
+    assert!(
+        !env.read()
+            .variable_state
+            .variables
+            .contains_key("$AI_CHAT_MODEL")
+    );
+}
+
+/// `value-let` is lexically scoped: the body sees the inner value and the
+/// outer value returns afterwards.
+#[test]
+fn value_let_restores_the_outer_value() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("FOO".to_string(), "outer".to_string());
+    let engine = engine_with_shell_get(env.clone());
+    let result = engine
+        .borrow()
+        .run("(value-let ((FOO \"inner\")) (shell-get \"FOO\"))")
+        .unwrap();
+    assert_eq!(result, Value::String("inner".to_string()));
+    assert_eq!(env.read().lookup_variable("FOO"), Some("outer".to_string()));
+    assert!(!env.read().variable_state.variables.contains_key("$FOO"));
+}
+
+/// A name absent before the block is absent afterwards.
+#[test]
+fn value_let_removes_a_temporary_binding() {
+    init();
+    let env = Environment::new();
+    assert!(env.read().lookup_variable("TEMP_PROBE").is_none());
+    let engine = engine_with_shell_get(env.clone());
+    let result = engine
+        .borrow()
+        .run("(value-let ((TEMP_PROBE \"inner\")) (shell-get \"TEMP_PROBE\"))")
+        .unwrap();
+    assert_eq!(result, Value::String("inner".to_string()));
+    assert!(env.read().lookup_variable("TEMP_PROBE").is_none());
+    assert!(
+        !env.read()
+            .variable_state
+            .variables
+            .contains_key("TEMP_PROBE")
+    );
+}
+
+/// Nested blocks unwind inside-out.
+#[test]
+fn value_let_nests_inside_out() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("FOO".to_string(), "outer".to_string());
+    let engine = engine_with_shell_get(env.clone());
+    let result = engine
+        .borrow()
+        .run("(value-let ((FOO \"middle\")) (value-let ((FOO \"inner\")) (shell-get \"FOO\")))")
+        .unwrap();
+    assert_eq!(result, Value::String("inner".to_string()));
+    assert_eq!(env.read().lookup_variable("FOO"), Some("outer".to_string()));
+}
+
+/// A body error still restores.
+#[test]
+fn value_let_restores_on_body_error() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("FOO".to_string(), "outer".to_string());
+    let engine = engine_with_shell_get(env.clone());
+    let result = engine
+        .borrow()
+        .run("(value-let ((FOO \"inner\")) (this-does-not-exist))");
+    assert!(result.is_err());
+    assert_eq!(env.read().lookup_variable("FOO"), Some("outer".to_string()));
+}
+
+/// Config rollback rebuilds derived projections, not just the raw map.
+#[test]
+fn config_rollback_restores_ai_projections() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("AI_CHAT_MODEL".to_string(), "model-a".to_string());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().clone(),
+        Some("model-a".to_string())
+    );
+    let engine = LispEngine::new(env.clone());
+    let snapshot = super::EnvironmentSnapshot::capture(&env.read());
+    env.write()
+        .set_shell_var("AI_CHAT_MODEL".to_string(), "model-b".to_string());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().clone(),
+        Some("model-b".to_string())
+    );
+    engine.borrow().restore_environment_snapshot(snapshot);
+    assert_eq!(
+        env.read().lookup_variable("AI_CHAT_MODEL"),
+        Some("model-a".to_string())
+    );
+    assert_eq!(
+        env.read().integration_state.chat_model.read().clone(),
+        Some("model-a".to_string())
+    );
+}

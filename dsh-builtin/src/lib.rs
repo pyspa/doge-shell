@@ -129,7 +129,6 @@ pub enum CoreShellAction {
     Lisp,
     LispRun,
     Var,
-    Read,
     AbbrCommand,
 }
 
@@ -150,7 +149,6 @@ impl CoreShellAction {
             Self::Lisp => "lisp",
             Self::LispRun => "lisp-run",
             Self::Var => "var",
-            Self::Read => "read",
             Self::AbbrCommand => "abbr-command",
         }
     }
@@ -171,7 +169,6 @@ impl CoreShellAction {
             "lisp" => Self::Lisp,
             "lisp-run" => Self::LispRun,
             "var" => Self::Var,
-            "read" => Self::Read,
             "abbr-command" => Self::AbbrCommand,
             _ => return None,
         })
@@ -207,6 +204,7 @@ pub trait ShellProxy:
     + shell_capabilities::AiJsonRequest
     + shell_capabilities::JobControlCapability
     + shell_capabilities::ShellOptionCapability
+    + shell_capabilities::ReadCapability
 {
     /// Initiates shell exit process
     fn exit_shell(&mut self);
@@ -486,7 +484,6 @@ mod shell_proxy_tests {
             CoreShellAction::Lisp,
             CoreShellAction::LispRun,
             CoreShellAction::Var,
-            CoreShellAction::Read,
             CoreShellAction::AbbrCommand,
         ];
 

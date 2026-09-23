@@ -1,9 +1,66 @@
+use crate::environment::Environment;
+use crate::environment::variables::canonical_shell_var_name;
 use crate::lisp::{
     model::{Env, Lambda, List, RuntimeError, Symbol, Value},
     utils::{require_arg, require_typed_arg},
 };
+use parking_lot::RwLock;
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::log::debug;
+
+/// Lexical shell-variable scope for `value-let` / `v-let`.
+///
+/// `Env::extend` shares the same `shell_env`, so a temporary binding must
+/// snapshot the previous shell value on first bind and restore it on drop.
+/// Restoration runs in reverse bind order and covers normal return,
+/// `RuntimeError`, declaration failure, and nesting. Only the instant of
+/// bind/restore takes the write lock; the body itself runs unlocked.
+struct ShellVarScope {
+    environment: Arc<RwLock<Environment>>,
+    originals: Vec<(String, Option<String>)>,
+    seen: HashSet<String>,
+}
+
+impl ShellVarScope {
+    fn new(environment: Arc<RwLock<Environment>>) -> Self {
+        Self {
+            environment,
+            originals: Vec::new(),
+            seen: HashSet::new(),
+        }
+    }
+
+    fn bind(&mut self, name: &str, value: String) {
+        let canonical = canonical_shell_var_name(name).to_string();
+        if self.seen.insert(canonical.clone()) {
+            let original = self
+                .environment
+                .read()
+                .variable_state
+                .variables
+                .get(&canonical)
+                .cloned();
+            self.originals.push((canonical.clone(), original));
+        }
+        self.environment.write().set_shell_var(canonical, value);
+    }
+}
+
+impl Drop for ShellVarScope {
+    fn drop(&mut self) {
+        for (name, original) in self.originals.iter().rev() {
+            if let Some(old) = original {
+                self.environment
+                    .write()
+                    .set_shell_var(name.clone(), old.clone());
+            } else {
+                self.environment.write().remove_shell_var(name);
+            }
+        }
+    }
+}
 
 /// Evaluate a single Lisp expression in the context of a given environment.
 pub fn eval(env: Rc<RefCell<Env>>, expression: &Value) -> Result<Value, RuntimeError> {
@@ -281,6 +338,7 @@ fn eval_inner(
 
                 Value::Symbol(Symbol(keyword)) if keyword == "v-let" || keyword == "value-let" => {
                     let let_env = Rc::new(RefCell::new(Env::extend(env)));
+                    let mut scope = ShellVarScope::new(Arc::clone(&let_env.borrow().shell_env));
 
                     let args = &list.cdr().into_iter().collect::<Vec<Value>>();
 
@@ -299,13 +357,7 @@ fn eval_inner(
                         let expr = &decl_cons.cdr().car()?;
 
                         let result = eval_inner(let_env.clone(), expr, context.found_tail(true))?;
-                        let_env
-                            .borrow_mut()
-                            .shell_env
-                            .write()
-                            .variable_state
-                            .variables
-                            .insert(format!("${symbol}"), result.to_string());
+                        scope.bind(&symbol.0, result.to_string());
                         // OPTIMIZED: Move result instead of clone when possible
                         let_env.borrow_mut().define(symbol.clone(), result);
                     }
@@ -318,7 +370,9 @@ fn eval_inner(
                         "variables {:?}",
                         let_env.borrow().shell_env.read().variable_state.variables
                     );
-                    eval_block_inner(let_env, body.into_iter(), context)
+                    let result = eval_block_inner(let_env, body.into_iter(), context);
+                    drop(scope);
+                    result
                 }
 
                 Value::Symbol(Symbol(keyword)) if keyword == "begin" => {

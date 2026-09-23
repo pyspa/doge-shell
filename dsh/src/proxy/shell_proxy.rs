@@ -84,9 +84,7 @@ impl ShellProxy for Shell {
             let old_pwd = current.to_string_lossy().into_owned();
             self.environment
                 .write()
-                .variable_state
-                .variables
-                .insert("OLDPWD".to_string(), old_pwd);
+                .set_shell_var("OLDPWD".to_string(), old_pwd);
         }
 
         std::env::set_current_dir(path)?;
@@ -163,7 +161,6 @@ impl ShellProxy for Shell {
             CoreShellAction::Lisp => builtin::lisp::execute_lisp(self, ctx, argv),
             CoreShellAction::LispRun => builtin::lisp::execute_lisp_run(self, ctx, argv),
             CoreShellAction::Var => builtin::var::execute_var(self, ctx, argv),
-            CoreShellAction::Read => builtin::var::execute_read(self, ctx, argv),
             CoreShellAction::AbbrCommand => builtin::abbr::execute(self, ctx, argv),
         }
     }
@@ -361,10 +358,11 @@ impl ShellProxy for Shell {
 
     fn export_var(&mut self, key: &str) -> bool {
         let mut env = self.environment.write();
+        let canonical = crate::environment::variables::canonical_shell_var_name(key);
         // Exporting a name that has no value yet is allowed: it takes effect
         // when the value arrives.
-        let existed = env.variable_state.variables.contains_key(key);
-        env.export_shell_var(key.to_string());
+        let existed = env.variable_state.variables.contains_key(canonical);
+        env.export_shell_var(canonical.to_string());
         existed
     }
 

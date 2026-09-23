@@ -477,7 +477,7 @@ pub async fn capture_output_and_history(
         let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();
         let stderr_stripped = console::strip_ansi_codes(&stderr_cap).to_string();
 
-        let exit_code = job.state.shell_exit_code().unwrap_or(0);
+        let exit_code = job.final_exit_status().unwrap_or(0);
 
         let entry = OutputEntry::new(job.cmd.clone(), stdout_stripped, stderr_stripped, exit_code);
         shell

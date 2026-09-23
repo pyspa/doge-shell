@@ -29,9 +29,11 @@ pub mod project;
 pub mod quick_fix;
 pub mod safety_policy;
 pub mod schedule;
+pub mod shell_options;
 pub mod snippet;
 pub mod text;
 pub use project::Project;
+pub use shell_options::{ShellOption, ShellOptions};
 
 #[derive(Clone)]
 pub struct Context {

@@ -490,3 +490,31 @@ fn user_variable_cannot_shadow_bang() {
     // Special parameters resolve before user variables, like `?` and `$`.
     assert_eq!(env.read().lookup_variable("!"), Some("4242".to_string()));
 }
+
+#[test]
+fn shell_options_default_is_pipefail_off() {
+    use dsh_types::shell_options::ShellOption;
+    init();
+    let env = Environment::new();
+    assert!(!env.read().shell_options.enabled(ShellOption::Pipefail));
+}
+
+#[test]
+fn extend_copies_shell_options_without_sharing() {
+    use dsh_types::shell_options::ShellOption;
+    init();
+    let parent = Environment::new();
+    parent
+        .write()
+        .shell_options
+        .set(ShellOption::Pipefail, true);
+    let child = Environment::extend(parent.clone());
+    assert!(child.read().shell_options.enabled(ShellOption::Pipefail));
+    // `ShellOptions` is `Copy`: flipping the child must not flip the parent.
+    child
+        .write()
+        .shell_options
+        .set(ShellOption::Pipefail, false);
+    assert!(parent.read().shell_options.enabled(ShellOption::Pipefail));
+    assert!(!child.read().shell_options.enabled(ShellOption::Pipefail));
+}

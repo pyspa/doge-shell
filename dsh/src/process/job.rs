@@ -10,6 +10,7 @@ use super::job_process::{JobProcess, ProcessLaunchOutcome};
 use super::launch_outcome::{
     CommandFailure, JobLaunchContext, JobLaunchOutcome, StageLaunchOutcome,
 };
+use super::pipeline_status::PipelineStatusPolicy;
 use super::process::Process;
 use super::redirect::{self, Redirect};
 use super::state::{ListOp, ProcessState, SubshellType};
@@ -46,6 +47,12 @@ pub struct Job {
     pub list_op: ListOp,
     pub job_id: usize,
     pub state: ProcessState,
+    /// Frozen pipeline status policy snapshotted at `launch` time.
+    ///
+    /// `Job.state` stays the lifecycle summary (tail stage on completion);
+    /// this policy separately decides the logical pipeline status via
+    /// `final_exit_status()`. Finalization never reads live shell options.
+    pub(crate) pipeline_status_policy: PipelineStatusPolicy,
     pub(crate) monitors: Vec<OutputMonitor>,
     pub(crate) shell_pgid: Pid,
     /// Whether to capture output for $OUT variable
@@ -102,6 +109,7 @@ impl Job {
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
+            pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
             shell_pgid,
             capture_output: false,
@@ -134,6 +142,7 @@ impl Job {
             list_op: ListOp::None,
             job_id: 1,
             state: ProcessState::Running,
+            pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
             shell_pgid,
             capture_output: false,
@@ -222,6 +231,14 @@ impl Job {
         ctx: &mut Context,
         shell: &mut Shell,
     ) -> Result<JobLaunchOutcome> {
+        // Freeze the pipeline status policy exactly once, before any stage
+        // spawns. Later option flips (including ones made while this
+        // pipeline runs) must not change this job's semantics, so every
+        // status consumer below reads the frozen policy, never live options.
+        // The borrow ends immediately; nothing here holds the environment
+        // lock across the spawn.
+        self.pipeline_status_policy =
+            PipelineStatusPolicy::from_shell_options(shell.environment.read().shell_options);
         // Record the descriptors the caller handed us. They belong to the
         // caller — `execute_with_capture` and `$( )` both pass a pipe they read
         // themselves — so the pipeline default restores to them and the

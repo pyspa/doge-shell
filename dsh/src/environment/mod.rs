@@ -36,6 +36,7 @@ use dsh_openai::ChatGptClient;
 use dsh_types::command_block::CommandBlockHistory;
 use dsh_types::mcp::McpServerConfig;
 use dsh_types::output_history::OutputHistory;
+use dsh_types::shell_options::ShellOptions;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -187,6 +188,10 @@ pub struct Environment {
     /// never read anywhere that would do its own I/O.
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub(crate) startup_mode: bool,
+    /// POSIX `set -o` option state. Plain `Copy` value, never stored in
+    /// `system_env_vars`/`variables`/`exported_vars`: it is shell
+    /// configuration, not process environment.
+    pub(crate) shell_options: ShellOptions,
 }
 
 fn parse_z_exclude_from_vars(vars: &HashMap<String, String>) -> Vec<String> {
@@ -256,6 +261,7 @@ impl Environment {
             dir_stack: Vec::new(),
             cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
             startup_mode: false,
+            shell_options: ShellOptions::default(),
         }));
 
         {
@@ -290,22 +296,27 @@ impl Environment {
 
     /// Create a child environment that inherits from the parent.
     pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
-        let variable_state = {
+        let (variable_state, shell_options) = {
             let parent = parent.read();
-            VariableState {
-                alias: parent.variable_state.alias.clone(),
-                abbreviations: parent.variable_state.abbreviations.clone(),
-                command_abbreviations: parent.variable_state.command_abbreviations.clone(),
-                command_ledger_mode: parent.variable_state.command_ledger_mode,
-                paths: parent.variable_state.paths.clone(),
-                variables: parent.variable_state.variables.clone(),
-                exported_vars: parent.variable_state.exported_vars.clone(),
-                direnv_roots: parent.variable_state.direnv_roots.clone(),
-                chpwd_hooks: Vec::new(),
-                system_env_vars: parent.variable_state.system_env_vars.clone(),
-                z_exclude: parent.variable_state.z_exclude.clone(),
-                keybindings: parent.variable_state.keybindings.clone(),
-            }
+            (
+                VariableState {
+                    alias: parent.variable_state.alias.clone(),
+                    abbreviations: parent.variable_state.abbreviations.clone(),
+                    command_abbreviations: parent.variable_state.command_abbreviations.clone(),
+                    command_ledger_mode: parent.variable_state.command_ledger_mode,
+                    paths: parent.variable_state.paths.clone(),
+                    variables: parent.variable_state.variables.clone(),
+                    exported_vars: parent.variable_state.exported_vars.clone(),
+                    direnv_roots: parent.variable_state.direnv_roots.clone(),
+                    chpwd_hooks: Vec::new(),
+                    system_env_vars: parent.variable_state.system_env_vars.clone(),
+                    z_exclude: parent.variable_state.z_exclude.clone(),
+                    keybindings: parent.variable_state.keybindings.clone(),
+                },
+                // `ShellOptions` is `Copy`: the child gets the parent's
+                // values without sharing mutable state.
+                parent.shell_options,
+            )
         };
         let (integration_state, policy_state, completion_state) = {
             let parent = parent.read();
@@ -353,6 +364,7 @@ impl Environment {
             // show stale numbers instead of simply showing none.
             cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
             startup_mode: false, // Extended environments (subshells) are not in startup mode
+            shell_options,
         }))
     }
 }

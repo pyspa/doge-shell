@@ -186,3 +186,113 @@ script = "FOO=top; FOO=bar | {{TRUE}}; echo VAL:$FOO"
 status = 0
 stdout_contains = ["VAL:top"]
 stderr_exact = ""
+
+# pipefail: launch-time snapshot semantics (`set -o pipefail`).
+# OFF (default) cases above stay as regressions; the cases below opt in.
+
+[[case]]
+id = "pipeline.pipefail-false-true"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "pipeline.pipefail-true-false-true"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{TRUE}} | {{FALSE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:1"]
+
+[[case]]
+id = "pipeline.pipefail-rightmost-nonzero"
+class = "posix"
+mode = "command"
+script = "printf 'exit 7\\n' > exit7.sh; printf 'exit 3\\n' > exit3.sh; set -o pipefail; {{SH}} exit7.sh | {{SH}} exit3.sh | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:3"]
+
+[[case]]
+id = "pipeline.pipefail-all-success"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{TRUE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+[[case]]
+id = "pipeline.pipefail-drives-or-fallback"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}} || echo FALLBACK"
+
+[case.expect]
+status = 0
+stdout_contains = ["FALLBACK"]
+
+[[case]]
+id = "pipeline.pipefail-blocks-and-branch"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}} && echo BAD; echo DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:1"]
+stdout_not_contains = ["BAD"]
+
+[[case]]
+id = "pipeline.pipefail-opt-out-restores-tail"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; set +o pipefail; {{FALSE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+# A pipeline-local `set` runs isolated in the re-exec helper and must not
+# flip the parent shell's option.
+[[case]]
+id = "pipeline.pipefail-builtin-isolates-parent"
+class = "dogesh"
+mode = "command"
+script = "set +o pipefail; echo x | set -o pipefail; {{FALSE}} | {{TRUE}}; echo GOT:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["GOT:0"]
+
+# Background pipelines inherit the launch-time snapshot: flipping the
+# parent option after launch does not change `wait` status.
+[[case]]
+id = "pipeline.pipefail-background-wait"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}} & p=$!; wait $p; echo WAIT:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["WAIT:1"]
+
+[[case]]
+id = "pipeline.pipefail-background-snapshot-frozen"
+class = "posix"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}} & p=$!; set +o pipefail; wait $p; echo WAIT:$?"
+timeout_ms = 8000
+
+[case.expect]
+status = 0
+stdout_contains = ["WAIT:1"]

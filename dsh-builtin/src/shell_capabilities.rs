@@ -14,7 +14,7 @@ use dsh_types::cron::job::{
 use dsh_types::cron::tool::CronToolRequest;
 use dsh_types::{
     Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
-    safety_policy::SafetyLevel, snippet::Snippet,
+    safety_policy::SafetyLevel, shell_options::ShellOption, snippet::Snippet,
 };
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -429,6 +429,18 @@ pub trait AiJsonRequest {
 /// method: no entry is added to the frozen compatibility surface.
 pub trait JobControlCapability {
     fn wait_for_jobs(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32>;
+}
+
+/// POSIX `set -o` / `set +o` option state owned by the shell core.
+///
+/// A supertrait bound on [`crate::ShellProxy`], not a new facade method:
+/// no entry is added to the frozen compatibility surface. Builtins reach
+/// option state only through this capability (`set.rs`), and both the real
+/// `Shell` and `TestShellProxy` implement it explicitly.
+pub trait ShellOptionCapability {
+    fn shell_option_enabled(&self, option: ShellOption) -> bool;
+
+    fn set_shell_option(&mut self, option: ShellOption, enabled: bool);
 }
 
 /// What the shell's safety policy says about a command the agent wants to run.

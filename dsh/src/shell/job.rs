@@ -231,22 +231,14 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     Ok(completed_jobs)
 }
 
-/// Canonical final status of a completed job: the tail stage's
-/// [`ProcessState::shell_exit_code`](crate::process::ProcessState::shell_exit_code).
+/// Canonical final status of a completed job.
 ///
-/// Borrow-traverses the canonical tree (no clones) so normal exits,
-/// `128+N` signals, pipeline tails, `NoCommand` stages, and builtin or
-/// async-list helpers all report through one source of truth. Returns
-/// `None` for a missing tree or a tail that has not completed.
-///
-/// A free function (not a `Job` method) so the 800-line `process/job.rs`
-/// budget stays intact; the canonical consumer is the finalizer below.
+/// Thin delegation to [`Job::final_exit_status`]: the single status
+/// resolver lives in `crate::process::pipeline_status` so pipefail and tail
+/// semantics cannot drift apart. Returns `None` for a missing tree or an
+/// incomplete pipeline.
 pub(crate) fn final_exit_status(job: &Job) -> Option<i32> {
-    let mut process = job.process.as_deref()?;
-    while let Some(next) = process.next_process() {
-        process = next;
-    }
-    process.get_state().shell_exit_code()
+    job.final_exit_status()
 }
 
 /// How a completed job's output monitors retire during finalization.

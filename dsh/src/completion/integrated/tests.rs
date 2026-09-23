@@ -2669,16 +2669,16 @@ async fn cloud_and_terraform_dynamic_providers_read_local_fixtures() {
     let environment = Environment::new();
     {
         let mut env = environment.write();
-        env.set_system_env_var("HOME".to_string(), dir.path().display().to_string());
-        env.set_system_env_var(
+        env.set_and_export_shell_var("HOME".to_string(), dir.path().display().to_string());
+        env.set_and_export_shell_var(
             "AWS_CONFIG_FILE".to_string(),
             aws_config.display().to_string(),
         );
-        env.set_system_env_var(
+        env.set_and_export_shell_var(
             "AWS_SHARED_CREDENTIALS_FILE".to_string(),
             aws_credentials.display().to_string(),
         );
-        env.set_system_env_var(
+        env.set_and_export_shell_var(
             "CLOUDSDK_CONFIG".to_string(),
             gcloud_dir.display().to_string(),
         );

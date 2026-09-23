@@ -205,15 +205,14 @@ impl DynamicCompletionProvider {
         shell_state_candidates(values, current_token, "shell abbreviation")
     }
     fn collect_shell_env_var_candidates(&self, current_token: &str) -> Vec<EnhancedCandidate> {
-        let mut values = self
+        let values = self
             .environment
             .read()
             .variable_state
-            .system_env_vars
+            .variables
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        values.extend(std::env::vars().map(|(key, _)| key));
         shell_state_candidates(values, current_token, "environment variable")
     }
     pub(crate) fn collect_ssh_host_candidates(

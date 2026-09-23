@@ -8,11 +8,25 @@ use anyhow::Result;
 
 pub struct CommandGenerator<'a> {
     database: &'a CommandCompletionDatabase,
+    environment_names: Option<&'a [String]>,
 }
 
 impl<'a> CommandGenerator<'a> {
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
-        Self { database }
+        Self {
+            database,
+            environment_names: None,
+        }
+    }
+
+    pub fn with_environment_names(
+        database: &'a CommandCompletionDatabase,
+        names: &'a [String],
+    ) -> Self {
+        Self {
+            database,
+            environment_names: Some(names),
+        }
     }
 
     /// Generate command name completion candidates
@@ -64,16 +78,18 @@ impl<'a> CommandGenerator<'a> {
         SystemCommandGenerator::new().generate_candidates(current_token)
     }
 
-    /// Generate environment variable completion candidates
+    /// Generate environment variable completion candidates from injected
+    /// runtime names. No `std::env` fallback: without injected names the
+    /// list is empty.
     pub fn generate_environment_variable_candidates(
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(32);
 
-        for (key, _) in std::env::vars() {
-            if fuzzy_match_score(&key, current_token).is_some() {
-                candidates.push(CompletionCandidate::argument(key, None));
+        for key in self.environment_names.unwrap_or(&[]) {
+            if fuzzy_match_score(key, current_token).is_some() {
+                candidates.push(CompletionCandidate::argument(key.clone(), None));
             }
         }
 

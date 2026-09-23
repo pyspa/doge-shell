@@ -36,7 +36,7 @@ fn root_restore_len(env: &Environment, path: &std::path::Path) -> usize {
 }
 
 fn system_env(env: &Environment, key: &str) -> Option<String> {
-    env.variable_state.system_env_vars.get(key).cloned()
+    env.lookup_variable(key)
 }
 
 fn enter(shell_env: &Arc<RwLock<Environment>>, dir: &tempfile::TempDir) {
@@ -157,8 +157,8 @@ fn existing_value_is_restored_on_leave() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "original".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "original".to_string());
         register_root(&mut env, &project);
     }
 
@@ -184,7 +184,7 @@ fn originally_absent_variable_is_absent_after_leave() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
+        env.unset_shell_var("FOO");
         register_root(&mut env, &project);
     }
 
@@ -210,7 +210,7 @@ fn path_restore_uses_activation_time_state() {
         // Register first, then change PATH: the restore point must be the
         // activation-time PATH, not the registration-time one.
         register_root(&mut env, &project);
-        env.set_system_env_var("PATH".to_string(), "/new".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/new".to_string());
     }
 
     enter(&shell_env, &project);
@@ -235,7 +235,7 @@ fn dotenv_path_assignment_is_not_overwritten() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.set_system_env_var("PATH".to_string(), "/base".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/base".to_string());
         register_root(&mut env, &project);
     }
 
@@ -261,7 +261,7 @@ fn envrc_export_then_path_add_composes_in_file_order() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.set_system_env_var("PATH".to_string(), "/base".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/base".to_string());
         register_root(&mut env, &project);
     }
 
@@ -287,7 +287,7 @@ fn envrc_path_add_then_export_keeps_file_order() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.set_system_env_var("PATH".to_string(), "/base".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/base".to_string());
         register_root(&mut env, &project);
     }
 
@@ -322,8 +322,8 @@ fn setup_nested_reversed() -> (
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         // Intentionally reversed: inner registered before outer.
         register_root_at(&mut env, &inner_path);
         register_root_at(&mut env, outer.path());
@@ -389,8 +389,8 @@ fn sibling_transition_unloads_before_loading() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root(&mut env, &dir_a);
         register_root(&mut env, &dir_b);
     }
@@ -422,7 +422,7 @@ fn path_add_nested_composes_and_unwinds() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.set_system_env_var("PATH".to_string(), "/base".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/base".to_string());
         register_root_at(&mut env, &inner_path);
         register_root_at(&mut env, outer.path());
     }
@@ -455,8 +455,8 @@ fn duplicate_key_snapshots_previous_only_once() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root(&mut env, &project);
     }
 
@@ -485,8 +485,8 @@ fn child_cd_inside_active_root_keeps_snapshot() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root(&mut env, &project);
     }
 
@@ -515,15 +515,15 @@ fn manual_mutation_while_active_restores_snapshot() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root(&mut env, &project);
     }
 
     enter(&shell_env, &project);
     shell_env
         .write()
-        .set_system_env_var("FOO".to_string(), "user".to_string());
+        .set_and_export_shell_var("FOO".to_string(), "user".to_string());
 
     // The activation snapshot is authoritative: leaving restores the base.
     leave(&shell_env, &outside);
@@ -544,8 +544,8 @@ fn failed_activation_removes_stale_overlay_but_keeps_root() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root(&mut env, &dir_a);
         register_root(&mut env, &dir_b);
     }
@@ -578,8 +578,8 @@ fn nested_failure_keeps_valid_outer_active() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.unset_system_env_var("FOO");
-        env.set_system_env_var("FOO".to_string(), "base".to_string());
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
         register_root_at(&mut env, &inner_path);
         register_root_at(&mut env, outer.path());
     }
@@ -604,7 +604,7 @@ fn path_derived_lookup_state_follows_activation_and_restore() {
     let shell_env = Environment::new();
     {
         let mut env = shell_env.write();
-        env.set_system_env_var("PATH".to_string(), "/usr/bin".to_string());
+        env.set_and_export_shell_var("PATH".to_string(), "/usr/bin".to_string());
         register_root(&mut env, &project);
     }
 
@@ -626,5 +626,142 @@ fn path_derived_lookup_state_follows_activation_and_restore() {
         let env = shell_env.read();
         assert_eq!(system_env(&env, "PATH"), Some("/usr/bin".to_string()));
         assert_eq!(env.variable_state.paths, vec!["/usr/bin".to_string()]);
+    }
+}
+
+fn is_exported(env: &Environment, key: &str) -> bool {
+    env.variable_state.exported_vars.contains(key)
+}
+
+#[test]
+fn exported_variable_is_overridden_and_restored() {
+    let project = tempfile::tempdir().unwrap();
+    write_root_file(&project, ".env", "FOO=project\n");
+    let outside = tempfile::tempdir().unwrap();
+
+    let shell_env = Environment::new();
+    {
+        let mut env = shell_env.write();
+        env.unset_shell_var("FOO");
+        env.set_and_export_shell_var("FOO".to_string(), "base".to_string());
+        register_root(&mut env, &project);
+    }
+
+    enter(&shell_env, &project);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), Some("project".to_string()));
+        assert!(is_exported(&env, "FOO"));
+        assert_eq!(
+            env.child_process_env().get("FOO"),
+            Some(&"project".to_string())
+        );
+    }
+
+    leave(&shell_env, &outside);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), Some("base".to_string()));
+        assert!(is_exported(&env, "FOO"));
+        assert_eq!(
+            env.child_process_env().get("FOO"),
+            Some(&"base".to_string())
+        );
+    }
+}
+
+#[test]
+fn local_variable_is_temporarily_exported_and_restored_local() {
+    let project = tempfile::tempdir().unwrap();
+    write_root_file(&project, ".env", "FOO=project\n");
+    let outside = tempfile::tempdir().unwrap();
+
+    let shell_env = Environment::new();
+    {
+        let mut env = shell_env.write();
+        env.unset_shell_var("FOO");
+        env.set_shell_var("FOO".to_string(), "local".to_string());
+        assert!(!env.variable_state.exported_vars.contains("FOO"));
+        register_root(&mut env, &project);
+    }
+
+    enter(&shell_env, &project);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), Some("project".to_string()));
+        assert!(is_exported(&env, "FOO"));
+    }
+
+    leave(&shell_env, &outside);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), Some("local".to_string()));
+        assert!(!is_exported(&env, "FOO"));
+        assert!(!env.child_process_env().contains_key("FOO"));
+    }
+}
+
+#[test]
+fn absent_variable_returns_to_absent() {
+    let project = tempfile::tempdir().unwrap();
+    write_root_file(&project, ".env", "FOO=project\n");
+    let outside = tempfile::tempdir().unwrap();
+
+    let shell_env = Environment::new();
+    {
+        let mut env = shell_env.write();
+        env.unset_shell_var("FOO");
+        register_root(&mut env, &project);
+    }
+
+    enter(&shell_env, &project);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), Some("project".to_string()));
+        assert!(is_exported(&env, "FOO"));
+    }
+
+    leave(&shell_env, &outside);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "FOO"), None);
+        assert!(!is_exported(&env, "FOO"));
+        assert!(!env.child_process_env().contains_key("FOO"));
+    }
+}
+
+#[test]
+fn path_export_attribute_is_restored() {
+    let project = tempfile::tempdir().unwrap();
+    write_root_file(&project, ".envrc", "PATH_ADD /project/bin\n");
+    let outside = tempfile::tempdir().unwrap();
+
+    let shell_env = Environment::new();
+    {
+        let mut env = shell_env.write();
+        env.unset_shell_var("PATH");
+        // Local PATH: shell lookup follows it, children do not.
+        env.set_shell_var("PATH".to_string(), "/base".to_string());
+        assert!(!env.variable_state.exported_vars.contains("PATH"));
+        register_root(&mut env, &project);
+    }
+
+    enter(&shell_env, &project);
+    {
+        let env = shell_env.read();
+        assert_eq!(
+            system_env(&env, "PATH"),
+            Some("/project/bin:/base".to_string())
+        );
+        assert!(is_exported(&env, "PATH"));
+    }
+
+    leave(&shell_env, &outside);
+    {
+        let env = shell_env.read();
+        assert_eq!(system_env(&env, "PATH"), Some("/base".to_string()));
+        assert!(!is_exported(&env, "PATH"));
+        assert!(!env.child_process_env().contains_key("PATH"));
+        assert_eq!(env.variable_state.paths, vec!["/base".to_string()]);
     }
 }

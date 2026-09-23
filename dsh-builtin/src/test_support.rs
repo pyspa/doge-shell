@@ -234,6 +234,7 @@ impl ShellProxy for TestShellProxy {
             // that touch the same environment variables.
             unsafe { std::env::set_var(&key, &value) };
         }
+        self.vars.insert(key.clone(), value.clone());
         self.exported.insert(key, value);
     }
 
@@ -246,6 +247,7 @@ impl ShellProxy for TestShellProxy {
             // SAFETY: see `set_env_var` above.
             unsafe { std::env::remove_var(key) };
         }
+        self.vars.remove(key);
         self.exported.remove(key);
     }
 

@@ -32,7 +32,6 @@ pub struct ChildShellSnapshot {
     pub last_async_pid: Option<i32>,
     pub variables: HashMap<String, String>,
     pub exported_vars: HashSet<String>,
-    pub system_env_vars: HashMap<String, String>,
     pub aliases: HashMap<String, String>,
     pub abbreviations: HashMap<String, String>,
     pub command_abbreviations: HashMap<String, HashMap<String, String>>,
@@ -77,7 +76,6 @@ impl ChildShellSnapshot {
             last_async_pid: env.last_async_pid,
             variables: env.variable_state.variables.clone(),
             exported_vars: env.variable_state.exported_vars.clone(),
-            system_env_vars: env.variable_state.system_env_vars.clone(),
             aliases: env.variable_state.alias.clone(),
             abbreviations: env.variable_state.abbreviations.clone(),
             command_abbreviations: env.variable_state.command_abbreviations.clone(),
@@ -100,7 +98,6 @@ impl ChildShellSnapshot {
         env.last_async_pid = self.last_async_pid;
         env.variable_state.variables = self.variables.clone();
         env.variable_state.exported_vars = self.exported_vars.clone();
-        env.variable_state.system_env_vars = self.system_env_vars.clone();
         env.variable_state.alias = self.aliases.clone();
         env.variable_state.abbreviations = self.abbreviations.clone();
         env.variable_state.command_abbreviations = self.command_abbreviations.clone();
@@ -187,6 +184,65 @@ mod tests {
         assert_eq!(
             guard.integration_state.chat_model.read().clone(),
             Some("snapshot-model".to_string())
+        );
+    }
+
+    #[test]
+    fn snapshot_round_trips_export_attributes() {
+        let source = Environment::new();
+        {
+            let mut env = source.write();
+            env.variable_state.variables.clear();
+            env.variable_state.exported_vars.clear();
+            env.set_and_export_shell_var("INHERITED_VAR".to_string(), "inherited".to_string());
+            env.set_shell_var("LOCAL_VAR".to_string(), "local".to_string());
+        }
+        let snapshot = ChildShellSnapshot::capture(&source.read());
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        assert!(
+            !json.contains("system_env_vars"),
+            "unified snapshot must not carry the removed field"
+        );
+        let back: ChildShellSnapshot = serde_json::from_str(&json).expect("deserialize snapshot");
+        assert!(back.exported_vars.contains("INHERITED_VAR"));
+        assert!(!back.exported_vars.contains("LOCAL_VAR"));
+
+        let fresh = Environment::new();
+        back.apply_to(&mut fresh.write());
+        let guard = fresh.read();
+        assert_eq!(
+            guard.lookup_variable("INHERITED_VAR"),
+            Some("inherited".to_string())
+        );
+        assert_eq!(
+            guard.lookup_variable("LOCAL_VAR"),
+            Some("local".to_string())
+        );
+        assert_eq!(
+            guard.child_process_env().get("INHERITED_VAR"),
+            Some(&"inherited".to_string())
+        );
+        assert!(!guard.child_process_env().contains_key("LOCAL_VAR"));
+    }
+
+    #[test]
+    fn snapshot_restores_path_projection() {
+        let source = Environment::new();
+        source
+            .write()
+            .set_shell_var("PATH".to_string(), "/snapshot-bin:/usr/bin".to_string());
+        let snapshot = ChildShellSnapshot::capture(&source.read());
+
+        let fresh = Environment::new();
+        snapshot.apply_to(&mut fresh.write());
+        let guard = fresh.read();
+        assert_eq!(
+            guard.lookup_variable("PATH"),
+            Some("/snapshot-bin:/usr/bin".to_string())
+        );
+        assert_eq!(
+            guard.variable_state.paths,
+            vec!["/snapshot-bin".to_string(), "/usr/bin".to_string()]
         );
     }
 }

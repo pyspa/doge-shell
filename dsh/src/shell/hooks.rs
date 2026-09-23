@@ -53,9 +53,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
             shell
                 .environment
                 .write()
-                .variable_state
-                .variables
-                .insert("DOGESH_PROJECT".to_string(), name.clone());
+                .set_shell_var("DOGESH_PROJECT".to_string(), name.clone());
             debug!("Entered project: {}", name);
 
             let lisp_code = format!(
@@ -66,12 +64,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
                 debug!("Failed to execute on-project-switch-hooks: {}", e);
             }
         } else {
-            shell
-                .environment
-                .write()
-                .variable_state
-                .variables
-                .remove("DOGESH_PROJECT");
+            shell.environment.write().remove_shell_var("DOGESH_PROJECT");
             debug!("Left project");
         }
     }
@@ -82,7 +75,7 @@ pub fn exec_chpwd_hooks(shell: &mut Shell, pwd: &str) -> Result<()> {
 fn chpwd_update_env(pwd: &Path, _env: Arc<RwLock<Environment>>) {
     debug!("chpwd update env {:?}", pwd);
     _env.write()
-        .set_system_env_var("PWD".to_string(), pwd.display().to_string());
+        .set_and_export_shell_var("PWD".to_string(), pwd.display().to_string());
 }
 
 /// Execute pre-prompt hooks

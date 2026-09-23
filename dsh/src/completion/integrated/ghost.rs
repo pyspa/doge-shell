@@ -87,7 +87,16 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         }
 
-        let completion_generator = CompletionGenerator::new(&db_lock);
+        let environment_names: Vec<String> = self
+            .environment
+            .read()
+            .variable_state
+            .variables
+            .keys()
+            .cloned()
+            .collect();
+        let completion_generator =
+            CompletionGenerator::with_environment_names(&db_lock, &environment_names);
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(candidates) => candidates
                 .into_iter()
@@ -130,7 +139,15 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         }
 
-        let generator = ArgumentGenerator::new(&db_lock);
+        let environment_names: Vec<String> = self
+            .environment
+            .read()
+            .variable_state
+            .variables
+            .keys()
+            .cloned()
+            .collect();
+        let generator = ArgumentGenerator::with_environment_names(&db_lock, &environment_names);
         generator
             .generate_candidates_for_type(&arg_type, parsed_command_line)
             .map(|candidates| {

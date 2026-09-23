@@ -196,7 +196,9 @@ impl ShellProxy for Shell {
             value.as_str()
         };
         debug!("set env {} {}", &key, masked);
-        self.environment.write().set_system_env_var(key, value);
+        self.environment
+            .write()
+            .set_and_export_shell_var(key, value);
     }
 
     fn is_direnv_allowed(&self, path: &std::path::Path) -> bool {
@@ -210,7 +212,7 @@ impl ShellProxy for Shell {
 
     fn unset_env_var(&mut self, key: &str) {
         debug!("unset env {}", key);
-        self.environment.write().unset_system_env_var(key);
+        self.environment.write().unset_shell_var(key);
     }
 
     fn get_alias(&mut self, name: &str) -> Option<String> {

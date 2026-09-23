@@ -53,7 +53,6 @@ struct EnvironmentSnapshot {
     mcp_servers: Vec<dsh_types::mcp::McpServerConfig>,
     mcp_runtime_state: McpRuntimeStateSnapshot,
     execute_allowlist: Vec<String>,
-    system_env_vars: HashMap<String, String>,
     input_preferences: InputPreferences,
     safety_level: crate::safety::SafetyLevel,
     command_cache: HashMap<String, Option<String>>,
@@ -83,7 +82,6 @@ impl EnvironmentSnapshot {
                 .read()
                 .snapshot_runtime_state(),
             execute_allowlist: env.policy_state.execute_allowlist.read().clone(),
-            system_env_vars: env.variable_state.system_env_vars.clone(),
             input_preferences: env.completion_state.input_preferences,
             safety_level: *env.policy_state.safety_level.read(),
             command_cache: env.completion_state.command_cache.read().clone(),
@@ -174,7 +172,6 @@ impl LispEngine {
             .write()
             .restore_runtime_state(snapshot.mcp_runtime_state);
         *env.policy_state.execute_allowlist.write() = snapshot.execute_allowlist;
-        env.variable_state.system_env_vars = snapshot.system_env_vars;
         env.completion_state.input_preferences = snapshot.input_preferences;
         *env.policy_state.safety_level.write() = snapshot.safety_level;
         *env.completion_state.command_cache.write() = snapshot.command_cache;

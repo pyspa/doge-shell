@@ -61,11 +61,17 @@ pub(crate) struct VariableState {
     pub(crate) command_abbreviations: HashMap<String, HashMap<String, String>>,
     pub(crate) command_ledger_mode: CommandLedgerMode,
     pub(crate) paths: Vec<String>,
+    /// The single value storage for every shell variable. The startup
+    /// process environment is imported here once; after that this map is
+    /// authoritative and the process environment is never re-read for
+    /// shell state.
     pub(crate) variables: HashMap<String, String>,
+    /// Export attribute only, never a second value store. A name present
+    /// here (and with a value in `variables`) is materialized into child
+    /// environments.
     pub(crate) exported_vars: HashSet<String>,
     pub(crate) direnv_roots: Vec<DirEnvironment>,
     pub(crate) chpwd_hooks: Vec<Box<dyn ChangePwdHook + Send + Sync>>,
-    pub(crate) system_env_vars: HashMap<String, String>,
     pub(crate) z_exclude: Vec<String>,
     /// User key bindings from `config.lisp`, layered over the built-in table.
     ///
@@ -189,7 +195,7 @@ pub struct Environment {
     /// Flags if the shell is currently in startup mode (e.g. running config.lisp)
     pub(crate) startup_mode: bool,
     /// POSIX `set -o` option state. Plain `Copy` value, never stored in
-    /// `system_env_vars`/`variables`/`exported_vars`: it is shell
+    /// `variables`/`exported_vars`: it is shell
     /// configuration, not process environment.
     pub(crate) shell_options: ShellOptions,
 }
@@ -202,15 +208,20 @@ fn parse_z_exclude_from_vars(vars: &HashMap<String, String>) -> Vec<String> {
 
 impl Environment {
     /// Create a new environment with default settings.
+    ///
+    /// Imports the process environment once: every inherited name lands in
+    /// `variables` with its inherited value, and every inherited name is
+    /// marked exported. After this, `Environment` is authoritative.
     pub fn new() -> Arc<RwLock<Self>> {
-        let system_env_vars: HashMap<String, String> = env::vars().collect();
-        let z_exclude = parse_z_exclude_from_vars(&system_env_vars);
+        let variables: HashMap<String, String> = env::vars().collect();
+        let exported_vars: HashSet<String> = variables.keys().cloned().collect();
+        let z_exclude = parse_z_exclude_from_vars(&variables);
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]
             .iter()
             .map(|s| s.to_string())
             .collect();
 
-        if let Some(val) = system_env_vars.get("PATH") {
+        if let Some(val) = variables.get("PATH") {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
@@ -224,12 +235,11 @@ impl Environment {
                 abbreviations: HashMap::new(),
                 command_abbreviations: HashMap::new(),
                 command_ledger_mode: CommandLedgerMode::Off,
-                variables: HashMap::new(),
-                exported_vars: HashSet::new(),
+                variables,
+                exported_vars,
                 paths,
                 direnv_roots: Vec::new(),
                 chpwd_hooks: Vec::new(),
-                system_env_vars,
                 z_exclude,
                 keybindings: crate::repl::keybind::KeyBindings::with_defaults(),
             },
@@ -269,17 +279,19 @@ impl Environment {
             // variable. Writing "normal" unconditionally shadowed an inherited
             // `SAFETY_LEVEL=strict` in the shell variable map, so starting dsh
             // from a hardened parent shell silently dropped back to normal.
+            // Inherited names are already exported; a fresh default must not
+            // become exported on its own.
             let mut env = env_arc.write();
-            let inherited = env
-                .variable_state
-                .system_env_vars
-                .get("SAFETY_LEVEL")
-                .cloned();
+            let had_inherited = env.variable_state.variables.contains_key("SAFETY_LEVEL");
+            let inherited = env.variable_state.variables.get("SAFETY_LEVEL").cloned();
             let level = crate::safety::SafetyLevel::from_env_value(inherited);
             *env.policy_state.safety_level.write() = level;
             env.variable_state
                 .variables
                 .insert("SAFETY_LEVEL".to_string(), level.as_str().to_string());
+            if !had_inherited {
+                env.variable_state.exported_vars.remove("SAFETY_LEVEL");
+            }
 
             // Publish the inherited `AI_MESSAGE_LANG`/`AI_CHAT_MODEL` once;
             // after this the variable setters keep the slots in step.
@@ -309,7 +321,6 @@ impl Environment {
                     exported_vars: parent.variable_state.exported_vars.clone(),
                     direnv_roots: parent.variable_state.direnv_roots.clone(),
                     chpwd_hooks: Vec::new(),
-                    system_env_vars: parent.variable_state.system_env_vars.clone(),
                     z_exclude: parent.variable_state.z_exclude.clone(),
                     keybindings: parent.variable_state.keybindings.clone(),
                 },

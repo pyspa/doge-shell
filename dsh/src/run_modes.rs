@@ -430,16 +430,17 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     };
     shell.environment.write().integration_state.lifecycle = lifecycle.clone();
     if let Some((key, value)) = owner_marker {
-        // Published through the shell's own environment snapshot, not
-        // `std::env::set_var`: `dsh/src/process/process.rs` builds each
-        // spawned child's `envp` explicitly from
-        // `Environment.variable_state.system_env_vars`, so a nested `dsh`
-        // (or any other agent CLI started from inside this shell) only sees
-        // this marker if it goes through that path.
+        // Published through the shell's own environment as an exported
+        // variable, not only `std::env::set_var`: `dsh/src/process/process.rs`
+        // builds each spawned child's `envp` explicitly from the exported
+        // shell variables, so a nested `dsh` (or any other agent CLI started
+        // from inside this shell) only sees this marker if it goes through
+        // that path. The agent lifecycle code intentionally also sets the
+        // real process environment marker for plain `Command::new` children.
         shell
             .environment
             .write()
-            .set_system_env_var(key.to_string(), value);
+            .set_and_export_shell_var(key.to_string(), value);
         spawn_herdr_shutdown_signal_watcher(lifecycle.clone());
     }
     let _lifecycle_shutdown = agent_lifecycle::ShutdownGuard::new(lifecycle);

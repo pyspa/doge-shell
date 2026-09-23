@@ -39,8 +39,8 @@ impl IntegratedCompletionEngine {
     }
 
     /// Build variable-name candidates from the shell environment. Names come
-    /// from system environment variables, shell-local variables, and the live
-    /// process environment, deduplicated and sorted. `format_value` renders the
+    /// from shell variables only (inherited names are already seeded there),
+    /// deduplicated and sorted. `format_value` renders the
     /// final replacement text (e.g. `$NAME` or `${NAME}`).
     pub(super) fn variable_candidates(
         &self,
@@ -50,10 +50,8 @@ impl IntegratedCompletionEngine {
         let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         {
             let env = self.environment.read();
-            names.extend(env.variable_state.system_env_vars.keys().cloned());
             names.extend(env.variable_state.variables.keys().cloned());
         }
-        names.extend(std::env::vars().map(|(key, _)| key));
 
         names
             .into_iter()
@@ -79,9 +77,18 @@ impl IntegratedCompletionEngine {
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
 
+        let environment_names: Vec<String> = self
+            .environment
+            .read()
+            .variable_state
+            .variables
+            .keys()
+            .cloned()
+            .collect();
         let db_lock = self.command_completion.lock();
 
-        let completion_generator = CompletionGenerator::new(&db_lock);
+        let completion_generator =
+            CompletionGenerator::with_environment_names(&db_lock, &environment_names);
 
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
@@ -116,7 +123,10 @@ impl IntegratedCompletionEngine {
 
                             // Retry generation with loaded command
                             let db_lock = self.command_completion.lock();
-                            let completion_generator = CompletionGenerator::new(&db_lock);
+                            let completion_generator = CompletionGenerator::with_environment_names(
+                                &db_lock,
+                                &environment_names,
+                            );
                             match completion_generator.generate_candidates(parsed_command_line) {
                                 Ok(candidates) => {
                                     let enhanced_candidates = candidates

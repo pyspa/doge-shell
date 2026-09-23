@@ -38,6 +38,17 @@ pub(crate) fn is_valid_shell_var_name(name: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Logical shell variable state for reversible overlays.
+///
+/// One logical variable has exactly one value (`variables`) plus an export
+/// attribute (`exported_vars`). Snapshotting both is what lets a direnv
+/// overlay restore the pre-activation state exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShellVarState {
+    pub value: Option<String>,
+    pub exported: bool,
+}
+
 impl Environment {
     /// Get the value of a variable, given `$FOO`, `${FOO}` or a bare `FOO`.
     pub fn get_var(&self, key: &str) -> Option<String> {
@@ -113,7 +124,7 @@ impl Environment {
             return Some(value.clone());
         }
 
-        self.variable_state.system_env_vars.get(name).cloned()
+        None
     }
 
     /// Resolves an alias from the Environment's alias map.
@@ -124,21 +135,6 @@ impl Environment {
             .get(name)
             .cloned()
             .unwrap_or_else(|| name.to_string())
-    }
-
-    /// Set a process-visible environment variable in the shell snapshot.
-    pub fn set_system_env_var(&mut self, key: String, value: String) {
-        self.variable_state
-            .system_env_vars
-            .insert(key.clone(), value);
-
-        self.refresh_derived_state(&key);
-    }
-
-    /// Remove a process-visible environment variable from the shell snapshot.
-    pub fn unset_system_env_var(&mut self, key: &str) {
-        self.variable_state.system_env_vars.remove(key);
-        self.refresh_derived_state(key);
     }
 
     /// Set a shell variable, keeping anything derived from its value in step.
@@ -179,12 +175,55 @@ impl Environment {
     /// Remove a shell variable, keeping derived state in step.
     ///
     /// Used to restore lexical scope (Lisp `value-let`): a name that had no
-    /// value before the block returns to absent afterwards.
+    /// value before the block returns to absent afterwards. The export
+    /// attribute is preserved: this only removes the value.
     pub(crate) fn remove_shell_var(&mut self, key: &str) -> Option<String> {
         let canonical = canonical_shell_var_name(key);
         let previous = self.variable_state.variables.remove(canonical);
         self.refresh_derived_state(canonical);
         previous
+    }
+
+    /// Logically unset a variable: remove both its value and its export bit.
+    ///
+    /// Unlike [`Self::remove_shell_var`] (lexical restoration, which keeps
+    /// the export attribute), this is the `unset` semantic: afterwards the
+    /// name is absent from the shell and from child environments.
+    pub(crate) fn unset_shell_var(&mut self, key: &str) {
+        let canonical = canonical_shell_var_name(key).to_string();
+        self.variable_state.variables.remove(&canonical);
+        self.variable_state.exported_vars.remove(&canonical);
+        self.refresh_derived_state(&canonical);
+    }
+
+    /// Snapshot one logical variable: its value plus its export attribute.
+    pub(crate) fn shell_var_state(&self, key: &str) -> ShellVarState {
+        let canonical = canonical_shell_var_name(key);
+        ShellVarState {
+            value: self.variable_state.variables.get(canonical).cloned(),
+            exported: self.variable_state.exported_vars.contains(canonical),
+        }
+    }
+
+    /// Restore one logical variable in a single mutation.
+    pub(crate) fn restore_shell_var_state(&mut self, key: &str, state: &ShellVarState) {
+        let canonical = canonical_shell_var_name(key).to_string();
+        match &state.value {
+            Some(value) => {
+                self.variable_state
+                    .variables
+                    .insert(canonical.clone(), value.clone());
+            }
+            None => {
+                self.variable_state.variables.remove(&canonical);
+            }
+        }
+        if state.exported {
+            self.variable_state.exported_vars.insert(canonical.clone());
+        } else {
+            self.variable_state.exported_vars.remove(&canonical);
+        }
+        self.refresh_derived_state(&canonical);
     }
 
     /// Rebuild whatever the shell caches from `key`'s value.
@@ -264,11 +303,12 @@ impl Environment {
     ///
     /// `None` (no key) clears the slot; every shell-side caller treats that
     /// as "not configured", the same as a missing `ai_service` used to.
+    ///
+    /// Reads only the shell variable map: `Environment::new()` already
+    /// imported the startup process environment, so a process-global
+    /// fallback here would resurrect a key the shell explicitly unset.
     pub fn reload_ai_client(&mut self) {
-        let config = dsh_openai::OpenAiConfig::from_getter(|key| {
-            self.lookup_variable(key)
-                .or_else(|| std::env::var(key).ok())
-        });
+        let config = dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key));
         let client = match config.api_key() {
             None => None,
             Some(_) => match dsh_openai::ChatGptClient::try_from_config(&config) {
@@ -316,28 +356,14 @@ impl Environment {
         self.integration_state.ai_service.clone()
     }
 
-    /// The value a child process would be given for `name`.
-    ///
-    /// An exported shell variable shadows the snapshot the shell started from —
-    /// that is what `child_process_env` builds — so anything that reacts to a
-    /// variable's *value* has to resolve it the same way, or the shell disagrees
-    /// with the processes it launches.
-    pub fn effective_env_var(&self, name: &str) -> Option<&str> {
-        let name = canonical_shell_var_name(name);
-        if self.variable_state.exported_vars.contains(name)
-            && let Some(value) = self.variable_state.variables.get(name)
-        {
-            return Some(value.as_str());
-        }
-        self.variable_state
-            .system_env_vars
-            .get(name)
-            .map(String::as_str)
-    }
-
     /// Build the effective environment for child processes.
+    ///
+    /// The single materializer: every exported shell variable's current
+    /// value, nothing else. `Process::prepare_execution` shares the same
+    /// precedence (command-scoped overrides win, then this map, then the
+    /// `TERM` fallback).
     pub fn child_process_env(&self) -> HashMap<String, String> {
-        let mut env_map = self.variable_state.system_env_vars.clone();
+        let mut env_map = HashMap::with_capacity(self.variable_state.exported_vars.len() + 1);
 
         for key in &self.variable_state.exported_vars {
             if let Some(value) = self.variable_state.variables.get(key) {
@@ -350,5 +376,18 @@ impl Environment {
         }
 
         env_map
+    }
+
+    /// Iterate exported variables without allocating a map.
+    ///
+    /// Shared precedence helper for `Process::prepare_execution`: the same
+    /// `variables + exported_vars` view as [`Self::child_process_env`], but
+    /// pushed through a callback so per-spawn allocation stays minimal.
+    pub(crate) fn for_each_exported_var(&self, mut f: impl FnMut(&str, &str)) {
+        for key in &self.variable_state.exported_vars {
+            if let Some(value) = self.variable_state.variables.get(key) {
+                f(key.as_str(), value.as_str());
+            }
+        }
     }
 }

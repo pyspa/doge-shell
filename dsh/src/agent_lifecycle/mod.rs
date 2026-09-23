@@ -579,7 +579,7 @@ static ACTIVATION: OnceLock<()> = OnceLock::new();
 /// child spawned via a plain `Command::new`, such as the AI `execute` tool's
 /// `sh -c` or `ShellProxy::capture_command`, inherits it through ordinary OS
 /// env inheritance) *and* as the returned `(key, value)` pair, which the
-/// caller must additionally push through `Environment::set_system_env_var`
+/// caller must additionally push through `Environment::set_and_export_shell_var`
 /// (so a child spawned through this shell's own external-command path,
 /// which builds each child's `envp` explicitly from its own snapshot in
 /// `dsh/src/process/process.rs` rather than the live process environment,

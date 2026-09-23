@@ -20,11 +20,25 @@ use anyhow::Result;
 
 pub struct ArgumentGenerator<'a> {
     database: &'a CommandCompletionDatabase,
+    environment_names: Option<&'a [String]>,
 }
 
 impl<'a> ArgumentGenerator<'a> {
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
-        Self { database }
+        Self {
+            database,
+            environment_names: None,
+        }
+    }
+
+    pub fn with_environment_names(
+        database: &'a CommandCompletionDatabase,
+        names: &'a [String],
+    ) -> Self {
+        Self {
+            database,
+            environment_names: Some(names),
+        }
     }
 
     /// Generate argument completion candidates
@@ -240,9 +254,9 @@ impl<'a> ArgumentGenerator<'a> {
             }
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
-                for (key, _) in std::env::vars() {
-                    if fuzzy_match_score(&key, &parsed.current_token).is_some() {
-                        candidates.push(CompletionCandidate::argument(key, None));
+                for key in self.environment_names.unwrap_or(&[]) {
+                    if fuzzy_match_score(key, &parsed.current_token).is_some() {
+                        candidates.push(CompletionCandidate::argument(key.clone(), None));
                     }
                 }
                 Ok(candidates)

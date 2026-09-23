@@ -6,6 +6,7 @@
 //! always unload deepest-first, then load shallowest-first.
 
 use crate::environment::Environment;
+use crate::environment::variables::ShellVarState;
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -31,12 +32,11 @@ pub struct EnvEntry {
     pub value: String,
 }
 
-/// Previous value captured at activation time for one overlaid key.
+/// Previous logical state captured at activation time for one overlaid key.
 #[derive(Debug, Clone)]
 struct EnvRestore {
     key: String,
-    /// `Some` restores the value, `None` unsets the key on deactivation.
-    previous: Option<String>,
+    previous: ShellVarState,
 }
 
 /// Runtime activation state owned by exactly one active root.
@@ -86,12 +86,12 @@ impl<'a> PatchBuilder<'a> {
         }
     }
 
-    /// Snapshot the pre-activation value of `key` exactly once.
+    /// Snapshot the pre-activation logical state of `key` exactly once.
     fn touch(&mut self, key: &str) {
         if self.seen.insert(key.to_string()) {
             self.restore.push(EnvRestore {
                 key: key.to_string(),
-                previous: self.env.variable_state.system_env_vars.get(key).cloned(),
+                previous: self.env.shell_var_state(key),
             });
         }
     }
@@ -106,12 +106,12 @@ impl<'a> PatchBuilder<'a> {
     }
 
     /// Current working value: earlier entries in this patch win over the
-    /// pre-activation baseline.
+    /// pre-activation baseline (the logical shell value).
     fn working(&self, key: &str) -> Option<String> {
         self.index
             .get(key)
             .map(|&i| self.values[i].1.clone())
-            .or_else(|| self.env.variable_state.system_env_vars.get(key).cloned())
+            .or_else(|| self.env.lookup_variable(key))
     }
 
     fn finish(self) -> DirEnvPatch {
@@ -179,6 +179,8 @@ impl DirEnvironment {
 
     /// Parse, build the complete patch, commit it, then mark active.
     /// `None` when already active: the original snapshot is never retaken.
+    /// Overlay values are exported: `.env`/`.envrc` entries are an
+    /// environment overlay, visible to children while active.
     fn activate(&mut self, env: &mut Environment) -> Result<Option<DirenvEvent>> {
         if self.active.is_some() {
             return Ok(None);
@@ -186,7 +188,7 @@ impl DirEnvironment {
         let entries = self.read_env_file()?;
         let patch = build_patch(&entries, env);
         for (key, value) in &patch.values {
-            env.set_system_env_var(key.clone(), value.clone());
+            env.set_and_export_shell_var(key.clone(), value.clone());
         }
         let exported = patch.values.iter().map(|(key, _)| key.clone()).collect();
         self.active = Some(ActiveDirEnvironment {
@@ -198,16 +200,13 @@ impl DirEnvironment {
         }))
     }
 
-    /// Restore the exact activation-time state, then mark inactive.
+    /// Restore the exact activation-time logical state, then mark inactive.
     /// `None` when already inactive.
     fn deactivate(&mut self, env: &mut Environment) -> Option<DirenvEvent> {
         let active = self.active.take()?;
         // Reverse touch order: unwind the overlay in reverse apply order.
         for saved in active.restore.iter().rev() {
-            match &saved.previous {
-                Some(value) => env.set_system_env_var(saved.key.clone(), value.clone()),
-                None => env.unset_system_env_var(&saved.key),
-            }
+            env.restore_shell_var_state(&saved.key, &saved.previous);
         }
         Some(DirenvEvent::Unloaded {
             path: self.path.clone(),
@@ -335,10 +334,10 @@ fn reconcile_roots(
 /// lose an allowed root.
 ///
 /// This take is sound because nothing called during reconciliation
-/// (`set_system_env_var` / `unset_system_env_var` and the derived-state
-/// refreshes behind them) reads `direnv_roots`. If a future derived-state
-/// hook starts consulting the allow-list, this ownership split must be
-/// revisited.
+/// (`set_and_export_shell_var` / `restore_shell_var_state` and the
+/// derived-state refreshes behind them) reads `direnv_roots`. If a future
+/// derived-state hook starts consulting the allow-list, this ownership
+/// split must be revisited.
 fn reconcile_path(pwd: &Path, environment: &mut Environment) -> Result<Vec<DirenvEvent>> {
     let mut roots = std::mem::take(&mut environment.variable_state.direnv_roots);
     let result = reconcile_roots(pwd, &mut roots, environment);

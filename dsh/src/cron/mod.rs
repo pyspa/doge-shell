@@ -92,7 +92,7 @@ pub fn command(shell: &mut crate::shell::Shell, ctx: &Context, argv: Vec<String>
 
     let store = SqliteCronStore::open(&config_paths::cron_state_dir())?;
     match action {
-        "add" | "create" => handlers::add(ctx, &store, rest),
+        "add" | "create" => handlers::add(shell, ctx, &store, rest),
         "list" | "ls" => handlers::list(ctx, &store, rest),
         "show" => handlers::show(ctx, &store, rest),
         "edit" => handlers::edit(ctx, &store, rest),

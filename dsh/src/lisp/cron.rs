@@ -49,7 +49,7 @@ fn now() -> i64 {
 /// Registering the same name twice **replaces** the job (upsert), which is
 /// what makes it safe to leave in `config.lisp`: every launch runs this line
 /// again.
-pub fn cron_add(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn cron_add(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.len() < 3 || args.len() > 4 {
         return Err(RuntimeError::new(
             "cron-add requires 3 or 4 arguments: name, schedule, command, [notify]",
@@ -111,8 +111,9 @@ pub fn cron_add(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runti
     };
 
     let store = open_store()?;
+    let snapshot = env.borrow().shell_env.read().child_process_env();
     let id = store
-        .upsert(&spec, &std::env::vars().collect(), now())
+        .upsert(&spec, &snapshot, now())
         .map_err(|err| RuntimeError::new(format!("cron-add: {err}").as_str()))?;
 
     Ok(Value::Int(id))

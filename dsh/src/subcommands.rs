@@ -31,11 +31,8 @@ pub async fn handle_completion_command(
     // Initialize AI service
     let env = Environment::new();
     let config = OpenAiConfig::from_getter(|key| {
-        let value = {
-            let guard = env.read();
-            guard.get_var(key)
-        };
-        value.or_else(|| std::env::var(key).ok())
+        let guard = env.read();
+        guard.get_var(key)
     });
 
     let _api_key = match config.api_key() {

@@ -1,9 +1,8 @@
-//! Variable lookup: one name, one answer.
+//! Variable lookup: one logical variable, one stored value.
 //!
-//! The shell variable map is written to with and without a `$` prefix
-//! depending on which builtin does the writing, and reads only tried one
-//! spelling. `export FOO=x; echo $FOO` printed nothing while the child process
-//! saw `FOO=x`.
+//! `variable_state.variables` is the single value storage and
+//! `exported_vars` carries only the export attribute. `$FOO`, `${FOO}` and
+//! `FOO` canonicalize to one `FOO` key, never two entries.
 
 mod common;
 

@@ -12,10 +12,16 @@
 - `config.lisp` は `Repl::new` より前に走る。REPL 起動前に登録できる必要があるものは `Environment` に置く。
 - `variable_state.variables` / `exported_vars` の key は bare variable name のみ。
 - sigil/brace 付きスペルは lookup/parser input syntax で、storage key にしない。
+- `Environment::variables` が全 shell variable value の唯一の storage。
+- 起動時 process environment も `variables` に seed し、その name を `exported_vars` に入れる。
+- `exported_vars` は export attribute のみで値を持たない。
+- child environment は `variables` + `exported_vars` から materialize する。
+- runtime shell state の fallback として `std::env` を再読込しない。
+- `std::env` は bootstrap/process-global integration boundary に限定する。
 - shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。
 - raw map の bulk restore/apply 後は variable-derived projections を再構築する。
 - direnv restore state は root 登録時ではなく activation 時に capture する。
-- active direnv root は exact previous environment patch を所有し、leave 時に Some(value) は restore、None は unset する。
+- active direnv root は exact previous logical state（value + export bit）を所有し、leave 時に `restore_shell_var_state` で復元する。
 - cross-root transition は unload deepest-first → load shallowest-first。
 - direnv read/load failure で allowed root を失わない。
 - direnv PATH restore に process-global std::env を使わない。

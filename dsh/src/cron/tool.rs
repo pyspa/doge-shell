@@ -49,7 +49,7 @@ impl CronToolHost for Shell {
             CronToolAction::Incidents => incidents(&store),
             CronToolAction::Status => status(&store),
             CronToolAction::Doctor => doctor(self, &store),
-            CronToolAction::Create => create(&store, request),
+            CronToolAction::Create => create(self, &store, request),
             CronToolAction::Update => update(&store, request),
             CronToolAction::Pause => set_paused(&store, request, true),
             CronToolAction::Resume => set_paused(&store, request, false),
@@ -197,7 +197,11 @@ fn doctor(shell: &mut Shell, store: &SqliteCronStore) -> Result<serde_json::Valu
     Ok(doctor_report(shell, store, now())?.to_json())
 }
 
-fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_json::Value> {
+fn create(
+    shell: &mut Shell,
+    store: &SqliteCronStore,
+    request: &CronToolRequest,
+) -> Result<serde_json::Value> {
     let mut argv: Vec<String> = Vec::new();
     if let Some(name) = &request.name {
         argv.push("--name".to_string());
@@ -256,7 +260,8 @@ fn create(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_js
     let cwd = current_dir_string()?;
     let spec = build_spec(parsed, cwd).map_err(anyhow::Error::msg)?;
     let name = spec.name.clone();
-    let id = store.create(&spec, &std::env::vars().collect(), now(), force)?;
+    let environment = shell.environment.read().child_process_env();
+    let id = store.create(&spec, &environment, now(), force)?;
 
     Ok(json!({
         "action": "create",

@@ -67,6 +67,69 @@ fn store() -> (TempDir, SqliteCronStore) {
     (dir, store)
 }
 
+#[test]
+fn create_snapshots_shell_child_environment_not_process_env() {
+    use dsh_types::cron::job::RunTrigger;
+    let (_dir, store) = store();
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    shell
+        .environment
+        .write()
+        .set_and_export_shell_var("CRON_RUNTIME_ONLY".to_string(), "value".to_string());
+    assert!(std::env::var_os("CRON_RUNTIME_ONLY").is_none());
+
+    let request = CronToolRequest {
+        name: Some("cron-env-probe".to_string()),
+        schedule: Some("5m".to_string()),
+        command: Some("true".to_string()),
+        ..request()
+    };
+    create(&mut shell, &store, &request).expect("create");
+    store
+        .set_paused("cron-env-probe", false, 0)
+        .expect("resume");
+    store.trigger("cron-env-probe", 0).expect("trigger");
+    let claimed = store
+        .claim_due(0, "owner", 10, RunTrigger::Tick)
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(
+        claimed[0].env.get("CRON_RUNTIME_ONLY"),
+        Some(&"value".to_string()),
+        "job must carry the shell child environment, not the process env"
+    );
+}
+
+#[test]
+fn process_env_added_after_boot_does_not_leak_into_cron_snapshot() {
+    use dsh_types::cron::job::RunTrigger;
+    let _lock = crate::test_env_lock();
+    let (_dir, store) = store();
+    let mut shell = crate::shell::Shell::new(crate::environment::Environment::new());
+    // Added to the process only, after the shell started.
+    unsafe { std::env::set_var("DOGESH_CRON_STALE", "stale") };
+    let request = CronToolRequest {
+        name: Some("cron-stale-probe".to_string()),
+        schedule: Some("5m".to_string()),
+        command: Some("true".to_string()),
+        ..request()
+    };
+    create(&mut shell, &store, &request).expect("create");
+    unsafe { std::env::remove_var("DOGESH_CRON_STALE") };
+    store
+        .set_paused("cron-stale-probe", false, 0)
+        .expect("resume");
+    store.trigger("cron-stale-probe", 0).expect("trigger");
+    let claimed = store
+        .claim_due(0, "owner", 10, RunTrigger::Tick)
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert!(
+        !claimed[0].env.contains_key("DOGESH_CRON_STALE"),
+        "process-only key must not enter the job snapshot"
+    );
+}
+
 fn request() -> CronToolRequest {
     CronToolRequest::default()
 }
@@ -80,7 +143,12 @@ fn create_registers_a_paused_shell_job_regardless_of_the_request() {
         command: Some("git fetch --all".to_string()),
         ..request()
     };
-    let value = create(&store, &request).expect("create");
+    let value = create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+        &store,
+        &request,
+    )
+    .expect("create");
     assert_eq!(value["job"], json!("fetch"));
     assert_eq!(value["paused"], json!(true));
 
@@ -97,7 +165,12 @@ fn create_defaults_a_name_from_the_command_when_none_is_given() {
         command: Some("git fetch --all".to_string()),
         ..request()
     };
-    let value = create(&store, &request).expect("create");
+    let value = create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+        &store,
+        &request,
+    )
+    .expect("create");
     assert_eq!(value["job"], json!("git"));
 }
 
@@ -108,7 +181,14 @@ fn create_without_a_schedule_is_a_clear_error() {
         command: Some("true".to_string()),
         ..request()
     };
-    assert!(create(&store, &request).is_err());
+    assert!(
+        create(
+            &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+            &store,
+            &request
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -120,7 +200,13 @@ fn create_refuses_an_agent_job() {
         goal: Some("summarise new commits".to_string()),
         ..request()
     };
-    let error = create(&store, &request).unwrap_err().to_string();
+    let error = create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+        &store,
+        &request,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("no longer supported"), "{error}");
 }
 
@@ -133,20 +219,40 @@ fn create_refuses_a_duplicate_name_without_force() {
         command: Some("git fetch".to_string()),
         ..request()
     };
-    create(&store, &request).expect("first create");
-    assert!(create(&store, &request).is_err());
+    create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+        &store,
+        &request,
+    )
+    .expect("first create");
+    assert!(
+        create(
+            &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+            &store,
+            &request
+        )
+        .is_err()
+    );
 
     let forced = CronToolRequest {
         force: true,
         ..request
     };
-    assert!(create(&store, &forced).is_ok());
+    assert!(
+        create(
+            &mut crate::shell::Shell::new(crate::environment::Environment::new()),
+            &store,
+            &forced
+        )
+        .is_ok()
+    );
 }
 
 #[test]
 fn update_refuses_agent_fields() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -173,6 +279,7 @@ fn update_refuses_agent_fields() {
 fn update_without_naming_a_field_is_a_clear_error() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -198,6 +305,7 @@ fn update_without_naming_a_field_is_a_clear_error() {
 fn pause_and_resume_round_trip() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -222,6 +330,7 @@ fn pause_and_resume_round_trip() {
 fn remove_deletes_the_job() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -247,6 +356,7 @@ fn remove_deletes_the_job() {
 fn run_marks_the_job_due_without_spawning_anything() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -279,6 +389,7 @@ fn run_marks_the_job_due_without_spawning_anything() {
 fn run_refuses_a_job_that_is_still_paused() {
     let (_dir, store) = store();
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         &store,
         &CronToolRequest {
             name: Some("fetch".to_string()),
@@ -351,6 +462,7 @@ fn run_a_job_named(store: &SqliteCronStore, name: &str, cwd: &str, stdout: &str)
     use dsh_types::cron::job::{RunOutcome, RunState, RunTrigger};
 
     create(
+        &mut crate::shell::Shell::new(crate::environment::Environment::new()),
         store,
         &CronToolRequest {
             name: Some(name.to_string()),

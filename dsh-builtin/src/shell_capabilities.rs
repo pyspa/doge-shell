@@ -459,6 +459,20 @@ pub trait ReadCapability {
     ) -> anyhow::Result<dsh_types::ExitStatus>;
 }
 
+/// Child-visible environment owned by the shell core.
+///
+/// Returns the materialized child environment (`variables` filtered by
+/// `exported_vars`): what a `bash` spawned for `include` must inherit via
+/// `env_clear` + `envs`, never the process-global `std::env`.
+///
+/// Like `JobControlCapability`, this is a supertrait bound on
+/// [`crate::ShellProxy`], not a new facade method: no entry is added to
+/// the frozen compatibility surface. Both the real `Shell` and
+/// `TestShellProxy` implement it explicitly.
+pub trait ProcessEnvironmentCapability {
+    fn child_process_environment(&self) -> HashMap<String, String>;
+}
+
 /// What the shell's safety policy says about a command the agent wants to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCommandVerdict {

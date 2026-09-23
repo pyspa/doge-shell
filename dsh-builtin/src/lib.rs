@@ -205,6 +205,7 @@ pub trait ShellProxy:
     + shell_capabilities::JobControlCapability
     + shell_capabilities::ShellOptionCapability
     + shell_capabilities::ReadCapability
+    + shell_capabilities::ProcessEnvironmentCapability
 {
     /// Initiates shell exit process
     fn exit_shell(&mut self);

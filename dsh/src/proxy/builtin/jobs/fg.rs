@@ -160,6 +160,21 @@ pub(crate) async fn foreground_selected_job(
         );
     }
 
+    // FullProxy resume preparation is transactional and must precede
+    // SIGCONT / foreground wait: clone + writer failures leave the stopped
+    // job intact so the caller can requeue it as `Stopped`.
+    if crate::process::job_pty::uses_full_pty_proxy(&job)
+        && let Err(err) = crate::process::job_pty::resume_pty_input_proxy(&mut job).await
+    {
+        job.refresh_lifecycle_state();
+        shell.wait_jobs.push(job);
+        return Err(err);
+    }
+    // Raw mode is scoped to each active FullProxy foreground interval:
+    // enable → input proxy resume (above) → SIGCONT / foreground wait →
+    // restore on guard drop (after finalization below).
+    let _pty_raw_guard = crate::process::job_pty::ForegroundPtyRawModeGuard::for_resume(&job);
+
     let old_state = job.state;
     // `job.foreground` stays `false`: it records background provenance, not
     // temporary foreground ownership during this resume.
@@ -192,7 +207,7 @@ pub(crate) async fn foreground_selected_job(
         job_id,
         wait_result.as_ref().map(|_| ()).map_err(|e| e.to_string())
     );
-    finalize_foreground_job(shell, job, wait_result).await
+    finalize_foreground_job(shell, job, wait_result, ctx).await
 }
 
 /// Reconcile a foreground wait and requeue the job when it is still active.
@@ -202,38 +217,72 @@ pub(crate) async fn foreground_selected_job(
 /// tree says completed. Retention runs before `wait_result` propagation so
 /// an error path never orphans an active process group; a completed job is
 /// still dropped even when the wait errored.
-/// Finalize a foreground wait: completed trees go through the canonical
-/// completed-job finalizer (output drain to EOF, known-async status
-/// archive); anything else returns to the job table.
+/// Finalize a foreground wait: completed trees go through PTY-specific
+/// completion (input stop, output drain to EOF, history once) and then the
+/// canonical completed-job finalizer (output drain to EOF, known-async
+/// status archive); anything else returns to the job table with stopped
+/// PTY ownership (`pty`/`pty_output_task` kept, input proxy stopped) so the
+/// prompt never shares terminal input with a stopped FullProxy job.
 ///
 /// Async because the canonical finalizer drains output monitors.
 pub(crate) async fn finalize_foreground_job(
     shell: &mut Shell,
     mut job: crate::process::Job,
     wait_result: Result<()>,
+    ctx: &Context,
 ) -> Result<()> {
     job.refresh_lifecycle_state();
     // Strict ownership: only a fully-completed tree may be dropped, and
     // only through the canonical finalizer.
     if !job.is_process_tree_completed() {
+        // Returning to the prompt with a FullProxy job alive: stop the
+        // input proxy (keep PTY/output) even on wait errors, so the REPL
+        // never competes for `/dev/tty` reads. Never await output here: a
+        // stopped child holds the slave, so EOF may never arrive.
+        if crate::process::job_pty::uses_full_pty_proxy(&job) {
+            crate::process::job_pty::suspend_stopped_pty_input(&mut job).await;
+        }
         debug!(
             "FG_CMD_REQUEUE: Job {} still active after foreground wait (state: {:?}), returning to job table",
             job.job_id, job.state
         );
         shell.wait_jobs.push(job);
-    } else {
-        debug!(
-            "FG_CMD_DONE: Job {} completed, finalizing through the canonical path",
-            job.job_id
-        );
-        crate::shell::job::finalize_completed_job(
-            shell,
-            job,
-            crate::shell::job::FinalizeDrain::ToEof,
-        )
-        .await?;
+        return wait_result;
     }
-    wait_result
+    debug!(
+        "FG_CMD_DONE: Job {} completed, finalizing through the canonical path",
+        job.job_id
+    );
+    // PTY-specific completion first (shared with the initial foreground
+    // launch path, not a duplicate algorithm), then the canonical
+    // monitor/ledger finalizer. Both are attempted even when the wait
+    // errored so a completed tree is never orphaned for error reporting.
+    let has_pty_state =
+        job.pty.is_some() || job.pty_output_task.is_some() || job.pty_mode.is_some();
+    let pty_settlement = if has_pty_state {
+        crate::process::job_pty::capture_completed_output_and_history(&mut job, ctx, shell).await
+    } else {
+        Ok(())
+    };
+    let finalizer_outcome = crate::shell::job::finalize_completed_job(
+        shell,
+        job,
+        crate::shell::job::FinalizeDrain::ToEof,
+    )
+    .await;
+    // Error precedence: foreground wait / process ownership first, PTY
+    // settlement second. Reconciliation is never skipped for reporting.
+    if let Err(wait_err) = wait_result {
+        if let Err(pty_err) = &pty_settlement {
+            debug!("fg PTY settlement also failed: {pty_err:#}");
+        }
+        if let Err(fin_err) = &finalizer_outcome {
+            debug!("fg canonical finalizer also failed: {fin_err:#}");
+        }
+        return Err(wait_err);
+    }
+    pty_settlement?;
+    finalizer_outcome.map(|_| ())
 }
 
 /// Reconcile a background resume without orphaning an active job on error.

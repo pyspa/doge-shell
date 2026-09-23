@@ -16,6 +16,16 @@
 - `ECHILD` は wait の観測であって合成 `ProcessState` ではない。実ステータスを消費したコードだけが tree に記録する。後続の ECHILD 観測が exit code を捏造しない。
 - `mark_stopped_processes_running` は `Stopped -> Running` のみ。`Completed` は触らない。
 
+## Foreground stop / PTY ownership
+
+- foreground `JobLaunchOutcome` は canonical tree から導出する。tail-only (`last_process_state`) を launch outcome に使わない。
+- logical final status は completed tree にだけ存在する。incomplete tree の `final_exit_status()` は pipefail ON/OFF とも `None`。
+- stopped FullProxy job は PTY/output ownership を保持するが terminal input proxy は持たない (`pty`/`pty_mode`/`pty_output_task` は残し `pty_input_task` は `None`)。
+- `fg` resume は input proxy を exactly one 再生成する。既存 PTY session を継続し、新しい PTY は作らない。
+- terminal raw mode は各 active FullProxy foreground interval にスコープする (`ForegroundPtyRawModeGuard` を再利用し、新しい raw-mode mechanism を作らない)。
+- stopped/incomplete job を completed `OutputHistory` に記録しない。`final_exit_status().unwrap_or(0)` による synthetic success は禁止。
+- completion-only I/O finalization (`capture_completed_output_and_history`) を stopped job に実行しない。
+
 ## ハーネス運用
 
 - shell semantics 変更 → `dsh/tests/spec/*.toml` に case を先に追加/更新し `cargo test -p doge-shell --test shell_contract`。

@@ -78,6 +78,37 @@ pub async fn execute_with_capture(
     job.disable_pty = original_disable_pty;
     job.foreground = original_foreground;
 
+    // A stopped child still holds the capture pipe's write end, so joining
+    // readers before terminating would hang on EOF. Peek first and abort
+    // fail-closed: terminate the canonical owned tree/group, reap boundedly
+    // (canonical PIDs only, never `waitpid(-1)`), then fall through to the
+    // normal close/join so reader threads always finish and no stopped
+    // orphan remains. `Running` from a foreground capture is the same
+    // cleanup followed by a loud infrastructure error.
+    let needs_abort = matches!(
+        launch_result,
+        Ok(JobLaunchOutcome::Process(ProcessState::Stopped(_, _)))
+            | Ok(JobLaunchOutcome::Process(ProcessState::Running))
+    );
+    if needs_abort {
+        let _ = job.signal(nix::sys::signal::Signal::SIGKILL);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            job.update_status();
+            if job.is_process_tree_completed() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                debug!(
+                    "execute_with_capture: abort reap timed out for '{}'",
+                    job.cmd
+                );
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    }
+
     // A redirection setup failure is an ordinary command failure: route the
     // diagnostic through the capture stderr (never a hard-coded process
     // stderr, which would bypass `|>` / `|:`), then fall through to the
@@ -104,12 +135,15 @@ pub async fn execute_with_capture(
         }
     };
     let exit_code = match state {
-        ProcessState::Completed(_, _) => job
-            .final_exit_status()
-            .or(state.shell_exit_code())
-            .expect("completed state has exit code"),
+        ProcessState::Completed(_, _) => crate::shell::job::completed_job_status(job, state)?,
         ProcessState::Stopped(_, _) => 130,
-        ProcessState::Running => 0,
+        ProcessState::Running => {
+            anyhow::bail!(
+                "foreground capture returned with active job {} ('{}')",
+                job.job_id,
+                job.cmd
+            );
+        }
     };
 
     debug!(

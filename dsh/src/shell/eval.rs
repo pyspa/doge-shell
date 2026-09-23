@@ -503,11 +503,10 @@ pub async fn eval_str(
                 Ok(JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _))) => {
                     // Logical pipeline status comes from the launch-time
                     // snapshot, not the tail copy: `state` is only the
-                    // lifecycle summary.
-                    let exit = job
-                        .final_exit_status()
-                        .or(state.shell_exit_code())
-                        .expect("completed state has exit code");
+                    // lifecycle summary. Process-bearing jobs must resolve
+                    // via the frozen policy; the tail copy survives only
+                    // for process-less jobs.
+                    let exit = crate::shell::job::completed_job_status(&job, state)?;
                     debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;
 

@@ -38,6 +38,12 @@ fn refresh_lifecycle_keeps_partial_stop_running() {
     let mut job = job_with_stage_states(&[ProcessState::Completed(0, None), ProcessState::Running]);
     job.refresh_lifecycle_state();
     assert_eq!(job.state, ProcessState::Running);
+
+    // Running / Completed stays Running: a completed tail alone never
+    // completes a foreground pipeline.
+    let mut job = job_with_stage_states(&[ProcessState::Running, ProcessState::Completed(0, None)]);
+    job.refresh_lifecycle_state();
+    assert_eq!(job.state, ProcessState::Running);
 }
 
 #[test]
@@ -66,6 +72,18 @@ fn refresh_lifecycle_preserves_actual_stop_signal() {
         job.state,
         ProcessState::Stopped(Pid::from_raw(12), Signal::SIGTTIN)
     );
+}
+
+#[test]
+fn refresh_lifecycle_stopped_head_with_completed_tail_is_stopped() {
+    // `Stopped | Completed`: final-consumer success alone never completes
+    // a foreground pipeline; the canonical tree is `Stopped`.
+    let stopped = ProcessState::Stopped(Pid::from_raw(11), Signal::SIGTSTP);
+    let mut job = job_with_stage_states(&[stopped, ProcessState::Completed(0, None)]);
+    job.refresh_lifecycle_state();
+    assert_eq!(job.state, stopped);
+    assert!(job.is_fully_stopped());
+    assert!(!job.is_process_tree_completed());
 }
 
 #[test]

@@ -581,3 +581,64 @@ fn capture_path_reports_normalized_signal_status() {
         stdout
     );
 }
+
+/// A stopped producer with an already-completed consumer never completes
+/// via final-consumer success: the shell must take the stopped path (no
+/// hang, no sequential remainder), and shutdown must leave no orphan.
+///
+/// Readiness uses pid/marker files plus the harness bounded timeout — no
+/// fixed `sleep` polling.
+#[test]
+fn stopped_producer_with_completed_consumer_stays_stopped() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pidfile = dir.path().join("stopper.pid");
+    let after_marker = dir.path().join("after_marker");
+    let stopper = write_executable_script(
+        &dir,
+        "stopper.sh",
+        &format!(
+            "#!/bin/sh\necho $$ > \"{}\"\nkill -STOP $$\n",
+            pidfile.display()
+        ),
+    );
+    // Same-line remainder must not run when the pipeline stops.
+    let line = format!(
+        "{} | {} ; printf after > \"{}\"",
+        stopper.display(),
+        true_path(),
+        after_marker.display()
+    );
+    let output = run_interactive(&[line.as_str()]);
+    assert!(
+        output.status.success(),
+        "shell must return to the prompt and exit without hanging. stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !after_marker.exists(),
+        "sequential remainder must not run after a stopped pipeline"
+    );
+    let pid_text = std::fs::read_to_string(&pidfile).unwrap_or_else(|_| {
+        panic!(
+            "stopped producer must have run; pidfile missing: {}",
+            pidfile.display()
+        )
+    });
+    let pid_raw: i32 = pid_text
+        .trim()
+        .parse()
+        .expect("pidfile must contain the producer pid");
+    let pid = nix::unistd::Pid::from_raw(pid_raw);
+    // Shutdown cleanup must not leave the stopped child behind. A live
+    // (even stopped) pid here is an orphan leak: kill it before failing so
+    // one leak cannot poison later tests.
+    match nix::sys::signal::kill(pid, None) {
+        Ok(()) | Err(nix::errno::Errno::EPERM) => {
+            let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+            let _ = nix::sys::wait::waitpid(pid, None);
+            panic!("stopped producer {pid} survived shell shutdown");
+        }
+        Err(nix::errno::Errno::ESRCH) => {}
+        Err(err) => panic!("unexpected kill probe for stopped producer {pid}: {err}"),
+    }
+}

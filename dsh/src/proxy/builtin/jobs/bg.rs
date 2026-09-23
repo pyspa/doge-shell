@@ -144,6 +144,10 @@ mod tests {
     use nix::sys::signal::Signal;
     use nix::unistd::{Pid, getpgrp, getpid};
 
+    fn fg_test_ctx() -> Context {
+        Context::new_safe(getpid(), getpgrp(), true)
+    }
+
     fn stopped_job(job_id: usize, signal: Signal) -> Job {
         let mut job = Job::new("sleep 60".to_string(), getpgrp());
         job.job_id = job_id;
@@ -264,7 +268,7 @@ mod tests {
             &[ProcessState::Running, ProcessState::Completed(0, None)],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()))
+        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
             .await
             .expect("finalize");
 
@@ -286,7 +290,7 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()))
+        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
             .await
             .expect("finalize");
 
@@ -311,7 +315,7 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()))
+        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
             .await
             .expect("finalize");
 

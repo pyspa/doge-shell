@@ -349,25 +349,10 @@ impl Job {
             );
         }
 
-        // 4. Capture output and history. The callee already reclaims tasks
-        // on its error paths, so this cleanup is a no-op `take()` there.
-        if let Err(err) = self.capture_output_and_history(ctx, shell).await {
-            self.cleanup_pty_tasks().await;
-            return Err(err);
-        }
-
-        let final_state = if ctx.foreground {
-            self.last_process_state()
-        } else {
-            ProcessState::Running
-        };
-
-        debug!(
-            "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-            self.job_id, final_state, ctx.foreground
-        );
-
-        Ok(JobLaunchOutcome::Process(final_state))
+        // 4. Canonical lifecycle settlement in `job_pty`: foreground
+        // outcome from the canonical tree, completion-only finalization
+        // for completed trees, input-suspend for stopped trees.
+        job_pty::settle_foreground_launch(self, ctx, shell).await
     }
 
     pub(crate) async fn setup_pty(&mut self, ctx: &mut Context) -> Result<Option<PtyChildConfig>> {
@@ -380,10 +365,6 @@ impl Job {
 
     async fn manage_execution(&mut self, ctx: &mut Context) -> Result<()> {
         job_pty::manage_execution(self, ctx).await
-    }
-
-    async fn capture_output_and_history(&mut self, ctx: &Context, shell: &mut Shell) -> Result<()> {
-        job_pty::capture_output_and_history(self, ctx, shell).await
     }
 
     async fn launch_process(

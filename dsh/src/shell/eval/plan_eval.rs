@@ -177,11 +177,8 @@ async fn evaluate_foreground_list(
             }
             JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _)) => {
                 // Same frozen-policy status as the top-level loop; the tail
-                // copy is only a fallback for process-less jobs.
-                last_exit_code = job
-                    .final_exit_status()
-                    .or(state.shell_exit_code())
-                    .expect("completed state has exit code");
+                // copy survives only for process-less jobs.
+                last_exit_code = super::super::job::completed_job_status(&job, state)?;
             }
             JobLaunchOutcome::CommandFailed(failure) => {
                 let _ = ctx.write_stderr(&failure.message);

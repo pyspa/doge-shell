@@ -20,13 +20,14 @@ impl ReplServices {
         ai: Option<Arc<dyn AiService + Send + Sync>>,
         command_timing: SharedCommandTiming,
         prompt: Arc<RwLock<Prompt>>,
+        environment: Arc<RwLock<crate::environment::Environment>>,
     ) -> Self {
         Self {
             ai,
             command_timing,
             file_context: Arc::new(RwLock::new(FileContextCache::new())),
             argument_explainer: ArgumentExplainer::new(),
-            prompt_refresh: PromptRefreshCoordinator::new(prompt),
+            prompt_refresh: PromptRefreshCoordinator::new(prompt, environment),
         }
     }
 }

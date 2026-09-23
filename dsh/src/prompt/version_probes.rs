@@ -100,15 +100,18 @@ pub async fn fetch_k8s_info_async() -> Option<(String, Option<String>)> {
     }
 }
 
-pub fn fetch_aws_profile() -> Option<String> {
-    std::env::var("AWS_PROFILE")
-        .ok()
-        .or_else(|| std::env::var("AWS_DEFAULT_PROFILE").ok())
+pub(crate) fn fetch_aws_profile_from(environment: &PromptEnvironment) -> Option<String> {
+    resolve_aws_profile(
+        environment.aws_profile.as_deref(),
+        environment.aws_default_profile.as_deref(),
+    )
 }
 
-pub async fn fetch_docker_context_async() -> Option<String> {
+pub(crate) async fn fetch_docker_context_async_from(
+    environment: &PromptEnvironment,
+) -> Option<String> {
     use tokio::process::Command;
-    if let Some(ctx) = env_var_value("DOCKER_CONTEXT") {
+    if let Some(ctx) = trimmed_nonempty(environment.docker_context.as_deref()) {
         return Some(ctx);
     }
 
@@ -127,23 +130,69 @@ pub async fn fetch_docker_context_async() -> Option<String> {
     }
 }
 
-pub(super) fn should_attempt_k8s_context_check() -> bool {
-    command_available_cached("kubectl", &KUBECTL_AVAILABLE) && kube_config_present()
+/// The slice of shell runtime state the prompt probes read.
+///
+/// Snapshotted from `Environment` once per refresh tick
+/// ([`PromptEnvironment::from_environment`]) so every probe in the tick sees
+/// the same values - and so a shell-level unset stays unset. Nothing here is
+/// ever re-read from the process environment afterwards: a stale
+/// process-global value must not resurrect a runtime shell variable.
+///
+/// `home` is the `$HOME` shell variable. When the shell has none, the OS
+/// account lookup (`dirs::home_dir()`) still backs the `~/.kube/config`
+/// fallback: that is a launch-time fact about the user, not a shell
+/// variable.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PromptEnvironment {
+    pub aws_profile: Option<String>,
+    pub aws_default_profile: Option<String>,
+    pub docker_context: Option<String>,
+    pub kubeconfig: Option<String>,
+    pub home: Option<String>,
 }
 
-pub(super) fn should_attempt_docker_context_check() -> bool {
-    env_var_present("DOCKER_CONTEXT") || command_available_cached("docker", &DOCKER_AVAILABLE)
+impl PromptEnvironment {
+    pub(crate) fn from_environment(environment: &Environment) -> Self {
+        Self {
+            aws_profile: environment.get_var("AWS_PROFILE"),
+            aws_default_profile: environment.get_var("AWS_DEFAULT_PROFILE"),
+            docker_context: environment.get_var("DOCKER_CONTEXT"),
+            kubeconfig: environment.get_var("KUBECONFIG"),
+            home: environment.get_var("HOME"),
+        }
+    }
+}
+
+/// Pure `AWS_PROFILE` / `AWS_DEFAULT_PROFILE` precedence: the profile wins,
+/// the default profile is the fallback, and a blank value counts as unset.
+pub(crate) fn resolve_aws_profile(
+    aws_profile: Option<&str>,
+    aws_default_profile: Option<&str>,
+) -> Option<String> {
+    trimmed_nonempty(aws_profile).or_else(|| trimmed_nonempty(aws_default_profile))
+}
+
+pub(super) fn should_attempt_k8s_context_check_with(environment: &PromptEnvironment) -> bool {
+    command_available_cached("kubectl", &KUBECTL_AVAILABLE) && kube_config_present_with(environment)
+}
+
+pub(super) fn should_attempt_docker_context_check_from(environment: &PromptEnvironment) -> bool {
+    trimmed_nonempty(environment.docker_context.as_deref()).is_some()
+        || command_available_cached("docker", &DOCKER_AVAILABLE)
 }
 
 fn command_available_cached(command: &'static str, cache: &'static OnceLock<bool>) -> bool {
     *cache.get_or_init(|| which::which(command).is_ok())
 }
 
-fn kube_config_present() -> bool {
-    kube_config_present_from(
-        std::env::var_os("KUBECONFIG").as_deref(),
-        dirs::home_dir().as_deref(),
-    )
+pub(super) fn kube_config_present_with(environment: &PromptEnvironment) -> bool {
+    let kubeconfig = environment.kubeconfig.as_deref().map(OsStr::new);
+    match environment.home.as_deref().map(PathBuf::from) {
+        Some(home) => kube_config_present_from(kubeconfig, Some(&home)),
+        // No `$HOME` in the shell: the OS account home is a launch-time
+        // fact, not a shell variable, so it still backs the fallback.
+        None => kube_config_present_from(kubeconfig, dirs::home_dir().as_deref()),
+    }
 }
 
 pub(super) fn kube_config_present_from(
@@ -159,13 +208,10 @@ pub(super) fn kube_config_present_from(
     home_dir.is_some_and(|home| home.join(".kube").join("config").exists())
 }
 
-fn env_var_present(name: &str) -> bool {
-    env_var_value(name).is_some()
-}
-
-fn env_var_value(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
+/// A trimmed, non-blank shell value. Blank counts as unset so an emptied
+/// variable falls through to the next source instead of sticking.
+fn trimmed_nonempty(value: Option<&str>) -> Option<String> {
+    value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }

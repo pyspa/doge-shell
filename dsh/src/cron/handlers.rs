@@ -35,13 +35,19 @@ fn without_flags<'a>(args: &'a [String], flags: &[&str]) -> Vec<&'a String> {
         .collect()
 }
 
-pub(super) fn add(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Result<()> {
+pub(super) fn add(
+    shell: &mut crate::shell::Shell,
+    ctx: &Context,
+    store: &SqliteCronStore,
+    args: &[String],
+) -> Result<()> {
     let parsed = parse_add(args).map_err(anyhow::Error::msg)?;
     let force = parsed.force;
     let cwd = current_dir_string()?;
     let spec = build_spec(parsed, cwd).map_err(anyhow::Error::msg)?;
     let summary = format!("{} {} -> {}", spec.name, spec.schedule, spec.command);
-    let id = store.create(&spec, &std::env::vars().collect(), now(), force)?;
+    let environment = shell.environment.read().child_process_env();
+    let id = store.create(&spec, &environment, now(), force)?;
     ctx.write_stdout(&format!("cron: [{id}] {summary}"))?;
     Ok(())
 }

@@ -1461,3 +1461,98 @@ fn test_multiple_script_argument_reuses_last_definition() {
     assert!(texts.contains(&"pkg-alpha".to_string()));
     assert!(texts.contains(&"pkg-beta".to_string()));
 }
+
+#[test]
+fn environment_names_are_injected_without_process_fallback() {
+    use crate::completion::generators::argument::ArgumentGenerator;
+    use crate::completion::generators::command::CommandGenerator;
+
+    let db = create_test_database();
+    let names = vec!["DOGESH_SHELL_ONLY_VAR".to_string()];
+
+    let parsed = ParsedCommandLine {
+        command: "cmd".to_string(),
+        subcommand_path: vec![],
+        raw_args: vec![],
+        args: vec![],
+        options: vec![],
+        current_token: "DOGESH_SHELL".to_string(),
+        current_arg: Some("DOGESH_SHELL".to_string()),
+        completion_context: CompletionContext::Argument {
+            arg_index: 0,
+            arg_type: Some(ArgumentType::Environment),
+        },
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    };
+
+    // Injected shell names appear.
+    let with_names = ArgumentGenerator::with_environment_names(&db, &names)
+        .generate_candidates_for_type(&ArgumentType::Environment, &parsed)
+        .unwrap();
+    assert!(
+        with_names.iter().any(|c| c.text == "DOGESH_SHELL_ONLY_VAR"),
+        "injected shell name missing: {with_names:?}"
+    );
+
+    // Without injected names the list is empty: no std::env fallback.
+    let without = ArgumentGenerator::new(&db)
+        .generate_candidates_for_type(&ArgumentType::Environment, &parsed)
+        .unwrap();
+    assert!(
+        !without.iter().any(|c| c.text == "DOGESH_SHELL_ONLY_VAR"),
+        "empty generator must not fall back to process env: {without:?}"
+    );
+
+    // Same contract on the command-level helper.
+    let cmd_with = CommandGenerator::with_environment_names(&db, &names)
+        .generate_environment_variable_candidates("DOGESH_SHELL")
+        .unwrap();
+    assert!(cmd_with.iter().any(|c| c.text == "DOGESH_SHELL_ONLY_VAR"));
+    let cmd_without = CommandGenerator::new(&db)
+        .generate_environment_variable_candidates("DOGESH_SHELL")
+        .unwrap();
+    assert!(cmd_without.is_empty());
+}
+
+#[test]
+fn stale_process_env_does_not_enter_environment_completion() {
+    let _guard = crate::test_env_lock();
+    unsafe { std::env::set_var("DOGESH_STALE_AFTER_BOOT", "stale") };
+
+    let db = create_test_database();
+    // Runtime names come from the shell only: the stale process-only key is
+    // not among them, so neither generator reports it.
+    let names = vec!["DOGESH_SHELL_ALIVE".to_string()];
+    let parsed = ParsedCommandLine {
+        command: "cmd".to_string(),
+        subcommand_path: vec![],
+        raw_args: vec![],
+        args: vec![],
+        options: vec![],
+        current_token: "DOGESH_".to_string(),
+        current_arg: Some("DOGESH_".to_string()),
+        completion_context: CompletionContext::Argument {
+            arg_index: 0,
+            arg_type: Some(ArgumentType::Environment),
+        },
+        specified_options: vec![],
+        specified_arguments: vec![],
+        cursor_index: 0,
+    };
+    let candidates =
+        crate::completion::generators::argument::ArgumentGenerator::with_environment_names(
+            &db, &names,
+        )
+        .generate_candidates_for_type(&ArgumentType::Environment, &parsed)
+        .unwrap();
+    let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
+    assert!(texts.contains(&"DOGESH_SHELL_ALIVE".to_string()));
+    assert!(
+        !texts.contains(&"DOGESH_STALE_AFTER_BOOT".to_string()),
+        "stale process env leaked: {texts:?}"
+    );
+
+    unsafe { std::env::remove_var("DOGESH_STALE_AFTER_BOOT") };
+}

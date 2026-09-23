@@ -594,6 +594,12 @@ impl crate::shell_capabilities::AiJsonRequest for TestShellProxy {
     }
 }
 
+impl crate::shell_capabilities::ProcessEnvironmentCapability for TestShellProxy {
+    fn child_process_environment(&self) -> HashMap<String, String> {
+        self.exported.clone()
+    }
+}
+
 impl crate::shell_capabilities::JobControlCapability for TestShellProxy {
     fn wait_for_jobs(&mut self, _ctx: &Context, _argv: Vec<String>) -> Result<i32> {
         match &self.wait_error {

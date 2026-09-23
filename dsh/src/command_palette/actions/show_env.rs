@@ -19,22 +19,14 @@ impl Action for ShowEnvAction {
     }
 
     async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
-        // Collect environment variables
+        // Authoritative shell variables only: no process-global merge, so
+        // one logical name appears exactly once.
         let mut env_vars: Vec<String> = Vec::new();
 
-        // From shell environment
         {
             let env = shell.environment.read();
             for (key, value) in &env.variable_state.variables {
                 env_vars.push(format!("{}={}", key, value));
-            }
-        }
-
-        // From system environment
-        for (key, value) in std::env::vars() {
-            let entry = format!("{}={}", key, value);
-            if !env_vars.contains(&entry) {
-                env_vars.push(entry);
             }
         }
 

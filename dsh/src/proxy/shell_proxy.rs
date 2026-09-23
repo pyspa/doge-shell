@@ -763,6 +763,12 @@ impl ShellProxy for Shell {
     }
 }
 
+impl dsh_builtin::shell_capabilities::ProcessEnvironmentCapability for Shell {
+    fn child_process_environment(&self) -> std::collections::HashMap<String, String> {
+        self.environment.read().child_process_env()
+    }
+}
+
 impl dsh_builtin::shell_capabilities::AiJsonRequest for Shell {
     /// Same request as [`ShellProxy::ask_ai_async`], but with
     /// `AiRequestOptions::as_json_object()` set: the provider's JSON mode is

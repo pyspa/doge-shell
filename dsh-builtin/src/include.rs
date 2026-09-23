@@ -24,9 +24,14 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     let script = &argv[1];
     let args = &argv[2..];
 
+    // Shell-runtime environment only: bash must not implicitly inherit the
+    // dogesh process-global environment.
+    let before = proxy.child_process_environment();
+
     // Construct the command to source the script and dump environment
     // We use env -0 to handle values with newlines correctly
     let mut bash_cmd = Command::new("bash");
+    bash_cmd.env_clear().envs(&before);
     bash_cmd.arg("-c");
 
     // We need to source the script with arguments if provided
@@ -71,54 +76,24 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
                 }
             }
 
-            // Get current environment (we can't easily get ALL current env vars from proxy without listing them)
-            // But we can just set all new ones and unset ones that are missing?
-            // Wait, unsetting missing ones might be dangerous if 'env -0' doesn't return everything.
-            // 'env' usually returns the FULL environment.
-            // So if a variable is NOT in new_env, it means it was unset/removed by the script OR it wasn't there.
-            // However, we should only unset variables that WERE present in the parent shell but are NOT in the new env.
-            // Since we can't easily iterate all env vars in proxy (no get_all_env_vars),
-            // maybe we can improve ShellProxy interface or just rely on 'set' for now?
-            //
-            // "For keys in the old environment not present in the new map, call proxy.unset_env_var"
-            // To do this, we need to know the *current* environment.
-            // The `Context` might not have it all? `Context` has `env` but it's passed from main.
-            // `env` command generally outputs the WHOLE environment of the subshell.
-            // So `new_env` represents the desired state of the environment.
-            //
-            // If we blindly unset everything not in `new_env`, we might unset internal variables if `bash -c env` doesn't inherit them?
-            // `Command::new` inherits environment by default. So `new_env` should contain everything + changes.
-            //
-            // So:
-            // 1. Iterate over `new_env`, set key=value.
-            // 2. We need to find keys that are currently set but MISSING in `new_env`.
-            //    To do this, we really need `std::env::vars()` from the current process context.
-            //    Wait, `Command::new` is spawned from the current process, so it inherits `std::env::vars()`.
-            //    So `new_env` is a superset (or subset if unset) of `std::env::vars()`.
-            //
-            //    So we can iterate `std::env::vars()` of the *current* process.
-            //    For each key in `std::env::vars()`:
-            //      If not in `new_env`, unset it.
-
-            // Apply changes
+            // Diff against the shell-runtime snapshot bash was given:
+            // added/changed keys are published as exported shell variables,
+            // missing keys are logically unset. `PROTECTED_ENV_VARS` and
+            // `DOGESH_*` are never unset by a sourced script.
             for (key, value) in &new_env {
-                // Determine if we need to update
-                // We can just call set_env_var, it's cheap enough.
-                // Optimization: check if value changed?
-                if std::env::var(key).unwrap_or_default() != *value {
+                if before.get(key) != Some(value) {
                     proxy.set_env_var(key.clone(), value.clone());
                 }
             }
 
-            // Handle Unset
-            // We iterate over CURRENT environment variables
-            for (key, _) in std::env::vars() {
-                if !new_env.contains_key(&key)
+            // Handle Unset: keys bash was given but no longer reports.
+            for key in before.keys() {
+                if !new_env.contains_key(key)
                     && !PROTECTED_ENV_VARS.contains(&key.as_str())
                     && !key.starts_with("DOGESH_")
                 {
                     // It was removed in the subshell
-                    proxy.unset_env_var(&key);
+                    proxy.unset_env_var(key);
                 }
             }
 
@@ -134,32 +109,31 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell_capabilities::ProcessEnvironmentCapability;
     use crate::test_support::TestShellProxy;
 
-    fn env_mirroring_proxy() -> TestShellProxy {
+    fn fake_proxy() -> TestShellProxy {
         TestShellProxy {
             confirm_result: true,
-            // This suite intentionally checks that `include`d `export`/`unset`
-            // reach the real process environment, so it opts into
-            // TestShellProxy's real-env mirroring rather than only asserting
-            // on the fake's own state.
-            mutate_real_env: true,
             capture_command_response: Some((0, String::new(), String::new())),
             open_editor_response: Some(String::new()),
             ..TestShellProxy::default()
         }
     }
 
-    #[test]
-    fn test_include_command() {
-        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
-        use std::io::Write;
-        let mut proxy = env_mirroring_proxy();
-        let ctx = Context::new_safe(
+    fn test_ctx() -> Context {
+        Context::new_safe(
             nix::unistd::Pid::from_raw(0),
             nix::unistd::Pid::from_raw(0),
             true,
-        );
+        )
+    }
+
+    #[test]
+    fn test_include_command() {
+        use std::io::Write;
+        let mut proxy = fake_proxy();
+        let ctx = test_ctx();
 
         // Create a temporary script
         let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -171,26 +145,22 @@ mod tests {
 
         assert!(matches!(status, ExitStatus::ExitedWith(0)));
         assert_eq!(
-            std::env::var("TEST_INCLUDE_VAR").unwrap(),
-            "Hello from Test"
+            proxy.get_var("TEST_INCLUDE_VAR").as_deref(),
+            Some("Hello from Test")
         );
-        // Clean up
-        unsafe { std::env::remove_var("TEST_INCLUDE_VAR") };
+        assert_eq!(
+            proxy.child_process_environment().get("TEST_INCLUDE_VAR"),
+            Some(&"Hello from Test".to_string())
+        );
     }
 
     #[test]
     fn test_include_unset() {
-        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
         use std::io::Write;
-        let mut proxy = env_mirroring_proxy();
-        let ctx = Context::new_safe(
-            nix::unistd::Pid::from_raw(0),
-            nix::unistd::Pid::from_raw(0),
-            true,
-        );
+        let mut proxy = fake_proxy();
+        let ctx = test_ctx();
 
-        // Set variable first
-        unsafe { std::env::set_var("TEST_UNSET_VAR", "Should be gone") };
+        // Set variable first (exported, as the shell would hold it).
         proxy.set_env_var("TEST_UNSET_VAR".to_string(), "Should be gone".to_string());
 
         // Create a temporary script
@@ -202,6 +172,84 @@ mod tests {
         let status = command(&ctx, argv, &mut proxy);
 
         assert!(matches!(status, ExitStatus::ExitedWith(0)));
-        assert!(std::env::var("TEST_UNSET_VAR").is_err());
+        assert!(proxy.get_var("TEST_UNSET_VAR").is_none());
+        assert!(
+            !proxy
+                .child_process_environment()
+                .contains_key("TEST_UNSET_VAR")
+        );
+    }
+
+    #[test]
+    fn include_receives_a_shell_runtime_exported_variable() {
+        use std::io::Write;
+        let mut proxy = fake_proxy();
+        let ctx = test_ctx();
+        proxy.set_env_var("DOGESH_INCLUDE_SEED".to_string(), "seed-value".to_string());
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "echo \"seed=$DOGESH_INCLUDE_SEED\"").unwrap();
+        // `include` only imports the environment; assert the seed reached
+        // bash by echoing it into an exported name.
+        writeln!(file, "export DOGESH_INCLUDE_SEEN=\"$DOGESH_INCLUDE_SEED\"").unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+
+        let status = command(&ctx, vec!["include".to_string(), path], &mut proxy);
+        assert!(matches!(status, ExitStatus::ExitedWith(0)));
+        assert_eq!(
+            proxy.get_var("DOGESH_INCLUDE_SEEN").as_deref(),
+            Some("seed-value")
+        );
+    }
+
+    #[test]
+    fn include_export_reaches_child_environment() {
+        use std::io::Write;
+        let mut proxy = fake_proxy();
+        let ctx = test_ctx();
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(file, "export DOGESH_INCLUDE_CHILD='child-value'").unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+
+        let status = command(&ctx, vec!["include".to_string(), path], &mut proxy);
+        assert!(matches!(status, ExitStatus::ExitedWith(0)));
+        assert_eq!(
+            proxy.get_var("DOGESH_INCLUDE_CHILD").as_deref(),
+            Some("child-value")
+        );
+        assert_eq!(
+            proxy
+                .child_process_environment()
+                .get("DOGESH_INCLUDE_CHILD"),
+            Some(&"child-value".to_string())
+        );
+    }
+
+    #[test]
+    fn process_global_env_does_not_leak_into_include() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        use std::io::Write;
+        // A process-global variable added after the shell started must not
+        // leak into the `bash` `include` spawns (it uses `env_clear`).
+        unsafe { std::env::set_var("DOGESH_INCLUDE_STALE", "stale") };
+        let mut proxy = fake_proxy();
+        let ctx = test_ctx();
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            "if [ -z \"${{DOGESH_INCLUDE_STALE:-}}\" ]; then export DOGESH_INCLUDE_PROBE=absent; else export DOGESH_INCLUDE_PROBE=leaked; fi"
+        )
+        .unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+
+        let status = command(&ctx, vec!["include".to_string(), path], &mut proxy);
+        unsafe { std::env::remove_var("DOGESH_INCLUDE_STALE") };
+        assert!(matches!(status, ExitStatus::ExitedWith(0)));
+        assert_eq!(
+            proxy.get_var("DOGESH_INCLUDE_PROBE").as_deref(),
+            Some("absent")
+        );
     }
 }

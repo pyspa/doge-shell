@@ -170,13 +170,7 @@ async fn run_helper_builtin(shell: &mut Shell, builtin: &BuiltinExecRequest) -> 
         shell
             .environment
             .write()
-            .set_shell_var(key.clone(), value.clone());
-        shell
-            .environment
-            .write()
-            .variable_state
-            .exported_vars
-            .insert(key.clone());
+            .set_and_export_shell_var(key.clone(), value.clone());
     }
 
     let Some(handler) = dsh_builtin::get_handler(&builtin.name) else {

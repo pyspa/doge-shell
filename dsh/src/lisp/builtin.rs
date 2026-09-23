@@ -130,12 +130,7 @@ pub fn set_variable(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 
     let display_val = redact_value_for_log(&key, &val);
     debug!("set variable {} {}", &key, display_val);
-    env.borrow()
-        .shell_env
-        .write()
-        .variable_state
-        .variables
-        .insert(key, val);
+    env.borrow().shell_env.write().set_shell_var(key, val);
     Ok(Value::NIL)
 }
 
@@ -262,10 +257,7 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
         // The variable is the readable copy, not the source of truth: every
         // policy check reads `policy_state.safety_level` through
         // `ShellProxy::safety_level`.
-        shell_env
-            .variable_state
-            .variables
-            .insert("SAFETY_LEVEL".to_string(), level.as_str().to_string());
+        shell_env.set_shell_var("SAFETY_LEVEL".to_string(), level.as_str().to_string());
     }
 
     Ok(Value::NIL)

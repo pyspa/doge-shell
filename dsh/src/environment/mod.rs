@@ -18,7 +18,7 @@ pub mod child_snapshot;
 mod mcp;
 mod paths;
 mod preferences;
-mod variables;
+pub(crate) mod variables;
 
 #[cfg(test)]
 mod tests;

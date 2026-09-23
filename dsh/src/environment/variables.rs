@@ -6,28 +6,50 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Strip the sigil and any braces so `$FOO`, `${FOO}` and `FOO` all reach the
-/// same lookup.
-fn variable_name(key: &str) -> &str {
+/// same canonical storage key.
+///
+/// This is the single canonical-name operation for shell variable storage:
+/// `variable_state.variables` and `exported_vars` hold bare names only.
+/// `$FOO` / `${FOO}` remain valid parser / parameter-expansion / API input
+/// syntax, but they are never storage keys.
+pub(crate) fn canonical_shell_var_name(key: &str) -> &str {
     let name = key.strip_prefix('$').unwrap_or(key);
+    if name.is_empty() {
+        // `$` alone (and `$$` collapsing to `$`) names the PID special.
+        // An empty input stays empty so it never aliases the PID entry.
+        return if key.is_empty() { "" } else { "$" };
+    }
     name.strip_prefix('{')
         .and_then(|rest| rest.strip_suffix('}'))
         .unwrap_or(name)
 }
 
+/// Whether `name` is a valid `read NAME` target.
+///
+/// Minimum contract shared with parser assignment names:
+/// `[A-Za-z_][A-Za-z0-9_]*`. Legacy `set`/`export` keep their own
+/// compatibility behavior; this is enforced only on the `read` path.
+pub(crate) fn is_valid_shell_var_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 impl Environment {
     /// Get the value of a variable, given `$FOO`, `${FOO}` or a bare `FOO`.
     pub fn get_var(&self, key: &str) -> Option<String> {
-        self.lookup_variable(variable_name(key))
+        self.lookup_variable(canonical_shell_var_name(key))
     }
 
     /// Resolve a bare variable name.
     ///
-    /// The shell variable map is written to with and without a `$` prefix
-    /// depending on which builtin did the writing (`set`/`export` store the
-    /// bare name, `read` and Lisp `let` store `$name`), so both spellings are
-    /// tried here. Without this, `export FOO=x; echo $FOO` printed nothing
-    /// while the child process saw `FOO=x`.
+    /// Storage holds bare names only; `$FOO` / `${FOO}` spellings are
+    /// canonicalized on entry so a single map lookup suffices.
     pub fn lookup_variable(&self, name: &str) -> Option<String> {
+        let name = canonical_shell_var_name(name);
         // Shell specials, before anything user-settable can shadow them.
         match name {
             "?" => return Some(self.last_exit_status.to_string()),
@@ -90,9 +112,6 @@ impl Environment {
         if let Some(value) = self.variable_state.variables.get(name) {
             return Some(value.clone());
         }
-        if let Some(value) = self.variable_state.variables.get(&format!("${name}")) {
-            return Some(value.clone());
-        }
 
         self.variable_state.system_env_vars.get(name).cloned()
     }
@@ -128,28 +147,49 @@ impl Environment {
     /// shell looking commands up in the old list while the children it spawned
     /// saw the new one, so `export PATH=...:$PATH; mytool` reported
     /// `command not found` for a tool that was right there.
+    ///
+    /// Keys are canonicalized to bare names: `$FOO` / `${FOO}` spellings
+    /// never reach storage.
     pub fn set_shell_var(&mut self, key: String, value: String) {
-        self.variable_state.variables.insert(key.clone(), value);
-        self.refresh_derived_state(&key);
+        let canonical = canonical_shell_var_name(&key).to_string();
+        self.variable_state
+            .variables
+            .insert(canonical.clone(), value);
+        self.refresh_derived_state(&canonical);
     }
 
     /// Mark a shell variable as exported. Exporting changes which value is the
     /// effective one, so the derived state has to be rebuilt as well.
     pub fn export_shell_var(&mut self, key: String) {
-        self.variable_state.exported_vars.insert(key.clone());
-        self.refresh_derived_state(&key);
+        let canonical = canonical_shell_var_name(&key).to_string();
+        self.variable_state.exported_vars.insert(canonical.clone());
+        self.refresh_derived_state(&canonical);
     }
 
     /// Set and export in one step, the way `export NAME=value` does.
     pub fn set_and_export_shell_var(&mut self, key: String, value: String) {
-        self.variable_state.variables.insert(key.clone(), value);
-        self.variable_state.exported_vars.insert(key.clone());
-        self.refresh_derived_state(&key);
+        let canonical = canonical_shell_var_name(&key).to_string();
+        self.variable_state
+            .variables
+            .insert(canonical.clone(), value);
+        self.variable_state.exported_vars.insert(canonical.clone());
+        self.refresh_derived_state(&canonical);
+    }
+
+    /// Remove a shell variable, keeping derived state in step.
+    ///
+    /// Used to restore lexical scope (Lisp `value-let`): a name that had no
+    /// value before the block returns to absent afterwards.
+    pub(crate) fn remove_shell_var(&mut self, key: &str) -> Option<String> {
+        let canonical = canonical_shell_var_name(key);
+        let previous = self.variable_state.variables.remove(canonical);
+        self.refresh_derived_state(canonical);
+        previous
     }
 
     /// Rebuild whatever the shell caches from `key`'s value.
     pub fn refresh_derived_state(&mut self, key: &str) {
-        match key {
+        match canonical_shell_var_name(key) {
             "PATH" => self.reload_path(),
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
@@ -242,6 +282,18 @@ impl Environment {
         *self.integration_state.ai_client.write() = client;
     }
 
+    /// Rebuild every variable-derived projection at once.
+    ///
+    /// For bulk raw-map restore/apply (config rollback, child snapshot
+    /// apply): single-variable mutation keeps using `refresh_derived_state`.
+    pub(crate) fn refresh_variable_projections(&mut self) {
+        self.reload_path();
+        self.reload_z_exclude();
+        self.reload_response_language();
+        self.reload_chat_model();
+        self.reload_ai_client();
+    }
+
     /// Whether a shell-side AI request can currently be sent.
     ///
     /// True when the shared client slot holds a client (i.e. an API key is
@@ -271,6 +323,7 @@ impl Environment {
     /// variable's *value* has to resolve it the same way, or the shell disagrees
     /// with the processes it launches.
     pub fn effective_env_var(&self, name: &str) -> Option<&str> {
+        let name = canonical_shell_var_name(name);
         if self.variable_state.exported_vars.contains(name)
             && let Some(value) = self.variable_state.variables.get(name)
         {

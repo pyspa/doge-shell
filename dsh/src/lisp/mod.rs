@@ -186,6 +186,7 @@ impl LispEngine {
             .secret_manager
             .restore(snapshot.secret_manager);
         env.shell_options = snapshot.shell_options;
+        env.refresh_variable_projections();
     }
 
     pub fn run(&self, src: &str) -> anyhow::Result<Value> {

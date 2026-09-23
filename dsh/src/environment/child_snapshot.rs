@@ -111,8 +111,7 @@ impl ChildShellSnapshot {
         *env.policy_state.execute_allowlist.write() = self.execute_allowlist.clone();
         *env.policy_state.shell_always_allowlist.write() = self.shell_always_allowlist.clone();
         env.shell_options = self.shell_options;
-        env.refresh_derived_state("PATH");
-        env.refresh_derived_state("Z_EXCLUDE");
+        env.refresh_variable_projections();
     }
 }
 
@@ -126,9 +125,7 @@ mod tests {
         {
             let mut env = env_arc.write();
             env.set_shell_var("SNAP_VAR".to_string(), "snap_value".to_string());
-            env.variable_state
-                .exported_vars
-                .insert("SNAP_VAR".to_string());
+            env.export_shell_var("SNAP_VAR".to_string());
             env.variable_state
                 .alias
                 .insert("ll".to_string(), "ls -l".to_string());
@@ -166,6 +163,31 @@ mod tests {
     #[test]
     fn unknown_safety_level_fails_closed_to_normal() {
         assert_eq!(safety_from_str("anything-else"), SafetyLevel::Normal);
+    }
+
+    #[test]
+    fn apply_restores_ai_projections_from_snapshot() {
+        let source = Environment::new();
+        source
+            .write()
+            .set_shell_var("AI_CHAT_MODEL".to_string(), "snapshot-model".to_string());
+        assert_eq!(
+            source.read().integration_state.chat_model.read().clone(),
+            Some("snapshot-model".to_string())
+        );
+        let snapshot = ChildShellSnapshot::capture(&source.read());
+
+        let fresh = Environment::new();
+        snapshot.apply_to(&mut fresh.write());
+        let guard = fresh.read();
+        assert_eq!(
+            guard.lookup_variable("AI_CHAT_MODEL"),
+            Some("snapshot-model".to_string())
+        );
+        assert_eq!(
+            guard.integration_state.chat_model.read().clone(),
+            Some("snapshot-model".to_string())
+        );
     }
 }
 

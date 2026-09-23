@@ -443,6 +443,22 @@ pub trait ShellOptionCapability {
     fn set_shell_option(&mut self, option: ShellOption, enabled: bool);
 }
 
+/// Single-line `read NAME` owned by the shell core.
+///
+/// `read` reports its command status itself (success vs. EOF vs. usage
+/// error) — not just success or failure — so it cannot travel through
+/// [`crate::CoreShellAction`] (whose dispatch shape is `Result<()>`).
+/// Like `JobControlCapability`, this is a supertrait bound on
+/// [`crate::ShellProxy`], not a new facade method: no entry is added to
+/// the frozen compatibility surface.
+pub trait ReadCapability {
+    fn read_shell_line(
+        &mut self,
+        ctx: &Context,
+        argv: Vec<String>,
+    ) -> anyhow::Result<dsh_types::ExitStatus>;
+}
+
 /// What the shell's safety policy says about a command the agent wants to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentCommandVerdict {

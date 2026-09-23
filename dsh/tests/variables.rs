@@ -440,3 +440,187 @@ fn exporting_path_changes_where_the_shell_looks_for_commands() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+fn write_read_input(dir: &tempfile::TempDir, name: &str, contents: &[u8]) -> std::path::PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, contents).expect("write read input");
+    path
+}
+
+/// `read` overwrites the canonical shell variable, not a `$`-prefixed copy.
+#[test]
+fn read_overwrites_an_existing_variable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_new.txt", b"new-value\n");
+    let output = run_command(&format!(
+        "set FOO old; read FOO < {}; echo $FOO",
+        input.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line.trim() == "new-value"),
+        "read did not overwrite FOO: {stdout:?} stderr: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// `read` then `export` reaches the child environment.
+#[test]
+fn read_then_export_reaches_the_child() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_export.txt", b"new-value\n");
+    let output = run_command(&format!(
+        "read FOO < {}; export FOO; /usr/bin/env",
+        input.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line == "FOO=new-value"),
+        "child missed FOO=new-value: {stdout:?}"
+    );
+}
+
+/// `read` consumes exactly one line.
+#[test]
+fn read_consumes_only_the_first_line() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_two.txt", b"first\nsecond\n");
+    let output = run_command(&format!("read FOO < {}; echo $FOO", input.display()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.lines().any(|line| line.trim() == "first"),
+        "expected only the first line: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("second"),
+        "read consumed past the first line: {stdout:?}"
+    );
+}
+
+/// An empty line is success with an empty value.
+#[test]
+fn read_empty_line_is_success_with_empty_value() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_empty.txt", b"\n");
+    let output = run_command(&format!(
+        "read FOO < {}; echo \"value=[$FOO] status=$?\"",
+        input.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "value=[] status=0"),
+        "empty line mishandled: {stdout:?}"
+    );
+}
+
+/// EOF with no bytes is status 1 and stays silent.
+#[test]
+fn read_empty_file_reports_eof_silently() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_eof.txt", b"");
+    let output = run_command(&format!("read FOO < {}; echo $?", input.display()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.lines().any(|line| line.trim() == "1"),
+        "EOF must report status 1: {stdout:?}"
+    );
+    assert!(
+        !stderr.contains("read:"),
+        "EOF must not emit a diagnostic: {stderr:?}"
+    );
+}
+
+/// A final line without a newline still sets the value but reports EOF.
+#[test]
+fn read_unterminated_last_line_sets_value_with_eof_status() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_unterminated.txt", b"abc");
+    let output = run_command(&format!(
+        "read FOO < {}; echo \"value=[$FOO] status=$?\"",
+        input.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "value=[abc] status=1"),
+        "unterminated line mishandled: {stdout:?}"
+    );
+}
+
+/// Unsupported shapes never run partially.
+#[test]
+fn read_rejects_an_invalid_name() {
+    let output = run_command("read 1BAD");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "invalid name must fail: {:?}",
+        output.status
+    );
+    assert!(
+        stderr.contains("read:"),
+        "invalid name needs a diagnostic: {stderr:?}"
+    );
+}
+
+/// Extra operands and options are usage errors, not partial runs.
+#[test]
+fn read_rejects_unsupported_shapes() {
+    for command in ["read", "read FOO BAR", "read -r FOO"] {
+        let output = run_command(command);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "{command:?} must fail: {:?}",
+            output.status
+        );
+        assert!(
+            stderr.contains("read:"),
+            "{command:?} needs a diagnostic: {stderr:?}"
+        );
+    }
+}
+
+/// Invalid UTF-8 never partially updates the variable.
+#[test]
+fn read_invalid_utf8_keeps_the_old_value() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_invalid.txt", &[0xff, 0xfe, b'\n']);
+    let output = run_command(&format!(
+        "set FOO old; read FOO < {}; echo \"value=[$FOO] status=$?\"",
+        input.display()
+    ));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim() == "value=[old] status=1"),
+        "invalid UTF-8 must not mutate FOO: {stdout:?}"
+    );
+    assert!(
+        stderr.contains("read:"),
+        "invalid UTF-8 needs a diagnostic: {stderr:?}"
+    );
+}
+
+/// `var` never shows a duplicate sigil spelling for one variable.
+#[test]
+fn var_lists_each_variable_once_without_sigil() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_read_input(&dir, "read_var.txt", b"new-value\n");
+    let output = run_command(&format!("set FOO old; read FOO < {}; var", input.display()));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("$FOO"),
+        "var must not list a sigil spelling: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("FOO") && stdout.contains("new-value"),
+        "var must list the canonical value: {stdout:?}"
+    );
+}

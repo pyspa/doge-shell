@@ -2,7 +2,7 @@ use crate::command_palette::CommandPalette;
 use crate::completion::display::Candidate;
 use crate::process::job::Job;
 use crate::repl::Repl;
-use crate::repl::job_notify::{JobMarker, JobNotice, format_job_notice, notice_state_from};
+use crate::repl::job_notify::{JobMarker, JobNotice, format_job_notice, notice_state_from_job};
 use crate::repl::notify::notify_command_finished;
 use crate::repl::state::ReplControlFlow;
 use crate::terminal::renderer::TerminalRenderer;
@@ -115,7 +115,7 @@ pub(crate) async fn check_background_jobs(repl: &mut Repl<'_>, output: bool) -> 
             format_job_notice(&JobNotice {
                 job_id: job.job_id,
                 cmd: job.cmd.clone(),
-                state: notice_state_from(&job.state),
+                state: notice_state_from_job(job),
                 marker: JobMarker::for_index(index),
             })
         })
@@ -144,7 +144,7 @@ fn notify_desktop_for_jobs(repl: &Repl<'_>, completed: &[Job]) {
         return;
     }
     for job in completed.iter().filter(|job| !job.foreground) {
-        let exit_code = notice_state_from(&job.state).exit_code();
+        let exit_code = notice_state_from_job(job).exit_code();
         notify_command_finished(&prefs, &job.cmd, job.started_at.elapsed(), exit_code);
     }
 }

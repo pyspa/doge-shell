@@ -51,7 +51,9 @@
 - After renderer failure, pipe drain, captured_output, and SharedOutputObserver continue normally.
 - ReadyNow still reads until EOF/WouldBlock; ToEof still owns the reader until EOF.
 - Actual read/readiness/framing errors retain their existing Result semantics.
-- final status は canonical tail process の `ProcessState::shell_exit_code()` から取る（`job.state` の blind read 禁止）。signal 死は128+N。
+- Lifecycle: `Job.state` は process tree から導出する lifecycle summary のまま（全完了 → tail stage の `ProcessState`、fully stopped → 実測の stop、それ以外 → `Running`）。pipefail status を `Job.state` に書き込まない。
+- Logical pipeline exit status: policy は `Job::launch` 時に `ShellOptions` から snapshot し、`Job` が frozen で所有する。pipefail OFF → tail stage の `shell_exit_code()`、pipefail ON → 右端に最も近い non-zero `shell_exit_code()`（全成功なら 0）。finalization は live `ShellOptions` を読まない。
+- final status は `Job::final_exit_status()`（`dsh/src/process/pipeline_status.rs`）の single resolver から取る（`job.state` の blind read 禁止）。signal 死は既存 `ProcessState::shell_exit_code()` の 128+N を使う。`NoCommand` stage も通常 stage として参加する。未完了 tree は `None`（status を捏造しない）。
 - `ECHILD` は completion を捏造しない。canonical tree が `Completed` でなければ status を invent しない。`wait(-1)`/`waitpid(-1)` 禁止。ledger→Job→canonical PID set 経由でのみ待つ。
 - `wait` semantics: 引数なし→全 known を待って0（個別 failure を反映しない）・全 consume。`wait PID` は active→take/termination-wait/finalize/consume、completed→即返却+consume、unknown→127（ alien PID を `waitpid` しない）。複数 operand は順に処理し最後の status。repeat は127。`-n/-p/-f` は usage error（exit 1）。`%spec`/非数値は 127 として扱い次の operand へ進む（code behavior）。
 - wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。

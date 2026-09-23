@@ -16,6 +16,7 @@
 
 use crate::environment::Environment;
 use crate::safety::SafetyLevel;
+use dsh_types::shell_options::ShellOptions;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -43,6 +44,11 @@ pub struct ChildShellSnapshot {
     pub safety_level: String,
     pub execute_allowlist: Vec<String>,
     pub shell_always_allowlist: Vec<String>,
+    /// `set -o` option state at capture time. `#[serde(default)]` keeps
+    /// error messages clear if a future field is added, and documents that
+    /// a missing value means "all options off".
+    #[serde(default)]
+    pub shell_options: ShellOptions,
 }
 
 fn safety_to_str(level: SafetyLevel) -> String {
@@ -81,6 +87,7 @@ impl ChildShellSnapshot {
             safety_level: safety_to_str(*env.policy_state.safety_level.read()),
             execute_allowlist: env.policy_state.execute_allowlist.read().clone(),
             shell_always_allowlist: env.policy_state.shell_always_allowlist.read().clone(),
+            shell_options: env.shell_options,
         }
     }
 
@@ -103,6 +110,7 @@ impl ChildShellSnapshot {
         *env.policy_state.safety_level.write() = safety_from_str(&self.safety_level);
         *env.policy_state.execute_allowlist.write() = self.execute_allowlist.clone();
         *env.policy_state.shell_always_allowlist.write() = self.shell_always_allowlist.clone();
+        env.shell_options = self.shell_options;
         env.refresh_derived_state("PATH");
         env.refresh_derived_state("Z_EXCLUDE");
     }
@@ -158,5 +166,29 @@ mod tests {
     #[test]
     fn unknown_safety_level_fails_closed_to_normal() {
         assert_eq!(safety_from_str("anything-else"), SafetyLevel::Normal);
+    }
+}
+
+#[cfg(test)]
+mod shell_options_tests {
+    use super::*;
+    use dsh_types::shell_options::ShellOption;
+
+    #[test]
+    fn snapshot_round_trips_pipefail() {
+        let env_arc = Environment::new();
+        env_arc
+            .write()
+            .shell_options
+            .set(ShellOption::Pipefail, true);
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
+        let back: ChildShellSnapshot = serde_json::from_str(&json).expect("deserialize snapshot");
+        assert!(back.shell_options.enabled(ShellOption::Pipefail));
+
+        let fresh = Environment::new();
+        assert!(!fresh.read().shell_options.enabled(ShellOption::Pipefail));
+        back.apply_to(&mut fresh.write());
+        assert!(fresh.read().shell_options.enabled(ShellOption::Pipefail));
     }
 }

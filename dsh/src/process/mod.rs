@@ -16,6 +16,7 @@ pub mod job_wait;
 pub mod launch_outcome;
 pub mod no_command_process;
 pub mod pipeline_source;
+pub mod pipeline_status;
 pub mod process;
 pub mod pty;
 pub mod redirect;

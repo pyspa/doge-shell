@@ -106,6 +106,36 @@ pub(crate) fn notice_state_from(state: &ProcessState) -> JobNoticeState {
     }
 }
 
+/// Map a whole `Job` to the notice state using the logical pipeline status.
+///
+/// `job.state` alone is the tail lifecycle summary, so pipefail ON can make
+/// it disagree with what `wait PID` reports (`Done` notice vs `wait` → 1).
+/// This helper resolves the same frozen [`Job::final_exit_status`] every
+/// other consumer uses: zero → `Done`, non-zero → `Exit N`. The tail's own
+/// SIGTERM/SIGKILL display is preserved only when that tail status is what
+/// decided the logical status; an upstream signal surfacing through pipefail
+/// is reported as `Exit 128+N`.
+pub(crate) fn notice_state_from_job(job: &crate::process::Job) -> JobNoticeState {
+    let tail_state = notice_state_from(&job.state);
+    let Some(logical) = job.final_exit_status() else {
+        return tail_state;
+    };
+    if logical == 0 {
+        return JobNoticeState::Done;
+    }
+    // Preserve Terminated/Killed only when the tail itself died that way
+    // and its status decided the pipeline status.
+    match (&job.state, tail_state) {
+        (ProcessState::Completed(_, Some(Signal::SIGTERM)), JobNoticeState::Terminated)
+        | (ProcessState::Completed(_, Some(Signal::SIGKILL)), JobNoticeState::Killed)
+            if job.state.shell_exit_code() == Some(logical) =>
+        {
+            tail_state
+        }
+        _ => JobNoticeState::Exit(logical.clamp(0, 255) as u8),
+    }
+}
+
 /// Render a bash-compatible job notice line, e.g. `[1]+  Done   sleep 5`.
 ///
 /// Newlines in the command are flattened so that a pasted multi-line command
@@ -264,5 +294,82 @@ mod tests {
         assert_eq!(JobMarker::for_index(0), JobMarker::Current);
         assert_eq!(JobMarker::for_index(1), JobMarker::Previous);
         assert_eq!(JobMarker::for_index(2), JobMarker::None);
+    }
+}
+
+#[cfg(test)]
+mod pipefail_notice_tests {
+    use super::*;
+    use crate::process::pipeline_status::PipelineStatusPolicy;
+    use crate::process::{Job, JobProcess, Process};
+    use dsh_types::shell_options::{ShellOption, ShellOptions};
+    use nix::unistd::Pid;
+
+    fn pipefail_job(states: &[ProcessState], pipefail: bool) -> Job {
+        let mut job = Job::new("false | true".to_string(), Pid::from_raw(1));
+        for (index, state) in states.iter().enumerate() {
+            let mut process = Process::new(format!("stage-{index}"), vec![]);
+            process.state = *state;
+            job.set_process(JobProcess::Command(process));
+        }
+        let mut options = ShellOptions::default();
+        if pipefail {
+            options.set(ShellOption::Pipefail, true);
+        }
+        job.pipeline_status_policy = PipelineStatusPolicy::from_shell_options(options);
+        job.refresh_lifecycle_state();
+        job
+    }
+
+    #[test]
+    fn pipefail_failure_notice_matches_wait_status() {
+        let job = pipefail_job(
+            &[
+                ProcessState::Completed(1, None),
+                ProcessState::Completed(0, None),
+            ],
+            true,
+        );
+        assert_eq!(job.final_exit_status(), Some(1));
+        let notice = notice_state_from_job(&job);
+        assert_eq!(notice, JobNoticeState::Exit(1));
+        assert_eq!(notice.exit_code(), 1);
+    }
+
+    #[test]
+    fn pipefail_off_tail_success_is_done() {
+        let job = pipefail_job(
+            &[
+                ProcessState::Completed(1, None),
+                ProcessState::Completed(0, None),
+            ],
+            false,
+        );
+        assert_eq!(notice_state_from_job(&job), JobNoticeState::Done);
+    }
+
+    #[test]
+    fn tail_sigterm_keeps_terminated_display() {
+        let job = pipefail_job(
+            &[
+                ProcessState::Completed(0, None),
+                ProcessState::signaled(Signal::SIGTERM),
+            ],
+            true,
+        );
+        assert_eq!(notice_state_from_job(&job), JobNoticeState::Terminated);
+    }
+
+    #[test]
+    fn upstream_signal_is_exit_not_terminated() {
+        let job = pipefail_job(
+            &[
+                ProcessState::signaled(Signal::SIGTERM),
+                ProcessState::Completed(0, None),
+            ],
+            true,
+        );
+        assert_eq!(job.final_exit_status(), Some(143));
+        assert_eq!(notice_state_from_job(&job), JobNoticeState::Exit(143));
     }
 }

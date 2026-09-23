@@ -10,6 +10,7 @@ use crate::secrets::SecretManagerSnapshot;
 use crate::suggestion::InputPreferences;
 use anyhow::Context;
 use dsh_builtin::McpRuntimeStateSnapshot;
+use dsh_types::shell_options::ShellOptions;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
@@ -61,6 +62,7 @@ struct EnvironmentSnapshot {
     keybindings: crate::repl::keybind::KeyBindings,
     startup_mode: bool,
     secret_manager: SecretManagerSnapshot,
+    shell_options: ShellOptions,
 }
 
 impl EnvironmentSnapshot {
@@ -90,6 +92,7 @@ impl EnvironmentSnapshot {
             keybindings: env.variable_state.keybindings.clone(),
             startup_mode: env.startup_mode,
             secret_manager: env.policy_state.secret_manager.snapshot(),
+            shell_options: env.shell_options,
         }
     }
 }
@@ -182,6 +185,7 @@ impl LispEngine {
         env.policy_state
             .secret_manager
             .restore(snapshot.secret_manager);
+        env.shell_options = snapshot.shell_options;
     }
 
     pub fn run(&self, src: &str) -> anyhow::Result<Value> {

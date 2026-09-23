@@ -274,3 +274,52 @@ fn final_exit_status_is_none_without_completed_tail() {
     let job = Job::new("test".to_string(), Pid::from_raw(1));
     assert_eq!(final_exit_status(&job), None);
 }
+
+#[test]
+fn pipefail_status_stays_out_of_lifecycle_state() {
+    use crate::process::pipeline_status::PipelineStatusPolicy;
+    use dsh_types::shell_options::{ShellOption, ShellOptions};
+    // `false | true` with pipefail ON: lifecycle stays tail-success,
+    // logical status is the upstream failure.
+    let mut job = job_with_stage_states(&[
+        ProcessState::Completed(1, None),
+        ProcessState::Completed(0, None),
+    ]);
+    let mut options = ShellOptions::default();
+    options.set(ShellOption::Pipefail, true);
+    job.pipeline_status_policy = PipelineStatusPolicy::from_shell_options(options);
+    job.refresh_lifecycle_state();
+    assert_eq!(job.state, ProcessState::Completed(0, None));
+    assert_eq!(job.final_exit_status(), Some(1));
+}
+
+#[test]
+fn final_status_follows_job_policy_value_not_other_values() {
+    use crate::process::pipeline_status::PipelineStatusPolicy;
+    use dsh_types::shell_options::{ShellOption, ShellOptions};
+    // The policy is a frozen value on the job: resolving with an ON value
+    // reports ON semantics, resolving with OFF reports OFF semantics.
+    // The launch-time wiring itself (snapshot in `Job::launch`, no live
+    // reads in finalization) is pinned end-to-end by the
+    // `pipeline.pipefail-background-snapshot-frozen` contract.
+    let mut on = ShellOptions::default();
+    on.set(ShellOption::Pipefail, true);
+    let mut job = job_with_stage_states(&[
+        ProcessState::Completed(1, None),
+        ProcessState::Completed(0, None),
+    ]);
+    job.pipeline_status_policy = PipelineStatusPolicy::from_shell_options(on);
+    assert_eq!(job.final_exit_status(), Some(1));
+
+    // An OFF-valued policy keeps OFF semantics even when another value
+    // elsewhere has pipefail ON.
+    let off = ShellOptions::default();
+    let mut job = job_with_stage_states(&[
+        ProcessState::Completed(1, None),
+        ProcessState::Completed(0, None),
+    ]);
+    job.pipeline_status_policy = PipelineStatusPolicy::from_shell_options(off);
+    let mut other_on = ShellOptions::default();
+    other_on.set(ShellOption::Pipefail, true);
+    assert_eq!(job.final_exit_status(), Some(0));
+}

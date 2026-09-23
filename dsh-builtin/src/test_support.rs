@@ -2,7 +2,11 @@ use crate::shell_capabilities::{AgentCommandPolicy, AgentCommandVerdict, Approva
 use crate::{ProxyFuture, ShellProxy};
 use anyhow::Result;
 use dsh_types::{
-    Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
+    Context,
+    command_block::CommandBlock,
+    mcp::McpServerConfig,
+    output_history::OutputEntry,
+    shell_options::{ShellOption, ShellOptions},
     snippet::Snippet,
 };
 use parking_lot::{Mutex, RwLock};
@@ -109,6 +113,8 @@ pub(crate) struct TestShellProxy {
     /// When set, `wait_for_jobs` fails with this message instead of
     /// returning `wait_status`.
     pub wait_error: Option<String>,
+    /// `set -o` option state for `ShellOptionCapability` tests.
+    pub shell_options: ShellOptions,
 }
 
 impl Default for TestShellProxy {
@@ -160,6 +166,7 @@ impl Default for TestShellProxy {
             cron_tool_error: None,
             wait_status: 0,
             wait_error: None,
+            shell_options: ShellOptions::default(),
         }
     }
 }
@@ -586,6 +593,16 @@ impl crate::shell_capabilities::JobControlCapability for TestShellProxy {
             Some(message) => Err(anyhow::anyhow!(message.clone())),
             None => Ok(self.wait_status),
         }
+    }
+}
+
+impl crate::shell_capabilities::ShellOptionCapability for TestShellProxy {
+    fn shell_option_enabled(&self, option: ShellOption) -> bool {
+        self.shell_options.enabled(option)
+    }
+
+    fn set_shell_option(&mut self, option: ShellOption, enabled: bool) {
+        self.shell_options.set(option, enabled);
     }
 }
 

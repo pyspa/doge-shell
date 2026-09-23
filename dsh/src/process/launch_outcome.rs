@@ -14,8 +14,9 @@
 //!   `Job::launch_process`.
 //!
 //! Scope: only redirection setup failures surface as [`CommandFailure`] for
-//! now. POSIX special-builtin exit rules, `pipefail`, and `PIPESTATUS` are
-//! explicitly out of scope.
+//! now. POSIX special-builtin exit rules and `PIPESTATUS` are explicitly
+//! out of scope. (`pipefail` lives in `super::pipeline_status`, snapshotted
+//! at `Job::launch`, not here.)
 //!
 //! [`JobLaunchContext`] is the other half of the launch boundary: the
 //! caller-owned transient state `Job::launch` snapshots on entry and

@@ -633,3 +633,24 @@ fn diagnose_hint_can_be_turned_on_and_read_back() {
     engine.borrow().run("(pref-diagnose-hint nil)").unwrap();
     assert!(!env.read().completion_state.input_preferences.auto_diagnose);
 }
+
+#[test]
+fn config_rollback_restores_shell_options() {
+    use dsh_types::shell_options::ShellOption;
+    init();
+    // Direct snapshot round-trip: `sh` needs a TTY (`tcgetattr(0)`) so it
+    // cannot drive an option change inside `cargo test`. Capture, mutate,
+    // and restore exercises the same `EnvironmentSnapshot` path
+    // `run_config_lisp` uses on failure.
+    let env = Environment::new();
+    assert!(!env.read().shell_options.enabled(ShellOption::Pipefail));
+    let engine = LispEngine::new(env.clone());
+    let snapshot = super::EnvironmentSnapshot::capture(&env.read());
+    env.write().shell_options.set(ShellOption::Pipefail, true);
+    assert!(env.read().shell_options.enabled(ShellOption::Pipefail));
+    engine.borrow().restore_environment_snapshot(snapshot);
+    assert!(
+        !env.read().shell_options.enabled(ShellOption::Pipefail),
+        "pipefail change survived the snapshot restore"
+    );
+}

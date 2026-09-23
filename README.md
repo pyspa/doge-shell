@@ -301,7 +301,7 @@ The shell includes many built-in commands:
 | `fg`                | Bring job to foreground                                                                                                    |
 | `bg`                | Send job to background                                                                                                     |
 | `lisp`              | Execute Lisp expressions                                                                                                   |
-| `set`               | Set shell variables                                                                                                        |
+| `set`               | Set shell variables (`set KEY VALUE`, `set -o/+o pipefail`)                                                                |
 | `var`               | Manage shell variables                                                                                                     |
 | `read`              | Read input into a variable                                                                                                 |
 | `abbr`              | Configure abbreviations                                                                                                    |

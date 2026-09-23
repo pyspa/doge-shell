@@ -206,6 +206,7 @@ pub trait ShellProxy:
     shell_capabilities::AgentCommandPolicy
     + shell_capabilities::AiJsonRequest
     + shell_capabilities::JobControlCapability
+    + shell_capabilities::ShellOptionCapability
 {
     /// Initiates shell exit process
     fn exit_shell(&mut self);

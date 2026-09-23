@@ -19,7 +19,9 @@ use std::os::unix::io::RawFd;
 /// Bumped to 4: `PlanExecRequest` carries an explicit `PlanSignalPolicy`
 /// because async AND-OR signal semantics depend on the caller's job-control
 /// state, which a non-interactive helper cannot reconstruct.
-pub const PROTOCOL_VERSION: u32 = 4;
+/// Bumped to 5: `ChildShellSnapshot` carries `ShellOptions` / pipefail
+/// state, so re-exec helpers inherit `set -o pipefail`.
+pub const PROTOCOL_VERSION: u32 = 5;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;

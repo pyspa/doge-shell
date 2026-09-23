@@ -104,8 +104,9 @@ pub async fn execute_with_capture(
         }
     };
     let exit_code = match state {
-        ProcessState::Completed(_, _) => state
-            .shell_exit_code()
+        ProcessState::Completed(_, _) => job
+            .final_exit_status()
+            .or(state.shell_exit_code())
             .expect("completed state has exit code"),
         ProcessState::Stopped(_, _) => 130,
         ProcessState::Running => 0,

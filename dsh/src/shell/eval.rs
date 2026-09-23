@@ -501,8 +501,12 @@ pub async fn eval_str(
                     stop_processing = true;
                 }
                 Ok(JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _))) => {
-                    let exit = state
-                        .shell_exit_code()
+                    // Logical pipeline status comes from the launch-time
+                    // snapshot, not the tail copy: `state` is only the
+                    // lifecycle summary.
+                    let exit = job
+                        .final_exit_status()
+                        .or(state.shell_exit_code())
                         .expect("completed state has exit code");
                     debug!("job '{}' completed exit_code: {:?}", job.cmd, exit);
                     last_exit_code = exit;

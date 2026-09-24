@@ -69,11 +69,11 @@ pub(super) fn build_project_status(
         runtimes: context
             .runtimes
             .iter()
-            .map(|runtime| ProjectRuntimeJson {
-                name: runtime.name.clone(),
-                source: runtime.source.clone(),
-                version: runtime.version.clone(),
-                path: runtime.path.display().to_string(),
+            .map(|rt| ProjectRuntimeJson {
+                name: rt.name.clone(),
+                source: rt.source.clone(),
+                version: rt.version.clone(),
+                path: rt.path.display().to_string(),
             })
             .collect(),
     }
@@ -184,15 +184,13 @@ pub(super) fn mise_output(
     runtime: &ProjectProviderRuntime,
 ) -> Result<std::process::Output> {
     let mut command = Command::new(mise);
-    runtime.configure_command(
-        command
-            .current_dir(root)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped()),
-    );
-    let mut child = command.spawn()?;
+    command
+        .current_dir(root)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = runtime.configure_command(&mut command).spawn()?;
     if child.wait_timeout(Duration::from_millis(1500))?.is_none() {
         let _ = child.kill();
         let _ = child.wait();

@@ -48,3 +48,11 @@
 - provider subprocess は `Environment::child_process_env()` snapshot だけを受け取り、
   process-global environment を暗黙継承しない。
 - task cache は project input metadata だけでなく runtime discovery identity でも scope する。
+- `pm status` / `pm activate` の external provider executable lookup、
+  特に mise lookup は logical `Environment.variable_state.paths`
+  を authority とする。
+- project provider subprocess は
+  `Environment::child_process_env()` snapshot だけを受け取り、
+  process-global environment を暗黙継承しない。
+- 一つの provider operation 中では executable lookup / trust /
+  provider query / activation で同一 runtime snapshot を使用する。

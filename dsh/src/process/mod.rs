@@ -6,7 +6,7 @@ pub mod builtin;
 pub mod child_exec;
 pub mod fork;
 pub mod io;
-pub mod isolated_shell;
+pub(crate) mod isolated_shell;
 pub mod job;
 pub mod job_process;
 mod job_process_launch;

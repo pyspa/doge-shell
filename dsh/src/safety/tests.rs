@@ -957,6 +957,114 @@ fn untrusted_allowlist_entries_still_allow() {
     );
 }
 
+/// An exact operator approval of the carried command string opens the gate
+/// regardless of trust or level: it is the operator's own verbatim string,
+/// not server-controlled classification. This preserves the pre-trust
+/// behavior (in particular, bare-command approvals keep working in Strict).
+#[test]
+fn an_exact_command_approval_opens_the_gate_regardless_of_trust_or_level() {
+    let guard = SafetyGuard::new();
+    let dangerous = serde_json::json!({ "command": "rm -rf /" }).to_string();
+    let benign = serde_json::json!({ "command": "ls" }).to_string();
+
+    // Normal + Untrusted: the trust boundary constrains server metadata, not
+    // the operator's own approval.
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call("mcp__ops__bash", "ops", "bash", &benign, None,),
+            &SafetyLevel::Normal,
+            &["ls".to_string()],
+        ),
+        SafetyResult::Allowed
+    );
+
+    // Even a dangerous command, when allowlisted verbatim.
+    assert_eq!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &dangerous, None,),
+            &SafetyLevel::Normal,
+            &["rm -rf /".to_string()],
+        ),
+        SafetyResult::Allowed
+    );
+
+    // Strict: a bare-command approval works as it did before trust existed.
+    assert_eq!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &benign, None,),
+            &SafetyLevel::Strict,
+            &["ls".to_string()],
+        ),
+        SafetyResult::Allowed
+    );
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call("mcp__ops__bash", "ops", "bash", &benign, None,),
+            &SafetyLevel::Strict,
+            &["ls".to_string()],
+        ),
+        SafetyResult::Allowed
+    );
+}
+
+/// MCP confirmations carry no `Proceed?` prompt of their own:
+/// `repl/confirmation.rs` appends `Proceed? [y/N/a(Always)]:` itself, so one
+/// inside the message would ask twice.
+#[test]
+fn mcp_confirmations_carry_no_proceed_prompt() {
+    let guard = SafetyGuard::new();
+    let dangerous = serde_json::json!({ "command": "rm -rf /" }).to_string();
+
+    let cases = [
+        guard.check_mcp_tool(
+            trusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                Some(true),
+            ),
+            &SafetyLevel::Strict,
+            &[],
+        ),
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &dangerous, None),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        guard.check_mcp_tool(
+            untrusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                None,
+            ),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        guard.check_mcp_tool(
+            trusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                None,
+            ),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+    ];
+    for result in cases {
+        match result {
+            SafetyResult::Confirm(msg) => {
+                assert!(!msg.contains("Proceed?"), "double prompt: {msg}")
+            }
+            SafetyResult::Allowed => panic!("expected a confirmation, got Allowed"),
+        }
+    }
+}
+
 /// An unknown binding falls back to untrusted and asks at Normal.
 #[test]
 fn an_unknown_binding_fails_closed_at_normal() {

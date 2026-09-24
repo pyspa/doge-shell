@@ -585,6 +585,41 @@ fn tool_facts_propagate_from_config_through_bind_tool() {
     assert_eq!(facts.declared_read_only, Some(true));
 }
 
+/// The other direction of the same path: a server that only bothers to say
+/// it is destructive still reaches the guard as `Some(false)`, so the gate
+/// closes even though no `readOnlyHint` was sent.
+#[test]
+fn tool_facts_carry_a_destructive_only_declaration_as_side_effects() {
+    use rmcp::model::ToolAnnotations;
+
+    let mut manager = McpManager::default();
+    manager.servers.push(mock_trusted_server("ops"));
+    let mut tool = Tool::new(
+        "prune".to_string(),
+        "prune things".to_string(),
+        Arc::new(serde_json::Map::new()),
+    );
+    let mut annotations = ToolAnnotations::new();
+    annotations.destructive_hint = Some(true);
+    tool.annotations = Some(annotations);
+    let (function_name, binding) = super::bind_tool("ops", &tool);
+    manager
+        .servers
+        .iter_mut()
+        .find(|server| server.label == "ops")
+        .expect("server registered above")
+        .tools
+        .push(tool.clone());
+    manager.bindings.insert(function_name.clone(), binding);
+
+    let facts = manager
+        .tool_facts_for(&function_name)
+        .expect("binding registered above");
+    assert_eq!(facts.server_trust, McpServerTrust::Trusted);
+    assert_eq!(facts.tool_name, "prune");
+    assert_eq!(facts.declared_read_only, Some(false));
+}
+
 fn group_tool(name: &str) -> Tool {
     Tool::new(
         name.to_string(),

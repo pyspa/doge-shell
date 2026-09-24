@@ -56,3 +56,16 @@
   process-global environment を暗黙継承しない。
 - 一つの provider operation 中では executable lookup / trust /
   provider query / activation で同一 runtime snapshot を使用する。
+
+## Command resolution
+
+- Runtime command search authority is Environment.variable_state.paths.
+- A command name containing '/' bypasses PATH search.
+- PATH search considers executable files only and preserves PATH order.
+- Explicit pathnames are passed toward exec even when non-executable so exec diagnostics remain authoritative.
+- command_cache stores successful absolute-PATH resolutions only.
+- command-not-found is never cached.
+- cached paths are revalidated before use.
+- any relative/empty PATH element disables persistent command-location caching.
+- assigning PATH invalidates remembered command locations even when the textual value is unchanged.
+- command-scoped PATH=... applies to that external command's lookup and child environment only; it never mutates or populates the persistent shell command cache.

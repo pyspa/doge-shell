@@ -229,7 +229,10 @@ impl Environment {
     /// Rebuild whatever the shell caches from `key`'s value.
     pub fn refresh_derived_state(&mut self, key: &str) {
         match canonical_shell_var_name(key) {
-            "PATH" => self.reload_path(),
+            "PATH" => {
+                self.clear_command_cache();
+                self.reload_path();
+            }
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
             "AI_CHAT_MODEL" | "OPENAI_MODEL" => self.reload_chat_model(),

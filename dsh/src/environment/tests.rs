@@ -69,7 +69,7 @@ fn extend_copies_shares_and_resets_state_by_group() {
             .completion_state
             .command_cache
             .write()
-            .insert("git".to_string(), Some("/usr/bin/git".to_string()));
+            .insert("git".to_string(), "/usr/bin/git".to_string());
         *parent.completion_state.executable_names.write() = vec!["git".to_string()];
         parent
             .session_output_state
@@ -128,20 +128,243 @@ fn extend_copies_shares_and_resets_state_by_group() {
 }
 
 #[test]
-fn lookup_caches_misses() {
+fn lookup_does_not_cache_misses() {
     init();
     let env = Environment::new();
     let missing = "definitely-not-a-command-12345";
 
     assert_eq!(None, env.read().lookup(missing));
+    assert!(
+        !env.read()
+            .completion_state
+            .command_cache
+            .read()
+            .contains_key(missing)
+    );
+}
+
+fn write_mode_file(dir: &Path, name: &str, mode: u32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(&path, "#!/bin/sh\necho hi\n").unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+fn env_with_paths(paths: Vec<String>) -> Arc<RwLock<Environment>> {
+    let env = Environment::new();
+    env.write().variable_state.paths = paths;
+    env.write().completion_state.command_cache.write().clear();
+    env
+}
+
+#[test]
+fn lookup_skips_non_executable_first_candidate() {
+    init();
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    write_mode_file(dir_a.path(), "foo", 0o644);
+    let expected = write_mode_file(dir_b.path(), "foo", 0o755);
+
+    let env = env_with_paths(vec![
+        dir_a.path().display().to_string(),
+        dir_b.path().display().to_string(),
+    ]);
     assert_eq!(
-        Some(&None),
+        env.read().lookup("foo"),
+        Some(expected.display().to_string())
+    );
+}
+
+#[test]
+fn lookup_revalidates_removed_cached_executable() {
+    init();
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let stale = write_mode_file(dir_a.path(), "foo", 0o755);
+    let fallback = write_mode_file(dir_b.path(), "foo", 0o755);
+
+    let env = env_with_paths(vec![
+        dir_a.path().display().to_string(),
+        dir_b.path().display().to_string(),
+    ]);
+    assert_eq!(env.read().lookup("foo"), Some(stale.display().to_string()));
+    std::fs::remove_file(&stale).unwrap();
+    assert_eq!(
+        env.read().lookup("foo"),
+        Some(fallback.display().to_string())
+    );
+}
+
+#[test]
+fn lookup_revalidates_de_executed_cached_executable() {
+    init();
+    use std::os::unix::fs::PermissionsExt;
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let stale = write_mode_file(dir_a.path(), "foo", 0o755);
+    let fallback = write_mode_file(dir_b.path(), "foo", 0o755);
+
+    let env = env_with_paths(vec![
+        dir_a.path().display().to_string(),
+        dir_b.path().display().to_string(),
+    ]);
+    assert_eq!(env.read().lookup("foo"), Some(stale.display().to_string()));
+    let mut permissions = std::fs::metadata(&stale).unwrap().permissions();
+    permissions.set_mode(0o644);
+    std::fs::set_permissions(&stale, permissions).unwrap();
+    assert_eq!(
+        env.read().lookup("foo"),
+        Some(fallback.display().to_string())
+    );
+}
+
+#[test]
+fn lookup_miss_then_install_is_found() {
+    init();
+    let dir = tempfile::tempdir().unwrap();
+    let env = env_with_paths(vec![dir.path().display().to_string()]);
+    assert_eq!(env.read().lookup("foo"), None);
+    let expected = write_mode_file(dir.path(), "foo", 0o755);
+    assert_eq!(
+        env.read().lookup("foo"),
+        Some(expected.display().to_string())
+    );
+}
+
+#[test]
+fn lookup_treats_every_slash_name_as_explicit_path() {
+    init();
+    let _guard = crate::test_env_lock();
+    let work = tempfile::tempdir().unwrap();
+    let sub = work.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let probe = write_mode_file(&sub, "probe", 0o755);
+    let parent_probe = write_mode_file(work.path(), "parent-probe", 0o755);
+
+    // `sub/foo` resolves literally even though PATH has nothing useful.
+    let env = env_with_paths(vec!["/definitely/not/a/real/path".to_string()]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
+    assert_eq!(
+        env.read().lookup("sub/probe"),
+        Some("sub/probe".to_string())
+    );
+    assert!(probe.exists());
+    // `../foo` is also an explicit pathname, never a PATH search.
+    std::env::set_current_dir(&sub).unwrap();
+    assert_eq!(
+        env.read().lookup("../parent-probe"),
+        Some("../parent-probe".to_string())
+    );
+    assert!(parent_probe.exists());
+    // A nested slash name is explicit too.
+    assert_eq!(env.read().lookup("a/b/foo"), None);
+    std::env::set_current_dir(&previous).unwrap();
+}
+
+#[test]
+fn relative_path_entries_disable_persistent_command_cache() {
+    init();
+    use super::paths::path_lookup_is_cacheable;
+    assert!(path_lookup_is_cacheable(&["/usr/bin".to_string()]));
+    assert!(path_lookup_is_cacheable(&[
+        "/a".to_string(),
+        "/b".to_string()
+    ]));
+    assert!(!path_lookup_is_cacheable(&["".to_string()]));
+    assert!(!path_lookup_is_cacheable(&[".".to_string()]));
+    assert!(!path_lookup_is_cacheable(&["bin".to_string()]));
+    assert!(!path_lookup_is_cacheable(&["../bin".to_string()]));
+    assert!(!path_lookup_is_cacheable(&[
+        "/usr/bin".to_string(),
+        "bin".to_string()
+    ]));
+
+    // A relative PATH lookup resolves but is never remembered.
+    let _guard = crate::test_env_lock();
+    let work = tempfile::tempdir().unwrap();
+    let bin = work.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    write_mode_file(&bin, "foo", 0o755);
+    let env = env_with_paths(vec!["bin".to_string()]);
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(work.path()).unwrap();
+    assert_eq!(env.read().lookup("foo"), Some("bin/foo".to_string()));
+    assert!(env.read().completion_state.command_cache.read().is_empty());
+    std::env::set_current_dir(&previous).unwrap();
+}
+
+#[test]
+fn same_value_path_assignment_invalidates_command_cache() {
+    init();
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let path_value = format!("{}:{}", dir_a.path().display(), dir_b.path().display());
+    let late = dir_a.path().join("late-probe-xyz");
+    let fallback = write_mode_file(dir_b.path(), "late-probe-xyz", 0o755);
+
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.set_shell_var("PATH".to_string(), path_value.clone());
+    }
+    assert_eq!(
+        env.read().lookup("late-probe-xyz"),
+        Some(fallback.display().to_string())
+    );
+    assert!(
         env.read()
             .completion_state
             .command_cache
             .read()
-            .get(missing)
+            .contains_key("late-probe-xyz")
     );
+    // Install a preferred candidate, then assign the identical PATH value.
+    write_mode_file(dir_a.path(), "late-probe-xyz", 0o755);
+    {
+        let mut guard = env.write();
+        guard.set_shell_var("PATH".to_string(), path_value.clone());
+    }
+    assert!(
+        env.read().completion_state.command_cache.read().is_empty()
+            || !env
+                .read()
+                .completion_state
+                .command_cache
+                .read()
+                .contains_key("late-probe-xyz")
+    );
+    assert_eq!(
+        env.read().lookup("late-probe-xyz"),
+        Some(late.display().to_string())
+    );
+}
+
+#[test]
+fn scoped_path_override_does_not_touch_persistent_cache() {
+    init();
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let in_a = write_mode_file(dir_a.path(), "foo", 0o755);
+    let in_b = write_mode_file(dir_b.path(), "foo", 0o755);
+
+    let env = env_with_paths(vec![dir_a.path().display().to_string()]);
+    assert_eq!(env.read().lookup("foo"), Some(in_a.display().to_string()));
+    // Override resolves from B without mutating or populating the cache.
+    assert_eq!(
+        env.read()
+            .lookup_with_path_override("foo", Some(&dir_b.path().display().to_string())),
+        Some(in_b.display().to_string())
+    );
+    assert_eq!(
+        env.read().completion_state.command_cache.read().get("foo"),
+        Some(&in_a.display().to_string())
+    );
+    // Last duplicate scoped assignment wins.
+    assert_eq!(env.read().lookup("foo"), Some(in_a.display().to_string()));
 }
 
 #[test]

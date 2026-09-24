@@ -149,8 +149,8 @@ fn build_stage_process(
         StageProcess::Builtin(BuiltinProcess::new_handler(cmd, handler, argv))
     } else if shell.lisp_engine.borrow().is_export(&cmd) {
         StageProcess::Builtin(BuiltinProcess::new(cmd, dsh_builtin::lisp::run, argv))
-    } else if shell.environment.read().lookup(&cmd).is_none()
-        && crate::dirs::is_dir(&cmd)
+    } else if crate::dirs::is_dir(&cmd)
+        && shell.environment.read().lookup(&cmd).is_none()
         && let Some(handler) = dsh_builtin::get_handler("cd")
     {
         // Dispatch identity is `cd`; `Job.cmd` keeps the user-facing path.

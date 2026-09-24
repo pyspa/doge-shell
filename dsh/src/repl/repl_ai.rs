@@ -399,14 +399,15 @@ impl<'a> Repl<'a> {
 
     /// Execute command, capture output, and send to AI for analysis
     pub(super) async fn run_ai_pipe(&mut self, command: String, query: String) -> Result<()> {
-        use std::process::Command;
-
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, Print("\r\n🔄 Running command...\r\n")).ok();
         renderer.flush().ok();
 
-        // Execute the command and capture output
-        let output = Command::new("sh").arg("-c").arg(&command).output();
+        // Snapshot the logical exported environment first, then drop the lock
+        // before spawning: the child sees only `child_process_env()` via
+        // `env_clear`, never the process-global environment.
+        let child_env = self.shell.environment.read().child_process_env();
+        let output = crate::process::isolated_shell::command(&command, &child_env).output();
 
         let (stdout, stderr, exit_code) = match output {
             Ok(out) => {

@@ -1142,6 +1142,69 @@ fn a_large_stdout_does_not_evict_stderr() {
     assert_ne!(parsed["exit_code"].as_i64().unwrap(), 0);
 }
 
+#[test]
+fn interactive_execute_uses_proxy_child_environment() {
+    let _lock = env_lock();
+    let _allow = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+    let _process_only =
+        crate::test_support::ProcessEnvGuard::set("DOGESH_EXEC_PROCESS_ONLY", "stale");
+    let _stale_visible =
+        crate::test_support::ProcessEnvGuard::set("DOGESH_EXEC_VISIBLE", "stale-process");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec![],
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        confirm_result: true,
+        exported: [("DOGESH_EXEC_VISIBLE".to_string(), "logical".to_string())]
+            .into_iter()
+            .collect(),
+        ..TestProxy::default()
+    };
+
+    let result = run(
+        r#"{"command":"printf '%s|%s' \"$DOGESH_EXEC_VISIBLE\" \"${DOGESH_EXEC_PROCESS_ONLY-unset}\""}"#,
+        &mut proxy,
+    )
+    .unwrap();
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["exit_code"], 0);
+    assert_eq!(
+        parsed["stdout"].as_str().unwrap(),
+        "logical|unset",
+        "{result}"
+    );
+    let program = capture::shell_command("true", None, &std::collections::HashMap::new())
+        .get_program()
+        .to_os_string();
+    assert_eq!(program, std::ffi::OsString::from("/bin/sh"));
+}
+
+#[test]
+fn interactive_execute_does_not_expose_unexported_variables() {
+    let _lock = env_lock();
+    let _allow = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+    let mut proxy = TestProxy {
+        execute_allowlist: vec![],
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        confirm_result: true,
+        vars: [("DOGESH_PRIVATE".to_string(), "logical-private".to_string())]
+            .into_iter()
+            .collect(),
+        ..TestProxy::default()
+    };
+    assert!(!proxy.exported.contains_key("DOGESH_PRIVATE"));
+
+    let result = run(
+        r#"{"command":"printf '%s' \"${DOGESH_PRIVATE-unset}\""}"#,
+        &mut proxy,
+    )
+    .unwrap();
+    let parsed: Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["exit_code"], 0);
+    assert_eq!(parsed["stdout"].as_str().unwrap(), "unset", "{result}");
+}
+
 pub(crate) struct EnvGuard {
     key: &'static str,
     previous: Option<String>,

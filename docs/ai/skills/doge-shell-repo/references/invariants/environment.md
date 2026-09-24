@@ -34,6 +34,19 @@
 - logical unset は final。process-global startup value を再発見しない。
   (`AI_CHAT_API_KEY` を `unset` しても、起動時 process env の同名値で
   `!` chat が復活してはいけない、等)
+- AI/capture subprocesses must not inherit process-global environment
+  implicitly.
+- `command |!`, `ShellProxy::capture_command`, and interactive `execute`
+  spawn `/bin/sh` with env_clear + Environment::child_process_env().
+- `/bin/sh` is the internal interpreter boundary on supported Linux/macOS;
+  it is not resolved through process-global or project-controlled PATH.
+- persistent agent execution does not receive the shell's full exported
+  environment. Its environment is the logical baseline plus explicitly
+  granted TaskGrant.environment names.
+- TaskGrant.environment lookup must use logical shell variables only.
+  A logically unset variable must never be resurrected from std::env.
+- agent sandbox runtime discovery (`srt`) uses logical command search paths,
+  never process-global PATH.
 - shell で変更された value は runtime consumer が即座に見る
   (`set AI_CHAT_MODEL` が次の `!` turn に効く、等)。
 - shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。

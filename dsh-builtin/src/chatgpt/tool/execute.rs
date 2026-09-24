@@ -189,22 +189,31 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         .clamp(MIN_TIMEOUT_MS, max_timeout_ms);
 
     if let Some(runtime) = proxy.agent_runtime() {
-        let (mut builder, config) = {
+        // Clone task inputs under a short lock, then release before touching
+        // the proxy or spawning: a persistent task receives only the minimum
+        // logical baseline plus explicit grants, never the full exported
+        // environment.
+        let (task_root, grant) = {
             let runtime = runtime.lock();
-            crate::agent::sandbox::command(
-                command,
-                cwd.as_deref().unwrap_or(&runtime.task.root),
-                &runtime.task.grant,
-                &crate::config_paths::agent_state_dir(),
-            )
-            .map_err(|e| e.to_string())?
+            (runtime.task.root.clone(), runtime.task.grant.clone())
         };
-        let env_names = runtime.lock().task.grant.environment.clone();
-        for name in env_names {
-            if let Some(value) = proxy.get_var(&name) {
-                builder.env(name, value);
-            }
-        }
+        let search_paths = proxy.command_search_paths();
+        let snapshot = {
+            let mut fetch = |key: &str| proxy.get_var(key);
+            crate::agent::sandbox::SandboxRuntimeSnapshot::capture(
+                search_paths,
+                &mut fetch,
+                &grant.environment,
+            )
+        };
+        let (builder, config) = crate::agent::sandbox::command(
+            command,
+            cwd.as_deref().unwrap_or(&task_root),
+            &grant,
+            &crate::config_paths::agent_state_dir(),
+            &snapshot,
+        )
+        .map_err(|e| e.to_string())?;
         let id = runtime
             .lock()
             .jobs

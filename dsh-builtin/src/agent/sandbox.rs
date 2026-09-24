@@ -3,12 +3,125 @@ use anyhow::{Context, Result, bail};
 use dsh_types::agent::TaskGrant;
 use serde_json::json;
 use std::{
+    collections::HashMap,
     io::Write,
     path::{Path, PathBuf},
     process::Command,
 };
 
 pub const SRT_VERSION: &str = "0.0.75";
+
+/// Fixed system shell for non-sandboxed agent task execution.
+///
+/// Not resolved through any PATH: project-controlled `sh` must never become
+/// the task execution engine.
+const SYSTEM_SHELL: &str = "/bin/sh";
+
+/// Logical shell state snapshot for one persistent agent task spawn.
+///
+/// Unlike an ordinary interactive child (full exported environment), a task
+/// receives only the minimum logical baseline plus explicitly granted
+/// `TaskGrant.environment` names. Every value comes from logical shell state;
+/// process-global `std::env` is never consulted, so a logically unset
+/// variable stays unset in the child.
+pub struct SandboxRuntimeSnapshot {
+    command_search_paths: Vec<PathBuf>,
+    baseline_env: HashMap<String, String>,
+    granted_env: HashMap<String, String>,
+}
+
+impl SandboxRuntimeSnapshot {
+    pub fn new(
+        command_search_paths: Vec<PathBuf>,
+        baseline_env: HashMap<String, String>,
+        granted_env: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            command_search_paths,
+            baseline_env,
+            granted_env,
+        }
+    }
+
+    /// Build a snapshot from logical shell state.
+    ///
+    /// `command_search_paths` is the logical PATH authority
+    /// (`proxy.command_search_paths()`); `get_var` reads logical shell
+    /// variables (`proxy.get_var`). `granted_names` is
+    /// `TaskGrant.environment`.
+    pub fn capture(
+        command_search_paths: Vec<PathBuf>,
+        get_var: &mut dyn FnMut(&str) -> Option<String>,
+        granted_names: &[String],
+    ) -> Self {
+        let mut baseline_env = HashMap::new();
+        if !command_search_paths.is_empty() {
+            let joined = command_search_paths
+                .iter()
+                .map(|p| p.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(":");
+            baseline_env.insert("PATH".to_string(), joined);
+        }
+        for key in ["HOME", "LANG", "LC_ALL", "TMPDIR"] {
+            if let Some(value) = get_var(key) {
+                baseline_env.insert(key.to_string(), value);
+            }
+        }
+        let mut granted_env = HashMap::new();
+        for name in granted_names {
+            if let Some(value) = get_var(name.as_str()) {
+                granted_env.insert(name.clone(), value);
+            }
+        }
+        Self {
+            command_search_paths,
+            baseline_env,
+            granted_env,
+        }
+    }
+
+    /// Convenience wrapper when the caller holds a shell proxy.
+    pub fn from_proxy(
+        proxy: &mut (impl crate::ShellProxy + ?Sized),
+        granted_names: &[String],
+    ) -> Self {
+        let command_search_paths = proxy.command_search_paths();
+        let mut fetch = |key: &str| proxy.get_var(key);
+        Self::capture(command_search_paths, &mut fetch, granted_names)
+    }
+
+    pub fn command_search_paths(&self) -> &[PathBuf] {
+        &self.command_search_paths
+    }
+
+    pub fn baseline_env(&self) -> &HashMap<String, String> {
+        &self.baseline_env
+    }
+
+    pub fn granted_env(&self) -> &HashMap<String, String> {
+        &self.granted_env
+    }
+
+    /// Resolve `name` through logical command search paths only.
+    pub fn resolve_program(&self, name: &str) -> Option<PathBuf> {
+        self.command_search_paths
+            .iter()
+            .map(|dir| dir.join(name))
+            .find(|candidate| candidate.is_file())
+    }
+}
+
+impl std::fmt::Debug for SandboxRuntimeSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never print environment values: they may hold secrets.
+        f.debug_struct("SandboxRuntimeSnapshot")
+            .field("command_search_paths_len", &self.command_search_paths.len())
+            .field("baseline_env_len", &self.baseline_env.len())
+            .field("granted_env_len", &self.granted_env.len())
+            .finish()
+    }
+}
 
 pub fn settings(grant: &TaskGrant, state_dir: &Path) -> serde_json::Value {
     #[cfg(target_os = "macos")]
@@ -25,9 +138,9 @@ pub fn settings(grant: &TaskGrant, state_dir: &Path) -> serde_json::Value {
             "denyWrite":[state_dir]}, "allowPty":false})
 }
 
-pub fn find_runtime() -> Result<PathBuf> {
-    let paths = std::env::var_os("PATH").unwrap_or_default();
-    let path = std::env::split_paths(&paths)
+pub fn find_runtime(search_paths: &[PathBuf]) -> Result<PathBuf> {
+    let path = search_paths
+        .iter()
         .filter(|p| p.is_absolute())
         .map(|p| p.join("srt"))
         .find(|p| p.is_file())
@@ -50,9 +163,10 @@ pub fn command(
     cwd: &Path,
     grant: &TaskGrant,
     state_dir: &Path,
+    snapshot: &SandboxRuntimeSnapshot,
 ) -> Result<(Command, Option<tempfile::NamedTempFile>)> {
     let (mut command, settings_file) = if grant.sandbox {
-        let runtime = find_runtime()?;
+        let runtime = find_runtime(snapshot.command_search_paths())?;
         let mut file = tempfile::NamedTempFile::new_in(state_dir)?;
         serde_json::to_writer(&mut file, &settings(grant, state_dir))?;
         file.flush()?;
@@ -64,31 +178,35 @@ pub fn command(
             .arg(line);
         (command, Some(file))
     } else {
-        let mut command = Command::new("sh");
+        let mut command = Command::new(SYSTEM_SHELL);
         command.arg("-c").arg(line);
         (command, None)
     };
     command.current_dir(cwd).env_clear();
-    for key in ["PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"]
-        .into_iter()
-        .chain(grant.environment.iter().map(String::as_str))
-    {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
+    for (key, value) in snapshot.baseline_env() {
+        command.env(key, value);
     }
     if grant.sandbox {
         // SRT resolves bash from PATH. Prefer the OS shell without granting
-        // access to an unrelated package-manager prefix.
+        // access to an unrelated package-manager prefix. Only logical
+        // absolute search paths are added; process-global PATH is never read.
         let mut paths: Vec<PathBuf> = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
             .iter()
             .map(PathBuf::from)
             .collect();
         paths.extend(
-            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-                .filter(|path| path.is_absolute()),
+            snapshot
+                .command_search_paths()
+                .iter()
+                .filter(|path| path.is_absolute())
+                .cloned(),
         );
         command.env("PATH", std::env::join_paths(paths)?);
+    }
+    // Explicit grants win over both the baseline and the sandbox bootstrap
+    // PATH, preserving the existing override semantics.
+    for (key, value) in snapshot.granted_env() {
+        command.env(key, value);
     }
     Ok((command, settings_file))
 }
@@ -96,6 +214,29 @@ pub fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{ProcessEnvGuard, TestShellProxy};
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::chatgpt::tool::execute::tests::env_lock()
+    }
+
+    fn run_task_line(
+        line: &str,
+        grant: &TaskGrant,
+        snapshot: &SandboxRuntimeSnapshot,
+        cwd: &Path,
+        state_dir: &Path,
+    ) -> String {
+        let (mut cmd, _settings) = command(line, cwd, grant, state_dir, snapshot).unwrap();
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).to_string()
+    }
+
     #[test]
     fn settings_enforce_explicit_roots_and_network() {
         let temp = tempfile::tempdir().unwrap();
@@ -133,12 +274,23 @@ mod tests {
             sandbox: true,
             ..Default::default()
         };
+        // Test-only fixture: resolve `srt` the way a logical shell would have
+        // imported it at startup. Production `command()` never reads
+        // process-global state; this test has no `Environment` to snapshot,
+        // so it builds the snapshot input from the runner's PATH directly.
+        let search_paths: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        let snapshot = SandboxRuntimeSnapshot::capture(
+            search_paths,
+            &mut |key| std::env::var(key).ok(),
+            &grant.environment,
+        );
         let line = format!(
             "printf allowed > inside; cat '{}'; printf forbidden > '{}'",
             outside.display(),
             outside.display()
         );
-        let (mut cmd, _settings) = command(&line, &inside, &grant, &state).unwrap();
+        let (mut cmd, _settings) = command(&line, &inside, &grant, &state, &snapshot).unwrap();
         let result = cmd.output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
         let inside_content = std::fs::read_to_string(inside.join("inside")).unwrap_or_default();
@@ -164,5 +316,190 @@ mod tests {
         assert!(!result.status.success());
         assert!(!String::from_utf8_lossy(&result.stdout).contains("secret"));
         assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
+    }
+
+    fn proxy_with(vars: &[(&str, &str)], search_paths: Vec<PathBuf>) -> TestShellProxy {
+        TestShellProxy {
+            vars: vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            command_search_paths: search_paths,
+            ..TestShellProxy::default()
+        }
+    }
+
+    fn task_setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap().to_path_buf();
+        let cwd = root.join("work");
+        let state = root.join("state");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        (temp, cwd, state)
+    }
+
+    #[test]
+    fn task_logical_unset_is_never_resurrected_from_process_env() {
+        let _lock = env_lock();
+        let _stale = ProcessEnvGuard::set("DOGESH_TASK_SECRET", "stale-secret");
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[], vec![]);
+        let grant = TaskGrant {
+            environment: vec!["DOGESH_TASK_SECRET".to_string()],
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let stdout = run_task_line(
+            "printf '%s' \"${DOGESH_TASK_SECRET-unset}\"",
+            &grant,
+            &snapshot,
+            &cwd,
+            &state,
+        );
+        assert_eq!(stdout, "unset");
+    }
+
+    #[test]
+    fn task_explicit_grant_exposes_unexported_logical_variable() {
+        let _lock = env_lock();
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[("DOGESH_TASK_SECRET", "logical-secret")], vec![]);
+        assert!(!proxy.exported.contains_key("DOGESH_TASK_SECRET"));
+        let grant = TaskGrant {
+            environment: vec!["DOGESH_TASK_SECRET".to_string()],
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let stdout = run_task_line(
+            "printf '%s' \"$DOGESH_TASK_SECRET\"",
+            &grant,
+            &snapshot,
+            &cwd,
+            &state,
+        );
+        assert_eq!(stdout, "logical-secret");
+    }
+
+    #[test]
+    fn task_grant_logical_value_overrides_process_stale_value() {
+        let _lock = env_lock();
+        let _stale = ProcessEnvGuard::set("DOGESH_TASK_SECRET", "stale");
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[("DOGESH_TASK_SECRET", "fresh")], vec![]);
+        let grant = TaskGrant {
+            environment: vec!["DOGESH_TASK_SECRET".to_string()],
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let stdout = run_task_line(
+            "printf '%s' \"$DOGESH_TASK_SECRET\"",
+            &grant,
+            &snapshot,
+            &cwd,
+            &state,
+        );
+        assert_eq!(stdout, "fresh");
+    }
+
+    #[test]
+    fn task_baseline_home_uses_logical_value() {
+        let _lock = env_lock();
+        let _process = ProcessEnvGuard::set("HOME", "/stale/process/home");
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[("HOME", "/logical/home")], vec![]);
+        let grant = TaskGrant {
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let stdout = run_task_line("printf '%s' \"$HOME\"", &grant, &snapshot, &cwd, &state);
+        assert_eq!(stdout, "/logical/home");
+    }
+
+    #[test]
+    fn task_logical_home_unset_does_not_resurrect_process_home() {
+        let _lock = env_lock();
+        let _process = ProcessEnvGuard::set("HOME", "/stale/process/home");
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[], vec![]);
+        let grant = TaskGrant {
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let stdout = run_task_line(
+            "printf '%s' \"${HOME-unset}\"",
+            &grant,
+            &snapshot,
+            &cwd,
+            &state,
+        );
+        assert_eq!(stdout, "unset");
+    }
+
+    #[test]
+    fn task_uses_fixed_system_shell() {
+        let _lock = env_lock();
+        let (_temp, cwd, state) = task_setup();
+        let mut proxy = proxy_with(&[], vec![]);
+        let grant = TaskGrant {
+            sandbox: false,
+            ..Default::default()
+        };
+        let snapshot = SandboxRuntimeSnapshot::from_proxy(&mut proxy, &grant.environment);
+        let (cmd, _settings) = command("true", &cwd, &grant, &state, &snapshot).unwrap();
+        assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
+    }
+
+    fn write_fake_srt(root: &Path) -> PathBuf {
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let srt = bin.join("srt");
+        std::fs::write(&srt, "#!/bin/sh\necho fake-srt\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&srt).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&srt, perms).unwrap();
+        }
+        std::fs::write(
+            root.join("package.json"),
+            serde_json::json!({"name": "@anthropic-ai/sandbox-runtime", "version": SRT_VERSION})
+                .to_string(),
+        )
+        .unwrap();
+        bin
+    }
+
+    #[test]
+    fn find_runtime_uses_logical_search_paths_only() {
+        let _lock = env_lock();
+        let logical = tempfile::tempdir().unwrap();
+        let process = tempfile::tempdir().unwrap();
+        let logical_bin = write_fake_srt(logical.path());
+        let process_bin = write_fake_srt(process.path());
+        let path_value = process_bin.to_string_lossy().to_string();
+        let _guard = ProcessEnvGuard::set("PATH", &path_value);
+        // Snapshot sees only the logical location even though the process
+        // environment points at a different valid runtime.
+        let found = find_runtime(std::slice::from_ref(&logical_bin)).unwrap();
+        assert_eq!(found, logical_bin.join("srt").canonicalize().unwrap());
+    }
+
+    #[test]
+    fn find_runtime_does_not_fall_back_to_process_path() {
+        let _lock = env_lock();
+        let process = tempfile::tempdir().unwrap();
+        let process_bin = write_fake_srt(process.path());
+        let path_value = process_bin.to_string_lossy().to_string();
+        let _guard = ProcessEnvGuard::set("PATH", &path_value);
+        let empty: Vec<PathBuf> = Vec::new();
+        let err = find_runtime(&empty).expect_err("logical PATH has no srt");
+        assert!(err.to_string().contains("srt missing"), "{err}");
     }
 }

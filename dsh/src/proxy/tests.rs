@@ -1,5 +1,8 @@
 //! Tests for `proxy/mod.rs`'s own free functions: direnv root matching and the y/N confirmation prompt.
 use super::*;
+use crate::environment::Environment;
+use crate::shell::Shell;
+use dsh_builtin::ShellProxy;
 use std::fs;
 
 #[test]
@@ -33,4 +36,29 @@ fn confirmation_accepts_only_single_y() {
 fn confirmation_reads_tty_only_when_stdin_is_terminal() {
     assert!(should_read_confirmation_from_tty(true));
     assert!(!should_read_confirmation_from_tty(false));
+}
+
+#[test]
+fn capture_command_uses_logical_child_environment() {
+    let _lock = crate::test_env_lock();
+    let environment = Environment::new();
+    // Plant process-only state after `Environment::new()` so startup import
+    // cannot explain what the child sees.
+    let _process_only = crate::ProcessEnvGuard::set("DOGESH_CAPTURE_PROCESS_ONLY", "stale-secret");
+    let _stale_visible = crate::ProcessEnvGuard::set("DOGESH_CAPTURE_VISIBLE", "stale-process");
+    {
+        let mut env = environment.write();
+        env.set_and_export_shell_var("DOGESH_CAPTURE_VISIBLE".to_string(), "logical".to_string());
+    }
+    let mut shell = Shell::new(environment);
+    let pid = nix::unistd::getpid();
+    let ctx = Context::new_safe(pid, pid, true);
+    let (code, stdout, _) = shell
+        .capture_command(
+            &ctx,
+            "printf '%s|%s' \"$DOGESH_CAPTURE_VISIBLE\" \"${DOGESH_CAPTURE_PROCESS_ONLY-unset}\"",
+        )
+        .expect("capture runs");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "logical|unset");
 }

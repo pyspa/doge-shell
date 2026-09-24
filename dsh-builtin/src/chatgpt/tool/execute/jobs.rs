@@ -18,6 +18,10 @@ use crate::chatgpt::ui::SpinnerGuard;
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Run `command` as a managed job, waiting up to `yield_ms` for it to finish.
+///
+/// Ordinary interactive child: the environment is the shell's exported child
+/// environment snapshot, cleared before spawn so process-global state never
+/// leaks in.
 pub(super) fn run_as_job(
     command: &str,
     cwd: Option<&Path>,
@@ -25,7 +29,8 @@ pub(super) fn run_as_job(
     yield_ms: u64,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    let builder = capture::shell_command(command, cwd);
+    let child_env = proxy.child_process_environment();
+    let builder = capture::shell_command(command, cwd, &child_env);
     let id = chat_jobs::start(builder, command, cwd.map(Path::to_path_buf), timeout)
         .map_err(|err| format!("chat: failed to execute `{command}`: {err}"))?;
 
@@ -171,7 +176,8 @@ mod tests {
         chat_jobs::set_session("over-cap-without-echo");
         let command =
             r"printf HEAD-MARKER; head -c 1200000 /dev/zero | tr '\0' x; printf TAIL-MARKER";
-        let builder = super::capture::shell_command(command, None);
+        let empty_env = std::collections::HashMap::new();
+        let builder = super::capture::shell_command(command, None, &empty_env);
         let timeout = Duration::from_secs(60);
         let id = chat_jobs::start(builder, command, None, timeout).unwrap();
 

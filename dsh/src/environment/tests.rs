@@ -1256,6 +1256,27 @@ fn insert_path_entry_keeps_entries_verbatim() {
     );
 }
 
+/// An out-of-range index appends at the end instead of panicking.
+#[test]
+fn insert_path_entry_appends_when_index_is_out_of_range() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("PATH".to_string(), "/a:/b".to_string());
+
+    env.write().insert_path_entry(99, "/new");
+
+    let guard = env.read();
+    assert_eq!(
+        guard.lookup_variable("PATH"),
+        Some("/a:/b:/new".to_string())
+    );
+    assert_eq!(
+        guard.variable_state.paths,
+        vec!["/a".to_string(), "/b".to_string(), "/new".to_string()]
+    );
+}
+
 /// `insert_path_entry` rewrites the logical `PATH` variable through the
 /// canonical setter, so the variable and the derived lookup projection
 /// agree afterwards.

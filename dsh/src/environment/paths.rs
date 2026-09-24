@@ -76,10 +76,15 @@ impl Environment {
     /// (and reaches [`Self::child_process_env`]) while an unexported one
     /// stays unexported. No dedup, canonicalization, existence check, or
     /// absolutization is applied: entries are kept as strings.
+    ///
+    /// An out-of-range index appends at the end instead of panicking:
+    /// `ShellProxy::insert_path` accepts an arbitrary index and a panic
+    /// here would take the shell down.
     pub(crate) fn insert_path_entry(&mut self, index: usize, path: &str) {
         let path = self.expand_path_entry(path);
 
         let mut paths = self.variable_state.paths.clone();
+        let index = index.min(paths.len());
         paths.insert(index, path);
 
         self.set_shell_var("PATH".to_string(), paths.join(":"));

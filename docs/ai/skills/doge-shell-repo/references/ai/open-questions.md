@@ -149,14 +149,23 @@ AI アクション・`ai-watch` 要約・`Alt+s` の実行中は端末入力が�
   **FNV-1a ハッシュ**接尾辞を付ける（登録順に依存しない）。`mcp:<function_name>:<args>`
   のセッション承認がリロードで無効化される問題は解消済み。
 
-## MCP の危険度判定（残る設計判断）
+## MCP の危険度判定（解決済み）
 
-- **ツール名はサーバが決める文字列**なのに、read marker に一致すれば Normal で無確認になる。
-  `readOnlyHint: true` を信じない理由（サーバの自己申告でゲートを開けない）は、名前にも
-  そのまま当てはまる。筋を通すなら既定を反転させる — allowlist か宣言された read-only でない
-  限り確認する — ことになるが、それは MCP の読み取りツール全部が Normal で毎回訊くという
-  ことで、`normal` / `strict` の設計そのものの変更になる。今回は名前ヒューリスティックの
-  穴（部分一致）を塞ぐところまでにした。
+- **解決済み — 既定は untrusted、trust は明示、ツール名ヒューリスティックは認可から削除**。
+  `McpServerTrust::{Untrusted, Trusted}`（`dsh-types/src/mcp.rs`）を
+  `McpServerConfig.trust`（`#[serde(default)]`、未指定は `Untrusted`）で受け、
+  `McpServer` を authority として `McpManager::tool_facts_for` が
+  `McpToolFacts`（`server_label` / `server_trust` / `tool_name` /
+  `declared_read_only`）1 回の lookup で解決する。経路 A
+  （`AgentCommandPolicy::evaluate_agent_tool`）と経路 B
+  （`LiveAiService::authorize_mcp_tool`）は同じスナップショットを同じ
+  `SafetyGuard::check_mcp_tool` に渡す。
+- Normal + Untrusted は allowlist 外の全呼び出しを確認する — read-looking な
+  名前でも、`readOnlyHint: true` でも、benign なコマンドを運ぶ `bash` でも。
+  Normal + Trusted のみ `readOnlyHint: true` が read-only 経路を開き、
+  コマンド実行ツールは既存コマンド分類を通る（`declared_read_only: Some(false)`
+  は benign に見えても確認）。Loose / Strict / allowlist / session "always" /
+  agent task grant の意味は変えていない。
 - **明示的な `readOnlyHint: false` を副作用の宣言として扱う**。仕様上の既定値も false なので、
   既定を明示的に serialize するサーバがあると読み取り専用のツールでも確認が出る。`rmcp` は
   `None` を skip するので rmcp 製サーバでは起きないが、他の SDK では起きうる。確認が増える

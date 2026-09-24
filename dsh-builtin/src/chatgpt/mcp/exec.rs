@@ -112,41 +112,38 @@ impl McpManager {
 
     /// The tool's own name behind the `mcp__<label>__<tool>` function name.
     ///
-    /// The safety guard classifies a tool by its name, and the name the model
-    /// calls is namespaced: matching `"bash"` against `mcp__ops__bash` never
-    /// held, so a server's shell tool was judged as a generic side effect
-    /// rather than as the command it was about to run.
+    /// Kept for diagnostics and existence checks only. Authorization must use
+    /// [`McpManager::tool_facts_for`]: the trust of the owning server is part
+    /// of the verdict, and a bare name cannot carry it.
     pub fn tool_name_for(&self, function_name: &str) -> Option<String> {
         self.bindings
             .get(function_name)
             .map(|binding| binding.tool_name.clone())
     }
 
-    /// The real tool name and the server's own side-effect declaration, from
-    /// one lookup.
+    /// The binding plus the owning server's trust, from one lookup.
     ///
-    /// The two are always used together to judge one call, and reading them
-    /// separately lets a concurrent `mcp connect` or tool-list refresh replace
-    /// the binding in between.
-    pub fn tool_facts_for(&self, function_name: &str) -> Option<(String, Option<bool>)> {
-        self.bindings
-            .get(function_name)
-            .map(|binding| (binding.tool_name.clone(), binding.declared_read_only))
-    }
-
-    /// What the server said about this tool's side effects, if anything.
+    /// All authorization paths judge one call from this single snapshot.
+    /// Reading the name and the declaration separately lets a concurrent
+    /// `mcp connect` or tool-list refresh replace the binding in between;
+    /// reading trust separately would additionally let a trust change land
+    /// on one entry point and not the other.
     ///
-    /// **Only safe to act on when it says `false`.** A `readOnlyHint` is the
-    /// server's description of itself, and the server is exactly the party the
-    /// confirmation exists to protect against: believing `true` would let any
-    /// server open the gate by naming its own tool harmless. Believing `false`
-    /// only ever closes it, which a server has no reason to lie about - and
-    /// catches what the name heuristic cannot, such as a tool called
-    /// `list_and_prune`.
-    pub fn declared_read_only_for(&self, function_name: &str) -> Option<bool> {
-        self.bindings
-            .get(function_name)
-            .and_then(|binding| binding.declared_read_only)
+    /// Returns `None` when the binding - or the server behind it - cannot be
+    /// resolved. Callers must treat that as untrusted (fail closed), never
+    /// as a reason to skip the question.
+    pub fn tool_facts_for(&self, function_name: &str) -> Option<McpToolFacts> {
+        let binding = self.bindings.get(function_name)?;
+        let server = self
+            .servers
+            .iter()
+            .find(|server| server.label == binding.server_label)?;
+        Some(McpToolFacts {
+            server_label: server.label.clone(),
+            server_trust: server.trust,
+            tool_name: binding.tool_name.clone(),
+            declared_read_only: binding.declared_read_only,
+        })
     }
 
     #[cfg(test)]
@@ -162,6 +159,7 @@ impl McpManager {
             self.servers.push(McpServer {
                 label: server_label.clone(),
                 description: None,
+                trust: dsh_types::mcp::McpServerTrust::Untrusted,
                 transport: McpTransport::Sse {
                     url: "http://localhost.invalid/sse".to_string(),
                 },
@@ -207,6 +205,7 @@ impl McpManager {
             self.servers.push(McpServer {
                 label: label.to_string(),
                 description: Some(format!("{label} server")),
+                trust: dsh_types::mcp::McpServerTrust::Untrusted,
                 transport: McpTransport::Sse {
                     url: "http://localhost.invalid/sse".to_string(),
                 },

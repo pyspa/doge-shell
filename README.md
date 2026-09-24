@@ -519,8 +519,15 @@ Create a `~/.config/dogesh/config.lisp` file to configure your shell:
 ;; MCP server configuration using Lisp functions
 (mcp-clear)  ; Clear any existing servers before adding new ones
 
+;; Trust: every MCP server is `untrusted` unless you explicitly pass
+;; `"trusted"` as the last argument. An untrusted server's tools always ask
+;; before running at the default `normal` safety level (unless you allowlisted
+;; that exact call); a trusted server's tools may run unasked when the server
+;; explicitly annotates them read-only, and its command-execution tools are
+;; still judged as the command they carry.
+
 ;; Add MCP server with stdio transport (for local executable servers)
-;; Parameters: label, command path, arguments list, environment variables list, working directory (optional), description (optional)
+;; Parameters: label, command path, arguments list, environment variables list, working directory (optional), description (optional), trust (optional: "trusted" or "untrusted", default "untrusted")
 (mcp-add-stdio 
   "local-dev-tools"                    ; label
   "/path/to/your/mcp-server"          ; command
@@ -528,16 +535,18 @@ Create a `~/.config/dogesh/config.lisp` file to configure your shell:
   '(("ENV_VAR1" "value1") ("ENV_VAR2" "value2"))  ; environment variables list
   '()                                 ; working directory (NIL = current directory)
   "Local development tools via stdio"  ; description
+  "trusted"                           ; trust (omit or "untrusted" for the default)
 )
 
 ;; Add MCP server with Streamable HTTP transport
-;; Parameters: label, URL, authentication header (optional), allow stateless (optional), description (optional)
+;; Parameters: label, URL, authentication header (optional), allow stateless (optional), description (optional), trust (optional: "trusted" or "untrusted", default "untrusted")
 (mcp-add-http 
   "remote-http-service"               ; label
   "https://example.com/mcp"           ; URL
   '()                                 ; authentication header (NIL = no auth)
   '()                                 ; allow stateless (NIL = false)
   "Remote HTTP MCP service"           ; description
+  "untrusted"                         ; trust (default when omitted)
 )
 
 ;; Add legacy MCP server with SSE transport
@@ -628,7 +637,7 @@ Removes all currently configured MCP servers.
 
 Lists all available tools from registered MCP servers. Returns a list of tool names.
 
-#### `(mcp-add-stdio label command args env-vars cwd description)`
+#### `(mcp-add-stdio label command args env-vars cwd description [trust])`
 
 Adds an MCP server that communicates via standard input/output streams.
 
@@ -638,6 +647,9 @@ Adds an MCP server that communicates via standard input/output streams.
 - `env-vars`: List of (key value) pairs for environment variables
 - `cwd`: Working directory for the server (or NIL for current directory)
 - `description`: Optional description of the server
+- `trust`: Optional `"trusted"` or `"untrusted"` (default `"untrusted"`).
+  Only a trusted server's explicit read-only annotations may auto-run at the
+  `normal` safety level; anything else is a configuration error.
 
 Example:
 
@@ -649,10 +661,11 @@ Example:
   '(("GIT_AUTHOR_NAME" "Your Name")) 
   '() 
   "Git utility tools"
+  "trusted"
 )
 ```
 
-#### `(mcp-add-http label url auth-header allow-stateless description)`
+#### `(mcp-add-http label url auth-header allow-stateless description [trust])`
 
 Adds an MCP server that communicates via HTTP requests.
 
@@ -661,6 +674,9 @@ Adds an MCP server that communicates via HTTP requests.
 - `auth-header`: Authentication header value (or NIL)
 - `allow-stateless`: Whether to allow stateless operations (or NIL)
 - `description`: Optional description of the server
+- `trust`: Optional `"trusted"` or `"untrusted"` (default `"untrusted"`).
+  Only a trusted server's explicit read-only annotations may auto-run at the
+  `normal` safety level; anything else is a configuration error.
 
 Example:
 
@@ -671,10 +687,11 @@ Example:
   '("Bearer your-token-here") 
   '() 
   "Remote API server"
+  "untrusted"
 )
 ```
 
-#### `(mcp-add-sse label url description)`
+#### `(mcp-add-sse label url description [trust])`
 
 Adds a legacy MCP Server-Sent Events config entry.
 This function is deprecated/configuration-only: runtime connection attempts return an error because rmcp removed the legacy SSE client transport. Use `(mcp-add-http ...)` for Streamable HTTP MCP servers.
@@ -697,7 +714,7 @@ Example:
 
 ### Security & Safety
 
-- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action, and both share one set of approvals. At `loose` they run unasked; at `normal` a tool that only reads runs unasked and anything else asks; at `strict` every MCP call asks. A tool whose arguments carry a command line is judged as that command - the tool's own name on its server is what decides, not the namespaced `mcp__<server>__<tool>` name the model calls. Answering "always" remembers that exact call for the session.
+- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action, and both share one set of approvals. At `loose` they run unasked; at `strict` every MCP call asks. At `normal`, MCP servers are untrusted by default and every call asks unless you allowlisted that exact call - the tool's name and its `readOnlyHint` are both server-controlled, so neither opens the gate on its own. Pass `"trusted"` as the last `mcp-add-*` argument only for servers you run yourself: a trusted server's tools may run unasked when explicitly annotated read-only, while its command-execution tools (`bash`, `run_command`, ...) are still judged as the command they carry. Answering "always" remembers that exact call for the session.
 - **Disconnecting takes effect**: `mcp disconnect <label>` removes that server's tools from what the agent is offered and refuses a call to them until `mcp connect <label>`.
 
 ### MCP CLI Management

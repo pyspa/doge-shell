@@ -285,26 +285,46 @@ impl LiveAiService {
     }
 
     /// Return a tool-result message when the call is not authorized.
+    ///
+    /// The facts - name, trust, and declaration - come from one
+    /// `tool_facts_for` lookup, the same snapshot Path A
+    /// (`AgentCommandPolicy::evaluate_agent_tool`) judges. A missing binding
+    /// falls back to untrusted (fail closed); execution still reports the
+    /// missing binding afterwards.
     async fn authorize_mcp_tool(
         &self,
         function_name: &str,
-        tool_name: &str,
         args: &str,
     ) -> Result<Option<&'static str>> {
         let allowlist = self.agent_allowlist();
         let level = *self.policy.safety_level.read();
-        // The same manager the `!` runtime asks, so one server's declaration
-        // cannot tighten the gate on one entry point and not the other.
-        let declared_read_only = self
-            .mcp_manager
-            .read()
-            .declared_read_only_for(function_name);
+        // The same manager the `!` runtime asks, so one server's trust cannot
+        // open the gate on one entry point and not the other.
+        let facts = {
+            let manager = self.mcp_manager.read();
+            manager.tool_facts_for(function_name)
+        };
+        let fallback;
+        let facts = match &facts {
+            Some(facts) => facts,
+            None => {
+                fallback = dsh_builtin::McpToolFacts {
+                    server_label: "<unknown>".to_string(),
+                    server_trust: dsh_types::mcp::McpServerTrust::Untrusted,
+                    tool_name: function_name.to_string(),
+                    declared_read_only: None,
+                };
+                &fallback
+            }
+        };
         let result = self.policy.safety_guard.check_mcp_tool(
             crate::safety::McpToolCall {
                 function_name,
-                tool_name,
+                server_label: &facts.server_label,
+                server_trust: facts.server_trust,
+                tool_name: &facts.tool_name,
                 args_json: args,
-                declared_read_only,
+                declared_read_only: facts.declared_read_only,
             },
             &level,
             &allowlist,
@@ -522,21 +542,11 @@ impl LiveAiService {
                         .and_then(|s| s.as_str())
                         .unwrap_or_default();
 
-                    let Some(tool_name) = self.mcp_manager.read().tool_name_for(name) else {
-                        messages.push(json!({
-                            "role": "tool",
-                            "tool_call_id": id,
-                            "content": format!(
-                                "Error executing tool: MCP tool binding `{name}` was not found"
-                            )
-                        }));
-                        continue;
-                    };
-
-                    // Check safety only after resolving the binding. Asking the
-                    // user to approve a tool that does not exist can leave a
-                    // phantom entry in the session allowlist.
-                    if let Some(reason) = self.authorize_mcp_tool(name, &tool_name, args).await? {
+                    // Authorization resolves the binding itself, in one
+                    // `tool_facts_for` lookup: a missing binding falls back to
+                    // untrusted (fail closed), and execution below still
+                    // reports it as not found after approval.
+                    if let Some(reason) = self.authorize_mcp_tool(name, args).await? {
                         messages.push(json!({
                             "role": "tool",
                             "tool_call_id": id,

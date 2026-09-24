@@ -51,7 +51,7 @@ pub use chatgpt::chat_status_detailed;
 pub use chatgpt::execute_chat_message;
 pub use chatgpt::{
     LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
-    McpServerStatus, McpToolExposure, McpToolGroup,
+    McpServerStatus, McpToolExposure, McpToolFacts, McpToolGroup,
 };
 pub use registry::{
     AsyncBuiltinFn, BUILTIN_COMMAND, BuiltinFn, BuiltinFuture, BuiltinHandler, BuiltinSpec,

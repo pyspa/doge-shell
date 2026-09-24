@@ -22,21 +22,28 @@ impl Shell {
         *self.environment.read().policy_state.safety_level.read()
     }
 
-    /// The tool's own name behind the namespaced one the model called, and
-    /// what the server declared about its side effects.
+    /// Everything the guard needs to judge one MCP call, in one lookup.
     ///
-    /// Falls back to the namespaced name when no binding matches, so an
-    /// unknown call is still judged rather than skipped.
+    /// Falls back to an untrusted unknown-server snapshot when no binding
+    /// matches, so an unknown call is still judged (fail closed) rather than
+    /// skipped.
     ///
-    /// Both halves come from one lookup under one guard. Fetched separately
-    /// they could straddle an `mcp connect` or a tool-list refresh and hand
-    /// the guard one server's tool name with another's declaration.
-    fn agent_mcp_tool_facts(&self, function_name: &str) -> (String, Option<bool>) {
+    /// The snapshot comes from one `tool_facts_for` lookup under one guard -
+    /// the same one Path B (`LiveAiService`) uses. Fetched separately, the
+    /// halves could straddle an `mcp connect` or a tool-list refresh and hand
+    /// the guard one server's tool name with another's trust.
+    fn agent_mcp_tool_facts(&self, function_name: &str) -> dsh_builtin::McpToolFacts {
+        use dsh_types::mcp::McpServerTrust;
         let environment = self.environment.read();
         let manager = environment.integration_state.mcp_manager.read();
         manager
             .tool_facts_for(function_name)
-            .unwrap_or_else(|| (function_name.to_string(), None))
+            .unwrap_or_else(|| dsh_builtin::McpToolFacts {
+                server_label: "<unknown>".to_string(),
+                server_trust: McpServerTrust::Untrusted,
+                tool_name: function_name.to_string(),
+                declared_read_only: None,
+            })
     }
 }
 
@@ -175,14 +182,16 @@ impl AgentCommandPolicy for Shell {
         let mut allowlist = self.agent_allowlist_snapshot();
         allowlist.extend(self.agent_session_approvals());
         let level = self.safety_level_snapshot();
-        let (tool_name, declared_read_only) = self.agent_mcp_tool_facts(name);
+        let facts = self.agent_mcp_tool_facts(name);
 
         match self.safety_guard.check_mcp_tool(
             crate::safety::McpToolCall {
                 function_name: name,
-                tool_name: &tool_name,
+                server_label: &facts.server_label,
+                server_trust: facts.server_trust,
+                tool_name: &facts.tool_name,
                 args_json: arguments,
-                declared_read_only,
+                declared_read_only: facts.declared_read_only,
             },
             &level,
             &allowlist,
@@ -258,5 +267,33 @@ mod agent_policy_tests {
             shell.evaluate_agent_command("true | rm -rf /"),
             AgentCommandVerdict::Confirm(_)
         ));
+    }
+
+    /// Path A resolves the same atomic snapshot as Path B: with no binding
+    /// the facts fall back to untrusted, so an unknown tool asks at Normal
+    /// instead of running.
+    #[test]
+    fn an_unknown_mcp_tool_asks_at_normal() {
+        let mut shell = shell();
+
+        assert!(matches!(
+            shell.evaluate_agent_tool("mcp__ghost__missing", "{}"),
+            AgentCommandVerdict::Confirm(_)
+        ));
+    }
+
+    /// The operator's own approval still opens the gate for unknown tools:
+    /// the trust boundary constrains server metadata, not explicit allowlist
+    /// entries.
+    #[test]
+    fn an_allowlisted_unknown_mcp_tool_is_allowed() {
+        let mut shell = shell();
+        let entry = crate::safety::SafetyGuard::mcp_allowlist_entry("mcp__ghost__missing", "{}");
+        shell.remember_agent_approval(&entry);
+
+        assert_eq!(
+            shell.evaluate_agent_tool("mcp__ghost__missing", "{}"),
+            AgentCommandVerdict::Allowed
+        );
     }
 }

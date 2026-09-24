@@ -9,7 +9,32 @@ use crate::lisp::model::{Env, List, Symbol, Value};
 use crate::lisp::utils::{
     list_of_pairs, list_of_strings, optional_bool, optional_string, require_typed_arg,
 };
-use dsh_types::mcp::{McpServerConfig, McpTransport};
+use dsh_types::mcp::{McpServerConfig, McpServerTrust, McpTransport};
+
+/// The explicit operator opt-in for an MCP server, as the last optional
+/// argument to `mcp-add-*`.
+///
+/// `NIL` (or a missing argument) means `Untrusted`: existing configs without
+/// the new argument keep working and default to the safe side. Anything that
+/// is not exactly `"trusted"` / `"untrusted"` is a configuration error -
+/// silently treating a typo as untrusted would hide the operator's intent.
+fn optional_mcp_trust(
+    function: &str,
+    value: &Value,
+) -> Result<McpServerTrust, crate::lisp::model::RuntimeError> {
+    use crate::lisp::model::RuntimeError;
+    match value {
+        Value::List(list) if *list == List::NIL => Ok(McpServerTrust::Untrusted),
+        Value::False => Ok(McpServerTrust::Untrusted),
+        Value::String(text) if text == "untrusted" => Ok(McpServerTrust::Untrusted),
+        Value::String(text) if text == "trusted" => Ok(McpServerTrust::Trusted),
+        other => Err(RuntimeError {
+            msg: format!(
+                "\"{function}\" expects trust to be \"trusted\" or \"untrusted\"; got {other}"
+            ),
+        }),
+    }
+}
 
 pub fn register(env: &mut Env) {
     env.define(
@@ -29,11 +54,13 @@ pub fn register(env: &mut Env) {
             let env_list = args.get(3).cloned().unwrap_or(Value::NIL);
             let cwd_value = args.get(4).cloned().unwrap_or(Value::NIL);
             let description_value = args.get(5).cloned().unwrap_or(Value::NIL);
+            let trust_value = args.get(6).cloned().unwrap_or(Value::NIL);
 
             let args_vec = list_of_strings("mcp-add-stdio", &arg_list)?;
             let env_map = list_of_pairs("mcp-add-stdio", &env_list)?;
             let cwd = optional_string("mcp-add-stdio", &cwd_value)?;
             let description = optional_string("mcp-add-stdio", &description_value)?;
+            let trust = optional_mcp_trust("mcp-add-stdio", &trust_value)?;
 
             let transport = McpTransport::Stdio {
                 command,
@@ -48,6 +75,7 @@ pub fn register(env: &mut Env) {
                 .add_mcp_server(McpServerConfig {
                     label,
                     description,
+                    trust,
                     transport,
                 });
 
@@ -61,7 +89,9 @@ pub fn register(env: &mut Env) {
             let label = require_typed_arg::<&String>("mcp-add-sse", &args, 0)?.clone();
             let url = require_typed_arg::<&String>("mcp-add-sse", &args, 1)?.clone();
             let description_value = args.get(2).cloned().unwrap_or(Value::NIL);
+            let trust_value = args.get(3).cloned().unwrap_or(Value::NIL);
             let description = optional_string("mcp-add-sse", &description_value)?;
+            let trust = optional_mcp_trust("mcp-add-sse", &trust_value)?;
 
             // Registered so `mcp list` and `doctor mcp` still show it, but said
             // out loud here: every connection to it fails, and the error
@@ -78,6 +108,7 @@ pub fn register(env: &mut Env) {
                 .add_mcp_server(McpServerConfig {
                     label,
                     description,
+                    trust,
                     transport: McpTransport::Sse { url },
                 });
 
@@ -93,10 +124,12 @@ pub fn register(env: &mut Env) {
             let auth_value = args.get(2).cloned().unwrap_or(Value::NIL);
             let allow_value = args.get(3).cloned().unwrap_or(Value::NIL);
             let description_value = args.get(4).cloned().unwrap_or(Value::NIL);
+            let trust_value = args.get(5).cloned().unwrap_or(Value::NIL);
 
             let auth_header = optional_string("mcp-add-http", &auth_value)?;
             let allow_stateless = optional_bool("mcp-add-http", &allow_value)?;
             let description = optional_string("mcp-add-http", &description_value)?;
+            let trust = optional_mcp_trust("mcp-add-http", &trust_value)?;
 
             env.borrow()
                 .shell_env
@@ -104,6 +137,7 @@ pub fn register(env: &mut Env) {
                 .add_mcp_server(McpServerConfig {
                     label,
                     description,
+                    trust,
                     transport: McpTransport::Http {
                         url,
                         auth_header,
@@ -127,8 +161,8 @@ pub fn register(env: &mut Env) {
                 return Ok(Value::List(List::NIL));
             }
 
-            println!("{:<20} {:<10} DESCRIPTION", "LABEL", "TYPE");
-            println!("{:<20} {:<10} -----------", "-----", "----");
+            println!("{:<20} {:<10} {:<10} DESCRIPTION", "LABEL", "TYPE", "TRUST");
+            println!("{:<20} {:<10} {:<10} -----------", "-----", "----", "-----");
 
             let mut labels = Vec::new();
 
@@ -139,7 +173,10 @@ pub fn register(env: &mut Env) {
                     McpTransport::Http { .. } => "HTTP",
                 };
                 let desc = server.description.as_deref().unwrap_or("");
-                println!("{:<20} {:<10} {}", server.label, transport_type, desc);
+                println!(
+                    "{:<20} {:<10} {:<10} {}",
+                    server.label, transport_type, server.trust, desc
+                );
                 labels.push(Value::String(server.label.clone()));
             }
 
@@ -371,12 +408,12 @@ pub fn register(env: &mut Env) {
             }
 
             println!(
-                "{:<20} {:<12} {:<8} {:<6} UPTIME",
-                "LABEL", "STATUS", "TYPE", "TOOLS"
+                "{:<20} {:<12} {:<8} {:<6} {:<10} UPTIME",
+                "LABEL", "STATUS", "TYPE", "TOOLS", "TRUST"
             );
             println!(
-                "{:<20} {:<12} {:<8} {:<6} ------",
-                "-----", "------", "----", "-----"
+                "{:<20} {:<12} {:<8} {:<6} {:<10} ------",
+                "-----", "------", "----", "-----", "-----"
             );
 
             let mut labels = Vec::new();
@@ -406,8 +443,13 @@ pub fn register(env: &mut Env) {
                 };
 
                 println!(
-                    "{:<20} {:<12} {:<8} {:<6} {}",
-                    status.label, status_str, status.transport_type, status.tool_count, uptime
+                    "{:<20} {:<12} {:<8} {:<6} {:<10} {}",
+                    status.label,
+                    status_str,
+                    status.transport_type,
+                    status.tool_count,
+                    status.trust,
+                    uptime
                 );
                 labels.push(Value::String(status.label));
             }

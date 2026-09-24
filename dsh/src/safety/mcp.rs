@@ -1,7 +1,8 @@
-//! Judging an MCP tool call: which tools only read, which ones run a command
-//! (and so need the command itself judged), and the allowlist entries a session
-//! approval is recorded under.
+//! Judging an MCP tool call: untrusted servers always ask, trusted servers
+//! may use an explicit read-only annotation, and command-execution tools go
+//! through the normal command classifier.
 use super::*;
+use dsh_types::mcp::McpServerTrust;
 
 /// One MCP tool call, as the guard needs to see it.
 ///
@@ -10,20 +11,33 @@ use super::*;
 /// `function_name` and `tool_name` compiles and silently changes the verdict -
 /// `mcp__ops__bash` never matches `"bash"`, so a shell tool stops being judged
 /// as the command it runs. That regression has already happened once.
+///
+/// `server_trust` is the explicit operator opt-in for this server, resolved by
+/// `McpManager::tool_facts_for` from the owning `McpServer` in the same lookup
+/// as the name and the annotation. Tool names and `readOnlyHint` are both
+/// server-controlled, so neither may open the Normal gate on its own: only a
+/// `Trusted` server's `readOnlyHint: true` counts as a positive signal, while
+/// a `false`/destructive declaration always tightens the gate.
 pub struct McpToolCall<'a> {
     /// The namespaced name the model called, e.g. `mcp__ops__bash`. What an
     /// allowlist entry and the question shown to the user are keyed on.
     pub function_name: &'a str,
-    /// The tool's own name on its server, e.g. `bash`. What the danger
-    /// classification looks at.
+    /// The label of the server that owns the tool, e.g. `ops`. Shown in the
+    /// confirmation so the operator sees whose trust they are spending.
+    pub server_label: &'a str,
+    /// The operator's explicit trust for that server. `Untrusted` is the
+    /// default; unknown bindings must fall back here (fail closed).
+    pub server_trust: McpServerTrust,
+    /// The tool's own name on its server, e.g. `bash`. Used to recognise
+    /// command-execution tools - never as a read-only signal.
     pub tool_name: &'a str,
     pub args_json: &'a str,
     /// What the server's own listing said about side effects
     /// (`readOnlyHint: false` or `destructiveHint: true`).
     ///
-    /// Believed only when it says `false`, i.e. only ever to close the gate:
-    /// the server is the party this confirmation exists to protect against, so
-    /// a claim it makes about itself must not be able to open it.
+    /// Believed only to close the gate on untrusted servers, and to open the
+    /// read-only path on explicitly trusted ones. A missing annotation never
+    /// opens the gate.
     pub declared_read_only: Option<bool>,
 }
 
@@ -36,6 +50,8 @@ impl SafetyGuard {
     ) -> SafetyResult {
         let McpToolCall {
             function_name,
+            server_label,
+            server_trust,
             tool_name,
             args_json,
             declared_read_only,
@@ -46,6 +62,32 @@ impl SafetyGuard {
 
         if Self::is_allowlisted_mcp_call(function_name, args_json, allowlist) {
             return SafetyResult::Allowed;
+        }
+
+        if matches!(level, SafetyLevel::Strict) {
+            return SafetyResult::Confirm(format!(
+                "MCP tool '{function_name}' execution requested in Strict mode. Proceed?"
+            ));
+        }
+
+        // Normal from here on. Untrusted servers never auto-run: the tool
+        // name, the annotation, and any embedded command are all
+        // server-controlled, so none of them may open the gate.
+        let trusted = matches!(server_trust, McpServerTrust::Trusted);
+        if !trusted {
+            return SafetyResult::Confirm(format!(
+                "MCP tool '{function_name}' from untrusted server '{server_label}' requires confirmation."
+            ));
+        }
+
+        // Trusted servers only from here on.
+        //
+        // A server that declares side effects is always believed in the
+        // strict direction, even when the command it carries looks benign.
+        if declared_read_only == Some(false) {
+            return SafetyResult::Confirm(format!(
+                "MCP tool '{function_name}' from server '{server_label}' declares side effects."
+            ));
         }
 
         // If it is a command execution tool, judge the raw command line
@@ -61,44 +103,30 @@ impl SafetyGuard {
         if Self::is_mcp_command_execution_tool(tool_name) {
             let Some(cmd_str) = Self::extract_mcp_command(args_json) else {
                 return SafetyResult::Confirm(format!(
-                    "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
-                    function_name
+                    "MCP tool '{function_name}' from server '{server_label}' wants to execute a command, but arguments could not be validated safely."
                 ));
             };
             if cmd_str.trim().is_empty() {
                 return SafetyResult::Confirm(format!(
-                    "MCP tool '{}' requested command execution, but arguments could not be validated safely. Proceed?",
-                    function_name
+                    "MCP tool '{function_name}' from server '{server_label}' wants to execute a command, but arguments could not be validated safely."
                 ));
             }
             if allowlist.contains(&cmd_str) {
                 return SafetyResult::Allowed;
             }
-            if matches!(level, SafetyLevel::Strict) {
-                return SafetyResult::Confirm(format!(
-                    "Command '{}' will be executed. Proceed?",
-                    cmd_str
-                ));
-            }
             return match self.classify_command_line(&cmd_str) {
-                Some(reason) => SafetyResult::Confirm(reason),
+                Some(reason) => SafetyResult::Confirm(format!(
+                    "MCP tool '{function_name}' from server '{server_label}' wants to execute command '{cmd_str}': {reason}"
+                )),
                 None => SafetyResult::Allowed,
             };
         }
 
-        if matches!(level, SafetyLevel::Strict) {
-            return SafetyResult::Confirm(format!(
-                "MCP tool '{}' execution requested in Strict mode. Proceed?",
-                function_name
-            ));
-        }
-
-        if Self::is_read_only_mcp_tool(tool_name, declared_read_only) {
+        if declared_read_only == Some(true) {
             SafetyResult::Allowed
         } else {
             SafetyResult::Confirm(format!(
-                "MCP tool '{}' may have side effects. Proceed?",
-                function_name
+                "MCP tool '{function_name}' from server '{server_label}' has no trusted read-only declaration."
             ))
         }
     }
@@ -138,129 +166,5 @@ impl SafetyGuard {
             .get("command")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-    }
-
-    /// Whether this tool may run at Normal without asking.
-    ///
-    /// The name is a guess - `search_and_replace` reads as a search - so a
-    /// server that declares side effects is believed over it. The reverse is
-    /// not true: `readOnlyHint: true` is *not* enough to skip the question,
-    /// because the server is the party this confirmation exists to protect
-    /// against, and a description a server writes about itself must never be
-    /// able to open the gate. A declaration only ever closes it.
-    ///
-    /// The two marker lists are matched differently on purpose, and the
-    /// asymmetry is the safety property:
-    ///
-    /// - **mutating markers match as substrings** - over-inclusive, so the
-    ///   worst case is a question nobody needed.
-    /// - **read markers match whole words** - under-inclusive, so the worst
-    ///   case is again a question nobody needed.
-    ///
-    /// Matching read markers as substrings is what made this dangerous:
-    /// `ls` occurs inside `emails`, `labels`, `channels` and `urls`, so
-    /// `send_emails`, `add_labels` and `notify_channels` were all classified
-    /// read-only and ran at Normal without asking.
-    fn is_read_only_mcp_tool(tool_name: &str, declared_read_only: Option<bool>) -> bool {
-        if declared_read_only == Some(false) {
-            return false;
-        }
-
-        let name = tool_name.to_ascii_lowercase();
-        let mutating_markers = [
-            "write",
-            "edit",
-            "update",
-            "delete",
-            "remove",
-            "create",
-            "execute",
-            "run",
-            "apply",
-            "install",
-            "set",
-            "post",
-            "put",
-            "patch",
-            "push",
-            "kill",
-            "start",
-            "stop",
-            "restart",
-            "connect",
-            "disconnect",
-            "submit",
-            // Verbs a tool can be named for that the list above missed. Each
-            // is a whole word in practice, so substring matching costs nothing
-            // here beyond the occasional extra question.
-            "replace",
-            "send",
-            "publish",
-            "upload",
-            "purge",
-            "prune",
-            "rotate",
-            "provision",
-            "revoke",
-            "truncate",
-            "rename",
-            "sync",
-            "drop",
-            "clear",
-        ];
-        if mutating_markers.iter().any(|marker| name.contains(marker)) {
-            return false;
-        }
-
-        let read_markers = [
-            "list", "get", "read", "search", "find", "show", "status", "describe", "fetch",
-            "query", "view", "ls", "stat",
-        ];
-        Self::words(tool_name)
-            .iter()
-            .any(|word| read_markers.contains(&word.as_str()))
-    }
-
-    /// The words in a tool name, lowercased, for markers that must not match
-    /// inside one.
-    ///
-    /// Splits on the separators tool names use and on camelCase boundaries, so
-    /// `listTools`, `list_tools`, `list-tools` and `getHTTPStatus` all yield
-    /// their verb while `emails` yields only `emails`. Takes the original
-    /// spelling: lowercasing first would erase the case boundary that makes
-    /// `getFile` two words.
-    pub(crate) fn words(name: &str) -> Vec<String> {
-        let chars: Vec<char> = name.chars().collect();
-        let mut words = Vec::new();
-        let mut current = String::new();
-
-        for (index, &c) in chars.iter().enumerate() {
-            if !c.is_ascii_alphanumeric() {
-                if !current.is_empty() {
-                    words.push(std::mem::take(&mut current));
-                }
-                continue;
-            }
-
-            // A new word starts at lower→upper (`getFile`) and at the last
-            // capital of an acronym run followed by a lowercase letter
-            // (`getHTTPStatus` → `http`, `status`).
-            let starts_word = c.is_ascii_uppercase()
-                && !current.is_empty()
-                && (chars[index - 1].is_ascii_lowercase()
-                    || chars[index - 1].is_ascii_digit()
-                    || chars
-                        .get(index + 1)
-                        .is_some_and(|next| next.is_ascii_lowercase()));
-            if starts_word {
-                words.push(std::mem::take(&mut current));
-            }
-            current.push(c.to_ascii_lowercase());
-        }
-
-        if !current.is_empty() {
-            words.push(current);
-        }
-        words
     }
 }

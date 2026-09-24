@@ -152,29 +152,58 @@ pub async fn run_shell() -> ExitCode {
         // MCP connections and executable discovery are interactive services.
         shell.reload_mcp_config();
 
-        // Prewarm executable names cache in background for faster command prefix search.
-        let paths = shell.environment.read().variable_state.paths.clone();
-        let names_arc =
-            std::sync::Arc::clone(&shell.environment.read().completion_state.executable_names);
+        // Prewarm executable names in the background for command prefix search.
+        // The ticket binds both disk and live scan results to the PATH snapshot
+        // captured before the worker starts.
+        let (paths, names_arc) = {
+            let environment = shell.environment.read();
+            (
+                environment.variable_state.paths.clone(),
+                std::sync::Arc::clone(&environment.completion_state.executable_names),
+            )
+        };
+        let activation = crate::completion::generator::activate_system_command_cache(&paths);
         if let Some(names) = crate::environment::load_cached_executables(&paths) {
-            *names_arc.write() = names.clone();
-            let set: std::collections::BTreeSet<String> = names.into_iter().collect();
-            crate::completion::generator::set_global_system_commands(set);
+            let set: std::collections::BTreeSet<String> = names.iter().cloned().collect();
+            if crate::completion::generator::publish_cached_system_commands(&activation, set) {
+                crate::completion::generator::publish_environment_executable_names(
+                    &activation,
+                    &names_arc,
+                    names,
+                );
+            }
         }
+        let scan_ticket =
+            crate::completion::generator::begin_background_system_command_scan(&activation);
+        let worker_ticket = scan_ticket.clone();
         let prewarm_thread = std::thread::Builder::new()
             .name("dsh-executable-prewarm".to_string())
             .spawn(move || {
+                // Capture the signature before scanning. If a directory changes
+                // after this point, the saved snapshot is invalidated next start
+                // instead of being labelled with the newer directory metadata.
+                let path_signature = crate::environment::executable_cache_signature(&paths);
                 let names = crate::environment::collect_executables(&paths);
-                let _ = crate::environment::save_cached_executables(&paths, &names);
-                *names_arc.write() = names;
-                let set: std::collections::BTreeSet<String> =
-                    names_arc.read().iter().cloned().collect();
-                crate::completion::generator::set_global_system_commands(set);
+                let set: std::collections::BTreeSet<String> = names.iter().cloned().collect();
+                if crate::completion::generator::publish_system_command_scan(&worker_ticket, set)
+                    && crate::completion::generator::publish_environment_executable_names(
+                        worker_ticket.activation(),
+                        &names_arc,
+                        names.clone(),
+                    )
+                    && crate::completion::generator::system_command_scan_is_current(&worker_ticket)
+                {
+                    let _ = crate::environment::save_cached_executables_with_signature(
+                        &names,
+                        &path_signature,
+                    );
+                }
             });
         match prewarm_thread {
             Ok(thread) => startup_tasks.push_loader(thread),
             Err(err) => {
                 tracing::warn!("Failed to start executable prewarm thread: {err}");
+                crate::completion::generator::release_system_command_scan(&scan_ticket);
             }
         }
     }

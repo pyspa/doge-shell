@@ -82,21 +82,17 @@ impl IntegratedCompletionEngine {
         }
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
+        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
         let db_lock = self.command_completion.lock();
         if db_lock.get_command(&parsed_command_line.command).is_none() {
             return Vec::new();
         }
 
-        let environment_names: Vec<String> = self
-            .environment
-            .read()
-            .variable_state
-            .variables
-            .keys()
-            .cloned()
-            .collect();
-        let completion_generator =
-            CompletionGenerator::with_environment_names(&db_lock, &environment_names);
+        let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
+            &db_lock,
+            &environment_names,
+            system_command_ticket,
+        );
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(candidates) => candidates
                 .into_iter()
@@ -139,15 +135,12 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         }
 
-        let environment_names: Vec<String> = self
-            .environment
-            .read()
-            .variable_state
-            .variables
-            .keys()
-            .cloned()
-            .collect();
-        let generator = ArgumentGenerator::with_environment_names(&db_lock, &environment_names);
+        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let generator = ArgumentGenerator::with_runtime_environment_ticket(
+            &db_lock,
+            &environment_names,
+            Some(system_command_ticket),
+        );
         generator
             .generate_candidates_for_type(&arg_type, parsed_command_line)
             .map(|candidates| {

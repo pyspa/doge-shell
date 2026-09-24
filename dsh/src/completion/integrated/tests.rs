@@ -3,6 +3,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
 
+fn top_level_cache_lookup(
+    engine: &IntegratedCompletionEngine,
+    input: &str,
+) -> Option<crate::completion::cache::CacheLookup<EnhancedCandidate>> {
+    let scope = engine.current_path_cache_scope();
+    engine.cache.lookup_scoped(scope, input)
+}
+
 async fn wait_for_candidate(
     engine: &IntegratedCompletionEngine,
     input: &str,
@@ -56,7 +64,7 @@ async fn wait_for_candidate_and_exact_cache(
             .candidates
             .iter()
             .any(|candidate| candidate.text == expected);
-        let cached = engine.cache.lookup(input);
+        let cached = top_level_cache_lookup(engine, input);
         let cache_ready = cached.as_ref().is_some_and(|cached| {
             cached.exact
                 && cached
@@ -909,7 +917,7 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         "cold result must not publish dynamic alias data before refresh completion"
     );
     assert!(
-        engine.cache.lookup(input).is_none(),
+        top_level_cache_lookup(&engine, input).is_none(),
         "a cold dynamic refresh must keep the partial result out of the top-level cache"
     );
 
@@ -920,9 +928,7 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
     let second =
         wait_for_candidate_and_exact_cache(&engine, &mut notify_rx, input, dir.path(), "cheat")
             .await;
-    let cached = engine
-        .cache
-        .lookup(input)
+    let cached = top_level_cache_lookup(&engine, input)
         .expect("the complete result should become cacheable after the dynamic refresh settles");
     assert!(cached.exact);
     assert!(
@@ -992,8 +998,106 @@ async fn dynamic_command_argument_does_not_use_completion_cache() {
     let _ = wait_for_candidate(&engine, input, dir.path(), "feature/test-branch").await;
 
     assert!(
-        engine.cache.lookup(input).is_none(),
+        top_level_cache_lookup(&engine, input).is_none(),
         "dynamic argument values must stay out of the top-level completion cache"
+    );
+}
+
+#[tokio::test]
+async fn system_command_top_level_cache_is_path_generation_scoped() {
+    let dir = tempdir().unwrap();
+    let path_a = dir.path().join("a");
+    let path_b = dir.path().join("b");
+    fs::create_dir(&path_a).unwrap();
+    fs::create_dir(&path_b).unwrap();
+    write_executable_script(&path_a.join("zz-old"), "#!/bin/sh\nexit 0\n");
+    write_executable_script(&path_b.join("zz-new"), "#!/bin/sh\nexit 0\n");
+
+    let engine = engine_with_path(&path_a);
+    let input = "sudo command zz-";
+    let scope_a = engine.current_path_cache_scope();
+    let first = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    assert!(
+        first
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-old")
+    );
+    let cached = engine
+        .cache
+        .lookup_scoped(scope_a, input)
+        .expect("same-generation system result should use the top-level cache");
+    assert!(
+        cached
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-old"),
+        "same-generation system result should remain cached: {cached:?}"
+    );
+
+    engine
+        .environment
+        .write()
+        .set_and_export_shell_var("PATH".to_string(), path_b.display().to_string());
+    let scope_b = engine.current_path_cache_scope();
+    assert!(
+        engine.cache.lookup_scoped(scope_b, input).is_none(),
+        "PATH switch must not reuse the previous generation's top-level entry"
+    );
+    let second = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    assert!(
+        second
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-new")
+    );
+    assert!(
+        !second
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-old"),
+        "top-level completion cache resurfaced the previous PATH: {:?}",
+        second.candidates
+    );
+    let cached = engine
+        .cache
+        .lookup_scoped(scope_b, input)
+        .expect("new PATH generation should publish its own top-level entry");
+    assert!(
+        cached
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-new"),
+        "new generation cache should contain only its PATH snapshot: {cached:?}"
+    );
+
+    engine
+        .environment
+        .write()
+        .set_and_export_shell_var("PATH".to_string(), path_a.display().to_string());
+    let scope_a2 = engine.current_path_cache_scope();
+    assert!(
+        engine.cache.lookup_scoped(scope_a2, input).is_none(),
+        "A -> B -> A must still allocate a fresh top-level cache scope"
+    );
+    let third = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    assert!(
+        third
+            .candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-old")
+            && !third
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "zz-new"),
+        "A -> B -> A reused the wrong generation: {:?}",
+        third.candidates
     );
 }
 
@@ -1046,7 +1150,7 @@ async fn git_dynamic_value_candidates_skip_fallback_collectors() {
         "external fallback should not run for exclusive git dynamic value completion"
     );
     assert!(
-        engine.cache.lookup(input).is_none(),
+        top_level_cache_lookup(&engine, input).is_none(),
         "exclusive dynamic argument values must stay out of the top-level completion cache"
     );
 }

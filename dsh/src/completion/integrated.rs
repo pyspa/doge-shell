@@ -126,19 +126,6 @@ impl CandidateBatch {
     }
 }
 
-#[derive(Debug)]
-struct CommandCollection {
-    batch: CandidateBatch,
-}
-
-impl CommandCollection {
-    fn empty() -> Self {
-        Self {
-            batch: CandidateBatch::empty(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct ParsedCommandLineCache {
     input: String,
@@ -245,9 +232,9 @@ pub struct IntegratedCompletionEngine {
 
     /// Dynamic completion registry
 
-    /// Short lived completion cache
+    /// Short lived completion cache, scoped by the logical PATH generation.
     cache: CompletionCache<EnhancedCandidate>,
-    framework_cache: RwLock<HashMap<String, CompletionFrameworkKind>>,
+    framework_cache: RwLock<HashMap<(u64, String), CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
     dynamic: DynamicCompletionProvider,
     runtime: Arc<CompletionRuntime>,
@@ -445,9 +432,15 @@ impl IntegratedCompletionEngine {
             };
         }
 
+        // Keep the top-level prefix/sliding cache, but scope every entry to the
+        // logical PATH generation. This preserves hot-keypress reuse without
+        // allowing any collector reached through a command argument to retain
+        // results from an older PATH activation.
+        let cache_scope = self.current_path_cache_scope();
+
         if cache_allowed
             && !request.input.is_empty()
-            && let Some(hit) = self.cache.lookup(request.input)
+            && let Some(hit) = self.cache.lookup_scoped(cache_scope, request.input)
         {
             timing.mark("cache_lookup");
             debug!(
@@ -456,9 +449,9 @@ impl IntegratedCompletionEngine {
             );
 
             if hit.exact || !hit.candidates.is_empty() {
-                self.cache.extend_ttl(&hit.key);
+                self.cache.extend_ttl_scoped(cache_scope, &hit.key);
                 let framework = self
-                    .lookup_cached_framework(&hit.key)
+                    .lookup_cached_framework(cache_scope, &hit.key)
                     .unwrap_or_else(super::default_completion_framework);
 
                 timing.finish(request.input, "cache_hit");
@@ -496,21 +489,31 @@ impl IntegratedCompletionEngine {
             timing.mark("finalize");
             results.replacement_range = replacement_range;
             if cache_allowed {
-                self.store_in_cache(request.input, &results.candidates, results.framework);
+                self.store_in_cache(
+                    cache_scope,
+                    request.input,
+                    &results.candidates,
+                    results.framework,
+                );
             }
             timing.finish(request.input, "dynamic_exclusive");
             return results;
         }
 
         // 2. JSON-based command completion
-        let command_collection = self.collect_command_candidates(&request, &parsed_command_line);
+        let command_batch = self.collect_command_candidates(&request, &parsed_command_line);
         timing.mark("json");
-        if !aggregator.extend(command_collection.batch) {
+        if !aggregator.extend(command_batch) {
             let mut results = aggregator.finalize(history);
             timing.mark("finalize");
             results.replacement_range = replacement_range;
             if cache_allowed {
-                self.store_in_cache(request.input, &results.candidates, results.framework);
+                self.store_in_cache(
+                    cache_scope,
+                    request.input,
+                    &results.candidates,
+                    results.framework,
+                );
             }
             timing.finish(request.input, "json_exclusive");
             return results;
@@ -524,7 +527,12 @@ impl IntegratedCompletionEngine {
             timing.mark("finalize");
             results.replacement_range = replacement_range;
             if cache_allowed {
-                self.store_in_cache(request.input, &results.candidates, results.framework);
+                self.store_in_cache(
+                    cache_scope,
+                    request.input,
+                    &results.candidates,
+                    results.framework,
+                );
             }
             timing.finish(request.input, "external_exclusive");
             return results;
@@ -540,7 +548,12 @@ impl IntegratedCompletionEngine {
             timing.mark("finalize");
             results.replacement_range = replacement_range;
             if cache_allowed {
-                self.store_in_cache(request.input, &results.candidates, results.framework);
+                self.store_in_cache(
+                    cache_scope,
+                    request.input,
+                    &results.candidates,
+                    results.framework,
+                );
             }
             timing.finish(request.input, "fish_exclusive");
             return results;
@@ -550,7 +563,12 @@ impl IntegratedCompletionEngine {
         timing.mark("finalize");
         results.replacement_range = replacement_range;
         if cache_allowed {
-            self.store_in_cache(request.input, &results.candidates, results.framework);
+            self.store_in_cache(
+                cache_scope,
+                request.input,
+                &results.candidates,
+                results.framework,
+            );
         }
         timing.finish(request.input, "complete");
         results

@@ -6,37 +6,57 @@ use super::generators::command::CommandGenerator;
 use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 
-// Re-export for compatibility
-pub use super::generators::system::{clear_global_system_commands, set_global_system_commands};
+pub(crate) use super::generators::system::{
+    SystemCommandCacheTicket, activate_system_command_cache, begin_background_system_command_scan,
+    publish_cached_system_commands, publish_environment_executable_names,
+    publish_system_command_scan, release_system_command_scan, system_command_scan_is_current,
+};
 
 /// Completion candidate generator.
 ///
-/// Runtime shell variable names are injected explicitly via
-/// `with_environment_names`; pure parser/unit tests use `new` (empty list).
-/// Never falls back to `std::env`: the shell `Environment` is authoritative.
+/// Runtime shell state is injected explicitly via
+/// `with_runtime_environment`; pure parser/unit tests use `new` with empty
+/// names and paths. Never falls back to `std::env`: the shell `Environment` is
+/// authoritative.
 pub struct CompletionGenerator<'a> {
     /// Command completion database
     database: &'a CommandCompletionDatabase,
-    environment_names: Option<&'a [String]>,
+    environment_names: &'a [String],
+    system_command_ticket: Option<SystemCommandCacheTicket>,
 }
 
 impl<'a> CompletionGenerator<'a> {
-    /// Create a new generator without environment names (empty list).
+    /// Create a generator for pure parsing/tests without runtime shell state.
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
-            environment_names: None,
+            environment_names: &[],
+            system_command_ticket: None,
         }
     }
 
-    /// Create a generator with runtime shell variable names.
-    pub fn with_environment_names(
+    /// Create a generator with one consistent runtime shell-state snapshot.
+    pub fn with_runtime_environment(
         database: &'a CommandCompletionDatabase,
-        names: &'a [String],
+        environment_names: &'a [String],
+        system_paths: &'a [String],
+    ) -> Self {
+        Self::with_runtime_environment_ticket(
+            database,
+            environment_names,
+            activate_system_command_cache(system_paths),
+        )
+    }
+
+    pub(crate) fn with_runtime_environment_ticket(
+        database: &'a CommandCompletionDatabase,
+        environment_names: &'a [String],
+        system_command_ticket: SystemCommandCacheTicket,
     ) -> Self {
         Self {
             database,
-            environment_names: Some(names),
+            environment_names,
+            system_command_ticket: Some(system_command_ticket),
         }
     }
 
@@ -62,11 +82,15 @@ impl<'a> CompletionGenerator<'a> {
         let mut candidates = crate::completion::generators::filesystem::FileSystemGenerator::generate_file_candidates(current_token)
             .map_err(GeneratorError::Other)?;
 
-        candidates.extend(
-            crate::completion::generators::system::SystemCommandGenerator::new()
+        if let Some(ticket) = &self.system_command_ticket {
+            candidates.extend(
+                crate::completion::generators::system::SystemCommandGenerator::from_activation(
+                    ticket.clone(),
+                )
                 .generate_candidates(current_token)
                 .map_err(|e| GeneratorError::Other(anyhow::anyhow!(e)))?,
-        );
+            );
+        }
 
         Ok(candidates)
     }
@@ -128,17 +152,19 @@ impl<'a> CompletionGenerator<'a> {
     }
 
     fn command_generator(&self) -> CommandGenerator<'_> {
-        match self.environment_names {
-            Some(names) => CommandGenerator::with_environment_names(self.database, names),
-            None => CommandGenerator::new(self.database),
-        }
+        CommandGenerator::with_runtime_environment_ticket(
+            self.database,
+            self.environment_names,
+            self.system_command_ticket.clone(),
+        )
     }
 
     fn argument_generator(&self) -> ArgumentGenerator<'_> {
-        match self.environment_names {
-            Some(names) => ArgumentGenerator::with_environment_names(self.database, names),
-            None => ArgumentGenerator::new(self.database),
-        }
+        ArgumentGenerator::with_runtime_environment_ticket(
+            self.database,
+            self.environment_names,
+            self.system_command_ticket.clone(),
+        )
     }
 }
 

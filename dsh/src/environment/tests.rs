@@ -158,6 +158,23 @@ fn search_prefix_uses_prewarmed_names() {
 }
 
 #[test]
+fn populated_executable_cache_does_not_fall_back_to_disk_on_miss() {
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("late-command");
+    std::fs::write(&executable, "").unwrap();
+    let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&executable, permissions).unwrap();
+
+    let env = Environment::new();
+    let mut guard = env.write();
+    guard.variable_state.paths = vec![dir.path().display().to_string()];
+    guard.set_executable_names(vec!["cargo".to_string()]);
+
+    assert_eq!(guard.search_prefix("late-"), None);
+}
+
+#[test]
 fn test_resolve_alias() {
     init();
     let env = Environment::new();
@@ -270,6 +287,44 @@ fn test_system_env_updates_refresh_path_and_child_env() {
         Some(&"/tmp/bin:/usr/bin".to_string())
     );
     assert_eq!(child_env.get("EXPORTED_ONLY"), Some(&"value".to_string()));
+}
+
+#[test]
+fn reload_path_reactivates_a_directly_restored_path_snapshot() {
+    let _guard = crate::test_env_lock();
+    let environment = Environment::new();
+    let path_a = vec!["/snapshot/a".to_string()];
+    let path_b = vec!["/snapshot/b".to_string()];
+
+    let scan_b = {
+        let mut guard = environment.write();
+        guard
+            .variable_state
+            .variables
+            .insert("PATH".to_string(), path_b.join(":"));
+        guard.variable_state.paths = path_b.clone();
+        // Snapshot restore assigns the derived field directly, then asks the
+        // normal projection refresh to reconcile global cache generations.
+        guard.reload_path();
+        let activation = crate::completion::generator::activate_system_command_cache(&path_b);
+        crate::completion::generators::system::begin_system_command_scan(&activation)
+    };
+
+    {
+        let mut guard = environment.write();
+        guard
+            .variable_state
+            .variables
+            .insert("PATH".to_string(), path_a.join(":"));
+        guard.variable_state.paths = path_a.clone();
+        guard.reload_path();
+    }
+
+    let stale_b_commands = ["b-command"].into_iter().map(String::from).collect();
+    assert!(
+        !crate::completion::generator::publish_system_command_scan(&scan_b, stale_b_commands),
+        "pre-restore B worker retained authority after snapshot restored A"
+    );
 }
 
 #[test]

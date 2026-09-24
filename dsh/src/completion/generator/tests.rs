@@ -5,6 +5,8 @@ use crate::completion::command::{
 use crate::completion::generators::command::CommandGenerator;
 use crate::completion::generators::filesystem::FileSystemGenerator;
 use crate::completion::parser::CommandLineParser;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{MAIN_SEPARATOR, Path};
 use tempfile::tempdir;
 
@@ -1463,12 +1465,76 @@ fn test_multiple_script_argument_reuses_last_definition() {
 }
 
 #[test]
+fn runtime_system_paths_reach_every_system_command_generator_route() {
+    let _guard = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let command_path = dir.path().join("zz-runtime-command");
+    fs::write(&command_path, "").unwrap();
+    let mut permissions = fs::metadata(&command_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&command_path, permissions).unwrap();
+
+    let system_paths = vec![dir.path().display().to_string()];
+    let environment_names = Vec::new();
+    let db = CommandCompletionDatabase::new();
+    let contains_runtime_command = |candidates: &[CompletionCandidate]| {
+        candidates
+            .iter()
+            .any(|candidate| candidate.text == "zz-runtime-command")
+    };
+
+    let command_candidates =
+        CommandGenerator::with_runtime_environment(&db, &environment_names, &system_paths)
+            .generate_command_candidates("zz-")
+            .unwrap();
+    assert!(contains_runtime_command(&command_candidates));
+
+    let fallback_candidates =
+        CompletionGenerator::with_runtime_environment(&db, &environment_names, &system_paths)
+            .generate_fallback_candidates("zz-")
+            .unwrap();
+    assert!(contains_runtime_command(&fallback_candidates));
+
+    let parsed = ParsedCommandLine {
+        command: "host".to_string(),
+        subcommand_path: vec![],
+        raw_args: vec!["zz-".to_string()],
+        args: vec!["zz-".to_string()],
+        options: vec![],
+        current_token: "zz-".to_string(),
+        current_arg: Some("zz-".to_string()),
+        completion_context: CompletionContext::Argument {
+            arg_index: 0,
+            arg_type: None,
+        },
+        specified_options: vec![],
+        specified_arguments: vec!["zz-".to_string()],
+        cursor_index: 0,
+    };
+    for argument_type in [ArgumentType::Command, ArgumentType::CommandWithArgs] {
+        let candidates =
+            crate::completion::generators::argument::ArgumentGenerator::with_runtime_environment(
+                &db,
+                &environment_names,
+                &system_paths,
+            )
+            .generate_candidates_for_type(&argument_type, &parsed)
+            .unwrap();
+        assert!(
+            contains_runtime_command(&candidates),
+            "system PATH missing from {argument_type:?}: {candidates:?}"
+        );
+    }
+}
+
+#[test]
 fn environment_names_are_injected_without_process_fallback() {
     use crate::completion::generators::argument::ArgumentGenerator;
     use crate::completion::generators::command::CommandGenerator;
 
     let db = create_test_database();
     let names = vec!["DOGESH_SHELL_ONLY_VAR".to_string()];
+    let system_paths = Vec::new();
 
     let parsed = ParsedCommandLine {
         command: "cmd".to_string(),
@@ -1488,7 +1554,7 @@ fn environment_names_are_injected_without_process_fallback() {
     };
 
     // Injected shell names appear.
-    let with_names = ArgumentGenerator::with_environment_names(&db, &names)
+    let with_names = ArgumentGenerator::with_runtime_environment(&db, &names, &system_paths)
         .generate_candidates_for_type(&ArgumentType::Environment, &parsed)
         .unwrap();
     assert!(
@@ -1506,7 +1572,7 @@ fn environment_names_are_injected_without_process_fallback() {
     );
 
     // Same contract on the command-level helper.
-    let cmd_with = CommandGenerator::with_environment_names(&db, &names)
+    let cmd_with = CommandGenerator::with_runtime_environment(&db, &names, &system_paths)
         .generate_environment_variable_candidates("DOGESH_SHELL")
         .unwrap();
     assert!(cmd_with.iter().any(|c| c.text == "DOGESH_SHELL_ONLY_VAR"));
@@ -1541,9 +1607,12 @@ fn stale_process_env_does_not_enter_environment_completion() {
         specified_arguments: vec![],
         cursor_index: 0,
     };
+    let system_paths = Vec::new();
     let candidates =
-        crate::completion::generators::argument::ArgumentGenerator::with_environment_names(
-            &db, &names,
+        crate::completion::generators::argument::ArgumentGenerator::with_runtime_environment(
+            &db,
+            &names,
+            &system_paths,
         )
         .generate_candidates_for_type(&ArgumentType::Environment, &parsed)
         .unwrap();

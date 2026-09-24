@@ -65,6 +65,7 @@ pub struct CacheLookup<T: CacheableCandidate> {
 #[derive(Debug)]
 pub struct CompletionCache<T: CacheableCandidate> {
     entries: RwLock<HashMap<String, CacheEntry<T>>>,
+    scoped_entries: RwLock<HashMap<u64, HashMap<String, CacheEntry<T>>>>,
     pending: RwLock<std::collections::HashSet<String>>,
     default_ttl: Duration,
 }
@@ -73,6 +74,7 @@ impl<T: CacheableCandidate> CompletionCache<T> {
     pub fn new(default_ttl: Duration) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
+            scoped_entries: RwLock::new(HashMap::new()),
             pending: RwLock::new(std::collections::HashSet::new()),
             default_ttl,
         }
@@ -85,8 +87,20 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         guard.insert(key, CacheEntry::new(candidates, self.default_ttl));
     }
 
+    pub fn set_scoped(&self, scope: u64, key: String, candidates: Vec<T>) {
+        let mut guard = self.scoped_entries.write();
+        for entries in guard.values_mut() {
+            Self::purge_expired_locked(entries);
+        }
+        guard.retain(|_, entries| !entries.is_empty());
+        let entries = guard.entry(scope).or_default();
+        debug!("scoped cache set for '{}'. len: {}", key, candidates.len());
+        entries.insert(key, CacheEntry::new(candidates, self.default_ttl));
+    }
+
     pub fn clear(&self) {
         self.entries.write().clear();
+        self.scoped_entries.write().clear();
         self.pending.write().clear();
     }
 
@@ -106,6 +120,20 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         let mut guard = self.entries.write();
         Self::purge_expired_locked(&mut guard);
         if let Some(entry) = guard.get_mut(key) {
+            entry.extend(self.default_ttl);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn extend_ttl_scoped(&self, scope: u64, key: &str) -> bool {
+        let mut guard = self.scoped_entries.write();
+        let Some(entries) = guard.get_mut(&scope) else {
+            return false;
+        };
+        Self::purge_expired_locked(entries);
+        if let Some(entry) = entries.get_mut(key) {
             entry.extend(self.default_ttl);
             true
         } else {
@@ -157,6 +185,44 @@ impl<T: CacheableCandidate> CompletionCache<T> {
                 key: key_owned,
                 candidates,
                 exact: best_exact,
+            })
+        });
+
+        drop(guard);
+        result
+    }
+
+    pub fn lookup_scoped(&self, scope: u64, input: &str) -> Option<CacheLookup<T>> {
+        let now = Instant::now();
+        let guard = self.scoped_entries.read();
+        let result = guard.get(&scope).and_then(|entries| {
+            longest_live_prefix(input, entries, now).and_then(|(key, best_exact)| {
+                let entry = entries.get(key)?;
+                let candidates = if best_exact {
+                    entry.candidates.as_ref().clone()
+                } else {
+                    let last_token = input
+                        .rsplit(|c: char| c.is_whitespace())
+                        .next()
+                        .unwrap_or("");
+
+                    entry
+                        .candidates
+                        .iter()
+                        .filter(|candidate| {
+                            let text = candidate.completion_text();
+                            text.starts_with(input)
+                                || (!last_token.is_empty() && text.starts_with(last_token))
+                        })
+                        .cloned()
+                        .collect()
+                };
+
+                Some(CacheLookup {
+                    key: key.to_string(),
+                    candidates,
+                    exact: best_exact,
+                })
             })
         });
 
@@ -259,6 +325,18 @@ mod tests {
         assert_eq!(result.key, "git co");
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(result.candidates[0].text, "commit");
+    }
+
+    #[test]
+    fn scoped_cache_preserves_prefix_reuse_without_cross_scope_hits() {
+        let cache = CompletionCache::new(Duration::from_secs(1));
+        cache.set_scoped(1, "git ".to_string(), vec![candidate("add")]);
+        cache.set_scoped(2, "git ".to_string(), vec![candidate("commit")]);
+
+        let first = cache.lookup_scoped(1, "git a").unwrap();
+        assert!(!first.exact);
+        assert_eq!(first.candidates[0].text, "add");
+        assert!(cache.lookup_scoped(3, "git a").is_none());
     }
 
     #[test]

@@ -17,6 +17,16 @@
 - `exported_vars` は export attribute のみで値を持たない。
 - child environment は `variables` + `exported_vars` から materialize する。
 - runtime shell state の fallback として `std::env` を再読込しない。
+- system command lookup/completion の PATH authority も
+  `Environment.variable_state.paths`。
+- completion cache refresh が `std::env::PATH` を再読込してはいけない。
+- PATH-derived async cache result は、refresh 開始時の PATH generation と
+  scan id が current の場合だけ publish できる。scan id は同一 generation 内で
+  古い scan の結果を後から publish できないようにする。
+- runtime completion request は PATH snapshot の activation ticket を保持し、
+  古い request が global cache を以前の PATH へ巻き戻さない。
+- integrated top-level completion cache は Environment の logical PATH
+  activation generation で scope する。
 - `std::env` は bootstrap/process-global integration boundary に限定する。
 - consumer が `Environment` を利用可能な runtime path では、shell variable
   の miss を `std::env::var` へ fallback しない。startup process environment

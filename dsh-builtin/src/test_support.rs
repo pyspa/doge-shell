@@ -118,6 +118,10 @@ pub(crate) struct TestShellProxy {
     pub read_error: Option<String>,
     /// `set -o` option state for `ShellOptionCapability` tests.
     pub shell_options: ShellOptions,
+    /// Logical command search paths for task provider resolution in tests.
+    /// Empty by default; set per-test to model PATH A vs PATH B without
+    /// touching process-global `std::env::PATH`.
+    pub command_search_paths: Vec<PathBuf>,
 }
 
 impl Default for TestShellProxy {
@@ -172,6 +176,7 @@ impl Default for TestShellProxy {
             read_status: None,
             read_error: None,
             shell_options: ShellOptions::default(),
+            command_search_paths: Vec::new(),
         }
     }
 }
@@ -597,6 +602,10 @@ impl crate::shell_capabilities::AiJsonRequest for TestShellProxy {
 impl crate::shell_capabilities::ProcessEnvironmentCapability for TestShellProxy {
     fn child_process_environment(&self) -> HashMap<String, String> {
         self.exported.clone()
+    }
+
+    fn command_search_paths(&self) -> Vec<PathBuf> {
+        self.command_search_paths.clone()
     }
 }
 

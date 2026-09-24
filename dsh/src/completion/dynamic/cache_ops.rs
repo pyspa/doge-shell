@@ -2,6 +2,10 @@
 //! background refresh, pruning expired command/error/external entries, folding
 //! the result into the diagnostics lines, and the signatures (file metadata,
 //! task sources) that decide when a cached value is still current.
+//!
+//! Task discovery signatures are canonical in `dsh_builtin::task`
+//! (`TaskDiscoverySignature`): this module keeps only the compose-service
+//! file signature and the task-source normalization for cache keys.
 use super::*;
 
 pub(super) fn canonicalize_path(path: &Path) -> PathBuf {
@@ -339,88 +343,6 @@ pub(super) fn file_metadata_signature(path: &Path) -> FileMetadataSignature {
             modified: None,
             len: 0,
         },
-    }
-}
-
-pub(super) fn task_completion_signature(
-    project_root: &Path,
-    sources: Option<&[&str]>,
-) -> Vec<FileMetadataSignature> {
-    let mut paths = [
-        "mise.toml",
-        "Taskfile.yml",
-        "Taskfile.yaml",
-        "turbo.json",
-        "package.json",
-        "Cargo.toml",
-        "Makefile",
-        "makefile",
-        "deno.json",
-        "deno.jsonc",
-        "build.gradle",
-        "build.gradle.kts",
-        "settings.gradle",
-        "settings.gradle.kts",
-        "gradle.properties",
-        "gradlew",
-    ]
-    .into_iter()
-    .map(|name| project_root.join(name))
-    .collect::<Vec<_>>();
-
-    if sources_include_nx(sources) {
-        paths.extend([
-            project_root.join("workspace.json"),
-            project_root.join("angular.json"),
-            project_root.join("project.json"),
-        ]);
-        paths.extend(descendant_project_json_files(project_root, 4));
-    }
-    paths.sort();
-    paths.dedup();
-    paths
-        .into_iter()
-        .map(|path| file_metadata_signature(&path))
-        .collect()
-}
-
-pub(super) fn sources_include_nx(sources: Option<&[&str]>) -> bool {
-    sources.is_none_or(|sources| sources.contains(&"nx"))
-}
-
-pub(super) fn descendant_project_json_files(root: &Path, max_depth: usize) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    collect_descendant_project_json_files(root, 0, max_depth, &mut paths);
-    paths
-}
-
-pub(super) fn collect_descendant_project_json_files(
-    dir: &Path,
-    depth: usize,
-    max_depth: usize,
-    paths: &mut Vec<PathBuf>,
-) {
-    if depth > max_depth {
-        return;
-    }
-
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build") {
-            continue;
-        }
-        if path.is_file() && name == "project.json" {
-            paths.push(path);
-        } else if path.is_dir() {
-            collect_descendant_project_json_files(&path, depth + 1, max_depth, paths);
-        }
     }
 }
 

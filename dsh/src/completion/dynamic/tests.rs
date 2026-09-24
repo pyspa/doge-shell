@@ -1563,6 +1563,70 @@ fn nx_task_cache_refreshes_when_descendant_project_json_changes() {
 }
 
 #[test]
+fn project_task_completion_follows_logical_path_changes() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("mise.toml"),
+        "[tasks.static_one]\nrun = 'echo static'\n",
+    )
+    .unwrap();
+    let bin_a = dir.path().join("bin-a");
+    let bin_b = dir.path().join("bin-b");
+    fs::create_dir_all(&bin_a).unwrap();
+    fs::create_dir_all(&bin_b).unwrap();
+    write_executable_script(
+        &bin_a.join("mise"),
+        "#!/bin/sh\nprintf '[{\"name\":\"from-a\"}]'\n",
+    );
+    write_executable_script(
+        &bin_b.join("mise"),
+        "#!/bin/sh\nprintf '[{\"name\":\"from-b\"}]'\n",
+    );
+
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.paths = vec![bin_a.display().to_string()];
+        env.clear_command_cache();
+    }
+    let provider = DynamicCompletionProvider::new(environment.clone());
+    let from_a = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("mise run from-"),
+        dir.path(),
+        MISE_PROJECT_TASK_SOURCES,
+        false,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        from_a.iter().any(|candidate| candidate.text == "from-a"),
+        "expected PATH A provider task in {from_a:?}"
+    );
+
+    // Same markers, different logical PATH: the cached PATH A catalog must
+    // not be returned for PATH B.
+    {
+        let mut env = environment.write();
+        env.variable_state.paths = vec![bin_b.display().to_string()];
+        env.clear_command_cache();
+    }
+    let from_b = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("mise run from-"),
+        dir.path(),
+        MISE_PROJECT_TASK_SOURCES,
+        false,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        from_b.iter().any(|candidate| candidate.text == "from-b"),
+        "expected PATH B provider task in {from_b:?}"
+    );
+    assert!(
+        !from_b.iter().any(|candidate| candidate.text == "from-a"),
+        "stale PATH A task must not survive a PATH change: {from_b:?}"
+    );
+}
+
+#[test]
 fn non_nx_source_task_signature_ignores_descendant_project_json_changes() {
     let dir = tempdir().unwrap();
     fs::write(
@@ -1578,14 +1642,15 @@ fn non_nx_source_task_signature_ignores_descendant_project_json_changes() {
     )
     .unwrap();
 
-    let before = task_completion_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES));
+    let runtime = task::TaskDiscoveryRuntime::new(Vec::new(), std::collections::HashMap::new());
+    let before = task::discovery_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES), &runtime);
     std::thread::sleep(Duration::from_millis(20));
     fs::write(
         api_dir.join("project.json"),
         r#"{ "name": "api", "targets": { "build": {}, "test": {} } }"#,
     )
     .unwrap();
-    let after = task_completion_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES));
+    let after = task::discovery_signature(dir.path(), Some(JS_PROJECT_TASK_SOURCES), &runtime);
 
     assert_eq!(
         before, after,

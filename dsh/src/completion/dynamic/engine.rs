@@ -137,17 +137,18 @@ impl DynamicCompletionProvider {
 
     pub(super) fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
         let project_root = self.cached_project_root(current_dir);
+        let runtime = self.task_discovery_runtime();
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: Vec::new(),
         };
-        let signature = task_completion_signature(&project_root, None);
+        let signature = task::discovery_signature(&project_root, None, &runtime);
 
         if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
             return Ok(tasks);
         }
 
-        let tasks = task::list_tasks_in_dir(&project_root)?;
+        let tasks = task::list_tasks_in_dir(&project_root, &runtime)?;
         self.cache.write().tasks.insert(
             cache_key,
             TaskCacheEntry {
@@ -160,11 +161,12 @@ impl DynamicCompletionProvider {
 
     pub(super) fn lookup_project_tasks(&self, current_dir: &Path) -> Vec<task::TaskInfo> {
         let project_root = self.cached_project_root(current_dir);
+        let runtime = self.task_discovery_runtime();
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: Vec::new(),
         };
-        let signature = task_completion_signature(&project_root, None);
+        let signature = task::discovery_signature(&project_root, None, &runtime);
         self.lookup_task_cache(&cache_key, &signature)
             .unwrap_or_default()
     }
@@ -175,17 +177,18 @@ impl DynamicCompletionProvider {
         sources: &[&str],
     ) -> Result<Vec<task::TaskInfo>> {
         let project_root = self.cached_project_root(current_dir);
+        let runtime = self.task_discovery_runtime();
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),
         };
-        let signature = task_completion_signature(&project_root, Some(sources));
+        let signature = task::discovery_signature(&project_root, Some(sources), &runtime);
 
         if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
             return Ok(tasks);
         }
 
-        let tasks = task::list_tasks_in_dir_for_sources(&project_root, sources)?;
+        let tasks = task::list_tasks_in_dir_for_sources(&project_root, sources, &runtime)?;
         self.cache.write().tasks.insert(
             cache_key,
             TaskCacheEntry {
@@ -202,11 +205,12 @@ impl DynamicCompletionProvider {
         sources: &[&str],
     ) -> Vec<task::TaskInfo> {
         let project_root = self.cached_project_root(current_dir);
+        let runtime = self.task_discovery_runtime();
         let cache_key = TaskCacheKey {
             project_root: project_root.clone(),
             sources: normalized_task_sources(sources),
         };
-        let signature = task_completion_signature(&project_root, Some(sources));
+        let signature = task::discovery_signature(&project_root, Some(sources), &runtime);
         self.lookup_task_cache(&cache_key, &signature)
             .unwrap_or_default()
     }
@@ -214,15 +218,25 @@ impl DynamicCompletionProvider {
     pub(super) fn lookup_task_cache(
         &self,
         cache_key: &TaskCacheKey,
-        signature: &[FileMetadataSignature],
+        signature: &task::TaskDiscoverySignature,
     ) -> Option<Vec<task::TaskInfo>> {
         let cache = self.cache.read();
         let entry = cache.tasks.get(cache_key)?;
-        if entry.signature == signature {
+        if entry.signature == *signature {
             Some(entry.tasks.clone())
         } else {
             None
         }
+    }
+
+    fn task_discovery_runtime(&self) -> task::TaskDiscoveryRuntime {
+        // One read-lock section for both halves; released before any
+        // filesystem scan or provider subprocess runs.
+        let env = self.environment.read();
+        task::TaskDiscoveryRuntime::new(
+            env.variable_state.paths.iter().map(PathBuf::from).collect(),
+            env.child_process_env(),
+        )
     }
 
     pub(super) fn load_compose_services(

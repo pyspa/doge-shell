@@ -253,8 +253,8 @@ Organize and switch between workspaces efficiently with the integrated Project M
 Run a task unambiguously with `task <source>:<name> -- <args>`. Static project
 file parsers remain the fallback; when installed, mise, Nx, and Turbo providers
 prefer their official JSON output with a bounded timeout. Results are cached by
-project-marker metadata, and Nx/Turbo continue to own graph, affected, and
-artifact-cache behavior.
+project input metadata plus runtime/provider identity, and Nx/Turbo continue
+to own graph, affected, and artifact-cache behavior.
 
 For example, `task npm:test -- --watch` invokes `npm run test -- --watch`.
 Arguments for other providers are forwarded using that runner's native syntax.

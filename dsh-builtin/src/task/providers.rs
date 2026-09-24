@@ -1,12 +1,21 @@
 //! Machine-readable task discovery for ecosystems whose task names aren't declared in a static file `project_context` can just read: mise, nx, and turbo each need their CLI invoked to list tasks.
+use super::runtime::TaskDiscoveryRuntime;
 use super::*;
 
 trait TaskProvider {
-    fn discover(&self, root: &Path) -> Result<Vec<project_context::TaskDefinition>>;
+    fn discover(
+        &self,
+        root: &Path,
+        runtime: &TaskDiscoveryRuntime,
+    ) -> Result<Vec<project_context::TaskDefinition>>;
 }
 struct StaticTaskProvider;
 impl TaskProvider for StaticTaskProvider {
-    fn discover(&self, root: &Path) -> Result<Vec<project_context::TaskDefinition>> {
+    fn discover(
+        &self,
+        root: &Path,
+        _runtime: &TaskDiscoveryRuntime,
+    ) -> Result<Vec<project_context::TaskDefinition>> {
         project_context::detect_task_names_in_dir(root)
     }
 }
@@ -20,12 +29,17 @@ struct TurboTaskProvider {
     executable: std::path::PathBuf,
 }
 impl TaskProvider for NxTaskProvider {
-    fn discover(&self, root: &Path) -> Result<Vec<project_context::TaskDefinition>> {
+    fn discover(
+        &self,
+        root: &Path,
+        runtime: &TaskDiscoveryRuntime,
+    ) -> Result<Vec<project_context::TaskDefinition>> {
         let projects_output = command_output_with_timeout(
             &self.executable,
             &["show", "projects", "--json"],
             root,
             Duration::from_millis(1500),
+            runtime.child_env(),
         )?;
         if !projects_output.status.success() {
             return Err(anyhow::anyhow!("nx show projects --json failed"));
@@ -38,6 +52,7 @@ impl TaskProvider for NxTaskProvider {
                 &["show", "project", project.as_str(), "--json"],
                 root,
                 Duration::from_millis(1500),
+                runtime.child_env(),
             )?;
             if !output.status.success() {
                 continue;
@@ -58,12 +73,17 @@ impl TaskProvider for NxTaskProvider {
     }
 }
 impl TaskProvider for MiseTaskProvider {
-    fn discover(&self, root: &Path) -> Result<Vec<project_context::TaskDefinition>> {
+    fn discover(
+        &self,
+        root: &Path,
+        runtime: &TaskDiscoveryRuntime,
+    ) -> Result<Vec<project_context::TaskDefinition>> {
         let output = command_output_with_timeout(
             &self.executable,
             &["--no-hooks", "tasks", "ls", "--json", "--all", "--local"],
             root,
             Duration::from_millis(1500),
+            runtime.child_env(),
         )?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("mise tasks ls --json failed"));
@@ -73,9 +93,13 @@ impl TaskProvider for MiseTaskProvider {
     }
 }
 impl TaskProvider for TurboTaskProvider {
-    fn discover(&self, root: &Path) -> Result<Vec<project_context::TaskDefinition>> {
+    fn discover(
+        &self,
+        root: &Path,
+        runtime: &TaskDiscoveryRuntime,
+    ) -> Result<Vec<project_context::TaskDefinition>> {
         let names = StaticTaskProvider
-            .discover(root)?
+            .discover(root, runtime)?
             .into_iter()
             .filter(|task| task.source == "turbo")
             .map(|task| task.name)
@@ -93,6 +117,7 @@ impl TaskProvider for TurboTaskProvider {
             &arg_refs,
             root,
             Duration::from_millis(1500),
+            runtime.child_env(),
         )?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("turbo run --dry=json failed"));
@@ -101,13 +126,16 @@ impl TaskProvider for TurboTaskProvider {
         Ok(parse_turbo_tasks_json(&value))
     }
 }
-pub(super) fn discover_provider_tasks(root: &Path) -> Result<Vec<project_context::TaskDefinition>> {
-    let mut tasks = StaticTaskProvider.discover(root)?;
+pub(super) fn discover_provider_tasks(
+    root: &Path,
+    runtime: &TaskDiscoveryRuntime,
+) -> Result<Vec<project_context::TaskDefinition>> {
+    let mut tasks = StaticTaskProvider.discover(root, runtime)?;
     if (root.join("mise.toml").exists() || root.join(".mise.toml").exists())
-        && let Some(executable) = find_program("mise")
+        && let Some(executable) = runtime.resolve_program("mise")
     {
         let provider = MiseTaskProvider { executable };
-        if let Ok(machine_tasks) = provider.discover(root)
+        if let Ok(machine_tasks) = provider.discover(root, runtime)
             && !machine_tasks.is_empty()
         {
             tasks.retain(|task| task.source != "mise");
@@ -117,10 +145,10 @@ pub(super) fn discover_provider_tasks(root: &Path) -> Result<Vec<project_context
     if (root.join("nx.json").exists()
         || root.join("workspace.json").exists()
         || root.join("project.json").exists())
-        && let Some(executable) = find_project_program(root, "nx")
+        && let Some(executable) = runtime.resolve_project_program(root, "nx")
     {
         let provider = NxTaskProvider { executable };
-        if let Ok(machine_tasks) = provider.discover(root)
+        if let Ok(machine_tasks) = provider.discover(root, runtime)
             && !machine_tasks.is_empty()
         {
             tasks.retain(|task| task.source != "nx");
@@ -128,10 +156,10 @@ pub(super) fn discover_provider_tasks(root: &Path) -> Result<Vec<project_context
         }
     }
     if root.join("turbo.json").exists()
-        && let Some(executable) = find_project_program(root, "turbo")
+        && let Some(executable) = runtime.resolve_project_program(root, "turbo")
     {
         let provider = TurboTaskProvider { executable };
-        if let Ok(machine_tasks) = provider.discover(root)
+        if let Ok(machine_tasks) = provider.discover(root, runtime)
             && !machine_tasks.is_empty()
         {
             tasks.retain(|task| task.source != "turbo");
@@ -139,19 +167,6 @@ pub(super) fn discover_provider_tasks(root: &Path) -> Result<Vec<project_context
         }
     }
     Ok(tasks)
-}
-fn find_project_program(root: &Path, name: &str) -> Option<std::path::PathBuf> {
-    let local = root.join("node_modules").join(".bin").join(name);
-    local
-        .is_file()
-        .then_some(local)
-        .or_else(|| find_program(name))
-}
-fn find_program(name: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
 }
 pub(super) fn parse_mise_tasks_json(
     value: &serde_json::Value,

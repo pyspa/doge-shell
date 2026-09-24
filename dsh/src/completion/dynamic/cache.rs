@@ -13,7 +13,7 @@ pub(super) struct FileMetadataSignature {
 
 #[derive(Debug, Clone)]
 pub(super) struct TaskCacheEntry {
-    pub signature: Vec<FileMetadataSignature>,
+    pub signature: task::TaskDiscoverySignature,
     pub tasks: Vec<task::TaskInfo>,
 }
 

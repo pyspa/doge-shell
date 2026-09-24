@@ -43,3 +43,8 @@
 - cross-root transition は unload deepest-first → load shallowest-first。
 - direnv read/load failure で allowed root を失わない。
 - direnv PATH restore に process-global std::env を使わない。
+- task discovery の external provider executable lookup は
+  `Environment.variable_state.paths` が authority。
+- provider subprocess は `Environment::child_process_env()` snapshot だけを受け取り、
+  process-global environment を暗黙継承しない。
+- task cache は project input metadata だけでなく runtime discovery identity でも scope する。

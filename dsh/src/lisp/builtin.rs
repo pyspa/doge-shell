@@ -1,3 +1,12 @@
+//! Lisp builtins bridging `config.lisp` to shell state.
+//!
+//! Native functions registered on the Lisp `Env` (`setenv`/`vset`, `alias`,
+//! `add_path`, direnv roots, safety level, editor helpers). PATH-affecting
+//! builtins route through the Environment's canonical mutation path so the
+//! logical variable, command cache, and completion activation stay in sync.
+//! Submodules hold the `sh` execution core (`exec`), input preferences
+//! (`prefs`), and secret helpers (`secret`).
+
 use crate::direnv::DirEnvironment;
 use crate::lisp::model::{Env, RuntimeError, Value};
 use crate::shell::Shell;
@@ -213,13 +222,7 @@ pub fn allow_direnv(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
 pub fn add_path(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     for arg in args {
         let path = arg.to_string();
-        let path = shellexpand::tilde(path.as_str());
-        env.borrow()
-            .shell_env
-            .write()
-            .variable_state
-            .paths
-            .insert(0, path.to_string());
+        env.borrow().shell_env.write().insert_path_entry(0, &path);
     }
     Ok(Value::NIL)
 }
@@ -309,6 +312,90 @@ mod tests {
         if let Ok(result) = res {
             println!("{result}");
         }
+    }
+
+    fn shell_env_of(
+        engine: &Rc<RefCell<crate::lisp::LispEngine>>,
+    ) -> std::sync::Arc<parking_lot::RwLock<Environment>> {
+        std::sync::Arc::clone(&engine.borrow().env.borrow().shell_env)
+    }
+
+    #[test]
+    fn add_path_updates_the_logical_path_variable_and_projection() {
+        init();
+        let env = Environment::new();
+        env.write()
+            .set_shell_var("PATH".to_string(), "/old".to_string());
+        let engine = LispEngine::new(env);
+
+        engine
+            .borrow()
+            .run("(add_path \"/custom/bin\")")
+            .expect("add_path runs");
+
+        let shell_env = shell_env_of(&engine);
+        let guard = shell_env.read();
+        assert_eq!(
+            guard.lookup_variable("PATH"),
+            Some("/custom/bin:/old".to_string())
+        );
+        assert_eq!(guard.variable_state.paths[0], "/custom/bin".to_string());
+    }
+
+    #[test]
+    fn add_path_uses_the_logical_home_for_tilde() {
+        init();
+        let _guard = crate::test_env_lock();
+        let _stale = crate::ProcessEnvGuard::set("HOME", "/stale/process/home");
+        let env = Environment::new();
+        env.write()
+            .set_shell_var("PATH".to_string(), "/old".to_string());
+        let engine = LispEngine::new(env);
+
+        engine
+            .borrow()
+            .run("(vset \"HOME\" \"/logical/home\")")
+            .expect("vset HOME runs");
+        engine
+            .borrow()
+            .run("(add_path \"~/bin\")")
+            .expect("add_path runs");
+
+        let shell_env = shell_env_of(&engine);
+        let guard = shell_env.read();
+        assert_eq!(
+            guard.lookup_variable("PATH"),
+            Some("/logical/home/bin:/old".to_string())
+        );
+        assert_eq!(
+            guard.variable_state.paths[0],
+            "/logical/home/bin".to_string()
+        );
+    }
+
+    #[test]
+    fn add_path_keeps_the_existing_prepend_order_for_multiple_args() {
+        init();
+        let env = Environment::new();
+        env.write()
+            .set_shell_var("PATH".to_string(), "/old".to_string());
+        let engine = LispEngine::new(env);
+
+        engine
+            .borrow()
+            .run("(add_path \"/a\" \"/b\")")
+            .expect("add_path runs");
+
+        let shell_env = shell_env_of(&engine);
+        let guard = shell_env.read();
+        assert_eq!(
+            guard.lookup_variable("PATH"),
+            Some("/b:/a:/old".to_string())
+        );
+        assert_eq!(
+            guard.variable_state.paths,
+            vec!["/b".to_string(), "/a".to_string(), "/old".to_string()]
+        );
     }
 
     #[test]

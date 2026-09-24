@@ -1,3 +1,7 @@
+//! Argument completion dispatch and wrapper-aware recursion.
+//! It selects file, choice, environment, system-command, and specialized
+//! generators while runtime shell state remains explicitly injected.
+
 use crate::completion::command::{
     Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate, SubCommand,
 };
@@ -13,31 +17,49 @@ use super::option::OptionGenerator;
 use super::process::ProcessGenerator;
 use super::script::ScriptGenerator;
 use super::signal::SignalGenerator;
-use super::system::SystemCommandGenerator;
+use super::system::{
+    SystemCommandCacheTicket, SystemCommandGenerator, activate_system_command_cache,
+};
 use super::user::UserGenerator;
 
 use anyhow::Result;
 
 pub struct ArgumentGenerator<'a> {
     database: &'a CommandCompletionDatabase,
-    environment_names: Option<&'a [String]>,
+    environment_names: &'a [String],
+    system_command_ticket: Option<SystemCommandCacheTicket>,
 }
 
 impl<'a> ArgumentGenerator<'a> {
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
-            environment_names: None,
+            environment_names: &[],
+            system_command_ticket: None,
         }
     }
 
-    pub fn with_environment_names(
+    pub fn with_runtime_environment(
         database: &'a CommandCompletionDatabase,
-        names: &'a [String],
+        environment_names: &'a [String],
+        system_paths: &'a [String],
+    ) -> Self {
+        Self::with_runtime_environment_ticket(
+            database,
+            environment_names,
+            Some(activate_system_command_cache(system_paths)),
+        )
+    }
+
+    pub(crate) fn with_runtime_environment_ticket(
+        database: &'a CommandCompletionDatabase,
+        environment_names: &'a [String],
+        system_command_ticket: Option<SystemCommandCacheTicket>,
     ) -> Self {
         Self {
             database,
-            environment_names: Some(names),
+            environment_names,
+            system_command_ticket,
         }
     }
 
@@ -228,6 +250,21 @@ impl<'a> ArgumentGenerator<'a> {
         }
     }
 
+    fn generate_system_command_candidates(
+        &self,
+        current_token: &str,
+    ) -> Result<Vec<CompletionCandidate>> {
+        Ok(self
+            .system_command_ticket
+            .as_ref()
+            .map(|ticket| {
+                SystemCommandGenerator::from_activation(ticket.clone())
+                    .generate_candidates(current_token)
+            })
+            .transpose()?
+            .unwrap_or_default())
+    }
+
     /// Generate completion candidates based on type
     pub fn generate_candidates_for_type(
         &self,
@@ -249,12 +286,10 @@ impl<'a> ArgumentGenerator<'a> {
                 .filter(|choice| fuzzy_match_score(choice, &parsed.current_token).is_some())
                 .map(|choice| CompletionCandidate::argument(choice.clone(), None))
                 .collect()),
-            ArgumentType::Command => {
-                SystemCommandGenerator::new().generate_candidates(&parsed.current_token)
-            }
+            ArgumentType::Command => self.generate_system_command_candidates(&parsed.current_token),
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
-                for key in self.environment_names.unwrap_or(&[]) {
+                for key in self.environment_names {
                     if fuzzy_match_score(key, &parsed.current_token).is_some() {
                         candidates.push(CompletionCandidate::argument(key.clone(), None));
                     }
@@ -269,7 +304,7 @@ impl<'a> ArgumentGenerator<'a> {
                 ProcessGenerator::new().generate_candidates(&parsed.current_token)
             }
             ArgumentType::CommandWithArgs => {
-                SystemCommandGenerator::new().generate_candidates(&parsed.current_token)
+                self.generate_system_command_candidates(&parsed.current_token)
             }
             ArgumentType::User => UserGenerator::new().generate_candidates(&parsed.current_token),
             ArgumentType::Group => GroupGenerator::new().generate_candidates(&parsed.current_token),

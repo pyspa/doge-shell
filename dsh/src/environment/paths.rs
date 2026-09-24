@@ -116,16 +116,26 @@ impl Environment {
             paths = val.split(':').map(|s| s.to_string()).collect();
         }
 
+        self.completion_state.path_generation = self
+            .completion_state
+            .path_generation
+            .checked_add(1)
+            .expect("logical PATH generation overflow");
+
         if paths == self.variable_state.paths {
+            // Bulk snapshot restore assigns `variable_state.paths` directly
+            // before rebuilding projections. Re-activate even when the value
+            // already matches so a worker from the pre-restore PATH generation
+            // cannot publish into the restored logical state.
+            let _ = crate::completion::generator::activate_system_command_cache(&paths);
             return;
         }
 
         self.variable_state.paths = paths;
-        // Clear command cache when PATH changes
+        // Clear command cache when PATH changes.
         self.completion_state.command_cache.write().clear();
-        crate::completion::generator::clear_global_system_commands();
-        // Rebuild the executable name cache rather than leaving it empty: an
-        // empty cache pushes the cost onto every subsequent keystroke.
+        // Activation invalidates the previous generation before the background
+        // scan starts; an older worker can no longer publish into the new one.
         self.prewarm_executables();
     }
 
@@ -142,36 +152,46 @@ impl Environment {
         self.completion_state.command_cache.get_mut().clear();
     }
 
-    /// Prewarm the executable names cache by scanning PATH directories.
-    /// This should be called in the background after shell startup.
+    /// Prewarm executable names from a logical PATH snapshot.
+    ///
+    /// Scan on a worker so callers may hold the Environment write lock while
+    /// PATH is being reloaded. Only the shared name vector crosses the thread;
+    /// the worker never acquires the Environment lock.
     pub fn prewarm_executables(&self) {
-        use std::collections::BTreeSet;
-        use std::fs::read_dir;
-        use std::os::unix::fs::PermissionsExt;
+        let paths = self.variable_state.paths.clone();
+        let activation = crate::completion::generator::activate_system_command_cache(&paths);
+        let scan_ticket =
+            crate::completion::generator::begin_background_system_command_scan(&activation);
+        let executable_names = std::sync::Arc::clone(&self.completion_state.executable_names);
 
-        let mut names = BTreeSet::new();
-        for path in &self.variable_state.paths {
-            if let Ok(entries) = read_dir(path) {
-                for entry in entries.flatten() {
-                    if let Ok(ft) = entry.file_type()
-                        && (ft.is_file() || ft.is_symlink())
-                        && let Ok(meta) = entry.metadata()
-                        && meta.permissions().mode() & 0o111 != 0
-                        && let Some(name) = entry.file_name().to_str()
-                    {
-                        names.insert(name.to_string());
-                    }
+        // `activate_system_command_cache` cleared the previous generation. The
+        // local projection is cleared now as well; a generation-checked worker
+        // repopulates only the activation that still owns the cache.
+        executable_names.write().clear();
+
+        let worker_ticket = scan_ticket.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("dsh-environment-executable-prewarm".to_string())
+            .spawn(move || {
+                let names = crate::environment::collect_executables(&paths);
+                let executable_count = names.len();
+                let commands = names.iter().cloned().collect();
+                if crate::completion::generator::publish_system_command_scan(
+                    &worker_ticket,
+                    commands,
+                ) && crate::completion::generator::publish_environment_executable_names(
+                    worker_ticket.activation(),
+                    &executable_names,
+                    names,
+                ) {
+                    debug!("Prewarmed {executable_count} executable names");
                 }
-            }
-        }
+            });
 
-        let sorted: Vec<String> = names.iter().cloned().collect();
-        *self.completion_state.executable_names.write() = sorted;
-        crate::completion::generator::set_global_system_commands(names);
-        debug!(
-            "Prewarmed {} executable names",
-            self.completion_state.executable_names.read().len()
-        );
+        if let Err(error) = spawn_result {
+            tracing::warn!("Failed to start executable name prewarm: {error}");
+            crate::completion::generator::release_system_command_scan(&scan_ticket);
+        }
     }
 
     /// Set the prewarmed executable names (called after background collection).
@@ -184,16 +204,19 @@ impl Environment {
     /// Returns the first matching executable name, or None if not found.
     pub fn search_prefix(&self, prefix: &str) -> Option<String> {
         let names = self.completion_state.executable_names.read();
-        if names.is_empty() {
-            // Cache not prewarmed yet, fall back to synchronous search
-            return self.search(prefix);
+        if !names.is_empty() {
+            // Binary search for the first name >= prefix
+            let start = names.partition_point(|name| name.as_str() < prefix);
+            if start < names.len() && names[start].starts_with(prefix) {
+                return Some(names[start].clone());
+            }
+            return None;
         }
+        drop(names);
 
-        // Binary search for the first name >= prefix
-        let start = names.partition_point(|n| n.as_str() < prefix);
-        if start < names.len() && names[start].starts_with(prefix) {
-            return Some(names[start].clone());
-        }
-        None
+        // Do not hold the projection read lock across the synchronous fallback:
+        // generation-checked workers publish while holding the global cache read
+        // lock, so an I/O-bound holder here would convoy PATH activation.
+        self.search(prefix)
     }
 }

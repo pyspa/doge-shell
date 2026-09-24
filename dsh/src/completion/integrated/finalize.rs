@@ -59,6 +59,7 @@ impl IntegratedCompletionEngine {
 
     pub(super) fn store_in_cache(
         &self,
+        scope: u64,
         key: &str,
         candidates: &[EnhancedCandidate],
         framework: CompletionFrameworkKind,
@@ -66,16 +67,24 @@ impl IntegratedCompletionEngine {
         if key.is_empty() || candidates.is_empty() {
             return;
         }
-        debug!("cache set for '{}'. len: {}", key, candidates.len());
+        debug!("scoped cache set for '{}'. len: {}", key, candidates.len());
 
-        self.cache.set(key.to_string(), candidates.to_vec());
+        self.cache
+            .set_scoped(scope, key.to_string(), candidates.to_vec());
         self.framework_cache
             .write()
-            .insert(key.to_string(), framework);
+            .insert((scope, key.to_string()), framework);
     }
 
-    pub(super) fn lookup_cached_framework(&self, key: &str) -> Option<CompletionFrameworkKind> {
-        self.framework_cache.read().get(key).copied()
+    pub(super) fn lookup_cached_framework(
+        &self,
+        scope: u64,
+        key: &str,
+    ) -> Option<CompletionFrameworkKind> {
+        self.framework_cache
+            .read()
+            .get(&(scope, key.to_string()))
+            .copied()
     }
 
     /// Deduplication and sorting

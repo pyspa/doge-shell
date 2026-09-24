@@ -2,8 +2,29 @@
 //! whatever the command is (`$VAR`, `~user`), plus the one-level unwrap that
 //! lets `sudo pacman -R <TAB>` reach pacman's own completion.
 use super::*;
+use crate::completion::generator::{SystemCommandCacheTicket, activate_system_command_cache};
 
 impl IntegratedCompletionEngine {
+    /// Capture all shell state used by JSON/system completion under one read
+    /// lock, so one collection cannot mix variable names from before a mutation
+    /// with executable paths from after it.
+    pub(super) fn runtime_completion_snapshot(&self) -> (Vec<String>, SystemCommandCacheTicket) {
+        let environment = self.environment.read();
+        let names = environment
+            .variable_state
+            .variables
+            .keys()
+            .cloned()
+            .collect();
+        let system_command_ticket =
+            activate_system_command_cache(&environment.variable_state.paths);
+        (names, system_command_ticket)
+    }
+
+    pub(super) fn current_path_cache_scope(&self) -> u64 {
+        self.environment.read().completion_state.path_generation
+    }
+
     /// Collect candidates for "special" tokens that complete the same way
     /// regardless of the command: environment/shell variable references
     /// (`$VAR`, `${VAR`) and user-home references (`~user`). Returns `None`
@@ -69,26 +90,22 @@ impl IntegratedCompletionEngine {
         &self,
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
-    ) -> CommandCollection {
+    ) -> CandidateBatch {
         if parsed_command_line.completion_context == parser::CompletionContext::Command {
             debug!("No completion context found - skipping JSON completion");
-            return CommandCollection::empty();
+            return CandidateBatch::empty();
         }
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
 
-        let environment_names: Vec<String> = self
-            .environment
-            .read()
-            .variable_state
-            .variables
-            .keys()
-            .cloned()
-            .collect();
+        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
         let db_lock = self.command_completion.lock();
 
-        let completion_generator =
-            CompletionGenerator::with_environment_names(&db_lock, &environment_names);
+        let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
+            &db_lock,
+            &environment_names,
+            system_command_ticket.clone(),
+        );
 
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
@@ -103,12 +120,10 @@ impl IntegratedCompletionEngine {
                     request.input
                 );
 
-                CommandCollection {
-                    batch: CandidateBatch::inclusive_with_framework(
-                        enhanced_candidates,
-                        CompletionFrameworkKind::Skim,
-                    ),
-                }
+                CandidateBatch::inclusive_with_framework(
+                    enhanced_candidates,
+                    CompletionFrameworkKind::Skim,
+                )
             }
             // Add retry logic for lazy loading of inner commands
             Err(crate::completion::generator::GeneratorError::MissingCommand(cmd)) => {
@@ -123,10 +138,12 @@ impl IntegratedCompletionEngine {
 
                             // Retry generation with loaded command
                             let db_lock = self.command_completion.lock();
-                            let completion_generator = CompletionGenerator::with_environment_names(
-                                &db_lock,
-                                &environment_names,
-                            );
+                            let completion_generator =
+                                CompletionGenerator::with_runtime_environment_ticket(
+                                    &db_lock,
+                                    &environment_names,
+                                    system_command_ticket.clone(),
+                                );
                             match completion_generator.generate_candidates(parsed_command_line) {
                                 Ok(candidates) => {
                                     let enhanced_candidates = candidates
@@ -134,12 +151,10 @@ impl IntegratedCompletionEngine {
                                         .map(|c| self.convert_to_enhanced_candidate(c))
                                         .collect::<Vec<_>>();
 
-                                    return CommandCollection {
-                                        batch: CandidateBatch::inclusive_with_framework(
-                                            enhanced_candidates,
-                                            CompletionFrameworkKind::Skim,
-                                        ),
-                                    };
+                                    return CandidateBatch::inclusive_with_framework(
+                                        enhanced_candidates,
+                                        CompletionFrameworkKind::Skim,
+                                    );
                                 }
                                 Err(e) => {
                                     warn!(
@@ -160,7 +175,11 @@ impl IntegratedCompletionEngine {
 
                 // Fallback if loading failed or returned nothing
                 let db_lock = self.command_completion.lock();
-                let completion_generator = CompletionGenerator::new(&db_lock);
+                let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
+                    &db_lock,
+                    &environment_names,
+                    system_command_ticket.clone(),
+                );
                 if let Ok(candidates) = completion_generator
                     .generate_fallback_candidates(&parsed_command_line.current_token)
                 {
@@ -168,23 +187,17 @@ impl IntegratedCompletionEngine {
                         .into_iter()
                         .map(|c| self.convert_to_enhanced_candidate(c))
                         .collect();
-                    CommandCollection {
-                        batch: CandidateBatch::inclusive_with_framework(
-                            enhanced_candidates,
-                            CompletionFrameworkKind::Skim,
-                        ),
-                    }
+                    CandidateBatch::inclusive_with_framework(
+                        enhanced_candidates,
+                        CompletionFrameworkKind::Skim,
+                    )
                 } else {
-                    CommandCollection {
-                        batch: CandidateBatch::empty(),
-                    }
+                    CandidateBatch::empty()
                 }
             }
             Err(e) => {
                 warn!("Failed to generate JSON completion candidates: {}", e);
-                CommandCollection {
-                    batch: CandidateBatch::empty(),
-                }
+                CandidateBatch::empty()
             }
         }
     }

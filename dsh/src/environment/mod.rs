@@ -144,6 +144,8 @@ pub(crate) struct CompletionState {
     pub(crate) input_preferences: InputPreferences,
     pub(crate) command_cache: RwLock<HashMap<String, Option<String>>>,
     pub(crate) executable_names: Arc<RwLock<Vec<String>>>,
+    /// Monotonic logical-PATH activation counter for generation-scoped caches.
+    pub(crate) path_generation: u64,
 }
 
 pub struct Environment {
@@ -267,6 +269,7 @@ impl Environment {
                 input_preferences: InputPreferences::default(),
                 command_cache: RwLock::new(HashMap::new()),
                 executable_names: Arc::new(RwLock::new(Vec::new())),
+                path_generation: 0,
             },
             dir_stack: Vec::new(),
             cron_health: Arc::new(RwLock::new(dsh_types::cron::job::CronHealth::default())),
@@ -352,6 +355,7 @@ impl Environment {
                     input_preferences: parent.completion_state.input_preferences,
                     command_cache: RwLock::new(HashMap::new()),
                     executable_names: Arc::new(RwLock::new(Vec::new())),
+                    path_generation: 0,
                 },
             )
         };
@@ -495,7 +499,7 @@ pub fn collect_executables(paths: &[String]) -> Vec<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PathCacheSignature {
+pub(crate) struct PathCacheSignature {
     path: String,
     exists: bool,
     modified_secs: Option<u64>,
@@ -509,7 +513,7 @@ struct ExecutableNamesCache {
     names: Vec<String>,
 }
 
-fn executable_cache_signature(paths: &[String]) -> Vec<PathCacheSignature> {
+pub(crate) fn executable_cache_signature(paths: &[String]) -> Vec<PathCacheSignature> {
     paths
         .iter()
         .map(|path| {
@@ -552,9 +556,16 @@ pub fn load_cached_executables(paths: &[String]) -> Option<Vec<String>> {
 }
 
 pub fn save_cached_executables(paths: &[String], names: &[String]) -> Result<()> {
+    save_cached_executables_with_signature(names, &executable_cache_signature(paths))
+}
+
+pub(crate) fn save_cached_executables_with_signature(
+    names: &[String],
+    paths: &[PathCacheSignature],
+) -> Result<()> {
     let cache = ExecutableNamesCache {
         version: 1,
-        paths: executable_cache_signature(paths),
+        paths: paths.to_vec(),
         names: names.to_vec(),
     };
     let path = executable_cache_path()?;

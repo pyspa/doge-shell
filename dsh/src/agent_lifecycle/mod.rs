@@ -576,14 +576,20 @@ static ACTIVATION: OnceLock<()> = OnceLock::new();
 ///
 /// On success, publishes the nested-dsh owner marker two ways: as a real
 /// process environment variable (`unsafe { std::env::set_var }` - so any
-/// child spawned via a plain `Command::new`, such as the AI `execute` tool's
-/// `sh -c` or `ShellProxy::capture_command`, inherits it through ordinary OS
-/// env inheritance) *and* as the returned `(key, value)` pair, which the
-/// caller must additionally push through `Environment::set_and_export_shell_var`
-/// (so a child spawned through this shell's own external-command path,
-/// which builds each child's `envp` explicitly from its own snapshot in
-/// `dsh/src/process/process.rs` rather than the live process environment,
-/// sees it too). Neither alone reaches every spawning path this shell has.
+/// child spawned via a plain `Command::new` integration path inherits it
+/// through ordinary OS env inheritance) *and* as the returned `(key, value)`
+/// pair, which the caller must additionally push through
+/// `Environment::set_and_export_shell_var` (so a child spawned through this
+/// shell's own external-command path, which builds each child's `envp`
+/// explicitly from its own snapshot in `dsh/src/process/process.rs` rather
+/// than the live process environment, sees it too). Neither alone reaches
+/// every spawning path this shell has.
+///
+/// Process-global delivery remains a compatibility/integration boundary only:
+/// AI-adjacent subprocesses (`command |!`, `ShellProxy::capture_command`,
+/// interactive `execute`, persistent agent tasks) build their environments
+/// explicitly from logical shell state and never inherit this marker
+/// implicitly.
 pub fn activate(
     env: &crate::environment::Environment,
 ) -> (Arc<AgentLifecycleManager>, Option<(&'static str, String)>) {

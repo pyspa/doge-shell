@@ -479,15 +479,15 @@ impl ShellProxy for Shell {
     }
 
     fn capture_command(&mut self, _ctx: &Context, cmd: &str) -> Result<(i32, String, String)> {
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
 
         // We implement this synchronously to avoid 'Cannot start a runtime from within a runtime' panic.
         debug!("Capturing command: '{}'", cmd);
 
-        // Use sh -c to execute the command
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
+        // Ordinary interactive child: logical exported environment only,
+        // never the process-global environment.
+        let child_env = self.environment.read().child_process_env();
+        let output = crate::process::isolated_shell::command(cmd, &child_env)
             .stdin(Stdio::inherit())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

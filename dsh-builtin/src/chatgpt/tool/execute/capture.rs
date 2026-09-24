@@ -9,9 +9,10 @@
 //! when a grandchild holds the pipe open"; see `jobs.rs` for the one that
 //! survived.
 use super::*;
+use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
-/// Run `command` under `sh -c`.
+/// Run `command` under the fixed system shell.
 ///
 /// Direct `Command::new` execution meant no pipes, no redirection, no `&&` and
 /// no globbing, so `cargo test 2>&1 | tail -40` could not be expressed at all
@@ -20,12 +21,26 @@ use std::process::{Command, Stdio};
 /// has already put the whole line through the shell's own parser and safety
 /// guard.
 ///
+/// Ordinary interactive child: `child_env` is the shell's exported
+/// `child_process_env()` snapshot. The ambient environment is cleared first,
+/// so an unexported or logically unset variable never reappears from the
+/// process-global environment.
+///
 /// The single place an interactive `execute` turns an authorized line into a
 /// process, so the line that was judged and the line that runs cannot drift.
 /// stdio and the process group are left to `AgentJobs::start`.
-pub(super) fn shell_command(command: &str, cwd: Option<&Path>) -> Command {
-    let mut builder = Command::new("sh");
-    builder.arg("-c").arg(command).stdin(Stdio::null());
+pub(super) fn shell_command(
+    command: &str,
+    cwd: Option<&Path>,
+    child_env: &HashMap<String, String>,
+) -> Command {
+    let mut builder = Command::new("/bin/sh");
+    builder
+        .arg("-c")
+        .arg(command)
+        .stdin(Stdio::null())
+        .env_clear()
+        .envs(child_env);
 
     if let Some(cwd) = cwd {
         builder.current_dir(cwd);

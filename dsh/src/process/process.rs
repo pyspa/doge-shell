@@ -151,6 +151,19 @@ impl Process {
         self
     }
 
+    /// The effective command-scoped `PATH` for this command's lookup, if any.
+    ///
+    /// `PATH=/a PATH=/b cmd` resolves (and runs with) `/b`: the last
+    /// assignment wins, matching `prepare_execution`'s child-environment
+    /// semantics. Slash-containing names still bypass it as explicit
+    /// pathnames at the resolver.
+    pub(crate) fn path_override(&self) -> Option<&str> {
+        self.env_overrides
+            .iter()
+            .rev()
+            .find_map(|(key, value)| (key == "PATH").then_some(value.as_str()))
+    }
+
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
         if let Some(ppid) = self.pid
             && ppid == pid

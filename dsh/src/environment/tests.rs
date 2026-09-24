@@ -160,6 +160,26 @@ fn env_with_paths(paths: Vec<String>) -> Arc<RwLock<Environment>> {
     env
 }
 
+/// Restores the process cwd on drop, so a mid-test panic cannot leak a
+/// tempdir cwd into concurrently running tests.
+struct CwdGuard {
+    previous: std::path::PathBuf,
+}
+
+impl CwdGuard {
+    fn enter(dir: &Path) -> Self {
+        let previous = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir).unwrap();
+        Self { previous }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous);
+    }
+}
+
 #[test]
 fn lookup_skips_non_executable_first_candidate() {
     init();
@@ -246,8 +266,7 @@ fn lookup_treats_every_slash_name_as_explicit_path() {
 
     // `sub/foo` resolves literally even though PATH has nothing useful.
     let env = env_with_paths(vec!["/definitely/not/a/real/path".to_string()]);
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CwdGuard::enter(work.path());
     assert_eq!(
         env.read().lookup("sub/probe"),
         Some("sub/probe".to_string())
@@ -262,7 +281,6 @@ fn lookup_treats_every_slash_name_as_explicit_path() {
     assert!(parent_probe.exists());
     // A nested slash name is explicit too.
     assert_eq!(env.read().lookup("a/b/foo"), None);
-    std::env::set_current_dir(&previous).unwrap();
 }
 
 #[test]
@@ -290,11 +308,9 @@ fn relative_path_entries_disable_persistent_command_cache() {
     std::fs::create_dir(&bin).unwrap();
     write_mode_file(&bin, "foo", 0o755);
     let env = env_with_paths(vec!["bin".to_string()]);
-    let previous = std::env::current_dir().unwrap();
-    std::env::set_current_dir(work.path()).unwrap();
+    let _cwd = CwdGuard::enter(work.path());
     assert_eq!(env.read().lookup("foo"), Some("bin/foo".to_string()));
     assert!(env.read().completion_state.command_cache.read().is_empty());
-    std::env::set_current_dir(&previous).unwrap();
 }
 
 #[test]
@@ -363,8 +379,28 @@ fn scoped_path_override_does_not_touch_persistent_cache() {
         env.read().completion_state.command_cache.read().get("foo"),
         Some(&in_a.display().to_string())
     );
-    // Last duplicate scoped assignment wins.
-    assert_eq!(env.read().lookup("foo"), Some(in_a.display().to_string()));
+    // Duplicate scoped assignments keep last-wins, matching the child
+    // environment the command runs with: resolve through the same
+    // `Process::path_override` selection `resolve_program` uses.
+    let dir_b_value = dir_b.path().display().to_string();
+    let scoped = crate::process::Process::new("foo".to_string(), vec!["foo".to_string()])
+        .with_execution_metadata(
+            vec![],
+            vec![
+                ("PATH".to_string(), dir_a.path().display().to_string()),
+                ("PATH".to_string(), dir_b_value.clone()),
+            ],
+        );
+    assert_eq!(scoped.path_override(), Some(dir_b_value.as_str()));
+    assert_eq!(
+        env.read()
+            .lookup_with_path_override("foo", scoped.path_override()),
+        Some(in_b.display().to_string())
+    );
+    assert_eq!(
+        env.read().completion_state.command_cache.read().get("foo"),
+        Some(&in_a.display().to_string())
+    );
 }
 
 #[test]

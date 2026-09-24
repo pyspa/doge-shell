@@ -270,11 +270,7 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
     let name = process.cmd.clone();
     // Command-scoped `PATH=...` selects the lookup PATH (last wins, matching
     // `prepare_execution`); slash names still bypass it as explicit pathnames.
-    let path_override = process
-        .env_overrides
-        .iter()
-        .rev()
-        .find_map(|(key, value)| (key == "PATH").then_some(value.as_str()));
+    let path_override = process.path_override();
     if let Some(path) = shell
         .environment
         .read()

@@ -268,7 +268,18 @@ pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
 /// safely take a lock after `fork`.
 fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> {
     let name = process.cmd.clone();
-    if let Some(path) = shell.environment.read().lookup(&name) {
+    // Command-scoped `PATH=...` selects the lookup PATH (last wins, matching
+    // `prepare_execution`); slash names still bypass it as explicit pathnames.
+    let path_override = process
+        .env_overrides
+        .iter()
+        .rev()
+        .find_map(|(key, value)| (key == "PATH").then_some(value.as_str()));
+    if let Some(path) = shell
+        .environment
+        .read()
+        .lookup_with_path_override(&name, path_override)
+    {
         process.cmd = path;
         return None;
     }

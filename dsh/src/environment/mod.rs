@@ -142,7 +142,7 @@ pub(crate) struct SessionOutputState {
 
 pub(crate) struct CompletionState {
     pub(crate) input_preferences: InputPreferences,
-    pub(crate) command_cache: RwLock<HashMap<String, Option<String>>>,
+    pub(crate) command_cache: RwLock<HashMap<String, String>>,
     pub(crate) executable_names: Arc<RwLock<Vec<String>>>,
     /// Monotonic logical-PATH activation counter for generation-scoped caches.
     pub(crate) path_generation: u64,

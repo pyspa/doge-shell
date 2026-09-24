@@ -55,7 +55,7 @@ struct EnvironmentSnapshot {
     execute_allowlist: Vec<String>,
     input_preferences: InputPreferences,
     safety_level: crate::safety::SafetyLevel,
-    command_cache: HashMap<String, Option<String>>,
+    command_cache: HashMap<String, String>,
     executable_names: Vec<String>,
     z_exclude: Vec<String>,
     keybindings: crate::repl::keybind::KeyBindings,

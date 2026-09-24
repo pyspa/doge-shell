@@ -6,51 +6,94 @@ use std::path::Path;
 use tracing::debug;
 
 #[inline]
-fn is_absolute_command_path(cmd: &str) -> bool {
-    cmd.starts_with('/')
+fn command_contains_slash(cmd: &str) -> bool {
+    cmd.contains('/')
 }
 
-#[inline]
-fn is_relative_command_path(cmd: &str) -> bool {
-    cmd.starts_with("./")
+/// An explicit pathname (`/foo`, `./foo`, `../foo`, `dir/foo`): never a PATH
+/// search. The executable bit is deliberately not required here so `execve`
+/// stays authoritative for permission diagnostics.
+fn explicit_command_file(cmd: &str) -> Option<String> {
+    let path = Path::new(cmd);
+    (path.exists() && path.is_file()).then(|| cmd.to_string())
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+/// A PATH resolution is cacheable only when every entry is absolute.
+/// Any relative/empty entry makes the result cwd-dependent.
+pub(crate) fn path_lookup_is_cacheable(paths: &[String]) -> bool {
+    paths.iter().all(|entry| Path::new(entry).is_absolute())
+}
+
+fn lookup_in_paths(paths: &[String], cmd: &str) -> Option<String> {
+    paths
+        .iter()
+        .map(|dir| Path::new(dir).join(cmd))
+        .find(|candidate| is_executable_file(candidate))
+        .and_then(|path| path.to_str().map(str::to_string))
 }
 
 impl Environment {
     /// Lookup a command in PATH with caching.
     pub fn lookup(&self, cmd: &str) -> Option<String> {
-        if is_absolute_command_path(cmd) {
-            let cmd_path = Path::new(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return Some(cmd.to_string());
-            } else {
-                return None;
-            }
-        }
-        if is_relative_command_path(cmd) {
-            let cmd_path = Path::new(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return Some(cmd.to_string());
-            } else {
-                return None;
-            }
+        if command_contains_slash(cmd) {
+            return explicit_command_file(cmd);
         }
 
-        // Check cache first for PATH lookups
-        {
-            if let Some(cached) = self.completion_state.command_cache.read().get(cmd) {
-                return cached.clone();
+        let cacheable = path_lookup_is_cacheable(&self.variable_state.paths);
+
+        if cacheable {
+            let cached = self.completion_state.command_cache.read().get(cmd).cloned();
+            if let Some(cached) = cached {
+                if is_executable_file(Path::new(&cached)) {
+                    return Some(cached);
+                }
+                self.completion_state.command_cache.write().remove(cmd);
             }
         }
 
-        // Cache miss: search PATH directories
-        let result = self.lookup_path_uncached(cmd);
+        let resolved = lookup_in_paths(&self.variable_state.paths, cmd);
 
-        self.completion_state
-            .command_cache
-            .write()
-            .insert(cmd.to_string(), result.clone());
+        if cacheable && let Some(path) = &resolved {
+            self.completion_state
+                .command_cache
+                .write()
+                .insert(cmd.to_string(), path.clone());
+        }
 
-        result
+        resolved
+    }
+
+    /// Lookup with a command-scoped `PATH=...` override.
+    ///
+    /// Slash-containing names bypass the override as explicit pathnames.
+    /// An override search is always fresh: the persistent command cache is
+    /// neither read nor populated.
+    pub(crate) fn lookup_with_path_override(
+        &self,
+        cmd: &str,
+        path_override: Option<&str>,
+    ) -> Option<String> {
+        if command_contains_slash(cmd) {
+            return explicit_command_file(cmd);
+        }
+        if let Some(override_value) = path_override {
+            let paths: Vec<String> = override_value.split(':').map(|s| s.to_string()).collect();
+            return lookup_in_paths(&paths, cmd);
+        }
+        self.lookup(cmd)
     }
 
     /// Lookup command with cache update (mutable version for cache population).
@@ -60,32 +103,13 @@ impl Environment {
     }
 
     fn lookup_path_uncached(&self, cmd: &str) -> Option<String> {
-        for path in &self.variable_state.paths {
-            let cmd_path = Path::new(path).join(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return cmd_path.to_str().map(|s| s.to_string());
-            }
-        }
-        None
+        lookup_in_paths(&self.variable_state.paths, cmd)
     }
 
     /// Search for a command, including fuzzy matching.
     pub fn search(&self, cmd: &str) -> Option<String> {
-        if is_absolute_command_path(cmd) {
-            let cmd_path = Path::new(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return Some(cmd.to_string());
-            } else {
-                return None;
-            }
-        }
-        if is_relative_command_path(cmd) {
-            let cmd_path = Path::new(cmd);
-            if cmd_path.exists() && cmd_path.is_file() {
-                return Some(cmd.to_string());
-            } else {
-                return None;
-            }
+        if command_contains_slash(cmd) {
+            return explicit_command_file(cmd);
         }
         if self.lookup_path_uncached(cmd).is_some() {
             return Some(cmd.to_string());

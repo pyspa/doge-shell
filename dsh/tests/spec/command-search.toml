@@ -1,0 +1,34 @@
+version = 1
+
+# External command search: slash bypass, executable-only PATH candidates,
+# and command-scoped PATH overrides.
+
+[[case]]
+id = "command-search.slash-bypasses-path"
+class = "posix"
+mode = "command"
+script = "mkdir -p sub; printf '#!/bin/sh\\necho PROBE-RUNS\\n' > sub/probe; chmod +x sub/probe; PATH=/definitely/not/a/real/path; sub/probe"
+
+[case.expect]
+status = 0
+stdout_contains = ["PROBE-RUNS"]
+
+[[case]]
+id = "command-search.skips-non-executable-candidate"
+class = "posix"
+mode = "command"
+script = "mkdir -p pa pb; printf '#!/bin/sh\\necho MARKER-A\\n' > pa/foo; chmod 644 pa/foo; printf '#!/bin/sh\\necho MARKER-B\\n' > pb/foo; chmod +x pb/foo; PATH=pa:pb:$PATH; foo"
+
+[case.expect]
+status = 0
+stdout_contains = ["MARKER-B"]
+
+[[case]]
+id = "command-search.command-scoped-path"
+class = "posix"
+mode = "command"
+script = "mkdir -p pa pb; printf '#!/bin/sh\\necho MARKER-A\\n' > pa/foo; chmod +x pa/foo; printf '#!/bin/sh\\necho MARKER-B\\n' > pb/foo; chmod +x pb/foo; PATH=pa:$PATH; PATH=pb foo; foo"
+
+[case.expect]
+status = 0
+stdout_contains = ["MARKER-B", "MARKER-A"]

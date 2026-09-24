@@ -8,6 +8,7 @@
 //! turns it into a lookup.
 
 use crate::ShellProxy;
+use crate::task::TaskDiscoveryRuntime;
 use crate::{project_context, task};
 use serde_json::{Value, json};
 
@@ -65,13 +66,20 @@ pub(crate) fn run(_arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String
         }
     }
 
-    out.push_str(&render_tasks(&current_dir));
+    out.push_str(&render_tasks(&current_dir, &snapshot_runtime(proxy)));
     out.push_str(&render_aliases(proxy));
     Ok(out)
 }
 
-fn render_tasks(current_dir: &std::path::Path) -> String {
-    match task::list_tasks_in_dir(current_dir) {
+fn snapshot_runtime(proxy: &dyn ShellProxy) -> TaskDiscoveryRuntime {
+    TaskDiscoveryRuntime::new(
+        proxy.command_search_paths(),
+        proxy.child_process_environment(),
+    )
+}
+
+fn render_tasks(current_dir: &std::path::Path, runtime: &TaskDiscoveryRuntime) -> String {
+    match task::list_tasks_in_dir(current_dir, runtime) {
         Ok(tasks) if tasks.is_empty() => {
             "\nTasks: none detected (no Makefile, package.json scripts, justfile, ...)\n"
                 .to_string()
@@ -178,5 +186,39 @@ mod tests {
         let gs = rendered.find("- gs = ").unwrap();
 
         assert!(ga < gs, "{rendered}");
+    }
+
+    /// The agent sees the same catalog as the shell: `shell_context` tasks
+    /// come from the proxy's logical PATH and exported environment, not the
+    /// process-global environment.
+    #[test]
+    fn shell_context_lists_tasks_from_proxy_runtime() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("mise.toml"),
+            "[tasks.static_one]\nrun = 'echo static'\n",
+        )
+        .unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let mise = bin.join("mise");
+        std::fs::write(&mise, "#!/bin/sh\nprintf '[{\"name\":\"ctx-task\"}]'\n").unwrap();
+        let mut permissions = std::fs::metadata(&mise).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&mise, permissions).unwrap();
+
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            command_search_paths: vec![bin],
+            ..TestShellProxy::default()
+        };
+
+        let rendered = run("{}", &mut proxy).unwrap();
+        assert!(
+            rendered.contains("ctx-task"),
+            "shell_context must surface provider tasks from proxy runtime: {rendered}"
+        );
     }
 }

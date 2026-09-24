@@ -7,6 +7,7 @@ mod builtin;
 mod external;
 
 mod agent_policy;
+mod process_environment;
 mod shell_options;
 mod shell_proxy;
 #[cfg(test)]

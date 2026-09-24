@@ -289,7 +289,23 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
 
     let task_suggestions = std::env::current_dir()
         .ok()
-        .and_then(|cwd| dsh_builtin::task::list_tasks_in_dir(&cwd).ok())
+        .and_then(|cwd| {
+            // Same shell runtime the command runs with: logical PATH plus
+            // exported child environment. The lock is released before any
+            // task filesystem scan or provider subprocess runs.
+            let runtime = {
+                let env = shell.environment.read();
+                dsh_builtin::task::TaskDiscoveryRuntime::new(
+                    env.variable_state
+                        .paths
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect(),
+                    env.child_process_env(),
+                )
+            };
+            dsh_builtin::task::list_tasks_in_dir(&cwd, &runtime).ok()
+        })
         .map(|tasks| {
             let task_names: Vec<String> = tasks.into_iter().map(|task| task.name).collect();
             crate::command_suggestion::find_similar_candidates(&name, &task_names)

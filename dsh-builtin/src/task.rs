@@ -7,23 +7,23 @@ use serde::Serialize;
 use skim::prelude::*;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::fs;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 use tabled::{Table, Tabled};
 use wait_timeout::ChildExt;
 
 mod detect;
 mod providers;
+pub mod runtime;
 use detect::detect_tasks_in_dir;
 #[cfg(test)]
 use detect::parse_gradle_task_names;
 use providers::discover_provider_tasks;
 #[cfg(test)]
 use providers::{parse_mise_tasks_json, parse_turbo_tasks_json};
+pub use runtime::{TaskDiscoveryRuntime, TaskDiscoverySignature, discovery_signature};
 
 pub fn description() -> &'static str {
     "Run project-specific tasks (npm, cargo, gradle, make, deno, just, etc.)"
@@ -481,28 +481,38 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
+    // One snapshot per invocation: cwd, logical PATH, and exported child
+    // environment. The lock is released here; later scans and subprocesses
+    // use only the owned snapshot.
     let current_dir = proxy.get_current_dir()?;
-    let tasks = list_tasks_in_dir(&current_dir)?;
+    let runtime = TaskDiscoveryRuntime::new(
+        proxy.command_search_paths(),
+        proxy.child_process_environment(),
+    );
+    let tasks = list_tasks_in_dir(&current_dir, &runtime)?;
     Ok(tasks.into_iter().map(Task::from).collect())
 }
 
-pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
+pub fn list_tasks_in_dir(
+    current_dir: &Path,
+    runtime: &TaskDiscoveryRuntime,
+) -> Result<Vec<TaskInfo>> {
     let project = project_context::resolve_project_context(current_dir);
-    let key = task_cache_key(&project.project_root);
+    let signature = discovery_signature(&project.project_root, None, runtime);
     if let Some(tasks) = TASK_CACHE
         .lock()
         .expect("task cache poisoned")
         .get(&project.project_root)
-        .filter(|entry| entry.key == key)
+        .filter(|entry| entry.signature == signature)
         .map(|entry| entry.tasks.clone())
     {
         return Ok(tasks);
     }
-    let tasks = detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, None)?.tasks;
+    let tasks = detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, None, runtime)?.tasks;
     TASK_CACHE.lock().expect("task cache poisoned").insert(
         project.project_root,
         TaskCacheEntry {
-            key,
+            signature,
             tasks: tasks.clone(),
         },
     );
@@ -512,12 +522,19 @@ pub fn list_tasks_in_dir(current_dir: &Path) -> Result<Vec<TaskInfo>> {
 pub fn list_tasks_in_dir_for_sources(
     current_dir: &Path,
     sources: &[&str],
+    runtime: &TaskDiscoveryRuntime,
 ) -> Result<Vec<TaskInfo>> {
-    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, Some(sources))?.tasks)
+    Ok(detect_tasks_in_dir(current_dir, TaskDetectionMode::Full, Some(sources), runtime)?.tasks)
 }
 
 pub fn summarize_tasks_in_dir_metadata_only(current_dir: &Path) -> Result<TaskDiscoverySummary> {
-    detect_tasks_in_dir(current_dir, TaskDetectionMode::MetadataOnly, None)
+    // No external commands by contract: an empty runtime resolves no
+    // provider executables, so only static file parsers contribute. This is
+    // deliberately narrower than full discovery, where installed mise/nx/
+    // turbo CLIs are preferred: passive diagnostics (doctor) must not
+    // execute project code, the same reason gradle/make/just defer above.
+    let runtime = TaskDiscoveryRuntime::new(Vec::new(), std::collections::HashMap::new());
+    detect_tasks_in_dir(current_dir, TaskDetectionMode::MetadataOnly, None, &runtime)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,95 +545,19 @@ enum TaskDetectionMode {
 
 #[derive(Clone)]
 struct TaskCacheEntry {
-    key: u64,
+    signature: TaskDiscoverySignature,
     tasks: Vec<TaskInfo>,
 }
 
 static TASK_CACHE: LazyLock<Mutex<std::collections::HashMap<std::path::PathBuf, TaskCacheEntry>>> =
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
-fn task_cache_key(root: &Path) -> u64 {
-    const MARKERS: &[&str] = &[
-        "mise.toml",
-        ".mise.toml",
-        "package.json",
-        "Cargo.toml",
-        "Makefile",
-        "makefile",
-        "Justfile",
-        "justfile",
-        "Taskfile.yml",
-        "Taskfile.yaml",
-        "turbo.json",
-        "nx.json",
-        "workspace.json",
-        "project.json",
-        "deno.json",
-        "deno.jsonc",
-    ];
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for name in MARKERS {
-        name.hash(&mut hasher);
-        hash_marker_metadata(&root.join(name), &mut hasher);
-    }
-    hash_descendant_task_markers(root, root, 0, 4, &mut hasher);
-    hasher.finish()
-}
-
-fn hash_marker_metadata(path: &Path, hasher: &mut impl Hasher) {
-    path.hash(hasher);
-    match fs::metadata(path) {
-        Ok(metadata) => {
-            metadata.len().hash(hasher);
-            metadata
-                .modified()
-                .ok()
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos())
-                .hash(hasher);
-        }
-        Err(_) => false.hash(hasher),
-    }
-}
-
-fn hash_descendant_task_markers(
-    root: &Path,
-    directory: &Path,
-    depth: usize,
-    max_depth: usize,
-    hasher: &mut impl Hasher,
-) {
-    if depth >= max_depth {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let name = entry.file_name();
-            if matches!(name.to_str(), Some(".git" | "node_modules" | "target")) {
-                continue;
-            }
-            hash_descendant_task_markers(root, &path, depth + 1, max_depth, hasher);
-        } else if depth > 0
-            && matches!(
-                entry.file_name().to_str(),
-                Some("project.json" | "package.json" | "mise.toml" | ".mise.toml")
-            )
-        {
-            path.strip_prefix(root).unwrap_or(&path).hash(hasher);
-            hash_marker_metadata(&path, hasher);
-        }
-    }
-}
-
 fn command_output_with_timeout(
     executable: &Path,
     args: &[&str],
     cwd: &Path,
     timeout: Duration,
+    child_env: &std::collections::BTreeMap<String, String>,
 ) -> Result<std::process::Output> {
     let executable = executable.to_path_buf();
     let args = args
@@ -624,9 +565,16 @@ fn command_output_with_timeout(
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
     let cwd = cwd.to_path_buf();
+    let child_env = child_env.clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let _ = sender.send(command_output_worker(&executable, &args, &cwd, timeout));
+        let _ = sender.send(command_output_worker(
+            &executable,
+            &args,
+            &cwd,
+            timeout,
+            &child_env,
+        ));
     });
     receiver
         .recv_timeout(timeout + Duration::from_millis(100))
@@ -638,8 +586,14 @@ fn command_output_worker(
     args: &[String],
     cwd: &Path,
     timeout: Duration,
+    child_env: &std::collections::BTreeMap<String, String>,
 ) -> Result<std::process::Output> {
+    // Shell child environment only: `env_clear` keeps a logically unset
+    // process-startup variable from being rediscovered, and an exported
+    // shell variable visible to the provider.
     let mut child = Command::new(executable)
+        .env_clear()
+        .envs(child_env.iter())
         .current_dir(cwd)
         .args(args)
         .stdin(Stdio::null())

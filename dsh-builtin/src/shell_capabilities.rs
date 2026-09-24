@@ -471,6 +471,13 @@ pub trait ReadCapability {
 /// `TestShellProxy` implement it explicitly.
 pub trait ProcessEnvironmentCapability {
     fn child_process_environment(&self) -> HashMap<String, String>;
+    /// Logical command search paths (`Environment.variable_state.paths`).
+    ///
+    /// The only authority for runtime executable lookup (task providers,
+    /// command-not-found suggestions). Never falls back to `std::env::PATH`,
+    /// so a test can pin PATH A vs PATH B without touching process-global
+    /// state.
+    fn command_search_paths(&self) -> Vec<PathBuf>;
 }
 
 /// What the shell's safety policy says about a command the agent wants to run.

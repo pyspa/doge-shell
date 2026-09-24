@@ -1,17 +1,20 @@
 //! The main per-ecosystem task scan (`detect_tasks_in_dir`): package.json (npm/pnpm/yarn/bun), Cargo.toml, Gradle, Makefile, deno.json(c), and Justfile, plus the small parsing/filtering helpers
 //! it alone uses.
+use super::runtime::{TaskDiscoveryRuntime, is_executable_file};
 use super::*;
+use std::fs;
 
 pub(super) fn detect_tasks_in_dir(
     current_dir: &Path,
     mode: TaskDetectionMode,
     source_filter: Option<&[&str]>,
+    runtime: &TaskDiscoveryRuntime,
 ) -> Result<TaskDiscoverySummary> {
     let project = project_context::resolve_project_context(current_dir);
     let current_dir = project.project_root.as_path();
     let cwd = current_dir.display().to_string();
     let project_tasks = if any_source_enabled(source_filter, &["mise", "taskfile", "turbo", "nx"]) {
-        discover_provider_tasks(current_dir)?
+        discover_provider_tasks(current_dir, runtime)?
             .into_iter()
             .filter(|task| source_enabled(source_filter, &task.source))
             .map(|task| TaskInfo::new(task.source, task.name, task.command, cwd.clone()))
@@ -65,17 +68,28 @@ pub(super) fn detect_tasks_in_dir(
     if source_enabled(source_filter, "gradle") && has_gradle_project(current_dir) {
         match mode {
             TaskDetectionMode::Full => {
-                let command_name = if current_dir.join("gradlew").is_file() {
-                    "./gradlew"
-                } else {
-                    "gradle"
-                };
-                if let Ok(output) = command_output_with_timeout(
-                    Path::new(command_name),
-                    &["-q", "tasks", "--all"],
-                    current_dir,
-                    Duration::from_millis(1500),
-                ) {
+                // One decision drives both execution and display: an
+                // executable wrapper runs as `./gradlew`, otherwise the
+                // global `gradle` from the logical PATH runs as `gradle`.
+                // A non-executable `gradlew` alone yields no tasks rather
+                // than tasks with an unrunnable command prefix.
+                let wrapper = current_dir.join("gradlew");
+                let (executable, command_name): (Option<PathBuf>, &str) =
+                    if is_executable_file(&wrapper) {
+                        // Absolute wrapper path; the displayed command stays `./gradlew`.
+                        (Some(wrapper), "./gradlew")
+                    } else {
+                        (runtime.resolve_program("gradle"), "gradle")
+                    };
+                if let Some(executable) = executable
+                    && let Ok(output) = command_output_with_timeout(
+                        &executable,
+                        &["-q", "tasks", "--all"],
+                        current_dir,
+                        Duration::from_millis(1500),
+                        runtime.child_env(),
+                    )
+                {
                     let content = String::from_utf8_lossy(&output.stdout);
                     for name in parse_gradle_task_names(&content) {
                         tasks.push(TaskInfo::new(
@@ -99,12 +113,16 @@ pub(super) fn detect_tasks_in_dir(
             TaskDetectionMode::Full => {
                 // Use make -pRrq : to list targets. This can evaluate Makefile constructs,
                 // so passive diagnostics must use MetadataOnly mode instead.
-                if let Ok(output) = command_output_with_timeout(
-                    Path::new("make"),
-                    &["-pRrq", ":"],
-                    current_dir,
-                    Duration::from_millis(1500),
-                ) {
+                // Resolved through the logical shell PATH, never OS PATH lookup.
+                if let Some(executable) = runtime.resolve_program("make")
+                    && let Ok(output) = command_output_with_timeout(
+                        &executable,
+                        &["-pRrq", ":"],
+                        current_dir,
+                        Duration::from_millis(1500),
+                        runtime.child_env(),
+                    )
+                {
                     let content = String::from_utf8_lossy(&output.stdout);
                     for line in content.lines() {
                         if let Some(target) = line.strip_suffix(':')
@@ -165,12 +183,15 @@ pub(super) fn detect_tasks_in_dir(
             TaskDetectionMode::Full => {
                 // Try `just --summary`. Keep this out of passive diagnostics because
                 // justfiles may invoke shell during evaluation.
-                if let Ok(output) = command_output_with_timeout(
-                    Path::new("just"),
-                    &["--summary"],
-                    current_dir,
-                    Duration::from_millis(1500),
-                ) {
+                if let Some(executable) = runtime.resolve_program("just")
+                    && let Ok(output) = command_output_with_timeout(
+                        &executable,
+                        &["--summary"],
+                        current_dir,
+                        Duration::from_millis(1500),
+                        runtime.child_env(),
+                    )
+                {
                     let text = String::from_utf8_lossy(&output.stdout);
                     for name in text.split_whitespace() {
                         tasks.push(TaskInfo::new(

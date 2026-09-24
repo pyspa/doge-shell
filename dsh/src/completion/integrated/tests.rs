@@ -2873,7 +2873,12 @@ async fn nx_run_completion_reads_workspace_and_descendant_projects() {
         r#"{ "name": "api", "targets": { "lint": {} } }"#,
     )
     .unwrap();
-    let tasks = dsh_builtin::task::list_tasks_in_dir_for_sources(dir.path(), &["nx"]).unwrap();
+    let tasks = dsh_builtin::task::list_tasks_in_dir_for_sources(
+        dir.path(),
+        &["nx"],
+        &dsh_builtin::task::TaskDiscoveryRuntime::new(Vec::new(), std::collections::HashMap::new()),
+    )
+    .unwrap();
     assert!(
         tasks.iter().any(|task| task.command == "nx run web:build"),
         "expected Nx task detection to include web:build: {tasks:?}"

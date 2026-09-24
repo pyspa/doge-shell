@@ -92,16 +92,38 @@ impl SandboxRuntimeSnapshot {
     }
 }
 
-/// Resolve `name` under `search_paths` (absolute entries only), without any
-/// process-global fallback. Single lookup shared by `find_runtime` so the
-/// pinned `srt` validation below cannot be bypassed through a second search
-/// path.
+/// Resolve an executable `name` under absolute logical search paths,
+/// without any process-global fallback. Single lookup shared by
+/// `find_runtime` so the pinned `srt` validation below cannot be bypassed
+/// through a second search path.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+
+    if !metadata.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
 fn resolve_in_search_paths(search_paths: &[PathBuf], name: &str) -> Option<PathBuf> {
     search_paths
         .iter()
         .filter(|p| p.is_absolute())
         .map(|p| p.join(name))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
 }
 
 impl std::fmt::Debug for SandboxRuntimeSnapshot {
@@ -443,7 +465,7 @@ mod tests {
         assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/bin/sh"));
     }
 
-    fn write_fake_srt(root: &Path) -> PathBuf {
+    fn write_fake_srt_with_mode(root: &Path, mode: u32) -> PathBuf {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let srt = bin.join("srt");
@@ -452,8 +474,12 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mut perms = std::fs::metadata(&srt).unwrap().permissions();
-            perms.set_mode(0o755);
+            perms.set_mode(mode);
             std::fs::set_permissions(&srt, perms).unwrap();
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = mode;
         }
         std::fs::write(
             root.join("package.json"),
@@ -462,6 +488,10 @@ mod tests {
         )
         .unwrap();
         bin
+    }
+
+    fn write_fake_srt(root: &Path) -> PathBuf {
+        write_fake_srt_with_mode(root, 0o755)
     }
 
     #[test]
@@ -489,5 +519,52 @@ mod tests {
         let empty: Vec<PathBuf> = Vec::new();
         let err = find_runtime(&empty).expect_err("logical PATH has no srt");
         assert!(err.to_string().contains("srt missing"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn find_runtime_skips_non_executable_candidate() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let first_bin = write_fake_srt_with_mode(first.path(), 0o644);
+        let second_bin = write_fake_srt(second.path());
+        let found = find_runtime(&[first_bin, second_bin.clone()]).unwrap();
+        assert_eq!(found, second_bin.join("srt").canonicalize().unwrap());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn find_runtime_rejects_non_executable_candidate() {
+        let logical = tempfile::tempdir().unwrap();
+        let logical_bin = write_fake_srt_with_mode(logical.path(), 0o644);
+        let err = find_runtime(std::slice::from_ref(&logical_bin))
+            .expect_err("non-executable srt must not resolve");
+        assert!(err.to_string().contains("srt missing"), "{err}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn find_runtime_accepts_symlink_to_executable() {
+        let package = tempfile::tempdir().unwrap();
+        let root = package.path().canonicalize().unwrap().to_path_buf();
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let real = bin.join("real-srt");
+        std::fs::write(&real, "#!/bin/sh\necho fake-srt\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&real).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&real, perms).unwrap();
+        }
+        std::os::unix::fs::symlink(&real, bin.join("srt")).unwrap();
+        std::fs::write(
+            root.join("package.json"),
+            serde_json::json!({"name": "@anthropic-ai/sandbox-runtime", "version": SRT_VERSION})
+                .to_string(),
+        )
+        .unwrap();
+        let found = find_runtime(std::slice::from_ref(&bin)).unwrap();
+        assert_eq!(found, real.canonicalize().unwrap());
     }
 }

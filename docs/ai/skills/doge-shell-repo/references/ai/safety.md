@@ -18,6 +18,10 @@
   `execute` / `terminal`）は既存コマンド分類を通る。
   `readOnlyHint: false` / `destructiveHint: true` は Trusted でも常にゲートを
   厳しくする。経路 A と B で同じ判定を使う。片方だけ無条件 confirm にしない。
+- MCP コマンド実行ツールの運ぶコマンド文字列そのものへの完全一致承認は、
+  レベル・trust によらずゲートを開ける。operator 自身の verbatim 承認であり
+  server-controlled な分類ではないためで、trust 導入前の動作（Strict での
+  素コマンド承認を含む）を維持する。
 - **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するので、
   guard がその一部しか読めないなら approve ではなく refuse する。
   - コマンド置換（`` ` ``, `$(...)`, `<(...)`, `(...)`）— `shell::parse::parse_command` が

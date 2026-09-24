@@ -64,9 +64,29 @@ impl SafetyGuard {
             return SafetyResult::Allowed;
         }
 
+        // The exact command string behind a command-execution tool, when the
+        // tool is one and carries a non-empty one. Extracted once: the
+        // allowlist probe below and the classifier both read it.
+        let mcp_command: Option<String> = if Self::is_mcp_command_execution_tool(tool_name) {
+            Self::extract_mcp_command(args_json).filter(|cmd| !cmd.trim().is_empty())
+        } else {
+            None
+        };
+
+        // An exact operator approval of that command string opens the gate at
+        // any level and trust. This is the operator's own verbatim string, not
+        // server-controlled classification, so the trust boundary does not
+        // apply to it - the same as before trust existed (in particular, this
+        // keeps bare-command approvals working in Strict mode as they did).
+        if let Some(cmd_str) = &mcp_command
+            && allowlist.contains(cmd_str)
+        {
+            return SafetyResult::Allowed;
+        }
+
         if matches!(level, SafetyLevel::Strict) {
             return SafetyResult::Confirm(format!(
-                "MCP tool '{function_name}' execution requested in Strict mode. Proceed?"
+                "MCP tool '{function_name}' execution requested in Strict mode."
             ));
         }
 
@@ -101,23 +121,21 @@ impl SafetyGuard {
         // quote or a `;`/`|` that was legitimately part of one argument's
         // value into a fabricated command boundary.
         if Self::is_mcp_command_execution_tool(tool_name) {
-            let Some(cmd_str) = Self::extract_mcp_command(args_json) else {
+            let Some(cmd_str) = mcp_command else {
                 return SafetyResult::Confirm(format!(
                     "MCP tool '{function_name}' from server '{server_label}' wants to execute a command, but arguments could not be validated safely."
                 ));
             };
-            if cmd_str.trim().is_empty() {
-                return SafetyResult::Confirm(format!(
-                    "MCP tool '{function_name}' from server '{server_label}' wants to execute a command, but arguments could not be validated safely."
-                ));
-            }
-            if allowlist.contains(&cmd_str) {
-                return SafetyResult::Allowed;
-            }
             return match self.classify_command_line(&cmd_str) {
-                Some(reason) => SafetyResult::Confirm(format!(
-                    "MCP tool '{function_name}' from server '{server_label}' wants to execute command '{cmd_str}': {reason}"
-                )),
+                Some(reason) => {
+                    // The classifier reasons end in "Proceed?", and the
+                    // confirmation UI appends its own prompt - keep only one.
+                    let reason = reason.strip_suffix("Proceed?").unwrap_or(&reason);
+                    let reason = reason.trim_end();
+                    SafetyResult::Confirm(format!(
+                        "MCP tool '{function_name}' from server '{server_label}' wants to execute command '{cmd_str}': {reason}"
+                    ))
+                }
                 None => SafetyResult::Allowed,
             };
         }

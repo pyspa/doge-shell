@@ -3,11 +3,30 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum McpServerTrust {
+    #[default]
+    Untrusted,
+    Trusted,
+}
+
+impl std::fmt::Display for McpServerTrust {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Untrusted => write!(f, "untrusted"),
+            Self::Trusted => write!(f, "trusted"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct McpServerConfig {
     pub label: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub trust: McpServerTrust,
     pub transport: McpTransport,
 }
 
@@ -16,6 +35,7 @@ impl fmt::Debug for McpServerConfig {
         f.debug_struct("McpServerConfig")
             .field("label", &self.label)
             .field("description", &self.description)
+            .field("trust", &self.trust)
             .field("transport", &self.transport)
             .finish()
     }

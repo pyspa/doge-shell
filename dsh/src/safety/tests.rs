@@ -1,4 +1,59 @@
 use super::*;
+use dsh_types::mcp::McpServerTrust;
+
+/// One MCP call for tests: trust and the owning server travel with the call,
+/// the way `McpManager::tool_facts_for` resolves them in production.
+fn mcp_call<'a>(
+    function_name: &'a str,
+    server_label: &'a str,
+    server_trust: McpServerTrust,
+    tool_name: &'a str,
+    args_json: &'a str,
+    declared_read_only: Option<bool>,
+) -> crate::safety::McpToolCall<'a> {
+    crate::safety::McpToolCall {
+        function_name,
+        server_label,
+        server_trust,
+        tool_name,
+        args_json,
+        declared_read_only,
+    }
+}
+
+fn untrusted_call<'a>(
+    function_name: &'a str,
+    server_label: &'a str,
+    tool_name: &'a str,
+    args_json: &'a str,
+    declared_read_only: Option<bool>,
+) -> crate::safety::McpToolCall<'a> {
+    mcp_call(
+        function_name,
+        server_label,
+        McpServerTrust::Untrusted,
+        tool_name,
+        args_json,
+        declared_read_only,
+    )
+}
+
+fn trusted_call<'a>(
+    function_name: &'a str,
+    server_label: &'a str,
+    tool_name: &'a str,
+    args_json: &'a str,
+    declared_read_only: Option<bool>,
+) -> crate::safety::McpToolCall<'a> {
+    mcp_call(
+        function_name,
+        server_label,
+        McpServerTrust::Trusted,
+        tool_name,
+        args_json,
+        declared_read_only,
+    )
+}
 
 // Mock Job for testing
 fn mock_job(cmd: &str) -> Job {
@@ -258,34 +313,30 @@ fn test_string_eval_flags_are_confirmed() {
 fn test_mcp_tool_check() {
     let guard = SafetyGuard::new();
 
-    // Safe read-only tool
+    // A trusted server's explicit read-only annotation runs without asking.
     assert_eq!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__files__list_files",
-                tool_name: "list_files",
-                args_json: "{}",
-                declared_read_only: None,
-            },
+            trusted_call(
+                "mcp__files__list_files",
+                "files",
+                "list_files",
+                "{}",
+                Some(true),
+            ),
             &SafetyLevel::Normal,
             &[],
         ),
         SafetyResult::Allowed
     );
 
-    // Dangerous command in bash tool
+    // Dangerous command in a trusted bash tool
     let args = serde_json::json!({
         "command": "rm -rf /"
     })
     .to_string();
 
     match guard.check_mcp_tool(
-        crate::safety::McpToolCall {
-            function_name: "mcp__ops__bash",
-            tool_name: "bash",
-            args_json: &args,
-            declared_read_only: None,
-        },
+        trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
         &SafetyLevel::Normal,
         &[],
     ) {
@@ -296,16 +347,11 @@ fn test_mcp_tool_check() {
     // Non-read-only tools require confirmation in Normal mode
     assert!(matches!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__files__delete_file",
-                tool_name: "delete_file",
-                args_json: "{}",
-                declared_read_only: None,
-            },
+            trusted_call("mcp__files__delete_file", "files", "delete_file", "{}", None,),
             &SafetyLevel::Normal,
             &[],
         ),
-        SafetyResult::Confirm(msg) if msg.contains("may have side effects")
+        SafetyResult::Confirm(msg) if msg.contains("no trusted read-only declaration")
     ));
 }
 
@@ -320,18 +366,13 @@ fn a_namespaced_shell_tool_is_judged_as_its_command() {
     let args = serde_json::json!({ "command": "rm -rf /" }).to_string();
 
     match guard.check_mcp_tool(
-        crate::safety::McpToolCall {
-            function_name: "mcp__ops__bash",
-            tool_name: "bash",
-            args_json: &args,
-            declared_read_only: None,
-        },
+        trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
         &SafetyLevel::Normal,
         &[],
     ) {
         SafetyResult::Confirm(msg) => {
             assert!(msg.contains("High Risk"), "{msg}");
-            assert!(!msg.contains("may have side effects"), "{msg}");
+            assert!(!msg.contains("no trusted read-only declaration"), "{msg}");
         }
         other => panic!("expected a command-level verdict, got {other:?}"),
     }
@@ -349,12 +390,7 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_wrapper() {
 
     let args = serde_json::json!({ "command": "sudo rm -rf /" }).to_string();
     match guard.check_mcp_tool(
-        crate::safety::McpToolCall {
-            function_name: "mcp__ops__bash",
-            tool_name: "bash",
-            args_json: &args,
-            declared_read_only: None,
-        },
+        trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
         &SafetyLevel::Normal,
         &[],
     ) {
@@ -369,12 +405,7 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_separator() {
 
     let args = serde_json::json!({ "command": "true; rm -rf /" }).to_string();
     match guard.check_mcp_tool(
-        crate::safety::McpToolCall {
-            function_name: "mcp__ops__bash",
-            tool_name: "bash",
-            args_json: &args,
-            declared_read_only: None,
-        },
+        trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
         &SafetyLevel::Normal,
         &[],
     ) {
@@ -442,24 +473,21 @@ fn check_command_does_not_reinterpret_argument_values_as_shell_text() {
     );
 }
 
-/// Read-only classification reads the tool, not the server nickname.
-///
-/// It used to see the whole namespaced name, so a server labelled
-/// `runner` made every one of its tools look mutating ("run"), and a
-/// server labelled `search` made them all look read-only. The label is a
-/// nickname; only the tool says what the call does.
+/// Trust and the annotation decide; the server label is only a nickname shown
+/// in the question, never a classification input.
 #[test]
 fn read_only_classification_ignores_the_server_label() {
     let guard = SafetyGuard::new();
 
     assert_eq!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__runner__get_logs",
-                tool_name: "get_logs",
-                args_json: "{}",
-                declared_read_only: None,
-            },
+            trusted_call(
+                "mcp__runner__get_logs",
+                "runner",
+                "get_logs",
+                "{}",
+                Some(true),
+            ),
             &SafetyLevel::Normal,
             &[],
         ),
@@ -468,12 +496,7 @@ fn read_only_classification_ignores_the_server_label() {
 
     assert!(matches!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__search__deploy",
-                tool_name: "deploy",
-                args_json: "{}",
-                declared_read_only: None,
-            },
+            trusted_call("mcp__search__deploy", "search", "deploy", "{}", None,),
             &SafetyLevel::Normal,
             &[],
         ),
@@ -487,12 +510,13 @@ fn an_mcp_prompt_names_the_function_the_model_called() {
     let guard = SafetyGuard::new();
 
     match guard.check_mcp_tool(
-        crate::safety::McpToolCall {
-            function_name: "mcp__files__delete_file",
-            tool_name: "delete_file",
-            args_json: "{}",
-            declared_read_only: None,
-        },
+        untrusted_call(
+            "mcp__files__delete_file",
+            "files",
+            "delete_file",
+            "{}",
+            None,
+        ),
         &SafetyLevel::Strict,
         &[],
     ) {
@@ -506,15 +530,16 @@ fn test_mcp_tool_strict_and_allowlist() {
     let guard = SafetyGuard::new();
     let args = serde_json::json!({ "path": "README.md" }).to_string();
 
-    // Strict mode asks confirmation even for read-only tools by default
+    // Strict mode asks confirmation even for trusted read-only tools by default
     assert!(matches!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__docs__read_file",
-                tool_name: "read_file",
-                args_json: &args,
-                declared_read_only: None,
-            },
+            trusted_call(
+                "mcp__docs__read_file",
+                "docs",
+                "read_file",
+                &args,
+                Some(true),
+            ),
             &SafetyLevel::Strict,
             &[],
         ),
@@ -529,12 +554,13 @@ fn test_mcp_tool_strict_and_allowlist() {
     )];
     assert_eq!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__docs__read_file",
-                tool_name: "read_file",
-                args_json: &args,
-                declared_read_only: None,
-            },
+            trusted_call(
+                "mcp__docs__read_file",
+                "docs",
+                "read_file",
+                &args,
+                Some(true),
+            ),
             &SafetyLevel::Strict,
             &allow,
         ),
@@ -717,131 +743,240 @@ fn test_sanitize_ai_input() {
     assert!(!sanitized.contains('\u{200B}'));
 }
 
-/// `ls` occurs inside `emails`, `labels`, `channels` and `urls`. Matching read
-/// markers as substrings meant `send_emails` and `add_labels` were classified
-/// read-only and ran at Normal with no prompt.
+/// Untrusted servers never auto-run at Normal: not by name, not by
+/// annotation, not by carrying a benign command. All three are
+/// server-controlled.
 #[test]
-fn a_read_marker_inside_a_longer_word_does_not_make_a_tool_read_only() {
+fn untrusted_servers_always_ask_without_an_allowlist_entry() {
     let guard = SafetyGuard::new();
 
-    for tool in [
-        "send_emails",
-        "add_labels",
-        "notify_channels",
-        "purge_urls",
-        "sendEmails",
-    ] {
-        assert!(
-            matches!(
-                guard.check_mcp_tool(
-                    crate::safety::McpToolCall {
-                        function_name: &format!("mcp__ops__{tool}"),
-                        tool_name: tool,
-                        args_json: "{}",
-                        declared_read_only: None,
-                    },
-                    &SafetyLevel::Normal,
-                    &[],
-                ),
-                SafetyResult::Confirm(_)
-            ),
-            "{tool} ran without asking"
-        );
-    }
-}
-
-/// The narrowing must not cost the tools it was always right about.
-#[test]
-fn a_genuine_read_tool_still_runs_without_asking() {
-    let guard = SafetyGuard::new();
-
-    for tool in [
-        "list_issues",
-        "getFile",
-        "read-file",
-        "ls",
-        "stat",
-        "search_code",
-    ] {
-        assert_eq!(
-            guard.check_mcp_tool(
-                crate::safety::McpToolCall {
-                    function_name: &format!("mcp__docs__{tool}"),
-                    tool_name: tool,
-                    args_json: "{}",
-                    declared_read_only: None,
-                },
-                &SafetyLevel::Normal,
-                &[],
-            ),
-            SafetyResult::Allowed,
-            "{tool} now asks when it never had to"
-        );
-    }
-}
-
-/// A tool name is a guess at what a tool does, and a server that declares side
-/// effects knows better. Asserted as the *difference* the declaration makes,
-/// not as "this tool is allowed" - the second shape would freeze whichever
-/// hole in the name heuristic the example happened to sit in.
-#[test]
-fn a_server_declaring_side_effects_is_believed_over_the_name() {
-    let guard = SafetyGuard::new();
-
-    let judge = |declared| {
+    // A read-looking name with no annotation.
+    assert!(matches!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__docs__search_index",
-                tool_name: "search_index",
-                args_json: "{}",
-                declared_read_only: declared,
-            },
+            untrusted_call("mcp__github__list_issues", "github", "list_issues", "{}", None,),
             &SafetyLevel::Normal,
             &[],
-        )
-    };
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("untrusted")
+    ));
 
-    assert_eq!(judge(None), SafetyResult::Allowed);
-    assert!(matches!(judge(Some(false)), SafetyResult::Confirm(_)));
+    // Even an explicit read-only declaration is the server describing itself.
+    assert!(matches!(
+        guard.check_mcp_tool(
+            untrusted_call("mcp__github__list_issues", "github", "list_issues", "{}", Some(true),),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("untrusted")
+    ));
+
+    // Even a benign command carried by a shell tool: "bash" is itself a name
+    // the server chose.
+    let benign = serde_json::json!({ "command": "ls" }).to_string();
+    assert!(matches!(
+        guard.check_mcp_tool(
+            untrusted_call("mcp__ops__bash", "ops", "bash", &benign, None,),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("untrusted")
+    ));
 }
 
-/// The reverse must not hold. A server calling its own tool harmless is the
-/// party this confirmation exists to protect against, so `readOnlyHint: true`
-/// buys nothing: a tool the name says mutates still asks.
+/// Only a trusted server's explicit read-only annotation opens the Normal
+/// gate. The name alone never does.
 #[test]
-fn a_server_calling_itself_read_only_cannot_open_the_gate() {
+fn trusted_read_only_annotations_open_the_gate_and_names_do_not() {
+    let guard = SafetyGuard::new();
+
+    assert_eq!(
+        guard.check_mcp_tool(
+            trusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                Some(true),
+            ),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Allowed
+    );
+
+    // A read-looking name with no annotation still asks.
+    assert!(matches!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__github__list_issues", "github", "list_issues", "{}", None,),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("no trusted read-only declaration")
+    ));
+
+    // An explicit side-effect declaration closes the gate.
+    assert!(matches!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__github__list_issues", "github", "list_issues", "{}", Some(false),),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("declares side effects")
+    ));
+}
+
+/// A trusted command-execution tool is judged as the command it carries -
+/// never bypassed, and never allowed by the tool name.
+#[test]
+fn trusted_command_tools_pass_through_the_command_classifier() {
+    let guard = SafetyGuard::new();
+
+    let benign = serde_json::json!({ "command": "ls -la" }).to_string();
+    assert_eq!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &benign, None,),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Allowed
+    );
+
+    let dangerous = serde_json::json!({ "command": "rm -rf /" }).to_string();
+    assert!(matches!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &dangerous, None,),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("High Risk")
+    ));
+
+    // The server said this tool has side effects: even a benign command asks.
+    assert!(matches!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &benign, Some(false),),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(msg) if msg.contains("declares side effects")
+    ));
+}
+
+/// Loose keeps its meaning: every MCP call runs unasked, trust or not.
+#[test]
+fn loose_allows_untrusted_mcp_calls_unchanged() {
+    let guard = SafetyGuard::new();
+    let dangerous = serde_json::json!({ "command": "rm -rf /" }).to_string();
+
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                None,
+            ),
+            &SafetyLevel::Loose,
+            &[],
+        ),
+        SafetyResult::Allowed
+    );
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call("mcp__ops__bash", "ops", "bash", &dangerous, None,),
+            &SafetyLevel::Loose,
+            &[],
+        ),
+        SafetyResult::Allowed
+    );
+}
+
+/// Strict keeps its meaning: only an explicit allowlist entry allows, even
+/// for a trusted read-only tool.
+#[test]
+fn strict_confirms_trusted_read_only_tools_without_an_allowlist_entry() {
     let guard = SafetyGuard::new();
 
     assert!(matches!(
         guard.check_mcp_tool(
-            crate::safety::McpToolCall {
-                function_name: "mcp__ops__delete_everything",
-                tool_name: "delete_everything",
-                args_json: "{}",
-                declared_read_only: Some(true),
-            },
-            &SafetyLevel::Normal,
+            trusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                "{}",
+                Some(true),
+            ),
+            &SafetyLevel::Strict,
             &[],
         ),
         SafetyResult::Confirm(_)
     ));
 }
 
-/// The splitting is what makes whole-word matching work on the names tools
-/// actually have, so pin the shapes rather than only their verdicts.
+/// The explicit MCP allowlist still opens the gate for untrusted servers,
+/// exact and wildcard alike - it is the operator's own approval.
 #[test]
-fn a_tool_name_splits_into_the_words_a_marker_must_match() {
-    for (name, expected) in [
-        ("list_tools", vec!["list", "tools"]),
-        ("getFile", vec!["get", "file"]),
-        ("read-file", vec!["read", "file"]),
-        ("getHTTPStatus", vec!["get", "http", "status"]),
-        ("ls", vec!["ls"]),
-        ("emails", vec!["emails"]),
-        ("mcp__ops__send_v2", vec!["mcp", "ops", "send", "v2"]),
-    ] {
-        assert_eq!(SafetyGuard::words(name), expected, "{name}");
-    }
+fn untrusted_allowlist_entries_still_allow() {
+    let guard = SafetyGuard::new();
+    let args = serde_json::json!({ "id": 1 }).to_string();
+
+    let exact = vec![SafetyGuard::mcp_allowlist_entry(
+        "mcp__github__list_issues",
+        &args,
+    )];
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                &args,
+                None,
+            ),
+            &SafetyLevel::Normal,
+            &exact,
+        ),
+        SafetyResult::Allowed
+    );
+
+    let wildcard = vec!["mcp:mcp__github__list_issues".to_string()];
+    assert_eq!(
+        guard.check_mcp_tool(
+            untrusted_call(
+                "mcp__github__list_issues",
+                "github",
+                "list_issues",
+                &args,
+                None,
+            ),
+            &SafetyLevel::Normal,
+            &wildcard,
+        ),
+        SafetyResult::Allowed
+    );
+}
+
+/// An unknown binding falls back to untrusted and asks at Normal.
+#[test]
+fn an_unknown_binding_fails_closed_at_normal() {
+    let guard = SafetyGuard::new();
+
+    assert!(matches!(
+        guard.check_mcp_tool(
+            mcp_call(
+                "mcp__ghost__missing",
+                "<unknown>",
+                McpServerTrust::Untrusted,
+                "mcp__ghost__missing",
+                "{}",
+                None,
+            ),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Confirm(_)
+    ));
 }
 
 /// Test F (pure): a substitution body is judged like any other job. The

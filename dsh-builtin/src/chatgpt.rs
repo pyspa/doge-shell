@@ -42,7 +42,7 @@ use ui::*;
 mod mcp;
 pub use mcp::{
     LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
-    McpServerStatus, McpToolExposure, McpToolGroup,
+    McpServerStatus, McpToolExposure, McpToolFacts, McpToolGroup,
 };
 pub(crate) mod tool;
 

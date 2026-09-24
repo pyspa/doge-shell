@@ -152,6 +152,75 @@ fn test_mcp_clear() {
 }
 
 #[test]
+fn test_mcp_add_stdio_defaults_to_untrusted() {
+    let (env, shell_env) = create_test_env();
+    run_lisp(env, r#"(mcp-add-stdio "test" "node")"#).unwrap();
+
+    let env_read = shell_env.read();
+    assert_eq!(env_read.integration_state.mcp_servers.len(), 1);
+    assert_eq!(
+        env_read.integration_state.mcp_servers[0].trust,
+        dsh_types::mcp::McpServerTrust::Untrusted
+    );
+}
+
+#[test]
+fn test_mcp_add_http_defaults_to_untrusted() {
+    let (env, shell_env) = create_test_env();
+    run_lisp(env, r#"(mcp-add-http "test" "https://example.com/mcp")"#).unwrap();
+
+    let env_read = shell_env.read();
+    assert_eq!(
+        env_read.integration_state.mcp_servers[0].trust,
+        dsh_types::mcp::McpServerTrust::Untrusted
+    );
+}
+
+#[test]
+fn test_mcp_add_stdio_explicit_trust() {
+    let (env, shell_env) = create_test_env();
+    run_lisp(
+        env,
+        r#"(mcp-add-stdio "test" "node" '() '() '() "desc" "trusted")"#,
+    )
+    .unwrap();
+
+    let env_read = shell_env.read();
+    assert_eq!(
+        env_read.integration_state.mcp_servers[0].trust,
+        dsh_types::mcp::McpServerTrust::Trusted
+    );
+}
+
+#[test]
+fn test_mcp_add_http_explicit_trust() {
+    let (env, shell_env) = create_test_env();
+    run_lisp(
+        env,
+        r#"(mcp-add-http "test" "https://example.com/mcp" '() '() "desc" "trusted")"#,
+    )
+    .unwrap();
+
+    let env_read = shell_env.read();
+    assert_eq!(
+        env_read.integration_state.mcp_servers[0].trust,
+        dsh_types::mcp::McpServerTrust::Trusted
+    );
+}
+
+#[test]
+fn test_mcp_add_stdio_rejects_invalid_trust() {
+    let (env, _) = create_test_env();
+    for trust in ["\"trust-me\"", "\"...\"", "\"yes\""] {
+        let code = format!(r#"(mcp-add-stdio "test" "node" '() '() '() "desc" {trust})"#);
+        assert!(
+            run_lisp(env.clone(), &code).is_err(),
+            "{trust} must be a configuration error, not a silent fallback"
+        );
+    }
+}
+
+#[test]
 fn test_chat_execute_allowlist() {
     let (env, shell_env) = create_test_env();
 

@@ -8,8 +8,16 @@
 - コマンド（`execute` ツール）は `AgentCommandPolicy::evaluate_agent_command`。
   パイプライン全体を判定し、ラッパー（`sudo` / `env` / `xargs` …）は透過する。
 - MCP ツールは `AgentCommandPolicy::evaluate_agent_tool` → `SafetyGuard::check_mcp_tool`。
-  Loose は素通り、Normal は read-only を素通り、Strict は必ず確認。
-  経路 A と B で同じ判定を使う。片方だけ無条件 confirm にしない。
+  Loose は素通り、Strict は必ず確認（allowlist 除く）。
+  Normal はサーバ trust が explicit な場合のみ詳細判定へ進む:
+  未指定は `Untrusted`（既存設定は暗黙に Trusted へ移行しない）。
+  Untrusted は allowlist 外の全呼び出しを確認 — ツール名・`readOnlyHint`・
+  運ぶコマンドのいずれもゲートを開けない（いずれも server-controlled）。
+  Trusted のみ `readOnlyHint: true` が read-only 経路を開き、
+  コマンド実行ツール（`bash` / `run_command` / `execute_command` /
+  `execute` / `terminal`）は既存コマンド分類を通る。
+  `readOnlyHint: false` / `destructiveHint: true` は Trusted でも常にゲートを
+  厳しくする。経路 A と B で同じ判定を使う。片方だけ無条件 confirm にしない。
 - **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するので、
   guard がその一部しか読めないなら approve ではなく refuse する。
   - コマンド置換（`` ` ``, `$(...)`, `<(...)`, `(...)`）— `shell::parse::parse_command` が
@@ -22,19 +30,19 @@
   オペレータで区切り、ラッパー（`sudo` / `timeout` / `env` …）を覗いてから
   各段を分類する（`split_command_segments` + `command_candidates`）。
   先頭トークンだけを見ると `true | rm -rf ~` も `sudo rm -rf ~` も素通りする。
-- **read marker は語単位、mutating marker は部分一致**（`is_read_only_mcp_tool`）。この非対称が
-  安全性そのもの: mutating は過剰包含（余計な質問が出るだけ）、read は過小包含（同上）。
-  read を部分一致にしていたせいで `ls` が `emails` / `labels` / `channels` / `urls` に当たり、
-  `send_emails` や `add_labels` が Normal で無確認実行されていた。語の切り出しは
-  `SafetyGuard::words`（区切り文字 + camelCase、`getHTTPStatus` → `get`/`http`/`status`）。
+- **ツール名は判定の security input にしない**（`is_read_only_mcp_tool` /
+  `read markers` / `mutating markers` / `SafetyGuard::words` は認可経路から
+  削除済み）。ツール名はサーバが決める文字列であり、`readOnlyHint: true` を
+  信じない理由（サーバの自己申告でゲートを開けない）がそのまま当てはまる。
+  ツール名は表示・ログ・diagnostic にのみ使う。
 - **サーバの側作用宣言は「厳しくする方向」にだけ信じる**（`McpToolCall::declared_read_only`、
   `McpManager::tool_facts_for` が引く）。`readOnlyHint: false` と `destructiveHint: true` の
   どちらも「副作用がある」の意で、仕様上 `readOnlyHint` の既定が false なので後者だけを送る
   サーバがある。`ToolAnnotations` は `None` を serialize しないので、**見えた値はサーバが
-  送ることを選んだ値**であって既定値ではない。**逆は成り立たない** — `readOnlyHint: true` で
-  確認を飛ばさない。サーバは確認が守ろうとしている相手そのもので、自分についての自己申告で
-  ゲートを開けられてはいけない。両経路（`AgentCommandPolicy` と
-  `LiveAiService::authorize_mcp_tool`）が同じマネージャに訊き、名前と宣言は
+  送ることを選んだ値**であって既定値ではない。**Untrusted では `readOnlyHint: true` でも
+  確認を飛ばさない** — ゲートを開けるのは、明示的に Trusted とされたサーバの宣言だけ。
+  両経路（`AgentCommandPolicy` と
+  `LiveAiService::authorize_mcp_tool`）が同じマネージャに訊き、名前・trust・宣言は
   `tool_facts_for` の**1 回のロック**で揃える（別々に引くと `mcp connect` やツール一覧更新を
   跨いで、あるサーバのツール名に別のサーバの宣言が付きうる）。
 - **`McpToolCall` は struct で渡す**。`function_name` と `tool_name` は隣り合う `&str` で
@@ -45,13 +53,13 @@
   `mcp add` の 3 箇所に手書きの複製があり、`ToolBinding` にフィールドを足すと 2 箇所にだけ届いて
   残り 1 箇所が静かに欠ける、という形のバグを許していた（テストは手書きのバインディングを使うので
   全部通る）。
-- MCP ツールの危険度は **function name ではなく実ツール名**で判定する。モデルが呼ぶ名前は
-  `mcp__<label>__<tool>` なので、`"bash"` との完全一致は**一度も成立しない**。
-  `check_mcp_tool(function_name, tool_name, ...)` の第 2 引数がそれで、
-  `McpManager::tool_name_for` が引く。allowlist entry とユーザーへの質問文は
-  function name のまま（ユーザーが見て承認したのはそちら）。read-only 判定も同じ理由で
-  実ツール名を見る。ラベルはサーバの通称なので、`runner` という名前だけで
-  その全ツールを mutating 扱いにしない。
+- MCP ツールの危険度は **function name ではなく実ツール名 + サーバ trust** で判定する。
+  モデルが呼ぶ名前は `mcp__<label>__<tool>` なので、`"bash"` との完全一致は**一度も成立しない**。
+  `check_mcp_tool` は `McpToolCall` struct（`function_name` / `server_label` /
+  `server_trust` / `tool_name`）で受け、`McpManager::tool_facts_for` が引く。
+  allowlist entry とユーザーへの質問文は function name のまま（ユーザーが見て承認したのはそちら）。
+  実ツール名が決めるのはコマンド実行ツールか否かだけで、read-only 判定は
+  Trusted サーバの宣言が担う。ラベルはサーバの通称なので、それだけで分類しない。
 - `SafetyResult` は **`Allowed | Confirm` の 2 値**。ガードは人が答えられる場所で走るので、
   一番強い返答は質問。拒否はエージェント経路の `AgentCommandVerdict::Denied` が担う。
   以前は `Denied` が 1 箇所からも生成されず、到達不能なハンドラが 9 箇所あった。

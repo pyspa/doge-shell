@@ -45,6 +45,19 @@ fn mock_server(label: &str) -> McpServer {
     McpServer {
         label: label.to_string(),
         description: Some(format!("{label} server")),
+        trust: McpServerTrust::Untrusted,
+        transport: McpTransport::Sse {
+            url: format!("https://example.com/{label}"),
+        },
+        tools: Vec::new(),
+    }
+}
+
+fn mock_trusted_server(label: &str) -> McpServer {
+    McpServer {
+        label: label.to_string(),
+        description: Some(format!("{label} server")),
+        trust: McpServerTrust::Trusted,
         transport: McpTransport::Sse {
             url: format!("https://example.com/{label}"),
         },
@@ -71,6 +84,7 @@ for line in sys.stdin:
     McpServer {
         label: label.into(),
         description: None,
+        trust: McpServerTrust::Untrusted,
         tools: vec![],
         transport: McpTransport::Stdio {
             command: "python3".into(),
@@ -130,6 +144,7 @@ fn mock_config(label: &str) -> McpServerConfig {
     McpServerConfig {
         label: label.to_string(),
         description: Some(format!("{label} server")),
+        trust: McpServerTrust::Untrusted,
         transport: McpTransport::Sse {
             url: format!("https://example.com/{label}"),
         },
@@ -427,9 +442,9 @@ fn a_binding_carries_what_the_server_declared_about_side_effects() {
 
 /// The two halves of one judgement come from one lookup.
 #[test]
-fn tool_facts_report_the_name_and_the_declaration_together() {
+fn tool_facts_report_the_binding_and_the_server_trust_together() {
     let mut manager = McpManager::default();
-    manager.servers.push(mock_server("ops"));
+    manager.servers.push(mock_trusted_server("ops"));
     manager.bindings.insert(
         "mcp__ops__sync".to_string(),
         ToolBinding {
@@ -442,9 +457,132 @@ fn tool_facts_report_the_name_and_the_declaration_together() {
 
     assert_eq!(
         manager.tool_facts_for("mcp__ops__sync"),
-        Some(("sync".to_string(), Some(false)))
+        Some(McpToolFacts {
+            server_label: "ops".to_string(),
+            server_trust: McpServerTrust::Trusted,
+            tool_name: "sync".to_string(),
+            declared_read_only: Some(false),
+        })
     );
     assert_eq!(manager.tool_facts_for("mcp__ops__missing"), None);
+}
+
+/// Trust lives on the server, not on the binding: a binding whose server is
+/// gone resolves to nothing, so the caller falls back to untrusted.
+#[test]
+fn tool_facts_for_a_binding_without_a_server_resolves_to_nothing() {
+    let mut manager = McpManager::default();
+    manager.bindings.insert(
+        "mcp__ghost__tool".to_string(),
+        ToolBinding {
+            server_label: "ghost".to_string(),
+            tool_name: "tool".to_string(),
+            function_name: "mcp__ghost__tool".to_string(),
+            declared_read_only: Some(true),
+        },
+    );
+
+    assert_eq!(manager.tool_facts_for("mcp__ghost__tool"), None);
+}
+
+/// A trust-only change is a real change: `sync_servers_blocking` diffs by
+/// `PartialEq`, so trust must participate in it or a reload would silently
+/// keep the old posture.
+#[test]
+fn a_trust_only_change_is_detected_as_a_config_change() {
+    let mut base = mock_config("ops");
+    let mut changed = mock_config("ops");
+    changed.trust = McpServerTrust::Trusted;
+
+    assert_eq!(base, mock_config("ops"));
+    assert_ne!(base, changed);
+    base.trust = McpServerTrust::Trusted;
+    assert_eq!(base, changed);
+}
+
+/// The manager reads trust from the server on every lookup, so flipping the
+/// server's trust is visible to the next `tool_facts_for` with no binding
+/// resync: there is no second copy of trust to go stale.
+#[test]
+fn a_server_trust_change_is_visible_to_the_next_lookup() {
+    let mut manager = McpManager::default();
+    manager.servers.push(mock_server("ops"));
+    manager.bindings.insert(
+        "mcp__ops__sync".to_string(),
+        ToolBinding {
+            server_label: "ops".to_string(),
+            tool_name: "sync".to_string(),
+            function_name: "mcp__ops__sync".to_string(),
+            declared_read_only: Some(true),
+        },
+    );
+
+    assert_eq!(
+        manager
+            .tool_facts_for("mcp__ops__sync")
+            .expect("binding registered above")
+            .server_trust,
+        McpServerTrust::Untrusted
+    );
+
+    manager
+        .servers
+        .iter_mut()
+        .find(|server| server.label == "ops")
+        .expect("server registered above")
+        .trust = McpServerTrust::Trusted;
+
+    assert_eq!(
+        manager
+            .tool_facts_for("mcp__ops__sync")
+            .expect("binding registered above")
+            .server_trust,
+        McpServerTrust::Trusted
+    );
+}
+
+/// The full path a real call travels: config -> server -> tool -> binding ->
+/// facts. Hand-built bindings could drift from it without any test noticing.
+#[test]
+fn tool_facts_propagate_from_config_through_bind_tool() {
+    use rmcp::model::ToolAnnotations;
+
+    let mut manager = McpManager::default();
+    let config = McpServerConfig {
+        label: "ops".to_string(),
+        description: Some("ops server".to_string()),
+        trust: McpServerTrust::Trusted,
+        transport: McpTransport::Sse {
+            url: "https://example.com/ops".to_string(),
+        },
+    };
+    let mut server = McpServer {
+        label: config.label.clone(),
+        description: config.description.clone(),
+        trust: config.trust,
+        transport: config.transport.clone(),
+        tools: Vec::new(),
+    };
+    let mut tool = Tool::new(
+        "sync".to_string(),
+        "sync things".to_string(),
+        Arc::new(serde_json::Map::new()),
+    );
+    let mut annotations = ToolAnnotations::new();
+    annotations.read_only_hint = Some(true);
+    tool.annotations = Some(annotations);
+    server.tools = vec![tool.clone()];
+    manager
+        .register_server(server, vec![tool])
+        .expect("register trusted server");
+
+    let facts = manager
+        .tool_facts_for("mcp__ops__sync")
+        .expect("binding registered above");
+    assert_eq!(facts.server_label, "ops");
+    assert_eq!(facts.server_trust, McpServerTrust::Trusted);
+    assert_eq!(facts.tool_name, "sync");
+    assert_eq!(facts.declared_read_only, Some(true));
 }
 
 fn group_tool(name: &str) -> Tool {

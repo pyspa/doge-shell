@@ -28,38 +28,40 @@ pub(super) fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_di
         let _ = ctx.write_stdout("ok mcp-servers none");
     } else {
         for server in servers {
+            // Trust is an explicit operator opt-in that relaxes the Normal
+            // safety policy for this server, so a trusted server is always a
+            // `warn` - not a misconfiguration, but a security posture worth
+            // seeing. Existing risks (sensitive env, insecure HTTP) still
+            // apply and are combined onto the same line.
+            let trusted = matches!(server.trust, dsh_types::mcp::McpServerTrust::Trusted);
             match &server.transport {
                 McpTransport::Stdio { command, env, .. } => {
-                    if env.keys().any(|key| is_sensitive_env_name(key)) {
-                        let _ = ctx.write_stdout(&format!(
-                            "warn mcp {} stdio command={} sensitive-env",
-                            server.label, command
-                        ));
-                    } else {
-                        let _ = ctx.write_stdout(&format!(
-                            "ok mcp {} stdio command={}",
-                            server.label, command
-                        ));
+                    let sensitive = env.keys().any(|key| is_sensitive_env_name(key));
+                    let level = if trusted || sensitive { "warn" } else { "ok" };
+                    let mut line = format!(
+                        "{level} mcp {} trust={} stdio command={}",
+                        server.label, server.trust, command
+                    );
+                    if sensitive {
+                        line.push_str(" sensitive-env");
                     }
+                    let _ = ctx.write_stdout(&line);
                 }
                 McpTransport::Sse { url } => {
                     let _ = ctx.write_stdout(&format!(
-                        "warn mcp {} sse url={} configuration-only use-streamable-http",
-                        server.label, url
+                        "warn mcp {} trust={} sse url={} configuration-only use-streamable-http",
+                        server.label, server.trust, url
                     ));
                 }
                 McpTransport::Http {
                     url, auth_header, ..
                 } => {
-                    let scheme = if is_https_or_local_http_url(url) {
-                        "ok"
-                    } else {
-                        "warn"
-                    };
+                    let scheme_ok = is_https_or_local_http_url(url);
+                    let level = if trusted || !scheme_ok { "warn" } else { "ok" };
                     let auth = if auth_header.is_some() { " auth" } else { "" };
                     let _ = ctx.write_stdout(&format!(
-                        "{scheme} mcp {} http url={}{}",
-                        server.label, url, auth
+                        "{level} mcp {} trust={} http url={}{}",
+                        server.label, server.trust, url, auth
                     ));
                 }
             }

@@ -2,7 +2,7 @@ use super::*;
 use crate::chatgpt::skills::usage;
 use crate::project_context;
 use crate::test_support::TestShellProxy as TestProxy;
-use dsh_types::mcp::{McpServerConfig, McpTransport};
+use dsh_types::mcp::{McpServerConfig, McpServerTrust, McpTransport};
 use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
 use std::collections::HashMap;
 use std::os::fd::IntoRawFd;
@@ -761,6 +761,7 @@ fn doctor_safety_reports_risky_posture() {
             McpServerConfig {
                 label: "local".to_string(),
                 description: None,
+                trust: McpServerTrust::Untrusted,
                 transport: McpTransport::Stdio {
                     command: "node".to_string(),
                     args: Vec::new(),
@@ -771,6 +772,7 @@ fn doctor_safety_reports_risky_posture() {
             McpServerConfig {
                 label: "legacy".to_string(),
                 description: None,
+                trust: McpServerTrust::Untrusted,
                 transport: McpTransport::Sse {
                     url: "https://example.com/sse".to_string(),
                 },
@@ -791,9 +793,9 @@ fn doctor_safety_reports_risky_posture() {
     assert!(output.contains("[safety]"));
     assert!(output.contains("warn execute-allowlist risky `bash`"));
     assert!(output.contains("ok execute-allowlist `git status`"));
-    assert!(output.contains("warn mcp local stdio command=node sensitive-env"));
+    assert!(output.contains("warn mcp local trust=untrusted stdio command=node sensitive-env"));
     assert!(output.contains(
-        "warn mcp legacy sse url=https://example.com/sse configuration-only use-streamable-http"
+        "warn mcp legacy trust=untrusted sse url=https://example.com/sse configuration-only use-streamable-http"
     ));
     assert!(output.contains("warn ai-base-url insecure http://example.com/v1"));
     assert!(output.contains("warn envrc not-allowed"));
@@ -815,6 +817,50 @@ fn doctor_safety_reports_risky_posture() {
     assert_eq!(value["details"]["execute_allowlist"][0]["risky"], true);
     assert_eq!(value["details"]["mcp"]["sse_servers"], 1);
     assert_eq!(value["details"]["envrc"]["allowed"], false);
+}
+
+/// A trusted server is not a misconfiguration, but it relaxes the Normal
+/// policy - so `doctor safety` reports it as a `warn` posture line.
+#[test]
+fn doctor_safety_reports_mcp_trust() {
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
+        mcp_servers: vec![
+            McpServerConfig {
+                label: "plain".to_string(),
+                description: None,
+                trust: McpServerTrust::Untrusted,
+                transport: McpTransport::Http {
+                    url: "https://example.com/mcp".to_string(),
+                    auth_header: None,
+                    allow_stateless: None,
+                },
+            },
+            McpServerConfig {
+                label: "internal".to_string(),
+                description: None,
+                trust: McpServerTrust::Trusted,
+                transport: McpTransport::Http {
+                    url: "https://example.com/mcp".to_string(),
+                    auth_header: None,
+                    allow_stateless: None,
+                },
+            },
+        ],
+        ..TestProxy::default()
+    };
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec!["doctor".to_string(), "safety".to_string()],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(output.contains("ok mcp plain trust=untrusted http url=https://example.com/mcp"));
+    assert!(output.contains("warn mcp internal trust=trusted http url=https://example.com/mcp"));
 }
 
 #[test]
@@ -859,6 +905,7 @@ fn doctor_mcp_reports_legacy_sse_as_configuration_only() {
         mcp_servers: vec![McpServerConfig {
             label: "legacy".to_string(),
             description: None,
+            trust: McpServerTrust::Untrusted,
             transport: McpTransport::Sse {
                 url: "https://example.com/sse".to_string(),
             },

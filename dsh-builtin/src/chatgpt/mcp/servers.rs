@@ -111,6 +111,7 @@ impl McpManager {
                     servers.push(McpServer {
                         label: config.label,
                         description: config.description,
+                        trust: config.trust,
                         transport: config.transport,
                         tools,
                     });
@@ -267,6 +268,7 @@ impl McpManager {
         let McpServerConfig {
             label,
             description,
+            trust,
             transport,
         } = config;
 
@@ -283,6 +285,7 @@ impl McpManager {
         let server_struct = McpServer {
             label: label.clone(),
             description,
+            trust,
             transport,
             tools: tools.clone(),
         };

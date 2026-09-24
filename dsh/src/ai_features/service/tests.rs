@@ -319,9 +319,10 @@ async fn an_unknown_mcp_tool_is_reported_as_an_error() {
         .await
         .unwrap();
 
+    // Unknown bindings fall back to untrusted and fail closed: with nobody to
+    // ask, the call is refused before execution instead of running.
     let result = tool_result.read().clone().expect("tool result was sent");
-    assert!(result.contains("Error executing tool"), "{result}");
-    assert!(result.contains("was not found"), "{result}");
+    assert!(result.contains("confirmation"), "{result}");
     assert!(!result.contains("successfully"), "{result}");
 }
 
@@ -406,7 +407,7 @@ async fn an_always_answer_lands_in_the_session_store() {
 
     assert!(
         service
-            .authorize_mcp_tool("mcp__ops__deploy", "deploy", "{}")
+            .authorize_mcp_tool("mcp__ops__deploy", "{}")
             .await
             .unwrap()
             .is_none()
@@ -419,4 +420,61 @@ async fn an_always_answer_lands_in_the_session_store() {
     );
     assert_eq!(session.read().len(), 1);
     assert!(session.read()[0].starts_with("mcp:mcp__ops__deploy"));
+}
+
+struct DenyHandler;
+
+#[async_trait]
+impl ConfirmationHandler for DenyHandler {
+    async fn confirm(&self, _message: &str) -> Result<ConfirmationAction> {
+        Ok(ConfirmationAction::No)
+    }
+}
+
+/// Path B resolves the same atomic snapshot as Path A: an unknown binding
+/// falls back to untrusted and asks at Normal instead of running.
+#[tokio::test]
+async fn path_b_fails_closed_for_an_unknown_binding() {
+    let service = LiveAiService::new(
+        OneToolCallClient {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        Arc::new(RwLock::new(McpManager::default())),
+        test_policy(SafetyLevel::Normal),
+        Some(Arc::new(DenyHandler)),
+        Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(None)),
+    );
+
+    assert_eq!(
+        service
+            .authorize_mcp_tool("mcp__ghost__missing", "{}")
+            .await
+            .unwrap(),
+        Some("User rejected tool execution")
+    );
+}
+
+/// Without anyone to ask, an unknown binding is refused rather than run.
+#[tokio::test]
+async fn path_b_without_a_handler_refuses_an_unknown_binding() {
+    let policy = test_policy(SafetyLevel::Normal);
+    let service = LiveAiService::new(
+        OneToolCallClient {
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+        Arc::new(RwLock::new(McpManager::default())),
+        policy,
+        None,
+        Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(None)),
+    );
+
+    assert!(
+        service
+            .authorize_mcp_tool("mcp__ghost__missing", "{}")
+            .await
+            .unwrap()
+            .is_some()
+    );
 }

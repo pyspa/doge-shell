@@ -4,7 +4,7 @@ mod groups;
 mod naming;
 mod servers;
 use anyhow::Result;
-use dsh_types::mcp::{McpServerConfig, McpTransport};
+use dsh_types::mcp::{McpServerConfig, McpServerTrust, McpTransport};
 pub use groups::{McpToolExposure, McpToolGroup, SearchableTool};
 use naming::*;
 use rmcp::{
@@ -107,6 +107,7 @@ pub struct McpServerStatus {
     pub label: String,
     pub description: Option<String>,
     pub transport_type: String,
+    pub trust: McpServerTrust,
     pub status: McpConnectionStatus,
     pub tool_count: usize,
     pub connected_since: Option<Instant>,
@@ -116,8 +117,24 @@ pub struct McpServerStatus {
 struct McpServer {
     label: String,
     description: Option<String>,
+    trust: McpServerTrust,
     transport: McpTransport,
     tools: Vec<Tool>,
+}
+
+/// One atomic snapshot of everything the safety guard needs to judge an MCP
+/// call: the binding plus the trust of the server that owns it.
+///
+/// Resolved by [`McpManager::tool_facts_for`] under one lookup, so Path A
+/// (`AgentCommandPolicy`) and Path B (`LiveAiService`) judge the same call
+/// the same way. `McpServer` stays the authority for trust; it is not
+/// duplicated onto `ToolBinding`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolFacts {
+    pub server_label: String,
+    pub server_trust: McpServerTrust,
+    pub tool_name: String,
+    pub declared_read_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -159,6 +176,7 @@ fn hash_server_config(config: &McpServerConfig) -> u64 {
     let mut s = DefaultHasher::new();
     config.label.hash(&mut s);
     config.description.hash(&mut s);
+    config.trust.hash(&mut s);
     // Transport
     match &config.transport {
         McpTransport::Stdio {
@@ -241,8 +259,8 @@ pub(super) struct ToolBinding {
     function_name: String,
     /// `annotations.readOnlyHint` as the server declared it, if it did.
     ///
-    /// Only ever read to make the gate *stricter* - see
-    /// `McpManager::declared_read_only_for`.
+    /// Only ever read through `McpManager::tool_facts_for`, together with the
+    /// owning server's trust.
     declared_read_only: Option<bool>,
 }
 
@@ -427,6 +445,7 @@ impl McpManager {
             .map(|server| McpServerConfig {
                 label: server.label.clone(),
                 description: server.description.clone(),
+                trust: server.trust,
                 transport: server.transport.clone(),
             })
             .collect()
@@ -463,6 +482,7 @@ impl McpManager {
                     label: server.label.clone(),
                     description: server.description.clone(),
                     transport_type: transport_type.to_string(),
+                    trust: server.trust,
                     status,
                     tool_count: server.tools.len(),
                     connected_since,

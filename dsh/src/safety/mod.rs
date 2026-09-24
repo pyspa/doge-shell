@@ -360,12 +360,15 @@ impl SafetyGuard {
     /// `function_name` is the namespaced name the model called
     /// (`mcp__<label>__<tool>`); it identifies the call in the allowlist and in
     /// what the user is asked. `tool_name` is the tool's own name on its
-    /// server, and it is what the classification below reads: matching
-    /// `"bash"` against `mcp__ops__bash` never held, so a server's shell tool
-    /// reached the user as a generic "may have side effects" question instead
-    /// of being judged as the command it was about to run. Pass
-    /// `function_name` for both when the binding cannot be resolved, which
-    /// only loses the classification the old code never had.
+    /// server, and it is what recognises command-execution tools (`bash`,
+    /// ...): matching `"bash"` against `mcp__ops__bash` never held, so a
+    /// server's shell tool reached the user as a generic question instead of
+    /// being judged as the command it was about to run. `server_trust` is the
+    /// operator's explicit opt-in for the owning server, and it - not the tool
+    /// name - decides whether a read-only annotation may open the Normal gate.
+    /// Pass `McpServerTrust::Untrusted` with `server_label = "<unknown>"` when
+    /// the binding cannot be resolved, which only closes the gate the old code
+    /// never opened by name alone.
     /// Task grants are explicit host input; sensitive/state paths cannot be granted.
     pub fn task_command_allowed(&self, grant: &dsh_types::agent::TaskGrant, command: &str) -> bool {
         grant.commands.iter().any(|entry| entry == command)

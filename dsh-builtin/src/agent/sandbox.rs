@@ -92,10 +92,10 @@ impl SandboxRuntimeSnapshot {
     }
 }
 
-/// Resolve an executable `name` under absolute logical search paths,
-/// without any process-global fallback. Single lookup shared by
-/// `find_runtime` so the pinned `srt` validation below cannot be bypassed
-/// through a second search path.
+/// Whether `path` names an executable regular file.
+///
+/// Follows symlinks via `metadata` so a linked runtime still resolves.
+/// Unix execute bits (`0o111`) are the authority; non-unix stays fail-closed.
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
@@ -118,6 +118,10 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
+/// Resolve an executable `name` under absolute logical search paths,
+/// without any process-global fallback. Single lookup shared by
+/// `find_runtime` so the pinned `srt` validation below cannot be bypassed
+/// through a second search path.
 fn resolve_in_search_paths(search_paths: &[PathBuf], name: &str) -> Option<PathBuf> {
     search_paths
         .iter()

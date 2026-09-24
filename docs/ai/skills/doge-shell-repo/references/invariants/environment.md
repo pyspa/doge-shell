@@ -69,3 +69,7 @@
 - any relative/empty PATH element disables persistent command-location caching.
 - assigning PATH invalidates remembered command locations even when the textual value is unchanged.
 - command-scoped PATH=... applies to that external command's lookup and child environment only; it never mutates or populates the persistent shell command cache.
+- 実行時の PATH 変更（`add_path` 等）は logical PATH shell variable を Environment の canonical mutation path（`insert_path_entry` → `set_shell_var("PATH", ...)`）経由で更新する。`variable_state.paths` への直接書き込みは禁止。
+- `variable_state.paths` は derived effective lookup projection であり、独立した書き込み可能な PATH ストアではない。読んで新値を組み立てる用途に限る。
+- `add_path` 等の PATH helper は既存の export 属性を保持する（`set_and_export_shell_var` を使わない）。
+- PATH 変更時の command-location cache 無効化と PATH 由来 completion cache の再活性化は `refresh_derived_state("PATH")` 経由でのみ行う。caller 側で個別に cache を触らない。

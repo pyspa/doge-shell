@@ -1222,3 +1222,192 @@ fn ai_unset_does_not_resurrect_from_process_env() {
         None => unsafe { std::env::remove_var(key) },
     }
 }
+
+/// PATH entries are kept as strings: relative entries are not absolutized,
+/// duplicates are not removed, and non-existent directories are accepted.
+#[test]
+fn insert_path_entry_keeps_entries_verbatim() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("PATH".to_string(), "/a:/b".to_string());
+
+    {
+        let mut guard = env.write();
+        guard.insert_path_entry(0, "./bin");
+        guard.insert_path_entry(0, "/a");
+        guard.insert_path_entry(0, "/future/toolchain/bin");
+    }
+
+    let guard = env.read();
+    assert_eq!(
+        guard.lookup_variable("PATH"),
+        Some("/future/toolchain/bin:/a:./bin:/a:/b".to_string())
+    );
+    assert_eq!(
+        guard.variable_state.paths,
+        vec![
+            "/future/toolchain/bin".to_string(),
+            "/a".to_string(),
+            "./bin".to_string(),
+            "/a".to_string(),
+            "/b".to_string()
+        ]
+    );
+}
+
+/// `insert_path_entry` rewrites the logical `PATH` variable through the
+/// canonical setter, so the variable and the derived lookup projection
+/// agree afterwards.
+#[test]
+fn insert_path_entry_updates_logical_path_and_projection() {
+    init();
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("PATH".to_string(), "/old/a:/old/b".to_string());
+
+    env.write().insert_path_entry(0, "/new");
+
+    let guard = env.read();
+    assert_eq!(
+        guard.lookup_variable("PATH"),
+        Some("/new:/old/a:/old/b".to_string())
+    );
+    assert_eq!(
+        guard.variable_state.paths,
+        vec![
+            "/new".to_string(),
+            "/old/a".to_string(),
+            "/old/b".to_string()
+        ]
+    );
+}
+
+/// An exported `PATH` stays exported, and the child environment sees the
+/// new value. `add_path` must never be an implicit `export`.
+#[test]
+fn insert_path_entry_preserves_exported_path() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.set_shell_var("PATH".to_string(), "/old".to_string());
+        guard.export_shell_var("PATH".to_string());
+    }
+
+    env.write().insert_path_entry(0, "/new");
+
+    let guard = env.read();
+    assert!(guard.variable_state.exported_vars.contains("PATH"));
+    assert_eq!(
+        guard.child_process_env().get("PATH"),
+        Some(&"/new:/old".to_string())
+    );
+}
+
+/// An unexported `PATH` stays unexported: `add_path` materializes the new
+/// logical value without adding the export attribute.
+#[test]
+fn insert_path_entry_does_not_export_an_unexported_path() {
+    init();
+    let env = Environment::new();
+    {
+        let mut guard = env.write();
+        guard.unset_shell_var("PATH");
+        guard.set_shell_var("PATH".to_string(), "/old".to_string());
+    }
+    assert!(!env.read().variable_state.exported_vars.contains("PATH"));
+
+    env.write().insert_path_entry(0, "/new");
+
+    let guard = env.read();
+    assert_eq!(guard.lookup_variable("PATH"), Some("/new:/old".to_string()));
+    assert_eq!(
+        guard.variable_state.paths,
+        vec!["/new".to_string(), "/old".to_string()]
+    );
+    assert!(!guard.variable_state.exported_vars.contains("PATH"));
+    assert!(!guard.child_process_env().contains_key("PATH"));
+}
+
+/// With `PATH` logically unset, the fallback projection is materialized
+/// into a new logical value instead of leaving the variable absent.
+#[test]
+fn insert_path_entry_materializes_fallback_when_path_is_unset() {
+    init();
+    let env = Environment::new();
+    env.write().unset_shell_var("PATH");
+    assert_eq!(env.read().lookup_variable("PATH"), None);
+
+    env.write().insert_path_entry(0, "/custom/bin");
+
+    let guard = env.read();
+    let logical = guard.lookup_variable("PATH").expect("PATH is materialized");
+    assert!(
+        logical.starts_with("/custom/bin:"),
+        "unexpected logical PATH: {logical}"
+    );
+    assert!(logical.contains("/usr/bin"));
+    assert_eq!(guard.variable_state.paths[0], "/custom/bin".to_string());
+    assert!(!guard.variable_state.exported_vars.contains("PATH"));
+}
+
+/// Prepending a directory invalidates the remembered command location, so
+/// the new directory's candidate wins, and bumps the PATH generation that
+/// scopes completion caches.
+#[test]
+fn insert_path_entry_invalidates_command_cache_and_bumps_generation() {
+    init();
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let in_b = write_mode_file(dir_b.path(), "foo", 0o755);
+    let in_a = write_mode_file(dir_a.path(), "foo", 0o755);
+
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("PATH".to_string(), dir_b.path().display().to_string());
+    assert_eq!(env.read().lookup("foo"), Some(in_b.display().to_string()));
+    assert!(
+        env.read()
+            .completion_state
+            .command_cache
+            .read()
+            .contains_key("foo"),
+        "expected a positive cache entry before the PATH mutation"
+    );
+
+    let before = env.read().completion_state.path_generation;
+    env.write()
+        .insert_path_entry(0, &dir_a.path().display().to_string());
+    let after = env.read().completion_state.path_generation;
+    assert!(after > before, "PATH generation did not advance");
+
+    assert_eq!(env.read().lookup("foo"), Some(in_a.display().to_string()));
+}
+
+/// `~/...` entries resolve against the logical shell `HOME`, not the
+/// process-global one.
+#[test]
+fn insert_path_entry_uses_logical_home_for_tilde() {
+    init();
+    let _guard = crate::test_env_lock();
+    let _stale = crate::ProcessEnvGuard::set("HOME", "/stale/process/home");
+
+    let env = Environment::new();
+    env.write()
+        .set_shell_var("PATH".to_string(), "/old".to_string());
+    env.write()
+        .set_shell_var("HOME".to_string(), "/logical/home".to_string());
+
+    env.write().insert_path_entry(0, "~/bin");
+
+    let guard = env.read();
+    assert_eq!(
+        guard.lookup_variable("PATH"),
+        Some("/logical/home/bin:/old".to_string())
+    );
+    assert_eq!(
+        guard.variable_state.paths[0],
+        "/logical/home/bin".to_string()
+    );
+}

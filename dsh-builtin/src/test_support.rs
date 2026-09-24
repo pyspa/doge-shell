@@ -64,6 +64,10 @@ pub(crate) struct TestShellProxy {
     pub set_env_calls: usize,
     /// Number of `insert_path` calls.
     pub insert_path_calls: usize,
+    /// Every `insert_path` call, in order. Kept alongside
+    /// `insert_path_calls` (which other tests already assert on) so a test
+    /// can also check the delegated index and path.
+    pub inserted_paths: Vec<(usize, String)>,
     pub mcp_servers: Vec<McpServerConfig>,
     pub direnv_allowed: bool,
     pub output_history: Vec<OutputEntry>,
@@ -153,6 +157,7 @@ impl Default for TestShellProxy {
             exported: HashMap::new(),
             set_env_calls: 0,
             insert_path_calls: 0,
+            inserted_paths: Vec::new(),
             mcp_servers: Vec::new(),
             direnv_allowed: false,
             output_history: Vec::new(),
@@ -219,8 +224,9 @@ impl ShellProxy for TestShellProxy {
         Ok(())
     }
 
-    fn insert_path(&mut self, _index: usize, _path: &str) {
+    fn insert_path(&mut self, index: usize, path: &str) {
         self.insert_path_calls += 1;
+        self.inserted_paths.push((index, path.to_string()));
     }
 
     fn get_var(&mut self, key: &str) -> Option<String> {

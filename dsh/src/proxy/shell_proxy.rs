@@ -123,11 +123,7 @@ impl ShellProxy for Shell {
     }
 
     fn insert_path(&mut self, idx: usize, path: &str) {
-        self.environment
-            .write()
-            .variable_state
-            .paths
-            .insert(idx, path.to_string());
+        self.environment.write().insert_path_entry(idx, path);
     }
 
     fn dispatch(&mut self, ctx: &Context, cmd: &str, argv: Vec<String>) -> Result<()> {

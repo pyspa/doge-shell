@@ -306,6 +306,68 @@ fn a_command_scoped_path_selects_that_commands_lookup() {
     );
 }
 
+/// `add_path` routes through the logical PATH variable in the same session:
+/// the first lookup answers from `B`, and after prepending `A` the same
+/// command answers from `A` (a stale command-location cache would keep
+/// answering `B`).
+#[test]
+fn cli_add_path_changes_command_precedence_in_the_same_session() {
+    let dir_a = tempfile::tempdir().expect("failed to create temp dir");
+    let dir_b = tempfile::tempdir().expect("failed to create temp dir");
+    write_script(dir_a.path(), "foo", "marker-A");
+    write_script(dir_b.path(), "foo", "marker-B");
+
+    let output = run_interactive(&[
+        &format!("export PATH={}:$PATH", dir_b.path().display()),
+        "foo",
+        &format!("add_path {}", dir_a.path().display()),
+        "foo",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<String> = stdout.lines().map(|line| line.trim().to_string()).collect();
+    let first = lines.iter().position(|line| line == "marker-B");
+    let second = lines.iter().rposition(|line| line == "marker-A");
+    assert!(
+        first.is_some() && second.is_some() && first.unwrap() < second.unwrap(),
+        "expected marker-B then marker-A in {stdout:?}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The shell's lookup PATH and the child environment PATH observe the same
+/// logical state: a probe resolved through the prepended directory prints a
+/// `PATH` that starts with that directory.
+#[test]
+fn cli_add_path_reaches_the_child_process_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir_a = tempfile::tempdir().expect("failed to create temp dir");
+    let dir_b = tempfile::tempdir().expect("failed to create temp dir");
+    let probe = dir_a.path().join("path-probe");
+    std::fs::write(&probe, "#!/bin/sh\nprintf '%s\\n' \"$PATH\"\n")
+        .expect("failed to write probe script");
+    let mut permissions = std::fs::metadata(&probe)
+        .expect("failed to stat probe script")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&probe, permissions).expect("failed to chmod probe script");
+
+    let output = run_interactive(&[
+        &format!("export PATH={}:$PATH", dir_b.path().display()),
+        &format!("add_path {}", dir_a.path().display()),
+        "path-probe",
+    ]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let dir_a_str = dir_a.path().display().to_string();
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line.trim_start().starts_with(&dir_a_str)),
+        "expected a child PATH starting with {dir_a_str:?} in {stdout:?}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A duplicated scoped `PATH` keeps last-assignment-wins, matching the child
 /// environment the command actually runs with.
 #[test]

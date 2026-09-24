@@ -46,6 +46,45 @@ fn lookup_in_paths(paths: &[String], cmd: &str) -> Option<String> {
 }
 
 impl Environment {
+    /// Expand one PATH entry the way shell word expansion does.
+    ///
+    /// `~` / `~/...` resolve against the logical shell `HOME` so a
+    /// same-session assignment is visible here; without a logical `HOME`
+    /// (and for `~user` / `~user/...`) the historical `shellexpand`
+    /// system-database lookup applies.
+    fn expand_path_entry(&self, input: &str) -> String {
+        if (input == "~" || input.starts_with("~/"))
+            && let Some(home) = self.lookup_variable("HOME")
+        {
+            return format!("{home}{}", &input[1..]);
+        }
+
+        shellexpand::tilde(input).into_owned()
+    }
+
+    /// Insert one entry into the logical `PATH` shell variable.
+    ///
+    /// The canonical PATH mutation path: the current effective projection
+    /// is read only to build the new value, and the write goes through
+    /// [`Self::set_shell_var`] so command-location cache invalidation,
+    /// `path_generation` bump, and completion re-activation happen through
+    /// `refresh_derived_state("PATH")`. Callers must not mutate
+    /// `variable_state.paths` directly.
+    ///
+    /// The existing export attribute is preserved: [`Self::set_shell_var`]
+    /// never touches `exported_vars`, so an exported `PATH` stays exported
+    /// (and reaches [`Self::child_process_env`]) while an unexported one
+    /// stays unexported. No dedup, canonicalization, existence check, or
+    /// absolutization is applied: entries are kept as strings.
+    pub(crate) fn insert_path_entry(&mut self, index: usize, path: &str) {
+        let path = self.expand_path_entry(path);
+
+        let mut paths = self.variable_state.paths.clone();
+        paths.insert(index, path);
+
+        self.set_shell_var("PATH".to_string(), paths.join(":"));
+    }
+
     /// Lookup a command in PATH with caching.
     pub fn lookup(&self, cmd: &str) -> Option<String> {
         if command_contains_slash(cmd) {

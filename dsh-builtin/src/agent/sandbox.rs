@@ -31,18 +31,6 @@ pub struct SandboxRuntimeSnapshot {
 }
 
 impl SandboxRuntimeSnapshot {
-    pub fn new(
-        command_search_paths: Vec<PathBuf>,
-        baseline_env: HashMap<String, String>,
-        granted_env: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            command_search_paths,
-            baseline_env,
-            granted_env,
-        }
-    }
-
     /// Build a snapshot from logical shell state.
     ///
     /// `command_search_paths` is the logical PATH authority
@@ -102,14 +90,18 @@ impl SandboxRuntimeSnapshot {
     pub fn granted_env(&self) -> &HashMap<String, String> {
         &self.granted_env
     }
+}
 
-    /// Resolve `name` through logical command search paths only.
-    pub fn resolve_program(&self, name: &str) -> Option<PathBuf> {
-        self.command_search_paths
-            .iter()
-            .map(|dir| dir.join(name))
-            .find(|candidate| candidate.is_file())
-    }
+/// Resolve `name` under `search_paths` (absolute entries only), without any
+/// process-global fallback. Single lookup shared by `find_runtime` so the
+/// pinned `srt` validation below cannot be bypassed through a second search
+/// path.
+fn resolve_in_search_paths(search_paths: &[PathBuf], name: &str) -> Option<PathBuf> {
+    search_paths
+        .iter()
+        .filter(|p| p.is_absolute())
+        .map(|p| p.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 impl std::fmt::Debug for SandboxRuntimeSnapshot {
@@ -139,11 +131,7 @@ pub fn settings(grant: &TaskGrant, state_dir: &Path) -> serde_json::Value {
 }
 
 pub fn find_runtime(search_paths: &[PathBuf]) -> Result<PathBuf> {
-    let path = search_paths
-        .iter()
-        .filter(|p| p.is_absolute())
-        .map(|p| p.join("srt"))
-        .find(|p| p.is_file())
+    let path = resolve_in_search_paths(search_paths, "srt")
         .context("srt missing; install @anthropic-ai/sandbox-runtime@0.0.75 explicitly")?
         .canonicalize()?;
     let manifest = path

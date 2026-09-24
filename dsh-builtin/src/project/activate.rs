@@ -174,9 +174,12 @@ pub(super) fn activate(ctx: &Context, args: &[String], proxy: &mut dyn ShellProx
         provider,
         ActivationProvider::Auto | ActivationProvider::Mise
     ) {
-        let status = MiseStatus::detect(&root);
+        // Snapshot after the native phase so `.env`/`.envrc`/venv changes to
+        // the logical shell state are visible to mise detection and overlay.
+        let runtime = ProjectProviderRuntime::from_proxy(&*proxy);
+        let status = MiseStatus::detect(&root, &runtime);
         if matches!(status.trust.as_str(), "trusted" | "safe") {
-            activate_mise(ctx, proxy, &root, &status, dry_run)?;
+            activate_mise(ctx, proxy, &root, &status, &runtime, dry_run)?;
         } else if provider == ActivationProvider::Mise {
             return Err(anyhow::anyhow!(
                 "mise provider is {}. dsh will not trust or install it automatically",
@@ -208,13 +211,14 @@ pub(super) fn activate_mise(
     proxy: &mut dyn ShellProxy,
     root: &Path,
     status: &MiseStatus,
+    runtime: &ProjectProviderRuntime,
     dry_run: bool,
 ) -> Result<()> {
     let mise = status
         .executable
         .as_deref()
         .context("mise executable unavailable")?;
-    let output = mise_output(mise, root, &["--no-hooks", "env", "--json"])?;
+    let output = mise_output(mise, root, &["--no-hooks", "env", "--json"], runtime)?;
     if !output.status.success() {
         return Err(anyhow::anyhow!(
             "mise env failed: {}",

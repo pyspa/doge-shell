@@ -10,12 +10,13 @@ pub(super) fn status(ctx: &Context, args: &[String], proxy: &mut dyn ShellProxy)
     let current_dir = proxy.get_current_dir()?;
     let context = project_context::resolve_project_context(&current_dir);
     let projects = load_projects()?;
+    let runtime = ProjectProviderRuntime::from_proxy(&*proxy);
     if json_output {
-        let status = build_project_status(&context, &projects);
+        let status = build_project_status(&context, &projects, &runtime);
         let _ = ctx.write_stdout(&serde_json::to_string(&status)?);
     } else {
         print_project_status(ctx, proxy, &context, &projects);
-        print_provider_status(ctx, &context.project_root);
+        print_provider_status(ctx, &context.project_root, &runtime);
     }
     Ok(())
 }
@@ -45,8 +46,9 @@ pub(super) struct ProjectRuntimeJson {
 pub(super) fn build_project_status(
     context: &project_context::ProjectContext,
     projects: &[Project],
+    runtime: &ProjectProviderRuntime,
 ) -> ProjectStatusJson {
-    let mise = MiseStatus::detect(&context.project_root);
+    let mise = MiseStatus::detect(&context.project_root, runtime);
     ProjectStatusJson {
         cwd: context.cwd.display().to_string(),
         root: context.project_root.display().to_string(),
@@ -77,8 +79,8 @@ pub(super) fn build_project_status(
     }
 }
 
-pub(super) fn print_provider_status(ctx: &Context, root: &Path) {
-    let mise = MiseStatus::detect(root);
+pub(super) fn print_provider_status(ctx: &Context, root: &Path, runtime: &ProjectProviderRuntime) {
+    let mise = MiseStatus::detect(root, runtime);
     let provider = if matches!(mise.trust.as_str(), "trusted" | "safe") {
         "mise"
     } else {
@@ -110,16 +112,20 @@ pub(super) struct MiseStatus {
 }
 
 impl MiseStatus {
-    pub(super) fn detect(root: &Path) -> Self {
-        Self::detect_with_executable(root, find_executable("mise"))
+    pub(super) fn detect(root: &Path, runtime: &ProjectProviderRuntime) -> Self {
+        Self::detect_with_executable(root, runtime.resolve_program("mise"), runtime)
     }
 
-    pub(super) fn detect_with_executable(root: &Path, executable: Option<PathBuf>) -> Self {
+    pub(super) fn detect_with_executable(
+        root: &Path,
+        executable: Option<PathBuf>,
+        runtime: &ProjectProviderRuntime,
+    ) -> Self {
         let configured = root.join("mise.toml").exists() || root.join(".mise.toml").exists();
         let trust = if !configured {
             "not-configured".to_string()
         } else if let Some(mise) = executable.as_deref() {
-            match mise_output(mise, root, &["trust", "--show"]) {
+            match mise_output(mise, root, &["trust", "--show"], runtime) {
                 Ok(output) if trust_output_is_trusted(&output) => "trusted".to_string(),
                 _ if mise_config_is_safe(root) => "safe".to_string(),
                 _ => "untrusted".to_string(),
@@ -135,7 +141,7 @@ impl MiseStatus {
         let missing_tools = if matches!(trust.as_str(), "trusted" | "safe") {
             executable
                 .as_deref()
-                .and_then(|mise| mise_missing_tools(mise, root).ok())
+                .and_then(|mise| mise_missing_tools(mise, root, runtime).ok())
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -149,8 +155,17 @@ impl MiseStatus {
     }
 }
 
-pub(super) fn mise_missing_tools(mise: &Path, root: &Path) -> Result<Vec<String>> {
-    let output = mise_output(mise, root, &["--no-hooks", "ls", "--missing", "--json"])?;
+pub(super) fn mise_missing_tools(
+    mise: &Path,
+    root: &Path,
+    runtime: &ProjectProviderRuntime,
+) -> Result<Vec<String>> {
+    let output = mise_output(
+        mise,
+        root,
+        &["--no-hooks", "ls", "--missing", "--json"],
+        runtime,
+    )?;
     if !output.status.success() {
         return Ok(Vec::new());
     }
@@ -162,14 +177,22 @@ pub(super) fn mise_missing_tools(mise: &Path, root: &Path) -> Result<Vec<String>
     Ok(tools)
 }
 
-pub(super) fn mise_output(mise: &Path, root: &Path, args: &[&str]) -> Result<std::process::Output> {
-    let mut child = Command::new(mise)
-        .current_dir(root)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+pub(super) fn mise_output(
+    mise: &Path,
+    root: &Path,
+    args: &[&str],
+    runtime: &ProjectProviderRuntime,
+) -> Result<std::process::Output> {
+    let mut command = Command::new(mise);
+    runtime.configure_command(
+        command
+            .current_dir(root)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    let mut child = command.spawn()?;
     if child.wait_timeout(Duration::from_millis(1500))?.is_none() {
         let _ = child.kill();
         let _ = child.wait();
@@ -273,12 +296,6 @@ pub(super) fn detect_dev_container(root: &Path) -> Option<String> {
     .map(|path| path.display().to_string())
 }
 
-pub(super) fn find_executable(name: &str) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|dir| dir.join(name))
-        .find(|path| path.is_file())
-}
 pub(super) fn print_project_status(
     ctx: &Context,
     proxy: &dyn ShellProxy,

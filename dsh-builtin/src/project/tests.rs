@@ -2,6 +2,7 @@
 use super::*;
 use crate::test_support::{ProcessEnvGuard, TestShellProxy as TestProxy};
 use dsh_types::observed_output::ObservedOutput;
+use std::collections::HashMap;
 use std::io::Write;
 use std::os::fd::IntoRawFd;
 use std::os::unix::fs::PermissionsExt;
@@ -143,26 +144,35 @@ fn activate_dry_run_masks_values_and_does_not_mutate_environment() {
 fn mise_activation_checks_trust_disables_hooks_and_dry_run_does_not_mutate() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("mise.toml"), "[tools]\nnode = '22'\n").unwrap();
+    let log = dir.path().join("mise-args.log");
     let executable = dir.path().join("mise-fake");
     std::fs::write(
         &executable,
-        r#"#!/bin/sh
-printf '%s\n' "$*" >> "$PWD/mise-args.log"
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "{}"
+printf 'SHELL_ONLY=%s\n' "${{DOGESH_SHELL_ONLY-unset}}" >> "{}"
 if [ "$1" = "trust" ]; then printf '%s\n' "$PWD: trusted"; exit 0; fi
-if [ "$1" = "--no-hooks" ] && [ "$2" = "ls" ]; then printf '%s\n' '[{"name":"python"}]'; exit 0; fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "ls" ]; then printf '%s\n' '[{{"name":"python"}}]'; exit 0; fi
 if [ "$1" = "--no-hooks" ] && [ "$2" = "env" ]; then
-  printf '%s\n' '{"PATH":"/tmp/mise/bin","API_KEY":"secret"}'
+  printf '%s\n' '{{"PATH":"/tmp/mise/bin","API_KEY":"secret"}}'
   exit 0
 fi
 exit 1
 "#,
+            log.display(),
+            log.display()
+        ),
     )
     .unwrap();
     let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&executable, permissions).unwrap();
 
-    let status = MiseStatus::detect_with_executable(dir.path(), Some(executable));
+    let mut child_env = HashMap::new();
+    child_env.insert("DOGESH_SHELL_ONLY".to_string(), "from-shell".to_string());
+    let runtime = ProjectProviderRuntime::new(Vec::new(), child_env);
+    let status = MiseStatus::detect_with_executable(dir.path(), Some(executable), &runtime);
     assert_eq!(status.trust, "trusted");
     assert_eq!(status.missing_tools, vec!["python"]);
 
@@ -172,12 +182,12 @@ exit 1
         ..TestProxy::default()
     };
     let (ctx, observer) = observed_context();
-    activate_mise(&ctx, &mut proxy, dir.path(), &status, true).unwrap();
+    activate_mise(&ctx, &mut proxy, dir.path(), &status, &runtime, true).unwrap();
     assert_eq!(proxy.set_env_calls, 0);
     let output = observed_stdout(&observer);
     assert!(output.contains("API_KEY=***"));
     assert!(!output.contains("API_KEY=secret"));
-    let args = std::fs::read_to_string(dir.path().join("mise-args.log")).unwrap();
+    let args = std::fs::read_to_string(&log).unwrap();
     assert!(args.contains("trust --show"));
     assert!(args.contains("--no-hooks ls --missing --json"));
     assert!(args.contains("--no-hooks env --json"));
@@ -185,6 +195,14 @@ exit 1
         !args
             .lines()
             .any(|line| line.starts_with("trust") && line != "trust --show")
+    );
+    // Every mise invocation in this operation sees the same shell-only env.
+    assert!(
+        args.lines()
+            .filter(|line| *line == "SHELL_ONLY=from-shell")
+            .count()
+            >= 3,
+        "all mise probes should observe the shell child env, got:\n{args}"
     );
 }
 
@@ -229,7 +247,8 @@ fn project_status_json_reports_provider_lock_and_dev_container_shape() {
     std::fs::create_dir_all(dir.path().join(".devcontainer")).unwrap();
     std::fs::write(dir.path().join(".devcontainer/devcontainer.json"), "{}").unwrap();
     let context = project_context::resolve_project_context(dir.path());
-    let status = build_project_status(&context, &[]);
+    let runtime = ProjectProviderRuntime::new(Vec::new(), HashMap::new());
+    let status = build_project_status(&context, &[], &runtime);
     let value = serde_json::to_value(status).unwrap();
     assert_eq!(value["provider"], "native");
     assert_eq!(value["trust"], "not-configured");
@@ -271,4 +290,187 @@ fn prepend_path_builds_on_the_shell_path() {
         proxy.vars.get("PATH"),
         Some(&"/project/bin:/shell/path".to_string())
     );
+}
+
+fn write_fake_mise(dir: &Path, body_marker: &str) -> PathBuf {
+    let path = dir.join("mise");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"trust\" ]; then printf '%s\\n' \"{body_marker}: trusted\"; exit 0; fi\nprintf '%s\\n' '{{}}'\n",
+        ),
+    )
+    .unwrap();
+    // Minimal trusted probe: `trust --show` prints trusted, missing probe
+    // returns an empty object. Real arg handling lives in the dedicated
+    // activation test; here only resolution order matters.
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+fn write_trusted_fake_mise(path: &Path, log: &Path) {
+    std::fs::write(
+        path,
+        format!(
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "{}"
+if [ "$1" = "trust" ]; then printf '%s\n' "trusted"; exit 0; fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "ls" ]; then printf '%s\n' '{{}}'; exit 0; fi
+exit 1
+"#,
+            log.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
+#[test]
+fn mise_resolves_from_logical_shell_path() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("mise.toml"), "[tools]\n").unwrap();
+    let bin_a = tempfile::tempdir().unwrap();
+    let bin_b = tempfile::tempdir().unwrap();
+    // Only bin-a contains an executable `mise`.
+    let expected = write_fake_mise(bin_a.path(), "a");
+
+    let runtime = ProjectProviderRuntime::new(
+        vec![bin_a.path().to_path_buf(), bin_b.path().to_path_buf()],
+        HashMap::new(),
+    );
+    let status = MiseStatus::detect(root.path(), &runtime);
+    assert_eq!(status.trust, "trusted");
+    assert_eq!(status.executable.as_deref(), Some(expected.as_path()));
+}
+
+#[test]
+fn mise_path_order_is_preserved() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("mise.toml"), "[tools]\n").unwrap();
+    let bin_a = tempfile::tempdir().unwrap();
+    let bin_b = tempfile::tempdir().unwrap();
+    let exe_a = write_fake_mise(bin_a.path(), "a");
+    let exe_b = write_fake_mise(bin_b.path(), "b");
+
+    let forward = ProjectProviderRuntime::new(
+        vec![bin_a.path().to_path_buf(), bin_b.path().to_path_buf()],
+        HashMap::new(),
+    );
+    assert_eq!(
+        MiseStatus::detect(root.path(), &forward)
+            .executable
+            .as_deref(),
+        Some(exe_a.as_path())
+    );
+
+    let reverse = ProjectProviderRuntime::new(
+        vec![bin_b.path().to_path_buf(), bin_a.path().to_path_buf()],
+        HashMap::new(),
+    );
+    assert_eq!(
+        MiseStatus::detect(root.path(), &reverse)
+            .executable
+            .as_deref(),
+        Some(exe_b.as_path())
+    );
+}
+
+#[test]
+fn mise_skips_non_executable_candidate() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("mise.toml"), "[tools]\n").unwrap();
+    let bin_a = tempfile::tempdir().unwrap();
+    let bin_b = tempfile::tempdir().unwrap();
+    let plain = bin_a.path().join("mise");
+    std::fs::write(&plain, "not executable").unwrap();
+    let mut permissions = std::fs::metadata(&plain).unwrap().permissions();
+    permissions.set_mode(0o644);
+    std::fs::set_permissions(&plain, permissions).unwrap();
+    let expected = write_fake_mise(bin_b.path(), "b");
+
+    let runtime = ProjectProviderRuntime::new(
+        vec![bin_a.path().to_path_buf(), bin_b.path().to_path_buf()],
+        HashMap::new(),
+    );
+    let status = MiseStatus::detect(root.path(), &runtime);
+    assert_eq!(status.trust, "trusted");
+    assert_eq!(status.executable.as_deref(), Some(expected.as_path()));
+}
+
+#[test]
+fn mise_subprocess_does_not_inherit_process_env() {
+    let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+    let _guard = ProcessEnvGuard::set("DOGESH_PROCESS_ONLY", "must-not-leak");
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("env.log");
+    let executable = dir.path().join("mise-env-fake");
+    std::fs::write(
+        &executable,
+        format!(
+            r#"#!/bin/sh
+printf 'SHELL_ONLY=%s\n' "${{DOGESH_SHELL_ONLY-unset}}" >> "{}"
+printf 'PROCESS_ONLY=%s\n' "${{DOGESH_PROCESS_ONLY-unset}}" >> "{}"
+printf '%s\n' '{{}}'
+"#,
+            log.display(),
+            log.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&executable, permissions).unwrap();
+
+    let mut child_env = HashMap::new();
+    child_env.insert("DOGESH_SHELL_ONLY".to_string(), "from-shell".to_string());
+    let runtime = ProjectProviderRuntime::new(Vec::new(), child_env);
+    let output = mise_output(
+        &executable,
+        dir.path(),
+        &["--no-hooks", "ls", "--missing", "--json"],
+        &runtime,
+    )
+    .unwrap();
+    assert!(output.status.success());
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        logged.contains("SHELL_ONLY=from-shell"),
+        "shell exported env must reach mise, got:\n{logged}"
+    );
+    assert!(
+        logged.contains("PROCESS_ONLY=unset"),
+        "process-only env must not leak into mise, got:\n{logged}"
+    );
+    assert!(!logged.contains("must-not-leak"));
+}
+
+#[test]
+fn project_status_uses_logical_path_mise() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("mise.toml"), "[tools]\nnode = '22'\n").unwrap();
+    std::fs::write(dir.path().join("mise.lock"), "{}").unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let log = dir.path().join("status-mise.log");
+    let executable = bin.path().join("mise");
+    write_trusted_fake_mise(&executable, &log);
+
+    let runtime = ProjectProviderRuntime::new(vec![bin.path().to_path_buf()], HashMap::new());
+    let context = project_context::resolve_project_context(dir.path());
+    let status = build_project_status(&context, &[], &runtime);
+    let value = serde_json::to_value(status).unwrap();
+    assert_eq!(value["provider"], "mise");
+    assert_eq!(value["trust"], "trusted");
+    // The logical-PATH mise was actually probed.
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains("trust --show"));
+}
+
+#[test]
+fn resolve_program_without_fallback_returns_none() {
+    let runtime = ProjectProviderRuntime::new(Vec::new(), HashMap::new());
+    assert_eq!(runtime.resolve_program("mise"), None);
 }

@@ -19,6 +19,8 @@ use wait_timeout::ChildExt;
 
 mod activate;
 use activate::*;
+mod runtime;
+use runtime::*;
 mod status;
 use status::*;
 

@@ -100,7 +100,14 @@ impl PromptRuntimeSnapshot {
     /// started in another directory still finds the same binaries. Only
     /// executable files match; an empty entry behaves like the shell's
     /// cwd fallback. Never consults the process-global `PATH`.
+    ///
+    /// A name containing `/` bypasses PATH search, like the shell's own
+    /// lookup: probes only pass bare tool names, and a pathname must never
+    /// be silently reinterpreted against snapshot directories.
     pub(crate) fn resolve_program(&self, name: &str) -> Option<PathBuf> {
+        if name.contains('/') {
+            return None;
+        }
         for entry in &self.command_search_paths {
             let base = if entry.is_absolute() {
                 entry.clone()

@@ -74,8 +74,9 @@
 - Logical pipeline exit status: policy は `Job::launch` 時に `ShellOptions` から snapshot し、`Job` が frozen で所有する。pipefail OFF → tail stage の `shell_exit_code()`、pipefail ON → 右端に最も近い non-zero `shell_exit_code()`（全成功なら 0）。finalization は live `ShellOptions` を読まない。
 - final status は `Job::final_exit_status()`（`dsh/src/process/pipeline_status.rs`）の single resolver から取る（`job.state` の blind read 禁止）。signal 死は既存 `ProcessState::shell_exit_code()` の 128+N を使う。`NoCommand` stage も通常 stage として参加する。未完了 tree は `None`（status を捏造しない）。
 - `ECHILD` は completion を捏造しない。canonical tree が `Completed` でなければ status を invent しない。`wait(-1)`/`waitpid(-1)` 禁止。ledger→Job→canonical PID set 経由でのみ待つ。
-- `wait` semantics: 引数なし→全 known を待って0（個別 failure を反映しない）・全 consume。`wait PID` は active→take/termination-wait/finalize/consume、completed→即返却+consume、unknown→127（ alien PID を `waitpid` しない）。複数 operand は順に処理し最後の status。repeat は127。`-n/-p/-f` は usage error（exit 1）。`%spec`/非数値は 127 として扱い次の operand へ進む（code behavior）。
-- wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
+- `wait` semantics: 引数なし→全 known を待って0（個別 failure を反映しない）・全 consume。`wait PID` は active→take/termination-wait/finalize/consume、completed→即返却+consume、unknown→127（ alien PID を `waitpid` しない）。複数 operand は順に処理し最後の status。repeat は127。`wait` operand は bare decimal=PID、`%N`/`%+`/`%-`/`%%`=job spec。bare decimal を job number と解釈しない。explicit `%N` は active table first、completed ledger fallback（`%+`/`%-`/`%%` は active-table concept で ledger fallback しない）。`wait -p`/`-f` は usage error（exit 1）。非数値・非 `%`・unknown jobspec は 127 として扱い次の operand へ進む（code behavior）。
+- `wait -n` semantics: resolved known target set のうち1件の completion を待つ。no target→127（引数なし `wait` の0と違う）。already-completed ledger status は即返却。選択した status だけ consume し、unselected は後続 `wait` 用に retained。duplicate PID/jobspec は二重 consume しない。explicit ownership completion は `FinalizeDrain::ToEof`。unrelated child status を consume しない（`waitpid(-1)` 禁止）。stopped は completion でない。`ECHILD` から synthetic completion を作らない。stale Active ledger entry（table job なし）は削除し、他 valid target を待ち続ける。全 target が stale/unknown なら127。
+- wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait`/`wait -n` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
 - ledger は bounded（`CHILD_MAX` 相当、fallback 4096）。prune は oldest Completed から。Active は捨てない。PID reuse は new register が勝つ。completed retention は metadata/status のみで process resource を所有しない。
 - `jobs`・completion notice・`fg`/`bg` は archive するが consume しない。consume するのは `wait` だけ。
 - normal-exit detach（`Shell::detach_known_async_jobs_for_normal_exit`）は user command ではない。ledger status を consume せず `$?`/`foreground status` を書き換えない。detach failure は infrastructure failure（exit 1）で ownership を維持し、`Drop` cleanup が kill する。
@@ -93,7 +94,7 @@
 - helper execution environment も同じ normal-exit rule（`run_helper_plan` return 前に detach）。substitution outer group ownership・`ProcessSubstitutionRegistry` の Read 所有権は触らない（Write のみ release）。
 - output-pipe EOF lifetime と parent shell process lifetime は別物。capture pipe を grandchild が保持する場合の EOF 待ちは shell wait ではない（`$(...)`・subshell capture の既知の挙動）。command-mode でも helper でも fd を閉じる処理を足さない。
 - detach 対象は ledger `Active` + job id 一致のものだけ。unknown/stopped/session-owned job は `Drop` cleanup へ残す。completed async job も detach 対象外（`Drop` の kill は completed tree には no-op）。
-- SIGHUP/`disown`/`wait -n/-p/-f` は scope 外。`!` chat jobs・`ProcessSubstitutionRegistry` shutdown は触らない（Write release 以外）。
+- SIGHUP/`disown`/`wait -p`/`-f` は scope 外。`!` chat jobs・`ProcessSubstitutionRegistry` shutdown は触らない（Write release 以外）。
 
 ## Async AND-OR signal disposition
 

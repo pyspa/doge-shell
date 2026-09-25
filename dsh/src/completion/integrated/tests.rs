@@ -445,7 +445,7 @@ async fn shell_job_completion_tracks_live_job_snapshot() {
         .iter()
         .map(|candidate| candidate.text.as_str())
         .collect::<Vec<_>>();
-    for expected in ["%+", "%-", "%1", "%2"] {
+    for expected in ["%+", "%%", "%-", "%1", "%2"] {
         assert!(
             texts.contains(&expected),
             "missing job candidate {expected}: {texts:?}"

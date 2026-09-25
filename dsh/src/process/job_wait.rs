@@ -85,19 +85,19 @@ const WAIT_POLL_MIN: Duration = Duration::from_millis(1);
 const WAIT_POLL_MAX: Duration = Duration::from_millis(20);
 
 #[derive(Debug, Clone, Copy)]
-struct WaitBackoff {
+pub(crate) struct WaitBackoff {
     delay: Duration,
 }
 
 impl WaitBackoff {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             delay: WAIT_POLL_MIN,
         }
     }
 
     /// Delay to sleep before the next `waitpid`, doubling up to [`WAIT_POLL_MAX`].
-    fn next_delay(&mut self) -> Duration {
+    pub(crate) fn next_delay(&mut self) -> Duration {
         let delay = self.delay;
         self.delay = (self.delay * 2).min(WAIT_POLL_MAX);
         delay

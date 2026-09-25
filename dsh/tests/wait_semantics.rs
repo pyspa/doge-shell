@@ -226,3 +226,202 @@ fn wait_returns_only_after_background_termination() {
         "background output must be observable after wait returns: {stdout:?}"
     );
 }
+
+#[test]
+fn wait_percent_number_waits_job() {
+    let failed = stdout_of("false & wait %1; echo STATUS:$?");
+    assert!(
+        failed.contains("STATUS:1"),
+        "wait %1 must report job 1's status: {failed:?}"
+    );
+    let passed = stdout_of("true & wait %1; echo STATUS:$?");
+    assert!(
+        passed.contains("STATUS:0"),
+        "wait %1 must report job 1's status: {passed:?}"
+    );
+}
+
+#[test]
+fn wait_current_and_previous_aliases() {
+    let prev = stdout_of("false & true & wait %-; echo STATUS:$?");
+    assert!(
+        prev.contains("STATUS:1"),
+        "%- must resolve the previous job: {prev:?}"
+    );
+    let current = stdout_of("false & true & wait %%; echo STATUS:$?");
+    assert!(
+        current.contains("STATUS:0"),
+        "%% must alias the current job: {current:?}"
+    );
+    let plus = stdout_of("false & true & wait %+; echo STATUS:$?");
+    assert!(
+        plus.contains("STATUS:0"),
+        "%+ must resolve the current job: {plus:?}"
+    );
+}
+
+#[test]
+fn wait_bare_decimal_is_pid_not_job_number() {
+    // Job id 1 exists, but `wait 1` is PID 1 — not our child — so 127.
+    let stdout = stdout_of("true & wait 1; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:127"),
+        "bare decimals are PIDs, never job numbers: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_percent_number_survives_jobs_reconciliation() {
+    let stdout = stdout_of("false & sleep 1; jobs; wait %1; echo STATUS:$?");
+    assert!(
+        stdout.contains("there are no jobs"),
+        "jobs must have reconciled the table: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("STATUS:1"),
+        "explicit %N must serve the retained ledger status: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_mixed_pid_and_jobspec_returns_last_status() {
+    let forward = stdout_of("false & p1=$!; true & p2=$!; wait %1 $p2; echo STATUS:$?");
+    assert!(
+        forward.contains("STATUS:0"),
+        "last operand wins (jobspec, PID): {forward:?}"
+    );
+    let reverse = stdout_of("false & p1=$!; true & p2=$!; wait $p2 %1; echo STATUS:$?");
+    assert!(
+        reverse.contains("STATUS:1"),
+        "last operand wins (PID, jobspec): {reverse:?}"
+    );
+}
+
+#[test]
+fn wait_reports_async_pipeline_tail_via_jobspec() {
+    let stdout = stdout_of("false | true & wait %1; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:0"),
+        "jobspec pipeline status is the tail status: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_double_dash_ends_option_parsing() {
+    let stdout = stdout_of("wait -- 999999; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:127"),
+        "post--- operands are PIDs, not options: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_rejects_p_and_f_options() {
+    let p = stdout_of("wait -p done; echo STATUS:$?");
+    assert!(p.contains("STATUS:1"), "wait -p stays a usage error: {p:?}");
+    let f = stdout_of("wait -f; echo STATUS:$?");
+    assert!(f.contains("STATUS:1"), "wait -f stays a usage error: {f:?}");
+}
+
+#[test]
+fn wait_next_returns_first_completion_not_first_operand() {
+    let stdout = stdout_of(
+        // The slow job's stdio goes to /dev/null: its orphaned `sleep`
+        // would otherwise hold the harness pipe open for the full 30s.
+        "sleep 30 > /dev/null 2>&1 & slow=$!; false & fast=$!; \
+         wait -n $slow $fast; echo \"STATUS:$?\"; kill $slow; wait $slow; echo CLEANED",
+    );
+    assert!(
+        stdout.contains("STATUS:1"),
+        "wait -n must return the fast failure, not the first operand: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_next_without_operands_waits_for_any_completion() {
+    let stdout = stdout_of("false & true & wait -n; echo STATUS:$?");
+    let value = last_line_value(&stdout, "STATUS:");
+    assert!(
+        value == "0" || value == "1",
+        "wait -n serves one real completion, never 127: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_next_accepts_job_spec_targets() {
+    let failed = stdout_of("false & wait -n %1; echo STATUS:$?");
+    assert!(
+        failed.contains("STATUS:1"),
+        "wait -n %1 must serve job 1's status: {failed:?}"
+    );
+    let mixed = stdout_of("false & p=$!; true & wait -n $p %2; echo STATUS:$?");
+    let value = last_line_value(&mixed, "STATUS:");
+    assert!(
+        value == "0" || value == "1",
+        "wait -n mixes PID and jobspec targets: {mixed:?}"
+    );
+}
+
+#[test]
+fn wait_next_without_targets_reports_127_while_bare_wait_reports_0() {
+    let stdout = stdout_of("wait -n; echo N:$?; wait; echo BARE:$?");
+    assert!(
+        stdout.contains("N:127"),
+        "wait -n with no known jobs reports 127: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("BARE:0"),
+        "bare wait with no known jobs reports 0: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_next_ignores_unknown_pid_when_valid_target_exists() {
+    let stdout = stdout_of("false & p=$!; wait -n 999999 $p; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:1"),
+        "an unknown operand must not abort a valid wait-any: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_next_all_unknown_reports_127() {
+    let stdout = stdout_of("wait -n 999998 999999; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:127"),
+        "all-unknown wait-any reports 127: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_next_consumes_selected_status_once_and_keeps_other() {
+    let stdout = stdout_of(
+        "false & p1=$!; true & p2=$!; wait -n $p1 $p2; echo FIRST:$?; \
+         wait $p1; echo R1:$?; wait $p2; echo R2:$?",
+    );
+    let first = last_line_value(&stdout, "FIRST:");
+    let r1 = last_line_value(&stdout, "R1:");
+    let r2 = last_line_value(&stdout, "R2:");
+    if first == "1" {
+        assert_eq!(r1, "127", "consumed p1 must be gone: {stdout:?}");
+        assert_eq!(r2, "0", "unselected p2 must be retained: {stdout:?}");
+    } else {
+        assert_eq!(first, "0", "wait -n serves one real status: {stdout:?}");
+        assert_eq!(r1, "1", "unselected p1 must be retained: {stdout:?}");
+        assert_eq!(r2, "127", "consumed p2 must be gone: {stdout:?}");
+    }
+}
+
+#[test]
+fn wait_next_honors_frozen_pipefail_policy() {
+    let tail = stdout_of("false | true & p=$!; wait -n $p; echo STATUS:$?");
+    assert!(
+        tail.contains("STATUS:0"),
+        "pipefail OFF serves the tail status: {tail:?}"
+    );
+    let pipefail = stdout_of("set -o pipefail; false | true & p=$!; wait -n $p; echo STATUS:$?");
+    assert!(
+        pipefail.contains("STATUS:1"),
+        "pipefail ON serves the upstream failure: {pipefail:?}"
+    );
+}

@@ -19,5 +19,5 @@ slow-timeout = { period = "60s", terminate-after = 2, grace-period = "5s" }
 # process's own children, while `DshTestProcess::assert_group_drained`
 # watches dogesh's descendants. Different responsibilities, both kept.
 [[profile.ci.overrides]]
-filter = "binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(pipeline_semantics) or binary(background_builtin) or binary(async_exit_semantics)"
+filter = "binary(shell_contract) or binary(resource_contract) or binary(fd_ownership) or binary(reexec_subshell) or binary(substitution) or binary(pipeline_semantics) or binary(background_builtin) or binary(async_exit_semantics) or test(/process_substitution::tests::/)"
 leak-timeout = "10s"

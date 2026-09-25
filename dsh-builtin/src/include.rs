@@ -1,7 +1,6 @@
 use crate::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use std::collections::HashMap;
-use std::process::Command;
 
 const PROTECTED_ENV_VARS: &[&str] = &[
     "HOME", "PATH", "PWD", "OLDPWD", "SHELL", "TERM", "USER", "LOGNAME", "LANG",
@@ -28,9 +27,16 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     // dogesh process-global environment.
     let before = proxy.child_process_environment();
 
-    // Construct the command to source the script and dump environment
-    // We use env -0 to handle values with newlines correctly
-    let mut bash_cmd = Command::new("bash");
+    // `bash` resolves through the logical runtime (never the
+    // process-global PATH); the snapshot already isolates the environment,
+    // and the explicit env below keeps the before/after diff source obvious.
+    let mut bash_cmd = match crate::runtime_spawn::runtime_command(proxy, "bash") {
+        Ok(command) => command,
+        Err(e) => {
+            let _ = ctx.write_stderr(&format!("include: bash execution failed:\n{e}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
     bash_cmd.env_clear().envs(&before);
     bash_cmd.arg("-c");
 
@@ -117,6 +123,13 @@ mod tests {
             confirm_result: true,
             capture_command_response: Some((0, String::new(), String::new())),
             open_editor_response: Some(String::new()),
+            // `bash` resolves through the proxy's logical PATH: point it
+            // at the runner's own PATH so the real `bash` is found, without
+            // letting production code read the process environment.
+            command_search_paths: std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            )
+            .collect(),
             ..TestShellProxy::default()
         }
     }

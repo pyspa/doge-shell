@@ -646,12 +646,16 @@ fn validate_matcher(id: &str, matcher: &HookMatch) -> Result<(), String> {
 /// run its commands" case that keeps `.dogesh/hooks.json` unread.
 ///
 /// - absolute path: kept as is
-/// - bare name (no `/`): resolved against `PATH` **now**, so the lookup cannot
-///   be steered by the directory the hook later runs in. Left alone when it is
-///   not on `PATH`; the spawn fails with a clear error and `doctor hooks`
+/// - bare name (no `/`): resolved against the logical runtime snapshot's
+///   command search paths **now**, so the lookup cannot be steered by the
+///   directory the hook later runs in. Left alone when it is not on the
+///   logical PATH; the spawn fails with a clear error and `doctor hooks`
 ///   already reports it, which beats refusing every chat over a typo.
 /// - anything else (`./x`, `../x`, `a/b`): refused
-fn normalize_program(program: &str) -> Result<String, String> {
+pub(crate) fn pin_program(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    program: &str,
+) -> Result<String, String> {
     let path = Path::new(program);
     if path.is_absolute() {
         return Ok(program.to_string());
@@ -662,14 +666,23 @@ fn normalize_program(program: &str) -> Result<String, String> {
         ));
     }
 
-    let Some(paths) = std::env::var_os("PATH") else {
-        return Ok(program.to_string());
-    };
-    Ok(std::env::split_paths(&paths)
-        .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_file())
+    Ok(snapshot
+        .resolve_bare_program(program)
         .map(|candidate| candidate.display().to_string())
         .unwrap_or_else(|| program.to_string()))
+}
+
+/// The load-time half of [`pin_program`] that needs no runtime: relative
+/// pathnames are refused while parsing so a bad config fails fast even
+/// before a snapshot exists.
+pub(crate) fn check_program_not_relative(program: &str) -> Result<(), String> {
+    let path = Path::new(program);
+    if path.is_absolute() || !program.contains('/') {
+        return Ok(());
+    }
+    Err(format!(
+        "`{program}` is a relative path; write an absolute path, or a bare name to look up on PATH. A relative one resolves against whatever directory the chat is in when the hook runs"
+    ))
 }
 
 #[cfg(test)]

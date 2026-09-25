@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct GitDiffAction;
 
@@ -22,9 +22,12 @@ impl Action for GitDiffAction {
     fn category(&self) -> &str {
         "Git"
     }
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Get list of changed files
-        let output = Command::new("git")
+        let output = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["diff", "--name-only"])
             .stdout(Stdio::piped())
             .output()?;
@@ -37,7 +40,9 @@ impl Action for GitDiffAction {
         let mut file_list: Vec<String> = files.lines().map(|s| s.to_string()).collect();
 
         // Also include staged files
-        let staged_output = Command::new("git")
+        let staged_output = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["diff", "--cached", "--name-only"])
             .stdout(Stdio::piped())
             .output()?;
@@ -80,7 +85,9 @@ impl Action for GitDiffAction {
             let file_path = item.output().to_string();
 
             // Show full diff for selected file
-            Command::new("git")
+            runtime
+                .std_command("git")
+                .context("command not found: git")?
                 .args(["diff", "--color=always", "--", &file_path])
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to show diff: {}", e))?;

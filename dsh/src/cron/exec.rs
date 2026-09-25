@@ -55,7 +55,9 @@ pub fn run_command(run: &ClaimedRun) -> CommandOutcome {
     let started = Instant::now();
     let timeout = Duration::from_secs(run.timeout_secs.max(1));
 
-    let mut command = Command::new("sh");
+    // Internal interpreter boundary: cron jobs run through the fixed
+    // system shell, never a PATH-resolved `sh`.
+    let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(&run.command)

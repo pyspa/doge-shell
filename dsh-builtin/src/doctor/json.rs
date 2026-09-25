@@ -132,16 +132,25 @@ pub(super) fn json_section_details(
             })
         }
         Some("runtime" | "runtimes") => {
+            // Same resolver as the text report: both describe the actual
+            // shell runtime, never the process-global PATH.
+            let snapshot = proxy.command_runtime_snapshot().ok();
             let commands = [
                 "mise", "direnv", "rustc", "cargo", "node", "npm", "pnpm", "python3", "uv", "go",
                 "just",
             ]
             .into_iter()
             .map(|command| {
+                let resolved = snapshot
+                    .as_ref()
+                    .and_then(|snapshot| resolve_in_path(snapshot, command));
+                let version = snapshot
+                    .as_ref()
+                    .and_then(|snapshot| read_version(snapshot, command));
                 json!({
                     "command": command,
-                    "path": resolve_in_path(command),
-                    "version": read_version(command)
+                    "path": resolved,
+                    "version": version
                 })
             })
             .collect::<Vec<_>>();
@@ -153,7 +162,7 @@ pub(super) fn json_section_details(
             "completion": proxy.completion_diagnostics()
         }),
         Some("safety") => json_safety_details(proxy, current_dir),
-        Some("dev" | "validate") => json_dev_details(current_dir),
+        Some("dev" | "validate") => json_dev_details(proxy, current_dir),
         Some("hooks") => json_hooks_details(proxy),
         Some("skills") => {
             let dsh = crate::config_paths::skills_dir();
@@ -211,11 +220,18 @@ pub(super) fn json_safety_details(
     })
 }
 
-pub(super) fn json_dev_details(current_dir: &Path) -> serde_json::Value {
+pub(super) fn json_dev_details(
+    proxy: &mut dyn ShellProxy,
+    current_dir: &Path,
+) -> serde_json::Value {
     let Some(repo_root) = find_repo_root(current_dir) else {
         return json!({"error": "repo-root-not-found"});
     };
-    match changed_paths(&repo_root) {
+    let snapshot = proxy.command_runtime_snapshot().ok();
+    let Some(snapshot) = snapshot.as_ref() else {
+        return json!({"repo_root": repo_root, "error": "runtime-snapshot-unavailable"});
+    };
+    match changed_paths(snapshot, &repo_root) {
         Ok(paths) => json!({
             "repo_root": repo_root,
             "changed_files": paths,
@@ -248,7 +264,11 @@ pub(super) fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Valu
         return json!({"config": null, "hooks": [], "turn_budget_ms": turn_budget});
     };
     match config::read(&path) {
-        Ok(hooks) => json!({
+        Ok(hooks) => {
+            // Same logical-PATH authority as the text report and the hook
+            // runner's load-time pinning.
+            let snapshot = proxy.command_runtime_snapshot().ok();
+            json!({
             "config": path,
             "turn_budget_ms": turn_budget,
             "hooks": hooks.all().iter().map(|hook| json!({
@@ -256,7 +276,7 @@ pub(super) fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Valu
                 "events": hook.events.iter().map(|event| event.as_str()).collect::<Vec<_>>(),
                 "enabled": hook.enabled,
                 "timeout_ms": hook.timeout_ms(),
-                "command_found": program_is_runnable(&hook.command[0]),
+                "command_found": snapshot.as_ref().is_some_and(|snapshot| program_is_runnable(snapshot, &hook.command[0])),
                 "match": {
                     "tools": hook.matcher.as_ref().map(|m| m.tools.clone()).unwrap_or_default(),
                     "programs": hook.matcher.as_ref().map(|m| m.programs.clone()).unwrap_or_default(),
@@ -264,7 +284,8 @@ pub(super) fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Valu
                     "arguments": hook.matcher.as_ref().map(|m| m.arguments.clone()).unwrap_or_default(),
                 },
             })).collect::<Vec<_>>()
-        }),
+            })
+        }
         Err(err) => json!({"config": path, "error": err}),
     }
 }

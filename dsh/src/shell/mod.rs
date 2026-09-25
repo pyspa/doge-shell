@@ -355,9 +355,12 @@ impl Shell {
             session_id: Some(self.session_id.clone()),
             hostname,
             started_at: chrono::Utc::now().timestamp() - duration.as_secs() as i64,
-            author: std::env::var("DOGESH_COMMAND_AUTHOR")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
+            author: self
+                .environment
+                .read()
+                .get_var("DOGESH_COMMAND_AUTHOR")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
                 .unwrap_or_else(|| "human".to_string()),
             output: filtered_output,
             ledger_mode,

@@ -7,6 +7,7 @@
 //! all see the same `PATH`, child environment, cwd, and prompt variables.
 
 use crate::environment::Environment;
+use dsh_types::process_runtime::CommandRuntimeSnapshot;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -77,27 +78,26 @@ pub(crate) fn trimmed_nonempty(value: Option<&str>) -> Option<String> {
 /// exported child environment, snapshot cwd, and prompt variables, so a
 /// `PATH` change or `unset` mid-tick cannot make probes disagree with each
 /// other or with normal shell command execution.
+///
+/// Executable lookup, environment isolation, and cwd live in the composed
+/// [`CommandRuntimeSnapshot`]: the prompt snapshot adds only the
+/// prompt-specific [`PromptEnvironment`] and the `PATH` generation that
+/// scopes the runtime identity. The prompt identity/epoch discipline
+/// (`path_generation`, cwd, child environment, prompt variables) is
+/// unchanged.
 #[derive(Debug, Clone)]
 pub(crate) struct PromptRuntimeSnapshot {
     pub(crate) environment: PromptEnvironment,
-    command_search_paths: Vec<PathBuf>,
-    child_env: Arc<HashMap<String, String>>,
-    current_dir: PathBuf,
+    command_runtime: CommandRuntimeSnapshot,
     path_generation: u64,
 }
 
 impl PromptRuntimeSnapshot {
     pub(crate) fn from_environment(environment: &Environment, current_dir: PathBuf) -> Self {
+        let command_runtime = environment.command_runtime_snapshot(current_dir);
         Self {
             environment: PromptEnvironment::from_environment(environment),
-            command_search_paths: environment
-                .variable_state
-                .paths
-                .iter()
-                .map(PathBuf::from)
-                .collect(),
-            child_env: Arc::new(environment.child_process_env()),
-            current_dir,
+            command_runtime,
             path_generation: environment.completion_state.path_generation,
         }
     }
@@ -107,18 +107,24 @@ impl PromptRuntimeSnapshot {
     pub(crate) fn identity(&self) -> PromptRuntimeIdentity {
         PromptRuntimeIdentity {
             path_generation: self.path_generation,
-            current_dir: self.current_dir.clone(),
-            child_env: Arc::clone(&self.child_env),
+            current_dir: self.command_runtime.current_dir().to_path_buf(),
+            child_env: self.command_runtime.child_env_shared(),
             environment: self.environment.clone(),
         }
     }
 
     pub(crate) fn child_env(&self) -> &HashMap<String, String> {
-        &self.child_env
+        self.command_runtime.child_env()
     }
 
     pub(crate) fn current_dir(&self) -> &Path {
-        &self.current_dir
+        self.command_runtime.current_dir()
+    }
+
+    /// The composed generic runtime: the one immutable `PATH` / child
+    /// environment / cwd triple this tick's probes share.
+    pub(crate) fn command_runtime(&self) -> &CommandRuntimeSnapshot {
+        &self.command_runtime
     }
 
     /// Resolve `name` against the snapshot's logical `PATH`, in order.
@@ -132,21 +138,7 @@ impl PromptRuntimeSnapshot {
     /// lookup: probes only pass bare tool names, and a pathname must never
     /// be silently reinterpreted against snapshot directories.
     pub(crate) fn resolve_program(&self, name: &str) -> Option<PathBuf> {
-        if name.contains('/') {
-            return None;
-        }
-        for entry in &self.command_search_paths {
-            let base = if entry.is_absolute() {
-                entry.clone()
-            } else {
-                self.current_dir().join(entry)
-            };
-            let candidate = base.join(name);
-            if is_executable_file(&candidate) {
-                return Some(candidate);
-            }
-        }
-        None
+        self.command_runtime.resolve_bare_program(name)
     }
 
     /// Build a subprocess for a prompt probe: the only spawn path probes use.
@@ -155,7 +147,8 @@ impl PromptRuntimeSnapshot {
     /// fallback after [`tokio::process::Command::env_clear`], and the child
     /// sees exactly the snapshot's exported environment - a logically unset
     /// variable stays absent even when the process environment still holds
-    /// a stale value.
+    /// a stale value. Like [`CommandRuntimeSnapshot::std_command`], the
+    /// original program name is kept as `argv[0]` on Unix.
     pub(crate) fn command(&self, program: &str) -> Option<tokio::process::Command> {
         let executable = self.resolve_program(program)?;
         let mut command = tokio::process::Command::new(executable);
@@ -163,20 +156,12 @@ impl PromptRuntimeSnapshot {
             .env_clear()
             .envs(self.child_env())
             .current_dir(self.current_dir());
+        // `arg0` is an inherent tokio `Command` method on Unix (no trait
+        // import needed): keep the original program name as argv[0].
+        #[cfg(unix)]
+        {
+            command.arg0(program);
+        }
         Some(command)
     }
-}
-
-/// Same executable predicate as shell/task/project resolution: a regular
-/// file with any execute bit. `metadata` follows symlinks so a linked
-/// toolchain binary stays usable from prompt probes.
-fn is_executable_file(path: &Path) -> bool {
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o111 != 0
 }

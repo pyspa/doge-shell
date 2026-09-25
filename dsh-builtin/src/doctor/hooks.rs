@@ -48,6 +48,9 @@ pub(super) fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
         return;
     }
 
+    // One immutable runtime for every existence check below: the same
+    // logical PATH the hook runner pins programs against at load time.
+    let snapshot = proxy.command_runtime_snapshot().ok();
     for hook in hooks.all() {
         let events = hook
             .events
@@ -63,7 +66,10 @@ pub(super) fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
             hook.timeout_ms()
         ));
 
-        if !program_is_runnable(&hook.command[0]) {
+        let runnable = snapshot
+            .as_ref()
+            .is_some_and(|snapshot| program_is_runnable(snapshot, &hook.command[0]));
+        if !runnable {
             let _ = ctx.write_stdout(&format!(
                 "warn hook {} command not found: {}",
                 hook.id, hook.command[0]
@@ -134,13 +140,17 @@ pub(super) fn describe_matcher(hook: &crate::chatgpt::hooks::config::HookDefinit
 }
 
 /// Can this program be started at all? Existence only - never execution.
-pub(super) fn program_is_runnable(program: &str) -> bool {
+///
+/// Bare names resolve through the logical runtime snapshot (the same
+/// authority the hook runner's load-time pinning uses); explicit pathnames
+/// are checked as files, exactly as the runner would spawn them.
+pub(super) fn program_is_runnable(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    program: &str,
+) -> bool {
     let path = Path::new(program);
     if path.is_absolute() || program.contains('/') {
         return path.is_file();
     }
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(program).is_file())
+    snapshot.resolve_bare_program(program).is_some()
 }

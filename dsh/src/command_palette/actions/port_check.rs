@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct PortCheckAction;
 
@@ -22,18 +22,21 @@ impl Action for PortCheckAction {
     fn category(&self) -> &str {
         "System"
     }
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
-        // Get listening ports using lsof or ss
-        let output = Command::new("lsof")
-            .args(["-i", "-P", "-n"])
-            .stdout(Stdio::piped())
-            .output()
-            .or_else(|_| {
-                Command::new("ss")
-                    .args(["-tulpn"])
-                    .stdout(Stdio::piped())
-                    .output()
-            })?;
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
+        // Get listening ports using lsof or ss, resolved through the
+        // logical runtime. A missing tool falls through to the next one.
+        let run_list = |program: &str, args: &[&str]| -> Option<std::process::Output> {
+            runtime
+                .std_command(program)?
+                .args(args)
+                .stdout(Stdio::piped())
+                .output()
+                .ok()
+        };
+        let output = run_list("lsof", &["-i", "-P", "-n"])
+            .or_else(|| run_list("ss", &["-tulpn"]))
+            .context("command not found: lsof/ss")?;
 
         if !output.status.success() {
             println!("Could not get port information");
@@ -81,7 +84,9 @@ impl Action for PortCheckAction {
                 std::io::stdin().read_line(&mut input)?;
 
                 if input.trim().to_lowercase() == "y" {
-                    Command::new("kill")
+                    runtime
+                        .std_command("kill")
+                        .context("command not found: kill")?
                         .arg(pid)
                         .status()
                         .map_err(|e| anyhow::anyhow!("Failed to kill: {}", e))?;

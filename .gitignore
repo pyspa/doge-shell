@@ -16,3 +16,4 @@ QWEN.md
 CRUSH.md
 backlog/*
 .fastembed_cache
+__pycache__/

@@ -1,4 +1,5 @@
 //! `doctor runtime`: common developer tools in PATH, and Herdr pane state.
+use crate::ShellProxy;
 use dsh_types::Context;
 
 use super::*;
@@ -13,14 +14,24 @@ pub(super) fn non_empty_env_for_doctor(key: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-pub(super) fn check_runtimes(ctx: &Context) {
+pub(super) fn check_runtimes(ctx: &Context, proxy: &mut dyn ShellProxy) {
+    // One immutable runtime for resolution and version probes: the text
+    // report and the JSON report share this resolver, so both describe the
+    // actual shell runtime instead of the process-global PATH.
+    let snapshot = proxy.command_runtime_snapshot().ok();
     for command in [
         "mise", "direnv", "rustc", "cargo", "node", "npm", "pnpm", "python3", "uv", "go", "just",
         "herdr",
     ] {
-        match resolve_in_path(command) {
+        let resolved = snapshot
+            .as_ref()
+            .and_then(|snapshot| resolve_in_path(snapshot, command));
+        match resolved {
             Some(path) => {
-                let version = read_version(command).unwrap_or_else(|| "-".to_string());
+                let version = snapshot
+                    .as_ref()
+                    .and_then(|snapshot| read_version(snapshot, command))
+                    .unwrap_or_else(|| "-".to_string());
                 let _ = ctx.write_stdout(&format!("ok {command} {version} {}", path.display()));
             }
             None => {
@@ -29,23 +40,12 @@ pub(super) fn check_runtimes(ctx: &Context) {
         }
     }
 
-    // Pure process-environment reads, mirroring exactly what
-    // `dsh/src/agent_lifecycle/herdr.rs::HerdrEnv::detect` requires - these
-    // are ambient launch-time facts, not dsh settings, so this deliberately
-    // doesn't go through `ShellProxy`/`resolve_setting`. `dsh-builtin`
-    // cannot see `dsh`'s own activation state directly (the dependency runs
-    // the other way), so replicating the same three checks here is the only
-    // way to avoid reporting "active" when this process's own lifecycle
-    // manager would in fact be a no-op `NullReporter`.
-    //
-    // `DOGESH_HERDR_ENABLED` itself is a dsh setting (shell var → process
-    // env via `Environment::get_var`), so `doctor` cannot read it precisely
-    // here. As a best-effort diagnostic it checks the process environment
-    // copy; when not set it reports disabled rather than "not running under
-    // herdr" so the user understands why reporting is off.
-    // Keep in sync with `dsh/src/agent_lifecycle/agent_command.rs::herdr_enabled`.
-    let herdr_enabled = std::env::var("DOGESH_HERDR_ENABLED")
-        .ok()
+    // `DOGESH_HERDR_ENABLED` is a shell setting: read it through the
+    // logical runtime authority like every other shell setting, so `unset`
+    // in the shell stays unset here too. Keep the truthy spelling in sync
+    // with `dsh/src/agent_lifecycle/agent_command.rs::herdr_enabled`.
+    let herdr_enabled = proxy
+        .get_var("DOGESH_HERDR_ENABLED")
         .map(|v| v.trim().to_ascii_lowercase())
         .filter(|v| matches!(v.as_str(), "1" | "true" | "on" | "yes"))
         .is_some();
@@ -55,6 +55,10 @@ pub(super) fn check_runtimes(ctx: &Context) {
         );
         return;
     }
+    // The rest are ambient process facts about how this process was
+    // launched, not shell settings — the same boundary
+    // `dsh/src/agent_lifecycle/herdr.rs::HerdrEnv::detect` reads. A shell
+    // variable must neither spoof nor suppress them.
     let herdr_env = std::env::var("HERDR_ENV").ok();
     let pane_id = non_empty_env_for_doctor("HERDR_PANE_ID");
     let bin_path = non_empty_env_for_doctor("HERDR_BIN_PATH");

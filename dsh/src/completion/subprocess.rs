@@ -89,7 +89,9 @@ pub(crate) fn shell_quote(value: &str) -> String {
 }
 
 pub(crate) fn shell_command(command_template: &str) -> Command {
-    let mut cmd = command("sh");
+    // Internal interpreter boundary: the fixed system shell, never a
+    // PATH-resolved `sh` that project-local entries could shadow.
+    let mut cmd = command("/bin/sh");
     cmd.arg("-c").arg(command_template);
     cmd
 }

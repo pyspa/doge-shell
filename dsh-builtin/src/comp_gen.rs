@@ -98,13 +98,24 @@ pub fn command_async<'a>(
         };
 
         let log_to_stderr = options.stdout;
-        let json = match generate_completion_async(ctx, proxy, &command_name, log_to_stderr).await {
-            Ok(json) => json,
+        let snapshot = match proxy.command_runtime_snapshot() {
+            Ok(snapshot) => snapshot,
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                ctx.write_stderr(&format!("Error: failed to snapshot runtime: {e:#}"))
+                    .ok();
                 return ExitStatus::ExitedWith(1);
             }
         };
+        let json =
+            match generate_completion_async(ctx, proxy, &snapshot, &command_name, log_to_stderr)
+                .await
+            {
+                Ok(json) => json,
+                Err(e) => {
+                    ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                    return ExitStatus::ExitedWith(1);
+                }
+            };
 
         if options.check_only {
             ctx.write_stdout("OK").ok();
@@ -274,6 +285,7 @@ fn parse_args(args: &[String]) -> Result<CompGenAction> {
 async fn generate_completion_async(
     ctx: &Context,
     proxy: &mut (impl AiCapability + ?Sized),
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
     command_name: &str,
     log_to_stderr: bool,
 ) -> Result<String> {
@@ -282,7 +294,7 @@ async fn generate_completion_async(
         log_to_stderr,
         &format!("Fetching help text for '{}'...", command_name),
     );
-    let help_text = CompletionGenerationService::collect_help_text(command_name)?;
+    let help_text = CompletionGenerationService::collect_help_text(snapshot, command_name)?;
     log(
         ctx,
         log_to_stderr,

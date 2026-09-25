@@ -1,11 +1,10 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 pub struct SshConnectAction;
 
@@ -21,7 +20,7 @@ impl Action for SshConnectAction {
         "🌐"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
         // Parse ~/.ssh/config for Host entries
         let config_path = dirs::home_dir()
             .map(|h| h.join(".ssh/config"))
@@ -54,7 +53,13 @@ impl Action for SshConnectAction {
             let host = item.output().to_string();
             println!("Connecting to {}...", host);
 
-            Command::new("ssh")
+            // `ssh` resolves through the shell's logical PATH and runs
+            // with exactly the exported child environment in the snapshot
+            // cwd — never the process-global PATH.
+            let runtime = super::runtime_snapshot(shell);
+            runtime
+                .std_command("ssh")
+                .with_context(|| "command not found: ssh".to_string())?
                 .arg(&host)
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to connect: {}", e))?;

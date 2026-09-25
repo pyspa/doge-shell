@@ -11,7 +11,6 @@ use getopts::Options;
 use skim::prelude::*;
 use skim::{SkimItemReceiver, SkimItemSender};
 use std::io::{self, Write};
-use std::process::Command;
 use std::process::Stdio;
 use std::sync::Arc;
 use tracing::debug;
@@ -21,7 +20,7 @@ pub fn description() -> &'static str {
     "Checkout or create GitHub Pull Request (-c to create)"
 }
 
-pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Parse arguments
     let mut opts = Options::new();
     opts.optflag("c", "create", "Create a new pull request");
@@ -47,34 +46,39 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     }
 
     // Check if we're in a git repository
-    if !is_git_repository() {
+    if !is_git_repository(proxy) {
         ctx.write_stderr("gpr: not a git repository").ok();
         return ExitStatus::ExitedWith(1);
     }
 
     // Check if gh is installed
-    if !github_client::is_gh_installed() {
+    if !github_client::is_gh_installed(proxy) {
         ctx.write_stderr("gpr: gh command not found").ok();
         return ExitStatus::ExitedWith(1);
     }
 
     // Handle different modes
     if matches.opt_present("web") {
-        return open_pr_list_web(ctx);
+        return open_pr_list_web(ctx, proxy);
     }
 
     if matches.opt_present("create") {
-        return create_pr(ctx, &matches);
+        return create_pr(ctx, proxy, &matches);
     }
 
     // Default: checkout mode
-    checkout_pr(ctx)
+    checkout_pr(ctx, proxy)
 }
 
 /// Open PR list in web browser
-fn open_pr_list_web(ctx: &Context) -> ExitStatus {
+fn open_pr_list_web(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     let args = vec!["pr", "list", "--web"];
-    match Command::new("gh").args(&args).status() {
+    match crate::runtime_spawn::runtime_command(proxy, "gh").and_then(|mut command| {
+        command
+            .args(&args)
+            .status()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }) {
         Ok(status) if status.success() => ExitStatus::ExitedWith(0),
         Ok(_) => {
             ctx.write_stderr("gpr: failed to open PR list in browser")
@@ -89,7 +93,7 @@ fn open_pr_list_web(ctx: &Context) -> ExitStatus {
 }
 
 /// Create a new PR using gh CLI
-fn create_pr(ctx: &Context, matches: &getopts::Matches) -> ExitStatus {
+fn create_pr(ctx: &Context, proxy: &mut dyn ShellProxy, matches: &getopts::Matches) -> ExitStatus {
     let mut args = vec!["pr", "create"];
 
     // Title
@@ -151,7 +155,12 @@ fn create_pr(ctx: &Context, matches: &getopts::Matches) -> ExitStatus {
 
     let arg_refs: Vec<&str> = arg_strings.iter().map(|s| s.as_str()).collect();
 
-    match Command::new("gh").args(&arg_refs).output() {
+    match crate::runtime_spawn::runtime_command(proxy, "gh").and_then(|mut command| {
+        command
+            .args(&arg_refs)
+            .output()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }) {
         Ok(output) => {
             if !output.status.success() {
                 let error = String::from_utf8_lossy(&output.stderr);
@@ -177,9 +186,9 @@ fn create_pr(ctx: &Context, matches: &getopts::Matches) -> ExitStatus {
 }
 
 /// Checkout an existing PR interactively
-fn checkout_pr(ctx: &Context) -> ExitStatus {
+fn checkout_pr(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Get PRs
-    let mut prs = match github_client::get_prs() {
+    let mut prs = match github_client::get_prs(proxy) {
         Ok(entries) => entries,
         Err(err) => {
             ctx.write_stderr(&format!("gpr: failed to get PRs: {err}"))
@@ -241,7 +250,12 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
             .ok();
 
         let args = vec!["pr", "checkout", &pr_number];
-        match Command::new("gh").args(&args).output() {
+        match crate::runtime_spawn::runtime_command(proxy, "gh").and_then(|mut command| {
+            command
+                .args(&args)
+                .output()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        }) {
             Ok(output) => {
                 if !output.status.success() {
                     let error = String::from_utf8_lossy(&output.stderr);
@@ -267,12 +281,16 @@ fn checkout_pr(ctx: &Context) -> ExitStatus {
     ExitStatus::ExitedWith(0)
 }
 
-fn is_git_repository() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn is_git_repository(proxy: &mut dyn ShellProxy) -> bool {
+    crate::runtime_spawn::runtime_command(proxy, "git")
+        .and_then(|mut command| {
+            command
+                .args(["rev-parse", "--git-dir"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
         .map(|status| status.success())
         .unwrap_or(false)
 }

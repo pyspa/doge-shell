@@ -46,6 +46,7 @@ pub(super) struct VerifyReport {
 /// column mostly not looking numeric) is still saved, with the reason
 /// surfaced as a warning instead.
 pub(super) fn verify_schema(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
     schema: &OutputSchema,
     argv: &[String],
     sample: &str,
@@ -62,7 +63,7 @@ pub(super) fn verify_schema(
     if let Some(prefer) = &spec.prefer {
         let mut prefer_argv = argv.to_vec();
         prefer_argv.extend(prefer.inject_args.iter().cloned());
-        match run_command(&prefer_argv) {
+        match run_command(snapshot, &prefer_argv) {
             Ok(captured) => match verify_prefer(&captured.text, prefer) {
                 Ok(row_count) => {
                     if !captured.exit_success {
@@ -182,11 +183,19 @@ pub(super) struct CommandSample {
     pub(super) text: String,
     pub(super) exit_success: bool,
 }
-pub(super) fn run_command(argv: &[String]) -> Result<CommandSample> {
+pub(super) fn run_command(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    argv: &[String],
+) -> Result<CommandSample> {
     let Some((program, args)) = argv.split_first() else {
         bail!("empty command");
     };
-    let output = Command::new(program)
+    // The sampled program resolves through the logical runtime and runs
+    // with exactly the exported child environment — the same binary the
+    // shell would run, never the process-global PATH.
+    let output = snapshot
+        .std_command(program)
+        .ok_or_else(|| anyhow::anyhow!("Failed to execute '{}'", argv.join(" ")))?
         .args(args)
         .output()
         .with_context(|| format!("Failed to execute '{}'", argv.join(" ")))?;
@@ -202,7 +211,10 @@ pub(super) fn run_command(argv: &[String]) -> Result<CommandSample> {
         exit_success: output.status.success(),
     })
 }
-pub(super) fn run_check(command_line: &str) -> Result<String> {
+pub(super) fn run_check(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    command_line: &str,
+) -> Result<String> {
     let argv = shell_words::split(command_line).context("Could not tokenize the command line")?;
     let Some(command_name) = argv.first().cloned() else {
         bail!("Missing required <command...> argument");
@@ -218,14 +230,14 @@ pub(super) fn run_check(command_line: &str) -> Result<String> {
         serde_json::from_str(&json).with_context(|| format!("Invalid JSON in {source}"))?;
     validate_schema_shape(&schema, &command_name)?;
 
-    let captured = run_command(&argv)
+    let captured = run_command(snapshot, &argv)
         .with_context(|| format!("Failed to run '{command_line}' for a sample"))?;
     let sample = captured.text;
     if sample.trim().is_empty() {
         bail!("'{command_line}' produced no output to check against");
     }
 
-    let report = verify_schema(&schema, &argv, &sample)?;
+    let report = verify_schema(snapshot, &schema, &argv, &sample)?;
     let mut lines = vec![format!(
         "OK: {source} ({} row(s) parsed from a fresh sample)",
         report.row_count

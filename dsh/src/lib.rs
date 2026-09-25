@@ -32,6 +32,7 @@ pub mod direnv;
 pub mod dirs;
 pub mod environment;
 pub mod errors;
+pub mod git_context;
 pub mod github;
 pub mod history;
 pub mod history_import;
@@ -90,6 +91,30 @@ impl ProcessEnvGuard {
         // serialization mechanism for process-global mutation.
         unsafe { std::env::set_var(key, value) };
         Self { key, previous }
+    }
+
+    /// Plant a decoy directory at the FRONT of the process `PATH` while
+    /// keeping the runner's own `PATH` behind it.
+    ///
+    /// A plain `set("PATH", dir)` hides the system tools (`sh`, `sleep`)
+    /// that unrelated tests spawn bare in parallel threads, flaking them
+    /// with `ENOENT`. Prepending keeps those resolvable while the decoy
+    /// still shadows same-named system tools, so "logical wins over
+    /// process" and "process-only is invisible" assertions keep their
+    /// discriminating power. The caller must still hold `test_env_lock()`.
+    pub(crate) fn prepend_path(dir: &std::path::Path) -> Self {
+        let previous = std::env::var_os("PATH");
+        let mut entries = vec![dir.as_os_str().to_owned()];
+        if let Some(previous) = &previous {
+            entries.extend(std::env::split_paths(previous).map(|p| p.into_os_string()));
+        }
+        let joined = std::env::join_paths(entries).expect("test PATH must join");
+        // SAFETY: same lock discipline as `set` above.
+        unsafe { std::env::set_var("PATH", joined) };
+        Self {
+            key: "PATH",
+            previous: previous.map(|v| v.to_string_lossy().into_owned()),
+        }
     }
 }
 

@@ -1,0 +1,125 @@
+# Runtime-authority exceptions: path<TAB>rule<TAB>detail<TAB>count.
+#
+# Every production `std::env::var*` read, `which::which` call, direct
+# `Command::new`, and `set_current_dir` outside test-only regions must be
+# listed here with a reason, or scripts/check-runtime-authority.py fails.
+# Runtime shell consumers (prompt, doctor, editors, Lisp, palette, external
+# dispatch) resolve through CommandRuntimeSnapshot instead and must never
+# appear here. A `#` comment above each entry group explains why the
+# process-global read is the authority there; adding a new same-shape call
+# changes the count and fails until a human reviews it. Removing a site
+# without dropping its entry fails as stale.
+#
+# Rules: process-env | which | command | set-cwd
+
+# Hook depth marker: a shell variable must not be able to clear the
+# "running inside a hook" flag, which is exactly the loop it prevents.
+dsh-builtin/src/chatgpt/hooks/config/load.rs	process-env	std::env::var_os(...)	1
+# MCP stdio transport baseline: server commands come from user config and
+# this layer has no shell proxy; PATH/HOME/LANG/LC_ALL/TMPDIR seed the
+# cleared environment before the server's own `env` applies.
+dsh-builtin/src/chatgpt/mcp/connection.rs	process-env	std::env::var_os(...)	1
+# MCP server command comes from server config, not shell resolution; the
+# transport owns its spawn contract (env_clear + explicit baseline).
+dsh-builtin/src/chatgpt/mcp/connection.rs	command	Command::new(<expr>)	1
+# AI allowlist second source: shell variable first, process environment
+# second — the documented AI-setting resolution order. Policy input, never
+# an executable lookup or child environment.
+dsh-builtin/src/chatgpt/tool/execute/authorize.rs	process-env	std::env::var(...)	2
+# AI execute tool runs through the fixed system shell: internal
+# interpreter boundary, never PATH-resolved.
+dsh-builtin/src/chatgpt/tool/execute/capture.rs	command	Command::new("/bin/sh")	1
+# Hook runner spawns the load-time pinned absolute program: pinning
+# (logical runtime) already happened in config load; this is the spawn.
+dsh-builtin/src/chatgpt/hooks/runner.rs	command	Command::new(<expr>)	1
+# doctor Herdr pane identity: HERDR_ENV / HERDR_PANE_ID / HERDR_BIN_PATH /
+# DOGESH_HERDR_OWNER_PID are ambient launch facts. DOGESH_HERDR_ENABLED is
+# deliberately NOT here — it is a logical shell setting via proxy.get_var.
+dsh-builtin/src/doctor/runtimes.rs	process-env	std::env::var(...)	2
+dsh-builtin/src/doctor/runtimes.rs	process-env	std::env::var_os(...)	1
+# mise provider subprocess: `mise` path already resolved via the logical
+# runtime; the provider owns its spawn contract (timeout + isolation).
+dsh-builtin/src/project/status.rs	command	Command::new(<expr>)	1
+# Task provider subprocess: executable already resolved via the logical
+# runtime snapshot; env_clear + snapshot child env at spawn.
+dsh-builtin/src/task.rs	command	Command::new(<expr>)	1
+# Test-harness helper: opt-in process-global mutation for stale-value
+# tests, serialized by the crate's env lock.
+dsh-builtin/src/test_support.rs	process-env	std::env::var(...)	1
+# Agent sandbox spawn: `srt` runtime resolved via logical search paths, or
+# the fixed system shell. Hardened sandbox boundary, not shell resolution.
+dsh-builtin/src/agent/sandbox.rs	command	Command::new(<expr>)	2
+# Insecure-HTTP bootstrap flag for direct OpenAiConfig construction; the
+# shell path resolves the same key through logical variables (from_getter).
+dsh-openai/src/config.rs	process-env	std::env::var(...)	1
+# The snapshot builder itself: the one place a bare name becomes an
+# absolute executable from logical state. Everything else delegates here.
+dsh-types/src/process_runtime.rs	command	std::process::Command::new(<expr>)	1
+# Herdr lifecycle spawn: HERDR_BIN_PATH is an absolute process-identity
+# path, never a PATH lookup.
+dsh/src/agent_lifecycle/herdr.rs	command	Command::new(<expr>)	1
+# Herdr detection reads ambient process facts only, so a shell variable
+# can neither spoof nor suppress "running under Herdr".
+dsh/src/agent_lifecycle/herdr.rs	process-env	std::env::var(...)	2
+dsh/src/agent_lifecycle/herdr.rs	process-env	std::env::var_os(...)	1
+# Completion display limit: terminal UI preference flag, not shell state.
+dsh/src/completion/display.rs	process-env	std::env::var(...)	1
+# Completion timing flag: diagnostics sampling switch, not shell state.
+dsh/src/completion/integrated/timing.rs	process-env	std::env::var(...)	1
+# File-path completion HOME fallback: OS account fact when the shell has
+# no logical HOME; never resurrects an unset shell variable into lookup.
+dsh/src/completion/path.rs	process-env	std::env::var(...)	1
+# Completion framework selector flag + current-dir fallback: UI/process
+# facts, not command resolution or child environments.
+dsh/src/completion/selection.rs	process-env	std::env::var(...)	2
+# Completion internal interpreter boundary: fixed system shell.
+dsh/src/completion/selection.rs	command	std::process::Command::new("/bin/sh")	1
+# Completion subprocess builder: generic owner shared by hardened dynamic
+# providers (executables pre-resolved); template path uses /bin/sh.
+dsh/src/completion/subprocess.rs	command	Command::new(<expr>)	1
+# Cron job interpreter boundary: fixed system shell with the stored job
+# snapshot environment, never PATH-resolved.
+dsh/src/cron/exec.rs	command	Command::new("/bin/sh")	1
+# Detached child re-exec: current_exe absolute path, not a PATH lookup.
+dsh/src/detached_child.rs	command	Command::new(<expr>)	1
+# Startup import: the process environment is seeded into shell variables
+# exactly once here; afterwards Environment is authoritative.
+dsh/src/environment/mod.rs	process-env	std::env::vars(...)	1
+# Test data-dir bootstrap (cfg(test) helper): XDG probe for test isolation.
+dsh/src/environment/mod.rs	process-env	std::env::var_os(...)	1
+# Atuin dual-write: optional external integration with a parameterized
+# executable, best-effort background thread without Environment access.
+dsh/src/history/command_history.rs	command	Command::new(<expr>)	2
+# Atuin dual-write feature flag: process-level opt-in, not shell state.
+dsh/src/history/command_history.rs	process-env	std::env::var(...)	1
+# Test-harness helpers: process-global mutation for stale-value tests,
+# serialized by the crate's test_env_lock.
+dsh/src/lib.rs	process-env	std::env::var(...)	1
+dsh/src/lib.rs	process-env	std::env::var_os(...)	1
+# config.lisp rollback: snapshots/restores the ambient process environment
+# around config evaluation so Lisp side effects stay reversible.
+dsh/src/lisp/mod.rs	process-env	std::env::vars_os(...)	2
+# Isolated shell builder: fixed system shell + explicit logical child env.
+dsh/src/process/isolated_shell.rs	command	Command::new(<expr>)	1
+# PTY disable switch: process-level debug flag, not shell state.
+dsh/src/process/job_pty.rs	process-env	std::env::var(...)	1
+# Re-exec child applier: applies the snapshot cwd inside the re-execed
+# helper, the only production set_current_dir outside changepwd.
+dsh/src/process/reexec/helper.rs	set-cwd	std::env::set_current_dir(...)	1
+# Helper binary override + child envp construction from the snapshot.
+dsh/src/process/reexec/mod.rs	process-env	std::env::var(...)	1
+dsh/src/process/reexec/mod.rs	process-env	std::env::vars_os(...)	1
+# Prompt probe builder: spawns the snapshot-resolved absolute executable
+# with env_clear + snapshot child env. The only probe spawn path.
+dsh/src/prompt/runtime.rs	command	tokio::process::Command::new(<expr>)	1
+# Canonical directory change: changepwd owns OLDPWD/stack/hooks updates.
+dsh/src/proxy/shell_proxy.rs	set-cwd	std::env::set_current_dir(...)	1
+# History picker selector flag + HOME fallback for init-time paths.
+dsh/src/repl/init.rs	process-env	std::env::var(...)	2
+# Terminal integration identity: TERM_PROGRAM / VSCODE nonce describe the
+# host terminal, never shell state.
+dsh/src/repl/shell_integration.rs	process-env	std::env::var(...)	2
+# Status-line selector flag: UI preference, not shell state.
+dsh/src/repl/status_line.rs	process-env	std::env::var(...)	1
+# Terminal-control kill switch: process-level bootstrap flag.
+dsh/src/terminal/mod.rs	process-env	std::env::var_os(...)	1

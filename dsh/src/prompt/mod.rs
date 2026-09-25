@@ -27,7 +27,7 @@ mod version_probes;
 
 #[cfg(test)]
 pub(crate) use git_status::parse_git_status_output;
-pub use git_status::{fetch_git_status_async, fetch_git_status_sync, find_git_root_async};
+pub(crate) use git_status::{fetch_git_status_async, find_git_root_async};
 pub(crate) use probe_lifecycle::{PromptProbe, PromptProbeEpoch, PromptProbeLifecycle};
 pub(crate) use runtime::{PromptRuntimeIdentity, PromptRuntimeSnapshot};
 #[cfg(test)]
@@ -478,6 +478,13 @@ impl Prompt {
         self.current_git_root.is_some()
     }
 
+    /// The current git root for runtime-gated publishing: a stale refresh
+    /// task must only publish status fetched for the root the prompt still
+    /// shows.
+    pub fn git_root_path(&self) -> Option<PathBuf> {
+        self.current_git_root.clone()
+    }
+
     pub fn get_git_status_cached(&self) -> Option<GitStatus> {
         let git_root = self.current_git_root.as_ref()?;
         let cache = self.git_status_cache.as_ref()?;
@@ -509,22 +516,6 @@ impl Prompt {
         };
 
         if let Some(status) = status {
-            if let Some(ref mut cache) = self.git_status_cache {
-                cache.update(status, git_root.clone());
-            } else {
-                self.git_status_cache = Some(GitStatusCache::new(status, git_root.clone()));
-            }
-        }
-    }
-
-    /// Synchronously refresh git status for accurate display after command execution.
-    /// This blocks but ensures the prompt shows the correct state immediately.
-    pub fn refresh_git_status_sync(&mut self) {
-        let Some(git_root) = &self.current_git_root else {
-            return;
-        };
-
-        if let Some(status) = fetch_git_status_sync(git_root) {
             if let Some(ref mut cache) = self.git_status_cache {
                 cache.update(status, git_root.clone());
             } else {

@@ -30,7 +30,6 @@ use serde_json::json;
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 mod verify;
 #[cfg(test)]
@@ -44,7 +43,7 @@ pub fn description() -> &'static str {
     "Generate a |: output-schema using AI, or validate existing ones"
 }
 
-pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     if argv.iter().any(|arg| arg == "--help" || arg == "-h") {
         ctx.write_stdout(usage()).ok();
         return ExitStatus::ExitedWith(0);
@@ -56,7 +55,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
                 .ok();
             ExitStatus::ExitedWith(1)
         }
-        Ok(action) => run_non_generate_action(ctx, action),
+        Ok(action) => run_non_generate_action(ctx, proxy, action),
         Err(e) => {
             ctx.write_stderr(&format!("Error: {:#}", e)).ok();
             ctx.write_stderr(usage()).ok();
@@ -90,16 +89,25 @@ pub fn command_async<'a>(
             command_line,
         } = action
         else {
-            return run_non_generate_action(ctx, action);
+            return run_non_generate_action(ctx, proxy, action);
         };
 
-        let outcome = match generate_async(ctx, proxy, &command_line, options.stdout).await {
-            Ok(outcome) => outcome,
+        let snapshot = match proxy.command_runtime_snapshot() {
+            Ok(snapshot) => snapshot,
             Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                ctx.write_stderr(&format!("Error: failed to snapshot runtime: {e:#}"))
+                    .ok();
                 return ExitStatus::ExitedWith(1);
             }
         };
+        let outcome =
+            match generate_async(ctx, proxy, &snapshot, &command_line, options.stdout).await {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    ctx.write_stderr(&format!("Error: {:#}", e)).ok();
+                    return ExitStatus::ExitedWith(1);
+                }
+            };
 
         for warning in &outcome.warnings {
             ctx.write_stderr(&format!("output-gen: warning: {warning}"))
@@ -131,9 +139,21 @@ pub fn command_async<'a>(
     })
 }
 
-fn run_non_generate_action(ctx: &Context, action: OutputGenAction) -> ExitStatus {
+fn run_non_generate_action(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    action: OutputGenAction,
+) -> ExitStatus {
+    let snapshot = match proxy.command_runtime_snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(e) => {
+            ctx.write_stderr(&format!("Error: failed to snapshot runtime: {e:#}"))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
     match action {
-        OutputGenAction::Check { command_line } => match run_check(&command_line) {
+        OutputGenAction::Check { command_line } => match run_check(&snapshot, &command_line) {
             Ok(report) => {
                 ctx.write_stdout(&report).ok();
                 ExitStatus::ExitedWith(0)
@@ -279,6 +299,7 @@ struct GenerateOutcome {
 async fn generate_async(
     ctx: &Context,
     proxy: &mut (impl crate::shell_capabilities::AiJsonRequest + ?Sized),
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
     command_line: &str,
     log_to_stderr: bool,
 ) -> Result<GenerateOutcome> {
@@ -293,7 +314,7 @@ async fn generate_async(
         log_to_stderr,
         &format!("Running '{command_line}' to capture a sample..."),
     );
-    let captured = run_command(&argv)
+    let captured = run_command(snapshot, &argv)
         .with_context(|| format!("Failed to run '{command_line}' for a sample"))?;
     let sample = captured.text;
     if sample.trim().is_empty() {
@@ -324,7 +345,7 @@ async fn generate_async(
         log_to_stderr,
         "Re-parsing the sample with the generated schema to verify it...",
     );
-    let report = verify_schema(&schema, &argv, &sample)
+    let report = verify_schema(snapshot, &schema, &argv, &sample)
         .context("generated schema failed verification against its own sample")?;
     warnings.extend(report.warnings);
 
@@ -400,6 +421,16 @@ Rules:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Empty runtime for schema-shape tests: they never reach the `prefer`
+    /// branch, so no executable resolution happens.
+    fn empty_snapshot() -> dsh_types::process_runtime::CommandRuntimeSnapshot {
+        dsh_types::process_runtime::CommandRuntimeSnapshot::new(
+            Vec::new(),
+            std::collections::HashMap::new(),
+            std::path::PathBuf::from("/"),
+        )
+    }
 
     #[test]
     fn parse_args_joins_unquoted_words_into_one_command_line() {
@@ -540,7 +571,7 @@ mod tests {
         .unwrap();
         let argv = vec!["ps".to_string(), "aux".to_string()];
         let sample = "USER PID COMMAND\nroot 1 /sbin/init\n";
-        let report = verify_schema(&schema, &argv, sample).unwrap();
+        let report = verify_schema(&empty_snapshot(), &schema, &argv, sample).unwrap();
         assert_eq!(report.row_count, 1);
         assert!(report.warnings.is_empty());
     }
@@ -553,7 +584,7 @@ mod tests {
         )
         .unwrap();
         let argv = vec!["ps".to_string(), "aux".to_string()];
-        assert!(verify_schema(&schema, &argv, "A\nb\n").is_err());
+        assert!(verify_schema(&empty_snapshot(), &schema, &argv, "A\nb\n").is_err());
     }
 
     #[test]
@@ -564,7 +595,7 @@ mod tests {
         )
         .unwrap();
         let argv = vec!["ps".to_string()];
-        assert!(verify_schema(&schema, &argv, "USER PID\nroot 1\n").is_err());
+        assert!(verify_schema(&empty_snapshot(), &schema, &argv, "USER PID\nroot 1\n").is_err());
     }
 
     #[test]
@@ -580,7 +611,7 @@ mod tests {
         )
         .unwrap();
         let argv = vec!["cmd".to_string()];
-        let err = verify_schema(&schema, &argv, ",,,\n").unwrap_err();
+        let err = verify_schema(&empty_snapshot(), &schema, &argv, ",,,\n").unwrap_err();
         assert!(err.to_string().contains("parsed 0 of"), "{err}");
     }
 
@@ -594,7 +625,7 @@ mod tests {
         )
         .unwrap();
         let argv = vec!["docker".to_string(), "ps".to_string()];
-        let report = verify_schema(&schema, &argv, "CONTAINER ID\n").unwrap();
+        let report = verify_schema(&empty_snapshot(), &schema, &argv, "CONTAINER ID\n").unwrap();
         assert_eq!(report.row_count, 0);
     }
 
@@ -607,7 +638,7 @@ mod tests {
         .unwrap();
         let argv = vec!["ps".to_string()];
         let sample = "PID\nnotanumber\nalsonotanumber\n";
-        let report = verify_schema(&schema, &argv, sample).unwrap();
+        let report = verify_schema(&empty_snapshot(), &schema, &argv, sample).unwrap();
         assert!(!report.warnings.is_empty());
     }
 

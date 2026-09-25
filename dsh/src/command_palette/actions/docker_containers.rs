@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct DockerContainersAction;
 
@@ -19,9 +19,15 @@ impl Action for DockerContainersAction {
         "🐳"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
-        // Get container list (all, including stopped)
-        let output = Command::new("docker")
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
+        // Get container list (all, including stopped). A missing `docker`
+        // is the friendly skip it always was, not an action error.
+        let Some(mut docker) = runtime.std_command("docker") else {
+            println!("Docker is not available or no containers found");
+            return Ok(());
+        };
+        let output = docker
             .args([
                 "ps",
                 "-a",
@@ -112,7 +118,9 @@ impl Action for DockerContainersAction {
 
             println!("docker {} {}", action, container_name);
 
-            let mut cmd = Command::new("docker");
+            let mut cmd = runtime
+                .std_command("docker")
+                .context("command not found: docker")?;
             cmd.args(&args);
             cmd.arg(&container_name);
             cmd.status()

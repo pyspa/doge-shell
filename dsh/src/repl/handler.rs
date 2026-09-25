@@ -458,7 +458,26 @@ pub(crate) async fn handle_key_event(
             let _status_pause = crate::repl::status_line::StatusLinePause::new(
                 repl.terminal_ui.status_line.clone(),
             );
-            match open_editor(repl.input.as_str(), "sh") {
+            // Logical VISUAL/EDITOR plus the runtime snapshot: the editor
+            // resolves through the shell PATH and inherits exactly the
+            // exported environment, never the process-global one.
+            let (snapshot, visual, editor) = {
+                let env = repl.shell.environment.read();
+                let current_dir =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                (
+                    env.command_runtime_snapshot(current_dir),
+                    env.get_var("VISUAL"),
+                    env.get_var("EDITOR"),
+                )
+            };
+            match open_editor(
+                &snapshot,
+                visual.as_deref(),
+                editor.as_deref(),
+                repl.input.as_str(),
+                "sh",
+            ) {
                 Ok(content) => {
                     repl.input.reset(content);
                     repl.ai_ui.last_input_change_time = std::time::Instant::now();

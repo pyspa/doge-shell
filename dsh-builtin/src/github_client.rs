@@ -1,8 +1,8 @@
+use crate::ShellProxy;
 use anyhow::Result;
 use serde::Deserialize;
 use skim::SkimItem;
 use std::borrow::Cow;
-use std::process::{Command, Stdio};
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct PrInfo {
@@ -53,17 +53,15 @@ impl SkimItem for PrInfo {
     }
 }
 
-pub fn is_gh_installed() -> bool {
-    Command::new("which")
-        .arg("gh")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+/// Whether `gh` resolves on the shell's logical PATH.
+///
+/// Pure resolution, no spawn: the same `gh` the shell would run is the one
+/// these helpers use. Never the process-global `PATH`.
+pub fn is_gh_installed(proxy: &mut dyn ShellProxy) -> bool {
+    crate::runtime_spawn::runtime_command(proxy, "gh").is_ok()
 }
 
-pub fn get_prs() -> Result<Vec<PrInfo>, String> {
+pub fn get_prs(proxy: &mut dyn ShellProxy) -> Result<Vec<PrInfo>, String> {
     let args = vec![
         "pr",
         "list",
@@ -73,7 +71,8 @@ pub fn get_prs() -> Result<Vec<PrInfo>, String> {
         "number,title,author,headRefName,state,isDraft",
     ];
 
-    let output = Command::new("gh")
+    let output = crate::runtime_spawn::runtime_command(proxy, "gh")
+        .map_err(|e| format!("failed to execute gh: {e}"))?
         .args(&args)
         .output()
         .map_err(|e| format!("failed to execute gh: {e}"))?;

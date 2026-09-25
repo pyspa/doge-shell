@@ -116,15 +116,21 @@ pub(super) fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
 
     format!(
         "- OS: {os} ({arch})\n- Current directory: {cwd}\n- Git: {}",
-        describe_git_state()
+        describe_git_state(proxy)
     )
 }
 
-pub(super) fn describe_git_state() -> String {
-    match Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-    {
+pub(super) fn describe_git_state(proxy: &mut dyn ShellProxy) -> String {
+    // Resolved through the logical runtime, spawned with exactly the
+    // exported child environment: the model sees the same git the shell
+    // would run.
+    let output = crate::runtime_spawn::runtime_command(proxy, "git").and_then(|mut command| {
+        command
+            .args(["rev-parse", "--is-inside-work-tree"])
+            .output()
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    });
+    match output {
         Ok(output) if output.status.success() => {
             let inside = String::from_utf8_lossy(&output.stdout)
                 .trim()
@@ -134,7 +140,7 @@ pub(super) fn describe_git_state() -> String {
                 return "not inside a Git worktree".to_string();
             }
 
-            match git_state_details() {
+            match git_state_details(proxy) {
                 Some((root, branch)) => match root {
                     Some(root) => format!("inside a Git worktree (root: {root}, {branch})"),
                     None => format!("inside a Git worktree ({branch})"),
@@ -159,8 +165,9 @@ pub(super) fn describe_git_state() -> String {
     }
 }
 
-pub(super) fn git_state_details() -> Option<(Option<String>, String)> {
-    let output = Command::new("git")
+pub(super) fn git_state_details(proxy: &mut dyn ShellProxy) -> Option<(Option<String>, String)> {
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .ok()?
         .args([
             "rev-parse",
             "--show-toplevel",

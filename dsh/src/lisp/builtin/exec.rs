@@ -43,7 +43,21 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
         }
     }
 
-    match Command::new(cmd).args(cmd_args).output() {
+    // SafetyGuard first, then the runtime snapshot: resolve through the
+    // logical PATH and spawn with the exported child environment only.
+    // Process-global PATH and inherited environment are never consulted,
+    // so an unexported logical PATH still resolves and a logically unset
+    // variable stays unset.
+    let snapshot = {
+        let shell_env = env.borrow();
+        let guard = shell_env.shell_env.read();
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        guard.command_runtime_snapshot(current_dir)
+    };
+    let mut spawn = snapshot.std_command(&cmd).ok_or_else(|| RuntimeError {
+        msg: format!("command not found: {cmd}"),
+    })?;
+    match spawn.args(cmd_args).output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout)
                 .trim_end()
@@ -194,4 +208,94 @@ pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
         msg: "Thread panicked".to_string(),
     })?
     .map(|_| Value::NIL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use crate::environment::Environment;
+
+    fn write_script(dir: &std::path::Path, name: &str, body: &str) {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+    }
+
+    fn lisp_env_for(
+        shell_env: std::sync::Arc<parking_lot::RwLock<Environment>>,
+    ) -> Rc<RefCell<Env>> {
+        crate::lisp::make_env(shell_env)
+    }
+
+    fn string_arg(value: &str) -> Value {
+        Value::String(value.to_string())
+    }
+
+    /// `(command "foo")` resolves through the unexported logical PATH:
+    /// process PATH B holds a different `foo`, but A runs.
+    #[test]
+    fn lisp_command_uses_unexported_logical_path() {
+        let _guard = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let logical = root.path().join("logical-bin");
+        let process = root.path().join("process-bin");
+        std::fs::create_dir_all(&logical).unwrap();
+        std::fs::create_dir_all(&process).unwrap();
+        write_script(&logical, "foo", "#!/bin/sh\nprintf 'logical-foo'\n");
+        write_script(&process, "foo", "#!/bin/sh\nprintf 'process-foo'\n");
+        let _process_path = crate::ProcessEnvGuard::prepend_path(&process);
+
+        let shell_env = Environment::new();
+        {
+            let mut env = shell_env.write();
+            env.unset_shell_var("PATH");
+            env.set_shell_var("PATH".to_string(), logical.to_string_lossy().into_owned());
+            assert!(!env.variable_state.exported_vars.contains("PATH"));
+            assert!(!env.child_process_env().contains_key("PATH"));
+        }
+
+        let env = lisp_env_for(shell_env);
+        match command(env, vec![string_arg("foo")]) {
+            Ok(Value::String(output)) => assert_eq!(output, "logical-foo"),
+            other => panic!("expected logical-foo output, got {other:?}"),
+        }
+    }
+
+    /// A logically unset variable stays unset in the Lisp child: no
+    /// resurrection from the process environment.
+    #[test]
+    fn lisp_command_logical_unset_stays_unset() {
+        let _guard = crate::test_env_lock();
+        let root = tempfile::tempdir().unwrap();
+        let logical = root.path().join("logical-bin");
+        std::fs::create_dir_all(&logical).unwrap();
+        write_script(
+            &logical,
+            "showfoo",
+            "#!/bin/sh\nprintf '%s' \"${DOGESH_LISP_FOO-unset}\"\n",
+        );
+        let _stale = crate::ProcessEnvGuard::set("DOGESH_LISP_FOO", "stale-secret");
+
+        let shell_env = Environment::new();
+        {
+            let mut env = shell_env.write();
+            // Startup import saw the stale value; `unset` is final.
+            assert!(env.lookup_variable("DOGESH_LISP_FOO").is_some());
+            env.unset_shell_var("DOGESH_LISP_FOO");
+            env.unset_shell_var("PATH");
+            env.set_shell_var("PATH".to_string(), logical.to_string_lossy().into_owned());
+        }
+
+        let env = lisp_env_for(shell_env);
+        match command(env, vec![string_arg("showfoo")]) {
+            Ok(Value::String(output)) => assert_eq!(output, "unset"),
+            other => panic!("expected unset output, got {other:?}"),
+        }
+    }
 }

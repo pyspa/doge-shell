@@ -96,6 +96,7 @@ pub mod shell_capabilities;
 pub(crate) mod test_support;
 
 mod reload;
+pub mod runtime_spawn;
 pub mod serve;
 mod set;
 mod skim_runner;

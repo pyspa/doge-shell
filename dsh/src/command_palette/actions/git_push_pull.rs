@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct GitPushPullAction;
 
@@ -22,9 +22,12 @@ impl Action for GitPushPullAction {
     fn category(&self) -> &str {
         "Git"
     }
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Get current branch
-        let branch_output = Command::new("git")
+        let branch_output = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["branch", "--show-current"])
             .stdout(Stdio::piped())
             .output()?;
@@ -76,7 +79,9 @@ impl Action for GitPushPullAction {
             };
 
             println!("git {}", args.join(" "));
-            Command::new("git")
+            runtime
+                .std_command("git")
+                .context("command not found: git")?
                 .args(&args)
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed: {}", e))?;

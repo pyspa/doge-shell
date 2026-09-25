@@ -109,3 +109,14 @@
 - `variable_state.paths` は derived effective lookup projection であり、独立した書き込み可能な PATH ストアではない。読んで新値を組み立てる用途に限る。
 - `add_path` 等の PATH helper は既存の export 属性を保持する（`set_and_export_shell_var` を使わない）。
 - PATH 変更時の command-location cache 無効化と PATH 由来 completion cache の再活性化は `refresh_derived_state("PATH")` 経由でのみ行う。caller 側で個別に cache を触らない。
+
+## Runtime subprocess authority
+
+- subprocess の bare executable を `std::process::Command` の PATH search に任せない。`Command::new("git")` + `env_clear` は OS の PATH で解決されるため、unexported logical PATH と乖離する。
+- runtime command は `CommandRuntimeSnapshot`（`dsh-types/src/process_runtime.rs`）で先に解決する。snapshot は logical `PATH`・`Environment::child_process_env()`・snapshot cwd の3点のみを持ち、変数・alias・policy・cache は持たない。
+- child env は `Environment::child_process_env()` 由来のみ。export されていない変数を渡さない。
+- relative/empty PATH entry は snapshot cwd を基準に解決する。
+- `/bin/sh` は内部 interpreter boundary であり、logical / process-global のいずれの PATH でも解決しない。
+- builtin が spawn する場合は `ProcessEnvironmentCapability::command_runtime_snapshot()` を使う。`ShellProxy` に新規メソッドを足さない。
+- process-global exception（`HERDR_*` 等の integration identity、bootstrap/debug/test-harness）は `scripts/runtime-authority-allowlist.txt` に理由付きで登録する。file 全体許可はしない。
+- `scripts/check-runtime-authority.py` が CI invariant。新規 violation・stale entry・count 変化はすべて失敗にする。

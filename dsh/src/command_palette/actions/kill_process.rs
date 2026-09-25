@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct KillProcessAction;
 
@@ -19,9 +19,12 @@ impl Action for KillProcessAction {
         "💀"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Get process list
-        let output = Command::new("ps")
+        let output = runtime
+            .std_command("ps")
+            .context("command not found: ps")?
             .args(["aux"])
             .stdout(Stdio::piped())
             .output()?;
@@ -65,7 +68,9 @@ impl Action for KillProcessAction {
 
             if let Some(pid) = pid {
                 println!("Killing process {}", pid);
-                Command::new("kill")
+                runtime
+                    .std_command("kill")
+                    .context("command not found: kill")?
                     .arg(pid)
                     .status()
                     .map_err(|e| anyhow::anyhow!("Failed to kill process: {}", e))?;

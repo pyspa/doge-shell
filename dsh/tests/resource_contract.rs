@@ -19,7 +19,9 @@ mod common;
 
 use std::time::Duration;
 
-use common::process::{DEFAULT_CASE_TIMEOUT, spawn_dsh_unlocked};
+use common::process::{
+    DEFAULT_CASE_TIMEOUT, spawn_dsh_unlocked, spawn_dsh_unlocked_with_nofile_limit,
+};
 use common::{head_path, run_command, serial_guard, tr_path, yes_path};
 
 const DRAIN_TIMEOUT: Duration = DEFAULT_CASE_TIMEOUT;
@@ -143,6 +145,39 @@ fn substitution_survives_fd_pressure() {
     assert!(
         output.status.success() && stdout.contains("FD-PRESSURE-MARKER"),
         "producer lost under fd pressure: stdout={stdout:?} stderr={stderr:?} status={:?}",
+        output.status,
+    );
+}
+
+/// Repeated foreground `<(...)` under a tight child-only FD budget.
+///
+/// `NOFILE_LIMIT` applies to the dogesh child alone (the parent test process
+/// keeps its limits). Each foreground Read substitution must return its
+/// retained endpoint and reap its producer synchronously, so per-iteration FD
+/// use falls back to baseline. `ITERATIONS > NOFILE_LIMIT` keeps this honest:
+/// one leaked descriptor per iteration would exhaust the table before the
+/// final marker. `&&` chaining (never `;`) stops a mid-run materialization
+/// failure from going green on the trailing marker.
+#[test]
+fn process_substitution_does_not_exhaust_fd_budget() {
+    let _serial = serial_guard();
+    const NOFILE_LIMIT: u64 = 96;
+    const ITERATIONS: usize = 128;
+    let mut script = String::new();
+    for _ in 0..ITERATIONS {
+        script.push_str("cat <(printf x) > /dev/null && ");
+    }
+    script.push_str("printf 'FD-RELEASE-OK\\n'");
+    let process = spawn_dsh_unlocked_with_nofile_limit(["-c", &script], None, NOFILE_LIMIT);
+    let output = process
+        .assert_group_drained(Duration::from_secs(60))
+        .expect("group must drain after repeated process substitution under fd budget");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success() && stdout.contains("FD-RELEASE-OK"),
+        "fd budget exhausted after {ITERATIONS} iterations (limit {NOFILE_LIMIT}): \
+         stdout={stdout:?} stderr={stderr:?} status={:?}",
         output.status,
     );
 }

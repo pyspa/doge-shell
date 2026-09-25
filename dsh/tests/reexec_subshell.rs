@@ -302,25 +302,3 @@ fn nested_process_substitution_inside_capture() {
         "nested producer output missing: {out:?}"
     );
 }
-
-#[test]
-fn dropped_owned_fd_closes_for_real() {
-    use std::os::fd::{FromRawFd, OwnedFd};
-
-    let mut pipe_fds = [0 as std::os::unix::io::RawFd; 2];
-    assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
-    let read_fd = pipe_fds[0];
-    let write_fd = pipe_fds[1];
-    {
-        let _owned = unsafe { OwnedFd::from_raw_fd(read_fd) };
-        // `OwnedFd` closes on drop: the fd must be gone afterwards on both
-        // Linux and macOS, so the parent never leaks one fd per `<(...)`.
-        assert_eq!(unsafe { libc::fcntl(read_fd, libc::F_GETFD) }, 0);
-    }
-    assert_eq!(
-        unsafe { libc::fcntl(read_fd, libc::F_GETFD) },
-        -1,
-        "dropped OwnedFd left the descriptor open"
-    );
-    unsafe { libc::close(write_fd) };
-}

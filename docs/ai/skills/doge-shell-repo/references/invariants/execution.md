@@ -46,6 +46,7 @@
 - process-heavy fix → `cargo nextest run -p doge-shell -P ci --stress-count 10 -j 1` の targeted stress。
 - contract の期待値は現在の実装ではなく仕様上正しい挙動を書く。壊れていれば XFAIL。`exit 7` のような外部 helper は spec 内 token（`{{TRUE}}` 等）で書く。絶対 path・`..` escape は runner が reject する。
 - race test に `sleep` ベースの readiness は使わない。pipe / marker / handshake + bounded timeout。
+- FD close の検証に、drop 済み `OwnedFd` の stale `RawFd` 数値への `fcntl(F_GETFD)` + `EBADF` 期待を使わない。close 後の descriptor number は同一プロセス内の別 thread/test に即再利用され得るため、close/leak の証明にならない。FD leak は isolated child + bounded `RLIMIT_NOFILE` + repeated real operation の behavioral contract で検証する。
 - property test で実 process を spawn しない。OS 依存（`waitpid`・`ECHILD`・`SIGSTOP` 配送・PGID・実 child exit）は deterministic test / Resource Harness 側。
 - `cargo test` と nextest は process isolation が違う。nextest の `static Mutex` は binary を跨いだ exclusion にならない。targeted lane は `-j 1`。
 

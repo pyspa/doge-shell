@@ -7,6 +7,9 @@
 //!
 //! - [`spawn_dsh_unlocked`]: no global lock; only dedicated concurrency
 //!   tests may use it, so ordinary tests can never accidentally go parallel.
+//! - [`spawn_dsh_unlocked_with_nofile_limit`]: same as above, but only the
+//!   child's own `RLIMIT_NOFILE` is lowered (the parent test process keeps
+//!   its limits).
 //! - [`DshTestProcess`]: RAII handle (stdin writes, bounded wait,
 //!   process-group cleanup, opt-in group-drain assertion).
 //!
@@ -248,11 +251,53 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let command = {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_dogesh"));
+        command.args(args);
+        command
+    };
+    spawn_child(command, input)
+}
+
+/// Spawn a `dogesh` child with only its own `RLIMIT_NOFILE` lowered.
+///
+/// The parent `cargo test` / nextest process keeps its limits: the bound is
+/// applied inside a `/bin/sh` wrapper (`ulimit -n "$1"; shift; exec "$@"`)
+/// that `exec`s dogesh, so the child PID/PGID ownership, isolated
+/// cwd/HOME/XDG, capture pipes, `process_group(0)`, and bounded wait stay
+/// identical to [`spawn_dsh_unlocked`]. Dogesh and script travel as
+/// positional arguments, never interpolated into the wrapper string.
+///
+/// A wrapper `ulimit` failure exits 97 so a platform that rejects the limit
+/// fails loudly instead of running unbounded.
+pub fn spawn_dsh_unlocked_with_nofile_limit<I, S>(
+    args: I,
+    input: Option<&str>,
+    nofile_limit: u64,
+) -> DshTestProcess
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("ulimit -n \"$1\" || exit 97; shift; exec \"$@\"")
+        .arg("dogesh-rlimit-wrapper")
+        .arg(nofile_limit.to_string())
+        .arg(env!("CARGO_BIN_EXE_dogesh"))
+        .args(args);
+    spawn_child(command, input)
+}
+
+/// Finish spawning `command` exactly the way [`spawn_dsh_unlocked`] does:
+/// isolated dirs, deterministic env, captured stdio, own process group,
+/// bounded-wait RAII handle.
+fn spawn_child(mut command: Command, input: Option<&str>) -> DshTestProcess {
     let temp = TempDir::new().expect("failed to create isolated dsh test directory");
     let workdir = temp.path().join("work");
     std::fs::create_dir_all(&workdir).expect("create isolated contract cwd");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_dogesh"))
-        .args(args)
+    let mut child = command
         .current_dir(&workdir)
         .envs(contract_env(&temp))
         .stdin(if input.is_some() {

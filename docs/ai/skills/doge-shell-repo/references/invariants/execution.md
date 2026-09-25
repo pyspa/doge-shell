@@ -80,6 +80,7 @@
 - wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait`/`wait -n` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
 - ledger は bounded（`CHILD_MAX` 相当、fallback 4096）。prune は oldest Completed から。Active は捨てない。PID reuse は new register が勝つ。completed retention は metadata/status のみで process resource を所有しない。
 - `jobs`・completion notice・`fg`/`bg` は archive するが consume しない。consume するのは `wait` だけ。
+- `fg` is a status-bearing job-control builtin. Completed: return `Job::final_exit_status()` after canonical `ToEof` finalization. Stopped again: job final status remains `None`; `fg` invocation status is `128 +` observed stop signal; job is requeued and wait ownership remains `Active`. Running/incomplete + successful wait: infrastructure inconsistency; requeue ownership first, then error; never synthesize status 0. `fg` archives known-async completion but never consumes it; only `wait` consumes `KnownAsyncLedger` status. Do not read live `ShellOptions`. Do not derive pipeline status from `Job.state`.
 - normal-exit detach（`Shell::detach_known_async_jobs_for_normal_exit`）は user command ではない。ledger status を consume せず `$?`/`foreground status` を書き換えない。detach failure は infrastructure failure（exit 1）で ownership を維持し、`Drop` cleanup が kill する。
 - テストは `dsh/tests/wait_semantics.rs`。sandbox の SafetyGuard が nested shell（`sh`/`bash`）を deny するため、exact status には `false`(1)/`true`(0)/self-`kill`(143)/unknown-command(127) を使う。`sh -c 'exit N'` 前提にしない。
 

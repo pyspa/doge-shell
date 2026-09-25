@@ -563,12 +563,6 @@ async fn finalize_wait_next_selection(shell: &mut Shell, index: usize) -> Result
     })
 }
 
-impl dsh_builtin::shell_capabilities::JobControlCapability for Shell {
-    fn wait_for_jobs(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32> {
-        execute_wait(self, ctx, argv)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

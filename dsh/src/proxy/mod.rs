@@ -32,7 +32,7 @@ use tracing::{debug, warn};
 /// handling instead of reimplementing it, without widening the whole `builtin`
 /// module's visibility.
 pub(crate) fn resume_job_foreground(shell: &mut Shell, ctx: &Context, job_id: usize) -> Result<()> {
-    builtin::jobs::execute_fg(shell, ctx, vec!["fg".to_string(), job_id.to_string()])
+    builtin::jobs::execute_fg(shell, ctx, vec!["fg".to_string(), job_id.to_string()]).map(|_| ())
 }
 
 fn canonical_or_original(path: &Path) -> PathBuf {

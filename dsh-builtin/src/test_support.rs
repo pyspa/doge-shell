@@ -117,6 +117,11 @@ pub(crate) struct TestShellProxy {
     /// When set, `wait_for_jobs` fails with this message instead of
     /// returning `wait_status`.
     pub wait_error: Option<String>,
+    /// `foreground_job`'s canned reply: the status the host reports.
+    pub foreground_status: i32,
+    /// When set, `foreground_job` fails with this message instead of
+    /// returning `foreground_status`.
+    pub foreground_error: Option<String>,
     /// `read_shell_line` canned status (`None` fails closed) / error.
     pub read_status: Option<dsh_types::ExitStatus>,
     pub read_error: Option<String>,
@@ -178,6 +183,8 @@ impl Default for TestShellProxy {
             cron_tool_error: None,
             wait_status: 0,
             wait_error: None,
+            foreground_status: 0,
+            foreground_error: None,
             read_status: None,
             read_error: None,
             shell_options: ShellOptions::default(),
@@ -630,6 +637,13 @@ impl crate::shell_capabilities::JobControlCapability for TestShellProxy {
         match &self.wait_error {
             Some(message) => Err(anyhow::anyhow!(message.clone())),
             None => Ok(self.wait_status),
+        }
+    }
+
+    fn foreground_job(&mut self, _ctx: &Context, _argv: Vec<String>) -> Result<i32> {
+        match &self.foreground_error {
+            Some(message) => Err(anyhow::anyhow!(message.clone())),
+            None => Ok(self.foreground_status),
         }
     }
 }

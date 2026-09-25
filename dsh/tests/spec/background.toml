@@ -204,3 +204,47 @@ stdout_contains = ["NEXT"]
 [[case.expect.files]]
 path = "bg.txt"
 exists = true
+
+# `fg` is status-bearing: the foregrounded command status passes through.
+[[case]]
+id = "background.fg-propagates-command-status"
+class = "dogesh"
+mode = "command"
+script = "{{FALSE}} & fg %1; echo FG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["FG:1"]
+
+# `fg` with an empty job table is an error, never success.
+[[case]]
+id = "background.fg-without-current-job-is-error"
+class = "dogesh"
+mode = "command"
+script = "fg; echo FG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["FG:1"]
+stderr_contains = ["fg:"]
+
+# Completed foreground pipeline uses the launch-time frozen policy.
+[[case]]
+id = "background.fg-pipefail-off-uses-tail-status"
+class = "dogesh"
+mode = "command"
+script = "{{FALSE}} | {{TRUE}} & fg %1; echo FG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["FG:0"]
+
+[[case]]
+id = "background.fg-pipefail-on-uses-logical-status"
+class = "dogesh"
+mode = "command"
+script = "set -o pipefail; {{FALSE}} | {{TRUE}} & fg %1; echo FG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["FG:1"]

@@ -268,10 +268,11 @@ mod tests {
             &[ProcessState::Running, ProcessState::Completed(0, None)],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
-            .await
-            .expect("finalize");
-
+        let result = finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx()).await;
+        assert!(
+            result.is_err(),
+            "Running + Ok(()) is an infrastructure inconsistency, never synthetic success"
+        );
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
         assert!(!requeued.is_process_tree_completed());
@@ -290,9 +291,14 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
+        let status = finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
             .await
             .expect("finalize");
+        assert_eq!(
+            status,
+            crate::process::signal_exit_status(Signal::SIGTSTP),
+            "re-stopped fg invocation reports 128 + stop signal"
+        );
 
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
@@ -315,9 +321,10 @@ mod tests {
             ],
         );
 
-        finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
+        let status = finalize_foreground_job(&mut shell, job, Ok(()), &fg_test_ctx())
             .await
             .expect("finalize");
+        assert_eq!(status, 0);
 
         assert!(
             shell.wait_jobs.is_empty(),

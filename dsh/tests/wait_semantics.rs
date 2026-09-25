@@ -425,3 +425,27 @@ fn wait_next_honors_frozen_pipefail_policy() {
         "pipefail ON serves the upstream failure: {pipefail:?}"
     );
 }
+
+#[test]
+fn fg_reports_status_without_consuming_wait_status() {
+    let stdout = stdout_of(
+        "false & p=$!; \
+         fg %1; echo FG:$?; \
+         wait $p; echo WAIT:$?",
+    );
+
+    assert!(stdout.contains("FG:1"), "fg must report: {stdout:?}");
+    assert!(stdout.contains("WAIT:1"), "wait must still own: {stdout:?}");
+}
+
+#[test]
+fn fg_pipefail_uses_frozen_policy_without_consuming_wait_status() {
+    let stdout = stdout_of(
+        "set -o pipefail; false | true & p=$!; \
+         fg %1; echo FG:$?; \
+         wait $p; echo WAIT:$?",
+    );
+
+    assert!(stdout.contains("FG:1"), "fg pipefail ON: {stdout:?}");
+    assert!(stdout.contains("WAIT:1"), "wait retains: {stdout:?}");
+}

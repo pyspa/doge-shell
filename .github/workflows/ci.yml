@@ -131,7 +131,7 @@ jobs:
         timeout-minutes: 15
         run: >
           cargo test -p doge-shell --test fd_ownership
-          --test reexec_subshell --test pipeline_semantics
+          --test reexec_subshell --test substitution --test pipeline_semantics
           --test background_builtin --test wait_semantics
           --test async_exit_semantics < /dev/null
 
@@ -173,7 +173,7 @@ jobs:
       # retries diagnose flakes, `flaky-result = "fail"` keeps them red, and
       # an empty selection fails instead of going green. Serial (`-j 1`):
       # races are created explicitly inside tests, never by the runner.
-      # Budget: ~1 min per iteration locally, x10 fits the step timeout
+      # Budget: ~1-2 min per iteration locally, x10 fits the step timeout
       # with margin for slower CI hosts.
       - name: Targeted stress
         timeout-minutes: 35
@@ -181,10 +181,12 @@ jobs:
           cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10
           -E 'binary(shell_contract) or binary(resource_contract)
           or binary(fd_ownership) or binary(reexec_subshell)
+          or binary(substitution)
           or binary(pipeline_semantics) or binary(background_builtin)
           or binary(wait_semantics) or binary(async_exit_semantics)
           or test(lifecycle_property) or test(output_monitor_completion)
-          or test(foreground_output_observer)'
+          or test(foreground_output_observer)
+          or test(/process_substitution::tests::/)'
           < /dev/null
 
   lint:

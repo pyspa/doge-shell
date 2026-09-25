@@ -25,7 +25,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Background Processing**: Run commands in background with `&` and manage jobs
 - **Pipes and Redirections**: Support for pipes (`|`), structured pipes (`|:`), input/output redirection (`>`, `>>`, `<`), and error redirection
 - **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
-- **Subshells**: Support for command substitution and process substitution (`<(...)` only; `>(...)` not supported yet)
+- **Subshells**: Support for command substitution and process substitution (`<(...)` and `>(...)`)
 - **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
 
 ### Advanced Features
@@ -1523,7 +1523,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
     - `execute` runs a shell command - pipes, redirection and `&&` included - and kills
       it after `timeout_ms` (120s by default), so a build or a dev server cannot wedge
       the shell. What the guard cannot read before it runs is refused rather than
-      approved: command substitution (`$(...)`, backticks, `<(...)`) and subshells,
+      approved: command substitution (`$(...)`, backticks, `<(...)`, `>(...)`) and subshells,
       because evaluating them is what a safety check must not do; compound
       statements (`{ ...; }`, `for`, `if`, `while`), because the commands inside one
       cannot be classified; a line the parser cannot finish; and any way of handing

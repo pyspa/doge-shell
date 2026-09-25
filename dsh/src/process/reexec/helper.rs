@@ -207,7 +207,7 @@ async fn run_helper_no_command(shell: &mut Shell, no_command: &NoCommandExecRequ
             assignments: no_command.assignments.clone(),
             redirects: Vec::new(),
             last_command_substitution_status: no_command.last_command_substitution_status,
-            resources: crate::shell::substitution::ExecutionResources::new(),
+            resources: crate::shell::process_substitution::ExecutionResources::new(),
         },
     );
     match result {
@@ -326,14 +326,17 @@ async fn run_helper_plan(
     // Normal helper exit: release helper-local known-async ownership so a
     // nested `&` child is not killed by this shell's `Drop` merely because
     // its parent helper finished. Only this helper's own `wait_jobs` and
-    // ledger entries move — outer ownership (the parent's tables, the
-    // producer-registry group a substitution helper joined) is untouched.
-    // Untracked background provenance stays shell-owned for `Drop` cleanup.
+    // ledger entries move — outer ownership (the parent's tables) is
+    // untouched. Untracked background provenance stays shell-owned for
+    // `Drop` cleanup. Nested `>(...)` consumers are likewise released
+    // without signal/wait so `$(printf x > >(consumer))` payloads survive
+    // helper exit; `<(...)` producers stay owned for `Drop` cleanup.
     if let Err(err) = shell.detach_known_async_jobs_for_normal_exit() {
         eprintln!("dogesh: internal exec plan failed: {err:#}");
         report_status_byte(status_fd, b'E');
         return Ok(1);
     }
+    let _ = shell.detach_process_substitution_consumers_for_normal_exit();
     match outcome {
         Ok(code) => {
             report_status_byte(status_fd, b'A');

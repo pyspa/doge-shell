@@ -126,7 +126,9 @@ fn collect_highlight_from_pair(
         | Rule::stdin_redirect_direction_in => {
             push_token(pair.as_span(), HighlightKind::Redirect, out);
         }
-        Rule::proc_subst_direction | Rule::proc_subst_direction_in => {
+        Rule::proc_subst_direction
+        | Rule::proc_subst_direction_in
+        | Rule::proc_subst_direction_out => {
             push_token(pair.as_span(), HighlightKind::ProcSubstitution, out);
         }
         Rule::pipeline_op | Rule::struct_pipe_op => {

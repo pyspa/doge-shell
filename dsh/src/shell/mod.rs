@@ -10,6 +10,7 @@ pub mod no_command;
 pub mod parse;
 pub mod pipeline_isolation;
 pub mod plan;
+pub mod process_substitution;
 pub mod struct_pipe;
 pub mod substitution;
 pub mod word_expand;
@@ -57,10 +58,13 @@ pub struct Shell {
     pub safety_guard: Arc<crate::safety::SafetyGuard>,
     pub github_status: Option<Arc<RwLock<crate::github::GitHubStatus>>>,
     pub(crate) completion_runtime: Option<Arc<crate::completion::dynamic::CompletionRuntime>>,
-    /// Process-substitution producers this session still owns. Per-shell so
-    /// one shell's shutdown never group-kills another shell's producers in a
-    /// multi-shell process (unit tests). See `substitution::ProducerRegistry`.
-    pub producer_registry: crate::shell::substitution::ProducerRegistry,
+    /// Process-substitution helpers this session still owns, in both
+    /// directions (`<(...)` producers and `>(...)` consumers). Per-shell so
+    /// one shell's shutdown never group-kills another shell's helpers in a
+    /// multi-shell process (unit tests). See
+    /// `process_substitution::ProcessSubstitutionRegistry`.
+    pub process_substitution_registry:
+        crate::shell::process_substitution::ProcessSubstitutionRegistry,
     pub session_id: String,
     pending_eval_commands: VecDeque<String>,
     pending_eval_drain_active: Arc<AtomicBool>,
@@ -97,8 +101,12 @@ impl Drop for Shell {
         let _ = self.kill_wait_jobs();
         // Producer helpers outlive nothing: group-kill any still-registered
         // group so grandchildren cannot hold session pipes open past exit.
-        // Per-shell registry: only this session's lingering producers.
-        self.producer_registry.cleanup_producer_groups();
+        // Per-shell registry: only this session's lingering helpers, in both
+        // directions. Normal-exit `Write` consumers must have been explicitly
+        // released via `detach_process_substitution_consumers_for_normal_exit`
+        // before this point; anything still registered here is abnormal.
+        self.process_substitution_registry
+            .cleanup_process_substitution_groups();
     }
 }
 
@@ -131,7 +139,8 @@ impl Shell {
             safety_guard,
             github_status: None,
             completion_runtime: None,
-            producer_registry: crate::shell::substitution::ProducerRegistry::default(),
+            process_substitution_registry:
+                crate::shell::process_substitution::ProcessSubstitutionRegistry::default(),
             session_id: xid::new().to_string(),
             pending_eval_commands: VecDeque::new(),
             pending_eval_drain_active: Arc::new(AtomicBool::new(false)),

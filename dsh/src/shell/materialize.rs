@@ -10,7 +10,7 @@ use super::authorize::ConfirmFn;
 use super::no_command::NoCommandMaterialization;
 use super::parse::planned_to_concrete;
 use super::plan::{PlannedJob, PlannedRedirectOp};
-use super::substitution::ExecutionResources;
+use super::process_substitution::ExecutionResources;
 use super::word_expand::{
     ExpansionTrace, expand_argument_word, expand_assignment_value, expand_redirect_target,
 };

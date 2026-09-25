@@ -363,6 +363,8 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
         | Rule::proc_subst_direction
+        | Rule::proc_subst_direction_in
+        | Rule::proc_subst_direction_out
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction => {
@@ -372,9 +374,6 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
             } else {
                 return Some((pair_span, false));
             }
-        }
-        Rule::proc_subst_direction_in => {
-            // skip
         }
 
         _ => {

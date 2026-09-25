@@ -359,3 +359,137 @@ fn an_expanded_substitution_body_keeps_its_pipeline() {
         "the pipe was lost and `tr` became an argument: {stdout:?}"
     );
 }
+
+/// `>(...)` via tempfile rendezvous: deterministic, no stdout race.
+#[test]
+fn output_substitution_writes_to_tempfile() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("out.txt");
+    let output = run_command(&format!("printf hello > >(cat > {})", out.display()));
+    assert!(
+        output.status.success(),
+        "outer must succeed: {:?}",
+        output.status.code()
+    );
+    // Command-mode shell releases the consumer without killing it; the
+    // helper may outlive `dogesh -c`. Poll bounded for the drained file.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Ok(data) = std::fs::read(&out)
+            && data == b"hello"
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "consumer never wrote hello"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// `>(...)` as a plain argument: `tee >(cat > file)`.
+#[test]
+fn output_substitution_as_argument_writes_to_tempfile() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("tee_out.txt");
+    let output = run_command(&format!(
+        "printf hello | tee >(cat > {}) > /dev/null",
+        out.display()
+    ));
+    assert!(
+        output.status.success(),
+        "tee must succeed: {:?}",
+        output.status.code()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Ok(data) = std::fs::read(&out)
+            && (data == b"hello\n" || data == b"hello")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "tee consumer never wrote"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Helper status never becomes outer status: `true > >(false)` is 0.
+#[test]
+fn output_consumer_failure_does_not_change_outer_status() {
+    let output = run_command(&format!(
+        "{} > >({})",
+        common::true_path(),
+        common::false_path()
+    ));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "outer true must stay 0 even though consumer is false"
+    );
+}
+
+/// Large output through `>(...)` keeps tail bytes.
+#[test]
+fn output_substitution_keeps_large_payload() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("large.txt");
+    // 300 KiB via `head -c` from /dev/zero piped through tr? Use yes+head
+    // for portability: `yes ABC | head -c 300000 > >(cat > file)`.
+    // `head -c` byte count keeps the harness pipe small (we check the file).
+    let output = run_command(&format!(
+        "{} | {} -c 300000 > >(cat > {})",
+        common::yes_path(),
+        common::head_path(),
+        out.display()
+    ));
+    assert!(
+        output.status.success(),
+        "large producer must succeed: {:?}",
+        output.status.code()
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Ok(data) = std::fs::read(&out)
+            && data.len() == 300_000
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "large consumer never completed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Nested `>(...)` inside `$(...)` keeps direction and payload.
+#[test]
+fn nested_output_substitution_inside_command_substitution() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("nested.txt");
+    let stdout = stdout_of(&format!(
+        "echo $(printf payload > >(cat > {}); echo done)",
+        out.display()
+    ));
+    assert!(
+        stdout.lines().any(|line| line.trim() == "done"),
+        "outer capture must see done in {stdout:?}"
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if let Ok(data) = std::fs::read(&out)
+            && data == b"payload"
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "nested consumer never wrote payload"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}

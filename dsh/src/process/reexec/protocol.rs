@@ -23,7 +23,10 @@ use std::os::unix::io::RawFd;
 /// state, so re-exec helpers inherit `set -o pipefail`.
 /// Bumped to 6: unified shell variable/export namespace; `ChildShellSnapshot`
 /// no longer carries `system_env_vars`.
-pub const PROTOCOL_VERSION: u32 = 6;
+/// Bumped to 7: `PlannedSubstitution` carries explicit input/output
+/// process-substitution direction (`PlannedSubstitutionKind::Process(Read)`
+/// vs `Process(Write)`).
+pub const PROTOCOL_VERSION: u32 = 7;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -67,8 +70,10 @@ pub enum PlanExecMode {
     /// informational only (matches the historical in-process behavior where
     /// the inner status only steered inner gating).
     CommandSubstitution,
-    /// `<(...)`: stdout is the producer stream; the parent reads `/dev/fd/N`
-    /// and reaps the producer.
+    /// `<(...)` / `>(...)` process-substitution helper: stdout is the
+    /// producer stream for `Read`, stdin is the consumer stream for `Write`.
+    /// The parent wires `ChildStdio` for the direction; the helper's
+    /// execution environment is identical either way.
     ProcessSubstitution,
     /// `list &`: one AND-OR list runs as a managed background job. The
     /// request carries the list normalized to foreground (see
@@ -576,5 +581,134 @@ mod tests {
                 .expect_err("non-async ignore must fail closed");
             assert!(err.to_string().contains("invalid signal policy"));
         }
+    }
+
+    fn plan_with_substitution_direction(
+        direction: crate::shell::plan::ProcessSubstitutionDirection,
+    ) -> crate::shell::plan::ExecutionPlan {
+        use crate::shell::plan::{PlannedSubstitution, PlannedSubstitutionKind};
+
+        let env_arc = crate::environment::Environment::new();
+        let inner =
+            crate::shell::parse::parse_execution_plan("printf x", env_arc).expect("parse inner");
+        let substitution = PlannedSubstitution {
+            source: "printf x".to_string(),
+            kind: PlannedSubstitutionKind::Process(direction),
+            plan: Box::new(inner),
+        };
+        // Minimal outer plan carrying the substitution in argv: serialize the
+        // whole `ExecutionPlan` so the direction travels the re-exec JSON.
+        // Reuse the real parser for the outer shape, then swap the kind to
+        // the requested direction (avoids hand-building jobs).
+        let env_arc = crate::environment::Environment::new();
+        let mut outer = crate::shell::parse::parse_execution_plan("cat <(printf x)", env_arc)
+            .expect("parse outer");
+        for job in outer.lists.iter_mut().flat_map(|list| list.jobs.iter_mut()) {
+            for stage in job.stages.iter_mut() {
+                for word in stage.argv.iter_mut() {
+                    for part in word.parts.iter_mut() {
+                        if let crate::shell::plan::WordPart::Substitution {
+                            substitution: inner_sub,
+                            ..
+                        } = part
+                        {
+                            inner_sub.kind = PlannedSubstitutionKind::Process(direction);
+                            inner_sub.source = substitution.source.clone();
+                            inner_sub.plan = substitution.plan.clone();
+                        }
+                    }
+                }
+            }
+        }
+        outer
+    }
+
+    fn roundtrip_plan_direction(
+        direction: crate::shell::plan::ProcessSubstitutionDirection,
+    ) -> crate::shell::plan::ProcessSubstitutionDirection {
+        use crate::shell::plan::{PlannedSubstitutionKind, WordPart};
+
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let plan = plan_with_substitution_direction(direction);
+        let request = InternalExecRequest {
+            version: PROTOCOL_VERSION,
+            snapshot,
+            kind: InternalExecKind::Plan(PlanExecRequest {
+                plan,
+                mode: PlanExecMode::ProcessSubstitution,
+                signal_policy: PlanSignalPolicy::Normal,
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let decoded = read_internal_request(read.into_raw_fd()).expect("decode");
+        match decoded.kind {
+            InternalExecKind::Plan(plan_request) => {
+                assert_eq!(decoded.version, PROTOCOL_VERSION);
+                let mut found = None;
+                for job in plan_request.plan.iter_jobs() {
+                    for stage in &job.stages {
+                        for word in &stage.argv {
+                            for part in &word.parts {
+                                if let WordPart::Substitution { substitution, .. } = part
+                                    && let PlannedSubstitutionKind::Process(dir) =
+                                        &substitution.kind
+                                {
+                                    found = Some(*dir);
+                                }
+                            }
+                        }
+                    }
+                }
+                found.expect("direction must survive round-trip")
+            }
+            other => panic!("expected Plan, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn process_substitution_direction_roundtrips_through_v7() {
+        use crate::shell::plan::ProcessSubstitutionDirection::{Read, Write};
+
+        assert_eq!(roundtrip_plan_direction(Read), Read);
+        assert_eq!(roundtrip_plan_direction(Write), Write);
+    }
+
+    #[test]
+    fn request_rejects_legacy_v6() {
+        // v6 payloads (old `PlannedSubstitution.kind = "ProcessSubstitution"`)
+        // must fail closed after the v7 direction migration, never parse as
+        // `<(...)`.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 6,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        let err = read_internal_request(read_fd).expect_err("legacy v6 must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
     }
 }

@@ -238,8 +238,9 @@ mod tests {
 
     #[test]
     fn reservation_avoids_every_open_aux_fd() {
-        // Stand-ins for process-substitution handles: whatever numbers they
-        // hold, the allocator must pick something else.
+        // Stand-ins for process-substitution handles in both directions
+        // (`<(...)` read ends and `>(...)` write ends): whatever numbers
+        // they hold, the allocator must pick something else.
         let aux: Vec<(OwnedFd, OwnedFd)> = (0..20).map(|_| aux_pipe()).collect();
         let aux_numbers: Vec<RawFd> = aux
             .iter()

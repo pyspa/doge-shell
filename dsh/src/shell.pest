@@ -42,8 +42,13 @@ literal_d_quoted = ${
     )+
 }
 
-proc_subst_direction_in =  { "<(" }
-proc_subst_direction    =  { proc_subst_direction_in }
+proc_subst_direction_in  = { "<(" }
+proc_subst_direction_out = { ">(" }
+
+proc_subst_direction = {
+    proc_subst_direction_in
+  | proc_subst_direction_out
+}
 proc_subst              =  { proc_subst_direction ~ group_list ~ ")" }
 command_subst           =  { "$(" ~ sp* ~ group_list ~ sp* ~ ")" }
 subshell                =  { "(" ~ group_list ~ ")" }
@@ -58,7 +63,7 @@ stdouterr_redirect_direction_out    = { "&>" }
 stdouterr_redirect_direction_append = { "&>>" }
 stderr_redirect_direction_out       = { "2>" }
 stderr_redirect_direction_append    = { "2>>" }
-stdout_redirect_direction_out       = { ">" }
+stdout_redirect_direction_out       = { ">" ~ !"(" }
 stdout_redirect_direction_append    = { ">>" }
 stdouterr_redirect_direction        = { (stdouterr_redirect_direction_append | stdouterr_redirect_direction_out) }
 stderr_redirect_direction           = { (stderr_redirect_direction_append | stderr_redirect_direction_out) }

@@ -4,8 +4,17 @@
 
 ## 所有権
 
-- 稼働中の helper / producer には論理 owner がちょうど1つ。`ExecutionResources -> Job -> detached reaper` へ移動はするが複製しない。consumer が必要な間は drop しない。`Shell` A の cleanup が `Shell` B の resource に触れない（`ProducerRegistry` は per-`Shell`。process-global に戻さない）。
-- `Shell` drop は自分がまだ所有する producer group だけ kill する。reaper が回収済みのものは deregister 済みなので届かない。
+- 稼働中の helper には論理 owner がちょうど1つ。`ExecutionResources -> Job -> detached reaper` へ移動はするが複製しない。consumer が必要な間は drop しない。`Shell` A の cleanup が `Shell` B の resource に触れない（`ProcessSubstitutionRegistry` は per-`Shell`。process-global に戻さない）。
+- `Shell` drop は自分がまだ所有する helper group だけ kill する。reaper が回収済みのものは deregister 済みなので届かない。
+- Process-substitution resource owner は exactly one of: `ExecutionResources` → reaper / registry → released/reaped。
+
+## Process substitution lifecycle
+
+- `<(...)` helper = producer, `>(...)` helper = consumer。
+- Read direction: outer consumer completion permits producer termination (synchronous bounded reap foreground, detached grace reaper background)。
+- Write direction: outer producer completion first closes parent write endpoint; helper consumer drains to EOF and is normally reaped without signal (detached natural reaper, prompt を block しない)。
+- Output consumers remain asynchronous with respect to the next shell command.
+- Normal shell exit may release Write-direction consumer ownership without signal (`detach_process_substitution_consumers_for_normal_exit`)。Abnormal `Shell::Drop` kills still-owned process-substitution groups (both directions)。
 
 ## ライフサイクル
 
@@ -81,10 +90,10 @@
 - detached job は parent-only resource を持たない（`OutputMonitor`・PTY task・`ExecutionResources` なし）。`validate_detach_safe` が fail-closed で検査する。transactional two-pass（全 validate→commit）で partial detach 禁止。
 - noninteractive async stdout/stderr は caller fd を direct inherit（monitor なし）。interactive async output は monitor-managed capture を維持（prompt-safe rendering）。
 - no-job-control async stdin default は `/dev/null`。`supports_job_control()` は `interactive` を含む enabled 判定。body 内の explicit `< file` は override する。
-- helper execution environment も同じ normal-exit rule（`run_helper_plan` return 前に detach）。substitution outer group ownership・`ProducerRegistry` は触らない。
+- helper execution environment も同じ normal-exit rule（`run_helper_plan` return 前に detach）。substitution outer group ownership・`ProcessSubstitutionRegistry` の Read 所有権は触らない（Write のみ release）。
 - output-pipe EOF lifetime と parent shell process lifetime は別物。capture pipe を grandchild が保持する場合の EOF 待ちは shell wait ではない（`$(...)`・subshell capture の既知の挙動）。command-mode でも helper でも fd を閉じる処理を足さない。
 - detach 対象は ledger `Active` + job id 一致のものだけ。unknown/stopped/session-owned job は `Drop` cleanup へ残す。completed async job も detach 対象外（`Drop` の kill は completed tree には no-op）。
-- SIGHUP/`disown`/`wait -n/-p/-f` は scope 外。`!` chat jobs・`ProducerRegistry` shutdown は触らない。
+- SIGHUP/`disown`/`wait -n/-p/-f` は scope 外。`!` chat jobs・`ProcessSubstitutionRegistry` shutdown は触らない（Write release 以外）。
 
 ## Async AND-OR signal disposition
 

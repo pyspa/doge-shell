@@ -67,11 +67,12 @@ pub struct Job {
     /// When the job was created, used to decide whether a finished background
     /// job ran long enough to warrant a desktop notification.
     pub started_at: std::time::Instant,
-    /// Process-substitution fds and producer pids created while materializing
-    /// this job. Taken and dropped at the end of `launch`: every consumer
-    /// holds its own copies by then, so the parent copies close here and
-    /// producers are handed to reapers instead of leaking.
-    pub resources: crate::shell::substitution::ExecutionResources,
+    /// Process-substitution endpoints and helper handles created while
+    /// materializing this job. Finalized direction-aware at the end of
+    /// `launch`: every outer command holds its own copies by then, so the
+    /// parent copies close here (Write consumers see EOF) and helpers move
+    /// to reapers instead of leaking.
+    pub resources: crate::shell::process_substitution::ExecutionResources,
 }
 
 fn last_process_state(process: JobProcess) -> ProcessState {
@@ -120,7 +121,7 @@ impl Job {
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
-            resources: crate::shell::substitution::ExecutionResources::new(),
+            resources: crate::shell::process_substitution::ExecutionResources::new(),
         }
     }
 
@@ -153,7 +154,7 @@ impl Job {
             disable_pty: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
-            resources: crate::shell::substitution::ExecutionResources::new(),
+            resources: crate::shell::process_substitution::ExecutionResources::new(),
         }
     }
 
@@ -252,22 +253,22 @@ impl Job {
         let caller_ctx = JobLaunchContext::capture(ctx);
         let result = self.launch_inner(ctx, shell).await;
 
-        // Every stage is spawned by now, so each consumer holds its own
-        // copies: close the parent's substitution fds here. Foreground jobs
-        // reap producers synchronously (bounded) so no detached reaper can
-        // die with an exiting shell and orphan grandchildren holding session
-        // pipes. Background jobs keep their resources in the job (which
-        // outlives this call on `wait_jobs`): handing them to detached
-        // reapers here would group-kill producers while the background
-        // consumer still needs their pipes (`cat <(sleep 5; echo done) &`
-        // lost its stream after the 2s reaper grace). Ownership moves to
-        // detached reapers only when the background job itself is dropped,
-        // by which point its consumer no longer needs anything.
+        // Every stage is spawned by now, so each outer command holds its own
+        // copies: finalize direction-aware here. Foreground jobs close parent
+        // endpoint copies first (Write consumers see EOF), then reap Read
+        // producers synchronously (bounded) and hand Write consumers to
+        // detached natural reapers so the prompt never waits for them.
+        // Background jobs keep their resources in the job (which outlives
+        // this call on `wait_jobs`): handing them to detached reapers here
+        // would group-kill helpers while the background outer command still
+        // needs their pipes (`cat <(sleep 5; echo done) &` lost its stream
+        // after the 2s reaper grace). Ownership moves to detached reapers
+        // only when the background job itself is dropped, by which point its
+        // outer command no longer needs anything. `Job` never touches
+        // producer/consumer/fd internals directly — only this API.
         if self.foreground {
-            let mut resources = std::mem::take(&mut self.resources);
-            let producers = std::mem::take(&mut resources.producers);
-            crate::shell::substitution::reap_producers_blocking(producers);
-            drop(resources);
+            let resources = std::mem::take(&mut self.resources);
+            resources.finish_foreground();
         }
 
         // Launching rewires `ctx` (pipes, capture, redirections, pgid routing,

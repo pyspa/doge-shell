@@ -14,7 +14,7 @@
 use super::plan::{
     ExecutionPlan, ListExecutionMode, PlannedAndOrList, PlannedAssignment, PlannedCommand,
     PlannedJob, PlannedLiteral, PlannedRedirect, PlannedRedirectOp, PlannedSubstitution,
-    PlannedWord, QuoteMode, WordPart,
+    PlannedSubstitutionKind, PlannedWord, ProcessSubstitutionDirection, QuoteMode, WordPart,
 };
 use super::struct_pipe;
 use crate::environment::Environment;
@@ -272,16 +272,17 @@ fn build_simple_command(ctx: &ParseContext, pair: Pair<Rule>) -> Result<PlannedC
 }
 
 fn make_substitution(
-    kind: SubshellType,
+    kind: PlannedSubstitutionKind,
     commands_pair: Pair<Rule>,
     _ctx: &ParseContext,
 ) -> Result<Option<PlannedSubstitution>> {
     let cmd_str = commands_pair.as_str().to_string();
     let mut nested = ParseContext::new();
     match kind {
-        SubshellType::Subshell | SubshellType::CommandSubstitution => nested.subshell = true,
-        SubshellType::ProcessSubstitution => nested.proc_subst = true,
-        SubshellType::None => {}
+        PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
+            nested.subshell = true;
+        }
+        PlannedSubstitutionKind::Process(_) => nested.proc_subst = true,
     }
     let plan = build_commands(&mut nested, commands_pair)?;
     if plan.is_empty() {
@@ -294,17 +295,51 @@ fn make_substitution(
     }))
 }
 
+/// Grammar is the authority for `<(` vs `>(...)`: never sniff the string
+/// prefix. Unknown rules fail closed.
+fn parse_process_substitution_direction(pair: Pair<Rule>) -> Result<ProcessSubstitutionDirection> {
+    match pair.as_rule() {
+        Rule::proc_subst_direction_in => Ok(ProcessSubstitutionDirection::Read),
+        Rule::proc_subst_direction_out => Ok(ProcessSubstitutionDirection::Write),
+        Rule::proc_subst_direction => {
+            // `proc_subst_direction` wraps one of the two concrete arms.
+            let Some(inner) = pair.into_inner().next() else {
+                anyhow::bail!("process substitution is missing a direction");
+            };
+            parse_process_substitution_direction(inner)
+        }
+        other => anyhow::bail!("unknown process substitution direction: {other:?}"),
+    }
+}
+
 fn substitution_from_wrapper(
     wrapper: Pair<Rule>,
-    kind: SubshellType,
+    kind: PlannedSubstitutionKind,
     ctx: &ParseContext,
 ) -> Result<Vec<PlannedSubstitution>> {
     let mut out = Vec::new();
+    // `proc_subst` carries its direction inline; the caller passes a
+    // placeholder that is replaced once the direction token is seen.
+    let is_process = matches!(kind, PlannedSubstitutionKind::Process(_));
+    let mut process_kind: Option<PlannedSubstitutionKind> =
+        if is_process { Some(kind.clone()) } else { None };
+    // Non-proc-subst wrappers (`$(...)`, `(...)`) keep `kind` as-is.
+    let fixed_kind: Option<PlannedSubstitutionKind> = if is_process { None } else { Some(kind) };
     for inner in wrapper.into_inner() {
         match inner.as_rule() {
-            Rule::proc_subst_direction => continue,
+            Rule::proc_subst_direction => {
+                let direction = parse_process_substitution_direction(inner)?;
+                process_kind = Some(PlannedSubstitutionKind::Process(direction));
+            }
             _ => {
-                if let Some(subst) = make_substitution(kind.clone(), inner, ctx)? {
+                let active = match (&fixed_kind, &process_kind) {
+                    (Some(fixed), _) => fixed.clone(),
+                    (None, Some(process)) => process.clone(),
+                    (None, None) => {
+                        anyhow::bail!("process substitution is missing a direction");
+                    }
+                };
+                if let Some(subst) = make_substitution(active, inner, ctx)? {
                     out.push(subst);
                 }
             }
@@ -376,7 +411,7 @@ fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
                         Rule::command_subst => {
                             for subst in substitution_from_wrapper(
                                 inner,
-                                SubshellType::CommandSubstitution,
+                                PlannedSubstitutionKind::Command,
                                 ctx,
                             )? {
                                 parts.push(WordPart::Substitution {
@@ -401,8 +436,7 @@ fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
                 }
             }
             Rule::command_subst => {
-                for subst in
-                    substitution_from_wrapper(part, SubshellType::CommandSubstitution, ctx)?
+                for subst in substitution_from_wrapper(part, PlannedSubstitutionKind::Command, ctx)?
                 {
                     parts.push(WordPart::Substitution {
                         substitution: subst,
@@ -411,9 +445,13 @@ fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
                 }
             }
             Rule::proc_subst => {
-                for subst in
-                    substitution_from_wrapper(part, SubshellType::ProcessSubstitution, ctx)?
-                {
+                // Direction comes from the inline `proc_subst_direction`
+                // token; the placeholder is replaced once it is seen.
+                for subst in substitution_from_wrapper(
+                    part,
+                    PlannedSubstitutionKind::Process(ProcessSubstitutionDirection::Read),
+                    ctx,
+                )? {
                     parts.push(WordPart::Substitution {
                         substitution: subst,
                         quote: QuoteMode::Unquoted,
@@ -421,7 +459,9 @@ fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
                 }
             }
             Rule::subshell => {
-                for subst in substitution_from_wrapper(part, SubshellType::Subshell, ctx)? {
+                for subst in
+                    substitution_from_wrapper(part, PlannedSubstitutionKind::Subshell, ctx)?
+                {
                     parts.push(WordPart::Substitution {
                         substitution: subst,
                         quote: QuoteMode::Unquoted,
@@ -642,144 +682,4 @@ fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJo
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::environment::Environment;
-
-    fn test_env() -> Arc<RwLock<Environment>> {
-        Environment::new()
-    }
-
-    /// Test A: planning alone must not execute substitutions.
-    #[test]
-    fn planning_does_not_execute_substitution() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let marker = dir.path().join("parse_must_not_run");
-        let input = format!("echo $(touch {})", marker.display());
-        let env = test_env();
-        let cwd = std::env::current_dir().expect("cwd");
-        let vars_before = {
-            let guard = env.read();
-            guard.variable_state.variables.clone()
-        };
-        let plan = parse_execution_plan(&input, Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.lists.len(), 1);
-        assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
-        assert!(
-            !marker.exists(),
-            "planning executed a substitution it must only record"
-        );
-        assert_eq!(
-            std::env::current_dir().expect("cwd"),
-            cwd,
-            "planning must not change directories"
-        );
-        let vars_after = env.read().variable_state.variables.clone();
-        assert_eq!(
-            vars_before, vars_after,
-            "planning must not mutate variables"
-        );
-    }
-
-    /// Test B: a standalone assignment is deferred, not applied by planning.
-    #[test]
-    fn planning_does_not_apply_standalone_assignment() {
-        let env = test_env();
-        let plan =
-            parse_execution_plan("DOGESH_TEST_PARSE_ONLY=value", Arc::clone(&env)).expect("plan");
-        assert_eq!(plan.lists.len(), 1);
-        assert!(env.read().get_var("DOGESH_TEST_PARSE_ONLY").is_none());
-        assert!(plan.lists[0].jobs[0].is_assignment_only());
-    }
-
-    /// Raw validation runs before rewriting: `echo $FOO )` must still reject
-    /// the line instead of being discarded when the prefix is re-serialized.
-    #[test]
-    fn raw_tail_is_rejected_before_expansion_can_discard_it() {
-        let env = test_env();
-        env.write()
-            .variable_state
-            .variables
-            .insert("$FOO".to_string(), "bar".to_string());
-        let err = parse_execution_plan("echo $FOO )", Arc::clone(&env))
-            .expect_err("raw tail must be a syntax error");
-        assert!(
-            err.to_string().contains("syntax error"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    /// Post-rewrite validation: a raw-complete line whose alias expands to
-    /// invalid syntax must not produce a plan.
-    #[test]
-    fn expanded_tail_is_rejected_after_expansion() {
-        let env = test_env();
-        env.write()
-            .variable_state
-            .alias
-            .insert("bad".to_string(), "echo expanded )".to_string());
-        let err = parse_execution_plan("bad", Arc::clone(&env))
-            .expect_err("expanded tail must be a syntax error");
-        assert!(
-            err.to_string().contains("syntax error"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    /// Boundary pin: `Rule::commands` stays tolerant for REPL highlighting and
-    /// completion, while execution is strict. The editor sees the partial
-    /// prefix plus an `unparsed_tail`; the planner returns an error.
-    #[test]
-    fn tolerant_grammar_and_strict_execution_stay_separate() {
-        use pest::Parser as _;
-
-        let input = "echo a )";
-        let pairs = ShellParser::parse(Rule::commands, input).expect("tolerant parse");
-        let consumed = pairs
-            .clone()
-            .next()
-            .map(|pair| pair.as_span().end())
-            .unwrap_or(0);
-        assert_eq!(parser::unparsed_tail(input, consumed), Some(")"));
-
-        let env = test_env();
-        let err =
-            parse_execution_plan(input, Arc::clone(&env)).expect_err("execution must be strict");
-        assert!(
-            err.to_string().contains("syntax error"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    /// Planning is environment-independent except for aliases: the same word
-    /// structure comes back regardless of variable values or cwd.
-    #[test]
-    fn planning_preserves_word_structure_across_environments() {
-        use super::super::plan::QuoteMode;
-
-        let env_a = test_env();
-        env_a
-            .write()
-            .set_shell_var("FOO".to_string(), "aaa".to_string());
-        let env_b = test_env();
-        env_b
-            .write()
-            .set_shell_var("FOO".to_string(), "bbb".to_string());
-        let plan_a = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_a)).expect("plan");
-        let plan_b = parse_execution_plan("echo $FOO *.txt", Arc::clone(&env_b)).expect("plan");
-        assert_eq!(plan_a.lists.len(), 1);
-        assert_eq!(plan_b.lists.len(), 1);
-        let argv_a = &plan_a.lists[0].jobs[0].stages[0].argv;
-        let argv_b = &plan_b.lists[0].jobs[0].stages[0].argv;
-        assert_eq!(argv_a.len(), argv_b.len());
-        assert!(matches!(
-            argv_a[1].parts[0],
-            WordPart::Variable {
-                quote: QuoteMode::Unquoted,
-                ..
-            }
-        ));
-        assert!(plan_a.lists[0].jobs[0].contains_dynamic_expansion());
-        assert!(plan_b.lists[0].jobs[0].contains_dynamic_expansion());
-    }
-}
+mod tests;

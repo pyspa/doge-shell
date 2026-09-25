@@ -213,11 +213,17 @@ pub async fn run_shell() -> ExitCode {
     // Covers all three modes, including `-c`, which a `!` chat can reach.
     let _chat_jobs_shutdown = ChatJobsShutdown;
 
-    match run_mode {
+    let code = match run_mode {
         RunMode::Lisp(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
         RunMode::Command(command) => execute_command(&mut shell, &mut ctx, &command).await,
         RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
-    }
+    };
+    // Interactive / notebook normal exit likewise releases `>(...)`
+    // consumers without signal; command-mode already released its own, so
+    // this second call is a no-op there. Abnormal paths still reach `Drop`
+    // cleanup with ownership intact.
+    let _ = shell.detach_process_substitution_consumers_for_normal_exit();
+    code
 }
 
 /// Kills every managed `!` chat command when the shell leaves.
@@ -398,6 +404,9 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     // not un-launched by a later foreground failure. A validation failure
     // keeps ownership (the `Drop` cleanup still kills) and reports an
     // infrastructure failure rather than orphaning live state.
+    // `>(...)` consumers are likewise released without signal/wait so tail
+    // bytes survive `dogesh -c 'produce > >(consumer)'`; `<(...)` producers
+    // stay owned for `Drop` cleanup.
     if let Err(err) = shell.detach_known_async_jobs_for_normal_exit() {
         display_user_error(
             &anyhow::anyhow!("failed to detach background jobs for normal exit: {err:#}"),
@@ -405,6 +414,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         );
         return ExitCode::FAILURE;
     }
+    let _ = shell.detach_process_substitution_consumers_for_normal_exit();
     match evaluated {
         Ok(code) => {
             shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);

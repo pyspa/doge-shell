@@ -183,6 +183,8 @@ mod substitution_tests {
         assert!(substitution_construct("echo `date`").is_some());
         assert!(substitution_construct("diff <(a) <(b)").is_some());
         assert!(substitution_construct("(cd /tmp && ls)").is_some());
+        assert!(substitution_construct("printf x > >(dangerous)").is_some());
+        assert!(substitution_construct("tee >(a) >(b)").is_some());
     }
 
     #[test]

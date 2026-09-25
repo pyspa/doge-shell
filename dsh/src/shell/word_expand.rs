@@ -6,14 +6,12 @@
 //! happens here.
 
 use super::authorize::ConfirmFn;
-use super::plan::{PlannedLiteral, PlannedWord, QuoteMode, WordPart};
-use super::substitution::{
-    ExecutionResources, capture_subshell_plan_stdout, start_process_substitution,
-};
+use super::plan::{PlannedLiteral, PlannedSubstitutionKind, PlannedWord, QuoteMode, WordPart};
+use super::process_substitution::{ExecutionResources, start_process_substitution};
+use super::substitution::capture_subshell_plan_stdout;
 use crate::parser::expansion::{
     escape_glob_metacharacters, expand_braces, expand_glob_pattern, unescape_glob_metacharacters,
 };
-use crate::process::SubshellType;
 use crate::process::reexec::PlanExecMode;
 use crate::shell::Shell;
 use anyhow::{Result, bail};
@@ -242,12 +240,12 @@ fn trim_substitution_output(output: &str) -> String {
 
 /// Per-stage trace of runtime expansion, kept in stage order.
 ///
-/// Only `SubshellType::CommandSubstitution` updates
-/// `last_command_substitution_status`. Process substitution (`<(...)`) and
-/// subshell groups (`( ... )`) have different semantics and must never feed
-/// this status. The value is consumed only when runtime expansion leaves no
-/// command name (Bash `3.7.1 Simple Command Expansion`); a surviving command
-/// reports its own execution status instead.
+/// Only `PlannedSubstitutionKind::Command` updates
+/// `last_command_substitution_status`. Process substitution (`<(...)` /
+/// `>(...)`) and subshell groups (`( ... )`) have different semantics and
+/// must never feed this status. The value is consumed only when runtime
+/// expansion leaves no command name (Bash `3.7.1 Simple Command Expansion`);
+/// a surviving command reports its own execution status instead.
 #[derive(Debug, Default)]
 pub struct ExpansionTrace {
     pub last_command_substitution_status: Option<i32>,
@@ -279,7 +277,7 @@ pub async fn expand_argument_word(
             } => {
                 let quoted = *quote != QuoteMode::Unquoted;
                 match substitution.kind {
-                    SubshellType::CommandSubstitution => {
+                    PlannedSubstitutionKind::Command => {
                         let captured = capture_subshell_plan_stdout(
                             shell,
                             ctx,
@@ -309,7 +307,7 @@ pub async fn expand_argument_word(
                             builder.append_multi(fragments);
                         }
                     }
-                    SubshellType::Subshell => {
+                    PlannedSubstitutionKind::Subshell => {
                         let captured = capture_subshell_plan_stdout(
                             shell,
                             ctx,
@@ -336,10 +334,15 @@ pub async fn expand_argument_word(
                             builder.append_multi(fragments);
                         }
                     }
-                    SubshellType::ProcessSubstitution => {
-                        let substitution =
-                            start_process_substitution(shell, ctx, &substitution.plan, confirm)
-                                .await?;
+                    PlannedSubstitutionKind::Process(direction) => {
+                        let substitution = start_process_substitution(
+                            shell,
+                            ctx,
+                            &substitution.plan,
+                            direction,
+                            confirm,
+                        )
+                        .await?;
                         let path = resources.add_process_substitution(substitution);
                         builder.append_single(
                             &path,
@@ -349,7 +352,6 @@ pub async fn expand_argument_word(
                             true,
                         );
                     }
-                    SubshellType::None => {}
                 }
             }
         }
@@ -419,28 +421,33 @@ async fn expand_scalar_word(
                 builder.append_single(&value, "", false, false, true);
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
-                SubshellType::CommandSubstitution | SubshellType::Subshell => {
+                PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
                     let mode = match substitution.kind {
-                        SubshellType::Subshell => PlanExecMode::Subshell,
+                        PlannedSubstitutionKind::Subshell => PlanExecMode::Subshell,
                         _ => PlanExecMode::CommandSubstitution,
                     };
                     let captured =
                         capture_subshell_plan_stdout(shell, ctx, &substitution.plan, mode, confirm)
                             .await?;
-                    if substitution.kind == SubshellType::CommandSubstitution {
+                    if substitution.kind == PlannedSubstitutionKind::Command {
                         trace.last_command_substitution_status = Some(captured.exit_code);
                     }
                     // Scalar context never splits; keep newlines except trailing.
                     let value = trim_substitution_output(&captured.stdout);
                     builder.append_single(&value, "", false, false, true);
                 }
-                SubshellType::ProcessSubstitution => {
-                    let substitution =
-                        start_process_substitution(shell, ctx, &substitution.plan, confirm).await?;
+                PlannedSubstitutionKind::Process(direction) => {
+                    let substitution = start_process_substitution(
+                        shell,
+                        ctx,
+                        &substitution.plan,
+                        direction,
+                        confirm,
+                    )
+                    .await?;
                     let path = resources.add_process_substitution(substitution);
                     builder.append_single(&path, "", false, false, true);
                 }
-                SubshellType::None => {}
             },
         }
         first_part = false;
@@ -475,10 +482,14 @@ pub fn dry_expand_argument_word(
                 quote,
             } => {
                 let placeholder = match substitution.kind {
-                    SubshellType::CommandSubstitution => format!("$({})", substitution.source),
-                    SubshellType::ProcessSubstitution => format!("<({})", substitution.source),
-                    SubshellType::Subshell => format!("({})", substitution.source),
-                    SubshellType::None => String::new(),
+                    PlannedSubstitutionKind::Command => format!("$({})", substitution.source),
+                    PlannedSubstitutionKind::Process(
+                        super::plan::ProcessSubstitutionDirection::Read,
+                    ) => format!("<({})", substitution.source),
+                    PlannedSubstitutionKind::Process(
+                        super::plan::ProcessSubstitutionDirection::Write,
+                    ) => format!(">({})", substitution.source),
+                    PlannedSubstitutionKind::Subshell => format!("({})", substitution.source),
                 };
                 let quoted = *quote != QuoteMode::Unquoted;
                 builder.append_single(
@@ -515,16 +526,22 @@ pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &Shell) -> String {
                 out.push_str(&resolve_variable(source, shell));
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
-                SubshellType::CommandSubstitution => {
+                PlannedSubstitutionKind::Command => {
                     out.push_str(&format!("$({})", substitution.source));
                 }
-                SubshellType::ProcessSubstitution => {
+                PlannedSubstitutionKind::Process(
+                    super::plan::ProcessSubstitutionDirection::Read,
+                ) => {
                     out.push_str(&format!("<({})", substitution.source));
                 }
-                SubshellType::Subshell => {
+                PlannedSubstitutionKind::Process(
+                    super::plan::ProcessSubstitutionDirection::Write,
+                ) => {
+                    out.push_str(&format!(">({})", substitution.source));
+                }
+                PlannedSubstitutionKind::Subshell => {
                     out.push_str(&format!("({})", substitution.source));
                 }
-                SubshellType::None => {}
             },
         }
         first_part = false;

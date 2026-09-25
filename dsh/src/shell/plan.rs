@@ -218,8 +218,33 @@ pub struct PlannedLiteral {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedSubstitution {
     pub source: String,
-    pub kind: SubshellType,
+    pub kind: PlannedSubstitutionKind,
     pub plan: Box<ExecutionPlan>,
+}
+
+/// Direction of a `<(...)` / `>(...)` process substitution.
+///
+/// This is pure execution-plan data, distinct from [`SubshellType`]: the
+/// latter classifies the helper's execution environment (identical for both
+/// directions), while this records which way bytes flow through `/dev/fd/N`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ProcessSubstitutionDirection {
+    /// `<(...)`: outer command reads from the special fd.
+    Read,
+    /// `>(...)`: outer command writes to the special fd.
+    Write,
+}
+
+/// Type-safe classification of a deferred substitution body.
+///
+/// `Option<ProcessSubstitutionDirection>` paired with `SubshellType` could
+/// express invalid states (e.g. `CommandSubstitution` + `Write`), so the
+/// direction lives only on the `Process` variant.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum PlannedSubstitutionKind {
+    Command,
+    Subshell,
+    Process(ProcessSubstitutionDirection),
 }
 
 /// One `NAME=value` prefix or standalone assignment. The value stays a word

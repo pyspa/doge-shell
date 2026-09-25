@@ -7,7 +7,7 @@
 //! evaluator and the isolated helper evaluator share this function so their
 //! `&&`/`||` gating cannot drift apart.
 
-use super::substitution::ExecutionResources;
+use super::process_substitution::ExecutionResources;
 use crate::process::{CommandFailure, Redirect};
 use crate::shell::Shell;
 use dsh_types::Context;
@@ -72,10 +72,14 @@ pub fn execute_no_command(
             }
         }
     }
-    // `resources` (process-substitution fds/producers) drops here: fds close,
-    // producers move to detached reapers, mirroring the runnable path where
-    // resources drop after every stage is spawned.
-    drop(no_command.resources);
+    // `resources` finalize explicitly (not a bare drop): parent endpoint
+    // copies close first so `>(...)` consumers see EOF, then Read producers
+    // reap synchronously while Write consumers move to detached natural
+    // reapers, mirroring the runnable foreground path. This intentionally
+    // shares foreground `Job` semantics: a lingering Read producer (e.g.
+    // `: <(sleep 30)`) briefly blocks here for bounded escalation instead of
+    // leaking, exactly as a foreground job would.
+    no_command.resources.finish_foreground();
     NoCommandExecutionResult::Completed(no_command.last_command_substitution_status.unwrap_or(0))
 }
 

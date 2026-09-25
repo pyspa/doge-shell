@@ -318,9 +318,14 @@ fn kube_config_present_empty_env_falls_back_to_home_file() {
     ));
 }
 
-use super::version_probes::{PromptEnvironment, fetch_aws_profile_from, resolve_aws_profile};
+use super::runtime::PromptEnvironment;
+use super::runtime::PromptRuntimeSnapshot;
+use super::version_probes::{fetch_aws_profile_from, resolve_aws_profile};
+use super::{fetch_node_version_async, fetch_python_version_async};
 use crate::ProcessEnvGuard;
 use crate::environment::Environment;
+use parking_lot::RwLock;
+use std::sync::Arc;
 
 /// A shell with none of the prompt-relevant keys set, even if the ambient
 /// process environment happens to carry them.
@@ -418,13 +423,16 @@ fn unset_docker_context_does_not_resurrect_the_process_value() {
 /// `docker` binary to be present.
 #[test]
 fn shell_docker_context_enables_the_docker_gate() {
+    use super::runtime::PromptRuntimeSnapshot;
     use super::version_probes::should_attempt_docker_context_check_from;
-    let environment = PromptEnvironment {
-        docker_context: Some("shell-context".to_string()),
-        ..Default::default()
-    };
+    let _lock = crate::test_env_lock();
+    let environment = shell_only_environment();
+    environment
+        .write()
+        .set_shell_var("DOCKER_CONTEXT".to_string(), "shell-context".to_string());
 
-    assert!(should_attempt_docker_context_check_from(&environment));
+    let runtime = PromptRuntimeSnapshot::from_environment(&environment.read(), PathBuf::from("/"));
+    assert!(should_attempt_docker_context_check_from(&runtime));
 }
 
 /// The snapshot's shell `HOME` backs the `~/.kube/config` fallback, and an
@@ -474,4 +482,411 @@ fn kubeconfig_helper_consumes_the_supplied_shell_value() {
         Some(std::ffi::OsStr::new("/missing/kubeconfig")),
         None
     ));
+}
+
+/// Write a Unix executable script for probe tests.
+fn write_executable(path: &std::path::Path, body: &str) {
+    std::fs::write(path, body).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(path, permissions).unwrap();
+}
+
+/// Drive a probe future inside a sync test so the process-environment lock
+/// stays held for the whole probe (`clippy::await_holding_lock` forbids
+/// holding the sync guard across `.await`).
+fn block_on_probe<Fut>(future: Fut) -> Fut::Output
+where
+    Fut: std::future::Future,
+{
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("prompt probe test runtime")
+        .block_on(future)
+}
+
+/// A shell with none of the prompt-relevant keys set plus a logical PATH.
+/// The process environment may still hold stale values; the snapshot must
+/// never see them.
+fn prompt_test_environment(logical_path: &str) -> Arc<RwLock<Environment>> {
+    let environment = shell_only_environment();
+    environment
+        .write()
+        .set_shell_var("PATH".to_string(), logical_path.to_string());
+    environment
+}
+
+fn runtime_for(environment: &Arc<RwLock<Environment>>) -> PromptRuntimeSnapshot {
+    PromptRuntimeSnapshot::from_environment(&environment.read(), PathBuf::from("/"))
+}
+
+/// The logical PATH wins over a stale process-global PATH: the prompt sees
+/// the same `node` the shell would execute.
+#[test]
+fn logical_path_wins_over_process_path() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_executable(&logical.path().join("node"), "#!/bin/sh\necho v99.0.0\n");
+    write_executable(&process.path().join("node"), "#!/bin/sh\necho v1.0.0\n");
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+
+    let runtime = runtime_for(&environment);
+    assert_eq!(
+        block_on_probe(fetch_node_version_async(&runtime)).as_deref(),
+        Some("v99.0.0")
+    );
+}
+
+/// A command that exists only on the process-global PATH is invisible to
+/// the prompt: no process-global fallback.
+#[test]
+fn process_only_command_is_invisible() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_executable(&process.path().join("node"), "#!/bin/sh\necho v1.0.0\n");
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+
+    let runtime = runtime_for(&environment);
+    assert_eq!(runtime.resolve_program("node"), None);
+    assert_eq!(block_on_probe(fetch_node_version_async(&runtime)), None);
+}
+
+/// A non-executable PATH candidate is skipped, and the first executable in
+/// PATH order wins.
+#[test]
+fn nonexecutable_candidate_is_skipped_in_path_order() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    std::fs::write(first.join("node"), "#!/bin/sh\necho v1.0.0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(first.join("node")).unwrap().permissions();
+    permissions.set_mode(0o644);
+    std::fs::set_permissions(first.join("node"), permissions).unwrap();
+    write_executable(&second.join("node"), "#!/bin/sh\necho v2.0.0\n");
+
+    let path_value = format!("{}:{}", first.display(), second.display());
+    let environment = prompt_test_environment(&path_value);
+    let runtime = runtime_for(&environment);
+    assert_eq!(
+        runtime.resolve_program("node").as_deref(),
+        Some(second.join("node").as_path())
+    );
+}
+
+/// When every candidate is executable, PATH order decides.
+#[test]
+fn path_order_is_preserved() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let first = dir.path().join("first");
+    let second = dir.path().join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    write_executable(&first.join("node"), "#!/bin/sh\necho v1.0.0\n");
+    write_executable(&second.join("node"), "#!/bin/sh\necho v2.0.0\n");
+
+    let path_value = format!("{}:{}", first.display(), second.display());
+    let environment = prompt_test_environment(&path_value);
+    let runtime = runtime_for(&environment);
+    assert_eq!(
+        runtime.resolve_program("node").as_deref(),
+        Some(first.join("node").as_path())
+    );
+}
+
+/// A symlinked executable resolves and spawns through the link.
+#[test]
+fn symlinked_executable_is_resolved() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let real = dir.path().join("real-node");
+    write_executable(&real, "#!/bin/sh\necho v9.9.9\n");
+    let link = dir.path().join("node");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let environment = prompt_test_environment(&dir.path().to_string_lossy());
+    let runtime = runtime_for(&environment);
+    assert_eq!(
+        runtime.resolve_program("node").as_deref(),
+        Some(link.as_path())
+    );
+    assert_eq!(
+        block_on_probe(fetch_node_version_async(&runtime)).as_deref(),
+        Some("v9.9.9")
+    );
+}
+
+/// A relative PATH entry resolves against the snapshot cwd, not the
+/// process cwd or any later state.
+#[test]
+fn relative_path_entry_resolves_against_snapshot_cwd() {
+    let _lock = crate::test_env_lock();
+    let root = tempdir().unwrap();
+    let project_a = root.path().join("project-a");
+    let project_b = root.path().join("project-b");
+    std::fs::create_dir_all(project_a.join("bin")).unwrap();
+    std::fs::create_dir_all(project_b.join("bin")).unwrap();
+    write_executable(
+        &project_a.join("bin").join("node"),
+        "#!/bin/sh\necho v18.0.0\n",
+    );
+    write_executable(
+        &project_b.join("bin").join("node"),
+        "#!/bin/sh\necho v24.0.0\n",
+    );
+
+    let environment = prompt_test_environment("bin");
+    let runtime = PromptRuntimeSnapshot::from_environment(&environment.read(), project_a.clone());
+    assert_eq!(runtime.current_dir(), project_a.as_path());
+    assert_eq!(
+        runtime.resolve_program("node").as_deref(),
+        Some(project_a.join("bin").join("node").as_path())
+    );
+    assert_eq!(
+        block_on_probe(fetch_node_version_async(&runtime)).as_deref(),
+        Some("v18.0.0")
+    );
+}
+
+/// An exported logical variable reaches the probe child; a stale process
+/// value does not leak through.
+#[test]
+fn child_env_carries_exported_marker() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    write_executable(
+        &dir.path().join("docker"),
+        "#!/bin/sh\nprintf '%s\\n' \"${DOGESH_PROMPT_MARKER-unset}\"\n",
+    );
+
+    let environment = prompt_test_environment(&dir.path().to_string_lossy());
+    environment
+        .write()
+        .set_and_export_shell_var("DOGESH_PROMPT_MARKER".to_string(), "logical".to_string());
+    let _stale = ProcessEnvGuard::set("DOGESH_PROMPT_MARKER", "stale");
+
+    let runtime = runtime_for(&environment);
+    let mut command = runtime
+        .command("docker")
+        .expect("logical docker must resolve");
+    let output = block_on_probe(async move { command.output().await }).unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "logical");
+}
+
+/// A logical unset stays unset in the child even when the process
+/// environment still holds the stale value.
+#[test]
+fn logical_unset_prevents_resurrection() {
+    let _lock = crate::test_env_lock();
+    let _stale = ProcessEnvGuard::set("DOGESH_PROMPT_MARKER", "stale");
+    // The shell imports the stale value at startup, then the user unsets it.
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.unset_shell_var("DOGESH_PROMPT_MARKER");
+    }
+
+    let dir = tempdir().unwrap();
+    write_executable(
+        &dir.path().join("docker"),
+        "#!/bin/sh\nprintf '%s\\n' \"${DOGESH_PROMPT_MARKER-unset}\"\n",
+    );
+    environment.write().set_shell_var(
+        "PATH".to_string(),
+        dir.path().to_string_lossy().into_owned(),
+    );
+
+    let runtime = runtime_for(&environment);
+    assert!(!runtime.child_env().contains_key("DOGESH_PROMPT_MARKER"));
+    let mut command = runtime
+        .command("docker")
+        .expect("logical docker must resolve");
+    let output = block_on_probe(async move { command.output().await }).unwrap();
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "unset");
+}
+
+/// A same-session PATH mutation makes `kubectl` visible immediately: no
+/// process-lifetime availability cache may pin the old answer.
+#[test]
+fn path_mutation_makes_kubectl_visible() {
+    use super::version_probes::should_attempt_k8s_context_check_with;
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let bindir = dir.path().join("bin");
+    let kubedir = dir.path().join("kubedir");
+    std::fs::create_dir_all(&bindir).unwrap();
+    std::fs::create_dir_all(&kubedir).unwrap();
+    write_executable(&kubedir.join("kubectl"), "#!/bin/sh\nexit 0\n");
+    let kubeconfig = dir.path().join("kubeconfig");
+    std::fs::write(&kubeconfig, "apiVersion: v1\n").unwrap();
+
+    let environment = prompt_test_environment(&bindir.to_string_lossy());
+    environment.write().set_shell_var(
+        "KUBECONFIG".to_string(),
+        kubeconfig.to_string_lossy().into_owned(),
+    );
+
+    let before = runtime_for(&environment);
+    assert_eq!(before.resolve_program("kubectl"), None);
+    assert!(!should_attempt_k8s_context_check_with(&before));
+
+    environment
+        .write()
+        .insert_path_entry(0, &kubedir.to_string_lossy());
+
+    let after = runtime_for(&environment);
+    assert_eq!(
+        after.resolve_program("kubectl").as_deref(),
+        Some(kubedir.join("kubectl").as_path())
+    );
+    assert!(should_attempt_k8s_context_check_with(&after));
+}
+
+/// Docker availability follows the logical PATH dynamically.
+#[test]
+fn docker_availability_is_dynamic() {
+    use super::version_probes::should_attempt_docker_context_check_from;
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let bindir = dir.path().join("bin");
+    let dockdir = dir.path().join("dockdir");
+    std::fs::create_dir_all(&bindir).unwrap();
+    std::fs::create_dir_all(&dockdir).unwrap();
+    write_executable(&dockdir.join("docker"), "#!/bin/sh\nexit 0\n");
+
+    let environment = prompt_test_environment(&bindir.to_string_lossy());
+
+    let before = runtime_for(&environment);
+    assert!(!should_attempt_docker_context_check_from(&before));
+
+    environment
+        .write()
+        .insert_path_entry(0, &dockdir.to_string_lossy());
+
+    let after = runtime_for(&environment);
+    assert!(should_attempt_docker_context_check_from(&after));
+}
+
+/// `python3` missing from the logical PATH falls back to the logical
+/// `python`, never to a process-global `python3`.
+#[test]
+fn python_falls_back_to_logical_python() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_executable(
+        &logical.path().join("python"),
+        "#!/bin/sh\necho 'Python 3.99.0'\n",
+    );
+    write_executable(
+        &process.path().join("python3"),
+        "#!/bin/sh\necho 'Python 1.0.0'\n",
+    );
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+
+    let runtime = runtime_for(&environment);
+    assert_eq!(runtime.resolve_program("python3"), None);
+    assert_eq!(
+        block_on_probe(fetch_python_version_async(&runtime)).as_deref(),
+        Some("3.99.0")
+    );
+}
+
+/// An unexported logical PATH still drives resolution, but never leaks
+/// into the child environment.
+#[test]
+fn unexported_path_resolves_but_stays_out_of_child_env() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    write_executable(&dir.path().join("node"), "#!/bin/sh\necho v7.7.7\n");
+
+    let environment = shell_only_environment();
+    {
+        let mut env = environment.write();
+        // Drop any inherited export bit, then set the value unexported.
+        env.unset_shell_var("PATH");
+        env.set_shell_var(
+            "PATH".to_string(),
+            dir.path().to_string_lossy().into_owned(),
+        );
+    }
+
+    let runtime = runtime_for(&environment);
+    assert!(!runtime.child_env().contains_key("PATH"));
+    assert_eq!(
+        block_on_probe(fetch_node_version_async(&runtime)).as_deref(),
+        Some("v7.7.7")
+    );
+}
+
+fn node_project_prompt() -> (Prompt, tempfile::TempDir) {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("package.json"), "{\"name\":\"demo\"}").unwrap();
+    let prompt = Prompt::new(dir.path().to_path_buf(), "🐕 < ".to_string());
+    (prompt, dir)
+}
+
+/// A PATH generation change drops external-tool version/context caches but
+/// keeps PATH-independent state like the AWS profile.
+#[test]
+fn path_generation_invalidates_version_caches() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, _project_dir) = node_project_prompt();
+    prompt.observe_runtime_path_generation(10);
+    prompt.update_node_version(Some("v18.0.0".to_string()));
+    prompt.update_docker_context(Some("old-context".to_string()));
+    prompt.update_aws_profile(Some("shell-profile".to_string()));
+    assert!(!prompt.needs_node_check());
+
+    prompt.observe_runtime_path_generation(11);
+
+    assert_eq!(prompt.node_version_cache, None);
+    assert_eq!(prompt.docker_context_cache, None);
+    assert!(prompt.needs_node_check());
+    assert_eq!(prompt.aws_profile_cache.as_deref(), Some("shell-profile"));
+}
+
+/// Re-observing the same generation keeps caches: no re-probe every tick.
+#[test]
+fn same_generation_keeps_caches() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, _project_dir) = node_project_prompt();
+    prompt.observe_runtime_path_generation(10);
+    prompt.update_node_version(Some("v18.0.0".to_string()));
+
+    prompt.observe_runtime_path_generation(10);
+
+    assert_eq!(prompt.node_version_cache.as_deref(), Some("v18.0.0"));
+    assert!(!prompt.needs_node_check());
+}
+
+/// A PATH generation change resets failure backoff so a newly added tool
+/// is probed immediately instead of after the old backoff delay.
+#[test]
+fn path_generation_resets_failure_backoff() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, _project_dir) = node_project_prompt();
+    prompt.observe_runtime_path_generation(10);
+    prompt.mark_node_check_failed();
+    assert!(!prompt.needs_node_check());
+
+    prompt.observe_runtime_path_generation(11);
+
+    assert!(prompt.needs_node_check());
 }

@@ -11,8 +11,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -20,6 +19,7 @@ pub mod context;
 mod git_status;
 pub mod modules;
 mod render;
+pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;
 mod version_probes;
@@ -27,14 +27,13 @@ mod version_probes;
 #[cfg(test)]
 pub(crate) use git_status::parse_git_status_output;
 pub use git_status::{fetch_git_status_async, fetch_git_status_sync, find_git_root_async};
+pub(crate) use runtime::PromptRuntimeSnapshot;
 #[cfg(test)]
 use version_probes::kube_config_present_from;
 pub(crate) use version_probes::{
-    PromptEnvironment, fetch_aws_profile_from, fetch_docker_context_async_from,
-};
-pub use version_probes::{
-    fetch_go_version_async, fetch_k8s_info_async, fetch_node_version_async,
-    fetch_python_version_async, fetch_rust_version_async,
+    fetch_aws_profile_from, fetch_docker_context_async_from, fetch_go_version_async,
+    fetch_k8s_info_async, fetch_node_version_async, fetch_python_version_async,
+    fetch_rust_version_async,
 };
 use version_probes::{
     should_attempt_docker_context_check_from, should_attempt_k8s_context_check_with,
@@ -62,8 +61,6 @@ pub use crate::prompt::context::PromptContext as Context; // just in case
 const BRANCH_MARK: &str = "🐾";
 const EXTERNAL_TOOL_BACKOFF_BASE: Duration = Duration::from_secs(5);
 const EXTERNAL_TOOL_BACKOFF_MAX: Duration = Duration::from_secs(300);
-static KUBECTL_AVAILABLE: OnceLock<bool> = OnceLock::new();
-static DOCKER_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
 impl ChangePwdHook for Arc<RwLock<Prompt>> {
     fn call(&self, pwd: &Path, _env: Arc<RwLock<Environment>>) -> Result<()> {
@@ -217,6 +214,11 @@ pub struct Prompt {
     docker_check_backoff: BackoffGate,
     last_exit_status: i32,
     last_duration: Option<Duration>,
+    /// Logical PATH generation of the last observed probe runtime.
+    /// External-tool version/context caches and failure backoffs are scoped
+    /// to this generation: a PATH change invalidates them so the prompt
+    /// cannot stay pinned to a previously selected toolchain.
+    runtime_path_generation: Option<u64>,
 
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
@@ -268,6 +270,7 @@ impl Prompt {
             docker_context_cache: None,
             k8s_check_backoff: BackoffGate::new(),
             docker_check_backoff: BackoffGate::new(),
+            runtime_path_generation: None,
             last_exit_status: 0,
             last_duration: None,
 
@@ -621,20 +624,46 @@ impl Prompt {
         self.docker_check_backoff.reset();
     }
 
-    pub(crate) fn should_check_k8s(&self, environment: &PromptEnvironment) -> bool {
+    pub(crate) fn should_check_k8s(&self, runtime: &PromptRuntimeSnapshot) -> bool {
         self.k8s_context_cache.is_none()
             && self.k8s_check_backoff.should_check()
-            && should_attempt_k8s_context_check_with(environment)
+            && should_attempt_k8s_context_check_with(runtime)
     }
 
     pub fn should_check_aws(&self) -> bool {
         self.aws_profile_cache.is_none()
     }
 
-    pub(crate) fn should_check_docker(&self, environment: &PromptEnvironment) -> bool {
+    pub(crate) fn should_check_docker(&self, runtime: &PromptRuntimeSnapshot) -> bool {
         self.docker_context_cache.is_none()
             && self.docker_check_backoff.should_check()
-            && should_attempt_docker_context_check_from(environment)
+            && should_attempt_docker_context_check_from(runtime)
+    }
+
+    /// Observe the logical PATH generation of a refresh-tick runtime.
+    ///
+    /// A changed generation means the toolchain the prompt cached versions
+    /// for may be gone: external-tool version/context caches are dropped
+    /// and failure backoffs reset so the new PATH is probed immediately.
+    /// Re-observing the same generation keeps caches and backoffs intact.
+    pub(crate) fn observe_runtime_path_generation(&mut self, generation: u64) {
+        if self.runtime_path_generation == Some(generation) {
+            return;
+        }
+        self.runtime_path_generation = Some(generation);
+        self.rust_version_cache = None;
+        self.node_version_cache = None;
+        self.python_version_cache = None;
+        self.go_version_cache = None;
+        self.k8s_context_cache = None;
+        self.k8s_namespace_cache = None;
+        self.docker_context_cache = None;
+        self.rust_check_backoff.reset();
+        self.node_check_backoff.reset();
+        self.python_check_backoff.reset();
+        self.go_check_backoff.reset();
+        self.k8s_check_backoff.reset();
+        self.docker_check_backoff.reset();
     }
 
     pub fn mark_rust_check_failed(&mut self) {

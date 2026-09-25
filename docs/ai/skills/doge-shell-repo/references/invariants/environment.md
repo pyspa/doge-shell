@@ -69,6 +69,16 @@
   process-global environment を暗黙継承しない。
 - 一つの provider operation 中では executable lookup / trust /
   provider query / activation で同一 runtime snapshot を使用する。
+- Prompt external tool probes resolve executables from the logical shell
+  PATH snapshot, never process-global PATH.
+- Prompt probe subprocesses use absolute resolved executable paths and
+  env_clear + Environment::child_process_env().
+- A prompt refresh tick uses one immutable runtime snapshot for PATH,
+  exported child environment, cwd, and prompt-related logical variables.
+- Prompt executable availability must not be stored in process-lifetime
+  OnceLock state; PATH is runtime mutable.
+- Prompt external-tool caches/backoff are invalidated when logical PATH
+  generation changes.
 
 ## Command resolution
 

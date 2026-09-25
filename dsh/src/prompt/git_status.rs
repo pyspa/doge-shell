@@ -1,5 +1,6 @@
 //! Fetching and parsing `git status --porcelain=2 --branch` outside of `Prompt` itself, so a background task can call the async half without borrowing the prompt.
 use super::*;
+use std::process::Command;
 
 // Standalone functions (kept for async task compatibility)
 

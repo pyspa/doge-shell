@@ -1,10 +1,19 @@
 //! Probing the toolchain/cluster/cloud context shown in the prompt (rustc/node/python/go versions, kubectl context, AWS profile, docker context) and the cheap pre-checks that decide whether it's worth
 //! spawning each probe at all.
+//!
+//! Every probe resolves its executable through [`PromptRuntimeSnapshot`]
+//! and spawns with the snapshot's exported child environment: output
+//! parsing lives here, runtime authority lives in `super::runtime`.
+use super::runtime::{PromptEnvironment, PromptRuntimeSnapshot, trimmed_nonempty};
 use super::*;
 
-pub async fn fetch_rust_version_async() -> Option<String> {
-    use tokio::process::Command;
-    let output = Command::new("rustc").arg("--version").output().await.ok()?;
+pub(crate) async fn fetch_rust_version_async(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    let output = runtime
+        .command("rustc")?
+        .arg("--version")
+        .output()
+        .await
+        .ok()?;
 
     if output.status.success() {
         // rustc 1.75.0 (82e1608df 2023-12-21)
@@ -16,9 +25,13 @@ pub async fn fetch_rust_version_async() -> Option<String> {
     }
 }
 
-pub async fn fetch_node_version_async() -> Option<String> {
-    use tokio::process::Command;
-    let output = Command::new("node").arg("--version").output().await.ok()?;
+pub(crate) async fn fetch_node_version_async(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    let output = runtime
+        .command("node")?
+        .arg("--version")
+        .output()
+        .await
+        .ok()?;
 
     if output.status.success() {
         // v20.10.0
@@ -29,20 +42,27 @@ pub async fn fetch_node_version_async() -> Option<String> {
     }
 }
 
-pub async fn fetch_python_version_async() -> Option<String> {
-    use tokio::process::Command;
-    // Try python3 first, then python
-    let mut cmd = Command::new("python3");
-    cmd.arg("--version");
-
-    let result = cmd.output().await;
-    let output = match result {
-        Ok(o) => o,
-        Err(_) => Command::new("python")
+pub(crate) async fn fetch_python_version_async(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    // Try python3 first, then python. A missing logical `python3` is the
+    // same as a spawn failure: fall through to `python` without ever
+    // consulting the process-global PATH.
+    let output = if let Some(mut command) = runtime.command("python3") {
+        match command.arg("--version").output().await {
+            Ok(output) => output,
+            Err(_) => runtime
+                .command("python")?
+                .arg("--version")
+                .output()
+                .await
+                .ok()?,
+        }
+    } else {
+        runtime
+            .command("python")?
             .arg("--version")
             .output()
             .await
-            .ok()?,
+            .ok()?
     };
 
     if output.status.success() {
@@ -55,9 +75,8 @@ pub async fn fetch_python_version_async() -> Option<String> {
     }
 }
 
-pub async fn fetch_go_version_async() -> Option<String> {
-    use tokio::process::Command;
-    let output = Command::new("go").arg("version").output().await.ok()?;
+pub(crate) async fn fetch_go_version_async(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    let output = runtime.command("go")?.arg("version").output().await.ok()?;
 
     if output.status.success() {
         // go version go1.21.5 linux/amd64
@@ -74,9 +93,11 @@ pub async fn fetch_go_version_async() -> Option<String> {
     }
 }
 
-pub async fn fetch_k8s_info_async() -> Option<(String, Option<String>)> {
-    use tokio::process::Command;
-    let output = Command::new("kubectl")
+pub(crate) async fn fetch_k8s_info_async(
+    runtime: &PromptRuntimeSnapshot,
+) -> Option<(String, Option<String>)> {
+    let output = runtime
+        .command("kubectl")?
         .arg("config")
         .arg("view")
         .arg("--minify")
@@ -108,14 +129,14 @@ pub(crate) fn fetch_aws_profile_from(environment: &PromptEnvironment) -> Option<
 }
 
 pub(crate) async fn fetch_docker_context_async_from(
-    environment: &PromptEnvironment,
+    runtime: &PromptRuntimeSnapshot,
 ) -> Option<String> {
-    use tokio::process::Command;
-    if let Some(ctx) = trimmed_nonempty(environment.docker_context.as_deref()) {
+    if let Some(ctx) = trimmed_nonempty(runtime.environment.docker_context.as_deref()) {
         return Some(ctx);
     }
 
-    let output = Command::new("docker")
+    let output = runtime
+        .command("docker")?
         .arg("context")
         .arg("show")
         .output()
@@ -130,39 +151,6 @@ pub(crate) async fn fetch_docker_context_async_from(
     }
 }
 
-/// The slice of shell runtime state the prompt probes read.
-///
-/// Snapshotted from `Environment` once per refresh tick
-/// ([`PromptEnvironment::from_environment`]) so every probe in the tick sees
-/// the same values - and so a shell-level unset stays unset. Nothing here is
-/// ever re-read from the process environment afterwards: a stale
-/// process-global value must not resurrect a runtime shell variable.
-///
-/// `home` is the `$HOME` shell variable. When the shell has none, the OS
-/// account lookup (`dirs::home_dir()`) still backs the `~/.kube/config`
-/// fallback: that is a launch-time fact about the user, not a shell
-/// variable.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct PromptEnvironment {
-    pub aws_profile: Option<String>,
-    pub aws_default_profile: Option<String>,
-    pub docker_context: Option<String>,
-    pub kubeconfig: Option<String>,
-    pub home: Option<String>,
-}
-
-impl PromptEnvironment {
-    pub(crate) fn from_environment(environment: &Environment) -> Self {
-        Self {
-            aws_profile: environment.get_var("AWS_PROFILE"),
-            aws_default_profile: environment.get_var("AWS_DEFAULT_PROFILE"),
-            docker_context: environment.get_var("DOCKER_CONTEXT"),
-            kubeconfig: environment.get_var("KUBECONFIG"),
-            home: environment.get_var("HOME"),
-        }
-    }
-}
-
 /// Pure `AWS_PROFILE` / `AWS_DEFAULT_PROFILE` precedence: the profile wins,
 /// the default profile is the fallback, and a blank value counts as unset.
 pub(crate) fn resolve_aws_profile(
@@ -172,17 +160,13 @@ pub(crate) fn resolve_aws_profile(
     trimmed_nonempty(aws_profile).or_else(|| trimmed_nonempty(aws_default_profile))
 }
 
-pub(super) fn should_attempt_k8s_context_check_with(environment: &PromptEnvironment) -> bool {
-    command_available_cached("kubectl", &KUBECTL_AVAILABLE) && kube_config_present_with(environment)
+pub(super) fn should_attempt_k8s_context_check_with(runtime: &PromptRuntimeSnapshot) -> bool {
+    runtime.resolve_program("kubectl").is_some() && kube_config_present_with(&runtime.environment)
 }
 
-pub(super) fn should_attempt_docker_context_check_from(environment: &PromptEnvironment) -> bool {
-    trimmed_nonempty(environment.docker_context.as_deref()).is_some()
-        || command_available_cached("docker", &DOCKER_AVAILABLE)
-}
-
-fn command_available_cached(command: &'static str, cache: &'static OnceLock<bool>) -> bool {
-    *cache.get_or_init(|| which::which(command).is_ok())
+pub(super) fn should_attempt_docker_context_check_from(runtime: &PromptRuntimeSnapshot) -> bool {
+    trimmed_nonempty(runtime.environment.docker_context.as_deref()).is_some()
+        || runtime.resolve_program("docker").is_some()
 }
 
 pub(super) fn kube_config_present_with(environment: &PromptEnvironment) -> bool {
@@ -206,12 +190,4 @@ pub(super) fn kube_config_present_from(
     }
 
     home_dir.is_some_and(|home| home.join(".kube").join("config").exists())
-}
-
-/// A trimmed, non-blank shell value. Blank counts as unset so an emptied
-/// variable falls through to the next source instead of sticking.
-fn trimmed_nonempty(value: Option<&str>) -> Option<String> {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }

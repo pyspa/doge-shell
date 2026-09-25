@@ -8,7 +8,6 @@ use skim::prelude::*;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::IsTerminal;
-use std::process::Command;
 use std::sync::Arc;
 
 pub fn description() -> &'static str {
@@ -234,7 +233,16 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             "xdg-open"
         };
 
-        if let Err(e) = Command::new(open_cmd).arg(&target_url).spawn() {
+        // The URL opener resolves through the logical runtime, like any
+        // other runtime subprocess.
+        if let Err(e) =
+            crate::runtime_spawn::runtime_command(proxy, open_cmd).and_then(|mut command| {
+                command
+                    .arg(&target_url)
+                    .spawn()
+                    .map_err(|e| anyhow::anyhow!("{e}"))
+            })
+        {
             ctx.write_stderr(&format!("gh-notify: Failed to open browser: {}", e))
                 .ok();
             return ExitStatus::ExitedWith(1);

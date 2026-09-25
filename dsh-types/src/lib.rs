@@ -25,6 +25,7 @@ pub mod output_history;
 pub mod output_schema;
 pub mod output_text;
 pub mod placeholder;
+pub mod process_runtime;
 pub mod project;
 pub mod quick_fix;
 pub mod safety_policy;

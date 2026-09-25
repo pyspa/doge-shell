@@ -97,7 +97,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "runtime") || show_section(section, "runtimes") {
         print_header(ctx, "runtimes");
-        check_runtimes(ctx);
+        check_runtimes(ctx, proxy);
     }
     if show_section(section, "performance") || show_section(section, "perf") {
         print_header(ctx, "performance");
@@ -113,7 +113,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "dev") || show_section(section, "validate") {
         print_header(ctx, "dev");
-        check_dev(ctx, &current_dir);
+        check_dev(ctx, proxy, &current_dir);
     }
 
     ExitStatus::ExitedWith(0)

@@ -19,9 +19,18 @@ pub fn description() -> &'static str {
 /// - Configurable log format and number of commits
 /// - Safe checkout with confirmation for detached HEAD state
 /// - Support for different log views (oneline, detailed, graph)
-pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // One immutable runtime for the whole interactive session.
+    let runtime = match proxy.command_runtime_snapshot() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            ctx.write_stderr(&format!("glog: failed to snapshot runtime: {e}"))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
     // Check if we're in a git repository
-    if !is_git_repository() {
+    if !is_git_repository(&runtime) {
         ctx.write_stderr("glog: not a git repository").ok();
         return ExitStatus::ExitedWith(1);
     }
@@ -30,7 +39,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     let options = parse_arguments(&argv);
 
     // Get git log entries
-    let log_entries = match get_git_log(&options) {
+    let log_entries = match get_git_log(&runtime, &options) {
         Ok(entries) => entries,
         Err(err) => {
             ctx.write_stderr(&format!("glog: failed to get git log: {err}"))
@@ -45,10 +54,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, _proxy: &mut dyn ShellProxy) ->
     }
 
     // Interactive commit selection
-    if let Some(selected_line) = interactive_commit_selection(ctx, &log_entries) {
+    if let Some(selected_line) = interactive_commit_selection(ctx, &runtime, &log_entries) {
         // Extract commit hash from selected line
         if let Some(commit_hash) = extract_commit_hash(&selected_line) {
-            checkout_commit(ctx, &commit_hash)
+            checkout_commit(ctx, &runtime, &commit_hash)
         } else {
             ctx.write_stderr("glog: failed to extract commit hash from selection")
                 .ok();
@@ -119,18 +128,26 @@ fn parse_arguments(argv: &[String]) -> LogOptions {
 }
 
 /// Check if current directory is within a git repository
-fn is_git_repository() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn is_git_repository(runtime: &dsh_types::process_runtime::CommandRuntimeSnapshot) -> bool {
+    runtime
+        .std_command("git")
+        .and_then(|mut command| {
+            command
+                .args(["rev-parse", "--git-dir"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()
+        })
         .map(|status| status.success())
         .unwrap_or(false)
 }
 
 /// Get formatted git log entries
-fn get_git_log(options: &LogOptions) -> Result<Vec<String>, String> {
+fn get_git_log(
+    runtime: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    options: &LogOptions,
+) -> Result<Vec<String>, String> {
     let mut args = vec!["log"];
 
     // Add limit
@@ -160,7 +177,9 @@ fn get_git_log(options: &LogOptions) -> Result<Vec<String>, String> {
         args.push("--all");
     }
 
-    let output = Command::new("git")
+    let output = runtime
+        .std_command("git")
+        .ok_or_else(|| "command not found: git".to_string())?
         .args(&args)
         .output()
         .map_err(|e| format!("failed to execute git: {e}"))?;
@@ -181,12 +200,16 @@ fn get_git_log(options: &LogOptions) -> Result<Vec<String>, String> {
 }
 
 /// Interactive commit selection using skim or fzf
-fn interactive_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<String> {
+fn interactive_commit_selection(
+    ctx: &Context,
+    runtime: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    log_entries: &[String],
+) -> Option<String> {
     let log_content = log_entries.join("\n");
 
     if ctx.interactive {
         for program in ["sk", "fzf"] {
-            match run_selector(program, &log_content, selector_spawn_config(ctx)) {
+            match run_selector(runtime, program, &log_content, selector_spawn_config(ctx)) {
                 SelectorResult::Selected(line) => return Some(line),
                 SelectorResult::Cancelled => return None,
                 SelectorResult::Unavailable => {}
@@ -242,8 +265,17 @@ enum SelectorResult {
     Unavailable,
 }
 
-fn run_selector(program: &str, log_content: &str, config: SelectorSpawnConfig) -> SelectorResult {
-    let mut command = Command::new(program);
+fn run_selector(
+    runtime: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    program: &str,
+    log_content: &str,
+    config: SelectorSpawnConfig,
+) -> SelectorResult {
+    // Resolved through the logical runtime; stdio stays interactive per
+    // the caller's config, and the child sees the exported environment.
+    let Some(mut command) = runtime.std_command(program) else {
+        return SelectorResult::Unavailable;
+    };
     command.args(selector_args());
     apply_selector_stdio(&mut command, config);
 
@@ -355,7 +387,11 @@ fn numbered_commit_selection(ctx: &Context, log_entries: &[String]) -> Option<St
 }
 
 /// Checkout to a specific commit (detached HEAD)
-fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
+fn checkout_commit(
+    ctx: &Context,
+    runtime: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    commit_hash: &str,
+) -> ExitStatus {
     // Warn user about detached HEAD state
     ctx.write_stdout(&format!(
         "⚠️  Checking out commit {commit_hash} will put you in 'detached HEAD' state."
@@ -385,7 +421,10 @@ fn checkout_commit(ctx: &Context, commit_hash: &str) -> ExitStatus {
     }
 
     // Perform the checkout
-    let output = Command::new("git").args(["checkout", commit_hash]).output();
+    let output = runtime
+        .std_command("git")
+        .ok_or_else(|| std::io::Error::other("command not found: git"))
+        .and_then(|mut command| command.args(["checkout", commit_hash]).output());
 
     match output {
         Ok(result) => {
@@ -490,7 +529,12 @@ mod tests {
     #[test]
     fn test_is_git_repository() {
         // This test will depend on the test environment
-        let _result = is_git_repository();
+        let runtime = dsh_types::process_runtime::CommandRuntimeSnapshot::new(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect(),
+            std::collections::HashMap::new(),
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
+        );
+        let _result = is_git_repository(&runtime);
         // Environment-dependent; ensure function is callable without panic
         // No assertion on value to keep test stable across environments
     }

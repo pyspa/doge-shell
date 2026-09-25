@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct GitStashAction;
 
@@ -19,9 +19,12 @@ impl Action for GitStashAction {
         "📦"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Get stash list
-        let output = Command::new("git")
+        let output = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["stash", "list"])
             .stdout(Stdio::piped())
             .output()?;
@@ -91,7 +94,9 @@ impl Action for GitStashAction {
             let action = action_item.output().to_string();
 
             println!("git stash {} {}", action, stash_ref);
-            Command::new("git")
+            runtime
+                .std_command("git")
+                .context("command not found: git")?
                 .args(["stash", &action, &stash_ref])
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to execute stash {}: {}", action, e))?;

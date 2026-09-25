@@ -6,7 +6,6 @@ use crate::safety_policy;
 use dsh_types::Context;
 use dsh_types::mcp::McpTransport;
 use std::path::Path;
-use std::process::Command;
 
 use super::*;
 pub(super) fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
@@ -167,18 +166,28 @@ pub(super) fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_di
     }
 
     if let Some(repo_root) = find_repo_root(current_dir) {
-        match unignored_log_paths(&repo_root) {
-            Ok(paths) if paths.is_empty() => {
-                let _ = ctx.write_stdout("ok unignored-logs none");
-            }
-            Ok(paths) => {
-                for path in paths {
-                    let _ = ctx.write_stdout(&format!("warn unignored-log {}", path.display()));
+        // Same logical-runtime `git` as the rest of doctor: resolved
+        // through the shell PATH, run with the exported child environment.
+        match proxy.command_runtime_snapshot() {
+            Ok(snapshot) => match unignored_log_paths(&snapshot, &repo_root) {
+                Ok(paths) if paths.is_empty() => {
+                    let _ = ctx.write_stdout("ok unignored-logs none");
                 }
-                let _ = ctx.write_stdout("warn unignored-logs consider adding *.log to .gitignore");
-            }
+                Ok(paths) => {
+                    for path in paths {
+                        let _ = ctx.write_stdout(&format!("warn unignored-log {}", path.display()));
+                    }
+                    let _ =
+                        ctx.write_stdout("warn unignored-logs consider adding *.log to .gitignore");
+                }
+                Err(err) => {
+                    let _ = ctx.write_stdout(&format!("warn unignored-logs unavailable {err}"));
+                }
+            },
             Err(err) => {
-                let _ = ctx.write_stdout(&format!("warn unignored-logs unavailable {err}"));
+                let _ = ctx.write_stdout(&format!(
+                    "warn unignored-logs unavailable runtime-snapshot-unavailable: {err:#}"
+                ));
             }
         }
     } else {
@@ -230,8 +239,13 @@ pub(super) fn is_risky_execute_allowlist_entry(entry: &str) -> bool {
         || lower.starts_with("node -e")
 }
 
-pub(super) fn unignored_log_paths(repo_root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
-    let output = Command::new("git")
+pub(super) fn unignored_log_paths(
+    snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+    repo_root: &Path,
+) -> std::result::Result<Vec<PathBuf>, String> {
+    let output = snapshot
+        .std_command("git")
+        .ok_or_else(|| "command not found: git".to_string())?
         .args(["status", "--short", "--untracked-files=all"])
         .current_dir(repo_root)
         .output()

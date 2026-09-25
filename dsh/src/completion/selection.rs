@@ -135,7 +135,9 @@ pub fn completion_from_cmd(
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
     debug!("{} ", &input);
-    match std::process::Command::new("sh")
+    // Internal interpreter boundary: never resolved through logical or
+    // process-global PATH.
+    match std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(input)
         .output()

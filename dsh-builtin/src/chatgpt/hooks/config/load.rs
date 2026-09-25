@@ -165,7 +165,7 @@ pub(crate) fn load(proxy: &mut dyn ShellProxy) -> Result<LoadedHooks, String> {
         .filter(|(cached, _)| *cached == signature)
         .map(|(_, hooks)| hooks)
     {
-        return Ok(cached);
+        return pin_loaded(proxy, cached);
     }
 
     let hooks = read(&path)?;
@@ -174,6 +174,23 @@ pub(crate) fn load(proxy: &mut dyn ShellProxy) -> Result<LoadedHooks, String> {
         *cache = Some((signature, hooks.clone()));
     }
 
+    pin_loaded(proxy, hooks)
+}
+
+/// Pin cached/parsed hooks against the proxy's logical runtime snapshot.
+///
+/// The cache stores parsed-but-unpinned hooks (keyed by file signature
+/// only), so every `load` pins afresh: a `PATH` change must move the next
+/// turn's pinning without waiting for a file edit.
+fn pin_loaded(proxy: &mut dyn ShellProxy, mut hooks: LoadedHooks) -> Result<LoadedHooks, String> {
+    let snapshot = proxy
+        .command_runtime_snapshot()
+        .map_err(|err| format!("chat: cannot snapshot runtime for hooks: {err:#}"))?;
+    for hook in &mut hooks.hooks {
+        let program = hook.command[0].clone();
+        hook.command[0] = super::pin_program(&snapshot, &program)
+            .map_err(|err| format!("hook `{}`: {err}", hook.id))?;
+    }
     Ok(hooks)
 }
 
@@ -329,7 +346,10 @@ pub(crate) fn parse(contents: &str) -> Result<LoadedHooks, String> {
 
     let mut hooks = file.hooks;
     for hook in &mut hooks {
-        hook.command[0] = normalize_program(&hook.command[0])
+        // Relative pathnames are refused here (no runtime needed); bare
+        // names are pinned against the logical runtime later in `load`, so
+        // a later `chdir` cannot reinterpret them.
+        super::check_program_not_relative(&hook.command[0])
             .map_err(|err| format!("hook `{}`: {err}", hook.id))?;
     }
 

@@ -613,6 +613,16 @@ impl crate::shell_capabilities::ProcessEnvironmentCapability for TestShellProxy 
     fn command_search_paths(&self) -> Vec<PathBuf> {
         self.command_search_paths.clone()
     }
+
+    fn command_runtime_snapshot(
+        &self,
+    ) -> Result<dsh_types::process_runtime::CommandRuntimeSnapshot> {
+        Ok(dsh_types::process_runtime::CommandRuntimeSnapshot::new(
+            self.command_search_paths.clone(),
+            self.exported.clone(),
+            self.current_dir.clone(),
+        ))
+    }
 }
 
 impl crate::shell_capabilities::JobControlCapability for TestShellProxy {

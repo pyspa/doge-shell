@@ -757,6 +757,11 @@ fn doctor_safety_reports_risky_posture() {
         current_dir: dir.path().to_path_buf(),
         vars,
         execute_allowlist: vec!["bash".to_string(), "git status".to_string()],
+        // The safety `git status` resolves through the proxy's logical
+        // PATH: point it at the runner's own PATH so the real `git` above
+        // is found.
+        command_search_paths: std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .collect(),
         mcp_servers: vec![
             McpServerConfig {
                 label: "local".to_string(),
@@ -884,7 +889,15 @@ fn validate_json_contains_focused_commands() {
     );
     std::fs::write(dir.path().join("dsh/src/review.rs"), "// changed\n").unwrap();
 
-    let value = json_dev_details(dir.path());
+    // The dev `git status` resolves through the proxy's logical PATH: point
+    // it at the runner's own PATH so the real `git` above is found.
+    let mut proxy = TestProxy {
+        current_dir: dir.path().to_path_buf(),
+        command_search_paths: std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .collect(),
+        ..TestProxy::default()
+    };
+    let value = json_dev_details(&mut proxy, dir.path());
     let commands = value["commands"].as_array().unwrap();
     assert!(
         commands
@@ -1006,4 +1019,166 @@ fn doctor_mcp_footprint_follows_active_tools() {
         output.contains("ok mcp-tools-footprint tools=5"),
         "{output}"
     );
+}
+
+#[cfg(unix)]
+mod runtime_authority_tests {
+    use super::*;
+
+    fn write_executable(dir: &Path, name: &str, body: &str) {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    /// Proxy whose logical PATH holds the fake tool, without touching the
+    /// process-global PATH.
+    fn logical_proxy(dir: &Path) -> TestProxy {
+        TestProxy {
+            current_dir: dir.to_path_buf(),
+            command_search_paths: vec![dir.to_path_buf()],
+            ..TestProxy::default()
+        }
+    }
+
+    /// Text and JSON `runtime` reports resolve the same executable through
+    /// the logical runtime, and the version probe runs that absolute path.
+    #[test]
+    fn text_and_json_runtime_reports_agree_on_logical_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        write_executable(
+            dir.path(),
+            "cargo",
+            "#!/bin/sh\necho 'cargo 9.9.9-logical'\n",
+        );
+        let mut proxy = logical_proxy(dir.path());
+
+        let (ctx, observer) = observed_context();
+        check_runtimes(&ctx, &mut proxy);
+        let text = observed_stdout(&observer);
+        assert!(
+            text.contains(&format!(
+                "ok cargo cargo 9.9.9-logical {}",
+                dir.path().join("cargo").display()
+            )),
+            "text report must name the logical executable: {text}"
+        );
+
+        let details = json_section_details(&mut proxy, dir.path(), Some("runtime"));
+        let commands = details["commands"].as_array().unwrap();
+        let cargo = commands
+            .iter()
+            .find(|entry| entry["command"] == "cargo")
+            .expect("cargo entry present");
+        assert_eq!(
+            cargo["path"].as_str().unwrap(),
+            dir.path().join("cargo").to_string_lossy().as_ref()
+        );
+        assert_eq!(cargo["version"].as_str().unwrap(), "cargo 9.9.9-logical");
+    }
+
+    /// A tool on the process PATH only is reported as not-found: doctor
+    /// never falls back to the process-global environment. The decoy goes
+    /// in front of the runner's own PATH so parallel tests spawning bare
+    /// system tools keep resolving.
+    #[test]
+    fn process_only_tool_is_not_found() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let process = tempfile::tempdir().unwrap();
+        write_executable(process.path(), "cargo", "#!/bin/sh\necho 'cargo 1.0.0'\n");
+        let previous = std::env::var_os("PATH");
+        let mut entries = vec![process.path().into()];
+        if let Some(previous) = &previous {
+            entries.extend(std::env::split_paths(previous));
+        }
+        unsafe { std::env::set_var("PATH", std::env::join_paths(entries).unwrap()) };
+        let empty = tempfile::tempdir().unwrap();
+        let mut proxy = logical_proxy(empty.path());
+        let (ctx, observer) = observed_context();
+        check_runtimes(&ctx, &mut proxy);
+        let result = observed_stdout(&observer);
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("PATH", value),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+        assert!(
+            result.contains("warn cargo not-found"),
+            "process-only cargo must be invisible: {result}"
+        );
+    }
+
+    /// `DOGESH_HERDR_ENABLED` is a logical shell setting: `unset` in the
+    /// shell disables the pane report even when the process environment
+    /// still carries a stale truthy value. The `HERDR_*` process identity
+    /// stays process-global.
+    #[test]
+    fn herdr_enabled_reads_the_logical_shell_variable() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let previous = std::env::var_os("DOGESH_HERDR_ENABLED");
+        unsafe { std::env::set_var("DOGESH_HERDR_ENABLED", "1") };
+        let dir = tempfile::tempdir().unwrap();
+        let mut proxy = logical_proxy(dir.path());
+        // Logically unset: no DOGESH_HERDR_ENABLED in `vars`.
+        let (ctx, observer) = observed_context();
+        check_runtimes(&ctx, &mut proxy);
+        let result = observed_stdout(&observer);
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("DOGESH_HERDR_ENABLED", value),
+                None => std::env::remove_var("DOGESH_HERDR_ENABLED"),
+            }
+        }
+        assert!(
+            result.contains("skip herdr-pane disabled"),
+            "logically unset DOGESH_HERDR_ENABLED must disable: {result}"
+        );
+    }
+
+    /// A logically enabled shell reports the process pane identity: the
+    /// two authorities compose without mixing.
+    #[test]
+    fn herdr_enabled_shell_sees_process_pane_identity() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let saved: Vec<(&str, Option<std::ffi::OsString>)> = [
+            "DOGESH_HERDR_ENABLED",
+            "HERDR_ENV",
+            "HERDR_PANE_ID",
+            "HERDR_BIN_PATH",
+            "DOGESH_HERDR_OWNER_PID",
+        ]
+        .iter()
+        .map(|key| (*key, std::env::var_os(key)))
+        .collect();
+        unsafe {
+            std::env::set_var("HERDR_ENV", "1");
+            std::env::set_var("HERDR_PANE_ID", "w9:p9");
+            std::env::set_var("HERDR_BIN_PATH", "/opt/herdr-fixture/herdr");
+            std::env::remove_var("DOGESH_HERDR_OWNER_PID");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut proxy = logical_proxy(dir.path());
+        proxy
+            .vars
+            .insert("DOGESH_HERDR_ENABLED".to_string(), "1".to_string());
+        let (ctx, observer) = observed_context();
+        check_runtimes(&ctx, &mut proxy);
+        let result = observed_stdout(&observer);
+        unsafe {
+            for (key, value) in saved {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        assert!(
+            result.contains("ok herdr-pane active pane=w9:p9"),
+            "logical enable + process identity must compose: {result}"
+        );
+    }
 }

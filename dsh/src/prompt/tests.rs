@@ -318,6 +318,7 @@ fn kube_config_present_empty_env_falls_back_to_home_file() {
     ));
 }
 
+use super::git_status::fetch_git_status_sync;
 use super::runtime::PromptEnvironment;
 use super::runtime::{PromptRuntimeIdentity, PromptRuntimeSnapshot};
 use super::version_probes::{fetch_aws_profile_from, resolve_aws_profile};
@@ -533,7 +534,7 @@ fn logical_path_wins_over_process_path() {
     write_executable(&process.path().join("node"), "#!/bin/sh\necho v1.0.0\n");
 
     let environment = prompt_test_environment(&logical.path().to_string_lossy());
-    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
 
     let runtime = runtime_for(&environment);
     assert_eq!(
@@ -552,7 +553,7 @@ fn process_only_command_is_invisible() {
     write_executable(&process.path().join("node"), "#!/bin/sh\necho v1.0.0\n");
 
     let environment = prompt_test_environment(&logical.path().to_string_lossy());
-    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
 
     let runtime = runtime_for(&environment);
     assert_eq!(runtime.resolve_program("node"), None);
@@ -815,7 +816,7 @@ fn python_falls_back_to_logical_python() {
     );
 
     let environment = prompt_test_environment(&logical.path().to_string_lossy());
-    let _stale_path = ProcessEnvGuard::set("PATH", &process.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
 
     let runtime = runtime_for(&environment);
     assert_eq!(runtime.resolve_program("python3"), None);
@@ -1311,4 +1312,135 @@ fn current_failure_applies_backoff_until_identity_change() {
         PromptEnvironment::default(),
     ));
     assert!(prompt.needs_node_check());
+}
+
+/// Fake `git` for runtime-authority tests: answers `status --porcelain=2
+/// --branch` with a canned branch and `rev-parse --show-toplevel` with a
+/// marker, so tests can tell logical git A apart from process git B.
+fn write_fake_git(dir: &std::path::Path, branch: &str) {
+    let body = format!(
+        "#!/bin/sh\nif [ \"$1\" = \"-C\" ]; then shift 2; fi\nif [ \"$1\" = \"--no-optional-locks\" ]; then shift; fi\ncase \"$1\" in\n  status) printf '# branch.head {branch}\\n';;\n  rev-parse) printf '%s\\n' \"$MARKER_ROOT\";;\nesac\n"
+    );
+    write_executable(&dir.join("git"), &body);
+}
+
+fn git_runtime_for(
+    environment: &Arc<RwLock<Environment>>,
+    cwd: &std::path::Path,
+) -> PromptRuntimeSnapshot {
+    PromptRuntimeSnapshot::from_environment(&environment.read(), cwd.to_path_buf())
+}
+
+/// The logical `git` wins over a stale process-global `git` for the sync
+/// fetch: same binary the shell would run.
+#[test]
+fn sync_git_status_uses_logical_git_only() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_fake_git(logical.path(), "logical-branch");
+    write_fake_git(process.path(), "process-branch");
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
+
+    let runtime = git_runtime_for(&environment, logical.path());
+    let status = fetch_git_status_sync(&runtime, logical.path()).expect("logical git must run");
+    assert_eq!(status.branch, "logical-branch");
+}
+
+/// The async fetch shares the same runtime authority: no process fallback.
+#[test]
+fn async_git_status_uses_logical_git_only() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_fake_git(logical.path(), "logical-branch");
+    write_fake_git(process.path(), "process-branch");
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
+
+    let runtime = git_runtime_for(&environment, logical.path());
+    let status = block_on_probe(super::fetch_git_status_async(&runtime, logical.path()))
+        .expect("logical git must run");
+    assert_eq!(status.branch, "logical-branch");
+}
+
+/// A `git` that exists only on the process-global PATH is invisible: both
+/// fetches return `None` instead of leaking it in.
+#[test]
+fn process_only_git_is_invisible_to_status_fetches() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_fake_git(process.path(), "process-branch");
+
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
+
+    let runtime = git_runtime_for(&environment, logical.path());
+    assert!(fetch_git_status_sync(&runtime, logical.path()).is_none());
+    assert!(block_on_probe(super::fetch_git_status_async(&runtime, logical.path())).is_none());
+}
+
+/// The git-root fallback resolves `git` through the same snapshot: the
+/// pure `.git` marker walk needs no binary, and the `rev-parse` fallback
+/// never consults the process PATH.
+#[test]
+fn git_root_fallback_uses_logical_git_only() {
+    let _lock = crate::test_env_lock();
+    let logical = tempdir().unwrap();
+    let process = tempdir().unwrap();
+    write_fake_git(logical.path(), "logical-branch");
+    write_fake_git(process.path(), "process-branch");
+
+    // No `.git` marker anywhere, so the `rev-parse` fallback must run.
+    let work = tempdir().unwrap();
+    let environment = prompt_test_environment(&logical.path().to_string_lossy());
+    let _stale_path = ProcessEnvGuard::prepend_path(process.path());
+    // The marker travels through the logical child environment (exported),
+    // never the process environment: isolation keeps process values out.
+    environment.write().set_and_export_shell_var(
+        "MARKER_ROOT".to_string(),
+        work.path().to_string_lossy().into_owned(),
+    );
+
+    let runtime = std::sync::Arc::new(git_runtime_for(&environment, work.path()));
+    let root = block_on_probe(super::find_git_root_async(Arc::clone(&runtime)));
+    assert_eq!(root, Some(work.path().to_path_buf()));
+}
+
+/// Stale git refreshes never overwrite a newer runtime: the Git probe
+/// shares the prompt's epoch discipline, so a delayed task from runtime A
+/// cannot publish over runtime B. Deterministic — no sleeps, the lifecycle
+/// decides.
+#[test]
+fn stale_git_probe_cannot_overwrite_newer_runtime() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+
+    let epoch_a = prompt.observe_runtime_identity(runtime_identity(
+        21,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Git, epoch_a));
+
+    // Runtime moves on (cd / PATH change) while A's git task is in flight.
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        22,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Git, epoch_b));
+
+    // A's late completion is stale: it must neither publish nor clear B's
+    // in-flight slot.
+    assert!(!prompt.finish_probe(PromptProbe::Git, epoch_a));
+    assert!(!prompt.try_begin_probe(PromptProbe::Git, epoch_b));
+    assert!(prompt.finish_probe(PromptProbe::Git, epoch_b));
 }

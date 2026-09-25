@@ -2,7 +2,7 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
 use skim::{Skim, SkimItemReceiver, SkimItemSender};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use tracing::debug;
 
 /// Built-in gco command description
@@ -23,15 +23,15 @@ impl SkimItem for StringItem {
     }
 }
 
-pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
+pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if we're in a git repository
-    if !is_git_repository() {
+    if !is_git_repository(proxy) {
         ctx.write_stderr("gco: not a git repository").ok();
         return ExitStatus::ExitedWith(1);
     }
 
     // Get git log entries
-    let branch_entries = match get_git_branches() {
+    let branch_entries = match get_git_branches(proxy) {
         Ok(entries) => entries,
         Err(err) => {
             ctx.write_stderr(&format!("gco: failed to get git log: {err}"))
@@ -54,7 +54,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
             branch
         );
         let args = vec!["checkout", &branch];
-        match Command::new("git").args(&args).output() {
+        match checkout_branch(proxy, &args) {
             Ok(output) => {
                 if !output.status.success() {
                     let error = String::from_utf8_lossy(&output.stderr);
@@ -116,7 +116,7 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
         let val = extract_branch_name(&val);
         debug!("selected branch {:?}", val);
         let args = vec!["checkout", &val];
-        match Command::new("git").args(&args).output() {
+        match checkout_branch(proxy, &args) {
             Ok(output) => {
                 if !output.status.success() {
                     let error = String::from_utf8_lossy(&output.stderr);
@@ -143,21 +143,37 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
 }
 
 /// Check if current directory is within a git repository
-fn is_git_repository() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn is_git_repository(proxy: &mut dyn ShellProxy) -> bool {
+    crate::runtime_spawn::runtime_command(proxy, "git")
+        .and_then(|mut command| {
+            command
+                .args(["rev-parse", "--git-dir"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
         .map(|status| status.success())
         .unwrap_or(false)
 }
 
+/// Run `git checkout` through the logical runtime: the same `git` the
+/// shell would run, with exactly the exported child environment.
+fn checkout_branch(
+    proxy: &mut dyn ShellProxy,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let mut command = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| std::io::Error::other(format!("{e}")))?;
+    command.args(args).output()
+}
+
 /// Get formatted git log entries
-fn get_git_branches() -> Result<Vec<String>, String> {
+fn get_git_branches(proxy: &mut dyn ShellProxy) -> Result<Vec<String>, String> {
     let args = vec!["branch", "--all"];
 
-    let output = Command::new("git")
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("failed to execute git: {e}"))?
         .args(&args)
         .output()
         .map_err(|e| format!("failed to execute git: {e}"))?;

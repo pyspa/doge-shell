@@ -214,6 +214,9 @@ jobs:
       - name: Portability
         run: scripts/check-portability.py
 
+      - name: Runtime authority
+        run: scripts/check-runtime-authority.py
+
       - name: File budget
         run: scripts/check-file-budget.py
 

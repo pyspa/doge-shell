@@ -56,7 +56,7 @@
 - builtin command / help / doctor outside chat/MCP
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
-  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes
+  - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes; subprocess を spawn する変更は `scripts/check-runtime-authority.py` も通す（`dsh-types/src/process_runtime.rs` の snapshot 経由か、理由付き allowlist が要る）
 - GitHub builtins / PR notification / git helpers
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: `dsh-builtin/src/g*.rs`, `dsh-builtin/src/github_client.rs`, `dsh-builtin/src/gh_notify.rs`, `dsh-builtin/src/commit_ai.rs`

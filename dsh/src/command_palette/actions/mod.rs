@@ -26,8 +26,21 @@ pub mod ssh_connect;
 pub use lisp_action::*;
 
 use super::ActionRegistry;
+use crate::shell::Shell;
 use builtin_command::{BuiltinCommandAction, BuiltinInvocation};
 use std::sync::Arc;
+
+/// One immutable runtime for a palette action: the shell's logical command
+/// search paths resolve the executable, and the child sees exactly the
+/// exported child environment in the snapshot cwd. Never the
+/// process-global `PATH` or inherited environment.
+pub(crate) fn runtime_snapshot(
+    shell: &Shell,
+) -> dsh_types::process_runtime::CommandRuntimeSnapshot {
+    let env = shell.environment.read();
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    env.command_runtime_snapshot(current_dir)
+}
 
 pub fn register_all(registry: &mut ActionRegistry) {
     // Dev

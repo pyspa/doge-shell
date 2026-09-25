@@ -6,10 +6,11 @@ use super::*;
 /// Add a worktree for a branch
 pub(super) fn add_worktree(
     ctx: &Context,
+    proxy: &mut dyn ShellProxy,
     branch: &str,
     create_new: bool,
 ) -> Result<PathBuf, String> {
-    let worktree_path = get_worktree_path(branch)?;
+    let worktree_path = get_worktree_path(proxy, branch)?;
 
     debug!(
         "Creating worktree at {:?} for branch {}",
@@ -37,7 +38,8 @@ pub(super) fn add_worktree(
 
     debug!("Executing: git {:?}", args);
 
-    let output = Command::new("git")
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("failed to execute git: {e}"))?
         .args(&args)
         .output()
         .map_err(|e| format!("failed to execute git: {}", e))?;
@@ -61,9 +63,13 @@ pub(super) fn add_worktree(
 }
 
 /// Remove worktree interactively using skim
-pub(super) fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitStatus {
+pub(super) fn remove_worktree_interactive(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    force: bool,
+) -> ExitStatus {
     // Get list of worktrees (excluding main)
-    let worktrees = match get_linked_worktrees() {
+    let worktrees = match get_linked_worktrees(proxy) {
         Ok(wt) => wt,
         Err(e) => {
             ctx.write_stderr(&format!("gwt: {}", e)).ok();
@@ -84,7 +90,7 @@ pub(super) fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitSta
             worktree
         ))
         .ok();
-        return remove_worktree(ctx, worktree, force);
+        return remove_worktree(ctx, proxy, worktree, force);
     }
 
     // Multiple worktrees - use skim for selection
@@ -123,12 +129,13 @@ pub(super) fn remove_worktree_interactive(ctx: &Context, force: bool) -> ExitSta
     }
 
     let worktree_path = selected[0].output().to_string();
-    remove_worktree(ctx, &worktree_path, force)
+    remove_worktree(ctx, proxy, &worktree_path, force)
 }
 
 /// Get list of linked worktrees (excluding main worktree)
-pub(super) fn get_linked_worktrees() -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+pub(super) fn get_linked_worktrees(proxy: &mut dyn ShellProxy) -> Result<Vec<String>, String> {
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("failed to execute git: {e}"))?
         .args(["worktree", "list", "--porcelain"])
         .output()
         .map_err(|e| format!("failed to execute git: {}", e))?;
@@ -176,7 +183,12 @@ pub(super) fn get_linked_worktrees() -> Result<Vec<String>, String> {
 }
 
 /// Remove a single worktree
-fn remove_worktree(ctx: &Context, path: &str, force: bool) -> ExitStatus {
+fn remove_worktree(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    path: &str,
+    force: bool,
+) -> ExitStatus {
     debug!("Removing worktree: {} (force: {})", path, force);
 
     let mut args = vec!["worktree", "remove"];
@@ -185,7 +197,12 @@ fn remove_worktree(ctx: &Context, path: &str, force: bool) -> ExitStatus {
     }
     args.push(path);
 
-    let output = Command::new("git").args(args).output();
+    let output = crate::runtime_spawn::runtime_command(proxy, "git").and_then(|mut command| {
+        command
+            .args(args)
+            .output()
+            .map_err(|e| anyhow::anyhow!("failed to execute git: {e}"))
+    });
 
     match output {
         Ok(output) => {
@@ -213,10 +230,13 @@ fn remove_worktree(ctx: &Context, path: &str, force: bool) -> ExitStatus {
 }
 
 /// Prune stale worktrees
-pub(super) fn prune_worktrees(ctx: &Context) -> ExitStatus {
-    let output = Command::new("git")
-        .args(["worktree", "prune", "-v"])
-        .output();
+pub(super) fn prune_worktrees(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let output = crate::runtime_spawn::runtime_command(proxy, "git").and_then(|mut command| {
+        command
+            .args(["worktree", "prune", "-v"])
+            .output()
+            .map_err(|e| anyhow::anyhow!("failed to execute git: {e}"))
+    });
 
     match output {
         Ok(output) => {
@@ -243,11 +263,21 @@ pub(super) fn prune_worktrees(ctx: &Context) -> ExitStatus {
 }
 
 /// Open editor at the given path
-pub(super) fn open_editor(ctx: &Context, path: &Path) -> ExitStatus {
-    // Try $EDITOR, then $VISUAL, then common editors
-    let editor = env::var("EDITOR")
-        .or_else(|_| env::var("VISUAL"))
-        .unwrap_or_else(|_| "vi".to_string());
+pub(super) fn open_editor(ctx: &Context, proxy: &mut dyn ShellProxy, path: &Path) -> ExitStatus {
+    // Logical shell variables (exported or not): never the process
+    // environment. Keeps the file's historical EDITOR-first order; a blank
+    // value counts as unset and falls through, like every other editor path.
+    let configured = proxy
+        .get_var("EDITOR")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            proxy
+                .get_var("VISUAL")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        });
+    let editor = configured.unwrap_or_else(|| "vi".to_string());
 
     debug!("Opening editor {} at {:?}", editor, path);
 
@@ -258,7 +288,15 @@ pub(super) fn open_editor(ctx: &Context, path: &Path) -> ExitStatus {
         return ExitStatus::ExitedWith(1);
     }
 
-    let mut cmd = Command::new(parts[0]);
+    let command = match crate::runtime_spawn::runtime_command(proxy, parts[0]) {
+        Ok(command) => command,
+        Err(e) => {
+            ctx.write_stderr(&format!("gwt: failed to open editor {}: {}", parts[0], e))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+    let mut cmd = command;
     for arg in &parts[1..] {
         cmd.arg(arg);
     }

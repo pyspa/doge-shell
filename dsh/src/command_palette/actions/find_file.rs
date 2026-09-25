@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct FindFileAction;
 
@@ -46,17 +46,20 @@ impl Action for FindFileAction {
     }
 
     async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
-        // Try fd first, fall back to find
-        let output = Command::new("fd")
-            .args(["--type", "f", "--hidden", "--exclude", ".git"])
-            .stdout(Stdio::piped())
-            .output()
-            .or_else(|_| {
-                Command::new("find")
-                    .args([".", "-type", "f", "-not", "-path", "*/.git/*"])
-                    .stdout(Stdio::piped())
-                    .output()
-            })?;
+        let runtime = super::runtime_snapshot(shell);
+        // Try fd first, fall back to find. Both resolve through the
+        // logical runtime; a missing tool falls through to the next one.
+        let run_list = |program: &str, args: &[&str]| -> Option<std::process::Output> {
+            runtime
+                .std_command(program)?
+                .args(args)
+                .stdout(Stdio::piped())
+                .output()
+                .ok()
+        };
+        let output = run_list("fd", &["--type", "f", "--hidden", "--exclude", ".git"])
+            .or_else(|| run_list("find", &[".", "-type", "f", "-not", "-path", "*/.git/*"]))
+            .context("command not found: fd/find")?;
 
         if !output.status.success() {
             return Err(anyhow::anyhow!("Failed to list files"));
@@ -95,7 +98,9 @@ impl Action for FindFileAction {
             // Get editor from environment
             let editor = resolve_editor(shell);
 
-            Command::new(&editor)
+            runtime
+                .std_command(&editor)
+                .context("command not found: editor")?
                 .arg(&file_path)
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to open editor: {}", e))?;

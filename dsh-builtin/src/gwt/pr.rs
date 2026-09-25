@@ -4,13 +4,16 @@ use super::*;
 
 use crate::github_client;
 
-pub(super) fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
+pub(super) fn add_worktree_from_pr(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+) -> Result<PathBuf, String> {
     // Check if gh is installed
-    if !github_client::is_gh_installed() {
+    if !github_client::is_gh_installed(proxy) {
         return Err("gh command not found".to_string());
     }
 
-    let mut prs = github_client::get_prs()?;
+    let mut prs = github_client::get_prs(proxy)?;
     if prs.is_empty() {
         return Err("no PR found".to_string());
     }
@@ -52,7 +55,7 @@ pub(super) fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
         .find(|p| p.number.to_string() == pr_number)
         .ok_or("PR not found")?;
 
-    let git_root = get_git_root()?;
+    let git_root = get_git_root(proxy)?;
     let project_name = git_root
         .file_name()
         .and_then(|n| n.to_str())
@@ -78,7 +81,8 @@ pub(super) fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
     .ok();
 
     // 1. Create worktree detached
-    let output = Command::new("git")
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("failed to create worktree: {e}"))?
         .args([
             "worktree",
             "add",
@@ -95,7 +99,8 @@ pub(super) fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
 
     // 2. Checkout PR in the new worktree
     // We execute gh pr checkout inside the new worktree directory
-    let checkout_output = Command::new("gh")
+    let checkout_output = crate::runtime_spawn::runtime_command(proxy, "gh")
+        .map_err(|e| format!("failed to execute gh pr checkout: {e}"))?
         .current_dir(&worktree_path)
         .args(["pr", "checkout", &pr_number])
         .output()
@@ -110,14 +115,16 @@ pub(super) fn add_worktree_from_pr(ctx: &Context) -> Result<PathBuf, String> {
         .ok();
 
         // Cleanup worktree if checkout fails
-        let _ = Command::new("git")
-            .args([
-                "worktree",
-                "remove",
-                "--force",
-                &worktree_path.to_string_lossy(),
-            ])
-            .output();
+        if let Ok(mut command) = crate::runtime_spawn::runtime_command(proxy, "git") {
+            let _ = command
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &worktree_path.to_string_lossy(),
+                ])
+                .output();
+        }
 
         return Err(format!("gh pr checkout failed: {}", stderr));
     }

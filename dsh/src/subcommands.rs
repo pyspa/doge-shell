@@ -17,12 +17,20 @@ pub async fn handle_completion_command(
 
     info!("Generating completion for command: {}", command);
 
-    let help_text = match CompletionGenerationService::collect_help_text(&command) {
-        Ok(help_text) => help_text,
-        Err(e) => {
-            error!("Failed to collect help for '{}': {:#}", command, e);
-            eprintln!("Error: Failed to get help text for '{}': {}", command, e);
-            return ExitCode::FAILURE;
+    let help_text = {
+        let env = Environment::new();
+        let guard = env.read();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        // Fresh startup environment (already imported from the process):
+        // `man` and the target resolve through it, never the ambient PATH.
+        let snapshot = guard.command_runtime_snapshot(cwd);
+        match CompletionGenerationService::collect_help_text(&snapshot, &command) {
+            Ok(help_text) => help_text,
+            Err(e) => {
+                error!("Failed to collect help for '{}': {:#}", command, e);
+                eprintln!("Error: Failed to get help text for '{}': {}", command, e);
+                return ExitCode::FAILURE;
+            }
         }
     };
 

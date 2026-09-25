@@ -2,7 +2,9 @@
 
 use super::Environment;
 use crate::dirs::search_file;
+use dsh_types::process_runtime::CommandRuntimeSnapshot;
 use std::path::Path;
+use std::path::PathBuf;
 use tracing::debug;
 
 #[inline]
@@ -46,6 +48,25 @@ fn lookup_in_paths(paths: &[String], cmd: &str) -> Option<String> {
 }
 
 impl Environment {
+    /// Build the immutable runtime snapshot one child spawn depends on.
+    ///
+    /// The single construction site: logical command search paths
+    /// (`variable_state.paths`), the exported child environment
+    /// ([`Self::child_process_env`]), and the explicitly passed cwd.
+    /// Process-global `std::env::PATH` is never read, so a logically unset
+    /// variable stays unset.
+    pub(crate) fn command_runtime_snapshot(&self, current_dir: PathBuf) -> CommandRuntimeSnapshot {
+        CommandRuntimeSnapshot::new(
+            self.variable_state
+                .paths
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
+            self.child_process_env(),
+            current_dir,
+        )
+    }
+
     /// Expand one PATH entry the way shell word expansion does.
     ///
     /// `~` / `~/...` resolve against the logical shell `HOME` so a

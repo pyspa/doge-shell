@@ -420,18 +420,73 @@ impl<'a> Repl<'a> {
         }
 
         self.background_tasks.last_git_update = Some(now);
+        // One immutable runtime for the whole refresh unit: the root lookup
+        // and the status lookup share PATH, child environment, and cwd, and
+        // publish under one probe epoch so a stale task can never overwrite
+        // a newer runtime's root or status.
+        let runtime = {
+            let cwd = self.terminal_ui.prompt.read().current_path().to_path_buf();
+            crate::prompt::PromptRuntimeSnapshot::from_environment(
+                &self.shell.environment.read(),
+                cwd,
+            )
+        };
+        let runtime = Arc::new(runtime);
+        let epoch = self
+            .terminal_ui
+            .prompt
+            .write()
+            .observe_runtime_identity(runtime.identity());
+        if !self
+            .terminal_ui
+            .prompt
+            .write()
+            .try_begin_probe(crate::prompt::PromptProbe::Git, epoch)
+        {
+            self.background_tasks
+                .git_task_inflight
+                .store(false, Ordering::SeqCst);
+            return;
+        }
+        let needs_root = self.terminal_ui.prompt.read().needs_git_check;
+        let status_fallback_root = self.terminal_ui.prompt.read().git_root_path();
         let prompt = Arc::clone(&self.terminal_ui.prompt);
         let inflight = Arc::clone(&self.background_tasks.git_task_inflight);
         tokio::spawn(async move {
-            if prompt.read().needs_git_check {
-                let cwd = prompt.read().current_dir.clone();
-                let root = crate::prompt::find_git_root_async(cwd).await;
-                prompt.write().update_git_root(root);
-            }
-            if prompt.read().has_git_root() {
-                let path = prompt.read().current_path().to_path_buf();
-                if let Some(status) = crate::prompt::fetch_git_status_async(&path).await {
-                    prompt.write().update_git_status(Some(status));
+            let looked_up_root = if needs_root {
+                Some(crate::prompt::find_git_root_async(Arc::clone(&runtime)).await)
+            } else {
+                None
+            };
+            let status_target: Option<std::path::PathBuf> = match &looked_up_root {
+                Some(root) => root.clone(),
+                None => status_fallback_root,
+            };
+            let status = match &status_target {
+                Some(path) => crate::prompt::fetch_git_status_async(&runtime, path).await,
+                None => None,
+            };
+            {
+                let mut prompt = prompt.write();
+                // Stale epoch: a newer runtime already published; drop
+                // everything instead of overwriting it.
+                if !prompt.finish_probe(crate::prompt::PromptProbe::Git, epoch) {
+                    inflight.store(false, Ordering::SeqCst);
+                    return;
+                }
+                // Same-runtime guard for a cwd move the epoch has not
+                // observed yet: never publish another directory's state.
+                if prompt.current_path().to_path_buf() != *runtime.current_dir() {
+                    inflight.store(false, Ordering::SeqCst);
+                    return;
+                }
+                if let Some(root) = looked_up_root {
+                    prompt.update_git_root(root);
+                }
+                if let Some(status) = status
+                    && prompt.git_root_path().as_ref() == status_target.as_ref()
+                {
+                    prompt.update_git_status(Some(status));
                 }
             }
             inflight.store(false, Ordering::SeqCst);

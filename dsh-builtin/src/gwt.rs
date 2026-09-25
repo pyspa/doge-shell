@@ -11,9 +11,7 @@ use super::ShellProxy;
 use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
 use skim::{SkimItemReceiver, SkimItemSender};
-use std::env;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use tracing::debug;
 
 mod options;
@@ -44,7 +42,7 @@ impl SkimItem for StringItem {
 /// Main command entry point
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // Check if we're in a git repository
-    if !is_git_repository() {
+    if !is_git_repository(proxy) {
         ctx.write_stderr("gwt: not a git repository").ok();
         return ExitStatus::ExitedWith(1);
     }
@@ -62,11 +60,11 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     match opts.action {
-        Action::List => list_worktrees(ctx),
-        Action::Remove { force } => remove_worktree_interactive(ctx, force),
-        Action::Prune => prune_worktrees(ctx),
+        Action::List => list_worktrees(ctx, proxy),
+        Action::Remove { force } => remove_worktree_interactive(ctx, proxy, force),
+        Action::Prune => prune_worktrees(ctx, proxy),
         Action::Add { branch, create_new } => {
-            match add_worktree(ctx, &branch, create_new) {
+            match add_worktree(ctx, proxy, &branch, create_new) {
                 Ok(path) => {
                     ctx.write_stdout(&format!("Created worktree at: {}", path.display()))
                         .ok();
@@ -84,7 +82,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
                     // Open editor if requested
                     if opts.open_editor {
-                        open_editor(ctx, &path)
+                        open_editor(ctx, proxy, &path)
                     } else {
                         ExitStatus::ExitedWith(0)
                     }
@@ -96,7 +94,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             }
         }
         Action::AddFromPr => {
-            match add_worktree_from_pr(ctx) {
+            match add_worktree_from_pr(ctx, proxy) {
                 Ok(path) => {
                     // Change directory if -c option is set (default true)
                     if opts.change_dir {
@@ -111,7 +109,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
                     // Open editor if requested
                     if opts.open_editor {
-                        open_editor(ctx, &path)
+                        open_editor(ctx, proxy, &path)
                     } else {
                         ExitStatus::ExitedWith(0)
                     }
@@ -130,19 +128,31 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 }
 
 /// Check if current directory is within a git repository
-fn is_git_repository() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn is_git_repository(proxy: &mut dyn ShellProxy) -> bool {
+    use std::process::Stdio;
+    crate::runtime_spawn::runtime_command(proxy, "git")
+        .and_then(|mut command| {
+            command
+                .args(["rev-parse", "--git-dir"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        })
         .map(|status| status.success())
         .unwrap_or(false)
 }
 
 /// List all worktrees
-fn list_worktrees(ctx: &Context) -> ExitStatus {
-    let output = Command::new("git").args(["worktree", "list"]).output();
+fn list_worktrees(ctx: &Context, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("gwt: failed to execute git: {e}"))
+        .and_then(|mut command| {
+            command
+                .args(["worktree", "list"])
+                .output()
+                .map_err(|e| format!("gwt: failed to execute git: {e}"))
+        });
 
     match output {
         Ok(output) => {
@@ -165,8 +175,9 @@ fn list_worktrees(ctx: &Context) -> ExitStatus {
 }
 
 /// Get the root directory of the git repository
-fn get_git_root() -> Result<PathBuf, String> {
-    let output = Command::new("git")
+fn get_git_root(proxy: &mut dyn ShellProxy) -> Result<PathBuf, String> {
+    let output = crate::runtime_spawn::runtime_command(proxy, "git")
+        .map_err(|e| format!("failed to execute git: {e}"))?
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .map_err(|e| format!("failed to execute git: {}", e))?;
@@ -186,8 +197,8 @@ fn sanitize_branch_name(branch: &str) -> String {
 }
 
 /// Get worktree path for a branch
-fn get_worktree_path(branch: &str) -> Result<PathBuf, String> {
-    let git_root = get_git_root()?;
+fn get_worktree_path(proxy: &mut dyn ShellProxy, branch: &str) -> Result<PathBuf, String> {
+    let git_root = get_git_root(proxy)?;
     let parent = git_root
         .parent()
         .ok_or_else(|| "cannot determine parent directory".to_string())?;
@@ -232,7 +243,8 @@ mod tests {
     fn test_is_git_repository() {
         // This test depends on whether we're in a git repo
         // Just verify it doesn't panic
-        let _ = is_git_repository();
+        let mut proxy = crate::test_support::TestShellProxy::default();
+        let _ = is_git_repository(&mut proxy);
     }
 
     #[test]

@@ -24,6 +24,11 @@ pub(crate) enum PromptProbe {
     Go,
     Kubernetes,
     Docker,
+    /// Git root + status refreshes as one unit: the task holds a single
+    /// runtime snapshot across both lookups and publishes under this probe's
+    /// epoch, so a stale task cannot overwrite a newer runtime's root or
+    /// status.
+    Git,
 }
 
 /// Result of observing a runtime identity.

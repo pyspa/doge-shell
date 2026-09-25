@@ -1,18 +1,27 @@
 //! `doctor dev` / `doctor validate`: suggest validation commands from
 //! changed files, mirroring `scripts/check.sh`'s per-path rules.
+use crate::ShellProxy;
 use dsh_types::Context;
+use dsh_types::process_runtime::CommandRuntimeSnapshot;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
-pub(super) fn check_dev(ctx: &Context, current_dir: &Path) {
+pub(super) fn check_dev(ctx: &Context, proxy: &mut dyn ShellProxy, current_dir: &Path) {
     let Some(repo_root) = find_repo_root(current_dir) else {
         let _ = ctx.write_stdout("warn repo-root not-found for validation suggestions");
         return;
     };
     let _ = ctx.write_stdout(&format!("ok repo-root {}", repo_root.display()));
 
-    let changed = changed_paths(&repo_root);
+    // `git status` resolves through the logical runtime and runs with the
+    // exported child environment in the repo root — the same `git` the
+    // shell would run.
+    let snapshot = proxy.command_runtime_snapshot().ok();
+    let Some(snapshot) = snapshot.as_ref() else {
+        let _ = ctx.write_stdout("warn changed-files unavailable runtime-snapshot-unavailable");
+        return;
+    };
+    let changed = changed_paths(snapshot, &repo_root);
     match changed {
         Ok(paths) if paths.is_empty() => {
             let _ = ctx.write_stdout("skip changed-files none");
@@ -52,8 +61,13 @@ pub(super) fn find_repo_root(current_dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub(super) fn changed_paths(repo_root: &Path) -> std::result::Result<Vec<PathBuf>, String> {
-    let output = Command::new("git")
+pub(super) fn changed_paths(
+    snapshot: &CommandRuntimeSnapshot,
+    repo_root: &Path,
+) -> std::result::Result<Vec<PathBuf>, String> {
+    let output = snapshot
+        .std_command("git")
+        .ok_or_else(|| "command not found: git".to_string())?
         .args(["status", "--short"])
         .current_dir(repo_root)
         .output()

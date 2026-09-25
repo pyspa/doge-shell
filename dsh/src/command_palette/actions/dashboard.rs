@@ -4,7 +4,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use crossterm::style::Stylize;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct DashboardAction;
 
@@ -20,27 +20,36 @@ impl Action for DashboardAction {
         "📊"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         let cwd = std::env::current_dir()
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| ".".to_string());
 
         // Get git branch
-        let branch = Command::new("git")
-            .args(["branch", "--show-current"])
-            .stdout(Stdio::piped())
-            .output()
-            .ok()
+        let branch = runtime
+            .std_command("git")
+            .and_then(|mut command| {
+                command
+                    .args(["branch", "--show-current"])
+                    .stdout(Stdio::piped())
+                    .output()
+                    .ok()
+            })
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|| "N/A".to_string());
 
         // Get git status summary
-        let status = Command::new("git")
-            .args(["status", "--porcelain"])
-            .stdout(Stdio::piped())
-            .output()
-            .ok()
+        let status = runtime
+            .std_command("git")
+            .and_then(|mut command| {
+                command
+                    .args(["status", "--porcelain"])
+                    .stdout(Stdio::piped())
+                    .output()
+                    .ok()
+            })
             .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
             .unwrap_or(0);
 

@@ -16,7 +16,6 @@ use dsh_openai::{ChatGptClient, ChatRequestOptions};
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
 use std::io::{self, Write};
-use std::process::Command;
 
 pub fn description() -> &'static str {
     "Generate git commit message using AI"
@@ -51,7 +50,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 
     // 1. Check for staged changes
-    let diff = match get_staged_diff(None) {
+    let diff = match get_staged_diff(proxy, None) {
         Ok(d) if d.trim().is_empty() => {
             ctx.write_stderr("ai-commit: no staged changes. Run 'git add' first.")
                 .ok();
@@ -127,7 +126,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         match input.trim().to_lowercase().as_str() {
             "y" | "yes" => {
                 // Execute commit
-                match run_git_commit(&message, None) {
+                match run_git_commit(proxy, &message, None) {
                     Ok(_) => {
                         ctx.write_stdout("Commit successful.").ok();
                         return ExitStatus::ExitedWith(0);
@@ -173,8 +172,13 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 /// full, which is unbounded input for a one-paragraph answer.
 const MAX_DIFF_CHARS: usize = 24_000;
 
-fn run_git(args: &[&str], cwd: Option<&std::path::Path>) -> Result<String, String> {
-    let mut command = Command::new("git");
+fn run_git(
+    proxy: &mut dyn ShellProxy,
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+) -> Result<String, String> {
+    let mut command =
+        crate::runtime_spawn::runtime_command(proxy, "git").map_err(|e| format!("{e}"))?;
     command.args(args);
 
     if let Some(dir) = cwd {
@@ -190,15 +194,18 @@ fn run_git(args: &[&str], cwd: Option<&std::path::Path>) -> Result<String, Strin
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn get_staged_diff(cwd: Option<&std::path::Path>) -> Result<String, String> {
-    let diff = run_git(&["diff", "--cached"], cwd)?;
+fn get_staged_diff(
+    proxy: &mut dyn ShellProxy,
+    cwd: Option<&std::path::Path>,
+) -> Result<String, String> {
+    let diff = run_git(proxy, &["diff", "--cached"], cwd)?;
     if diff.len() <= MAX_DIFF_CHARS {
         return Ok(diff);
     }
 
     // Too large to send whole: lead with the file-level summary so the model
     // still sees the shape of the change, then as much of the diff as fits.
-    let stat = run_git(&["diff", "--cached", "--stat"], cwd).unwrap_or_default();
+    let stat = run_git(proxy, &["diff", "--cached", "--stat"], cwd).unwrap_or_default();
     let budget = MAX_DIFF_CHARS.saturating_sub(stat.len());
     let end = diff.floor_char_boundary(budget);
 
@@ -258,8 +265,13 @@ Rules:
     Ok(content.trim().to_string())
 }
 
-fn run_git_commit(message: &str, cwd: Option<&std::path::Path>) -> Result<(), String> {
-    let mut command = Command::new("git");
+fn run_git_commit(
+    proxy: &mut dyn ShellProxy,
+    message: &str,
+    cwd: Option<&std::path::Path>,
+) -> Result<(), String> {
+    let mut command =
+        crate::runtime_spawn::runtime_command(proxy, "git").map_err(|e| format!("{e}"))?;
     command.args(["commit", "-m", message]);
 
     if let Some(dir) = cwd {
@@ -277,8 +289,22 @@ fn run_git_commit(message: &str, cwd: Option<&std::path::Path>) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TestShellProxy;
     use std::fs::File;
+    use std::process::Command;
     use tempfile::TempDir;
+
+    /// Test proxy whose logical PATH is the runner's own PATH: these tests
+    /// exercise real `git` without letting production code read it.
+    fn test_proxy() -> TestShellProxy {
+        let command_search_paths =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        TestShellProxy {
+            current_dir: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")),
+            command_search_paths,
+            ..TestShellProxy::default()
+        }
+    }
 
     fn setup_git_repo() -> TempDir {
         let temp_dir = TempDir::new().expect("failed to create temp dir");
@@ -308,7 +334,7 @@ mod tests {
     #[test]
     fn test_get_staged_diff_empty() {
         let temp_dir = setup_git_repo();
-        let diff = get_staged_diff(Some(temp_dir.path())).unwrap();
+        let diff = get_staged_diff(&mut test_proxy(), Some(temp_dir.path())).unwrap();
         assert!(diff.trim().is_empty());
     }
 
@@ -329,7 +355,7 @@ mod tests {
             .output()
             .expect("failed to stage file");
 
-        let diff = get_staged_diff(Some(path)).unwrap();
+        let diff = get_staged_diff(&mut test_proxy(), Some(path)).unwrap();
         assert!(diff.contains("hello world"));
         assert!(diff.contains("diff --git"));
     }
@@ -351,7 +377,7 @@ mod tests {
             .expect("failed to stage file");
 
         // Run commit
-        run_git_commit("feat: test commit", Some(path)).unwrap();
+        run_git_commit(&mut test_proxy(), "feat: test commit", Some(path)).unwrap();
 
         // Verify log
         let output = Command::new("git")

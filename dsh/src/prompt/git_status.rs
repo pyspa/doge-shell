@@ -1,13 +1,26 @@
 //! Fetching and parsing `git status --porcelain=2 --branch` outside of `Prompt` itself, so a background task can call the async half without borrowing the prompt.
+use super::runtime::PromptRuntimeSnapshot;
 use super::*;
-use std::process::Command;
+use std::sync::Arc;
 
 // Standalone functions (kept for async task compatibility)
 
 /// Synchronous git status fetch for accurate display after command execution.
-/// This blocks but ensures the prompt shows the correct state immediately.
-pub fn fetch_git_status_sync(path: &Path) -> Option<GitStatus> {
-    let output = Command::new("git")
+///
+/// Resolves `git` through the refresh tick's logical runtime snapshot and
+/// spawns it with the snapshot's exported child environment: a shell-level
+/// `PATH` change or `unset` cannot leak the process-global `git` in.
+///
+/// Test-only: the interactive loop uses the async half so the prompt never
+/// blocks on a subprocess.
+#[cfg(test)]
+pub(crate) fn fetch_git_status_sync(
+    runtime: &PromptRuntimeSnapshot,
+    path: &Path,
+) -> Option<GitStatus> {
+    let output = runtime
+        .command_runtime()
+        .std_command("git")?
         .arg("-C")
         .arg(path)
         .arg("--no-optional-locks")
@@ -24,10 +37,17 @@ pub fn fetch_git_status_sync(path: &Path) -> Option<GitStatus> {
     parse_git_status_output(&output.stdout)
 }
 
-pub async fn fetch_git_status_async(path: &Path) -> Option<GitStatus> {
-    use tokio::process::Command;
-
-    let output = Command::new("git")
+/// Async git status fetch sharing one refresh tick's runtime snapshot.
+///
+/// The caller holds the same `Arc<PromptRuntimeSnapshot>` across the root
+/// lookup and this fetch, so `PATH`, child environment, and cwd cannot be
+/// re-read mid-operation.
+pub(crate) async fn fetch_git_status_async(
+    runtime: &PromptRuntimeSnapshot,
+    path: &Path,
+) -> Option<GitStatus> {
+    let output = runtime
+        .command("git")?
         .arg("-C")
         .arg(path)
         .arg("--no-optional-locks")
@@ -146,35 +166,29 @@ fn list_stats(line: &str, status: &mut GitStatus) -> bool {
     false
 }
 
-pub async fn find_git_root_async(cwd: PathBuf) -> Option<PathBuf> {
-    tokio::task::spawn_blocking(move || find_git_root(&cwd).map(PathBuf::from))
+/// Async git-root lookup bound to one refresh tick's runtime snapshot.
+///
+/// The pure `.git` marker walk comes first (shared with history context via
+/// `crate::git_context`, no subprocess involved); only when no marker is
+/// found does the logical-runtime `git rev-parse` fallback run. Both halves
+/// read the same immutable snapshot, and the caller publishes the result
+/// under the tick's probe epoch so a stale task never overwrites a newer
+/// runtime.
+pub(crate) async fn find_git_root_async(runtime: Arc<PromptRuntimeSnapshot>) -> Option<PathBuf> {
+    tokio::task::spawn_blocking(move || find_git_root(&runtime).map(PathBuf::from))
         .await
         .unwrap_or(None)
 }
 
-fn find_git_root(cwd: &Path) -> Option<String> {
-    let mut p = cwd;
-    loop {
-        let git_dir = p.join(".git");
-        if git_dir.exists() {
-            if git_dir.is_dir() {
-                return Some(p.to_string_lossy().into_owned());
-            } else if git_dir.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&git_dir)
-                    && content.trim().starts_with("gitdir:")
-                {
-                    return Some(p.to_string_lossy().into_owned());
-                }
-                break;
-            }
-        }
-        {
-            let parent = p.parent()?;
-            p = parent;
-        }
+fn find_git_root(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    let cwd = runtime.current_dir();
+    if let Some(root) = crate::git_context::find_marker_root(cwd) {
+        return Some(root.to_string_lossy().into_owned());
     }
 
-    let result = Command::new("git")
+    let result = runtime
+        .command_runtime()
+        .std_command("git")?
         .arg("rev-parse")
         .arg("--show-toplevel")
         .current_dir(cwd)

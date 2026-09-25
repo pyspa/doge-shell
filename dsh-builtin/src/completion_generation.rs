@@ -1,7 +1,6 @@
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// Shared boundary for completion generation used by both `dogesh completion`
 /// and the `comp-gen` builtin.
@@ -29,15 +28,19 @@ impl CompletionGenerationService {
         Ok(())
     }
 
-    pub fn collect_help_text(command_name: &str) -> Result<String> {
+    pub fn collect_help_text(
+        snapshot: &dsh_types::process_runtime::CommandRuntimeSnapshot,
+        command_name: &str,
+    ) -> Result<String> {
         Self::validate_command_name(command_name)?;
 
-        let man_output = Command::new("man")
-            .arg("-P")
-            .arg("cat")
-            .arg(command_name)
-            .output();
-        if let Ok(output) = man_output
+        // Both `man` and the target resolve through the logical runtime:
+        // the same executables the shell would run, spawned with exactly
+        // the exported child environment.
+        let man_output = snapshot
+            .std_command("man")
+            .and_then(|mut command| command.arg("-P").arg("cat").arg(command_name).output().ok());
+        if let Some(output) = man_output
             && output.status.success()
         {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -46,7 +49,9 @@ impl CompletionGenerationService {
             }
         }
 
-        let output = Command::new(command_name)
+        let output = snapshot
+            .std_command(command_name)
+            .ok_or_else(|| anyhow::anyhow!("Failed to execute '{command_name} --help'"))?
             .arg("--help")
             .output()
             .with_context(|| format!("Failed to execute '{command_name} --help'"))?;

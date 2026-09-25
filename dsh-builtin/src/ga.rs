@@ -1,9 +1,10 @@
 use super::ShellProxy;
+use dsh_types::process_runtime::CommandRuntimeSnapshot;
 use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
 use skim::{SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 pub fn description() -> &'static str {
@@ -22,6 +23,10 @@ struct GitFileItem {
     path: String,
     display: String,
     index: usize,
+    /// The one immutable runtime of this `ga` invocation, so the preview
+    /// callback (which cannot reach the proxy) resolves the same `git` the
+    /// shell would run, with exactly the exported child environment.
+    runtime: CommandRuntimeSnapshot,
 }
 
 impl SkimItem for GitFileItem {
@@ -34,22 +39,38 @@ impl SkimItem for GitFileItem {
     }
 
     fn preview(&self, _context: PreviewContext) -> ItemPreview {
-        let output = Command::new("git")
-            .args(["diff", "--color=always", "--", &self.path])
-            .output()
+        let output = self
+            .runtime
+            .std_command("git")
+            .and_then(|mut command| {
+                command
+                    .args(["diff", "--color=always", "--", &self.path])
+                    .output()
+                    .ok()
+            })
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
-            .unwrap_or_else(|_| "".to_string());
+            .unwrap_or_default();
         ItemPreview::AnsiText(output)
     }
 }
 
-pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -> ExitStatus {
-    if !is_git_repository() {
+pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    // One immutable runtime for the whole interactive session: every `git`
+    // below (including skim previews) resolves the same executable.
+    let runtime = match proxy.command_runtime_snapshot() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            ctx.write_stderr(&format!("ga: failed to snapshot runtime: {e}"))
+                .ok();
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+    if !is_git_repository(&runtime) {
         ctx.write_stderr("ga: not a git repository").ok();
         return ExitStatus::ExitedWith(1);
     }
 
-    let files = match get_git_status() {
+    let files = match get_git_status(&runtime) {
         Ok(f) => f,
         Err(e) => {
             ctx.write_stderr(&format!("ga: failed to get status: {}", e))
@@ -110,7 +131,11 @@ pub fn command(ctx: &Context, _argv: Vec<String>, _proxy: &mut dyn ShellProxy) -
     let mut args = vec!["add"];
     args.extend(added_files.iter().map(|s| s.as_str()));
 
-    match Command::new("git").args(&args).output() {
+    match runtime
+        .std_command("git")
+        .ok_or_else(|| std::io::Error::other("command not found: git"))
+        .and_then(|mut command| command.args(&args).output())
+    {
         Ok(output) => {
             if output.status.success() {
                 ctx.write_stdout(&format!("Added {} files.", added_files.len()))
@@ -147,18 +172,25 @@ fn build_ga_skim_options() -> Result<SkimOptions, String> {
         .map_err(|e| format!("failed to build skim options: {}", e))
 }
 
-fn is_git_repository() -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--git-dir"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
+fn is_git_repository(runtime: &CommandRuntimeSnapshot) -> bool {
+    runtime
+        .std_command("git")
+        .and_then(|mut command| {
+            command
+                .args(["rev-parse", "--git-dir"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .ok()
+        })
         .map(|status| status.success())
         .unwrap_or(false)
 }
 
-fn get_git_status() -> Result<Vec<GitFileItem>, String> {
-    let output = Command::new("git")
+fn get_git_status(runtime: &CommandRuntimeSnapshot) -> Result<Vec<GitFileItem>, String> {
+    let output = runtime
+        .std_command("git")
+        .ok_or_else(|| "command not found: git".to_string())?
         .args(["status", "--porcelain"])
         .output()
         .map_err(|e| format!("{}", e))?;
@@ -180,6 +212,7 @@ fn get_git_status() -> Result<Vec<GitFileItem>, String> {
             path: path.to_string(),
             display: line.to_string(),
             index: 0, // Will be set later
+            runtime: runtime.clone(),
         });
     }
 

@@ -1,9 +1,9 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use skim::prelude::*;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub struct GitCheckoutAction;
 
@@ -19,9 +19,12 @@ impl Action for GitCheckoutAction {
         "🌿"
     }
 
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Get branches
-        let output = Command::new("git")
+        let output = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["branch", "-a", "--format=%(refname:short)"])
             .stdout(Stdio::piped())
             .output()?;
@@ -55,7 +58,9 @@ impl Action for GitCheckoutAction {
 
         if let Some(item) = selected.first() {
             let branch = item.output().to_string();
-            Command::new("git")
+            runtime
+                .std_command("git")
+                .context("command not found: git")?
                 .args(["checkout", &branch])
                 .status()
                 .map_err(|e| anyhow::anyhow!("Failed to checkout: {}", e))?;

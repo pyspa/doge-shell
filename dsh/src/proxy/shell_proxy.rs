@@ -28,7 +28,10 @@ impl ShellProxy for Shell {
     }
 
     fn get_git_branch(&self) -> Option<String> {
-        let output = std::process::Command::new("git")
+        // Logical runtime only: shell PATH resolves `git`, exported env spawns it.
+        let output = super::process_environment::snapshot_current(&self.environment.read())
+            .ok()?
+            .std_command("git")?
             .arg("branch")
             .arg("--show-current")
             .output()
@@ -537,7 +540,18 @@ impl ShellProxy for Shell {
     }
 
     fn open_editor(&mut self, content: &str, extension: &str) -> Result<String> {
-        crate::utils::editor::open_editor(content, extension)
+        // Logical VISUAL/EDITOR; the executable resolves via the snapshot.
+        let env = self.environment.read();
+        let snapshot = super::process_environment::snapshot_current(&env)?;
+        let (visual, editor) = (env.get_var("VISUAL"), env.get_var("EDITOR"));
+        drop(env);
+        crate::utils::editor::open_editor(
+            &snapshot,
+            visual.as_deref(),
+            editor.as_deref(),
+            content,
+            extension,
+        )
     }
 
     fn add_snippet(&mut self, name: String, command: String, description: Option<String>) -> bool {

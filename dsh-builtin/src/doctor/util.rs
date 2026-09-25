@@ -1,9 +1,9 @@
 //! Shared filesystem/PATH helpers used by more than one `doctor` section.
 use crate::ShellProxy;
+use dsh_types::process_runtime::CommandRuntimeSnapshot;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(super) fn count_extra_skill_dirs(root: &Path, expected_skills: &[&str]) -> usize {
     let expected = expected_skills.iter().copied().collect::<BTreeSet<_>>();
@@ -79,12 +79,17 @@ pub(super) fn mask_secret(value: Option<String>) -> String {
     }
 }
 
-pub(super) fn read_version(command: &str) -> Option<String> {
+/// Run `command --version` (or `go version`) through the logical runtime.
+///
+/// The resolved absolute executable runs with the snapshot's exported
+/// child environment in the snapshot cwd — the same binary `doctor
+/// runtime` reports, never the process-global `PATH`.
+pub(super) fn read_version(snapshot: &CommandRuntimeSnapshot, command: &str) -> Option<String> {
     let args = match command {
         "go" => vec!["version"],
         _ => vec!["--version"],
     };
-    let output = Command::new(command).args(args).output().ok()?;
+    let output = snapshot.std_command(command)?.args(args).output().ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     stdout
@@ -94,33 +99,12 @@ pub(super) fn read_version(command: &str) -> Option<String> {
         .map(|line| line.trim().to_string())
 }
 
-pub(super) fn resolve_in_path(command: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(command);
-        if is_executable(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-pub(super) fn is_executable(path: &Path) -> bool {
-    if !path.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(metadata) = fs::metadata(path) {
-            return metadata.permissions().mode() & 0o111 != 0;
-        }
-        false
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+/// Resolve `command` through the logical runtime snapshot.
+///
+/// The single resolver behind both the text and JSON `runtime` reports, so
+/// diagnostics never disagree with the actual shell runtime.
+pub(super) fn resolve_in_path(snapshot: &CommandRuntimeSnapshot, command: &str) -> Option<PathBuf> {
+    snapshot.resolve_bare_program(command)
 }
 
 pub(super) fn count_skill_dirs(root: &Path) -> usize {

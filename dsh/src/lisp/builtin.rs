@@ -19,7 +19,6 @@ use std::borrow::Cow;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::{AsRawFd, BorrowedFd};
-use std::process::Command;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
@@ -258,7 +257,7 @@ pub fn safety_level(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Ru
     Ok(Value::NIL)
 }
 
-pub fn edit(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+pub fn edit(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
     if args.len() != 1 {
         return Err(RuntimeError {
             msg: "edit requires 1 argument".to_string(),
@@ -275,8 +274,22 @@ pub fn edit(_env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeEr
     };
 
     let path = std::path::Path::new(path_str);
-    launch_editor(path).map_err(|e| RuntimeError {
-        msg: format!("Failed to launch editor: {}", e),
+    // Logical VISUAL/EDITOR plus the runtime snapshot, like the REPL and
+    // proxy editor paths: no process-global reads.
+    let (snapshot, visual, editor) = {
+        let borrowed = env.borrow();
+        let guard = borrowed.shell_env.read();
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        (
+            guard.command_runtime_snapshot(current_dir),
+            guard.get_var("VISUAL"),
+            guard.get_var("EDITOR"),
+        )
+    };
+    launch_editor(&snapshot, visual.as_deref(), editor.as_deref(), path).map_err(|e| {
+        RuntimeError {
+            msg: format!("Failed to launch editor: {}", e),
+        }
     })?;
     Ok(Value::True)
 }

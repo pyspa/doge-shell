@@ -616,14 +616,35 @@ fn a_relative_hook_command_is_refused_at_load_time() {
 
 #[test]
 fn a_bare_command_name_is_pinned_to_its_path_entry() {
-    let hooks = parse(&one(r#"["true"]"#)).expect("a PATH name is allowed");
-    let program = &hooks.all()[0].command[0];
-    // Either resolved to an absolute path, or left alone when not on PATH -
-    // never left as something a later chdir could reinterpret.
-    assert!(
-        Path::new(program).is_absolute() || program == "true",
-        "{program}"
+    use dsh_types::process_runtime::CommandRuntimeSnapshot;
+    use std::collections::HashMap;
+
+    // A `true` binary on the logical PATH pins to its absolute path; the
+    // process-global PATH is never consulted.
+    let dir = tempfile::tempdir().unwrap();
+    let pinned = dir.path().join("true");
+    std::fs::write(&pinned, "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&pinned).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&pinned, perms).unwrap();
+    }
+    let snapshot = CommandRuntimeSnapshot::new(
+        vec![dir.path().to_path_buf()],
+        HashMap::new(),
+        dir.path().to_path_buf(),
     );
+    assert_eq!(
+        super::pin_program(&snapshot, "true").unwrap(),
+        pinned.to_string_lossy().into_owned()
+    );
+
+    // Left alone when not on the logical PATH — never left as something a
+    // later chdir could reinterpret.
+    let empty = CommandRuntimeSnapshot::new(Vec::new(), HashMap::new(), dir.path().to_path_buf());
+    assert_eq!(super::pin_program(&empty, "true").unwrap(), "true");
 }
 
 #[test]

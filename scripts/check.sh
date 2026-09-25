@@ -23,6 +23,7 @@ scripts/check-ai-guidance.sh
 scripts/check-project-consistency.py
 scripts/check-shell-proxy-capabilities.py
 scripts/check-portability.py
+scripts/check-runtime-authority.py
 scripts/check-file-budget.py
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace

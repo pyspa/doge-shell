@@ -478,6 +478,13 @@ pub trait ProcessEnvironmentCapability {
     /// so a test can pin PATH A vs PATH B without touching process-global
     /// state.
     fn command_search_paths(&self) -> Vec<PathBuf>;
+    /// Immutable runtime snapshot for one child spawn: logical search
+    /// paths, exported child env, snapshot cwd — never process-global
+    /// `std::env`. An independent capability method, not a new `ShellProxy`
+    /// facade method.
+    fn command_runtime_snapshot(
+        &self,
+    ) -> Result<dsh_types::process_runtime::CommandRuntimeSnapshot>;
 }
 
 /// What the shell's safety policy says about a command the agent wants to run.

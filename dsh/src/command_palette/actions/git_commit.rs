@@ -1,9 +1,8 @@
 use super::super::Action;
 use crate::shell::Shell;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use std::io::{self, Write};
-use std::process::Command;
 
 pub struct GitCommitAction;
 
@@ -22,9 +21,12 @@ impl Action for GitCommitAction {
     fn category(&self) -> &str {
         "Git"
     }
-    async fn execute(&self, _shell: &mut Shell, _input: &str) -> Result<()> {
+    async fn execute(&self, shell: &mut Shell, _input: &str) -> Result<()> {
+        let runtime = super::runtime_snapshot(shell);
         // Check for staged changes
-        let status = Command::new("git")
+        let status = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["diff", "--cached", "--name-only"])
             .output()?;
 
@@ -59,7 +61,9 @@ impl Action for GitCommitAction {
         }
 
         // Perform commit
-        let result = Command::new("git")
+        let result = runtime
+            .std_command("git")
+            .context("command not found: git")?
             .args(["commit", "-m", message])
             .status()?;
 

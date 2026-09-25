@@ -606,6 +606,23 @@ fn path_order_is_preserved() {
     );
 }
 
+/// A name containing `/` bypasses PATH search, like the shell's own
+/// lookup: a pathname must never resolve against snapshot directories.
+#[test]
+fn slash_containing_name_bypasses_path_search() {
+    let _lock = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let sub = dir.path().join("sub");
+    std::fs::create_dir_all(&sub).unwrap();
+    write_executable(&sub.join("node"), "#!/bin/sh\necho v1.0.0\n");
+
+    let environment = prompt_test_environment(&dir.path().to_string_lossy());
+    let runtime = PromptRuntimeSnapshot::from_environment(&environment.read(), dir.path().into());
+    assert_eq!(runtime.resolve_program("sub/node"), None);
+    assert_eq!(runtime.resolve_program("./node"), None);
+    assert!(runtime.command("sub/node").is_none());
+}
+
 /// A symlinked executable resolves and spawns through the link.
 #[test]
 fn symlinked_executable_is_resolved() {

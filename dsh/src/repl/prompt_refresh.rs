@@ -1,6 +1,7 @@
 use crate::environment::Environment;
 use crate::prompt::{
-    Prompt, PromptRuntimeSnapshot, fetch_aws_profile_from, fetch_docker_context_async_from,
+    Prompt, PromptProbe, PromptProbeEpoch, PromptRuntimeSnapshot, fetch_aws_profile_from,
+    fetch_docker_context_async_from,
 };
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -34,95 +35,162 @@ impl PromptRefreshCoordinator {
     pub fn schedule(&self) {
         // A single runtime for the whole tick, shared by every probe below.
         let runtime = Arc::new(self.snapshot());
-        // Observe before any `needs_*_check`: a PATH generation change must
-        // invalidate stale caches before the checks read them.
-        self.prompt
-            .write()
-            .observe_runtime_path_generation(runtime.path_generation());
+        let identity = runtime.identity();
+        // Observe before any `needs_*_check`: an identity change must
+        // invalidate stale caches and advance the epoch before the checks
+        // read them.
+        let epoch = self.prompt.write().observe_runtime_identity(identity);
 
-        self.schedule_rust(&runtime);
-        self.schedule_node(&runtime);
-        self.schedule_python(&runtime);
-        self.schedule_go(&runtime);
+        self.schedule_rust(&runtime, epoch);
+        self.schedule_node(&runtime, epoch);
+        self.schedule_python(&runtime, epoch);
+        self.schedule_go(&runtime, epoch);
 
-        self.schedule_kubernetes(&runtime);
+        self.schedule_kubernetes(&runtime, epoch);
         self.refresh_aws(&runtime);
-        self.schedule_docker(&runtime);
+        self.schedule_docker(&runtime, epoch);
     }
 
-    fn schedule_rust(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().needs_rust_check() {
+    /// Shared publication discipline: only the completion that still owns
+    /// the current epoch may mutate Prompt caches or failure backoff.
+    /// Stale results are dropped (debug-logged); old tasks keep running
+    /// but never roll back a newer runtime.
+    fn publish_probe_result<F>(
+        prompt: &Arc<RwLock<Prompt>>,
+        probe: PromptProbe,
+        epoch: PromptProbeEpoch,
+        publish: F,
+    ) where
+        F: FnOnce(&mut Prompt),
+    {
+        let mut prompt = prompt.write();
+        if !prompt.finish_probe(probe, epoch) {
+            tracing::debug!("prompt probe result dropped as stale");
+            return;
+        }
+        publish(&mut prompt);
+    }
+
+    fn schedule_rust(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.needs_rust_check() && prompt.try_begin_probe(PromptProbe::Rust, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some(version) = crate::prompt::fetch_rust_version_async(&runtime).await {
-                prompt.write().update_rust_version(Some(version));
-            } else {
-                prompt.write().mark_rust_check_failed();
-            }
+            let result = crate::prompt::fetch_rust_version_async(&runtime).await;
+            Self::publish_probe_result(&prompt, PromptProbe::Rust, epoch, |prompt| match result {
+                Some(version) => {
+                    prompt.update_rust_version(Some(version));
+                }
+                None => {
+                    prompt.mark_rust_check_failed();
+                }
+            });
         });
     }
 
-    fn schedule_node(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().needs_node_check() {
+    fn schedule_node(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.needs_node_check() && prompt.try_begin_probe(PromptProbe::Node, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some(version) = crate::prompt::fetch_node_version_async(&runtime).await {
-                prompt.write().update_node_version(Some(version));
-            } else {
-                prompt.write().mark_node_check_failed();
-            }
+            let result = crate::prompt::fetch_node_version_async(&runtime).await;
+            Self::publish_probe_result(&prompt, PromptProbe::Node, epoch, |prompt| match result {
+                Some(version) => {
+                    prompt.update_node_version(Some(version));
+                }
+                None => {
+                    prompt.mark_node_check_failed();
+                }
+            });
         });
     }
 
-    fn schedule_python(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().needs_python_check() {
+    fn schedule_python(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.needs_python_check() && prompt.try_begin_probe(PromptProbe::Python, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some(version) = crate::prompt::fetch_python_version_async(&runtime).await {
-                prompt.write().update_python_version(Some(version));
-            } else {
-                prompt.write().mark_python_check_failed();
-            }
+            let result = crate::prompt::fetch_python_version_async(&runtime).await;
+            Self::publish_probe_result(
+                &prompt,
+                PromptProbe::Python,
+                epoch,
+                |prompt| match result {
+                    Some(version) => {
+                        prompt.update_python_version(Some(version));
+                    }
+                    None => {
+                        prompt.mark_python_check_failed();
+                    }
+                },
+            );
         });
     }
 
-    fn schedule_go(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().needs_go_check() {
+    fn schedule_go(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.needs_go_check() && prompt.try_begin_probe(PromptProbe::Go, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some(version) = crate::prompt::fetch_go_version_async(&runtime).await {
-                prompt.write().update_go_version(Some(version));
-            } else {
-                prompt.write().mark_go_check_failed();
-            }
+            let result = crate::prompt::fetch_go_version_async(&runtime).await;
+            Self::publish_probe_result(&prompt, PromptProbe::Go, epoch, |prompt| match result {
+                Some(version) => {
+                    prompt.update_go_version(Some(version));
+                }
+                None => {
+                    prompt.mark_go_check_failed();
+                }
+            });
         });
     }
 
-    fn schedule_kubernetes(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().should_check_k8s(runtime) {
+    fn schedule_kubernetes(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.should_check_k8s(runtime)
+                && prompt.try_begin_probe(PromptProbe::Kubernetes, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some((context, namespace)) = crate::prompt::fetch_k8s_info_async(&runtime).await
-            {
-                prompt.write().update_k8s_info(Some(context), namespace);
-            } else {
-                prompt.write().mark_k8s_check_failed();
-            }
+            let result = crate::prompt::fetch_k8s_info_async(&runtime).await;
+            Self::publish_probe_result(&prompt, PromptProbe::Kubernetes, epoch, |prompt| {
+                match result {
+                    Some((context, namespace)) => {
+                        prompt.update_k8s_info(Some(context), namespace);
+                    }
+                    None => {
+                        prompt.mark_k8s_check_failed();
+                    }
+                }
+            });
         });
     }
 
@@ -133,18 +201,32 @@ impl PromptRefreshCoordinator {
         }
     }
 
-    fn schedule_docker(&self, runtime: &Arc<PromptRuntimeSnapshot>) {
-        if !self.prompt.read().should_check_docker(runtime) {
+    fn schedule_docker(&self, runtime: &Arc<PromptRuntimeSnapshot>, epoch: PromptProbeEpoch) {
+        let should_spawn = {
+            let mut prompt = self.prompt.write();
+            prompt.should_check_docker(runtime)
+                && prompt.try_begin_probe(PromptProbe::Docker, epoch)
+        };
+        if !should_spawn {
             return;
         }
         let prompt = Arc::clone(&self.prompt);
         let runtime = Arc::clone(runtime);
         tokio::spawn(async move {
-            if let Some(context) = fetch_docker_context_async_from(&runtime).await {
-                prompt.write().update_docker_context(Some(context));
-            } else {
-                prompt.write().mark_docker_check_failed();
-            }
+            let result = fetch_docker_context_async_from(&runtime).await;
+            Self::publish_probe_result(
+                &prompt,
+                PromptProbe::Docker,
+                epoch,
+                |prompt| match result {
+                    Some(context) => {
+                        prompt.update_docker_context(Some(context));
+                    }
+                    None => {
+                        prompt.mark_docker_check_failed();
+                    }
+                },
+            );
         });
     }
 }

@@ -79,6 +79,19 @@
   OnceLock state; PATH is runtime mutable.
 - Prompt external-tool caches/backoff are invalidated when logical PATH
   generation changes.
+- Prompt probe cache authority is the complete prompt runtime identity:
+  logical PATH generation, snapshot cwd, exported child environment, and
+  prompt-specific logical variables.
+- A prompt probe result or failure may publish only when its launch epoch is
+  still the current runtime epoch.
+- Prompt runtime epoch changes monotonically whenever runtime identity
+  changes, even when state later returns to a previously seen identity
+  (ABA protection).
+- At most one probe of each kind may be in flight for the same runtime epoch.
+- An old probe completion must never clear or mutate a newer epoch's
+  in-flight state, cache, or failure backoff.
+- PATH assignment remains an explicit rescan boundary even when its textual
+  value is unchanged.
 
 ## Command resolution
 

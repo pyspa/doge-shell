@@ -94,3 +94,21 @@ pub fn parse_job_spec(spec: &str, wait_jobs: &[crate::process::Job]) -> Option<u
     }
     None
 }
+
+impl dsh_builtin::shell_capabilities::JobControlCapability for crate::shell::Shell {
+    fn wait_for_jobs(
+        &mut self,
+        ctx: &dsh_types::Context,
+        argv: Vec<String>,
+    ) -> anyhow::Result<i32> {
+        wait::execute_wait(self, ctx, argv)
+    }
+
+    fn foreground_job(
+        &mut self,
+        ctx: &dsh_types::Context,
+        argv: Vec<String>,
+    ) -> anyhow::Result<i32> {
+        fg::execute_fg(self, ctx, argv)
+    }
+}

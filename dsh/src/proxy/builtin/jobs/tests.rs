@@ -33,6 +33,10 @@ fn stopped_tree_job(job_id: usize, signal: NixSignal) -> ProcJob {
 }
 
 fn completed_tree_job(job_id: usize) -> ProcJob {
+    completed_tree_job_with_status(job_id, 0)
+}
+
+fn completed_tree_job_with_status(job_id: usize, code: u8) -> ProcJob {
     let mut job = ProcJob::new("true".to_string(), getpgrp());
     job.job_id = job_id;
     let pid = Pid::from_raw(424243);
@@ -40,7 +44,7 @@ fn completed_tree_job(job_id: usize) -> ProcJob {
     job.pgid = Some(pid);
     let mut proc = Process::new("true".to_string(), vec!["true".to_string()]);
     proc.pid = Some(pid);
-    proc.state = ProcessState::Completed(0, None);
+    proc.state = ProcessState::Completed(code, None);
     job.set_process(JobProcess::Command(proc));
     job.state = ProcessState::Running;
     job
@@ -68,7 +72,10 @@ async fn fg_requeues_job_that_stops_again() {
     let job = stopped_tree_job(job_id, NixSignal::SIGTSTP);
 
     let result = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx()).await;
-    assert!(result.is_ok());
+    assert_eq!(
+        result.unwrap(),
+        crate::process::signal_exit_status(NixSignal::SIGTSTP)
+    );
     assert_eq!(shell.wait_jobs.len(), 1);
     let requeued = &shell.wait_jobs[0];
     assert_eq!(requeued.job_id, job_id);
@@ -88,9 +95,13 @@ async fn fg_requeues_job_stopped_by_sigstop() {
     let pid = Pid::from_raw(424242);
     let job = stopped_tree_job(8, NixSignal::SIGSTOP);
 
-    finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
         .await
         .expect("finalize");
+    assert_eq!(
+        status,
+        crate::process::signal_exit_status(NixSignal::SIGSTOP)
+    );
     assert_eq!(shell.wait_jobs.len(), 1);
     assert_eq!(
         shell.wait_jobs[0].state,
@@ -104,11 +115,65 @@ async fn fg_does_not_requeue_completed_job() {
     let job = completed_tree_job(3);
 
     let result = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx()).await;
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), 0);
     assert!(
         shell.wait_jobs.is_empty(),
         "completed job must not return to the job table"
     );
+}
+
+#[tokio::test]
+async fn fg_completed_nonzero_reports_command_status() {
+    let mut shell = test_shell();
+    let job = completed_tree_job_with_status(30, 7);
+
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
+        .await
+        .expect("finalize");
+    assert_eq!(status, 7);
+    assert!(
+        shell.wait_jobs.is_empty(),
+        "completed job must not return to the job table"
+    );
+}
+
+#[tokio::test]
+async fn fg_signal_completion_reports_128_plus_signal() {
+    let mut shell = test_shell();
+    let mut job = ProcJob::new("killed".to_string(), getpgrp());
+    job.job_id = 31;
+    let pid = Pid::from_raw(424243);
+    job.pid = Some(pid);
+    job.pgid = Some(pid);
+    let mut proc = Process::new("killed".to_string(), vec!["killed".to_string()]);
+    proc.pid = Some(pid);
+    proc.state = ProcessState::signaled(NixSignal::SIGTERM);
+    job.set_process(JobProcess::Command(proc));
+    job.state = ProcessState::Running;
+
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
+        .await
+        .expect("finalize");
+    assert_eq!(
+        status,
+        crate::process::signal_exit_status(NixSignal::SIGTERM)
+    );
+    assert!(shell.wait_jobs.is_empty());
+}
+
+#[tokio::test]
+async fn fg_running_with_successful_wait_is_infrastructure_error() {
+    let mut shell = test_shell();
+    let job = running_tree_job(34);
+
+    let result = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx()).await;
+    assert!(
+        result.is_err(),
+        "Running + Ok(()) must never synthesize status 0"
+    );
+    assert_eq!(shell.wait_jobs.len(), 1, "job must be requeued first");
+    assert_eq!(shell.wait_jobs[0].job_id, 34);
+    assert_eq!(shell.wait_jobs[0].state, ProcessState::Running);
 }
 
 #[tokio::test]
@@ -120,9 +185,10 @@ async fn fg_completion_archives_known_async_status() {
     let pid = Pid::from_raw(424243);
     shell.known_async.register(pid, 21);
 
-    finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
         .await
         .expect("finalize");
+    assert_eq!(status, 0);
 
     assert!(shell.wait_jobs.is_empty());
     let status = shell
@@ -981,7 +1047,8 @@ async fn foreground_resume_drains_background_capture() {
             panic!("foreground driver hung: background capture was not drained");
         }
     };
-    wait_result.expect("foreground driver failed");
+    let status = wait_result.expect("foreground driver failed");
+    assert_eq!(status, 0);
 
     assert!(
         shell.wait_jobs.is_empty(),
@@ -1027,9 +1094,13 @@ async fn fg_stopped_full_proxy_requeues_with_pty_ownership() {
     let job = stopped_full_proxy_job_for_fg(31);
     let ctx = test_ctx();
 
-    finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
         .await
         .expect("finalize");
+    assert_eq!(
+        status,
+        crate::process::signal_exit_status(NixSignal::SIGTSTP)
+    );
     assert_eq!(shell.wait_jobs.len(), 1);
     let requeued = &shell.wait_jobs[0];
     assert_eq!(requeued.job_id, 31);
@@ -1065,9 +1136,10 @@ async fn fg_completed_full_proxy_retires_all_resources() {
     job.pty_output_task = Some(tokio::spawn(async { Ok("fg-final".to_string()) }));
     let ctx = test_ctx();
 
-    finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
+    let status = finalize_foreground_job(&mut shell, job, Ok(()), &ctx)
         .await
         .expect("finalize");
+    assert_eq!(status, 0);
     assert!(
         shell.wait_jobs.is_empty(),
         "completed fg job must not return to the table"

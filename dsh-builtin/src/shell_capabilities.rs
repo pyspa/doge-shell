@@ -429,6 +429,8 @@ pub trait AiJsonRequest {
 /// method: no entry is added to the frozen compatibility surface.
 pub trait JobControlCapability {
     fn wait_for_jobs(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32>;
+    /// Status-bearing `fg` core (not `CoreShellAction`'s `Result<()>` shape).
+    fn foreground_job(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32>;
 }
 
 /// POSIX `set -o` / `set +o` option state owned by the shell core.

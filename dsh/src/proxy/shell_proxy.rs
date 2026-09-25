@@ -155,7 +155,8 @@ impl ShellProxy for Shell {
                 builtin::blocks_persistent::execute(self, ctx, argv)
             }
             CoreShellAction::Jobs => builtin::jobs::execute_jobs(self, ctx, argv),
-            CoreShellAction::Foreground => builtin::jobs::execute_fg(self, ctx, argv),
+            // Legacy `Result<()>` compatibility boundary: discards `fg` status.
+            CoreShellAction::Foreground => builtin::jobs::execute_fg(self, ctx, argv).map(|_| ()),
             CoreShellAction::Background => builtin::jobs::execute_bg(self, ctx, argv),
             CoreShellAction::Lisp => builtin::lisp::execute_lisp(self, ctx, argv),
             CoreShellAction::LispRun => builtin::lisp::execute_lisp_run(self, ctx, argv),

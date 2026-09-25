@@ -9,7 +9,7 @@ use crate::process::ProcessState;
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
-use tracing::{debug, error};
+use tracing::debug;
 
 /// Execute the `fg` builtin command.
 ///
@@ -18,7 +18,13 @@ use tracing::{debug, error};
 /// Thin sync bridge over [`foreground_selected_job`]: the async driver owns
 /// the wait (and its `OutputMonitor` drain), while this boundary only blocks
 /// the calling worker thread until it completes.
-pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
+///
+/// Status-bearing: the foregrounded command's own logical status is the
+/// result (via [`crate::shell::job::final_exit_status`]), not just success.
+/// Diagnostics carry no `fg: ` prefix; the builtin wrapper
+/// (`dsh-builtin/src/fg.rs`) is the single diagnostic owner that adds it
+/// once.
+pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<i32> {
     debug!(
         "FG_CMD_START: Starting fg command - wait_jobs.len(): {}, args: {:?}",
         shell.wait_jobs.len(),
@@ -27,8 +33,7 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
 
     if shell.wait_jobs.is_empty() {
         debug!("FG_CMD_NO_JOBS: No jobs available for fg command");
-        ctx.write_stdout("fg: there are no suitable jobs")?;
-        return Ok(());
+        anyhow::bail!("no current job");
     }
 
     let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
@@ -45,20 +50,18 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
 
     let Some(job_index) = parse_job_spec(job_spec, &shell.wait_jobs) else {
         let error_msg = if job_spec.is_empty() {
-            "fg: no current job".to_string()
+            "no current job".to_string()
         } else {
-            format!("fg: job not found: {job_spec}")
+            format!("job not found: {job_spec}")
         };
         debug!("FG_CMD_NOT_FOUND: {}", error_msg);
-        ctx.write_stderr(&error_msg)?;
         return Err(anyhow::anyhow!(error_msg));
     };
 
     match run_foreground_driver(shell, ctx, job_index) {
-        Ok(()) => Ok(()),
+        Ok(status) => Ok(status),
         Err(err) => {
-            error!("FG_CMD_ERROR: foreground wait failed: {:?}", err);
-            ctx.write_stderr(&format!("{err}")).ok();
+            debug!("FG_CMD_ERROR: foreground wait failed: {:?}", err);
             Err(err)
         }
     }
@@ -83,7 +86,7 @@ pub(crate) fn run_foreground_driver(
     shell: &mut Shell,
     ctx: &Context,
     job_index: usize,
-) -> Result<()> {
+) -> Result<i32> {
     block_on_job_control_future(foreground_selected_job(shell, ctx, job_index))?
 }
 
@@ -125,9 +128,9 @@ pub(crate) async fn foreground_selected_job(
     shell: &mut Shell,
     ctx: &Context,
     job_index: usize,
-) -> Result<()> {
+) -> Result<i32> {
     if job_index >= shell.wait_jobs.len() {
-        return Err(anyhow::anyhow!("fg: no current job"));
+        return Err(anyhow::anyhow!("no current job"));
     }
     let mut job = shell.wait_jobs.remove(job_index);
     debug!(
@@ -224,13 +227,24 @@ pub(crate) async fn foreground_selected_job(
 /// PTY ownership (`pty`/`pty_output_task` kept, input proxy stopped) so the
 /// prompt never shares terminal input with a stopped FullProxy job.
 ///
+/// `fg` is status-bearing:
+/// - Completed: the canonical logical status
+///   ([`crate::shell::job::final_exit_status`], frozen launch-time pipefail
+///   policy) after `ToEof` finalization. Never `Job.state`, never a live
+///   option read, never ledger consume (archive only; only `wait` consumes).
+/// - Stopped again: the job final status stays `None`; the `fg` invocation
+///   itself reports the observed stop as `128 + signal`. The job is requeued
+///   first, then the status (or error) is reported.
+/// - Running/incomplete with a successful wait: infrastructure inconsistency.
+///   Requeue ownership first, then error. Never synthesize status 0.
+///
 /// Async because the canonical finalizer drains output monitors.
 pub(crate) async fn finalize_foreground_job(
     shell: &mut Shell,
     mut job: crate::process::Job,
     wait_result: Result<()>,
     ctx: &Context,
-) -> Result<()> {
+) -> Result<i32> {
     job.refresh_lifecycle_state();
     // Strict ownership: only a fully-completed tree may be dropped, and
     // only through the canonical finalizer.
@@ -246,8 +260,21 @@ pub(crate) async fn finalize_foreground_job(
             "FG_CMD_REQUEUE: Job {} still active after foreground wait (state: {:?}), returning to job table",
             job.job_id, job.state
         );
+        // The invocation status of a re-stopped job is the observed stop
+        // signal (`128 + signal`), never a final `Job` status: a stopped
+        // tree has no logical final status by design.
+        let command_status = match job.state {
+            ProcessState::Stopped(_, signal) => Some(crate::process::signal_exit_status(signal)),
+            ProcessState::Running => None,
+            ProcessState::Completed(_, _) => None,
+        };
+        // Ownership first, reporting second: the job is requeued before
+        // either the wait error or the missing-status error is returned.
         shell.wait_jobs.push(job);
-        return wait_result;
+        wait_result?;
+        return command_status.ok_or_else(|| {
+            anyhow::anyhow!("foreground wait returned without completion or a fully stopped job")
+        });
     }
     debug!(
         "FG_CMD_DONE: Job {} completed, finalizing through the canonical path",
@@ -282,7 +309,14 @@ pub(crate) async fn finalize_foreground_job(
         return Err(wait_err);
     }
     pty_settlement?;
-    finalizer_outcome.map(|_| ())
+    let finalized = finalizer_outcome?;
+    let status = crate::shell::job::final_exit_status(&finalized).ok_or_else(|| {
+        anyhow::anyhow!(
+            "completed foreground job {} has no final status",
+            finalized.job_id
+        )
+    })?;
+    Ok(status)
 }
 
 /// Reconcile a background resume without orphaning an active job on error.

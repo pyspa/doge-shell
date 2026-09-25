@@ -319,9 +319,9 @@ fn kube_config_present_empty_env_falls_back_to_home_file() {
 }
 
 use super::runtime::PromptEnvironment;
-use super::runtime::PromptRuntimeSnapshot;
+use super::runtime::{PromptRuntimeIdentity, PromptRuntimeSnapshot};
 use super::version_probes::{fetch_aws_profile_from, resolve_aws_profile};
-use super::{fetch_node_version_async, fetch_python_version_async};
+use super::{PromptProbe, fetch_node_version_async, fetch_python_version_async};
 use crate::ProcessEnvGuard;
 use crate::environment::Environment;
 use parking_lot::RwLock;
@@ -859,35 +859,85 @@ fn node_project_prompt() -> (Prompt, tempfile::TempDir) {
     (prompt, dir)
 }
 
-/// A PATH generation change drops external-tool version/context caches but
-/// keeps PATH-independent state like the AWS profile.
+fn runtime_identity(
+    path_generation: u64,
+    cwd: &std::path::Path,
+    child_env: &[(&str, &str)],
+    prompt_env: PromptEnvironment,
+) -> PromptRuntimeIdentity {
+    PromptRuntimeIdentity {
+        path_generation,
+        current_dir: cwd.to_path_buf(),
+        child_env: std::sync::Arc::new(
+            child_env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        ),
+        environment: prompt_env,
+    }
+}
+
+fn prompt_env_with_aws(profile: Option<&str>) -> PromptEnvironment {
+    PromptEnvironment {
+        aws_profile: profile.map(str::to_string),
+        ..Default::default()
+    }
+}
+
+/// A PATH generation change drops all runtime-scoped caches including the
+/// AWS profile: the new runtime identity must recompute everything.
 #[test]
 fn path_generation_invalidates_version_caches() {
     let _lock = crate::test_env_lock();
-    let (mut prompt, _project_dir) = node_project_prompt();
-    prompt.observe_runtime_path_generation(10);
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
     prompt.update_node_version(Some("v18.0.0".to_string()));
     prompt.update_docker_context(Some("old-context".to_string()));
     prompt.update_aws_profile(Some("shell-profile".to_string()));
     assert!(!prompt.needs_node_check());
 
-    prompt.observe_runtime_path_generation(11);
+    prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
 
     assert_eq!(prompt.node_version_cache, None);
     assert_eq!(prompt.docker_context_cache, None);
     assert!(prompt.needs_node_check());
-    assert_eq!(prompt.aws_profile_cache.as_deref(), Some("shell-profile"));
+    // Runtime identity scope includes the AWS cache: a generation change
+    // clears it so the next tick recomputes from current variables.
+    assert_eq!(prompt.aws_profile_cache, None);
 }
 
 /// Re-observing the same generation keeps caches: no re-probe every tick.
 #[test]
 fn same_generation_keeps_caches() {
     let _lock = crate::test_env_lock();
-    let (mut prompt, _project_dir) = node_project_prompt();
-    prompt.observe_runtime_path_generation(10);
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
     prompt.update_node_version(Some("v18.0.0".to_string()));
 
-    prompt.observe_runtime_path_generation(10);
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
 
     assert_eq!(prompt.node_version_cache.as_deref(), Some("v18.0.0"));
     assert!(!prompt.needs_node_check());
@@ -898,12 +948,367 @@ fn same_generation_keeps_caches() {
 #[test]
 fn path_generation_resets_failure_backoff() {
     let _lock = crate::test_env_lock();
-    let (mut prompt, _project_dir) = node_project_prompt();
-    prompt.observe_runtime_path_generation(10);
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
     prompt.mark_node_check_failed();
     assert!(!prompt.needs_node_check());
 
-    prompt.observe_runtime_path_generation(11);
+    prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
 
+    assert!(prompt.needs_node_check());
+}
+
+/// Same field values are equal even when the child-env insertion order
+/// differs: HashMap equality is order-independent.
+#[test]
+fn identity_equality_ignores_insertion_order() {
+    let cwd = std::path::PathBuf::from("/project-a");
+    let left = runtime_identity(
+        10,
+        &cwd,
+        &[("A", "1"), ("B", "2")],
+        PromptEnvironment::default(),
+    );
+    let right = runtime_identity(
+        10,
+        &cwd,
+        &[("B", "2"), ("A", "1")],
+        PromptEnvironment::default(),
+    );
+    assert_eq!(left, right);
+}
+
+#[test]
+fn cwd_change_is_an_identity_change() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, _project_dir) = node_project_prompt();
+    let epoch_a = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        std::path::Path::new("/project-a"),
+        &[],
+        PromptEnvironment::default(),
+    ));
+    prompt.update_node_version(Some("v24.0.0".to_string()));
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        std::path::Path::new("/project-b"),
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert_ne!(epoch_a, epoch_b);
+    assert_eq!(prompt.node_version_cache, None);
+}
+
+#[test]
+fn exported_env_change_is_an_identity_change() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[("RUSTUP_TOOLCHAIN", "stable")],
+        PromptEnvironment::default(),
+    ));
+    prompt.update_node_version(Some("v24.0.0".to_string()));
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[("RUSTUP_TOOLCHAIN", "nightly")],
+        PromptEnvironment::default(),
+    ));
+    assert_eq!(prompt.node_version_cache, None);
+    assert!(prompt.needs_node_check());
+}
+
+/// AWS profile lives in PromptEnvironment, not PATH generation: a profile
+/// change invalidates the AWS cache so the next tick recomputes it.
+#[test]
+fn aws_identity_change_invalidates_cache() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        prompt_env_with_aws(Some("development")),
+    ));
+    prompt.update_aws_profile(Some("development".to_string()));
+    assert!(!prompt.should_check_aws());
+
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        prompt_env_with_aws(Some("production")),
+    ));
+    assert_eq!(prompt.aws_profile_cache, None);
+    assert!(prompt.should_check_aws());
+}
+
+#[test]
+fn docker_context_change_invalidates_cache() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let docker_dev = PromptEnvironment {
+        docker_context: Some("desktop-linux".to_string()),
+        ..Default::default()
+    };
+    let docker_remote = PromptEnvironment {
+        docker_context: Some("remote".to_string()),
+        ..Default::default()
+    };
+    prompt.observe_runtime_identity(runtime_identity(10, &cwd, &[], docker_dev));
+    prompt.update_docker_context(Some("desktop-linux".to_string()));
+    prompt.observe_runtime_identity(runtime_identity(10, &cwd, &[], docker_remote));
+    assert_eq!(prompt.docker_context_cache, None);
+}
+
+#[test]
+fn kubeconfig_change_invalidates_k8s_cache() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let kube_a = PromptEnvironment {
+        kubeconfig: Some("/a/config".to_string()),
+        ..Default::default()
+    };
+    let kube_b = PromptEnvironment {
+        kubeconfig: Some("/b/config".to_string()),
+        ..Default::default()
+    };
+    prompt.observe_runtime_identity(runtime_identity(10, &cwd, &[], kube_a));
+    prompt.update_k8s_info(Some("ctx-a".to_string()), Some("ns-a".to_string()));
+    prompt.observe_runtime_identity(runtime_identity(10, &cwd, &[], kube_b));
+    assert_eq!(prompt.k8s_context_cache, None);
+    assert_eq!(prompt.k8s_namespace_cache, None);
+}
+
+/// AWS stale-cache regression: observing identity B after caching under
+/// identity A clears the cache so refresh recomputes from B's variables.
+#[test]
+fn aws_stale_cache_regression() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        prompt_env_with_aws(Some("development")),
+    ));
+    prompt.update_aws_profile(Some("development".to_string()));
+
+    prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        prompt_env_with_aws(Some("production")),
+    ));
+    assert_eq!(prompt.aws_profile_cache, None);
+    // The next refresh recomputes from B's variables.
+    let profile =
+        super::version_probes::fetch_aws_profile_from(&prompt_env_with_aws(Some("production")));
+    prompt.update_aws_profile(profile);
+    assert_eq!(prompt.aws_profile_cache.as_deref(), Some("production"));
+}
+
+/// Same identity preserves caches, backoff, and epoch across ticks.
+#[test]
+fn same_identity_preserves_caches_backoff_and_epoch() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let identity = || runtime_identity(10, &cwd, &[], PromptEnvironment::default());
+    let epoch_a = prompt.observe_runtime_identity(identity());
+    prompt.update_node_version(Some("v24.0.0".to_string()));
+    prompt.update_docker_context(Some("ctx".to_string()));
+    let epoch_b = prompt.observe_runtime_identity(identity());
+    assert_eq!(epoch_a, epoch_b);
+    assert_eq!(prompt.node_version_cache.as_deref(), Some("v24.0.0"));
+    assert_eq!(prompt.docker_context_cache.as_deref(), Some("ctx"));
+
+    // Backoff also survives: a failed check stays gated on re-observe.
+    prompt.node_version_cache = None;
+    prompt.mark_node_check_failed();
+    assert!(!prompt.needs_node_check());
+    let epoch_c = prompt.observe_runtime_identity(identity());
+    assert_eq!(epoch_b, epoch_c);
+    assert!(!prompt.needs_node_check());
+}
+
+/// A → B → A yields three distinct epochs: the first A probe can never
+/// publish over the final A runtime.
+#[test]
+fn epoch_handles_a_b_a() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch_a1 = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_a1));
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert_ne!(epoch_a1, epoch_b);
+    let epoch_a2 = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert_ne!(epoch_a1, epoch_a2);
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_a2));
+    assert!(!prompt.finish_probe(PromptProbe::Node, epoch_a1));
+    assert!(prompt.finish_probe(PromptProbe::Node, epoch_a2));
+}
+
+#[test]
+fn duplicate_same_epoch_probe_is_rejected() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch));
+    assert!(!prompt.try_begin_probe(PromptProbe::Node, epoch));
+}
+
+#[test]
+fn new_epoch_can_start_probe_immediately() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch_a = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_a));
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_b));
+}
+
+/// A stale completion must not clear the current epoch's in-flight slot.
+#[test]
+fn stale_completion_keeps_current_slot() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch_a = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_a));
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_b));
+    assert!(!prompt.finish_probe(PromptProbe::Node, epoch_a));
+    // Epoch B still owns its slot: duplicate begin is rejected.
+    assert!(!prompt.try_begin_probe(PromptProbe::Node, epoch_b));
+    assert!(prompt.finish_probe(PromptProbe::Node, epoch_b));
+}
+
+#[test]
+fn current_completion_frees_slot() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch));
+    assert!(prompt.finish_probe(PromptProbe::Node, epoch));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch));
+}
+
+/// A stale-epoch failure must not apply backoff to the current runtime.
+#[test]
+fn stale_failure_does_not_apply_backoff() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch_a = prompt.observe_runtime_identity(runtime_identity(
+        10,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_a));
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_b));
+    // Epoch A fails after B started: finish() is false, so the caller
+    // must not call mark_node_check_failed(); B stays ready.
+    assert!(!prompt.finish_probe(PromptProbe::Node, epoch_a));
+    assert!(prompt.needs_node_check());
+}
+
+/// A current-epoch failure applies backoff; an identity change clears it.
+#[test]
+fn current_failure_applies_backoff_until_identity_change() {
+    let _lock = crate::test_env_lock();
+    let (mut prompt, project_dir) = node_project_prompt();
+    let cwd = project_dir.path().to_path_buf();
+    let epoch_b = prompt.observe_runtime_identity(runtime_identity(
+        11,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
+    assert!(prompt.try_begin_probe(PromptProbe::Node, epoch_b));
+    assert!(prompt.finish_probe(PromptProbe::Node, epoch_b));
+    prompt.mark_node_check_failed();
+    assert!(!prompt.needs_node_check());
+
+    prompt.observe_runtime_identity(runtime_identity(
+        12,
+        &cwd,
+        &[],
+        PromptEnvironment::default(),
+    ));
     assert!(prompt.needs_node_check());
 }

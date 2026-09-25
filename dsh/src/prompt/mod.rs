@@ -18,6 +18,7 @@ use tokio::sync::mpsc::UnboundedSender;
 pub mod context;
 mod git_status;
 pub mod modules;
+pub(crate) mod probe_lifecycle;
 mod render;
 pub(crate) mod runtime;
 #[cfg(test)]
@@ -27,7 +28,8 @@ mod version_probes;
 #[cfg(test)]
 pub(crate) use git_status::parse_git_status_output;
 pub use git_status::{fetch_git_status_async, fetch_git_status_sync, find_git_root_async};
-pub(crate) use runtime::PromptRuntimeSnapshot;
+pub(crate) use probe_lifecycle::{PromptProbe, PromptProbeEpoch, PromptProbeLifecycle};
+pub(crate) use runtime::{PromptRuntimeIdentity, PromptRuntimeSnapshot};
 #[cfg(test)]
 use version_probes::kube_config_present_from;
 pub(crate) use version_probes::{
@@ -214,11 +216,13 @@ pub struct Prompt {
     docker_check_backoff: BackoffGate,
     last_exit_status: i32,
     last_duration: Option<Duration>,
-    /// Logical PATH generation of the last observed probe runtime.
-    /// External-tool version/context caches and failure backoffs are scoped
-    /// to this generation: a PATH change invalidates them so the prompt
-    /// cannot stay pinned to a previously selected toolchain.
-    runtime_path_generation: Option<u64>,
+    /// Lifecycle ownership for async tool probes. External-tool
+    /// version/context caches and failure backoffs are scoped to the
+    /// current runtime identity (logical PATH generation, snapshot cwd,
+    /// exported child environment, prompt variables): an identity change
+    /// advances the epoch and invalidates them so the prompt cannot stay
+    /// pinned to a previously selected toolchain.
+    probe_lifecycle: PromptProbeLifecycle,
 
     // Module system
     modules: Vec<Box<dyn PromptModule>>,
@@ -270,7 +274,7 @@ impl Prompt {
             docker_context_cache: None,
             k8s_check_backoff: BackoffGate::new(),
             docker_check_backoff: BackoffGate::new(),
-            runtime_path_generation: None,
+            probe_lifecycle: PromptProbeLifecycle::new(),
             last_exit_status: 0,
             last_duration: None,
 
@@ -640,23 +644,47 @@ impl Prompt {
             && should_attempt_docker_context_check_from(runtime)
     }
 
-    /// Observe the logical PATH generation of a refresh-tick runtime.
+    /// Observe the runtime identity of a refresh-tick snapshot.
     ///
-    /// A changed generation means the toolchain the prompt cached versions
-    /// for may be gone: external-tool version/context caches are dropped
-    /// and failure backoffs reset so the new PATH is probed immediately.
-    /// Re-observing the same generation keeps caches and backoffs intact.
-    pub(crate) fn observe_runtime_path_generation(&mut self, generation: u64) {
-        if self.runtime_path_generation == Some(generation) {
-            return;
+    /// A changed identity (PATH generation, cwd, exported child env, or
+    /// prompt variables) advances the probe epoch and drops
+    /// runtime-scoped caches/backoffs so the new runtime is probed
+    /// immediately. Re-observing the same identity keeps caches, backoffs,
+    /// and the epoch intact.
+    pub(crate) fn observe_runtime_identity(
+        &mut self,
+        identity: PromptRuntimeIdentity,
+    ) -> PromptProbeEpoch {
+        let observed = self.probe_lifecycle.observe(identity);
+        if observed.changed {
+            self.invalidate_runtime_scoped_probe_state();
         }
-        self.runtime_path_generation = Some(generation);
+        observed.epoch
+    }
+
+    /// Claim the in-flight slot for `probe` at `epoch`. Keeps the
+    /// `needs_*`/`should_check_*` cache/backoff/project gates separate:
+    /// they decide whether a probe is wanted, the lifecycle decides
+    /// whether it may spawn.
+    pub(crate) fn try_begin_probe(&mut self, probe: PromptProbe, epoch: PromptProbeEpoch) -> bool {
+        self.probe_lifecycle.try_begin(probe, epoch)
+    }
+
+    /// Release a probe slot. Returns true only when the completion still
+    /// owns the current epoch and may publish success or failure.
+    pub(crate) fn finish_probe(&mut self, probe: PromptProbe, epoch: PromptProbeEpoch) -> bool {
+        self.probe_lifecycle.finish(probe, epoch)
+    }
+
+    /// Drop every runtime-scoped probe cache and reset failure backoffs.
+    fn invalidate_runtime_scoped_probe_state(&mut self) {
         self.rust_version_cache = None;
         self.node_version_cache = None;
         self.python_version_cache = None;
         self.go_version_cache = None;
         self.k8s_context_cache = None;
         self.k8s_namespace_cache = None;
+        self.aws_profile_cache = None;
         self.docker_context_cache = None;
         self.rust_check_backoff.reset();
         self.node_check_backoff.reset();

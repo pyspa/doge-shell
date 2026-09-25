@@ -9,6 +9,7 @@
 use crate::environment::Environment;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The slice of shell runtime state the prompt probes read.
 ///
@@ -22,7 +23,7 @@ use std::path::{Path, PathBuf};
 /// account lookup (`dirs::home_dir()`) still backs the `~/.kube/config`
 /// fallback: that is a launch-time fact about the user, not a shell
 /// variable.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PromptEnvironment {
     pub aws_profile: Option<String>,
     pub aws_default_profile: Option<String>,
@@ -43,6 +44,25 @@ impl PromptEnvironment {
     }
 }
 
+/// Value-compared identity of the runtime a prompt probe belongs to.
+///
+/// `path_generation` is the authority for `PATH` contents (every logical
+/// `PATH` mutation bumps it, even a same-text reassignment, so `PATH=$PATH`
+/// stays an explicit rescan boundary). The actual `Vec<PathBuf>` is not
+/// duplicated here. `current_dir` covers relative-`PATH` semantics and
+/// directory-sensitive lookups (`~/.kube/config` fallback, project
+/// location); `child_env` covers shim/toolchain behavior that depends on
+/// exported variables (e.g. `RUSTUP_TOOLCHAIN`); `environment` covers
+/// prompt-specific logical variables (`AWS_PROFILE`, `DOCKER_CONTEXT`,
+/// `KUBECONFIG`, `HOME`) that never move the PATH generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PromptRuntimeIdentity {
+    pub(crate) path_generation: u64,
+    pub(crate) current_dir: PathBuf,
+    pub(crate) child_env: Arc<HashMap<String, String>>,
+    pub(crate) environment: PromptEnvironment,
+}
+
 /// A trimmed, non-blank shell value. Blank counts as unset so an emptied
 /// variable falls through to the next source instead of sticking.
 pub(crate) fn trimmed_nonempty(value: Option<&str>) -> Option<String> {
@@ -61,7 +81,7 @@ pub(crate) fn trimmed_nonempty(value: Option<&str>) -> Option<String> {
 pub(crate) struct PromptRuntimeSnapshot {
     pub(crate) environment: PromptEnvironment,
     command_search_paths: Vec<PathBuf>,
-    child_env: HashMap<String, String>,
+    child_env: Arc<HashMap<String, String>>,
     current_dir: PathBuf,
     path_generation: u64,
 }
@@ -76,14 +96,21 @@ impl PromptRuntimeSnapshot {
                 .iter()
                 .map(PathBuf::from)
                 .collect(),
-            child_env: environment.child_process_env(),
+            child_env: Arc::new(environment.child_process_env()),
             current_dir,
             path_generation: environment.completion_state.path_generation,
         }
     }
 
-    pub(crate) fn path_generation(&self) -> u64 {
-        self.path_generation
+    /// Value-compared identity of this snapshot's runtime. Shared `Arc`
+    /// child environment keeps the clone cheap.
+    pub(crate) fn identity(&self) -> PromptRuntimeIdentity {
+        PromptRuntimeIdentity {
+            path_generation: self.path_generation,
+            current_dir: self.current_dir.clone(),
+            child_env: Arc::clone(&self.child_env),
+            environment: self.environment.clone(),
+        }
     }
 
     pub(crate) fn child_env(&self) -> &HashMap<String, String> {

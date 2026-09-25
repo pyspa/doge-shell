@@ -267,6 +267,7 @@ fn test_basic_commands_use_precise_dynamic_and_value_completions() {
         ("man", "man.page"),
         ("fg", "shell.job"),
         ("bg", "shell.job"),
+        ("wait", "shell.job"),
         ("tar", "archive.entry"),
     ] {
         let completion = loader
@@ -314,6 +315,38 @@ fn test_basic_commands_use_precise_dynamic_and_value_completions() {
             "{command} should use a filesystem-aware argument type"
         );
     }
+}
+
+#[test]
+fn test_wait_completion_offers_next_option_and_job_arguments() {
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = root_dir.parent().unwrap();
+    let completions_dir = repo_root.join("completions");
+
+    let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
+    let wait = loader
+        .load_command_completion("wait")
+        .unwrap()
+        .expect("wait completion not found in json");
+
+    assert!(
+        wait.global_options
+            .iter()
+            .any(|option| option.short.as_deref() == Some("-n")),
+        "wait should offer -n for wait-any"
+    );
+    let id = wait.arguments.first().expect("missing wait id argument");
+    assert!(
+        id.multiple,
+        "wait id arg must accept several PIDs/job specs"
+    );
+    assert!(
+        matches!(
+            id.arg_type,
+            Some(ArgumentType::Dynamic { ref provider, .. }) if provider == "shell.job"
+        ),
+        "wait id should complete shell jobs"
+    );
 }
 
 #[test]

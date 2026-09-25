@@ -144,6 +144,35 @@ impl KnownAsyncLedger {
         self.entries.values().find(|entry| entry.job_id == job_id)
     }
 
+    /// The canonical PID for a stable job number, if this shell knows it.
+    ///
+    /// Intention-revealing query for `%N` resolution: explicit job numbers
+    /// outlive the heavy `Job` (reconciliation archives the status here),
+    /// so `wait %N` consults this after the active table misses. Peek only —
+    /// status still leaves through [`consume_completed`](Self::consume_completed).
+    pub(crate) fn pid_by_job_id(&self, job_id: usize) -> Option<Pid> {
+        self.entry_by_job_id(job_id).map(|entry| entry.pid)
+    }
+
+    /// The retained status for a completed PID, without consuming it.
+    ///
+    /// Peek only: `wait -n` scans every target for an already-completed
+    /// status first and consumes exactly the one it selects.
+    pub(crate) fn completed_status(&self, pid: Pid) -> Option<i32> {
+        match self.entries.get(&pid.as_raw())?.state {
+            KnownAsyncState::Completed { exit_status } => Some(exit_status),
+            KnownAsyncState::Active => None,
+        }
+    }
+
+    /// The stable job number for a known PID, if this shell knows it.
+    ///
+    /// Fills `WaitCompletion` metadata for PID-derived targets so a future
+    /// `wait -p` can report which job finished without a new lookup path.
+    pub(crate) fn job_id_for_pid(&self, pid: Pid) -> Option<usize> {
+        self.entries.get(&pid.as_raw()).map(|entry| entry.job_id)
+    }
+
     /// Consume a retained status: returns it and removes the entry.
     /// Returns `None` for unknown PIDs and for still-`Active` ones — only
     /// `Completed` rows are consumable.

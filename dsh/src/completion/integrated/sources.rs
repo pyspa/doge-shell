@@ -18,6 +18,12 @@ impl IntegratedCompletionEngine {
                 candidate_type: CandidateType::Argument,
                 priority: 160,
             });
+            candidates.push(EnhancedCandidate {
+                text: "%%".to_string(),
+                description: Some(format!("current job alias: {command} ({state})")),
+                candidate_type: CandidateType::Argument,
+                priority: 159,
+            });
         }
         if jobs.len() >= 2
             && let Some((_, command, state)) = jobs.get(jobs.len() - 2)

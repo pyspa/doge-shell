@@ -1,0 +1,20 @@
+{
+  "command": "wait",
+  "description": "Wait for background jobs and report their exit status",
+  "global_options": [
+    {
+      "short": "-n",
+      "description": "Wait for the next background job to terminate"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "id",
+      "description": "PID or job specification",
+      "required": false,
+      "multiple": true,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.job" } }
+    }
+  ],
+  "subcommands": []
+}

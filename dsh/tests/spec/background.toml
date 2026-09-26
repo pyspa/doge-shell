@@ -274,33 +274,38 @@ stdout_contains = ["JOBS:1"]
 stderr_contains = ["jobs:"]
 
 # Single active job: `%-` resolves to the same job as `%+`.
+# Cleanup signals the owned job process group (`$!` is the top-level managed
+# AsyncList helper PID and also the job PGID), not just the helper PID, so no
+# helper-spawned descendant can outlive the case and hold the harness pipes.
 [[case]]
 id = "background.single-job-previous-alias"
 class = "dogesh"
 mode = "command"
-script = "{{YES}} > /dev/null & p=$!; jobs %-; rc=$?; kill $p; wait $p; echo JOBS:$rc; {{TRUE}}"
+script = "{{YES}} > /dev/null & p=$!; jobs %-; rc=$?; {{KILL}} -KILL -- -$p; wait $p; echo JOBS:$rc; {{TRUE}}"
 
 [case.expect]
 status = 0
 stdout_contains = ["JOBS:0"]
 
 # Bare `%` is a current-job alias.
+# Cleanup signals the owned job process group; see single-job-previous-alias.
 [[case]]
 id = "background.percent-alone-is-current-job"
 class = "dogesh"
 mode = "command"
-script = "{{YES}} > /dev/null & p=$!; jobs %; rc=$?; kill $p; wait $p; echo JOBS:$rc; {{TRUE}}"
+script = "{{YES}} > /dev/null & p=$!; jobs %; rc=$?; {{KILL}} -KILL -- -$p; wait $p; echo JOBS:$rc; {{TRUE}}"
 
 [case.expect]
 status = 0
 stdout_contains = ["JOBS:0"]
 
 # `jobs` marks previous (`-`) and current (`+`) active jobs.
+# Each `$!` is its job's process-group leader, so both groups are signaled.
 [[case]]
 id = "background.jobs-marks-current-and-previous"
 class = "dogesh"
 mode = "command"
-script = "{{YES}} > /dev/null & p1=$!; {{YES}} > /dev/null & p2=$!; jobs; kill $p1 $p2; wait $p1 $p2; {{TRUE}}"
+script = "{{YES}} > /dev/null & p1=$!; {{YES}} > /dev/null & p2=$!; jobs; {{KILL}} -KILL -- -$p1; {{KILL}} -KILL -- -$p2; wait $p1 $p2; {{TRUE}}"
 
 [case.expect]
 status = 0

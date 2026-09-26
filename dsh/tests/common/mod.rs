@@ -138,6 +138,11 @@ pub fn head_path() -> &'static str {
     first_existing(&["/bin/head", "/usr/bin/head"])
 }
 
+/// Absolute path to an external `kill` for contract cleanup. See [`true_path`].
+pub fn kill_path() -> &'static str {
+    first_existing(&["/bin/kill", "/usr/bin/kill"])
+}
+
 /// Absolute path to an external `sh` for helper scripts. See [`true_path`].
 pub fn sh_path() -> &'static str {
     process::sh_path()

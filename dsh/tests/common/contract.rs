@@ -35,6 +35,7 @@ pub fn expand_tokens(script: &str) -> String {
         ("{{YES}}", super::yes_path()),
         ("{{HEAD}}", super::head_path()),
         ("{{SH}}", super::sh_path()),
+        ("{{KILL}}", super::kill_path()),
     ] {
         out = out.replace(token, path);
     }
@@ -49,7 +50,8 @@ pub fn unknown_token(script: &str) -> Option<String> {
         let end = tail.find("}}")?;
         let token = &tail[..end + 2];
         match token {
-            "{{TRUE}}" | "{{FALSE}}" | "{{TR}}" | "{{YES}}" | "{{HEAD}}" | "{{SH}}" => {
+            "{{TRUE}}" | "{{FALSE}}" | "{{TR}}" | "{{YES}}" | "{{HEAD}}" | "{{SH}}"
+            | "{{KILL}}" => {
                 rest = &tail[end + 2..];
             }
             _ => return Some(token.to_string()),
@@ -545,10 +547,13 @@ mod tests {
 
     #[test]
     fn tokens_expand_to_absolute_paths() {
-        let script = expand_tokens("{{TRUE}} | {{FALSE}} | {{TR}} | {{YES}} | {{HEAD}} | {{SH}}");
+        let script =
+            expand_tokens("{{TRUE}} | {{FALSE}} | {{TR}} | {{YES}} | {{HEAD}} | {{SH}} | {{KILL}}");
         assert!(!script.contains("{{"));
+        assert!(!script.contains("}}"));
         for path in script.split(" | ") {
             assert!(Path::new(path).is_absolute(), "{path} is not absolute");
+            assert!(Path::new(path).exists(), "{path} does not exist");
         }
     }
 
@@ -556,6 +561,7 @@ mod tests {
     fn unknown_token_is_reported() {
         assert_eq!(unknown_token("echo {{NOPE}}").as_deref(), Some("{{NOPE}}"));
         assert_eq!(unknown_token("{{TRUE}} ok").as_deref(), None);
+        assert_eq!(unknown_token("{{KILL}} ok").as_deref(), None);
     }
 
     #[test]

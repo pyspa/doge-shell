@@ -272,3 +272,36 @@ script = "jobs --definitely-invalid; echo JOBS:$?"
 status = 0
 stdout_contains = ["JOBS:1"]
 stderr_contains = ["jobs:"]
+
+# Single active job: `%-` resolves to the same job as `%+`.
+[[case]]
+id = "background.single-job-previous-alias"
+class = "dogesh"
+mode = "command"
+script = "{{YES}} > /dev/null & p=$!; jobs %-; rc=$?; kill $p; wait $p; echo JOBS:$rc; {{TRUE}}"
+
+[case.expect]
+status = 0
+stdout_contains = ["JOBS:0"]
+
+# Bare `%` is a current-job alias.
+[[case]]
+id = "background.percent-alone-is-current-job"
+class = "dogesh"
+mode = "command"
+script = "{{YES}} > /dev/null & p=$!; jobs %; rc=$?; kill $p; wait $p; echo JOBS:$rc; {{TRUE}}"
+
+[case.expect]
+status = 0
+stdout_contains = ["JOBS:0"]
+
+# `jobs` marks previous (`-`) and current (`+`) active jobs.
+[[case]]
+id = "background.jobs-marks-current-and-previous"
+class = "dogesh"
+mode = "command"
+script = "{{YES}} > /dev/null & p1=$!; {{YES}} > /dev/null & p2=$!; jobs; kill $p1 $p2; wait $p1 $p2; {{TRUE}}"
+
+[case.expect]
+status = 0
+stdout_contains = ["[1]-", "[2]+"]

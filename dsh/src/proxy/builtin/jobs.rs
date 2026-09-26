@@ -23,7 +23,7 @@ pub use list::execute_jobs;
 /// into this type internally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobSpec {
-    /// `%+` or `%%`: the most recently added active job.
+    /// `%`, `%+` or `%%`: the most recently added active job.
     Current,
     /// `%-`: the active job before the current one.
     Previous,
@@ -33,17 +33,17 @@ pub(crate) enum JobSpec {
 
 /// Parse a `%`-prefixed job specification without touching any job table.
 ///
-/// Accepts `%%`/`%+` (current), `%-` (previous), `%N` (job number).
+/// Accepts `%`/`%%`/`%+` (current), `%-` (previous), `%N` (job number).
 /// Rejects everything else — including bare numbers, which `wait` must
 /// read as PIDs.
 pub(crate) fn parse_percent_job_spec(spec: &str) -> Option<JobSpec> {
     let spec = spec.trim();
     match spec {
-        "%%" | "%+" => Some(JobSpec::Current),
+        "%" | "%%" | "%+" => Some(JobSpec::Current),
         "%-" => Some(JobSpec::Previous),
         _ => {
             let digits = spec.strip_prefix('%')?;
-            // `%` alone, `%foo`, `%?foo`: not a job spec here.
+            // `%foo`, `%?foo`, empty digits: not a job spec here.
             let number: usize = digits.parse().ok()?;
             Some(JobSpec::Number(number))
         }
@@ -61,14 +61,15 @@ pub(crate) fn resolve_active_job_spec(
     spec: JobSpec,
     wait_jobs: &[crate::process::Job],
 ) -> Option<usize> {
+    let selection = crate::shell::job_selection::ActiveJobSelection::for_len(wait_jobs.len());
     match spec {
-        JobSpec::Current => wait_jobs.len().checked_sub(1),
-        JobSpec::Previous => wait_jobs.len().checked_sub(2),
+        JobSpec::Current => selection.current(),
+        JobSpec::Previous => selection.previous(),
         JobSpec::Number(number) => wait_jobs.iter().position(|job| job.job_id == number),
     }
 }
 
-/// Parse a legacy `fg`/`bg` job specification (e.g., "%1", "1", "%+", "%-").
+/// Parse a legacy `fg`/`bg` job specification (e.g., "%1", "1", "%", "%+", "%-").
 ///
 /// Returns the job index in wait_jobs vector, or None if not found.
 pub fn parse_job_spec(spec: &str, wait_jobs: &[crate::process::Job]) -> Option<usize> {

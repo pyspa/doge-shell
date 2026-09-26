@@ -261,6 +261,20 @@ fn wait_current_and_previous_aliases() {
 }
 
 #[test]
+fn wait_percent_alone_is_current_and_single_previous_alias() {
+    let bare = stdout_of("false & true & wait %; echo STATUS:$?");
+    assert!(
+        bare.contains("STATUS:0"),
+        "% must alias the current job: {bare:?}"
+    );
+    let single = stdout_of("false & wait %-; echo STATUS:$?");
+    assert!(
+        single.contains("STATUS:1"),
+        "single-job %- must resolve to that job: {single:?}"
+    );
+}
+
+#[test]
 fn wait_bare_decimal_is_pid_not_job_number() {
     // Job id 1 exists, but `wait 1` is PID 1 — not our child — so 127.
     let stdout = stdout_of("true & wait 1; echo STATUS:$?");

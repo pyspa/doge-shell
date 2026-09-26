@@ -462,6 +462,7 @@ fn job_control_bridge_runs_future_outside_existing_runtime() {
 fn wait_percent_job_spec_accepts_only_percent_forms() {
     assert_eq!(parse_percent_job_spec("%1"), Some(JobSpec::Number(1)));
     assert_eq!(parse_percent_job_spec("%42"), Some(JobSpec::Number(42)));
+    assert_eq!(parse_percent_job_spec("%"), Some(JobSpec::Current));
     assert_eq!(parse_percent_job_spec("%+"), Some(JobSpec::Current));
     assert_eq!(parse_percent_job_spec("%%"), Some(JobSpec::Current));
     assert_eq!(parse_percent_job_spec("%-"), Some(JobSpec::Previous));
@@ -473,7 +474,6 @@ fn wait_percent_job_spec_accepts_only_percent_forms() {
     // Not job numbers at all.
     assert_eq!(parse_percent_job_spec("%foo"), None);
     assert_eq!(parse_percent_job_spec("%?foo"), None);
-    assert_eq!(parse_percent_job_spec("%"), None);
     assert_eq!(parse_percent_job_spec(""), None);
 }
 
@@ -522,6 +522,38 @@ fn legacy_parse_job_spec_keeps_fg_bg_behavior() {
     assert_eq!(parse_job_spec("", &shell.wait_jobs), Some(1));
     assert_eq!(parse_job_spec("%99", &shell.wait_jobs), None);
     assert_eq!(parse_job_spec("%foo", &shell.wait_jobs), None);
+}
+
+/// Single active job: current and previous resolve to the same job.
+#[test]
+fn single_active_job_resolves_current_and_previous_to_same_job() {
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+
+    assert_eq!(
+        resolve_active_job_spec(JobSpec::Current, &shell.wait_jobs),
+        Some(0)
+    );
+    assert_eq!(
+        resolve_active_job_spec(JobSpec::Previous, &shell.wait_jobs),
+        Some(0)
+    );
+}
+
+/// Single active job: every legacy current/previous alias pins that job.
+#[test]
+fn single_active_job_legacy_aliases_resolve_to_same_job() {
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    let jobs = &shell.wait_jobs;
+
+    assert_eq!(parse_job_spec("", jobs), Some(0));
+    assert_eq!(parse_job_spec("+", jobs), Some(0));
+    assert_eq!(parse_job_spec("%", jobs), Some(0));
+    assert_eq!(parse_job_spec("%+", jobs), Some(0));
+    assert_eq!(parse_job_spec("%%", jobs), Some(0));
+    assert_eq!(parse_job_spec("-", jobs), Some(0));
+    assert_eq!(parse_job_spec("%-", jobs), Some(0));
 }
 
 fn wait_argv(args: &[&str]) -> Vec<String> {
@@ -1323,10 +1355,15 @@ fn jobs_parser_rejects_bad_options_and_extra_operands() {
 
 #[test]
 fn jobs_default_table_omits_pid_column() {
-    use super::list::render_jobs_default;
+    use super::list::{JobListEntry, render_jobs_default};
+    use crate::shell::job_selection::ActiveJobMarker;
 
     let job = running_tree_job(1);
-    let rendered = render_jobs_default(&[&job]);
+    let entries = [JobListEntry {
+        job: &job,
+        marker: ActiveJobMarker::Current,
+    }];
+    let rendered = render_jobs_default(&entries);
     assert!(rendered.contains("job"), "header missing: {rendered}");
     assert!(rendered.contains("state"), "header missing: {rendered}");
     assert!(rendered.contains("command"), "header missing: {rendered}");
@@ -1338,14 +1375,171 @@ fn jobs_default_table_omits_pid_column() {
 
 #[test]
 fn jobs_long_table_includes_pid_column() {
-    use super::list::render_jobs_long;
+    use super::list::{JobListEntry, render_jobs_long};
+    use crate::shell::job_selection::ActiveJobMarker;
 
     let job = running_tree_job(1);
-    let rendered = render_jobs_long(&[&job]);
+    let entries = [JobListEntry {
+        job: &job,
+        marker: ActiveJobMarker::Current,
+    }];
+    let rendered = render_jobs_long(&entries);
     assert!(rendered.contains("pid"), "long table needs pid: {rendered}");
     assert!(
         rendered.contains(&job.pid.expect("pid").as_raw().to_string()),
         "long table needs the pid value: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_default_table_marks_current_and_previous() {
+    use super::list::{JobListEntry, render_jobs_default};
+    use crate::shell::job_selection::ActiveJobSelection;
+
+    let first = running_tree_job(1);
+    let second = running_tree_job(2);
+    let third = running_tree_job(3);
+    let jobs = [&first, &second, &third];
+    let selection = ActiveJobSelection::for_len(jobs.len());
+    let entries: Vec<JobListEntry<'_>> = jobs
+        .iter()
+        .enumerate()
+        .map(|(index, job)| JobListEntry {
+            job,
+            marker: selection.marker_for(index),
+        })
+        .collect();
+    let rendered = render_jobs_default(&entries);
+    assert!(
+        rendered.contains("[2]-"),
+        "previous marker missing: {rendered}"
+    );
+    assert!(
+        rendered.contains("[3]+"),
+        "current marker missing: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_default_table_single_job_shows_current_only() {
+    use super::list::{JobListEntry, render_jobs_default};
+    use crate::shell::job_selection::ActiveJobSelection;
+
+    let job = running_tree_job(1);
+    let selection = ActiveJobSelection::for_len(1);
+    let entries = [JobListEntry {
+        job: &job,
+        marker: selection.marker_for(0),
+    }];
+    let rendered = render_jobs_default(&entries);
+    assert!(
+        rendered.contains("[1]+"),
+        "single job must show +: {rendered}"
+    );
+    assert!(
+        !rendered.contains("[1]-"),
+        "single job must not show -: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_long_table_marks_current_and_previous_with_pid() {
+    use super::list::{JobListEntry, render_jobs_long};
+    use crate::shell::job_selection::ActiveJobSelection;
+
+    let first = running_tree_job(1);
+    let second = running_tree_job(2);
+    let jobs = [&first, &second];
+    let selection = ActiveJobSelection::for_len(jobs.len());
+    let entries: Vec<JobListEntry<'_>> = jobs
+        .iter()
+        .enumerate()
+        .map(|(index, job)| JobListEntry {
+            job,
+            marker: selection.marker_for(index),
+        })
+        .collect();
+    let rendered = render_jobs_long(&entries);
+    assert!(
+        rendered.contains("[1]-"),
+        "previous marker missing: {rendered}"
+    );
+    assert!(
+        rendered.contains("[2]+"),
+        "current marker missing: {rendered}"
+    );
+    assert!(
+        rendered.contains(&first.pid.expect("pid").as_raw().to_string()),
+        "long table needs the pid value: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_filtered_render_keeps_full_table_marker() {
+    use super::list::{JobListEntry, render_jobs_default};
+    use crate::shell::job_selection::ActiveJobSelection;
+
+    let first = running_tree_job(1);
+    let second = running_tree_job(2);
+    let third = running_tree_job(3);
+    let selection = ActiveJobSelection::for_len(3);
+
+    // `jobs %1`: job 1 is neither current nor previous in the full table.
+    let filtered = [JobListEntry {
+        job: &first,
+        marker: selection.marker_for(0),
+    }];
+    let rendered = render_jobs_default(&filtered);
+    assert!(
+        !rendered.contains("[1]+"),
+        "filtered non-current job must not gain +: {rendered}"
+    );
+    assert!(
+        !rendered.contains("[1]-"),
+        "filtered non-previous job must not gain -: {rendered}"
+    );
+
+    // `jobs %+` and `jobs %-` keep their full-table roles.
+    let current = [JobListEntry {
+        job: &third,
+        marker: selection.marker_for(2),
+    }];
+    assert!(
+        render_jobs_default(&current).contains("[3]+"),
+        "filtered current must stay +"
+    );
+    let previous = [JobListEntry {
+        job: &second,
+        marker: selection.marker_for(1),
+    }];
+    assert!(
+        render_jobs_default(&previous).contains("[2]-"),
+        "filtered previous must stay -"
+    );
+}
+
+#[test]
+fn jobs_single_job_previous_operand_renders_current_marker() {
+    use super::list::{JobListEntry, render_jobs_default};
+    use crate::shell::job_selection::ActiveJobSelection;
+
+    // `jobs %-` on a single job succeeds; the display role is still
+    // current (`+`), never `-`, because marker follows the active-table
+    // role rather than the operand spelling.
+    let job = running_tree_job(1);
+    let selection = ActiveJobSelection::for_len(1);
+    let entries = [JobListEntry {
+        job: &job,
+        marker: selection.marker_for(0),
+    }];
+    let rendered = render_jobs_default(&entries);
+    assert!(
+        rendered.contains("[1]+"),
+        "single job must show +: {rendered}"
+    );
+    assert!(
+        !rendered.contains("[1]-"),
+        "operand spelling must not leak into the marker: {rendered}"
     );
 }
 

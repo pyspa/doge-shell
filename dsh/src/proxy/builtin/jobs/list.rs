@@ -10,6 +10,7 @@
 //! never triggers a table side effect.
 
 use crate::shell::Shell;
+use crate::shell::job_selection::{ActiveJobMarker, ActiveJobSelection};
 use anyhow::Result;
 use dsh_types::Context;
 use std::borrow::Cow;
@@ -111,7 +112,7 @@ fn set_jobs_mode(mode: &mut JobsOutputMode, seen: &mut bool, next: JobsOutputMod
 }
 
 struct DefaultJobRow {
-    job: usize,
+    job: String,
     state: String,
     command: String,
 }
@@ -121,7 +122,7 @@ impl Tabled for DefaultJobRow {
 
     fn fields(&self) -> Vec<Cow<'_, str>> {
         vec![
-            Cow::Owned(self.job.to_string()),
+            Cow::Borrowed(self.job.as_str()),
             Cow::Borrowed(self.state.as_str()),
             Cow::Borrowed(self.command.as_str()),
         ]
@@ -137,7 +138,7 @@ impl Tabled for DefaultJobRow {
 }
 
 struct LongJobRow {
-    job: usize,
+    job: String,
     pid: i32,
     state: String,
     command: String,
@@ -148,7 +149,7 @@ impl Tabled for LongJobRow {
 
     fn fields(&self) -> Vec<Cow<'_, str>> {
         vec![
-            Cow::Owned(self.job.to_string()),
+            Cow::Borrowed(self.job.as_str()),
             Cow::Owned(self.pid.to_string()),
             Cow::Borrowed(self.state.as_str()),
             Cow::Borrowed(self.command.as_str()),
@@ -165,28 +166,42 @@ impl Tabled for LongJobRow {
     }
 }
 
+/// One listed job plus its marker role from the full active table.
+///
+/// The marker is computed from the full-table index, never from the
+/// filtered slice position: `jobs %1` must not mark job 1 current just
+/// because the selection holds a single entry.
+pub(crate) struct JobListEntry<'a> {
+    pub(crate) job: &'a crate::process::Job,
+    pub(crate) marker: ActiveJobMarker,
+}
+
+fn format_job_label(job_id: usize, marker: ActiveJobMarker) -> String {
+    format!("[{job_id}]{}", marker.glyph())
+}
+
 /// Render the default `jobs` table (`job` / `state` / `command`, no pid).
-pub(crate) fn render_jobs_default(jobs: &[&crate::process::Job]) -> String {
-    let rows: Vec<DefaultJobRow> = jobs
+pub(crate) fn render_jobs_default(entries: &[JobListEntry<'_>]) -> String {
+    let rows: Vec<DefaultJobRow> = entries
         .iter()
-        .map(|job| DefaultJobRow {
-            job: job.job_id,
-            state: format!("{}", job.state),
-            command: job.cmd.clone(),
+        .map(|entry| DefaultJobRow {
+            job: format_job_label(entry.job.job_id, entry.marker),
+            state: format!("{}", entry.job.state),
+            command: entry.job.cmd.clone(),
         })
         .collect();
     Table::new(rows).to_string()
 }
 
 /// Render the long `jobs -l` table (`job` / `pid` / `state` / `command`).
-pub(crate) fn render_jobs_long(jobs: &[&crate::process::Job]) -> String {
-    let rows: Vec<LongJobRow> = jobs
+pub(crate) fn render_jobs_long(entries: &[JobListEntry<'_>]) -> String {
+    let rows: Vec<LongJobRow> = entries
         .iter()
-        .map(|job| LongJobRow {
-            job: job.job_id,
-            pid: job.pid.map(|p| p.as_raw()).unwrap_or(-1),
-            state: format!("{}", job.state),
-            command: job.cmd.clone(),
+        .map(|entry| LongJobRow {
+            job: format_job_label(entry.job.job_id, entry.marker),
+            pid: entry.job.pid.map(|p| p.as_raw()).unwrap_or(-1),
+            state: format!("{}", entry.job.state),
+            command: entry.job.cmd.clone(),
         })
         .collect();
     Table::new(rows).to_string()
@@ -225,34 +240,44 @@ pub(crate) fn render_jobs_pgids(jobs: &[&crate::process::Job]) -> Result<String>
 pub fn execute_jobs(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
     let invocation = parse_jobs_invocation(&argv)?;
     super::block_on_job_control_future(shell.check_job_state())??;
-    let selected: Vec<&crate::process::Job> = match &invocation.jobspec {
+    let selection = ActiveJobSelection::for_len(shell.wait_jobs.len());
+    let selected_indices: Vec<usize> = match &invocation.jobspec {
         Some(spec) => {
             let Some(index) = super::parse_job_spec(spec, &shell.wait_jobs) else {
                 return Err(anyhow::anyhow!("job not found: {spec}"));
             };
-            vec![&shell.wait_jobs[index]]
+            vec![index]
         }
-        None => shell.wait_jobs.iter().collect(),
+        None => (0..shell.wait_jobs.len()).collect(),
     };
+    let entries: Vec<JobListEntry<'_>> = selected_indices
+        .iter()
+        .map(|&index| JobListEntry {
+            job: &shell.wait_jobs[index],
+            marker: selection.marker_for(index),
+        })
+        .collect();
+    // `jobs -p` stays marker-free machine-readable output.
+    let selected_jobs: Vec<&crate::process::Job> = entries.iter().map(|entry| entry.job).collect();
     match invocation.mode {
         JobsOutputMode::PgidOnly => {
-            let output = render_jobs_pgids(&selected)?;
+            let output = render_jobs_pgids(&selected_jobs)?;
             if !output.is_empty() {
                 ctx.write_stdout(output.trim_end())?;
             }
         }
         JobsOutputMode::Default => {
-            if selected.is_empty() {
+            if entries.is_empty() {
                 ctx.write_stdout("jobs: there are no jobs")?;
             } else {
-                ctx.write_stdout(render_jobs_default(&selected).as_str())?;
+                ctx.write_stdout(render_jobs_default(&entries).as_str())?;
             }
         }
         JobsOutputMode::Long => {
-            if selected.is_empty() {
+            if entries.is_empty() {
                 ctx.write_stdout("jobs: there are no jobs")?;
             } else {
-                ctx.write_stdout(render_jobs_long(&selected).as_str())?;
+                ctx.write_stdout(render_jobs_long(&entries).as_str())?;
             }
         }
     }

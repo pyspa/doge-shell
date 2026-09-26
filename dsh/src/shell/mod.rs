@@ -5,6 +5,7 @@ pub mod hooks;
 pub mod job;
 pub mod job_exit;
 pub mod job_ledger;
+pub(crate) mod job_selection;
 pub mod materialize;
 pub mod no_command;
 pub mod parse;

@@ -666,8 +666,8 @@ impl Job {
         }
     }
 
-    pub async fn check_background_all_output(&mut self) -> Result<()> {
-        job_wait::check_background_all_output(self).await
+    pub fn drain_running_output_ready_now(&mut self) -> Result<()> {
+        job_wait::drain_running_output_ready_now(self)
     }
 
     /// A job pgid is only safe to signal as a group when it names the job's

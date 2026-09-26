@@ -181,7 +181,7 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     // 4. Active background jobs keep streaming their available output.
     for job in shell.wait_jobs.iter_mut() {
         if !job.foreground
-            && let Err(e) = job.check_background_all_output().await
+            && let Err(e) = job.drain_running_output_ready_now()
         {
             error!(
                 "CHECK_JOB_STATE_BG_ERROR: Failed to check background output for job {}: {}",
@@ -364,7 +364,6 @@ mod tests {
     use crate::shell::Shell;
     use dsh_types::observed_output::ObservedStream;
     use std::io::Write as _;
-    use std::time::Duration;
 
     fn test_shell() -> Shell {
         Shell::new(Environment::new())
@@ -403,10 +402,7 @@ mod tests {
         let mut writer = std::fs::File::from(write);
 
         // Pass-4 style poll observes nothing.
-        monitor
-            .drain_available_for(Duration::from_millis(5))
-            .await
-            .expect("poll");
+        monitor.drain_ready_now().expect("poll");
         assert_eq!(monitor.captured_output, "");
 
         // Committed after the poll, before completion is observed.
@@ -442,8 +438,7 @@ mod tests {
         writer.write_all(b"NO-NEWLINE").expect("write fragment");
         writer.flush().expect("flush");
         monitor
-            .drain_available_for(Duration::from_millis(5))
-            .await
+            .drain_ready_now()
             .expect("running drain holds the fragment");
         assert_eq!(monitor.captured_output, "");
 

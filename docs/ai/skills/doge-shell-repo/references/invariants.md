@@ -12,6 +12,7 @@
 | プラットフォーム | [invariants/platform.md](invariants/platform.md) |
 | 安全判定 | [invariants/safety.md](invariants/safety.md) |
 | 実行セマンティクス・ライフサイクル・所有権・ハーネス | [invariants/execution.md](invariants/execution.md) |
+| background job / `$!` / `wait` | [invariants/execution-background.md](invariants/execution-background.md) |
 | 二重化しているもの（多数派が正解とは限らない） | [invariants/duplication.md](invariants/duplication.md) |
 
 cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、cron を触る前に該当ファイルを読む。

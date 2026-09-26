@@ -76,11 +76,13 @@ dsh/src/terminal/title.rs	/bin/codex
 dsh/src/terminal/title.rs	/usr/bin/nvim
 dsh/tests/common/mod.rs	/bin/false
 dsh/tests/common/mod.rs	/bin/head
+dsh/tests/common/mod.rs	/bin/kill
 dsh/tests/common/mod.rs	/bin/tr
 dsh/tests/common/mod.rs	/bin/true
 dsh/tests/common/mod.rs	/bin/yes
 dsh/tests/common/mod.rs	/usr/bin/false
 dsh/tests/common/mod.rs	/usr/bin/head
+dsh/tests/common/mod.rs	/usr/bin/kill
 dsh/tests/common/mod.rs	/usr/bin/tr
 dsh/tests/common/mod.rs	/usr/bin/true
 dsh/tests/common/mod.rs	/usr/bin/yes

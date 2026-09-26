@@ -350,6 +350,52 @@ fn test_wait_completion_offers_next_option_and_job_arguments() {
 }
 
 #[test]
+fn test_jobs_and_bg_completion_cover_job_specs() {
+    let root_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = root_dir.parent().unwrap();
+    let completions_dir = repo_root.join("completions");
+
+    let loader = JsonCompletionLoader::with_dirs(vec![completions_dir]);
+
+    let jobs = loader
+        .load_command_completion("jobs")
+        .unwrap()
+        .expect("jobs completion not found in json");
+    for (short, long) in [("-l", "--list"), ("-p", "--pgid")] {
+        assert!(
+            jobs.global_options
+                .iter()
+                .any(|option| option.short.as_deref() == Some(short)
+                    && option.long.as_deref() == Some(long)),
+            "jobs should offer {short}/{long}"
+        );
+    }
+    let job_arg = jobs.arguments.first().expect("missing jobs job argument");
+    assert!(!job_arg.multiple, "jobs accepts at most one jobspec");
+    assert!(
+        matches!(
+            job_arg.arg_type,
+            Some(ArgumentType::Dynamic { ref provider, .. }) if provider == "shell.job"
+        ),
+        "jobs job should complete shell jobs"
+    );
+
+    let bg = loader
+        .load_command_completion("bg")
+        .unwrap()
+        .expect("bg completion not found in json");
+    let bg_arg = bg.arguments.first().expect("missing bg job argument");
+    assert!(bg_arg.multiple, "bg job arg must accept several job specs");
+    assert!(
+        matches!(
+            bg_arg.arg_type,
+            Some(ArgumentType::Dynamic { ref provider, .. }) if provider == "shell.job"
+        ),
+        "bg job should complete shell jobs"
+    );
+}
+
+#[test]
 fn test_git_completion_with_real_json() {
     use doge_shell::completion::command::CommandCompletionDatabase;
     use doge_shell::completion::generator::CompletionGenerator;

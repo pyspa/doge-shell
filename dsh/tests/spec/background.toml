@@ -248,3 +248,27 @@ script = "set -o pipefail; {{FALSE}} | {{TRUE}} & fg %1; echo FG:$?"
 [case.expect]
 status = 0
 stdout_contains = ["FG:1"]
+
+# `bg` with no stopped job is an error, never success.
+[[case]]
+id = "background.bg-without-stopped-job-is-error"
+class = "dogesh"
+mode = "command"
+script = "bg; echo BG:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["BG:1"]
+stderr_contains = ["bg:"]
+
+# `jobs` rejects unknown options instead of silently ignoring argv.
+[[case]]
+id = "background.jobs-invalid-option-is-error"
+class = "dogesh"
+mode = "command"
+script = "jobs --definitely-invalid; echo JOBS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["JOBS:1"]
+stderr_contains = ["jobs:"]

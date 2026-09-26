@@ -163,3 +163,75 @@ fn completed_background_builtin_pipeline_leaves_job_table() {
         "completed background builtin pipeline still in job table: {stdout:?}"
     );
 }
+
+/// `bg` with no stopped job is an error, never success.
+#[test]
+fn bg_without_stopped_job_reports_error() {
+    let output = common::run_command("bg; echo BG:$?");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("BG:1"),
+        "bg without a stopped job must report status 1: {stdout:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("bg:"),
+        "bg failure needs a diagnostic: {stderr:?}"
+    );
+}
+
+/// `jobs` rejects unknown options instead of silently ignoring argv.
+#[test]
+fn jobs_invalid_option_reports_error() {
+    let output = common::run_command("jobs --definitely-invalid; echo JOBS:$?");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("JOBS:1"),
+        "jobs with an invalid option must report status 1: {stdout:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("jobs:"),
+        "jobs failure needs a diagnostic: {stderr:?}"
+    );
+}
+
+/// `jobs -p` emits raw numeric process-group IDs only: the launched async
+/// job's associated PID shows up as an integer line with no table header.
+/// The trailing `wait` reaps the child so no process leaks from the test.
+#[test]
+fn jobs_pgid_lists_active_job_process_group() {
+    let output = common::run_command("sleep 1 & echo ASYNC:$!; jobs -p; wait $!");
+    assert!(output.status.success(), "command failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let async_pid: i32 = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("ASYNC:"))
+        .expect("missing ASYNC pid line")
+        .trim()
+        .parse()
+        .expect("async pid must be numeric");
+    let numeric_lines: Vec<i32> = stdout
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .collect();
+    assert!(
+        numeric_lines.contains(&async_pid),
+        "jobs -p must list the async job pgid {async_pid}: {stdout:?}"
+    );
+    // Machine-readable shape: every line is either the ASYNC marker or a raw
+    // integer (no table header, no prose). Substring checks would be brittle
+    // against future shell notices, so the line shape itself is the contract.
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        assert!(
+            trimmed.strip_prefix("ASYNC:").is_some() || trimmed.parse::<i32>().is_ok(),
+            "unexpected jobs -p line {line:?} in {stdout:?}"
+        );
+    }
+}

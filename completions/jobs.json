@@ -13,5 +13,14 @@
       "description": "List only process group IDs"
     }
   ],
+  "arguments": [
+    {
+      "name": "job",
+      "description": "Job specification",
+      "required": false,
+      "multiple": false,
+      "type": { "type": "Dynamic", "data": { "provider": "shell.job" } }
+    }
+  ],
   "subcommands": []
 }

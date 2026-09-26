@@ -80,6 +80,11 @@
 - wait 用は TerminationOnly policy（stop は completion 扱いせず待機継続）。foreground の stop 終了・SIGINT forward と混ぜない。`wait`/`wait -n` 中の SIGINT は child へ forward せず builtin を interrupt して130、job は requeue・ledger は Active のまま。
 - ledger は bounded（`CHILD_MAX` 相当、fallback 4096）。prune は oldest Completed から。Active は捨てない。PID reuse は new register が勝つ。completed retention は metadata/status のみで process resource を所有しない。
 - `jobs`・completion notice・`fg`/`bg` は archive するが consume しない。consume するのは `wait` だけ。
+- `jobs` は reconciliation より先に CLI を parse する。syntax valid 後に `check_job_state` で reconcile し、completed Job を直接 remove せず、ledger を consume しない。
+- `jobs` default 出力は pid を含まない（`job`/`state`/`command`）。`-l`/`--list` は associated pid を足した long table。`-p`/`--pgid` は canonical process-group leader ID のみを table/header/prose なしで出す。`-p` で 0 件なら空 stdout + status 0。pgid が無い active Job は fail-closed。
+- `bg` の explicit operand は全て、1 回 reconcile した mutation 前 active-table snapshot に対して stable job ID へ解決する。remove/requeue を跨いで `wait_jobs` index を持ち回らない。
+- `bg` は明示 target を全件 best-effort で処理する。失敗 target があっても他 target を skip/rollback しない。1 件でも失敗したら builtin は non-zero。
+- `bg` の選択 Job は毎回 `finalize_background_resume()` を通す。SIGCONT failure でも active ownership を requeue する。completion は archive するが `KnownAsyncLedger` を consume しない。
 - `fg` is a status-bearing job-control builtin. Completed: return `Job::final_exit_status()` after canonical `ToEof` finalization. Stopped again: job final status remains `None`; `fg` invocation status is `128 +` observed stop signal; job is requeued and wait ownership remains `Active`. Running/incomplete + successful wait: infrastructure inconsistency; requeue ownership first, then error; never synthesize status 0. `fg` archives known-async completion but never consumes it; only `wait` consumes `KnownAsyncLedger` status. Do not read live `ShellOptions`. Do not derive pipeline status from `Job.state`.
 - normal-exit detach（`Shell::detach_known_async_jobs_for_normal_exit`）は user command ではない。ledger status を consume せず `$?`/`foreground status` を書き換えない。detach failure は infrastructure failure（exit 1）で ownership を維持し、`Drop` cleanup が kill する。
 - テストは `dsh/tests/wait_semantics.rs`。sandbox の SafetyGuard が nested shell（`sh`/`bash`）を deny するため、exact status には `false`(1)/`true`(0)/self-`kill`(143)/unknown-command(127) を使う。`sh -c 'exit N'` 前提にしない。

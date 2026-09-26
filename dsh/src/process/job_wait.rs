@@ -260,7 +260,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
 
         debug!("waitpid loop iteration...");
 
-        check_background_all_output(job).await?;
+        drain_running_output_ready_now(job)?;
 
         let wait_pids = job_wait_pids(job);
         let wait_pids_for_error = wait_pids.clone();
@@ -278,9 +278,9 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
                 no_waitable @ (KnownWaitResult::NoWaitableChildren | KnownWaitResult::NoKnownPids),
             )) => {
                 // `ECHILD` (or an empty pid set) never completes a job on
-                // its own: only the canonical tree decides. Drain available
+                // its own: only the canonical tree decides. Drain ready-now
                 // (non-blocking) output first, then consult the tree.
-                check_background_all_output(job).await?;
+                drain_running_output_ready_now(job)?;
                 if job.is_process_tree_completed() {
                     drain_completed_output(job).await?;
                     break JobWaitOutcome::Completed;
@@ -330,7 +330,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
             }
         };
 
-        check_background_all_output(job).await?;
+        drain_running_output_ready_now(job)?;
         job.set_process_state(pid, state);
         backoff.reset();
 
@@ -444,18 +444,18 @@ pub fn finalize_ready_output(job: &mut Job) -> Result<()> {
     Ok(())
 }
 
-pub async fn check_background_all_output(job: &mut Job) -> Result<()> {
+pub fn drain_running_output_ready_now(job: &mut Job) -> Result<()> {
     debug!(
-        "check_background_all_output: monitors.len() = {}",
+        "drain_running_output_ready_now: monitors.len() = {}",
         job.monitors.len()
     );
     let mut i = 0;
     while i < job.monitors.len() {
         debug!("Processing monitor {}", i);
-        job.monitors[i].drain_available().await?;
+        job.monitors[i].drain_ready_now()?;
         i += 1;
     }
-    debug!("check_background_all_output completed");
+    debug!("drain_running_output_ready_now completed");
     Ok(())
 }
 

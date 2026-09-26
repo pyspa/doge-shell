@@ -10,7 +10,6 @@ use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 use std::io::{ErrorKind, Write as _};
-use std::time::Duration;
 
 fn unnamed_pipe() -> (std::os::fd::OwnedFd, std::fs::File) {
     let (read, write) = nix::unistd::pipe().expect("pipe");
@@ -39,8 +38,7 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
         Err(failing_once_broken_pipe().into())
     };
     monitor
-        .drain_available_for_with(Duration::from_millis(5), &mut flush)
-        .await
+        .drain_ready_now_with_budget(256 * 1024, &mut flush)
         .expect("renderer failure must not fail the running drain");
     assert!(monitor.renderer_failed);
     assert_eq!(monitor.captured_output, "first\n");
@@ -55,8 +53,7 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
         panic!("failed renderer must not be retried")
     };
     monitor
-        .drain_available_for_with(Duration::from_millis(5), &mut no_render)
-        .await
+        .drain_ready_now_with_budget(256 * 1024, &mut no_render)
         .expect("second running drain stays Ok without rendering");
     assert!(monitor.renderer_failed);
     assert_eq!(monitor.captured_output, "first\nsecond\n");

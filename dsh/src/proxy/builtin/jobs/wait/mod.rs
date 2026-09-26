@@ -18,7 +18,7 @@
 use super::{JobSpec, parse_percent_job_spec, resolve_active_job_spec};
 use crate::environment::variables::is_valid_shell_var_name;
 use crate::process::job_wait::{
-    JobWaitOutcome, WaitBackoff, check_background_all_output, wait_for_termination,
+    JobWaitOutcome, WaitBackoff, drain_running_output_ready_now, wait_for_termination,
 };
 use crate::process::signal::check_and_clear_sigint;
 use crate::shell::Shell;
@@ -699,7 +699,7 @@ async fn wait_next_until(
                 .iter()
                 .position(|job| job.pid == Some(target.pid))
             {
-                check_background_all_output(&mut shell.wait_jobs[index]).await?;
+                drain_running_output_ready_now(&mut shell.wait_jobs[index])?;
                 if shell.wait_jobs[index].update_status() {
                     selected = Some(index);
                     break;

@@ -8,7 +8,7 @@
 - `$!` は最後に登録された associated PID を展開する（`Environment.last_async_pid`）。PID の wait status を consume しても `$!` 自体は消さない（2回目の `wait $!` は値自体は展開できるが ledger から消えているため127）。
 - wait ownership は `Shell.known_async`（`KnownAsyncLedger`）が持つ。`Environment` に ledger を入れない（parameter expansion と lifecycle ownership の分離）。subshell snapshot は `last_async_pid` の値だけ引き継ぎ、ledger は引き継がない。
 - Active job は `wait_jobs` に住む。重い `Job` オブジェクトの削除は、monitor へ terminal retirement action を1回実行（drain 種別は次項通り）し、known async job なら final status を ledger に archive してから。completed `Job` の直接 `remove()` は禁止。全経路（`check_job_state`・`jobs`・notices・`fg`・`bg`・`wait`）は canonical finalizer を通す。
-- running background monitor は bounded `drain_available` を使う。canonical completed tree の reconciliation は `ReadyNow`（await なし・timeout なし・O_NONBLOCK fd への直接 drain）。`ReadyNow` は monitor ownership がそこで終了するため pending fragment を publish する。explicit ownership wait（`wait PID`・`fg`）は `ToEof` を使う。descendant が pipe を保持していても reconciliation は EOF を待たない。`FinalizeDrain::Skip` は存在しない。
+- running monitor は wait-free ReadyNow drain を使う。O_NONBLOCK fd を直接 read し、WouldBlock で即 return する。running ReadyNow は per-call byte budget（256KiB）を持つ。budget exhaustion / WouldBlock では pending fragment を保持する。EOF のみ pending fragment を publish する。completed reconciliation ReadyNow は ownership retirement なので pending fragment を publish する。explicit wait/fg は ToEof を使う。
 - drain error で status を失わない。exit status 確定と ledger archive を先に保証し、monitor error は diagnostic に留める。
 - OutputMonitor terminal rendering is best-effort presentation only.
 - A renderer write/flush failure disables rendering for that monitor exactly once.

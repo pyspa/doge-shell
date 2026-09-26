@@ -5,7 +5,7 @@
 //! lifetime (sticky `renderer_failed`), keeps draining/capturing/observing,
 //! and still returns `Ok` unless a real read/framing error occurred.
 
-use super::{OutputMonitor, RENDER_FLUSH_BYTES};
+use super::{OutputMonitor, RENDER_FLUSH_BYTES, RUNNING_DRAIN_BUDGET_BYTES};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
@@ -38,7 +38,7 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
         Err(failing_once_broken_pipe().into())
     };
     monitor
-        .drain_ready_now_with_budget(256 * 1024, &mut flush)
+        .drain_ready_now_with_budget(RUNNING_DRAIN_BUDGET_BYTES, &mut flush)
         .expect("renderer failure must not fail the running drain");
     assert!(monitor.renderer_failed);
     assert_eq!(monitor.captured_output, "first\n");
@@ -53,7 +53,7 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
         panic!("failed renderer must not be retried")
     };
     monitor
-        .drain_ready_now_with_budget(256 * 1024, &mut no_render)
+        .drain_ready_now_with_budget(RUNNING_DRAIN_BUDGET_BYTES, &mut no_render)
         .expect("second running drain stays Ok without rendering");
     assert!(monitor.renderer_failed);
     assert_eq!(monitor.captured_output, "first\nsecond\n");

@@ -1,135 +1,264 @@
 //! Background job selection and SIGCONT dispatch.
+//!
+//! `execute_bg` is the thin sync bridge over [`background_jobs`]; explicit
+//! operands are all resolved against one reconciled, pre-mutation
+//! active-table snapshot into stable job IDs, then resumed best-effort.
+//! Each selected job transfers through [`finalize_background_resume`], the
+//! single owner of the stopped→running transition and the canonical
+//! completed-job finalizer.
 
 use super::{finalize_background_resume, parse_job_spec};
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
 use nix::sys::signal::{Signal, killpg};
+use nix::unistd::Pid;
 use tracing::{debug, error};
 
 /// Execute the `bg` builtin command.
 ///
-/// Resumes a stopped job in the background.
+/// Resumes stopped jobs in the background. Thin sync bridge over
+/// [`background_jobs`]: this boundary only blocks the calling worker thread
+/// until the async driver completes.
+///
+/// Errors are prefixless; the builtin wrapper owns the final `bg: ` prefix
+/// and core failure paths never write to stderr. Successful resumes still
+/// notify on stdout (`dsh: job N '...' to background`).
 pub fn execute_bg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
     debug!(
         "BG_CMD_START: Starting bg command - wait_jobs.len(): {}, args: {:?}",
         shell.wait_jobs.len(),
         argv
     );
+    super::block_on_job_control_future(background_jobs(shell, ctx, argv))??;
+    Ok(())
+}
 
-    if shell.wait_jobs.is_empty() {
-        debug!("BG_CMD_NO_JOBS: No jobs available for bg command");
-        ctx.write_stdout("bg: there are no suitable jobs")?;
-    } else {
-        let job_spec = argv.get(1).map(|s| s.as_str()).unwrap_or("");
-        debug!("BG_CMD_SPEC: Job specification: '{}'", job_spec);
+/// A single `bg` operand resolved against the pre-mutation active table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BgOperandResolution {
+    /// Operand plus the stable job ID it selected.
+    Target { operand: String, job_id: usize },
+    /// Operand that selected nothing; recorded, never fail-fast.
+    Invalid { operand: String, reason: String },
+}
 
-        debug!("BG_CMD_AVAILABLE_JOBS: Current job list:");
-        for (i, job) in shell.wait_jobs.iter().enumerate() {
-            debug!(
-                "BG_CMD_JOB[{}]: id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
-                i, job.job_id, job.pid, job.state, job.foreground, job.cmd
-            );
+/// One failed `bg` target, kept in operand order for the aggregate error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BgFailure {
+    pub(crate) operand: String,
+    pub(crate) reason: String,
+}
+
+/// A successful background resume, for the stdout notification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BgResumeSuccess {
+    pub(crate) job_id: usize,
+    pub(crate) cmd: String,
+}
+
+/// Split `bg` argv (including `argv[0]`) into jobspec operands.
+///
+/// `bg` owns no options yet, but `--` separates operands so
+/// `bg -- %1 %2` works. `-`/`+` are previous/current job aliases, never
+/// options; any other `-`-prefixed token is a usage error. An empty operand
+/// (`bg ""`) keeps the legacy `fg` behavior and resolves to the current job
+/// downstream via [`parse_job_spec`], rather than becoming a new error case.
+///
+/// Errors are prefixless; the builtin wrapper owns the final `bg: ` prefix.
+pub(crate) fn parse_bg_operands(argv: &[String]) -> Result<Vec<String>> {
+    let mut operands = Vec::new();
+    let mut end_of_options = false;
+    for arg in argv.iter().skip(1) {
+        if end_of_options {
+            operands.push(arg.clone());
+            continue;
         }
+        if arg == "--" {
+            end_of_options = true;
+            continue;
+        }
+        if arg.starts_with('-') && arg != "-" {
+            return Err(anyhow::anyhow!("unsupported option: {arg}"));
+        }
+        operands.push(arg.clone());
+    }
+    Ok(operands)
+}
 
-        let job_index = if job_spec.is_empty() {
-            debug!("BG_CMD_FIND_STOPPED: Looking for most recent stopped job");
-            let found_index = shell
-                .wait_jobs
-                .iter()
-                .enumerate()
-                .rev()
-                .find(|(_, job)| job.has_stopped_process())
-                .map(|(index, job)| {
-                    debug!(
-                        "BG_CMD_FOUND_STOPPED: Found stopped job {} at index {}",
-                        job.job_id, index
-                    );
-                    index
-                });
-            if found_index.is_none() {
-                debug!("BG_CMD_NO_STOPPED: No stopped jobs found");
+/// Resolve every operand against the reconciled active table before any
+/// mutation, mapping each to its stable job ID.
+///
+/// Index-based re-resolution after a remove/requeue would drift (`bg %- %+`
+/// could select the requeued first job twice), so the driver never carries
+/// `wait_jobs` indices across mutations — only these stable IDs.
+pub(crate) fn resolve_bg_targets(
+    operands: &[String],
+    wait_jobs: &[crate::process::Job],
+) -> Vec<BgOperandResolution> {
+    operands
+        .iter()
+        .map(|operand| match parse_job_spec(operand, wait_jobs) {
+            Some(index) => BgOperandResolution::Target {
+                operand: operand.clone(),
+                job_id: wait_jobs[index].job_id,
+            },
+            None => BgOperandResolution::Invalid {
+                operand: operand.clone(),
+                reason: "job not found".to_string(),
+            },
+        })
+        .collect()
+}
+
+/// Select the default `bg` target: the most recent job whose canonical
+/// process tree holds a stopped process. The stale `job.state` summary
+/// never decides; [`crate::process::Job::has_stopped_process`] is authority.
+pub(crate) fn default_bg_target(wait_jobs: &[crate::process::Job]) -> Option<usize> {
+    wait_jobs
+        .iter()
+        .rev()
+        .find(|job| job.has_stopped_process())
+        .map(|job| job.job_id)
+}
+
+/// Resume one job by stable ID, transferring ownership through
+/// [`finalize_background_resume`] on every path.
+///
+/// The job is only removed after its process tree is confirmed stopped; a
+/// missing job, an already-running tree, a missing process group, or a
+/// SIGCONT failure all keep active ownership (requeued through the
+/// finalizer) and report a prefixless error.
+///
+/// `send_cont` injects the SIGCONT delivery so orchestration tests never
+/// send real signals; production passes `killpg(pgid, SIGCONT)`.
+pub(crate) async fn resume_background_job_with<F>(
+    shell: &mut Shell,
+    job_id: usize,
+    send_cont: &mut F,
+) -> Result<BgResumeSuccess>
+where
+    F: FnMut(Pid) -> Result<()>,
+{
+    let Some(index) = shell.wait_jobs.iter().position(|job| job.job_id == job_id) else {
+        return Err(anyhow::anyhow!("job {job_id} is no longer active"));
+    };
+    if !shell.wait_jobs[index].has_stopped_process() {
+        return Err(anyhow::anyhow!("job {job_id} is already running"));
+    }
+
+    let job = shell.wait_jobs.remove(index);
+    debug!(
+        "BG_CMD_JOB_DETAILS: Job details before bg - state: {:?}, pgid: {:?}, pid: {:?}",
+        job.state, job.pgid, job.pid
+    );
+
+    let job_id = job.job_id;
+    let job_cmd = job.cmd.clone();
+    let resume_result: Result<()> = match job.pgid {
+        Some(pgid) => {
+            debug!(
+                "BG_CMD_SIGCONT: Sending SIGCONT to process group {} for job {}",
+                pgid, job.job_id
+            );
+            send_cont(pgid)
+        }
+        None => Err(anyhow::anyhow!("job {} has no process group", job.job_id)),
+    };
+
+    finalize_background_resume(shell, job, resume_result)
+        .await
+        .map_err(|err| {
+            error!("BG_CMD_SIGCONT_ERROR: Failed to resume job {job_id}: {err}");
+            err
+        })?;
+    debug!("BG_CMD_SIGCONT_SUCCESS: SIGCONT sent successfully to job {job_id}");
+    Ok(BgResumeSuccess {
+        job_id,
+        cmd: job_cmd,
+    })
+}
+
+/// Async `bg` driver: parse, reconcile, pre-mutation stable resolution,
+/// best-effort multi-target resume.
+///
+/// A reconciled completed job is never mistaken for a stopped one, and the
+/// canonical finalizer (inside [`finalize_background_resume`]) is the only
+/// path that retires completion into the known-async ledger — `bg` archives
+/// but never consumes ledger status. One failed target never skips or rolls
+/// back the others; any failure still makes the whole invocation non-zero.
+async fn background_jobs(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()> {
+    background_jobs_with(shell, ctx, argv, &mut |pgid| {
+        killpg(pgid, Signal::SIGCONT).map_err(Into::into)
+    })
+    .await
+}
+
+/// Async `bg` driver with an injectable SIGCONT sender (see
+/// [`resume_background_job_with`]); production uses [`background_jobs`].
+pub(crate) async fn background_jobs_with<F>(
+    shell: &mut Shell,
+    ctx: &Context,
+    argv: Vec<String>,
+    send_cont: &mut F,
+) -> Result<()>
+where
+    F: FnMut(Pid) -> Result<()>,
+{
+    let operands = parse_bg_operands(&argv)?;
+    shell.check_job_state().await?;
+
+    if operands.is_empty() {
+        let Some(job_id) = default_bg_target(&shell.wait_jobs) else {
+            if shell.wait_jobs.is_empty() {
+                return Err(anyhow::anyhow!("there are no suitable jobs"));
             }
-            found_index
-        } else {
-            debug!("BG_CMD_PARSE_SPEC: Parsing job specification: '{job_spec}'");
-            parse_job_spec(job_spec, &shell.wait_jobs)
+            return Err(anyhow::anyhow!("no stopped jobs"));
         };
+        let resumed = resume_background_job_with(shell, job_id, send_cont).await?;
+        ctx.write_stdout(&format!(
+            "dsh: job {} '{}' to background",
+            resumed.job_id, resumed.cmd
+        ))
+        .ok();
+        return Ok(());
+    }
 
-        if let Some(index) = job_index {
-            let job = &shell.wait_jobs[index];
-            debug!(
-                "BG_CMD_SELECTED: Selected job {} at index {} for background",
-                job.job_id, index
-            );
-
-            if !job.has_stopped_process() {
-                let error_msg = format!("bg: job {} is already running", job.job_id);
-                debug!("BG_CMD_ALREADY_RUNNING: {error_msg}");
-                ctx.write_stderr(&error_msg)?;
-                return Err(anyhow::anyhow!(error_msg));
+    let resolutions = resolve_bg_targets(&operands, &shell.wait_jobs);
+    let mut failures: Vec<BgFailure> = Vec::new();
+    for resolution in resolutions {
+        match resolution {
+            BgOperandResolution::Invalid { operand, reason } => {
+                failures.push(BgFailure { operand, reason });
             }
-
-            let job = shell.wait_jobs.remove(index);
-            debug!(
-                "BG_CMD_JOB_DETAILS: Job details before bg - state: {:?}, pgid: {:?}, pid: {:?}",
-                job.state, job.pgid, job.pid
-            );
-
-            let job_id = job.job_id;
-            let job_cmd = job.cmd.clone();
-            let had_pgid = job.pgid.is_some();
-            let resume_result: Result<()> = if let Some(pgid) = job.pgid {
-                debug!(
-                    "BG_CMD_SIGCONT: Sending SIGCONT to process group {} for job {}",
-                    pgid, job.job_id
-                );
-                killpg(pgid, Signal::SIGCONT).map_err(Into::into)
-            } else {
-                Err(anyhow::anyhow!(
-                    "bg: job {} has no process group",
-                    job.job_id
-                ))
-            };
-
-            let result = super::block_on_job_control_future(finalize_background_resume(
-                shell,
-                job,
-                resume_result,
-            ))?;
-            match result {
-                Ok(()) => {
-                    debug!(
-                        "BG_CMD_SIGCONT_SUCCESS: SIGCONT sent successfully to job {}",
-                        job_id
-                    );
-                    ctx.write_stdout(&format!("dsh: job {} '{}' to background", job_id, job_cmd))
+            BgOperandResolution::Target { operand, job_id } => {
+                match resume_background_job_with(shell, job_id, send_cont).await {
+                    Ok(resumed) => {
+                        ctx.write_stdout(&format!(
+                            "dsh: job {} '{}' to background",
+                            resumed.job_id, resumed.cmd
+                        ))
                         .ok();
-                    debug!("BG_CMD_SUCCESS: Job moved to background successfully");
-                }
-                Err(err) => {
-                    error!("BG_CMD_SIGCONT_ERROR: Failed to resume job {job_id}: {err}");
-                    let error_msg = if had_pgid {
-                        format!("bg: failed to resume job: {err}")
-                    } else {
-                        err.to_string()
-                    };
-                    ctx.write_stderr(&error_msg).ok();
-                    return Err(err);
+                    }
+                    Err(err) => failures.push(BgFailure {
+                        operand,
+                        reason: err.to_string(),
+                    }),
                 }
             }
-        } else {
-            let error_msg = if job_spec.is_empty() {
-                "bg: no stopped jobs".to_string()
-            } else {
-                format!("bg: job not found: {job_spec}")
-            };
-            debug!("BG_CMD_NOT_FOUND: {error_msg}");
-            ctx.write_stderr(&error_msg)?;
-            return Err(anyhow::anyhow!(error_msg));
         }
     }
-    Ok(())
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        let detail = failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.operand, failure.reason))
+            .collect::<Vec<_>>()
+            .join("; ");
+        Err(anyhow::anyhow!(detail))
+    }
 }
 
 #[cfg(test)]

@@ -1177,3 +1177,590 @@ async fn fg_wait_error_suspends_full_proxy_input_before_requeue() {
     );
     crate::process::job_pty::cleanup_pty_tasks(&mut shell.wait_jobs[0]).await;
 }
+
+// --- `jobs` CLI contract (§43): pure parser ---
+
+fn jobs_argv(args: &[&str]) -> Vec<String> {
+    std::iter::once("jobs".to_string())
+        .chain(args.iter().map(|arg| arg.to_string()))
+        .collect()
+}
+
+#[test]
+fn jobs_parser_accepts_default_and_modes() {
+    use super::list::{JobsInvocation, JobsOutputMode, parse_jobs_invocation};
+
+    assert_eq!(
+        parse_jobs_invocation(&jobs_argv(&[])).expect("parse"),
+        JobsInvocation {
+            mode: JobsOutputMode::Default,
+            jobspec: None,
+        }
+    );
+    for args in [["-l"], ["--list"]] {
+        assert_eq!(
+            parse_jobs_invocation(&jobs_argv(&args)).expect("parse"),
+            JobsInvocation {
+                mode: JobsOutputMode::Long,
+                jobspec: None,
+            },
+            "{args:?}"
+        );
+    }
+    for args in [["-p"], ["--pgid"]] {
+        assert_eq!(
+            parse_jobs_invocation(&jobs_argv(&args)).expect("parse"),
+            JobsInvocation {
+                mode: JobsOutputMode::PgidOnly,
+                jobspec: None,
+            },
+            "{args:?}"
+        );
+    }
+    // Repeated same-mode bundles are allowed.
+    for args in [["-ll"], ["-pp"]] {
+        parse_jobs_invocation(&jobs_argv(&args)).expect("repeated bundle must parse");
+    }
+}
+
+#[test]
+fn jobs_parser_accepts_jobspec_operand() {
+    use super::list::{JobsOutputMode, parse_jobs_invocation};
+
+    let parsed = parse_jobs_invocation(&jobs_argv(&["-p", "%3"])).expect("parse");
+    assert_eq!(parsed.mode, JobsOutputMode::PgidOnly);
+    assert_eq!(parsed.jobspec.as_deref(), Some("%3"));
+
+    let parsed = parse_jobs_invocation(&jobs_argv(&["--", "%3"])).expect("parse");
+    assert_eq!(parsed.mode, JobsOutputMode::Default);
+    assert_eq!(parsed.jobspec.as_deref(), Some("%3"));
+
+    // `-` / `+` are job aliases, never options.
+    for alias in ["-", "+"] {
+        let parsed = parse_jobs_invocation(&jobs_argv(&[alias])).expect("parse");
+        assert_eq!(parsed.jobspec.as_deref(), Some(alias));
+    }
+}
+
+#[test]
+fn jobs_parser_rejects_bad_options_and_extra_operands() {
+    use super::list::parse_jobs_invocation;
+
+    for args in [
+        vec!["--bad"],
+        vec!["-x"],
+        vec!["-z"],
+        vec!["--unknown"],
+        vec!["%1", "%2"],
+        vec!["-l", "-p"],
+        vec!["-lp"],
+        vec!["-pl"],
+    ] {
+        let argv = jobs_argv(&args);
+        let err = parse_jobs_invocation(&argv).expect_err("must reject {args:?}");
+        assert!(
+            !err.to_string().starts_with("jobs:"),
+            "core error must stay prefixless: {err}"
+        );
+    }
+    for args in [vec!["--bad"], vec!["-x"]] {
+        let err = parse_jobs_invocation(&jobs_argv(&args)).expect_err("must reject");
+        assert!(
+            err.to_string().contains("unsupported option"),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+// --- `jobs` rendering (§44): pure helpers ---
+
+#[test]
+fn jobs_default_table_omits_pid_column() {
+    use super::list::render_jobs_default;
+
+    let job = running_tree_job(1);
+    let rendered = render_jobs_default(&[&job]);
+    assert!(rendered.contains("job"), "header missing: {rendered}");
+    assert!(rendered.contains("state"), "header missing: {rendered}");
+    assert!(rendered.contains("command"), "header missing: {rendered}");
+    assert!(
+        !rendered.contains("pid"),
+        "default table must not show pid: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_long_table_includes_pid_column() {
+    use super::list::render_jobs_long;
+
+    let job = running_tree_job(1);
+    let rendered = render_jobs_long(&[&job]);
+    assert!(rendered.contains("pid"), "long table needs pid: {rendered}");
+    assert!(
+        rendered.contains(&job.pid.expect("pid").as_raw().to_string()),
+        "long table needs the pid value: {rendered}"
+    );
+}
+
+#[test]
+fn jobs_pgid_output_is_raw_numbers_without_header() {
+    use super::list::render_jobs_pgids;
+
+    let first = running_tree_job(1);
+    let second = running_tree_job(2);
+    let rendered = render_jobs_pgids(&[&first, &second]).expect("pgids");
+    let lines: Vec<&str> = rendered.lines().collect();
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert!(
+            line.parse::<i32>().is_ok(),
+            "pgid line must be a raw integer: {line:?}"
+        );
+    }
+    assert!(!rendered.contains("job"), "no header: {rendered:?}");
+    assert!(!rendered.contains("pid"), "no header: {rendered:?}");
+
+    assert_eq!(
+        render_jobs_pgids(&[]).expect("empty"),
+        "",
+        "no jobs means empty output, not prose"
+    );
+}
+
+#[test]
+fn jobs_pgid_output_fails_closed_without_process_group() {
+    use super::list::render_jobs_pgids;
+
+    let mut job = running_tree_job(4);
+    job.pgid = None;
+    let err = render_jobs_pgids(&[&job]).expect_err("missing pgid must fail");
+    assert!(
+        err.to_string().contains("has no process group"),
+        "unexpected error: {err}"
+    );
+}
+
+// --- `jobs` jobspec filtering (§45) ---
+
+#[test]
+fn jobs_filters_single_target_through_active_table() {
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    shell.wait_jobs.push(running_tree_job(2));
+    shell.wait_jobs.push(running_tree_job(3));
+    let ctx = test_ctx();
+
+    // `%1` selects only job 1; `%99` is an error, never a silent empty table.
+    super::list::execute_jobs(&mut shell, &ctx, jobs_argv(&["%1"])).expect("filter");
+    let err = super::list::execute_jobs(&mut shell, &ctx, jobs_argv(&["%99"]))
+        .expect_err("unknown jobspec must fail");
+    assert!(
+        err.to_string().contains("job not found"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !err.to_string().starts_with("jobs:"),
+        "core error must stay prefixless: {err}"
+    );
+    // Failed filtering never drops owned jobs.
+    assert_eq!(shell.wait_jobs.len(), 3);
+}
+
+#[test]
+fn jobs_current_previous_aliases_resolve_on_active_table() {
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    shell.wait_jobs.push(running_tree_job(2));
+    shell.wait_jobs.push(running_tree_job(3));
+
+    assert_eq!(parse_job_spec("%1", &shell.wait_jobs), Some(0));
+    assert_eq!(parse_job_spec("%+", &shell.wait_jobs), Some(2));
+    assert_eq!(parse_job_spec("%%", &shell.wait_jobs), Some(2));
+    assert_eq!(parse_job_spec("%-", &shell.wait_jobs), Some(1));
+    assert_eq!(parse_job_spec("-", &shell.wait_jobs), Some(1));
+    assert_eq!(parse_job_spec("+", &shell.wait_jobs), Some(2));
+    assert_eq!(parse_job_spec("%99", &shell.wait_jobs), None);
+}
+
+// --- `bg` stable selection + multi-target orchestration (§46-§54) ---
+
+fn stopped_bg_job(job_id: usize, pid_raw: i32) -> ProcJob {
+    let mut job = ProcJob::new(format!("sleep {job_id}"), getpgrp());
+    job.job_id = job_id;
+    let pid = Pid::from_raw(pid_raw);
+    job.pid = Some(pid);
+    job.pgid = Some(pid);
+    let mut proc = Process::new("sleep".to_string(), vec!["sleep".to_string()]);
+    proc.pid = Some(pid);
+    proc.state = ProcessState::Stopped(pid, NixSignal::SIGTSTP);
+    job.set_process(JobProcess::Command(proc));
+    // Stale summary on purpose: the tree, not `job.state`, decides.
+    job.state = ProcessState::Running;
+    job
+}
+
+fn bg_argv(args: &[&str]) -> Vec<String> {
+    std::iter::once("bg".to_string())
+        .chain(args.iter().map(|arg| arg.to_string()))
+        .collect()
+}
+
+/// `bg %- %+` must pin both operands before any mutation: after job 2 is
+/// removed/resumed/requeued, `%+` still means job 3, never the requeued job 2.
+#[test]
+fn bg_resolves_all_operands_before_mutation() {
+    use super::bg::{BgOperandResolution, resolve_bg_targets};
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    shell.wait_jobs.push(running_tree_job(2));
+    shell.wait_jobs.push(running_tree_job(3));
+
+    assert_eq!(
+        resolve_bg_targets(&["%-".to_string(), "%+".to_string()], &shell.wait_jobs),
+        vec![
+            BgOperandResolution::Target {
+                operand: "%-".to_string(),
+                job_id: 2,
+            },
+            BgOperandResolution::Target {
+                operand: "%+".to_string(),
+                job_id: 3,
+            },
+        ]
+    );
+}
+
+#[test]
+fn bg_operand_parser_accepts_specs_and_separator() {
+    use super::bg::parse_bg_operands;
+
+    assert_eq!(
+        parse_bg_operands(&bg_argv(&["%1", "%2"])).expect("parse"),
+        vec!["%1".to_string(), "%2".to_string()]
+    );
+    assert_eq!(
+        parse_bg_operands(&bg_argv(&["--", "%1"])).expect("parse"),
+        vec!["%1".to_string()]
+    );
+    // `-` is the previous-job alias, not an option.
+    assert_eq!(
+        parse_bg_operands(&bg_argv(&["-"])).expect("parse"),
+        vec!["-".to_string()]
+    );
+    for args in [vec!["-x"], vec!["--bogus"]] {
+        let err = parse_bg_operands(&bg_argv(&args)).expect_err("must reject {args:?}");
+        assert!(
+            err.to_string().contains("unsupported option"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.to_string().starts_with("bg:"),
+            "core error must stay prefixless: {err}"
+        );
+    }
+}
+
+#[test]
+fn bg_resolver_maps_every_legacy_spelling() {
+    use super::bg::{BgOperandResolution, resolve_bg_targets};
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    shell.wait_jobs.push(running_tree_job(2));
+
+    for operand in ["%1", "1", "%+", "+", "%%", "%-", "-"] {
+        let resolved = resolve_bg_targets(&[operand.to_string()], &shell.wait_jobs);
+        assert!(
+            matches!(resolved[..], [BgOperandResolution::Target { .. }]),
+            "{operand} must resolve"
+        );
+    }
+    for operand in ["%999", "foo"] {
+        let resolved = resolve_bg_targets(&[operand.to_string()], &shell.wait_jobs);
+        assert!(
+            matches!(resolved[..], [BgOperandResolution::Invalid { .. }]),
+            "{operand} must not resolve"
+        );
+    }
+}
+
+#[tokio::test]
+async fn bg_multi_target_resumes_every_stopped_job() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(1, 426001));
+    shell.wait_jobs.push(stopped_bg_job(2, 426002));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%1", "%2"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect("both targets resume");
+
+    assert_eq!(seen.len(), 2, "one SIGCONT per target");
+    assert_eq!(shell.wait_jobs.len(), 2);
+    assert!(
+        shell.wait_jobs.iter().all(|job| !job.has_stopped_process()),
+        "both trees must be running"
+    );
+    assert!(
+        shell
+            .wait_jobs
+            .iter()
+            .all(|job| job.state == ProcessState::Running),
+        "both summaries must be running"
+    );
+}
+
+#[tokio::test]
+async fn bg_marker_drift_regression_percent_minus_plus() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(1, 426011));
+    shell.wait_jobs.push(stopped_bg_job(2, 426012));
+    shell.wait_jobs.push(stopped_bg_job(3, 426013));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%-", "%+"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect("both targets resume");
+
+    // Exactly jobs 2 and 3 resumed once each: `%+` never drifts onto the
+    // requeued job 2.
+    seen.sort();
+    assert_eq!(seen, vec![Pid::from_raw(426012), Pid::from_raw(426013)]);
+    for job in &shell.wait_jobs {
+        if job.job_id == 1 {
+            assert!(
+                job.has_stopped_process(),
+                "untargeted job 1 must stay stopped"
+            );
+        } else {
+            assert!(
+                !job.has_stopped_process(),
+                "job {} must be running",
+                job.job_id
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn bg_invalid_first_target_does_not_block_valid_sibling() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(1, 426021));
+    shell.wait_jobs.push(stopped_bg_job(2, 426022));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    let err = background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%99", "%2"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect_err("overall status must be non-zero");
+    assert!(
+        err.to_string().contains("%99"),
+        "aggregate error keeps operand order: {err}"
+    );
+    assert_eq!(
+        seen,
+        vec![Pid::from_raw(426022)],
+        "valid sibling still resumed"
+    );
+    assert!(
+        !shell
+            .wait_jobs
+            .iter()
+            .find(|job| job.job_id == 2)
+            .expect("job 2 owned")
+            .has_stopped_process()
+    );
+}
+
+#[tokio::test]
+async fn bg_missing_pgid_sibling_failure_keeps_ownership() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    let mut no_pgid = stopped_bg_job(1, 426031);
+    no_pgid.pgid = None;
+    shell.wait_jobs.push(no_pgid);
+    shell.wait_jobs.push(stopped_bg_job(2, 426032));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    let err = background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%1", "%2"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect_err("overall status must be non-zero");
+    assert!(
+        err.to_string().contains("has no process group"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(seen, vec![Pid::from_raw(426032)]);
+    // Job 1 stays owned and stopped; job 2 resumed.
+    assert_eq!(shell.wait_jobs.len(), 2);
+    let first = shell
+        .wait_jobs
+        .iter()
+        .find(|job| job.job_id == 1)
+        .expect("job 1 owned");
+    assert!(first.has_stopped_process(), "job 1 must stay stopped");
+    let second = shell
+        .wait_jobs
+        .iter()
+        .find(|job| job.job_id == 2)
+        .expect("job 2 owned");
+    assert!(!second.has_stopped_process());
+}
+
+#[tokio::test]
+async fn bg_running_sibling_failure_still_resumes_stopped_target() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(running_tree_job(1));
+    shell.wait_jobs.push(stopped_bg_job(2, 426042));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    let err = background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%1", "%2"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect_err("overall status must be non-zero");
+    assert!(
+        err.to_string().contains("already running"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(seen, vec![Pid::from_raw(426042)]);
+    assert_eq!(shell.wait_jobs.len(), 2, "both jobs stay owned");
+}
+
+#[tokio::test]
+async fn bg_duplicate_operand_second_hit_is_already_running() {
+    use super::bg::background_jobs_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(2, 426052));
+    let ctx = test_ctx();
+
+    let mut seen = Vec::new();
+    let err = background_jobs_with(
+        &mut shell,
+        &ctx,
+        bg_argv(&["%2", "%2"]),
+        &mut |pgid: Pid| {
+            seen.push(pgid);
+            Ok(())
+        },
+    )
+    .await
+    .expect_err("duplicate operand must not silently dedupe");
+    assert!(
+        err.to_string().contains("already running"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(seen, vec![Pid::from_raw(426052)], "exactly one SIGCONT");
+}
+
+#[test]
+fn bg_default_selection_prefers_most_recent_stopped_tree() {
+    use super::bg::default_bg_target;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(1, 426061));
+    shell.wait_jobs.push(running_tree_job(2));
+    shell.wait_jobs.push(stopped_bg_job(3, 426063));
+    assert_eq!(default_bg_target(&shell.wait_jobs), Some(3));
+
+    // Stale `job.state` never decides: tree Stopped wins over the summary.
+    let mut stale = stopped_bg_job(4, 426064);
+    stale.state = ProcessState::Stopped(Pid::from_raw(9), NixSignal::SIGSTOP);
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stale);
+    assert_eq!(default_bg_target(&shell.wait_jobs), Some(4));
+}
+
+#[tokio::test]
+async fn bg_no_stopped_job_is_error_not_success() {
+    use super::bg::background_jobs_with;
+
+    let ctx = test_ctx();
+    let mut send = |_: Pid| Ok(());
+
+    let mut empty = test_shell();
+    let err = background_jobs_with(&mut empty, &ctx, bg_argv(&[]), &mut send)
+        .await
+        .expect_err("empty table must be non-zero");
+    assert!(
+        !err.to_string().starts_with("bg:"),
+        "core error stays prefixless: {err}"
+    );
+
+    let mut running = test_shell();
+    running.wait_jobs.push(running_tree_job(1));
+    background_jobs_with(&mut running, &ctx, bg_argv(&[]), &mut send)
+        .await
+        .expect_err("no stopped tree must be non-zero");
+    assert_eq!(running.wait_jobs.len(), 1, "running job stays owned");
+}
+
+#[tokio::test]
+async fn bg_sigcont_failure_keeps_active_ownership_through_finalizer() {
+    use super::bg::resume_background_job_with;
+
+    let mut shell = test_shell();
+    shell.wait_jobs.push(stopped_bg_job(5, 426071));
+
+    let err = resume_background_job_with(&mut shell, 5, &mut |_: Pid| {
+        Err(anyhow::anyhow!("SIGCONT failed"))
+    })
+    .await
+    .expect_err("SIGCONT failure must propagate");
+    assert!(err.to_string().contains("SIGCONT failed"));
+
+    assert_eq!(shell.wait_jobs.len(), 1, "active job must be requeued");
+    assert!(shell.wait_jobs[0].has_stopped_process());
+}

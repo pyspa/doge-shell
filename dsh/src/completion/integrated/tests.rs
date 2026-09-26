@@ -459,9 +459,14 @@ async fn shell_job_completion_tracks_live_job_snapshot() {
         .iter()
         .map(|candidate| candidate.text.as_str())
         .collect::<Vec<_>>();
-    assert!(texts.contains(&"%+"));
-    assert!(texts.contains(&"%3"));
-    assert!(!texts.contains(&"%-"));
+    // Single active job is both current and previous: all four spellings
+    // coexist (`%` itself stays a valid token, not a candidate).
+    for expected in ["%+", "%%", "%-", "%3"] {
+        assert!(
+            texts.contains(&expected),
+            "missing single-job candidate {expected}: {texts:?}"
+        );
+    }
     assert!(!texts.contains(&"%1"));
     assert!(!texts.contains(&"%2"));
 }

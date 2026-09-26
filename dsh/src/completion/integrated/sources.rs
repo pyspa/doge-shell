@@ -2,6 +2,7 @@
 //! project and bookmark commands, directories, MCP entries, the package-manager
 //! and task-runner scripts, and the external/fish fallbacks.
 use super::*;
+use crate::shell::job_selection::ActiveJobSelection;
 
 impl IntegratedCompletionEngine {
     pub(super) fn collect_shell_job_candidates(
@@ -10,8 +11,11 @@ impl IntegratedCompletionEngine {
     ) -> Vec<EnhancedCandidate> {
         let jobs = self.shell_jobs.read();
         let mut candidates = Vec::with_capacity(jobs.len() + 2);
+        let selection = ActiveJobSelection::for_len(jobs.len());
 
-        if let Some((_, command, state)) = jobs.last() {
+        if let Some(index) = selection.current()
+            && let Some((_, command, state)) = jobs.get(index)
+        {
             candidates.push(EnhancedCandidate {
                 text: "%+".to_string(),
                 description: Some(format!("current job: {command} ({state})")),
@@ -25,8 +29,8 @@ impl IntegratedCompletionEngine {
                 priority: 159,
             });
         }
-        if jobs.len() >= 2
-            && let Some((_, command, state)) = jobs.get(jobs.len() - 2)
+        if let Some(index) = selection.previous()
+            && let Some((_, command, state)) = jobs.get(index)
         {
             candidates.push(EnhancedCandidate {
                 text: "%-".to_string(),

@@ -24,11 +24,16 @@ pub(crate) fn canonical_shell_var_name(key: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// Whether `name` is a valid `read NAME` target.
+/// Whether `name` is a valid simple shell-variable assignment target.
+///
+/// Shared by:
+/// - `read NAME`
+/// - `wait -p NAME`
 ///
 /// Minimum contract shared with parser assignment names:
 /// `[A-Za-z_][A-Za-z0-9_]*`. Legacy `set`/`export` keep their own
-/// compatibility behavior; this is enforced only on the `read` path.
+/// compatibility behavior; this is enforced only on the `read`/`wait -p`
+/// paths.
 pub(crate) fn is_valid_shell_var_name(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {

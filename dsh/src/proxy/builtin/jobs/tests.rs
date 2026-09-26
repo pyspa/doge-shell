@@ -586,19 +586,66 @@ fn wait_unknown_job_spec_reports_127() {
     assert_eq!(status, 127);
 }
 
-/// `wait -p`/`-f` stay scope-out: usage error, not a silent fallback.
+/// `wait -p VAR` is supported: a completed ledger status is served and
+/// the canonical associated PID is published; a bare `wait -p VAR`
+/// consumes all waits, reports 0, and leaves the destination unset.
+/// Invalid variable names and a missing `-p` value stay usage errors.
 #[test]
-fn wait_p_and_f_options_stay_unsupported() {
+fn wait_accepts_p_option() {
+    let ctx = test_ctx();
+
+    let mut shell = test_shell();
+    let pid = Pid::from_raw(424270);
+    shell.known_async.register(pid, 3);
+    assert!(shell.known_async.mark_completed(pid, 5));
+    let status = super::wait::execute_wait(&mut shell, &ctx, wait_argv(&["-p", "done", "424270"]))
+        .expect("wait executes");
+    assert_eq!(status, 5);
+    assert_eq!(
+        shell.environment.read().lookup_variable("done").as_deref(),
+        Some("424270")
+    );
+
+    // Bare `wait -p VAR` publishes nothing.
+    let mut shell = test_shell();
+    shell
+        .environment
+        .write()
+        .set_shell_var("done".to_string(), "old".to_string());
+    let status = super::wait::execute_wait(&mut shell, &ctx, wait_argv(&["-p", "done"]))
+        .expect("wait executes");
+    assert_eq!(status, 0);
+    assert_eq!(
+        shell.environment.read().lookup_variable("done"),
+        None,
+        "bare wait -p must leave the destination unset"
+    );
+
+    // Missing value and invalid names stay usage errors, with `wait:`-
+    // prefixed diagnostics (the builtin wrapper prints the `Err` once).
+    for (args, expected) in [
+        (vec!["-p"], "wait: option -p requires a variable name"),
+        (vec!["-np"], "wait: option -p requires a variable name"),
+        (vec!["-p", "123bad"], "wait: invalid variable name: 123bad"),
+    ] {
+        let argv: Vec<String> = std::iter::once("wait".to_string())
+            .chain(args.iter().map(|arg| arg.to_string()))
+            .collect();
+        let err = super::wait::execute_wait(&mut shell, &ctx, argv).expect_err("must reject");
+        assert!(
+            err.to_string().contains(expected),
+            "unexpected error: {err}"
+        );
+    }
+}
+
+/// `wait -f` stays scope-out: usage error, not a silent fallback.
+#[test]
+fn wait_rejects_f_option() {
     let mut shell = test_shell();
     let ctx = test_ctx();
 
-    for args in [
-        vec!["-p", "done"],
-        vec!["-f"],
-        vec!["-n", "-p", "done"],
-        vec!["-np"],
-        vec!["-nx"],
-    ] {
+    for args in [vec!["-f"], vec!["-nx"]] {
         let argv: Vec<String> = std::iter::once("wait".to_string())
             .chain(args.iter().map(|arg| arg.to_string()))
             .collect();

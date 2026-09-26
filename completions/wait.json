@@ -5,6 +5,14 @@
     {
       "short": "-n",
       "description": "Wait for the next background job to terminate"
+    },
+    {
+      "short": "-p",
+      "description": "Assign the completed job's PID to a shell variable",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
     }
   ],
   "arguments": [

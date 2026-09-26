@@ -1,7 +1,10 @@
 //! The `wait` builtin: wait for background jobs and report their status.
 //!
 //! Operands are PIDs or `%`-prefixed job specs, with `wait -n` waiting for
-//! the next completion among its targets. Unlike `jobs`/`fg`/`bg`, `wait` cannot travel through
+//! the next completion among its targets and `wait -p VAR` publishing the
+//! completed job's canonical associated PID to a shell variable
+//! (`wait -n -p VAR` publishes the selected completion's PID). `wait -f`
+//! remains out of scope and is rejected. Unlike `jobs`/`fg`/`bg`, `wait` cannot travel through
 //! [`CoreShellAction`](super::CoreShellAction) — its result is the waited
 //! child's exit status itself, not just success or failure. The handler
 //! below is a thin wrapper over
@@ -14,7 +17,7 @@ use dsh_types::{Context, ExitStatus};
 
 /// Built-in wait command description
 pub fn description() -> &'static str {
-    "Wait for background jobs by PID or job specification"
+    "Wait for background jobs by PID or job specification (-n for next, -p VAR for PID assignment)"
 }
 
 /// Built-in wait command implementation.

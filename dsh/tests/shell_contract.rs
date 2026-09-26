@@ -102,6 +102,7 @@ contract_test!(contract_expansion, "expansion.toml");
 contract_test!(contract_substitution, "substitution.toml");
 contract_test!(contract_process_substitution, "process-substitution.toml");
 contract_test!(contract_background, "background.toml");
+contract_test!(contract_wait, "wait.toml");
 contract_test!(contract_smart_pipe, "smart-pipe.toml");
 contract_test!(contract_interactive, "interactive.toml");
 contract_test!(contract_command_search, "command-search.toml");

@@ -1,0 +1,36 @@
+version = 1
+
+# `wait -p VAR` identity propagation: the destination holds the canonical
+# associated PID only when the invocation's returned status came from a real
+# known completion. Unknown targets leave it unset even though both paths
+# report status 127.
+
+[[case]]
+id = "wait.p-assigns-associated-pid"
+class = "dogesh"
+mode = "command"
+script = '{{FALSE}} & p=$!; wait -p done $p; rc=$?; test "$done" = "$p" && echo MATCH; echo STATUS:$rc'
+
+[case.expect]
+status = 0
+stdout_contains = ["MATCH", "STATUS:1"]
+
+[[case]]
+id = "wait.p-unknown-target-leaves-variable-unset"
+class = "dogesh"
+mode = "command"
+script = "done=old; wait -p done 999999; rc=$?; test \"$done\" = '$done' && echo UNSET; echo STATUS:$rc"
+
+[case.expect]
+status = 0
+stdout_contains = ["UNSET", "STATUS:127"]
+
+[[case]]
+id = "wait.np-assigns-selected-pid"
+class = "dogesh"
+mode = "command"
+script = '{{FALSE}} & p=$!; wait -n -p done $p; rc=$?; test "$done" = "$p" && echo MATCH; echo STATUS:$rc'
+
+[case.expect]
+status = 0
+stdout_contains = ["MATCH", "STATUS:1"]

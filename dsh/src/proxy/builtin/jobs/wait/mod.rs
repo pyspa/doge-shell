@@ -2,18 +2,21 @@
 //!
 //! Operands are PIDs or `%`-prefixed job specs (`wait`, `wait PID`,
 //! `wait PID1 PID2 ...`, `wait %1`, `wait %+`, `wait %-`, `wait %%`), plus
-//! `wait -n` to wait for the next completion among a target set. Bare
-//! numbers are always PIDs here, never job numbers: `wait 1` means PID 1,
-//! only `wait %1` means job 1. `wait -p`/`-f` stay out of scope and are
-//! rejected. Statuses come from `Job::final_exit_status()` using the frozen
-//! pipeline policy via the completed-job finalizer; the ledger is consumed
-//! only here, never by reconciliation (`jobs`, notices, `fg`/`bg`).
+//! `wait -n` to wait for the next completion among a target set and
+//! `wait -p VAR` to publish the completed job's canonical associated PID to
+//! a shell variable. Bare numbers are always PIDs here, never job numbers:
+//! `wait 1` means PID 1, only `wait %1` means job 1. `wait -f` remains out
+//! of scope and is rejected. Statuses come from `Job::final_exit_status()`
+//! using the frozen pipeline policy via the completed-job finalizer; the
+//! ledger is consumed only here, never by reconciliation (`jobs`, notices,
+//! `fg`/`bg`).
 //!
 //! `wait -n` never uses `waitpid(-1)`: it polls only the canonical PID set
 //! of its resolved targets, so unrelated children (process substitution
 //! helpers, detached children, agent children) keep their statuses.
 
 use super::{JobSpec, parse_percent_job_spec, resolve_active_job_spec};
+use crate::environment::variables::is_valid_shell_var_name;
 use crate::process::job_wait::{
     JobWaitOutcome, WaitBackoff, check_background_all_output, wait_for_termination,
 };
@@ -26,11 +29,19 @@ use nix::unistd::Pid;
 use std::collections::HashSet;
 use tracing::debug;
 
-/// Outcome of waiting for a single PID.
+/// Outcome of waiting for a single PID, identity-aware.
+///
+/// A real child that exits 127 and an unknown PID both surface shell status
+/// 127, but only the former carries a [`WaitCompletion`]: `-p` assignment
+/// must be able to tell them apart without guessing from the status code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WaitOneOutcome {
-    /// The PID's status (a waited child, a retained completed status, or
-    /// 127 for an unknown PID).
-    Status(i32),
+    /// A known child/job produced this status; carries its identity.
+    Completed(WaitCompletion),
+    /// The wait command reports this status, but no real child completion
+    /// produced it (unknown PID, invalid operand, unknown jobspec, stale
+    /// `Active` ledger entry).
+    NoCompletion(i32),
     /// `SIGINT` arrived mid-wait: the job was requeued untouched and the
     /// caller must report 130 without touching further operands.
     Interrupted,
@@ -54,9 +65,8 @@ enum WaitOperandError {
 
 /// A `wait` operand resolved to the canonical PID the wait layer owns.
 ///
-/// `job_id`/`source` ride along so a future `wait -p` can report *which*
-/// job finished without a new lookup path; no `Environment` writes happen
-/// here.
+/// `wait -p` publishes the canonical associated PID. `job_id`/`source`
+/// remain internal identity metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ResolvedWaitTarget {
     pid: Pid,
@@ -71,8 +81,8 @@ enum WaitTargetSource {
     JobSpec,
 }
 
-/// One completed wait-any result: status plus the identity metadata a
-/// future `wait -p VAR` needs. Never just a bare status code.
+/// One completed wait-any result: status plus the identity metadata
+/// `wait -p VAR` publishes. Never just a bare status code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct WaitCompletion {
     pid: Pid,
@@ -91,10 +101,23 @@ enum WaitNextOutcome {
     NoTargets,
 }
 
-/// The parsed `wait` command line: `-n` mode plus raw operand strings.
+/// The parsed `wait` command line: `-n` mode, `-p` destination, operands.
 struct WaitInvocation {
     next: bool,
+    assign_to: Option<String>,
     operands: Vec<String>,
+}
+
+/// One `wait` invocation's user-visible result: the `$?` status plus the
+/// identity of the known completion that actually produced it, if any.
+///
+/// `completion` is the final returned status's source only: a later
+/// `NoCompletion` resets it to `None`, so `wait -p` never publishes a stale
+/// PID when the invocation as a whole ends on an unknown target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WaitCommandOutcome {
+    status: i32,
+    completion: Option<WaitCompletion>,
 }
 
 /// `wait` entry point: bridge the async wait onto a runtime shared with
@@ -106,42 +129,125 @@ pub fn execute_wait(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Resu
 /// Async body of `wait`.
 async fn wait_async(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<i32> {
     let invocation = parse_wait_invocation(&argv)?;
-    if invocation.next {
-        return wait_next_command(shell, ctx, &invocation.operands).await;
-    }
-    if invocation.operands.is_empty() {
-        // Bare `wait`: every known async PID, status always 0 (individual
-        // child failures do not become the builtin's status). All entries
-        // are consumed.
-        for pid in shell.known_async.known_pids() {
-            match wait_one(shell, ctx, pid).await? {
-                WaitOneOutcome::Status(_) => {}
-                WaitOneOutcome::Interrupted => return Ok(130),
-            }
-        }
-        return Ok(0);
-    }
-    // Sequential `wait`: each operand in order, the last status wins.
-    // Unknown targets report 127 without stopping the remaining operands.
-    let mut last_status = 0;
-    for operand in &invocation.operands {
-        match wait_operand(shell, ctx, operand).await? {
-            WaitOneOutcome::Status(status) => last_status = status,
-            WaitOneOutcome::Interrupted => return Ok(130),
-        }
-    }
-    Ok(last_status)
+    prepare_wait_assignment(shell, invocation.assign_to.as_deref())?;
+    let outcome = if invocation.next {
+        wait_next_command(shell, ctx, &invocation.operands).await?
+    } else if invocation.operands.is_empty() {
+        wait_bare_command(shell, ctx).await?
+    } else {
+        wait_sequential_command(shell, ctx, &invocation.operands).await?
+    };
+    publish_wait_assignment(shell, invocation.assign_to.as_deref(), outcome.completion);
+    Ok(outcome.status)
 }
 
-/// Parse the `wait` command line: `-n` mode, `--` end-of-options, operands.
+/// Bare `wait`: every known async PID, status always 0 (individual child
+/// failures do not become the builtin's status). All entries are consumed.
+/// Never publishes an identity: with `-p` and no operands the destination
+/// stays unset.
+async fn wait_bare_command(shell: &mut Shell, ctx: &Context) -> Result<WaitCommandOutcome> {
+    for pid in shell.known_async.known_pids() {
+        match wait_one(shell, ctx, pid).await? {
+            WaitOneOutcome::Completed(_) | WaitOneOutcome::NoCompletion(_) => {}
+            WaitOneOutcome::Interrupted => {
+                return Ok(WaitCommandOutcome {
+                    status: 130,
+                    completion: None,
+                });
+            }
+        }
+    }
+    Ok(WaitCommandOutcome {
+        status: 0,
+        completion: None,
+    })
+}
+
+/// Sequential `wait`: each operand in order, the last status wins.
+/// Unknown targets report 127 without stopping the remaining operands.
+/// Only the identity behind the final returned status is published.
+async fn wait_sequential_command(
+    shell: &mut Shell,
+    ctx: &Context,
+    operands: &[String],
+) -> Result<WaitCommandOutcome> {
+    let mut result = WaitCommandOutcome {
+        status: 0,
+        completion: None,
+    };
+    for operand in operands {
+        match wait_operand(shell, ctx, operand).await? {
+            WaitOneOutcome::Completed(completion) => {
+                result.status = completion.status;
+                result.completion = Some(completion);
+            }
+            WaitOneOutcome::NoCompletion(status) => {
+                result.status = status;
+                result.completion = None;
+            }
+            WaitOneOutcome::Interrupted => {
+                return Ok(WaitCommandOutcome {
+                    status: 130,
+                    completion: None,
+                });
+            }
+        }
+    }
+    Ok(result)
+}
+
+/// Validate (already done by the parser; re-checked here so direct callers
+/// cannot skip it) and logically `unset` the `-p` destination before
+/// waiting. Uses [`Environment::unset_shell_var`](crate::environment::Environment::unset_shell_var):
+/// value and export bit are both removed, matching `unset VAR` semantics.
+fn prepare_wait_assignment(shell: &mut Shell, assign_to: Option<&str>) -> Result<()> {
+    let Some(name) = assign_to else {
+        return Ok(());
+    };
+    if !is_valid_shell_var_name(name) {
+        anyhow::bail!("wait: invalid variable name: {name}");
+    }
+    shell.environment.write().unset_shell_var(name);
+    Ok(())
+}
+
+/// Publish the invocation's final identity exactly once, after the outcome
+/// is selected — never incrementally mid-loop, so an interrupt leaves the
+/// destination unset rather than holding a stale PID. `None` publishes
+/// nothing (unknown/stale target, bare wait, interrupt, no targets).
+fn publish_wait_assignment(
+    shell: &mut Shell,
+    assign_to: Option<&str>,
+    completion: Option<WaitCompletion>,
+) {
+    let (Some(name), Some(completed)) = (assign_to, completion) else {
+        return;
+    };
+    shell
+        .environment
+        .write()
+        .set_shell_var(name.to_string(), completed.pid.as_raw().to_string());
+}
+
+/// Parse the `wait` command line: `-n` mode, `-p VAR` destination, `--`
+/// end-of-options, operands.
 ///
-/// `-p`/`-f` and any other `-` option stay rejected (usage error, exit 1
-/// via the builtin wrapper). A lone `-` is an operand, never an option.
+/// Bundled short flags (`-nn`, `-np VAR`) work bash/getopt-like: every flag
+/// must be a supported one. `-p` takes a value (the next argv element, or
+/// the remainder of the same element); a repeated `-p` overwrites the
+/// previous destination. `-f` and any other `-` option stay rejected (usage
+/// error, exit 1 via the builtin wrapper). A lone `-` is an operand, never
+/// an option.
 fn parse_wait_invocation(argv: &[String]) -> Result<WaitInvocation> {
     let mut next = false;
+    let mut assign_to: Option<String> = None;
     let mut operands = Vec::new();
     let mut end_of_options = false;
-    for operand in argv.get(1..).unwrap_or(&[]) {
+    let rest = argv.get(1..).unwrap_or(&[]);
+    let mut index = 0;
+    while index < rest.len() {
+        let operand = &rest[index];
+        index += 1;
         if !end_of_options && operand == "--" {
             end_of_options = true;
             continue;
@@ -150,19 +256,55 @@ fn parse_wait_invocation(argv: &[String]) -> Result<WaitInvocation> {
             && operand != "-"
             && let Some(flags) = operand.strip_prefix('-')
         {
-            // Bundled short flags (`-nn`) like bash getopt: every flag
-            // must be a supported one. Anything else (`-p`, `-f`, `-np`,
-            // `-x`) stays a usage error.
-            if !flags.is_empty() && flags.chars().all(|flag| flag == 'n') {
-                next = true;
-                continue;
+            // `flags` is never empty here: `operand != "-"` above rules out
+            // the only input `strip_prefix` maps to `Some("")`.
+            let chars: Vec<char> = flags.chars().collect();
+            let mut flag_index = 0;
+            while flag_index < chars.len() {
+                match chars[flag_index] {
+                    'n' => {
+                        next = true;
+                        flag_index += 1;
+                    }
+                    'p' => {
+                        let trailing: String = chars[flag_index + 1..].iter().collect();
+                        let value = if !trailing.is_empty() {
+                            trailing
+                        } else {
+                            match rest.get(index) {
+                                Some(next_arg) => {
+                                    index += 1;
+                                    next_arg.clone()
+                                }
+                                None => {
+                                    anyhow::bail!("wait: option -p requires a variable name")
+                                }
+                            }
+                        };
+                        if !is_valid_shell_var_name(&value) {
+                            anyhow::bail!("wait: invalid variable name: {value}")
+                        }
+                        assign_to = Some(value);
+                        flag_index = chars.len();
+                    }
+                    _ => {
+                        // No pre-bail write: the builtin wrapper prints the
+                        // `Err` once.
+                        anyhow::bail!("wait: unsupported option: {operand}")
+                    }
+                }
             }
-            // No pre-bail write: the builtin wrapper prints the `Err` once.
-            anyhow::bail!("wait: unsupported option: {operand}")
+            // Every flag above was consumed as an option (`-n` and/or
+            // `-p VAR`); nothing is pushed as an operand.
+            continue;
         }
         operands.push(operand.clone());
     }
-    Ok(WaitInvocation { next, operands })
+    Ok(WaitInvocation {
+        next,
+        assign_to,
+        operands,
+    })
 }
 
 /// Parse one operand's syntax: `%`-prefixed job spec or decimal PID.
@@ -234,58 +376,103 @@ fn resolve_wait_operand(shell: &Shell, operand: &WaitOperand) -> Option<Resolved
 }
 
 /// Wait for one operand: usage errors bail, invalid syntax and unknown
-/// targets report 127 and let the remaining operands run.
+/// targets report 127 and let the remaining operands run. Never invents a
+/// [`WaitCompletion`] for a PID this shell does not own.
 async fn wait_operand(shell: &mut Shell, ctx: &Context, operand: &str) -> Result<WaitOneOutcome> {
     let parsed = match parse_wait_operand(operand) {
         Ok(parsed) => parsed,
         Err(WaitOperandError::Invalid) => {
             let _ = ctx.write_stderr(&format!("wait: '{operand}': not a pid or job spec"));
-            return Ok(WaitOneOutcome::Status(127));
+            return Ok(WaitOneOutcome::NoCompletion(127));
         }
     };
     match resolve_wait_operand(shell, &parsed) {
         Some(target) => wait_target(shell, ctx, target).await,
         None => {
             let _ = ctx.write_stderr(&format!("wait: '{operand}': no such job"));
-            Ok(WaitOneOutcome::Status(127))
+            Ok(WaitOneOutcome::NoCompletion(127))
         }
     }
 }
 
-/// Wait for one resolved target: an active table job is taken and
-/// termination-waited; an already-completed ledger entry needs no OS wait;
-/// anything else is unknown (127) and never touches `waitpid`.
+/// Wait for one resolved target: the canonical single-target path.
+///
+/// An active table job is taken and termination-waited; an
+/// already-completed ledger entry needs no OS wait; anything else is
+/// unknown (127) and never touches `waitpid`. Ledger metadata is captured
+/// before consuming: after `consume_completed` the entry is gone and
+/// `job_id_for_pid` can no longer answer.
 async fn wait_target(
     shell: &mut Shell,
     ctx: &Context,
     target: ResolvedWaitTarget,
 ) -> Result<WaitOneOutcome> {
-    wait_one(shell, ctx, target.pid).await
-}
-
-/// Wait for one PID: an active table job is taken and terminated-waited; an
-/// already-completed ledger entry needs no OS wait; anything else is
-/// unknown (127) and never touches `waitpid`.
-async fn wait_one(shell: &mut Shell, ctx: &Context, pid: Pid) -> Result<WaitOneOutcome> {
-    if let Some(index) = shell.wait_jobs.iter().position(|job| job.pid == Some(pid)) {
+    if let Some(index) = shell
+        .wait_jobs
+        .iter()
+        .position(|job| job.pid == Some(target.pid))
+    {
         return wait_active_job(shell, index).await;
     }
-    if let Some(exit_status) = shell.known_async.consume_completed(pid) {
-        debug!("wait: pid {pid} already completed with status {exit_status}");
-        return Ok(WaitOneOutcome::Status(exit_status));
+    if shell.known_async.completed_status(target.pid).is_some() {
+        let job_id = target
+            .job_id
+            .or_else(|| shell.known_async.job_id_for_pid(target.pid));
+        let status = shell
+            .known_async
+            .consume_completed(target.pid)
+            .expect("completed status peeked above must still be consumable");
+        debug!(
+            "wait: pid {} already completed with status {status}",
+            target.pid
+        );
+        return Ok(WaitOneOutcome::Completed(WaitCompletion {
+            pid: target.pid,
+            job_id,
+            status,
+        }));
     }
-    if shell.known_async.remove(pid).is_some() {
+    if shell.known_async.remove(target.pid).is_some() {
         // Active ledger entry but no table job: stale ownership that can
         // never complete. Drop it rather than blocking forever.
-        debug!("wait: pid {pid} has a stale active ledger entry, dropping it");
+        debug!(
+            "wait: pid {} has a stale active ledger entry, dropping it",
+            target.pid
+        );
     }
-    let _ = ctx.write_stderr(&format!("wait: '{pid}': not a child of this shell"));
-    Ok(WaitOneOutcome::Status(127))
+    let _ = ctx.write_stderr(&format!(
+        "wait: '{}': not a child of this shell",
+        target.pid
+    ));
+    Ok(WaitOneOutcome::NoCompletion(127))
+}
+
+/// Wait for one PID: builds the target metadata, then delegates to the
+/// canonical [`wait_target`] path so bare `wait` shares the same
+/// active/completed/unknown semantics.
+async fn wait_one(shell: &mut Shell, ctx: &Context, pid: Pid) -> Result<WaitOneOutcome> {
+    let job_id = shell
+        .wait_jobs
+        .iter()
+        .find(|job| job.pid == Some(pid))
+        .map(|job| job.job_id)
+        .or_else(|| shell.known_async.job_id_for_pid(pid));
+    wait_target(
+        shell,
+        ctx,
+        ResolvedWaitTarget {
+            pid,
+            job_id,
+            source: WaitTargetSource::Pid,
+        },
+    )
+    .await
 }
 
 /// Termination-wait a table job under temporary ownership (`fg` model).
 async fn wait_active_job(shell: &mut Shell, index: usize) -> Result<WaitOneOutcome> {
     let mut job = shell.wait_jobs.remove(index);
+    let pid_hint = job.pid;
     match wait_for_termination(&mut job).await {
         Ok(JobWaitOutcome::Completed) => {
             let job = finalize_completed_job(shell, job, FinalizeDrain::ToEof).await?;
@@ -294,7 +481,11 @@ async fn wait_active_job(shell: &mut Shell, index: usize) -> Result<WaitOneOutco
             })?;
             // Archive first, then consume: the status reaches the caller
             // exactly once.
-            let raw_pid = job.pid.map(|pid| pid.as_raw()).unwrap_or(-1);
+            let pid = job
+                .pid
+                .or(pid_hint)
+                .expect("active wait target always has an associated PID");
+            let raw_pid = pid.as_raw();
             let consumed = job
                 .pid
                 .and_then(|pid| shell.known_async.consume_completed(pid));
@@ -302,7 +493,11 @@ async fn wait_active_job(shell: &mut Shell, index: usize) -> Result<WaitOneOutco
                 "wait: pid {raw_pid} completed with status {status} (ledger consumed: {})",
                 consumed.is_some()
             );
-            Ok(WaitOneOutcome::Status(status))
+            Ok(WaitOneOutcome::Completed(WaitCompletion {
+                pid,
+                job_id: Some(job.job_id),
+                status,
+            }))
         }
         Ok(JobWaitOutcome::Stopped) => {
             // Termination waits never end stopped; reaching here means the
@@ -341,18 +536,34 @@ async fn wait_active_job(shell: &mut Shell, index: usize) -> Result<WaitOneOutco
 
 /// `wait -n` entry: resolve the target set, then wait for exactly one
 /// completion among it.
-async fn wait_next_command(shell: &mut Shell, ctx: &Context, operands: &[String]) -> Result<i32> {
+async fn wait_next_command(
+    shell: &mut Shell,
+    ctx: &Context,
+    operands: &[String],
+) -> Result<WaitCommandOutcome> {
     let targets = resolve_wait_next_targets(shell, ctx, operands);
     if targets.is_empty() {
         // No waitable target: unlike bare `wait` (which reports 0 with no
         // known jobs), `wait -n` reports 127. Unknown-operand diagnostics
         // were already printed during resolution.
-        return Ok(127);
+        return Ok(WaitCommandOutcome {
+            status: 127,
+            completion: None,
+        });
     }
     match wait_next(shell, targets).await? {
-        WaitNextOutcome::Completed(completion) => Ok(completion.status),
-        WaitNextOutcome::Interrupted => Ok(130),
-        WaitNextOutcome::NoTargets => Ok(127),
+        WaitNextOutcome::Completed(completion) => Ok(WaitCommandOutcome {
+            status: completion.status,
+            completion: Some(completion),
+        }),
+        WaitNextOutcome::Interrupted => Ok(WaitCommandOutcome {
+            status: 130,
+            completion: None,
+        }),
+        WaitNextOutcome::NoTargets => Ok(WaitCommandOutcome {
+            status: 127,
+            completion: None,
+        }),
     }
 }
 
@@ -564,57 +775,4 @@ async fn finalize_wait_next_selection(shell: &mut Shell, index: usize) -> Result
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::process::{JobProcess, Process, ProcessState};
-
-    fn interrupt_flag() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
-    }
-
-    /// `wait -n` under SIGINT reports 130, forwards nothing to the
-    /// background job, and keeps every ownership entry intact. The
-    /// interrupt arrives as a plain flag (no real signal delivery), so
-    /// parallel tests can neither steal nor observe it.
-    #[test]
-    fn wait_next_interrupt_reports_130_and_keeps_ownership() {
-        let flag = interrupt_flag();
-        let mut shell = Shell::new(crate::environment::Environment::new());
-        let pid = Pid::from_raw(424281);
-        let mut job = crate::process::Job::new("sleep 60".to_string(), shell.pgid);
-        job.job_id = 1;
-        job.pid = Some(pid);
-        let mut process = Process::new("sleep".to_string(), vec!["sleep".to_string()]);
-        process.pid = Some(pid);
-        process.state = ProcessState::Running;
-        job.set_process(JobProcess::Command(process));
-        shell.wait_jobs.push(job);
-        shell.known_async.register(pid, 1);
-
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        let probe = flag.clone();
-        let outcome = super::super::block_on_job_control_future(wait_next_until(
-            &mut shell,
-            vec![ResolvedWaitTarget {
-                pid,
-                job_id: Some(1),
-                source: WaitTargetSource::Pid,
-            }],
-            move || probe.load(std::sync::atomic::Ordering::SeqCst),
-        ))
-        .expect("bridge executes")
-        .expect("wait executes");
-        let WaitNextOutcome::Interrupted = outcome else {
-            panic!("interrupt must win over a live target");
-        };
-        assert_eq!(shell.wait_jobs.len(), 1, "interrupted job stays owned");
-        assert!(
-            shell.known_async.active_entry(pid).is_some(),
-            "ledger stays Active"
-        );
-        assert!(
-            shell.known_async.consume_completed(pid).is_none(),
-            "nothing consumed"
-        );
-    }
-}
+mod tests;

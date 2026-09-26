@@ -335,6 +335,17 @@ fn test_wait_completion_offers_next_option_and_job_arguments() {
             .any(|option| option.short.as_deref() == Some("-n")),
         "wait should offer -n for wait-any"
     );
+    let p = wait
+        .global_options
+        .iter()
+        .find(|option| option.short.as_deref() == Some("-p"))
+        .expect("wait should offer -p for PID assignment");
+    assert!(p.takes_value, "wait -p must take a variable-name value");
+    assert!(
+        matches!(p.value_type(), Some(ArgumentType::String)),
+        "wait -p value must be a plain string, not a job provider: {:?}",
+        p.value_type(),
+    );
     let id = wait.arguments.first().expect("missing wait id argument");
     assert!(
         id.multiple,

@@ -316,9 +316,16 @@ fn wait_double_dash_ends_option_parsing() {
 }
 
 #[test]
-fn wait_rejects_p_and_f_options() {
-    let p = stdout_of("wait -p done; echo STATUS:$?");
-    assert!(p.contains("STATUS:1"), "wait -p stays a usage error: {p:?}");
+fn wait_accepts_p_option() {
+    let stdout = stdout_of("false & p=$!; wait -p done $p; echo STATUS:$?");
+    assert!(
+        stdout.contains("STATUS:1"),
+        "wait -p must serve the child status: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_rejects_f_option() {
     let f = stdout_of("wait -f; echo STATUS:$?");
     assert!(f.contains("STATUS:1"), "wait -f stays a usage error: {f:?}");
 }
@@ -448,4 +455,199 @@ fn fg_pipefail_uses_frozen_policy_without_consuming_wait_status() {
 
     assert!(stdout.contains("FG:1"), "fg pipefail ON: {stdout:?}");
     assert!(stdout.contains("WAIT:1"), "wait retains: {stdout:?}");
+}
+
+#[test]
+fn wait_p_assigns_active_pid() {
+    // `$?` must be saved before the reporting `echo`s: every `echo`
+    // overwrites it.
+    let stdout = stdout_of(
+        "false & p=$!; wait -p done $p; rc=$?; echo P:$p; echo DONE:$done; echo STATUS:$rc",
+    );
+    let pid = last_line_value(&stdout, "P:");
+    let done = last_line_value(&stdout, "DONE:");
+    let status = last_line_value(&stdout, "STATUS:");
+    assert_eq!(status, "1", "child status passes through: {stdout:?}");
+    assert_eq!(done, pid, "-p must publish the associated PID: {stdout:?}");
+    assert_ne!(pid, "", "$! must expand: {stdout:?}");
+}
+
+#[test]
+fn wait_p_jobspec_assigns_pid_not_job_number() {
+    let stdout = stdout_of(
+        "false & p=$!; wait -p done %1; rc=$?; echo P:$p; echo DONE:$done; echo STATUS:$rc",
+    );
+    let pid = last_line_value(&stdout, "P:");
+    let done = last_line_value(&stdout, "DONE:");
+    let status = last_line_value(&stdout, "STATUS:");
+    assert_eq!(status, "1", "jobspec status passes through: {stdout:?}");
+    assert_eq!(done, pid, "%1 must publish the PID, not \"1\": {stdout:?}");
+}
+
+#[test]
+fn wait_p_real_child_status_127_still_assigns() {
+    let stdout = stdout_of(
+        "definitely-not-a-command-xyz & p=$!; wait -p done $p; rc=$?; \
+         echo P:$p; echo DONE:$done; echo STATUS:$rc",
+    );
+    let pid = last_line_value(&stdout, "P:");
+    let done = last_line_value(&stdout, "DONE:");
+    let status = last_line_value(&stdout, "STATUS:");
+    assert_eq!(
+        status, "127",
+        "unknown-command helper exits 127: {stdout:?}"
+    );
+    assert_eq!(done, pid, "real child 127 must still assign: {stdout:?}");
+}
+
+#[test]
+fn wait_p_unknown_pid_leaves_variable_unset() {
+    let stdout = stdout_of(
+        "done=old; wait -p done 999999; rc=$?; \
+         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+    );
+    assert!(
+        stdout.contains("STATUS:127"),
+        "unknown PID reports 127: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("DONE-UNSET"),
+        "unknown target must leave -p unset: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_p_valid_then_unknown_leaves_variable_unset() {
+    let stdout = stdout_of(
+        "false & p=$!; wait -p done $p 999999; rc=$?; \
+         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+    );
+    assert!(
+        stdout.contains("STATUS:127"),
+        "final unknown target wins: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("DONE-UNSET"),
+        "trailing NoCompletion resets the identity: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_p_unknown_then_valid_assigns_valid_pid() {
+    let stdout = stdout_of(
+        "false & p=$!; wait -p done 999999 $p; rc=$?; \
+         echo P:$p; echo DONE:$done; echo STATUS:$rc",
+    );
+    let pid = last_line_value(&stdout, "P:");
+    let done = last_line_value(&stdout, "DONE:");
+    let status = last_line_value(&stdout, "STATUS:");
+    assert_eq!(status, "1", "valid completion wins: {stdout:?}");
+    assert_eq!(
+        done, pid,
+        "unknown-then-valid publishes the PID: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_p_multiple_valid_operands_publish_last_identity() {
+    let forward = stdout_of(
+        "false & p1=$!; true & p2=$!; wait -p done $p1 $p2; rc=$?; \
+         echo P2:$p2; echo DONE:$done; echo STATUS:$rc",
+    );
+    assert_eq!(last_line_value(&forward, "STATUS:"), "0");
+    assert_eq!(
+        last_line_value(&forward, "DONE:"),
+        last_line_value(&forward, "P2:"),
+        "forward publishes the last PID: {forward:?}"
+    );
+    let reverse = stdout_of(
+        "false & p1=$!; true & p2=$!; wait -p done $p2 $p1; rc=$?; \
+         echo P1:$p1; echo DONE:$done; echo STATUS:$rc",
+    );
+    assert_eq!(last_line_value(&reverse, "STATUS:"), "1");
+    assert_eq!(
+        last_line_value(&reverse, "DONE:"),
+        last_line_value(&reverse, "P1:"),
+        "reverse publishes the last PID: {reverse:?}"
+    );
+}
+
+#[test]
+fn wait_p_bare_wait_publishes_nothing() {
+    let stdout = stdout_of(
+        "false & p=$!; done=old; wait -p done; rc=$?; \
+         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+    );
+    assert!(
+        stdout.contains("STATUS:0"),
+        "bare wait -p still reports 0: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("DONE-UNSET"),
+        "bare wait -p must not invent a PID: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_np_assigns_selected_pid_and_keeps_other() {
+    let stdout = stdout_of(
+        "sleep 30 > /dev/null 2>&1 & slow=$!; false & fast=$!; \
+         wait -n -p done $slow $fast; rc=$?; \
+         echo FAST:$fast; echo DONE:$done; echo STATUS:$rc; \
+         kill $slow; wait $slow; echo CLEANED",
+    );
+    let fast = last_line_value(&stdout, "FAST:");
+    let done = last_line_value(&stdout, "DONE:");
+    assert!(
+        stdout.contains("STATUS:1"),
+        "wait -n serves the fast failure: {stdout:?}"
+    );
+    assert_eq!(done, fast, "-p must publish the selected PID: {stdout:?}");
+    assert!(
+        stdout.contains("CLEANED"),
+        "unselected target stays waitable: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_np_without_targets_leaves_variable_unset() {
+    let stdout = stdout_of(
+        "DONE=old; wait -n -p DONE; rc=$?; \
+         test \"$DONE\" = '$DONE' && echo DONE-UNSET; echo STATUS:$rc",
+    );
+    assert!(
+        stdout.contains("STATUS:127"),
+        "wait -n with no targets reports 127: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("DONE-UNSET"),
+        "no-target wait -n must leave -p unset: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_p_consumes_selected_status_once() {
+    let stdout = stdout_of("false & p=$!; wait -p done $p; echo FIRST:$?; wait $p; echo SECOND:$?");
+    assert!(stdout.contains("FIRST:1"), "first wait reports: {stdout:?}");
+    assert!(
+        stdout.contains("SECOND:127"),
+        "-p still consumes exactly once: {stdout:?}"
+    );
+}
+
+#[test]
+fn wait_p_honors_frozen_pipefail_policy() {
+    let stdout = stdout_of(
+        "set -o pipefail; false | true & p=$!; wait -p done $p; rc=$?; \
+         echo P:$p; echo DONE:$done; echo STATUS:$rc",
+    );
+    assert!(
+        stdout.contains("STATUS:1"),
+        "pipefail ON serves the upstream failure: {stdout:?}"
+    );
+    assert_eq!(
+        last_line_value(&stdout, "DONE:"),
+        last_line_value(&stdout, "P:"),
+        "identity follows the logical status: {stdout:?}"
+    );
 }

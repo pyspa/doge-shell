@@ -167,8 +167,8 @@ impl KnownAsyncLedger {
 
     /// The stable job number for a known PID, if this shell knows it.
     ///
-    /// Fills `WaitCompletion` metadata for PID-derived targets so a future
-    /// `wait -p` can report which job finished without a new lookup path.
+    /// Fills `WaitCompletion` metadata for PID-derived targets so `wait -p`
+    /// reports the canonical associated PID without a new lookup path.
     pub(crate) fn job_id_for_pid(&self, pid: Pid) -> Option<usize> {
         self.entries.get(&pid.as_raw()).map(|entry| entry.job_id)
     }

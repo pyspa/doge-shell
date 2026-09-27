@@ -133,7 +133,7 @@ jobs:
           cargo test -p doge-shell --test fd_ownership
           --test reexec_subshell --test substitution --test pipeline_semantics
           --test background_builtin --test wait_semantics
-          --test async_exit_semantics < /dev/null
+          --test async_exit_semantics --test harness_contract < /dev/null
 
   stress:
     name: stress (${{ matrix.os }})
@@ -184,6 +184,7 @@ jobs:
           or binary(substitution)
           or binary(pipeline_semantics) or binary(background_builtin)
           or binary(wait_semantics) or binary(async_exit_semantics)
+          or binary(harness_contract)
           or test(lifecycle_property) or test(/output_monitor_(running|completion)/)
           or test(foreground_output_observer)
           or test(/process_substitution::tests::/)'

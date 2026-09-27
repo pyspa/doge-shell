@@ -10,25 +10,36 @@
 //! - [`spawn_dsh_unlocked_with_nofile_limit`]: same as above, but only the
 //!   child's own `RLIMIT_NOFILE` is lowered (the parent test process keeps
 //!   its limits).
-//! - [`DshTestProcess`]: RAII handle (stdin writes, bounded wait,
-//!   process-group cleanup, opt-in group-drain assertion).
+//! - [`DshTestProcess`]: RAII handle (stdin writes, total-deadline
+//!   process + output collection, process-group cleanup, opt-in
+//!   group-drain assertion).
 //!
 //! Ownership rule mirrored from the shell itself: every live helper has
 //! exactly one logical owner, and a group is never left behind. `Drop`
 //! best-effort kills the group but never panics; failures surface through
 //! [`DshTestProcess::wait`] / [`DshTestProcess::assert_group_drained`].
+//!
+//! Total-deadline rule: a case timeout bounds primary process exit **and**
+//! capture-pipe EOF as one absolute deadline. Primary exit alone never
+//! completes a case; legitimate descendant-held output is collected until
+//! EOF or the deadline. Past the deadline the harness kills the owned
+//! shell process group, performs one ready-now partial drain, closes its
+//! capture readers, and reports `Timeout` — it never waits indefinitely
+//! for EOF.
 
 use std::ffi::OsStr;
-use std::io::Write;
+use std::io::{Read, Write};
+use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::time::{Duration, Instant};
 
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 use tempfile::TempDir;
-use wait_timeout::ChildExt;
 
 /// Default per-case bound for a contract child.
 pub const DEFAULT_CASE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -119,11 +130,13 @@ impl DshTestProcess {
         }
     }
 
-    /// Wait up to `timeout`, then collect output.
+    /// Wait up to `timeout` for process exit **and** capture-pipe EOF.
     ///
-    /// On timeout the group is `SIGKILL`ed, reaped, and a
-    /// [`WaitError::TimedOut`] carrying partial output is returned so the
-    /// caller can record it as a case failure instead of panicking mid-suite.
+    /// The timeout is one absolute deadline covering primary exit plus
+    /// stdout/stderr EOF. On deadline the group is `SIGKILL`ed, reaped, and a
+    /// [`WaitError::TimedOut`] carrying partial output plus the timeout
+    /// phase is returned so the caller can record it as a case failure
+    /// instead of panicking mid-suite.
     ///
     /// The isolated dirs are dropped with `self`; callers asserting on
     /// side-effect files must use [`DshTestProcess::wait_keep_dirs`] so the
@@ -135,30 +148,8 @@ impl DshTestProcess {
     /// [`DshTestProcess::wait`], but the isolated temp dirs and workdir are
     /// returned alive for post-exit file assertions.
     pub fn wait_keep_dirs(mut self, timeout: Duration) -> Result<WaitedProcess, WaitError> {
-        let output = {
-            let child = self.child.as_mut().expect("DshTestProcess already waited");
-            match child
-                .wait_timeout(timeout)
-                .expect("failed while waiting for dsh")
-            {
-                Some(_) => {
-                    let child = self.child.take().expect("child present");
-                    child
-                        .wait_with_output()
-                        .map_err(|err| WaitError::Io(err.to_string()))?
-                }
-                None => {
-                    self.kill_group();
-                    let child = self.child.take().expect("child present");
-                    let output = child.wait_with_output().unwrap_or_else(|_| Output {
-                        status: std::os::unix::process::ExitStatusExt::from_raw(9 << 8),
-                        stdout: Vec::new(),
-                        stderr: format!("dsh did not exit within {timeout:?}").into_bytes(),
-                    });
-                    return Err(WaitError::TimedOut(output));
-                }
-            }
-        };
+        let child = self.child.take().expect("DshTestProcess already waited");
+        let output = wait_child_with_output_deadline(child, self.pgid, timeout)?;
         // `Option::take` moves out cleanly despite the `Drop` impl; the
         // remainder (`child: None`) drops as a no-op.
         let temp = self.temp.take().expect("dirs present");
@@ -184,8 +175,14 @@ impl DshTestProcess {
     pub fn assert_group_drained(self, timeout: Duration) -> Result<Output, String> {
         let pgid = self.pgid;
         let output = self.wait(timeout).map_err(|err| match err {
-            WaitError::TimedOut(output) => format!(
-                "dsh did not exit within {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+            WaitError::TimedOut {
+                output,
+                phase,
+                stdout_eof,
+                stderr_eof,
+            } => format!(
+                "dsh did not complete within {timeout:?} (phase: {}, stdout eof: {stdout_eof}, stderr eof: {stderr_eof})\nstdout:\n{}\nstderr:\n{}",
+                phase.as_str(),
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             ),
@@ -230,8 +227,281 @@ impl Drop for DshTestProcess {
 /// How a bounded wait can fail without panicking.
 #[derive(Debug)]
 pub enum WaitError {
-    TimedOut(Output),
+    TimedOut {
+        output: Output,
+        phase: WaitTimeoutPhase,
+        stdout_eof: bool,
+        stderr_eof: bool,
+    },
     Io(String),
+}
+
+/// Which half of the total deadline ran out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitTimeoutPhase {
+    /// The primary child was still running at the deadline.
+    ProcessExit,
+    /// The primary child had exited, but stdout/stderr had not reached EOF.
+    OutputEof,
+}
+
+impl WaitTimeoutPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WaitTimeoutPhase::ProcessExit => "process-exit",
+            WaitTimeoutPhase::OutputEof => "output-eof",
+        }
+    }
+}
+
+/// Per-iteration fairness budget for one capture stream.
+///
+/// A continuous producer must not monopolize the collection loop: after
+/// this many bytes the loop returns to `try_wait()` and the deadline check.
+/// Mirrors the production running-drain fairness policy; kept as a harness
+/// own constant because the goals differ.
+const CAPTURE_DRAIN_BUDGET_BYTES: usize = 256 * 1024;
+
+/// Wake-up slice for the capture loop.
+///
+/// The actual poll timeout is `min(deadline - now, CAPTURE_POLL_SLICE)` so
+/// pipe silence never delays primary-exit observation beyond ~25ms.
+const CAPTURE_POLL_SLICE: Duration = Duration::from_millis(25);
+
+/// Result of one nonblocking pipe drain.
+enum PipeDrain {
+    Open,
+    Eof,
+}
+
+/// Collect `child` output under a single absolute deadline.
+///
+/// Success requires primary status **and** stdout EOF **and** stderr EOF
+/// before the deadline. `Child::wait_with_output()` is never used: it
+/// cannot bound EOF collection. Reader threads are not used either: a
+/// blocked `read_to_end()` cannot be cancelled safely.
+///
+/// Both capture pipes are switched to `O_NONBLOCK` (the same `fcntl`
+/// method as production `OutputMonitor`), drained fairly with a per-stream
+/// byte budget, and woken with a short `libc::poll()`. `revents` never
+/// decides EOF; only a direct `read()` returning `Ok(0)` (EOF) or
+/// `WouldBlock` (still open) is authoritative.
+///
+/// On deadline the owned shell process group is `SIGKILL`ed (direct
+/// `child.kill()` fallback), the primary is reaped, one ready-now drain
+/// keeps partial output, the readers are dropped, and `TimedOut` is
+/// returned. EOF is never waited for after the deadline. No process
+/// enumeration and no `waitpid(-1)`: unrelated groups are untouched.
+pub(crate) fn wait_child_with_output_deadline(
+    mut child: Child,
+    pgid: Pid,
+    timeout: Duration,
+) -> Result<Output, WaitError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .expect("test timeout overflow");
+
+    // Like `wait_with_output()`: closing stdin signals input EOF up front.
+    drop(child.stdin.take());
+
+    let mut stdout: Option<ChildStdout> = child.stdout.take();
+    let mut stderr: Option<ChildStderr> = child.stderr.take();
+    if let Some(stream) = stdout.as_ref() {
+        let current =
+            fcntl(stream, FcntlArg::F_GETFL).map_err(|err| WaitError::Io(err.to_string()))?;
+        let flags = OFlag::from_bits_truncate(current) | OFlag::O_NONBLOCK;
+        fcntl(stream, FcntlArg::F_SETFL(flags)).map_err(|err| WaitError::Io(err.to_string()))?;
+    }
+    if let Some(stream) = stderr.as_ref() {
+        let current =
+            fcntl(stream, FcntlArg::F_GETFL).map_err(|err| WaitError::Io(err.to_string()))?;
+        let flags = OFlag::from_bits_truncate(current) | OFlag::O_NONBLOCK;
+        fcntl(stream, FcntlArg::F_SETFL(flags)).map_err(|err| WaitError::Io(err.to_string()))?;
+    }
+
+    let mut collected_stdout = Vec::new();
+    let mut collected_stderr = Vec::new();
+    let mut status: Option<ExitStatus> = None;
+    let mut stdout_eof = stdout.is_none();
+    let mut stderr_eof = stderr.is_none();
+
+    loop {
+        if !stdout_eof {
+            let reader = stdout.as_mut().expect("stdout present");
+            match drain_ready(reader, &mut collected_stdout, CAPTURE_DRAIN_BUDGET_BYTES)
+                .map_err(WaitError::Io)?
+            {
+                PipeDrain::Eof => stdout_eof = true,
+                PipeDrain::Open => {}
+            }
+        }
+        if !stderr_eof {
+            let reader = stderr.as_mut().expect("stderr present");
+            match drain_ready(reader, &mut collected_stderr, CAPTURE_DRAIN_BUDGET_BYTES)
+                .map_err(WaitError::Io)?
+            {
+                PipeDrain::Eof => stderr_eof = true,
+                PipeDrain::Open => {}
+            }
+        }
+        if status.is_none() {
+            status = child
+                .try_wait()
+                .map_err(|err| WaitError::Io(err.to_string()))?;
+        }
+        if let Some(exit) = status
+            && stdout_eof
+            && stderr_eof
+        {
+            return Ok(Output {
+                status: exit,
+                stdout: collected_stdout,
+                stderr: collected_stderr,
+            });
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if stdout_eof && stderr_eof {
+            // Pipes are done but the primary lives on: no fd to poll.
+            std::thread::sleep(remaining.min(CAPTURE_POLL_SLICE));
+            continue;
+        }
+        poll_captures(
+            stdout.as_ref().map(AsRawFd::as_raw_fd),
+            stderr.as_ref().map(AsRawFd::as_raw_fd),
+            stdout_eof,
+            stderr_eof,
+            remaining.min(CAPTURE_POLL_SLICE),
+        )?;
+    }
+
+    // Deadline path: never wait for EOF again.
+    if status.is_none() {
+        status = child
+            .try_wait()
+            .map_err(|err| WaitError::Io(err.to_string()))?;
+    }
+    let phase = if status.is_some() {
+        WaitTimeoutPhase::OutputEof
+    } else {
+        WaitTimeoutPhase::ProcessExit
+    };
+    if status.is_none() {
+        match killpg(pgid, Signal::SIGKILL) {
+            Ok(()) | Err(Errno::ESRCH) => {}
+            Err(_) => {
+                let _ = child.kill();
+            }
+        }
+        let reaped = child.wait().map_err(|err| WaitError::Io(err.to_string()))?;
+        status = Some(reaped);
+    }
+    // One ready-now drain keeps diagnostics; EOF is not awaited.
+    if !stdout_eof
+        && let Some(reader) = stdout.as_mut()
+        && let Ok(PipeDrain::Eof) =
+            drain_ready(reader, &mut collected_stdout, CAPTURE_DRAIN_BUDGET_BYTES)
+    {
+        stdout_eof = true;
+    }
+    if !stderr_eof
+        && let Some(reader) = stderr.as_mut()
+        && let Ok(PipeDrain::Eof) =
+            drain_ready(reader, &mut collected_stderr, CAPTURE_DRAIN_BUDGET_BYTES)
+    {
+        stderr_eof = true;
+    }
+    drop(stdout);
+    drop(stderr);
+    let output = Output {
+        status: status.expect("primary reaped on deadline"),
+        stdout: collected_stdout,
+        stderr: collected_stderr,
+    };
+    Err(WaitError::TimedOut {
+        output,
+        phase,
+        stdout_eof,
+        stderr_eof,
+    })
+}
+
+/// Drain what is ready now without blocking.
+///
+/// `Ok(0)` is EOF (authoritative), `WouldBlock` means still open,
+/// `Interrupted` retries. The byte budget guarantees a return to the
+/// `try_wait()` / deadline check even under continuous output.
+fn drain_ready<R>(
+    reader: &mut R,
+    buffer: &mut Vec<u8>,
+    byte_budget: usize,
+) -> Result<PipeDrain, String>
+where
+    R: Read + AsFd,
+{
+    let mut bytes_read = 0usize;
+    let mut chunk = [0u8; 8192];
+    loop {
+        if bytes_read >= byte_budget {
+            return Ok(PipeDrain::Open);
+        }
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(PipeDrain::Eof),
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                bytes_read += n;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                return Ok(PipeDrain::Open);
+            }
+            Err(err) => return Err(err.to_string()),
+        }
+    }
+}
+
+/// Wake-up-only poll for the still-open capture pipes.
+///
+/// `revents` never decides EOF; the caller always follows up with a direct
+/// `read()`. `EINTR` retries via the next loop iteration.
+fn poll_captures(
+    stdout_fd: Option<std::os::fd::RawFd>,
+    stderr_fd: Option<std::os::fd::RawFd>,
+    stdout_eof: bool,
+    stderr_eof: bool,
+    timeout: Duration,
+) -> Result<(), WaitError> {
+    let mut fds = Vec::with_capacity(2);
+    if !stdout_eof && let Some(fd) = stdout_fd {
+        fds.push(libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+            revents: 0,
+        });
+    }
+    if !stderr_eof && let Some(fd) = stderr_fd {
+        fds.push(libc::pollfd {
+            fd,
+            events: libc::POLLIN | libc::POLLHUP | libc::POLLERR,
+            revents: 0,
+        });
+    }
+    if fds.is_empty() {
+        return Ok(());
+    }
+    let millis = timeout.as_millis().min(i32::MAX as u128) as i32;
+    // SAFETY: `fds` is a live mutable slice of `pollfd` for the call.
+    let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, millis) };
+    if result >= 0 {
+        return Ok(());
+    }
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::Interrupted {
+        return Ok(());
+    }
+    Err(WaitError::Io(err.to_string()))
 }
 
 /// A reaped child whose isolated dirs are still alive for file assertions.

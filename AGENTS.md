@@ -1,66 +1,45 @@
 # Agent Guide
 
-このリポジトリでは、トークン消費を抑えるために「最小探索・最小検証」を徹底すること。
+このリポジトリでは、最小探索・最小検証を徹底する。
 
-## 基本方針
+## 共通ルール
+
 - チャットは日本語で行う。
-- 対応 OS は Linux と macOS の 2 つ。片方でしか動かない変更を入れない。`/proc` や `/etc/passwd` のような OS 固有のソースを読むときは、必ずもう一方の OS の腕も書く。
-- 補助スクリプトは shell / Python のどちらを使ってもよい。repo-tracked な生成・整形は、目的が明確なときだけ行う。
-- `Cargo.toml` と必要なら task map で範囲を絞り、`rg --files` / `rg -n` で当たりを付けてから必要なファイルだけ読む。
-- 該当する Skill がある場合は先に使い、詳細は必要になってから `references/` を読む。
-- `README.md` 全文を最初から読まない。ユーザー向け挙動、設定例、公開文書の更新時だけ必要箇所を開く。
-- 変更後は関係する最小コマンドで検証し、無関係なワークスペース全体テストは最後に限定する。
-- 400 行を超える非テストファイルには `//!` でモジュール doc を書く（手本: `dsh-types/src/ansi.rs`）。800 行を超えたら分割を検討する。両方 `scripts/check-file-budget.py` が検査する（既存の超過は allowlist で追跡中、新規の超過は失敗する）。
+- 対応 OS は Linux と macOS。片方だけで動く変更を入れない。
+- 既存のユーザー変更を破棄しない。
+- `Cargo.toml` でcrate境界を確認し、`rg --files` / `rg -n` で当たりを付けてから狭く読む。
+- 該当Skillを先に使い、詳細な `references/` は必要になったときだけ読む。
+- `README.md` 全文を最初から読まない。公開挙動・設定例の更新時だけ該当箇所を読む。
+- repo-trackedな生成・整形は目的が明確なときだけ行う。
+- 400行超の非テストファイルには `//!` module docを付け、800行超は分割を検討する。`scripts/check-file-budget.py` が検査する。
 
-## 作業タイプ別の最初の一手
-- 実装修正: `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
-- 検証選定: `doctor validate` が使える環境では提案を優先し、なければ `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ。
-- AI guidance / Skill 変更: `scripts/check-ai-guidance.sh` と runtime Skill の `--check-installed` を使う（`--status` は表示専用）。
-- 製品側の AI 機能修正: `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` を先に読む。
-- 失敗例の再発防止: 修正後に `task-map.md` か該当 Skill の `references/` へ短く戻す。
+## 編集前のルーティング
 
-## 探索順
-1. `Cargo.toml` でクレート境界を確認する。
-2. タスク種別が明確なら `docs/ai/skills/doge-shell-repo/references/task-map.md` で入口と検証候補を確認する。
-3. `rg -n "<symbol>|<feature>" dsh dsh-builtin dsh-openai dsh-types` で実装位置を絞る。
-4. package 名が曖昧なら `docs/ai/skills/doge-shell-repo/references/package-map.md` を読む。
-5. 所有範囲が曖昧なら `docs/ai/skills/doge-shell-repo/references/module-map.md` を読む。
-
-## 検証の最小単位
-- `doctor validate` が使える環境では変更ファイルに応じた候補を確認する。
-- `dsh-builtin` を触ったとき: `cargo test -p dsh-builtin`
-- `dsh` 本体を触ったとき: `cargo test -p doge-shell`
-- 複数クレートを跨いだときだけ: `cargo test`
-- 広いビルド確認が必要なら: `cargo check --workspace`
-- OS 依存のコード・テスト・ビルド設定を触ったとき: `scripts/check-portability.py`
-- `Cargo.toml` / `README.md` / `LICENSE` を触ったとき: `scripts/check-project-consistency.py`
-- 400 行超のファイルを新規作成・分割したとき、`docs/ai/` の reference や `AGENTS.md`/`CLAUDE.md` のパス参照を変えたとき: `scripts/check-file-budget.py`
-- 段階的な設計変更の完了時とリリース前: `./scripts/check.sh`
+- 非自明な実装・調査・refactorでは、まず `python3 scripts/agent-context.py --topic "<task>" --json` を使う。pathが既知なら `--path <repo-relative-path>` を追加できる。
+- routerは編集前のSkillとreferenceの入口だけを示す。使えないときは `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
+- typo、明白な1ファイルdocs編集、変更内容を完全指定された単純修正ではrouterを省略してよい。
+- 補完定義は `doge-shell-completion-spec` と `references/invariants/completion.md`、execution/job lifecycleは `doge-shell-execution-semantics` と `references/invariants/execution*.md` を読む。
+- 製品側のAI機能では `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` を先に読む。
 
 ## 設計境界
-- AI 機能の設計境界は `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に集約する。エージェントループを 3 つ目にしない。設定解決・レスポンス解釈・切り詰め・応答言語・config ディレクトリ・コマンド危険度判定・MCP マネージャを再実装しない。
-- `dirs::config_dir()` を直接呼ばない。macOS では `~/Library/Application Support` を指し、XDG を使う installer や config ローダと食い違う。`dsh-builtin/src/config_paths.rs`（`dsh` crate では `environment::get_config_file`）を通す。`scripts/check-portability.py` が検査する。
-- 動的補完 provider は `dsh-types` の `DYNAMIC_COMPLETION_PROVIDERS` へ一度だけ登録し、`CachePolicy` 経路を使う。cached 専用 dispatch を増やさない。収集の実装は 2 経路のどちらかで、**混在させない**（両方あるとテーブルが黙って勝つ）。固定シェイプ（固定の実行ファイル + 固定引数、または固定パス読み取り + パーサ関数）は `LocalSpec` テーブルに 1 行足すだけで、`registry.rs` の `family_for` にも family collector にも触らない。行は `dsh/src/completion/dynamic/specs.rs`（`CORE_LOCAL_SPECS`）か、パーサ/ローダー関数と同じ family モジュール（`container.rs`/`dev.rs`/`linux.rs`/`project.rs` の `LOCAL_SPECS`）に置く — テーブルの struct と検索ロジック自体は `dsh/src/completion/dynamic/local.rs` にあるが、行そのものはそこには置かない。動的な引数構築・JSON 解釈・複数コマンドのマージが要るものだけ `family_for` + family collector を使う。詳細は `docs/ai/skills/doge-shell-repo/references/invariants.md` の「Completion 定義」。
-- `ShellProxy` は互換レイヤーとして固定し、新規メソッドを追加しない。builtin の新しい依存は `dsh-builtin/src/shell_capabilities.rs` の能力 trait へ追加する。
-- runtime subprocess（外部コマンド解決・child 環境・spawn）は `CommandRuntimeSnapshot`（`dsh-types/src/process_runtime.rs`）に一本化する。bare `Command::new` / `which::which` / runtime 設定値への `std::env::var*` fallback を足さない。process-global が正当な例外は `scripts/runtime-authority-allowlist.txt` に理由付きで登録し、`scripts/check-runtime-authority.py` を通す。
-- `ShellProxy` または能力 trait を変更したら `scripts/check-shell-proxy-capabilities.py` を実行する。
-- プラットフォーム分岐は `#[cfg(not(target_os = "macos"))]` と `#[cfg(target_os = "macos")]` の対で書き、共通ロジックは cfg の外の純粋関数に置く（`dsh/src/completion/generators/user.rs`）。片方だけ書くと、もう一方の OS ではその項目が消えるだけでコンパイルもテストも通る。
-- OS ごとに違う定数表には `libc` と突き合わせるテストを付ける（`dsh/src/completion/generators/signal.rs`）。`cargo clippy` はそのホストの腕しか見ないので、macOS 側の実証は CI の macos ジョブだけ。
 
-## 参照の使い分け
-- `task-map.md`: タスクごとの最初の読みに行く先と最小検証を決める。
-- `package-map.md`: ディレクトリ名と Cargo package 名のズレを避ける。
-- `module-map.md`: crate や主要ディレクトリの ownership を確認する。
-- `read-boundaries.md`: README や workspace 全体 test を開く条件を確認する。
-- `invariants.md`: cwd 変更、`Environment` の状態、キー入力、端末描画、出力履歴、スケジューラを触る前に読む。
-- `platform-support.md`: 対応 OS、プラットフォーム分岐の書き方、macOS 側の腕を Linux ホストで確認する手順。
-- `ai-architecture.md`: AI 機能（`!` チャット、MCP、ツール、コマンドパレットの AI アクション、`ai-commit`、`safe-run`、ゴーストテキスト）の方針。再実装してはいけないものと、未解決の設計判断。
+- AI機能、completion、environment、runtime subprocess、ShellProxy capabilityの既存authorityを迂回しない。詳細は関連Skill・invariantと `scripts/check-runtime-authority.py`、`scripts/check-shell-proxy-capabilities.py` にある。
+- executionのwait/ownership境界は `scripts/check-execution-authority.py` が検査する。
+- OS固有の変更は `docs/ai/skills/doge-shell-repo/references/platform-support.md` を読み、Linux/macOS両方の実装と `scripts/check-portability.py` を確認する。
 
-## Skill 運用
-- canonical source は `docs/ai/skills/` に置く。
-- runtime 配置先は `~/.codex/skills/`、`~/.config/dogesh/skills/`、`~/.claude/skills/`、`<repo>/.claude/skills`（`docs/ai/skills` への symlink）の 4 つ。詳細は `docs/ai/README.md`。
-- 導入や更新は `scripts/install-runtime-skills.sh` を使う。
-- 普段は必要な skill だけ install する。引数なしの全件 install は初期セットアップ時だけ使う。
-- Codex runtime へ常時入れる Skill は原則 `doge-shell-repo` のみにし、領域別 Skill は `docs/ai/skills/<skill>/SKILL.md` を必要時に読む。
-- Skill は frontmatter の `description` を短い要約兼トリガー文として書く。
-- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変更したら `scripts/check-ai-guidance.sh` を実行する。
+## 編集後の検証
+
+- `doctor validate` が使える環境では、変更ファイルに応じた提案を優先する。routerを検証コマンドのauthorityにしない。
+- 使えない場合は `docs/ai/skills/doge-shell-repo/references/test-scope.md` から最小コマンドを選ぶ。
+- `dsh/` はCargo package `doge-shell`、`dsh-builtin/` は `dsh-builtin`。複数crateに跨るときだけ広いtestを選ぶ。
+- AI guidance / Skill変更では `scripts/check-ai-guidance.sh` を実行する。runtime Skillの `--check-installed` はコピーの新旧を検査し、`--status` は表示専用。
+- OS依存コード・設定では `scripts/check-portability.py`、ShellProxy・能力trait変更では `scripts/check-shell-proxy-capabilities.py` を実行する。
+- `Cargo.toml` / `README.md` / `LICENSE` 変更では `scripts/check-project-consistency.py` を実行する。
+- 全体の `./scripts/check.sh` は段階的な設計変更の最後とリリース前に実行する。
+- 失敗例の再発防止は `task-map.md` または該当Skillのreferenceへ短く戻す。
+
+## Skillの配置
+
+- canonical sourceは `docs/ai/skills/`。Codex runtimeには原則 `doge-shell-repo` だけを常設し、領域別Skillは必要時に読む。
+- `.claude/skills` は `../docs/ai/skills` へのsymlinkを維持する。導入・更新は `scripts/install-runtime-skills.sh` を使う。
+- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変えたら `scripts/check-ai-guidance.sh` を実行する。

@@ -1,0 +1,383 @@
+{
+  "version": 1,
+  "routes": [
+    {
+      "id": "execution-semantics",
+      "risk": "high",
+      "terms": [
+        "wait",
+        "wait -n",
+        "wait -p",
+        "fg",
+        "bg",
+        "$!",
+        "ECHILD",
+        "SIGCONT",
+        "pipeline status",
+        "pipeline partial completion",
+        "process substitution",
+        "reexec",
+        "subshell",
+        "FD ownership",
+        "PID ownership",
+        "PGID ownership",
+        "background job",
+        "ジョブ制御",
+        "バックグラウンド"
+      ],
+      "exact_paths": [
+        "dsh/src/process/job.rs",
+        "dsh/src/process/job_wait.rs",
+        "dsh/src/process/wait.rs",
+        "dsh/src/process/launch_outcome.rs",
+        "dsh/src/process/pipeline_status.rs",
+        "dsh/src/shell/job.rs",
+        "dsh/src/shell/job_exit.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/proxy/builtin/jobs/",
+        "dsh/src/shell/process_substitution/",
+        "dsh/src/process/job/",
+        "dsh/src/process/reexec/"
+      ],
+      "skills": [
+        "doge-shell-execution-semantics"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/execution.md",
+        "docs/ai/skills/doge-shell-repo/references/invariants/execution-background.md"
+      ]
+    },
+    {
+      "id": "process-pty",
+      "risk": "normal",
+      "terms": [
+        "PTY",
+        "raw mode",
+        "FullProxy",
+        "terminal input proxy",
+        "ANSI rendering",
+        "stdout rendering",
+        "端末描画"
+      ],
+      "exact_paths": [
+        "dsh/src/process/pty.rs",
+        "dsh/src/process/job_pty.rs",
+        "dsh/src/process/io.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/terminal/"
+      ],
+      "skills": [
+        "doge-shell-process-pty"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/terminal.md"
+      ]
+    },
+    {
+      "id": "completion-spec",
+      "risk": "normal",
+      "terms": [
+        "completion JSON",
+        "dynamic completion provider",
+        "LocalSpec",
+        "family_for",
+        "補完定義"
+      ],
+      "exact_paths": [
+        "command-completion-schema.json"
+      ],
+      "path_prefixes": [
+        "completions/",
+        "dsh/src/completion/dynamic/"
+      ],
+      "skills": [
+        "doge-shell-completion-spec"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/completion.md"
+      ]
+    },
+    {
+      "id": "repl-completion",
+      "risk": "normal",
+      "terms": [
+        "ghost text",
+        "suggestion",
+        "TAB completion",
+        "user completion",
+        "ユーザー補完"
+      ],
+      "exact_paths": [
+        "dsh/src/completion/generators/user.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/repl/completion/"
+      ],
+      "skills": [
+        "doge-shell-repl-completion"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/completion.md",
+        "docs/ai/skills/doge-shell-repo/references/platform-support.md"
+      ]
+    },
+    {
+      "id": "parser-shell",
+      "risk": "normal",
+      "terms": [
+        "parser redirect",
+        "redirection",
+        "brace expansion",
+        "AST",
+        "パーサ",
+        "リダイレクト"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh/src/parser/"
+      ],
+      "skills": [
+        "doge-shell-parser-shell"
+      ],
+      "references": []
+    },
+    {
+      "id": "prompt-terminal-ui",
+      "risk": "normal",
+      "terms": [
+        "right prompt",
+        "transient prompt",
+        "status line",
+        "プロンプト"
+      ],
+      "exact_paths": [
+        "dsh/src/repl/status_line.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/prompt/"
+      ],
+      "skills": [
+        "doge-shell-prompt-terminal-ui"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/terminal.md"
+      ]
+    },
+    {
+      "id": "env-startup",
+      "risk": "normal",
+      "terms": [
+        "direnv",
+        "project context",
+        "path activation",
+        "startup environment",
+        "環境変数",
+        "起動処理"
+      ],
+      "exact_paths": [
+        "dsh/src/direnv.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/environment/"
+      ],
+      "skills": [
+        "doge-shell-env-startup"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/environment.md"
+      ]
+    },
+    {
+      "id": "lisp-config",
+      "risk": "normal",
+      "terms": [
+        "config.lisp",
+        "lisp config",
+        "config loader",
+        "Lisp",
+        "設定読み込み"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh/src/lisp/"
+      ],
+      "skills": [
+        "doge-shell-lisp-config"
+      ],
+      "references": []
+    },
+    {
+      "id": "history-frecency",
+      "risk": "normal",
+      "terms": [
+        "frecency",
+        "command history",
+        "command timing",
+        "履歴"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh/src/history/",
+        "dsh-frecency/"
+      ],
+      "skills": [
+        "doge-shell-history-frecency"
+      ],
+      "references": []
+    },
+    {
+      "id": "builtin-commands",
+      "risk": "normal",
+      "terms": [
+        "builtin command",
+        "CommandRuntimeSnapshot",
+        "ShellProxy capability",
+        "directory stack",
+        "pushd",
+        "popd"
+      ],
+      "exact_paths": [
+        "dsh-types/src/process_runtime.rs",
+        "dsh-builtin/src/shell_capabilities.rs"
+      ],
+      "path_prefixes": [
+        "dsh-builtin/src/doctor/"
+      ],
+      "skills": [
+        "doge-shell-builtin-commands"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/execution.md"
+      ]
+    },
+    {
+      "id": "chat-tools",
+      "risk": "normal",
+      "terms": [
+        "chatgpt",
+        "MCP tool",
+        "AI chat hooks",
+        "skill_manage"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh-builtin/src/chatgpt/",
+        "dsh-openai/"
+      ],
+      "skills": [
+        "doge-shell-chat-tools"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/ai-architecture.md"
+      ]
+    },
+    {
+      "id": "safety-policy",
+      "risk": "high",
+      "terms": [
+        "safe-run",
+        "command policy",
+        "AgentCommandPolicy",
+        "安全確認",
+        "コマンドポリシー"
+      ],
+      "exact_paths": [
+        "dsh-builtin/src/safe_run.rs"
+      ],
+      "path_prefixes": [
+        "dsh/src/safety/"
+      ],
+      "skills": [
+        "doge-shell-safety-policy"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/safety.md"
+      ]
+    },
+    {
+      "id": "command-palette-ai",
+      "risk": "normal",
+      "terms": [
+        "command palette",
+        "AI action",
+        "quick fix",
+        "コマンドパレット"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh/src/command_palette/",
+        "dsh/src/ai_features/"
+      ],
+      "skills": [
+        "doge-shell-command-palette-ai"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/ai-architecture.md"
+      ]
+    },
+    {
+      "id": "serve-web",
+      "risk": "normal",
+      "terms": [
+        "HTTP serve",
+        "static files",
+        "CORS",
+        "path validation"
+      ],
+      "exact_paths": [],
+      "path_prefixes": [
+        "dsh-builtin/src/serve/"
+      ],
+      "skills": [
+        "doge-shell-serve-web"
+      ],
+      "references": []
+    },
+    {
+      "id": "notebook-markdown",
+      "risk": "normal",
+      "terms": [
+        "Markdown notebook",
+        "notebook rendering",
+        "output history"
+      ],
+      "exact_paths": [
+        "dsh-builtin/src/notebook_play.rs"
+      ],
+      "path_prefixes": [
+        "dsh-builtin/src/markdown/"
+      ],
+      "skills": [
+        "doge-shell-notebook-markdown"
+      ],
+      "references": []
+    },
+    {
+      "id": "ai-guidance",
+      "risk": "normal",
+      "terms": [
+        "skill guidance",
+        "agent guidance",
+        "SKILL.md",
+        "agent routing"
+      ],
+      "exact_paths": [
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".claude/settings.json"
+      ],
+      "path_prefixes": [
+        "docs/ai/skills/",
+        "docs/ai/evals/"
+      ],
+      "skills": [
+        "dsh-skill-authoring"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/task-map.md"
+      ]
+    }
+  ]
+}

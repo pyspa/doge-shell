@@ -298,6 +298,71 @@ dsh-chat"
     rm -rf "$runtime_tmp"
 }
 
+check_claude_skill_visibility() {
+    settings="$repo_root/.claude/settings.json"
+
+    if [ ! -f "$settings" ]; then
+        fail ".claude/settings.json is missing; Claude skill visibility is unchecked"
+        return
+    fi
+
+    # JSON parsing uses Python, never regex: overrides are a nested object
+    # and quoting/whitespace variants must not change the verdict.
+    if ! visibility_errors=$(SKILL_SOURCE="$source_root" SETTINGS_PATH="$settings" python3 - <<'EOF'
+import json
+import os
+import sys
+from pathlib import Path
+
+source = Path(os.environ["SKILL_SOURCE"])
+settings_path = Path(os.environ["SETTINGS_PATH"])
+errors = []
+
+try:
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+except (OSError, ValueError) as exc:
+    print(f".claude/settings.json is not valid JSON: {exc}")
+    sys.exit(0)
+
+overrides = settings.get("skillOverrides", {})
+if not isinstance(overrides, dict):
+    print("skillOverrides must be an object")
+    sys.exit(0)
+
+canonical = sorted(
+    entry.name for entry in source.iterdir()
+    if entry.is_dir() and (entry / "SKILL.md").is_file()
+)
+core = {"doge-shell-repo", "doge-shell-validation", "doge-shell-investigation"}
+user_invocable = {"dsh-chat", "dsh-cron"}
+
+for name in canonical:
+    if name in core:
+        if name in overrides:
+            errors.append(f"core skill must stay fully visible (no override): {name}")
+    elif name in user_invocable:
+        if overrides.get(name) != "user-invocable-only":
+            errors.append(f"product-user skill must be user-invocable-only: {name}")
+    elif overrides.get(name) != "name-only":
+        errors.append(f"non-core repo skill must be name-only: {name}")
+
+for name in sorted(overrides):
+    if name not in canonical:
+        errors.append(f"skillOverrides references unknown skill: {name}")
+
+print("\n".join(errors))
+EOF
+); then
+        fail "Claude skill visibility check could not run (python3 json parse failed)"
+        return
+    fi
+
+    if [ -n "$visibility_errors" ]; then
+        echo "$visibility_errors" >&2
+        fail "Claude skill visibility policy violated (core full / domain name-only / dsh-chat+dsh-cron user-invocable-only)"
+    fi
+}
+
 check_claude_project_skills() {
     claude_skills="$repo_root/.claude/skills"
 
@@ -334,7 +399,12 @@ if [ -d "$source_root" ]; then
     check_readme_skill_names
     check_repo_skill_paths
     check_installer_profiles
+    check_claude_skill_visibility
     check_claude_project_skills
+fi
+
+if ! python3 "$repo_root/scripts/eval-agent-routing.py"; then
+    fail "agent routing evaluation failed"
 fi
 
 if [ "$failures" -gt 0 ]; then

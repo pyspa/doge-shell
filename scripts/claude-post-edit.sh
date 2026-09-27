@@ -5,6 +5,7 @@
 # Reads the hook payload on stdin and gives immediate, build-free feedback on
 # the file that was just written:
 #   *.rs               -> format it (only when it is actually unformatted)
+#   execution *.rs     -> check wait/ownership authority (fast --path mode)
 #   completions/*.json -> validate it, without modifying it
 #
 # Exit 2 makes the message on stderr blocking feedback for the agent.
@@ -20,11 +21,21 @@ file=$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty' 2>/dev/nu
 
 case "$file" in
     *.rs)
-        command -v rustfmt >/dev/null 2>&1 || exit 0
-        # Only rewrite when needed, so the file mtime usually stays untouched.
-        if ! rustfmt --edition 2024 --check "$file" >/dev/null 2>&1; then
-            rustfmt --edition 2024 "$file" >/dev/null 2>&1
+        if command -v rustfmt >/dev/null 2>&1; then
+            # Only rewrite when needed, so the file mtime usually stays untouched.
+            if ! rustfmt --edition 2024 --check "$file" >/dev/null 2>&1; then
+                rustfmt --edition 2024 "$file" >/dev/null 2>&1
+            fi
         fi
+        relative=${file#"$repo_root"/}
+        case "$relative" in
+            dsh/src/process/*|dsh/src/proxy/builtin/jobs/*|dsh/src/shell/process_substitution/*|dsh/src/shell/job.rs|dsh/src/shell/job_exit.rs)
+                if ! "$repo_root/scripts/check-execution-authority.py" --path "$file"; then
+                    echo "execution authority check rejected: $relative" >&2
+                    exit 2
+                fi
+                ;;
+        esac
         ;;
     "$repo_root"/completions/*.json | completions/*.json)
         command -v jq >/dev/null 2>&1 || exit 0

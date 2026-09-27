@@ -42,6 +42,7 @@
       "Bash(scripts/check-ai-guidance.sh)",
       "Bash(scripts/check-shell-proxy-capabilities.py)",
       "Bash(scripts/check-portability.py)",
+      "Bash(scripts/check-execution-authority.py:*)",
       "Bash(scripts/check-file-budget.py)",
       "Bash(scripts/check-file-budget.py --list)",
       "Bash(scripts/check-file-budget.py --update)",
@@ -50,6 +51,26 @@
       "Bash(scripts/install-runtime-skills.sh --status:*)",
       "Bash(scripts/install-runtime-skills.sh --dry-run:*)"
     ]
+  },
+  "skillOverrides": {
+    "doge-shell-builtin-commands": "name-only",
+    "doge-shell-chat-tools": "name-only",
+    "doge-shell-command-palette-ai": "name-only",
+    "doge-shell-completion-spec": "name-only",
+    "doge-shell-env-startup": "name-only",
+    "doge-shell-history-frecency": "name-only",
+    "doge-shell-lisp-config": "name-only",
+    "doge-shell-notebook-markdown": "name-only",
+    "doge-shell-parser-shell": "name-only",
+    "doge-shell-process-pty": "name-only",
+    "doge-shell-prompt-terminal-ui": "name-only",
+    "doge-shell-repl-completion": "name-only",
+    "doge-shell-safety-policy": "name-only",
+    "doge-shell-serve-web": "name-only",
+    "doge-shell-execution-semantics": "name-only",
+    "dsh-skill-authoring": "name-only",
+    "dsh-chat": "user-invocable-only",
+    "dsh-cron": "user-invocable-only"
   },
   "hooks": {
     "PostToolUse": [

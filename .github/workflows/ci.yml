@@ -86,6 +86,13 @@ jobs:
         timeout-minutes: 15
         run: cargo test --workspace < /dev/null
 
+      - name: Agent eval fixture contract
+        run: |
+          python3 scripts/check-agent-eval-schemas.py
+          python3 scripts/check-agent-eval-fixtures.py
+          python3 scripts/eval-agent-routing.py
+          scripts/check-ai-guidance.sh
+
   contract:
     name: contract (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["normalized", "grade"],
+  "properties": {
+    "normalized": {
+      "type": "object",
+      "required": ["runner", "runner_version", "model", "case_id", "success", "exit_code", "duration_ms", "prompt_tokens", "cached_prompt_tokens", "completion_tokens", "tool_calls", "command_calls", "files_changed", "diff_insertions", "diff_deletions", "validation_commands", "trace_available"],
+      "properties": {
+        "runner": {"enum": ["codex", "claude"]},
+        "runner_version": {"type": "string"},
+        "model": {"type": ["string", "null"]},
+        "case_id": {"type": "string"},
+        "success": {"type": "boolean"},
+        "exit_code": {"type": "integer"},
+        "duration_ms": {"type": "integer"},
+        "prompt_tokens": {"type": ["integer", "null"]},
+        "cached_prompt_tokens": {"type": ["integer", "null"]},
+        "completion_tokens": {"type": ["integer", "null"]},
+        "tool_calls": {"type": "integer"},
+        "command_calls": {"type": "integer"},
+        "files_changed": {"type": "array", "items": {"type": "string"}},
+        "diff_insertions": {"type": "integer"},
+        "diff_deletions": {"type": "integer"},
+        "validation_commands": {"type": "array", "items": {"type": "string"}},
+        "trace_available": {"type": "boolean"}
+      }
+    },
+    "grade": {
+      "type": "object",
+      "required": ["outcome", "correctness", "process", "efficiency", "warnings"],
+      "properties": {
+        "outcome": {"type": "object", "required": ["pass"], "properties": {"pass": {"type": "boolean"}}},
+        "correctness": {"type": "object"},
+        "process": {"type": "object"},
+        "efficiency": {"type": "object"},
+        "warnings": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

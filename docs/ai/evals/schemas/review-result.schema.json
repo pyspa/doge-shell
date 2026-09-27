@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["verdict", "findings"],
+  "properties": {
+    "verdict": {"enum": ["clean", "changes-requested"]},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "path", "summary"],
+        "properties": {
+          "severity": {"enum": ["critical", "high", "medium", "low"]},
+          "path": {"type": "string"},
+          "line": {"type": ["integer", "null"]},
+          "summary": {"type": "string"},
+          "invariant": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

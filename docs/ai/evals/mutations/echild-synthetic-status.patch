@@ -1,0 +1,11 @@
+--- a/dsh/src/process/process.rs
++++ b/dsh/src/process/process.rs
+@@ -309,7 +309,7 @@
+                     self.state = state;
+                 }
+                 Ok(WaitPidObservation::StillAlive) => {}
+-                Ok(WaitPidObservation::NoChild) => {}
++                Ok(WaitPidObservation::NoChild) => { self.state = ProcessState::Completed(0, None); }
+                 Err(nix::errno::Errno::EINTR) => {}
+                 Err(err) => {
+                     debug!(

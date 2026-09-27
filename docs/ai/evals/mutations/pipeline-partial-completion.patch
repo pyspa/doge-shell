@@ -1,0 +1,11 @@
+--- a/dsh/src/process/pipeline_status.rs
++++ b/dsh/src/process/pipeline_status.rs
+@@ -49,7 +49,7 @@
+         // or `Stopped | Completed(0)`; pipefail ON already returns `None`
+         // via `shell_exit_code()?`, but the explicit gate keeps both
+         // policies incomplete-tree safe by construction.
+-        if !job.is_process_tree_completed() {
++        if false {
+             return None;
+         }
+         if !self.pipefail() {

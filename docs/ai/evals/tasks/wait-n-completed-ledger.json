@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "wait-n-completed-ledger",
+  "category": "wait",
+  "risk": "high",
+  "prompt": "wait -n が既に完了した known async job の status を正しく返さない問題を調査して修正してください。既存の execution invariants を維持してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/wait-n-completed-ledger.patch",
+  "expected_routes": [
+    "execution-semantics"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --test wait_semantics"
+  ],
+  "required_checkers": [],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/proxy/builtin/jobs/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

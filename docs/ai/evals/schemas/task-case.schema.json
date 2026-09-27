@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "id", "category", "risk", "prompt", "mutation", "expected_routes", "required_tests", "forbidden_commands", "allowed_change_prefixes", "max_changed_files", "deterministic_checks"],
+  "properties": {
+    "version": {"const": 1},
+    "id": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
+    "category": {"type": "string"},
+    "risk": {"enum": ["high", "normal"]},
+    "prompt": {"type": "string", "minLength": 1},
+    "mutation": {"type": "string"},
+    "expected_routes": {"type": "array", "items": {"type": "string"}},
+    "required_tests": {"type": "array", "items": {"type": "string"}},
+    "required_checkers": {"type": "array", "items": {"type": "string"}},
+    "forbidden_commands": {"type": "array", "items": {"type": "string"}},
+    "allowed_change_prefixes": {"type": "array", "items": {"type": "string"}},
+    "max_changed_files": {"type": "integer", "minimum": 1},
+    "deterministic_checks": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

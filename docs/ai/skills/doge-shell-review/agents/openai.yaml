@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Review"
+  short_description: "Review high-risk changes independently against invariants."
+  default_prompt: "Use $doge-shell-review to inspect the current diff, relevant invariants, and validation without implementing changes."

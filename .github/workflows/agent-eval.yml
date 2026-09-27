@@ -1,0 +1,85 @@
+name: Agent evaluation
+permissions:
+  contents: read
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Agent CLI"
+        required: true
+        type: choice
+        options: [codex, claude]
+      case:
+        description: "Curated task case"
+        required: true
+        type: choice
+        options:
+          - wait-n-completed-ledger
+          - pipeline-partial-completion
+          - echild-synthetic-status
+          - background-sigcont-ownership
+          - completion-local-spec
+          - platform-user-completion
+          - runtime-authority
+          - ai-skill-routing
+          - shell-proxy-capability
+      repeat:
+        description: "Repeat count"
+        required: true
+        default: "1"
+      model:
+        description: "Optional model override"
+        required: false
+
+jobs:
+  evaluate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install runner
+        env:
+          RUNNER: ${{ inputs.runner }}
+        run: |
+          if [ "$RUNNER" = codex ]; then
+            npm install --global --ignore-scripts @openai/codex@0.157.1
+          else
+            npm install --global @anthropic-ai/claude-code@2.1.281
+          fi
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y mold
+      - name: Run isolated evaluation
+        id: eval
+        env:
+          OPENAI_API_KEY: ${{ inputs.runner == 'codex' && secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ inputs.runner == 'claude' && secrets.ANTHROPIC_API_KEY || '' }}
+          RUNNER: ${{ inputs.runner }}
+          CASE: ${{ inputs.case }}
+          REPEAT: ${{ inputs.repeat }}
+          MODEL: ${{ inputs.model }}
+        run: |
+          args=(--runner "$RUNNER" --case "$CASE" --repeat "$REPEAT" --output-dir "$RUNNER_TEMP/agent-evals")
+          if [ -n "$MODEL" ]; then args+=(--model "$MODEL"); fi
+          python3 scripts/run-agent-eval.py "${args[@]}"
+      - name: Redact artifacts
+        id: redact
+        if: always()
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python3 scripts/redact-agent-eval-artifacts.py "$RUNNER_TEMP/agent-evals"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always() && steps.redact.outcome == 'success'
+        with:
+          name: agent-eval-${{ inputs.runner }}-${{ inputs.case }}
+          path: ${{ runner.temp }}/agent-evals
+          if-no-files-found: ignore

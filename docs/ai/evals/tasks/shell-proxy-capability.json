@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "shell-proxy-capability",
+  "category": "capability",
+  "risk": "normal",
+  "prompt": "ShellProxy に追加された method が capability trait を迂回する問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/shell-proxy-capability.patch",
+  "expected_routes": [
+    "shell-proxy-capability"
+  ],
+  "required_tests": [
+    "python3 scripts/check-shell-proxy-capabilities.py"
+  ],
+  "required_checkers": [],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh-builtin/src/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

@@ -68,6 +68,7 @@
     "doge-shell-safety-policy": "name-only",
     "doge-shell-serve-web": "name-only",
     "doge-shell-execution-semantics": "name-only",
+    "doge-shell-review": "name-only",
     "dsh-skill-authoring": "name-only",
     "dsh-chat": "user-invocable-only",
     "dsh-cron": "user-invocable-only"

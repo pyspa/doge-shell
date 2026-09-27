@@ -36,6 +36,7 @@
 - OS依存コード・設定では `scripts/check-portability.py`、ShellProxy・能力trait変更では `scripts/check-shell-proxy-capabilities.py` を実行する。
 - `Cargo.toml` / `README.md` / `LICENSE` 変更では `scripts/check-project-consistency.py` を実行する。
 - 全体の `./scripts/check.sh` は段階的な設計変更の最後とリリース前に実行する。
+- 長時間タスクでは `.agent/TASK.md` を使える。手順は `docs/ai/herdr-development.md` を参照する。
 - 失敗例の再発防止は `task-map.md` または該当Skillのreferenceへ短く戻す。
 
 ## Skillの配置

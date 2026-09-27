@@ -1,0 +1,6 @@
+--- a/dsh-builtin/src/lib.rs
++++ b/dsh-builtin/src/lib.rs
+@@ -212,0 +213,3 @@
++    /// Misplaced compatibility method.
++    fn eval_probe(&self) -> bool { true }
++

@@ -40,4 +40,13 @@
 - A top-level managed async AND-OR helper is the associated PID and process-group leader; nested commands belong to that job group.
 - Integration/contract cleanup for a deliberately long-lived async AND-OR job must terminate the owned process group, not only `$!`. Signaling `$!` as a positive PID kills only the helper and can leave helper-spawned descendants alive.
 - Long-lived contract helpers must be explicitly reaped/terminated. Do not hide leaks by redirecting all inherited descriptors to /dev/null.
-- Contract case `timeout_ms` currently bounds the primary dogesh child wait, not an indefinitely-held stdout/stderr EOF after that primary child exits. Therefore descendant FD ownership must remain correct.
+- Contract timeout is a total deadline covering primary process exit and
+  capture-pipe EOF.
+- Primary exit alone does not complete a case; legitimate descendant-held
+  output is collected until EOF or deadline.
+- On deadline, the harness never waits indefinitely for EOF: it kills the
+  owned shell process group, performs one ready-now partial drain, closes
+  its capture readers, and reports Timeout.
+- Long-lived async jobs in individual contracts still require explicit
+  job-group cleanup; the harness does not enumerate or reap unrelated
+  process groups.

@@ -370,13 +370,24 @@ fn run_case_script(case: &ContractCase, script: &str, timeout: Duration) -> Cont
             Ok(()) => ContractOutcome::Pass,
             Err(failure) => ContractOutcome::Fail(failure),
         },
-        Err(WaitError::TimedOut(output)) => {
+        Err(WaitError::TimedOut {
+            output,
+            phase,
+            stdout_eof,
+            stderr_eof,
+        }) => {
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             ContractOutcome::Timeout(ContractFailure {
                 detail: format!(
-                    "case {} timed out after {timeout:?}\nscript:\n{}\npartial stdout:\n{}\npartial stderr:\n{}",
-                    case.id, case.script, stdout, stderr
+                    "case {} timed out after {timeout:?}\nphase: {}\nstdout eof: {}\nstderr eof: {}\nscript:\n{}\npartial stdout:\n{}\npartial stderr:\n{}",
+                    case.id,
+                    phase.as_str(),
+                    if stdout_eof { "yes" } else { "no" },
+                    if stderr_eof { "yes" } else { "no" },
+                    case.script,
+                    stdout,
+                    stderr
                 ),
             })
         }

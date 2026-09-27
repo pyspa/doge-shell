@@ -14,6 +14,7 @@
 pub mod contract;
 pub mod process;
 
+use nix::unistd::Pid;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -22,7 +23,6 @@ use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tempfile::TempDir;
-use wait_timeout::ChildExt;
 
 fn child_process_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -80,32 +80,24 @@ where
             .expect("failed to write dsh stdin");
     }
 
-    if child
-        .wait_timeout(timeout)
-        .expect("failed while waiting for dsh")
-        .is_none()
-    {
-        let process_group = nix::unistd::Pid::from_raw(child.id() as i32);
-        match nix::sys::signal::killpg(process_group, nix::sys::signal::Signal::SIGKILL) {
-            Ok(()) | Err(nix::errno::Errno::ESRCH) => {}
-            Err(err) => {
-                let _ = child.kill();
-                panic!("failed to kill timed-out dsh process group: {err}");
-            }
-        }
-        let output = child
-            .wait_with_output()
-            .expect("failed to collect timed-out dsh output");
-        panic!(
-            "dsh did not exit within {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+    let pgid = Pid::from_raw(child.id() as i32);
+    match process::wait_child_with_output_deadline(child, pgid, timeout) {
+        Ok(output) => output,
+        Err(process::WaitError::TimedOut {
+            output,
+            phase,
+            stdout_eof,
+            stderr_eof,
+        }) => panic!(
+            "dsh did not complete within {timeout:?} (phase: {}, stdout eof: {stdout_eof}, stderr eof: {stderr_eof})\nstdout:\n{}\nstderr:\n{}",
+            phase.as_str(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
-        );
+        ),
+        Err(process::WaitError::Io(err)) => {
+            panic!("failed to collect dsh output: {err}");
+        }
     }
-
-    child
-        .wait_with_output()
-        .expect("failed to collect dsh output")
 }
 
 /// Absolute path to an external `true`.

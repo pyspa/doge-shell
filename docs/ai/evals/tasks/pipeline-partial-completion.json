@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "pipeline-partial-completion",
+  "category": "pipeline",
+  "risk": "high",
+  "prompt": "pipeline の末尾段だけが完了した時に、未完了の tree を完了扱いする問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/pipeline-partial-completion.patch",
+  "expected_routes": [
+    "execution-semantics"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --lib process::pipeline_status"
+  ],
+  "required_checkers": [],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/process/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

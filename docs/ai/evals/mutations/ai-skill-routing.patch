@@ -1,0 +1,11 @@
+--- a/docs/ai/agent-routing.json
++++ b/docs/ai/agent-routing.json
+@@ -41,7 +41,7 @@
+         "dsh/src/process/reexec/"
+       ],
+       "skills": [
+-        "doge-shell-execution-semantics"
++        "doge-shell-process-pty"
+       ],
+       "references": [
+         "docs/ai/skills/doge-shell-repo/references/invariants/execution.md",

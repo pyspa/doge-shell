@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "ai-skill-routing",
+  "category": "ai",
+  "risk": "normal",
+  "prompt": "wait -n のタスクが誤った Skill に routing される問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/ai-skill-routing.patch",
+  "expected_routes": [
+    "ai-guidance"
+  ],
+  "required_tests": [
+    "python3 scripts/eval-agent-routing.py"
+  ],
+  "required_checkers": [
+    "scripts/check-ai-guidance.sh"
+  ],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "docs/ai/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

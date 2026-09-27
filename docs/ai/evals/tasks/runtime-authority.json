@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "runtime-authority",
+  "category": "runtime",
+  "risk": "normal",
+  "prompt": "editor 起動が CommandRuntimeSnapshot を迂回する問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/runtime-authority.patch",
+  "expected_routes": [
+    "builtin-commands"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --lib utils::editor"
+  ],
+  "required_checkers": [
+    "python3 scripts/check-runtime-authority.py"
+  ],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/utils/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

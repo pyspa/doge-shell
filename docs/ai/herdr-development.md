@@ -1,0 +1,7 @@
+# Long-running AI development
+
+Use `python3 scripts/agent-task.py init --goal "..." --risk high` only for multi-crate work, at least three milestones, execution architecture changes, long debugging, multiple context windows, or coordinated agents. Fill **Done when** and **Hard constraints**, then run `python3 scripts/agent-task.py validate`. Keep **Current state** near ten bullets; update **Decisions** only when a decision changes and remove resolved **Blockers**. `status` is a short summary; `clear` deletes only when explicitly called. The copy lives in ignored `.agent/TASK.md`.
+
+If Codex Goals are available, use Goal for the completion condition and TASK.md for portable repository-local state. Avoid maintaining two detailed plans. For high-risk changes, let one implementer edit, run focused validation, then give an independent reviewer the packet from `scripts/agent-review-context.py --json` and the diff. The reviewer does not inherit the implementer's conversation. Resolve concrete findings and use at most two review passes.
+
+Herdr panes can host an implementer and read-only reviewer (`pane split`, `agent start`, `agent prompt --wait`, `agent read`). An `idle` or `done` pane only means the agent can accept input; tests and review findings determine correctness. Do not run two implementers in the same worktree.

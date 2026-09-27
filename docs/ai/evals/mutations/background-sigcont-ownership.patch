@@ -1,0 +1,12 @@
+--- a/dsh/src/proxy/builtin/jobs/fg.rs
++++ b/dsh/src/proxy/builtin/jobs/fg.rs
+@@ -329,6 +329,9 @@
+     mut job: crate::process::Job,
+     resume_result: Result<()>,
+ ) -> Result<()> {
++    if resume_result.is_err() {
++        return resume_result;
++    }
+     if resume_result.is_ok() {
+         job.mark_stopped_processes_running();
+     } else {

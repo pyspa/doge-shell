@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "platform-user-completion",
+  "category": "platform",
+  "risk": "normal",
+  "prompt": "macOS の user completion が正しい account source を使えない問題を調査して修正してください。Linux と macOS を維持してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/platform-user-completion.patch",
+  "expected_routes": [
+    "repl-completion"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --lib completion::generators::user::tests"
+  ],
+  "required_checkers": [
+    "python3 scripts/check-portability.py"
+  ],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/completion/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

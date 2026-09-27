@@ -1,0 +1,11 @@
+--- a/dsh/src/completion/generators/user.rs
++++ b/dsh/src/completion/generators/user.rs
+@@ -132,7 +132,7 @@
+ /// header -- and holds nothing but the `_`-prefixed service accounts, so
+ /// parsing it offered `root` and nothing else. `getpwent` asks Directory
+ /// Service and returns the accounts a person would actually type.
+-#[cfg(target_os = "macos")]
++#[cfg(target_os = "linux")]
+ fn load_users(include_system_users: bool) -> Vec<CompletionCandidate> {
+     use std::collections::HashSet;
+     use std::ffi::CStr;

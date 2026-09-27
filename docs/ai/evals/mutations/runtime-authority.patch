@@ -1,0 +1,10 @@
+--- a/dsh/src/utils/editor.rs
++++ b/dsh/src/utils/editor.rs
+@@ -58,6 +58,4 @@
+-    let status = snapshot
+-        .std_command(parts[0])
+-        .ok_or_else(|| anyhow::anyhow!("No editor found"))?
++    let status = std::process::Command::new(parts[0])
+         .args(&parts[1..])
+         .arg(path)
+         .status()

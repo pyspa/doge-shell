@@ -1,0 +1,11 @@
+--- a/dsh/src/proxy/builtin/jobs/wait/mod.rs
++++ b/dsh/src/proxy/builtin/jobs/wait/mod.rs
+@@ -672,7 +672,7 @@
+         // Already-completed fast path, in target order: serve retained
+         // statuses without touching the OS wait layer.
+         for target in &targets {
+-            if shell.known_async.completed_status(target.pid).is_some() {
++            if shell.known_async.completed_status(target.pid).is_none() {
+                 let status = shell
+                     .known_async
+                     .consume_completed(target.pid)

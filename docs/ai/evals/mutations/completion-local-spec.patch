@@ -1,0 +1,11 @@
+--- a/dsh/src/completion/dynamic/registry.rs
++++ b/dsh/src/completion/dynamic/registry.rs
+@@ -54,7 +54,7 @@
+         // row rather than a wrapper method plus a `match` arm. `family_for`
+         // still classifies every id - the row lives in a family module's
+         // table - it just does not have to route these.
+-        if let Some(candidates) = local::collect(provider, request) {
++        if let Some(candidates) = local::collect(provider, request) && false {
+             return Some(candidates);
+         }
+         (self.collector)(provider, request)

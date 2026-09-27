@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "id": "echild-synthetic-status",
+  "category": "echild",
+  "risk": "high",
+  "prompt": "ECHILD の観測から synthetic success を生成してしまう問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/echild-synthetic-status.patch",
+  "expected_routes": [
+    "execution-semantics"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --lib update_state_does_not_synthesize_exit_one_on_echild"
+  ],
+  "required_checkers": [
+    "python3 scripts/check-execution-authority.py"
+  ],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/process/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

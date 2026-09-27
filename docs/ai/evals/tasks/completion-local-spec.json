@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "id": "completion-local-spec",
+  "category": "completion",
+  "risk": "normal",
+  "prompt": "LocalSpec の dynamic completion provider が不適切な family collector へ流れる問題を調査して修正してください。 最小範囲で検証してください。",
+  "mutation": "docs/ai/evals/mutations/completion-local-spec.patch",
+  "expected_routes": [
+    "completion-spec"
+  ],
+  "required_tests": [
+    "cargo test -p doge-shell --lib completion::dynamic::tests::every_registered_provider_has_a_dispatch_arm"
+  ],
+  "required_checkers": [],
+  "forbidden_commands": [
+    "git reset --hard",
+    "git clean -fdx",
+    "git push",
+    "git commit",
+    "git add"
+  ],
+  "allowed_change_prefixes": [
+    "dsh/src/completion/"
+  ],
+  "max_changed_files": 6,
+  "deterministic_checks": [
+    "agent_exit_success",
+    "structured_trace_available",
+    "mutation_reverted",
+    "required_tests_pass",
+    "required_checkers_pass",
+    "diff_scope_pass",
+    "file_count_pass",
+    "working_tree_valid",
+    "forbidden_commands_absent",
+    "mutation_index_intact"
+  ]
+}

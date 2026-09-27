@@ -1,0 +1,8 @@
+# Production waitpid calls: canonical single-PID observation boundary.
+waitpid dsh/src/process/wait.rs
+
+# Job ownership is removed only by normal-exit detachment and jobs builtins.
+wait_jobs.remove dsh/src/shell/job_exit.rs
+wait_jobs.remove dsh/src/proxy/builtin/jobs/fg.rs
+wait_jobs.remove dsh/src/proxy/builtin/jobs/bg.rs
+wait_jobs.remove dsh/src/proxy/builtin/jobs/wait/mod.rs

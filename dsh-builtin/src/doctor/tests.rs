@@ -248,6 +248,31 @@ fn validation_commands_follow_changed_paths() {
     );
 }
 
+#[test]
+fn execution_paths_request_authority_check() {
+    for path in [
+        "dsh/src/process/job.rs",
+        "dsh/src/proxy/builtin/jobs/wait/mod.rs",
+        "dsh/src/shell/process_substitution/mod.rs",
+        "dsh/src/shell/job.rs",
+        "dsh/src/shell/job_exit.rs",
+    ] {
+        let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-execution-authority.py"),
+            "{path}: {commands:?}"
+        );
+    }
+    let unrelated = validation_commands_for_paths(&[PathBuf::from("dsh/src/repl/mod.rs")]);
+    assert!(
+        !unrelated
+            .iter()
+            .any(|cmd| cmd == "scripts/check-execution-authority.py")
+    );
+}
+
 /// The linker flags and the CI matrix are the two non-Rust inputs the
 /// portability lint covers, so they have to reach it without a `.rs` change.
 #[test]

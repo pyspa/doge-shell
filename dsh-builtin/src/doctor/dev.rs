@@ -108,9 +108,20 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut has_rust = false;
     let mut needs_portability = false;
     let mut needs_file_budget = false;
+    let mut needs_execution_authority = false;
 
     for path in paths {
         let text = path.to_string_lossy().replace('\\', "/");
+        if text.starts_with("dsh/src/process/")
+            || text.starts_with("dsh/src/proxy/builtin/jobs/")
+            || text.starts_with("dsh/src/shell/process_substitution/")
+            || text == "dsh/src/shell/job.rs"
+            || text == "dsh/src/shell/job_exit.rs"
+            || text == "scripts/check-execution-authority.py"
+            || text == "scripts/execution-authority-allowlist.txt"
+        {
+            needs_execution_authority = true;
+        }
         if text.ends_with(".rs") {
             has_rust = true;
         }
@@ -235,6 +246,9 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     }
     if needs_shell_proxy_check {
         add_command(&mut commands, "scripts/check-shell-proxy-capabilities.py");
+    }
+    if needs_execution_authority {
+        add_command(&mut commands, "scripts/check-execution-authority.py");
     }
 
     commands

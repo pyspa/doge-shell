@@ -26,10 +26,15 @@
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/mod.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when `changepwd` behavior changes
-- process / PTY / job / raw terminal / colored output
+- process / PTY / raw terminal / colored output
   - Skill: `docs/ai/skills/doge-shell-process-pty/SKILL.md`
-  - Read: `dsh/src/process/`, `dsh/src/shell/eval.rs`, `dsh/src/terminal/`
+  - Read: `dsh/src/process/io.rs`, `dsh/src/process/job_pty.rs`, `dsh/src/process/pty.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
+- execution / pipeline / background jobs / wait / fg/bg / `$!` / ECHILD / process substitution / reexec / FD/PID/PGID ownership
+  - Skill: `docs/ai/skills/doge-shell-execution-semantics/SKILL.md`
+  - 先に読む: `docs/ai/skills/doge-shell-repo/references/invariants/execution.md`（lifecycle/ownership/harness）、`docs/ai/skills/doge-shell-repo/references/invariants/execution-background.md`（`$!`/`wait`/`fg`/`bg`）
+  - Read: `dsh/src/process/` (`wait.rs`, `job.rs`, `job_wait.rs`, `pipeline_status.rs`, `launch_outcome.rs`), `dsh/src/proxy/builtin/jobs/`, `dsh/src/shell/job_exit.rs`, `dsh/src/shell/job.rs`, `dsh/src/shell/process_substitution/`
+  - Validate: `cargo test -p doge-shell`; `waitpid` site や `wait_jobs` mutation を動かしたら `scripts/check-execution-authority.py` も通す
 - chatgpt / MCP / tool / runtime skill / OpenAI config
   - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
   - 先に読む: [ai/README.md](ai/README.md)（AI 機能の方針。再実装してはいけないものの一覧）

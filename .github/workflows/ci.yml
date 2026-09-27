@@ -220,6 +220,9 @@ jobs:
       - name: Runtime authority
         run: scripts/check-runtime-authority.py
 
+      - name: Execution authority
+        run: scripts/check-execution-authority.py
+
       - name: File budget
         run: scripts/check-file-budget.py
 

@@ -7,7 +7,10 @@
 ## Claude Code 固有の手順
 
 - リポジトリ作業では最初に Skill `doge-shell-repo` を使い、そこから狭い Skill / `references/` に降りる。canonical source は `docs/ai/skills/`。
+- 非自明な作業は `scripts/agent-context.py` で編集前のSkillを選ぶ。編集後の検証選定は `doctor validate` に従う。
+- rust-analyzer Code Intelligenceが使える場合はdefinition/reference/symbol navigationを広いファイル読みより優先する。使えない場合は `rg` を使い、LSPの有無をbuild/testの条件にしない。
 - Skill は `.claude/skills` -> `../docs/ai/skills` の symlink で全件がプロジェクトスコープに入る。追加導入は不要。
+  ただし常時 full metadata で載るのは core 3 件 (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`) だけで、domain Skill は `skillOverrides` で `name-only` に絞っている。作業開始時は `doge-shell-repo` の task map に従い、必要な domain Skill だけ明示的に読む。
   symlink が辿られず Skill 一覧に出ない場合だけ `scripts/install-runtime-skills.sh --target claude-project` で実体をコピーする（ユーザー全体に入れるなら `--target claude`。`--profile` を付けると 4 個に絞られるので付けない）。
 - 検証は可能なら `doctor validate` の提案を優先し、なければ `docs/ai/skills/doge-shell-repo/references/test-scope.md` で最小コマンドを選ぶ。`dsh/` の Cargo package 名は `doge-shell`（`-p dogesh` は存在しない）。
 - `doctor` は CLI サブコマンドではなく shell builtin。`dogesh doctor validate` は失敗する。`./target/release/dogesh -c "doctor validate --json"` と呼ぶ。見ているのは `git status --short` の未コミット分だけで、release バイナリはソースより古いことがある。

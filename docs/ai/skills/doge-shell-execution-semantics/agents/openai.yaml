@@ -1,0 +1,4 @@
+interface:
+  display_name: "Doge Shell Execution Semantics"
+  short_description: "Inspect pipelines, jobs, wait/fg/bg, and ownership narrowly."
+  default_prompt: "Use $doge-shell-execution-semantics to work on pipeline status, background jobs, wait/fg/bg, process substitution, and FD/PID/PGID ownership with minimal reading and validation."

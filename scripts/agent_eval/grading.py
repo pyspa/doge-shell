@@ -45,25 +45,28 @@ def grade(case: Case, worktree: Path, normalized: dict, validation: dict, index_
         "diff_scope_pass": all(any(path.startswith(prefix) for prefix in case.allowed_change_prefixes) for path in paths),
         "file_count_pass": len(paths) <= case.max_changed_files,
         "working_tree_valid": git("diff", "--check", cwd=worktree, check=False).returncode == 0,
-        "forbidden_commands_absent": not any(bad in command for bad in case.forbidden_commands for command in commands),
+        "forbidden_commands_absent": not any(bad in command for bad in case.forbidden_commands for command in commands) if normalized["trace_available"] else None,
         "mutation_index_intact": git("ls-files", "-s", cwd=worktree).stdout == index_baseline,
     }
     trace_text = "\n".join(commands)
-    checks["expected_route_accessed"] = any(route in trace_text for route in case.expected_routes)
-    checks["workspace_test_before_focus"] = not any("cargo test --workspace" in command for command in commands)
+    checks["expected_route_accessed"] = any(route in trace_text for route in case.expected_routes) if normalized["trace_available"] else None
+    checks["workspace_test_before_focus"] = not any("cargo test --workspace" in command for command in commands) if normalized["trace_available"] else None
     required = case.deterministic_checks
-    outcome = all(checks.get(name, False) for name in required)
+    trace_only = {"structured_trace_available", "forbidden_commands_absent", "expected_route_accessed", "workspace_test_before_focus"}
+    outcome = all(checks.get(name, False) for name in required if name not in trace_only)
     warnings = []
-    if not checks["expected_route_accessed"]:
+    if checks["expected_route_accessed"] is False:
         warnings.append("expected route access was not visible in the command trace")
-    if not checks["workspace_test_before_focus"]:
+    if checks["workspace_test_before_focus"] is False:
         warnings.append("workspace-wide test was used")
-    if normalized["command_calls"] > 40:
+    if checks["forbidden_commands_absent"] is False:
+        warnings.append("forbidden command was visible in the trace")
+    if normalized["command_calls"] is not None and normalized["command_calls"] > 40:
         warnings.append("command calls exceeded 40")
     return {
         "outcome": {"pass": outcome},
-        "correctness": {"score": float(checks["mutation_reverted"] and checks["required_tests_pass"])},
-        "process": {"checks": checks, "score": sum(checks.values()) / len(checks)},
+        "correctness": {key: checks[key] for key in ("mutation_reverted", "required_tests_pass", "required_checkers_pass", "diff_scope_pass", "file_count_pass", "working_tree_valid", "mutation_index_intact")},
+        "process": {"checks": checks},
         "efficiency": {
             key: normalized[key]
             for key in ("duration_ms", "prompt_tokens", "cached_prompt_tokens", "completion_tokens", "tool_calls", "command_calls", "diff_insertions", "diff_deletions")

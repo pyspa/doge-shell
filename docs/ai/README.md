@@ -12,9 +12,9 @@
 - Codex runtime skills: `~/.codex/skills/`
 - doge-shell runtime skills: `~/.config/dogesh/skills/`
 - Claude Code runtime skills: `~/.claude/skills/` (`CLAUDE_CONFIG_DIR` で上書き可)
-- Claude Code project skills: `<repo>/.claude/skills/` (`../docs/ai/skills` への symlink。全 Skill は project scope に存在するが、`skillOverrides` により core 3 件 (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`) だけが full metadata で常駐し、domain Skill は `name-only`、製品利用者向け `dsh-chat` / `dsh-cron` は `user-invocable-only`。`doge-shell-repo` の task map が必要時に domain Skill へ明示 route する)
+- Claude Code project skills: `<repo>/.claude/skills/` (core 3件だけのcanonical symlink)
 - doge-shell project skills: `<project>/.dogesh/skills/` (dogesh の `!` チャットだけが読む。installer の対象外で、リポジトリが自分で持つ)
-- cross-agent project skills: `<project>/.agents/skills/` (**読み取り専用**の相互運用 root。installer の対象外 — 他ツールと共有するディレクトリを installer が `rm -rf` するのは越権)
+- cross-agent project skills: `<repo>/.agents/skills/` (core 3件だけのcanonical symlink。installer の対象外)
 
 ## 使い分け
 - `AGENTS.md`: この repo で最初に守る短いルールだけを書く。`CLAUDE.md` は `@AGENTS.md` を import するだけの薄いアダプタにし、内容は複製しない。
@@ -55,10 +55,7 @@ doctor skills
 - Codex 最小: `--profile codex-core` (`doge-shell-repo`)
 - Codex よく使う構成: `--profile codex-common` (`doge-shell-repo`, `doge-shell-validation`, `doge-shell-investigation`, `doge-shell-chat-tools`)
 - dogesh runtime 用: `--profile dogesh-common`
-- Claude Code 用: プロジェクト内では `.claude/skills` の symlink で全件が入るので導入不要。
-  全Skillはproject scopeに存在するが、`.claude/settings.json` の `skillOverrides` によりfull metadataはcoreの `doge-shell-repo` / `doge-shell-validation` / `doge-shell-investigation` だけ。領域別Skillは `name-only`、製品利用者向け `dsh-chat` / `dsh-cron` は `user-invocable-only`。`doge-shell-repo` のtask mapと `scripts/agent-context.py` が必要なSkillへ案内する。
-  symlink が使えない環境だけ `--target claude-project`（リポジトリ内へコピー）か `--target claude`（`~/.claude/skills/` へコピー）を使う。
-  `--profile claude-common` を付けると 4 個に絞られ、SKILL.md 間の相対リンクが切れるので通常は付けない。
+- Claude Code 用: `.claude/skills` はcore 3件だけ。領域別Skillは `scripts/agent-context.py` の `skills[].path` から直接読む。global installationは通常不要。`--profile claude-common` はglobal fallback用。
 - 領域別: `doge-shell-parser-shell`, `doge-shell-process-pty`, `doge-shell-execution-semantics`, `doge-shell-repl-completion`, `doge-shell-completion-spec`, `doge-shell-prompt-terminal-ui`, `doge-shell-env-startup`, `doge-shell-lisp-config`, `doge-shell-history-frecency`, `doge-shell-command-palette-ai`, `doge-shell-builtin-commands`, `doge-shell-serve-web`, `doge-shell-notebook-markdown`, `doge-shell-safety-policy`
 - Skill 自体を書き足すとき (製品利用者向けにも公開): `dsh-skill-authoring`
 - 製品利用者向け: `--profile dogesh-user` (`dsh-cron`, `dsh-skill-authoring`, `dsh-chat`)

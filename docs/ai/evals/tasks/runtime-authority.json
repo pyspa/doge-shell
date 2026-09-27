@@ -27,14 +27,12 @@
   "max_changed_files": 6,
   "deterministic_checks": [
     "agent_exit_success",
-    "structured_trace_available",
     "mutation_reverted",
     "required_tests_pass",
     "required_checkers_pass",
     "diff_scope_pass",
     "file_count_pass",
     "working_tree_valid",
-    "forbidden_commands_absent",
     "mutation_index_intact"
   ]
 }

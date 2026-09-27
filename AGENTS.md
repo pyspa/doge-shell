@@ -9,6 +9,7 @@
 - 既存のユーザー変更を破棄しない。
 - `Cargo.toml` でcrate境界を確認し、`rg --files` / `rg -n` で当たりを付けてから狭く読む。
 - 該当Skillを先に使い、詳細な `references/` は必要になったときだけ読む。
+- 利用可能で信頼できるsymbol navigationを優先する。使えない場合は `rg` とcompiler/test結果を使う。LSPを必須検証にしない。
 - `README.md` 全文を最初から読まない。公開挙動・設定例の更新時だけ該当箇所を読む。
 - repo-trackedな生成・整形は目的が明確なときだけ行う。
 - 400行超の非テストファイルには `//!` module docを付け、800行超は分割を検討する。`scripts/check-file-budget.py` が検査する。
@@ -36,11 +37,11 @@
 - OS依存コード・設定では `scripts/check-portability.py`、ShellProxy・能力trait変更では `scripts/check-shell-proxy-capabilities.py` を実行する。
 - `Cargo.toml` / `README.md` / `LICENSE` 変更では `scripts/check-project-consistency.py` を実行する。
 - 全体の `./scripts/check.sh` は段階的な設計変更の最後とリリース前に実行する。
-- 長時間タスクでは `.agent/TASK.md` を使える。手順は `docs/ai/herdr-development.md` を参照する。
+- 長時間タスクで `.agent/TASK.md` が存在すれば再開前に読み、Current state / Decisions / Blockersを短く保つ。手順は `docs/ai/herdr-development.md` を参照する。
 - 失敗例の再発防止は `task-map.md` または該当Skillのreferenceへ短く戻す。
 
 ## Skillの配置
 
 - canonical sourceは `docs/ai/skills/`。Codex runtimeには原則 `doge-shell-repo` だけを常設し、領域別Skillは必要時に読む。
-- `.claude/skills` は `../docs/ai/skills` へのsymlinkを維持する。導入・更新は `scripts/install-runtime-skills.sh` を使う。
+- `.agents/skills` と `.claude/skills` はcore 3件だけをcanonical directoryへのsymlinkとして公開する。domain Skillはrouterが返す `skills[].path` を直接読む。
 - `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変えたら `scripts/check-ai-guidance.sh` を実行する。

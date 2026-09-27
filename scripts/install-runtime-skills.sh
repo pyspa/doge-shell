@@ -4,18 +4,16 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/install-runtime-skills.sh [--target codex|dogesh|claude|claude-project|both] [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh [codex|dogesh|claude|claude-project|both]
+Usage: scripts/install-runtime-skills.sh [--target codex|dogesh|claude|both] [--profile name] [skill-name ...]
+       scripts/install-runtime-skills.sh [codex|dogesh|claude|both]
        scripts/install-runtime-skills.sh --list [--profile name] [skill-name ...]
-       scripts/install-runtime-skills.sh --status [--target codex|dogesh|claude|claude-project|both] [--profile name]
-       scripts/install-runtime-skills.sh --check-installed [--target codex|dogesh|claude|claude-project|both] [--profile name]
+       scripts/install-runtime-skills.sh --status [--target codex|dogesh|claude|both] [--profile name]
+       scripts/install-runtime-skills.sh --check-installed [--target codex|dogesh|claude|both] [--profile name]
 
 Installs sample runtime skills from docs/ai/skills/ into:
   codex  -> ~/.codex/skills
   dogesh -> ~/.config/dogesh/skills
   claude -> ~/.claude/skills   (Claude Code user-level skills; CLAUDE_CONFIG_DIR overrides ~/.claude)
-  claude-project -> <repo>/.claude/skills   (project-level fallback; only needed if the
-            .claude/skills -> ../docs/ai/skills symlink is not followed)
   both   -> codex and dogesh destinations
 
 Profiles:
@@ -79,7 +77,7 @@ while [ "$#" -gt 0 ]; do
             shift 2
             continue
             ;;
-        codex|dogesh|claude|claude-project|both)
+        codex|dogesh|claude|both)
             if [ "$mode" = "both" ] && [ "${#requested_skills[@]}" -eq 0 ]; then
                 mode="$1"
             else
@@ -103,7 +101,7 @@ if [ -n "$profile" ] && [ "${#requested_skills[@]}" -gt 0 ]; then
 fi
 
 case "$mode" in
-    codex|dogesh|claude|claude-project|both)
+    codex|dogesh|claude|both)
         ;;
     *)
         usage >&2
@@ -260,12 +258,6 @@ if [ "$status_only" -eq 1 ]; then
         fi
     fi
 
-    if [ "$mode" = "claude-project" ]; then
-        if ! skill_list | status_selected "$repo_root/.claude/skills" claude-project; then
-            status_failures=1
-        fi
-    fi
-
     if [ "$strict_status" -eq 1 ]; then
         exit "$status_failures"
     fi
@@ -282,12 +274,4 @@ fi
 
 if [ "$mode" = "claude" ]; then
     skill_list | install_selected "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills"
-fi
-
-if [ "$mode" = "claude-project" ]; then
-    if [ -L "$repo_root/.claude/skills" ]; then
-        echo "note: .claude/skills is a symlink to the canonical source; nothing to copy" >&2
-        exit 0
-    fi
-    skill_list | install_selected "$repo_root/.claude/skills"
 fi

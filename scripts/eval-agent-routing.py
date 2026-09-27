@@ -19,10 +19,12 @@ def main():
     for case in cases:
         result = route_context(manifest, case.get("topic", ""), case.get("paths", []))
         routes = result["routes"]
-        skills = {skill for route in routes for skill in route["skills"]}
+        skills = {skill["name"] for route in routes for skill in route["skills"]}
+        skill_paths_valid = all(skill["path"] == f"docs/ai/skills/{skill['name']}/SKILL.md" for route in routes for skill in route["skills"])
         refs = {ref for route in routes for ref in route["references"]}
         valid = (routes[0]["id"] == case["expected_primary_route"]
                  and set(case.get("expected_skills", [])) <= skills
+                 and skill_paths_valid
                  and set(case.get("required_references", [])) <= refs
                  and len(routes) <= case.get("max_routes", 2)
                  and result == route_context(manifest, case.get("topic", ""), case.get("paths", [])))

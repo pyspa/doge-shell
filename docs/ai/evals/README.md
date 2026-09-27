@@ -8,12 +8,14 @@ python3 scripts/check-agent-eval-fixtures.py
 python3 scripts/check-agent-eval-fixtures.py --smoke  # optional: mutation must fail a required validation
 python3 scripts/eval-agent-routing.py
 python3 scripts/run-agent-eval.py --runner codex --case wait-n-completed-ledger --repeat 3
+python3 scripts/run-agent-eval.py --runner opencode --suite smoke --model provider/model
+python3 scripts/run-agent-eval.py --runner command --runner-config ~/.config/doge-eval/my-agent.json --case wait-n-completed-ledger
 python3 scripts/summarize-agent-evals.py --baseline /tmp/before --candidate /tmp/after
 ```
 
-Codex uses `codex exec --json` with workspace-write sandboxing. Claude requires headless `stream-json`, a turn limit, a budget, and a wall timeout; unsupported versions are explicitly skipped. Neither adapter infers missing token usage. The prompts prohibit commit, push, network use, and destructive Git commands. Run agent evaluations only in a trusted manual environment with suitable credentials. The ordinary PR CI runs only local fixture and schema checks.
+The generic command runner accepts an argv array such as `{"argv":["my-agent","--prompt-file","{prompt_file}"]}`. No shell string is executed. Add `env_allowlist` only for credential environment variable names the CLI needs. To pass `--model`, include `{model}` in the argv array. Codex uses `codex exec --json`; Claude probes headless JSON support and falls back to plain print output; OpenCode uses `run --format json` in the isolated worktree, adding `--dir` when supported, and exports a sanitized session when the event stream supplies its ID. Missing usage and trace-derived counts stay `null`. The prompts prohibit commit, push, network use, and destructive Git commands. Run agent evaluations only in a trusted manual environment with suitable credentials. The ordinary PR CI runs only local fixture and schema checks.
 
-The grade keeps outcome, correctness, process, and efficiency separate. A mutation is scored as restored when its changed path returns exactly to HEAD; a semantically equivalent but different fix may require manual review. Trace-based route access is advisory. Broader tests, command count above 40, and token growth above 30% of a comparable baseline are warnings. Collect 5–10 runs per model before defining a regression threshold.
+The grade keeps outcome, correctness, process, and efficiency separate, without a combined score. A mutation is restored when its changed path returns exactly to HEAD; a semantically equivalent but different fix may require manual review. Trace-based route access is advisory. Broader tests and command count above 40 are warnings when trace is available. Collect 5–10 runs per model before defining a regression threshold.
 
 Reviewer cases are separate from implementer cases. A reviewer receives the original prompt, router packet, diff, changed paths, recommended validations, and relevant references, without the implementer's conversation. The suite includes historical bug diffs and a clean control. Its true-positive check is a path-and-term heuristic, so inspect the finding text before treating the rate as a quality result. Invalid output or a changed worktree fails the review run.
 

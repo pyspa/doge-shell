@@ -65,6 +65,15 @@ FALLBACK_ROUTE = {
 }
 
 
+def skill_path(name: str) -> str:
+    """Canonical repository path, independent of agent skill discovery."""
+    return f"docs/ai/skills/{name}/SKILL.md"
+
+
+def skill_entry(name: str) -> dict[str, str]:
+    return {"name": name, "path": skill_path(name)}
+
+
 def load_routes(manifest_path: str | Path) -> dict:
     """Read and JSON-parse the routing manifest."""
     with open(manifest_path, encoding="utf-8") as handle:
@@ -174,7 +183,7 @@ def route_context(
                     "score": score,
                     "matched_terms": sorted(set(terms)),
                     "matched_paths": sorted(set(matched)),
-                    "skills": list(route.get("skills", [])),
+                    "skills": [skill_entry(name) for name in route.get("skills", [])],
                     "references": list(route.get("references", [])),
                     "risk": route.get("risk", "normal"),
                 }
@@ -193,7 +202,7 @@ def route_context(
                 "score": 0,
                 "matched_terms": [],
                 "matched_paths": [],
-                "skills": list(FALLBACK_ROUTE["skills"]),
+                "skills": [skill_entry(name) for name in FALLBACK_ROUTE["skills"]],
                 "references": list(FALLBACK_ROUTE["references"]),
                 "risk": FALLBACK_ROUTE["risk"],
             }
@@ -230,7 +239,7 @@ def validate_manifest(manifest: dict, repo_root: str | Path) -> list[str]:
             errors.append(f"{where} ({route_id}): risk must be high|normal")
 
         for skill in route.get("skills", []):
-            skill_file = root / "docs/ai/skills" / skill / "SKILL.md"
+            skill_file = root / skill_path(skill)
             if not skill_file.is_file():
                 errors.append(f"{where} ({route_id}): unknown skill {skill!r}")
         for reference in route.get("references", []):

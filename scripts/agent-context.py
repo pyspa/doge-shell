@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"risk: {result['risk']}")
     for route in result["routes"]:
         print(f"- {route['id']} (score {route['score']})")
-        print(f"  skills: {', '.join(route['skills'])}")
+        print(f"  skills: {', '.join(skill['path'] for skill in route['skills'])}")
         print(f"  references: {', '.join(route['references'])}")
         if route["matched_terms"]:
             print(f"  matched terms: {', '.join(route['matched_terms'])}")

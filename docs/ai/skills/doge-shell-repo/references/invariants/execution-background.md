@@ -39,6 +39,10 @@
 - テストは `dsh/tests/wait_semantics.rs`。sandbox の SafetyGuard が nested shell（`sh`/`bash`）を deny するため、exact status には `false`(1)/`true`(0)/self-`kill`(143)/unknown-command(127) を使う。`sh -c 'exit N'` 前提にしない。
 - A top-level managed async AND-OR helper is the associated PID and process-group leader; nested commands belong to that job group.
 - Integration/contract cleanup for a deliberately long-lived async AND-OR job must terminate the owned process group, not only `$!`. Signaling `$!` as a positive PID kills only the helper and can leave helper-spawned descendants alive.
+- Long-lived async contract cleanup must not assume that one process-group signal closes the group while the AsyncList helper can still spawn its foreground descendant.
+- Cleanup order for deliberately killed async helpers is: group signal → wait/reap associated helper PID → final group sweep.
+- The associated PID reap is the quiescence barrier: after it returns, that helper can no longer introduce new members into its group.
+- This is cleanup/shutdown hygiene, not user-visible `kill` semantics.
 - Long-lived contract helpers must be explicitly reaped/terminated. Do not hide leaks by redirecting all inherited descriptors to /dev/null.
 - Contract timeout is a total deadline covering primary process exit and
   capture-pipe EOF.
@@ -49,4 +53,5 @@
   its capture readers, and reports Timeout.
 - Long-lived async jobs in individual contracts still require explicit
   job-group cleanup; the harness does not enumerate or reap unrelated
-  process groups.
+  process groups. Two-phase termination is required: group signal, wait/reap
+  the associated helper PID, then final group sweep.

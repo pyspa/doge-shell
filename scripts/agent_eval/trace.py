@@ -13,6 +13,8 @@ class NormalizedRunResult:
     runner: str
     runner_version: str
     model: str | None
+    agent: str | None
+    variant: str | None
     case_id: str
     success: bool
     exit_code: int
@@ -22,8 +24,8 @@ class NormalizedRunResult:
     completion_tokens: int | None
     cost_usd: float | None
     turn_count: int | None
-    tool_calls: int
-    command_calls: int
+    tool_calls: int | None
+    command_calls: int | None
     files_changed: list[str]
     diff_insertions: int
     diff_deletions: int

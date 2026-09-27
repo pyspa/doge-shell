@@ -92,6 +92,7 @@ jobs:
           python3 scripts/check-agent-eval-fixtures.py
           python3 scripts/eval-agent-routing.py
           scripts/check-ai-guidance.sh
+          python3 scripts/check-agent-context-budget.py
 
   contract:
     name: contract (${{ matrix.os }})

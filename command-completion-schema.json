@@ -88,7 +88,7 @@
           "description": "Argument definition for this option value"
         }
       },
-      "oneOf": [
+      "anyOf": [
         {
           "required": ["short"]
         },

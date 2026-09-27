@@ -20,6 +20,7 @@ merge_base=$(git merge-base "$base_ref" HEAD)
 
 cargo fmt --all -- --check
 scripts/check-ai-guidance.sh
+python3 scripts/check-agent-context-budget.py
 python3 scripts/check-agent-eval-schemas.py
 python3 scripts/check-agent-eval-fixtures.py
 python3 scripts/eval-agent-routing.py

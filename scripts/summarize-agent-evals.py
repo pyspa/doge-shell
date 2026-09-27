@@ -13,7 +13,7 @@ def read_results(root):
     for path in Path(root).rglob("result.json"):
         result = json.loads(path.read_text(encoding="utf-8"))
         normalized = result["normalized"]
-        key = (normalized["case_id"], normalized["runner"], normalized.get("model"))
+        key = (normalized["case_id"], normalized["runner"], normalized.get("model"), normalized.get("agent"), normalized.get("variant"))
         results[key].append(result)
     return results
 
@@ -54,7 +54,7 @@ def main():
         }
         for key in sorted(common, key=str)
     }
-    output = {"common_case_runner_models": [list(key) for key in sorted(common, key=str)], "baseline": before, "candidate": after, "groups": groups, "warnings": []}
+    output = {"common_case_runner_models_agents_variants": [list(key) for key in sorted(common, key=str)], "baseline": before, "candidate": after, "groups": groups, "warnings": []}
     if before["median_prompt_tokens"] and after["median_prompt_tokens"] and after["median_prompt_tokens"] > before["median_prompt_tokens"] * 1.3:
         output["warnings"].append("candidate prompt-token median exceeds baseline by 30%")
     if args.json:

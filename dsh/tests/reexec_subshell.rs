@@ -95,7 +95,13 @@ fn skipped_process_substitution_spawns_nothing() {
 fn repeated_process_substitution_does_not_hang_or_leak() {
     // Unique markers per iteration: a stale producer's output cannot be
     // mistaken for the current one, and one empty iteration fails loudly.
-    for i in 0..20 {
+    // Each iteration spawns a fresh dogesh process group (`run_full` ->
+    // `run_command` -> `run_dsh`: new `Command::new(CARGO_BIN_EXE_dogesh)`
+    // with `process_group(0)`, isolated temp state, bounded wait), so 40
+    // inner x outer stress-count 5 = 200 fresh dogesh executions, equal to
+    // the former 20 x 10 independent shell/process lifecycle executions
+    // with fewer outer Nextest repeats.
+    for i in 0..40 {
         let word = format!("PS-{i:03}");
         let (out, err, status) = run_full(&format!("cat <(printf {word})"));
         assert!(

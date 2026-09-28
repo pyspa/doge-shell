@@ -43,7 +43,7 @@
 - concurrency 所有権変更 → `resource_contract.rs` の明示 concurrency test。既存テストを parallel にしない（serial lock を外さない）。
 - 既知 bug → XFAIL contract + `spec/xfail-allowlist.txt` への ID 追加。allowlist は exact match（新規の隠れ XFAIL も stale entry も落とす）。
 - bug fix → XPASS（suite failure）を確認してから XFAIL を削除。XPASS を silent success にしない。
-- process-heavy fix → `cargo nextest run -p doge-shell -P ci --stress-count 10 -j 1` の targeted stress。
+- process-heavy fix → fast lane（job ID `stress-fast`、表示名 `stress (OS)`）は `cargo nextest run -p doge-shell -P ci -j 1 --stress-count 9`（10→9 は外側サンプルの 10% 削減を予算 margin と交換するものであり、同等検出を主張しない）。resource は独立 job の `stress-resource-fd`（FD-budget ×3）と `stress-resource-repeated`（repeated-substitution ×5、内側 20 shells×5＝累積 100 shells、旧 200 から半減）に分離し、各 job が独自予算を持つため timeout/失敗が他方を skip・枯渇させない。除外/選択は `binary(resource_contract) and test(…)` / `binary(reexec_subshell) and test(…)` でスコープする。詳細は `.github/workflows/ci.yml` の `stress-fast` / `stress-resource-fd` / `stress-resource-repeated`。
 - contract の期待値は現在の実装ではなく仕様上正しい挙動を書く。壊れていれば XFAIL。`exit 7` のような外部 helper は spec 内 token（`{{TRUE}}` 等）で書く。絶対 path・`..` escape は runner が reject する。
 - race test に `sleep` ベースの readiness は使わない。pipe / marker / handshake + bounded timeout。
 - FD close の検証に、drop 済み `OwnedFd` の stale `RawFd` 数値への `fcntl(F_GETFD)` + `EBADF` 期待を使わない。close 後の descriptor number は同一プロセス内の別 thread/test に即再利用され得るため、close/leak の証明にならない。FD leak は isolated child + bounded `RLIMIT_NOFILE` + repeated real operation の behavioral contract で検証する。

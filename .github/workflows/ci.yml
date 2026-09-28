@@ -184,17 +184,19 @@ jobs:
       # The two internally repeated resource/leak tests are excluded here
       # (binary-scoped so only those two move) and run in the resource jobs
       # below (`stress-resource-fd` / `stress-resource-repeated`), so the
-      # outer `--stress-count 9` does not multiply their in-test iterations.
-      # `contract_background` stays in this lane at the
-      # full outer count. Outer 9, not 10: the split lane still timed out
-      # the 30-minute step at iteration 10, test 278/296 on macOS (push run
-      # 36377022565). 10 to 9 is an explicit 10% reduction in outer samples,
-      # exchanged for budget margin without raising the timeout; it does
-      # not claim equivalent race detection.
+      # outer `--stress-count 10` does not multiply their in-test iterations.
+      # `contract_background` stays in this lane at the full outer count.
+      # Outer 10 and step 35 minutes equal the origin/develop baseline (not
+      # above it): the split lane removes the two heaviest tests (about 29s
+      # + 9s per iteration on macOS as a contextual measurement), so the
+      # baseline budget now covers the fast subset. The prior 30-minute
+      # split-lane run timed out at iteration 10; restoring the baseline 35
+      # minutes keeps full outer samples without exceeding the source
+      # timeout. Fast-lane success on macOS is proven only by CI.
       - name: Fast lifecycle/race stress
-        timeout-minutes: 30
+        timeout-minutes: 35
         run: >
-          cargo nextest run -p doge-shell -P ci -j 1 --stress-count 9
+          cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10
           -E '(binary(shell_contract) or binary(resource_contract)
           or binary(fd_ownership) or binary(reexec_subshell)
           or binary(substitution)
@@ -245,12 +247,17 @@ jobs:
           tool: nextest@0.9.145
 
       # FD-budget lane (independent job/runner with its own 25-minute job
-      # budget and 15-minute step budget): the test chains 128
+      # budget and 15-minute step budget): the test chains the original 128
       # substitutions under a tight NOFILE limit (a self-contained
-      # contract), so the outer count stays at 3. Serial (`-j 1`) with the
-      # same retries/`flaky-result = "fail"`/`leak-timeout` policy as the
-      # fast lane. A timeout or failure here cannot skip or starve the
-      # repeated-substitution lane, which runs as its own job below.
+      # contract, unchanged: 60s bounded drain). Each of the 3 outer
+      # executions runs the complete per-run leak detector (128 > 96, so one
+      # leaked descriptor per iteration would exhaust the table before the
+      # final marker). The smaller outer count limits independent retries
+      # because this is now a separately budgeted lane; it does not claim
+      # statistical equivalence to the former 10 outer runs. Serial (`-j 1`)
+      # with the same retries/`flaky-result = "fail"`/`leak-timeout` policy
+      # as the fast lane. A timeout or failure here cannot skip or starve
+      # the repeated-substitution lane, which runs as its own job below.
       - name: Resource/leak stress (FD budget)
         timeout-minutes: 15
         run: >
@@ -294,10 +301,13 @@ jobs:
           tool: nextest@0.9.145
 
       # Repeated-substitution lane (independent job/runner with its own
-      # 25-minute job budget and 15-minute step budget): the test runs 20
-      # shells per invocation, so 5 outer repeats give 100 aggregate shells
-      # (down from the former 200, up from a minimal 60) without
-      # multiplying the same loop 10x. Serial (`-j 1`) with the same
+      # 25-minute job budget and 15-minute step budget): each loop iteration
+      # spawns a fresh dogesh process group (`run_full` -> `run_command` ->
+      # `run_dsh`: new `Command::new(CARGO_BIN_EXE_dogesh)` with
+      # `process_group(0)`, isolated temp state, bounded wait), so 40 inner
+      # x outer 5 = 200 fresh dogesh executions, equal to the former 20 x 10
+      # independent shell/process lifecycle executions with fewer outer
+      # Nextest repeats. Serial (`-j 1`) with the same
       # retries/`flaky-result = "fail"`/`leak-timeout` policy as the fast
       # lane. A timeout or failure here cannot skip or starve the FD-budget
       # lane, which runs as its own job above.

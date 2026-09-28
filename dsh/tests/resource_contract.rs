@@ -154,10 +154,14 @@ fn substitution_survives_fd_pressure() {
 /// `NOFILE_LIMIT` applies to the dogesh child alone (the parent test process
 /// keeps its limits). Each foreground Read substitution must return its
 /// retained endpoint and reap its producer synchronously, so per-iteration FD
-/// use falls back to baseline. `ITERATIONS > NOFILE_LIMIT` keeps this honest:
-/// one leaked descriptor per iteration would exhaust the table before the
-/// final marker. `&&` chaining (never `;`) stops a mid-run materialization
-/// failure from going green on the trailing marker.
+/// use falls back to baseline. `ITERATIONS(128) > NOFILE_LIMIT(96)` keeps
+/// this honest: one leaked descriptor per iteration would exhaust the table
+/// before the final marker. `&&` chaining (never `;`) stops a mid-run
+/// materialization failure from going green on the trailing marker.
+///
+/// The dedicated FD lane runs this unchanged contract 3 outer times as a
+/// separately budgeted lane; the smaller outer count limits independent
+/// retries and does not claim statistical equivalence to the former 10.
 #[test]
 fn process_substitution_does_not_exhaust_fd_budget() {
     let _serial = serial_guard();

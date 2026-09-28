@@ -143,8 +143,8 @@ jobs:
           --test background_builtin --test wait_semantics
           --test async_exit_semantics --test harness_contract < /dev/null
 
-  stress:
-    name: stress (${{ matrix.os }})
+  stress-fast:
+    name: stress-fast (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     strategy:
@@ -159,7 +159,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          key: stress-${{ matrix.os }}
+          key: stress-fast-${{ matrix.os }}
 
       - name: Install mold
         if: runner.os == 'Linux'
@@ -177,17 +177,19 @@ jobs:
         with:
           tool: nextest@0.9.145
 
-      # Targeted process/execution lane only (see .config/nextest.toml):
+      # Fast lifecycle/race lane only (see .config/nextest.toml):
       # retries diagnose flakes, `flaky-result = "fail"` keeps them red, and
       # an empty selection fails instead of going green. Serial (`-j 1`):
       # races are created explicitly inside tests, never by the runner.
-      # Budget: ~1-2 min per iteration locally, x10 fits the step timeout
-      # with margin for slower CI hosts.
-      - name: Targeted stress
-        timeout-minutes: 35
+      # The two internally repeated resource/leak tests are excluded here
+      # and run in the resource lane below, so the outer `--stress-count 10`
+      # does not multiply their in-test iterations. `contract_background`
+      # stays in this lane at the full outer count.
+      - name: Fast lifecycle/race stress
+        timeout-minutes: 30
         run: >
           cargo nextest run -p doge-shell -P ci -j 1 --stress-count 10
-          -E 'binary(shell_contract) or binary(resource_contract)
+          -E '(binary(shell_contract) or binary(resource_contract)
           or binary(fd_ownership) or binary(reexec_subshell)
           or binary(substitution)
           or binary(pipeline_semantics) or binary(background_builtin)
@@ -195,7 +197,59 @@ jobs:
           or binary(harness_contract)
           or test(lifecycle_property) or test(/output_monitor_(running|completion)/)
           or test(foreground_output_observer)
-          or test(/process_substitution::tests::/)'
+          or test(/process_substitution::tests::/))
+          and not (test(process_substitution_does_not_exhaust_fd_budget)
+          or test(repeated_process_substitution_does_not_hang_or_leak))'
+          < /dev/null
+
+  stress-resource:
+    name: stress-resource (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # stable toolchain
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: stress-resource-${{ matrix.os }}
+
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y mold
+
+      # Pinned cargo-nextest 0.9.145 (supports retries, flaky-result=fail,
+      # slow-timeout, leak-timeout, --stress-count). The installer itself is
+      # pinned by commit SHA like every other action in this file
+      # (install-action 2.87.16 at pin time).
+      - name: Install cargo-nextest
+        # install-action 2.87.16 at pin time
+        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3
+        with:
+          tool: nextest@0.9.145
+
+      # Resource/leak lane: exactly the two tests excluded from the fast
+      # lane. Each already repeats internally (the FD-budget test chains 128
+      # substitutions under a tight NOFILE limit; the repeated-substitution
+      # test runs 20 shells), so the outer count stays small to avoid
+      # multiplying the same loop. Serial (`-j 1`) with the same
+      # retries/`flaky-result = "fail"`/`leak-timeout` policy as the fast
+      # lane. Separately budgeted so one class cannot consume the other's
+      # budget.
+      - name: Resource/leak stress
+        timeout-minutes: 15
+        run: >
+          cargo nextest run -p doge-shell -P ci -j 1 --stress-count 3
+          -E 'test(process_substitution_does_not_exhaust_fd_budget)
+          or test(repeated_process_substitution_does_not_hang_or_leak)'
           < /dev/null
 
   lint:

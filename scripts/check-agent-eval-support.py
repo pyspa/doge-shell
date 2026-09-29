@@ -143,11 +143,66 @@ def parse_workflow_runners(workflow_path: Path = DEFAULT_WORKFLOW) -> set[str]:
     raise ValueError(f"{workflow_path}: missing or unrecognized inputs.runner options")
 
 
+_DOT_SECRET_RE = re.compile(r'secrets\s*\.\s*([A-Za-z0-9_]+)', re.IGNORECASE)
+_BRACKET_SECRET_RE = re.compile(
+    r"secrets\s*\[\s*'([^'\n]+)'\s*\]"
+    r"|"
+    r'secrets\s*\[\s*"([^"\n]+)"\s*\]',
+    re.IGNORECASE,
+)
+_RESIDUAL_SECRET_RE = re.compile(r'secrets\s*(?:\.|\[)', re.IGNORECASE)
+_EXPRESSION_RE = re.compile(r'\$\{\{(.*?)\}\}', re.DOTALL)
+_QUOTED_STRING_RE = re.compile(r"'[^'\n]*'|\"[^\"]*\"")
+_BARE_SECRETS_RE = re.compile(r'\bsecrets\b', re.IGNORECASE)
+
+
+def _mask_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    masked = list(text)
+    for start, end in spans:
+        for i in range(start, end):
+            if masked[i] != "\n":
+                masked[i] = " "
+    return "".join(masked)
+
+
 def parse_workflow_secrets(workflow_path: Path = DEFAULT_WORKFLOW) -> set[str]:
+    """Collect literal secret names; fail closed on unclassifiable access.
+
+    Recognized literal forms: `secrets.NAME`, `secrets['NAME']`,
+    `secrets["NAME"]` (surrounding whitespace allowed). Matching is
+    case-insensitive and names are normalized to uppercase because GitHub
+    secret references are case-insensitive (secret names are stored
+    uppercase). Any other `secrets.` / `secrets[` access, or any
+    `${{ ... secrets ... }}` expression still mentioning `secrets` after
+    recognized literals are masked, raises ValueError instead of silently
+    passing.
+    """
     text = Path(workflow_path).read_text(encoding="utf-8")
     if "workflow_dispatch" not in text:
         raise ValueError(f"{workflow_path}: unrecognized workflow format")
-    return set(re.findall(r'secrets\.([A-Za-z0-9_]+)', text))
+    secrets: set[str] = set()
+    spans: list[tuple[int, int]] = []
+    for match in _DOT_SECRET_RE.finditer(text):
+        secrets.add(match.group(1).upper())
+        spans.append(match.span())
+    for match in _BRACKET_SECRET_RE.finditer(text):
+        secrets.add((match.group(1) if match.group(1) is not None else match.group(2)).upper())
+        spans.append(match.span())
+    masked = _mask_spans(text, spans)
+    residual = _RESIDUAL_SECRET_RE.search(masked)
+    if residual is not None:
+        raise ValueError(
+            f"{workflow_path}: unrecognized or dynamic secrets access: "
+            f"{text[max(0, residual.start() - 20):residual.end() + 20]!r}"
+        )
+    for expr in _EXPRESSION_RE.finditer(masked):
+        body = _QUOTED_STRING_RE.sub(" ", expr.group(1))
+        if _BARE_SECRETS_RE.search(body):
+            raise ValueError(
+                f"{workflow_path}: unrecognized or dynamic secrets access in "
+                f"expression: {expr.group(0)[:80]!r}"
+            )
+    return secrets
 
 
 BOUNDARY_TERMS = ("local-only", "opencode", "command", "Codex/Claude-only")

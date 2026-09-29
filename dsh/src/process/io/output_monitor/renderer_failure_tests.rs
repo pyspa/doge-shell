@@ -34,14 +34,14 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
 
     // Poll 1: renderer fails on the first display flush.
     write_to_pipe(&mut writer, b"first\n");
-    let mut flush = |_: &mut TerminalRenderer, _: &str| -> Result<()> {
+    let mut flush = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
         Err(failing_once_broken_pipe().into())
     };
     monitor
         .drain_ready_now_with_budget(RUNNING_DRAIN_BUDGET_BYTES, &mut flush)
         .expect("renderer failure must not fail the running drain");
     assert!(monitor.renderer_failed);
-    assert_eq!(monitor.captured_output, "first\n");
+    assert_eq!(monitor.captured_output.as_slice(), b"first\n");
     {
         let observed = observer.lock().expect("observer lock");
         assert_eq!(observed.snapshot().stdout.matches("first\n").count(), 1);
@@ -49,14 +49,14 @@ async fn output_monitor_completion_renderer_failure_is_sticky_across_running_dra
 
     // Poll 2: renderer must not be retried; capture/observer continue.
     write_to_pipe(&mut writer, b"second\n");
-    let mut no_render = |_: &mut TerminalRenderer, _: &str| -> Result<()> {
+    let mut no_render = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
         panic!("failed renderer must not be retried")
     };
     monitor
         .drain_ready_now_with_budget(RUNNING_DRAIN_BUDGET_BYTES, &mut no_render)
         .expect("second running drain stays Ok without rendering");
     assert!(monitor.renderer_failed);
-    assert_eq!(monitor.captured_output, "first\nsecond\n");
+    assert_eq!(monitor.captured_output.as_slice(), b"first\nsecond\n");
     {
         let observed = observer.lock().expect("observer lock");
         let stdout_text = observed.snapshot().stdout;
@@ -76,7 +76,7 @@ async fn output_monitor_completion_renderer_failure_to_eof_drains_after_failure(
         payload.extend_from_slice(format!("line-{line_count:04}\n").as_bytes());
         line_count += 1;
     }
-    let expected = String::from_utf8(payload.clone()).expect("payload is UTF-8");
+    let expected = payload.clone();
 
     let observer: SharedOutputObserver =
         dsh_types::observed_output::ObservedOutput::shared(1024 * 1024);
@@ -93,7 +93,7 @@ async fn output_monitor_completion_renderer_failure_to_eof_drains_after_failure(
     });
 
     let mut flush_calls = 0;
-    let mut flush = |_: &mut TerminalRenderer, _: &str| -> Result<()> {
+    let mut flush = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
         flush_calls += 1;
         if flush_calls == 1 {
             return Err(failing_once_broken_pipe().into());
@@ -120,7 +120,7 @@ async fn output_monitor_completion_renderer_failure_to_eof_drains_after_failure(
     );
     {
         let observed = observer.lock().expect("observer lock");
-        assert_eq!(observed.snapshot().stdout, expected);
+        assert_eq!(observed.snapshot().stdout.as_bytes(), expected.as_slice());
     }
 }
 
@@ -133,7 +133,7 @@ async fn output_monitor_completion_renderer_failure_ready_now_is_nonfatal() {
 
     // Writer stays open: ReadyNow never waits for EOF.
     write_to_pipe(&mut writer, b"READY\nFRAGMENT");
-    let mut flush = |_: &mut TerminalRenderer, _: &str| -> Result<()> {
+    let mut flush = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
         Err(failing_once_broken_pipe().into())
     };
     monitor
@@ -141,7 +141,7 @@ async fn output_monitor_completion_renderer_failure_ready_now_is_nonfatal() {
         .expect("renderer failure must not fail ReadyNow");
 
     assert!(monitor.renderer_failed);
-    assert_eq!(monitor.captured_output, "READY\nFRAGMENT");
+    assert_eq!(monitor.captured_output.as_slice(), b"READY\nFRAGMENT");
     assert!(monitor.pending_line.is_empty());
     {
         let observed = observer.lock().expect("observer lock");
@@ -152,17 +152,49 @@ async fn output_monitor_completion_renderer_failure_ready_now_is_nonfatal() {
 
     // Second retirement: renderer still disabled, capture continues.
     write_to_pipe(&mut writer, b"AFTER\n");
-    let mut no_render = |_: &mut TerminalRenderer, _: &str| -> Result<()> {
+    let mut no_render = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
         panic!("failed renderer must not be retried by ReadyNow")
     };
     monitor
         .finalize_ready_now_with(&mut no_render)
         .expect("second ReadyNow stays Ok without rendering");
-    assert!(monitor.captured_output.contains("AFTER\n"));
+    assert!(
+        monitor
+            .captured_output
+            .windows(b"AFTER\n".len())
+            .any(|window| window == b"AFTER\n")
+    );
     {
         let observed = observer.lock().expect("observer lock");
         let stdout_text = observed.snapshot().stdout;
         assert_eq!(stdout_text.matches("AFTER\n").count(), 1);
+    }
+    drop(writer);
+}
+
+/// Renderer failure with binary payload: raw capture and the lossy
+/// observer keep progressing even though terminal rendering is disabled.
+#[tokio::test]
+async fn output_monitor_renderer_failure_preserves_binary_capture() {
+    let observer: SharedOutputObserver = dsh_types::observed_output::ObservedOutput::shared(1024);
+    let (read, mut writer) = unnamed_pipe();
+    let mut monitor = OutputMonitor::new(read, Some(observer.clone()), ObservedStream::Stdout)
+        .expect("create monitor");
+
+    let payload = b"\xff\nafter\n";
+    write_to_pipe(&mut writer, payload);
+    let mut flush = |_: &mut TerminalRenderer, _: &[u8]| -> Result<()> {
+        Err(failing_once_broken_pipe().into())
+    };
+    monitor
+        .drain_ready_now_with_budget(RUNNING_DRAIN_BUDGET_BYTES, &mut flush)
+        .expect("renderer failure must not fail the drain");
+
+    assert!(monitor.renderer_failed);
+    assert_eq!(monitor.captured_output.as_slice(), payload);
+    {
+        let observed = observer.lock().expect("observer lock");
+        assert_eq!(observed.snapshot().stdout, String::from_utf8_lossy(payload));
     }
     drop(writer);
 }

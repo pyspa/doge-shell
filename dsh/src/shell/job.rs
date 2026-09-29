@@ -403,7 +403,7 @@ mod tests {
 
         // Pass-4 style poll observes nothing.
         monitor.drain_ready_now().expect("poll");
-        assert_eq!(monitor.captured_output, "");
+        assert!(monitor.captured_output.is_empty());
 
         // Committed after the poll, before completion is observed.
         writer.write_all(b"FINAL-MARKER\n").expect("write marker");
@@ -413,13 +413,15 @@ mod tests {
         let finalized = finalize_completed_job(&mut shell, job, FinalizeDrain::ReadyNow)
             .await
             .expect("finalize");
-        let captured: String = finalized
+        let captured: Vec<u8> = finalized
             .monitors
             .iter()
-            .map(|monitor| monitor.captured_output.clone())
+            .flat_map(|monitor| monitor.captured_output.iter().copied())
             .collect();
         assert!(
-            captured.contains("FINAL-MARKER\n"),
+            captured
+                .windows(b"FINAL-MARKER\n".len())
+                .any(|window| window == b"FINAL-MARKER\n"),
             "bytes written after the poll were lost: {captured:?}"
         );
         drop(writer);
@@ -440,18 +442,40 @@ mod tests {
         monitor
             .drain_ready_now()
             .expect("running drain holds the fragment");
-        assert_eq!(monitor.captured_output, "");
+        assert!(monitor.captured_output.is_empty());
 
         let job = completed_job_with_monitor(pgid, monitor);
         let finalized = finalize_completed_job(&mut shell, job, FinalizeDrain::ReadyNow)
             .await
             .expect("finalize");
-        let captured: String = finalized
+        let captured: Vec<u8> = finalized
             .monitors
             .iter()
-            .map(|monitor| monitor.captured_output.clone())
+            .flat_map(|monitor| monitor.captured_output.iter().copied())
             .collect();
-        assert_eq!(captured, "NO-NEWLINE");
+        assert_eq!(captured.as_slice(), b"NO-NEWLINE");
+        drop(writer);
+    }
+
+    /// Canonical finalizer preserves invalid-UTF-8 bytes exactly: the
+    /// completed-job `ReadyNow` path keeps the binary-safe contract.
+    #[tokio::test]
+    async fn finalize_ready_now_preserves_binary_output() {
+        let mut shell = test_shell();
+        let pgid = shell.pgid;
+        let (read, write) = nix::unistd::pipe().expect("pipe");
+        let monitor = OutputMonitor::new(read, None, ObservedStream::Stdout).expect("monitor");
+        let mut writer = std::fs::File::from(write);
+
+        let payload = b"FINAL-\xff-MARKER\n";
+        writer.write_all(payload).expect("write marker");
+        writer.flush().expect("flush");
+
+        let job = completed_job_with_monitor(pgid, monitor);
+        let finalized = finalize_completed_job(&mut shell, job, FinalizeDrain::ReadyNow)
+            .await
+            .expect("finalize");
+        assert_eq!(finalized.monitors[0].captured_output.as_slice(), payload);
         drop(writer);
     }
 }

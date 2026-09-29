@@ -570,14 +570,15 @@ mod tests {
         for monitor in shell.wait_jobs[0].monitors.iter_mut() {
             monitor.drain_to_eof().await.expect("drain helper output");
         }
-        let captured: String = shell.wait_jobs[0]
+        let captured: Vec<u8> = shell.wait_jobs[0]
             .monitors
             .iter()
-            .map(|monitor| monitor.captured_output.clone())
+            .flat_map(|monitor| monitor.captured_output.iter().copied())
             .collect();
+        let captured_text = String::from_utf8_lossy(&captured);
         assert!(
-            captured.contains("two"),
-            "helper jobs did not share one environment: {captured:?}"
+            captured_text.contains("two"),
+            "helper jobs did not share one environment: {captured_text:?}"
         );
     }
 

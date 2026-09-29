@@ -30,6 +30,7 @@
 
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use std::borrow::Cow;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::OwnedFd;
 
@@ -37,18 +38,18 @@ use crate::terminal::renderer::TerminalRenderer;
 use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 
 const RUNNING_DRAIN_BUDGET_BYTES: usize = 256 * 1024;
-const FIRST_MONITOR_OUTPUT_PREFIX: &str = "\r\n";
+const FIRST_MONITOR_OUTPUT_PREFIX: &[u8] = b"\r\n";
 const READ_CHUNK_BYTES: usize = 4096;
 const RENDER_FLUSH_BYTES: usize = 8192;
 // NOTE: `MAX_PENDING_CONTROL_BYTES` stays in `super` (io.rs): it belongs to
 // `PtyDisplayBuffer`, which did not move.
 
-fn append_output_chunk(output_started: &mut bool, buffer: &mut String, chunk: &str) {
+fn append_output_chunk(output_started: &mut bool, buffer: &mut Vec<u8>, chunk: &[u8]) {
     if !*output_started {
         *output_started = true;
-        buffer.push_str(FIRST_MONITOR_OUTPUT_PREFIX);
+        buffer.extend_from_slice(FIRST_MONITOR_OUTPUT_PREFIX);
     }
-    buffer.push_str(chunk);
+    buffer.extend_from_slice(chunk);
 }
 
 fn is_would_block(err: &std::io::Error) -> bool {
@@ -74,12 +75,12 @@ pub struct OutputMonitor {
     inner: tokio::io::unix::AsyncFd<std::fs::File>,
     /// Incomplete record bytes kept across calls. New chunk bytes are
     /// appended here first, so a multi-byte character split across reads
-    /// is only validated once its record completes.
+    /// is only projected to the text observer once its record completes.
     /// Published only on newline, at EOF, or at monitor retirement
     /// (`finalize_ready_now`); a running ready-now drain never publishes it.
     pending_line: Vec<u8>,
     pub(crate) outputed: bool,
-    pub captured_output: String,
+    pub captured_output: Vec<u8>,
     // Cached renderer to avoid repeated allocations.
     // Safe to hold as it no longer holds StdoutLock persistently.
     pub(crate) renderer: TerminalRenderer,
@@ -110,7 +111,7 @@ impl OutputMonitor {
             inner,
             pending_line: Vec::new(),
             outputed: false,
-            captured_output: String::new(),
+            captured_output: Vec::new(),
             renderer: TerminalRenderer::new(),
             renderer_failed: false,
             observer,
@@ -122,24 +123,31 @@ impl OutputMonitor {
         self.observed_stream
     }
 
-    fn append_line(&mut self, buffer: &mut String, line: &str) {
+    /// Text projection of the raw capture for text-only consumers
+    /// (`OutputHistory`). The authority stays [`Self::captured_output`]
+    /// (`Vec<u8>`); this converts at the boundary only.
+    pub(crate) fn captured_text_lossy(&self) -> Cow<'_, str> {
+        String::from_utf8_lossy(&self.captured_output)
+    }
+
+    fn append_line(&mut self, buffer: &mut Vec<u8>, line: &[u8]) {
         append_output_chunk(&mut self.outputed, buffer, line);
-        // Also capture the raw line (we might want to be careful about prefixes/newlines)
-        // The line from read_line includes the newline character usually.
-        self.captured_output.push_str(line);
+        // Raw capture: never lossy-convert here; text projection happens
+        // only for the text-only observer below.
+        self.captured_output.extend_from_slice(line);
         if let Some(observer) = &self.observer
             && let Ok(mut observer) = observer.lock()
         {
-            observer.append(self.observed_stream, line);
+            observer.append(self.observed_stream, &String::from_utf8_lossy(line));
         }
     }
 
-    fn flush_terminal(renderer: &mut TerminalRenderer, buffer: &str) -> Result<()> {
+    fn flush_terminal(renderer: &mut TerminalRenderer, buffer: &[u8]) -> Result<()> {
         if buffer.is_empty() {
             return Ok(());
         }
 
-        renderer.write_all(buffer.as_bytes())?;
+        renderer.write_all(buffer)?;
         renderer.flush()?;
         Ok(())
     }
@@ -149,9 +157,9 @@ impl OutputMonitor {
     /// one diagnostic, and never propagates as a drain `Err`. The display
     /// scratch buffer is always cleared so a long-running job cannot grow it
     /// without bound; capture and observer data is already recorded.
-    fn flush_display_with<F>(&mut self, display: &mut String, flush: &mut F)
+    fn flush_display_with<F>(&mut self, display: &mut Vec<u8>, flush: &mut F)
     where
-        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+        F: FnMut(&mut TerminalRenderer, &[u8]) -> Result<()>,
     {
         if display.is_empty() {
             return;
@@ -172,58 +180,41 @@ impl OutputMonitor {
     }
 
     /// Publish one complete record exactly once to the renderer buffer, the
-    /// capture, and the observer.
+    /// raw capture, and the observer.
     ///
-    /// UTF-8 validation mirrors the old `read_line` semantics: invalid UTF-8
-    /// is an error and the offending bytes are dropped, so the stream
-    /// continues with the next record. Restoring them into `pending_line`
-    /// would fail conversion again on every retry, stalling all later output
-    /// behind one bad record.
-    fn publish_record(&mut self, buffer: &mut String, record: Vec<u8>) -> Result<usize> {
-        let len = record.len();
-        match String::from_utf8(record) {
-            Ok(line) => {
-                self.append_line(buffer, &line);
-                Ok(len)
-            }
-            Err(_) => Err(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "stream did not contain valid UTF-8",
-            )
-            .into()),
-        }
+    /// Raw bytes are authoritative: capture and terminal rendering keep
+    /// them byte-exact, including invalid UTF-8. Only the text-only
+    /// `SharedOutputObserver` receives a `String::from_utf8_lossy` projection,
+    /// computed after the record completes so a valid multi-byte character
+    /// split across reads is never replaced with U+FFFD. Invalid UTF-8 is
+    /// presentation data, never a drain error.
+    fn publish_record(&mut self, buffer: &mut Vec<u8>, record: &[u8]) {
+        self.append_line(buffer, record);
     }
 
     /// Frame raw chunk bytes into newline-terminated records.
     ///
     /// A single `read` can return many lines (or a trailing fragment), so
     /// one syscall is never assumed to be one record. Complete records are
-    /// published; the trailing fragment stays in `pending_line`. The first
-    /// publish error is remembered while the rest of the buffer is still
-    /// fully consumed, so one invalid record never discards the valid
-    /// records read alongside it.
-    fn feed_bytes(&mut self, display: &mut String, bytes: &[u8]) -> Option<anyhow::Error> {
-        let mut first_error = None;
+    /// published byte-exact; the trailing fragment stays in `pending_line`.
+    /// Newline `0x0A` never appears inside a UTF-8 multi-byte sequence, so
+    /// record framing never splits a character for the observer projection.
+    fn feed_bytes(&mut self, display: &mut Vec<u8>, bytes: &[u8]) {
         self.pending_line.extend_from_slice(bytes);
         while let Some(newline) = self.pending_line.iter().position(|&byte| byte == b'\n') {
             let record: Vec<u8> = self.pending_line.drain(..=newline).collect();
-            if let Err(err) = self.publish_record(display, record)
-                && first_error.is_none()
-            {
-                first_error = Some(err);
-            }
+            self.publish_record(display, &record);
         }
-        first_error
     }
 
     /// Publish the pending fragment as the final record. Used at EOF and at
     /// monitor retirement, where keeping it would lose it with the monitor.
-    fn flush_pending_fragment(&mut self, display: &mut String) -> Option<anyhow::Error> {
+    fn flush_pending_fragment(&mut self, display: &mut Vec<u8>) {
         if self.pending_line.is_empty() {
-            return None;
+            return;
         }
         let fragment = std::mem::take(&mut self.pending_line);
-        self.publish_record(display, fragment).err()
+        self.publish_record(display, &fragment);
     }
 
     /// Running-job drain: consume whatever the kernel already holds without
@@ -246,10 +237,10 @@ impl OutputMonitor {
         flush: &mut F,
     ) -> Result<ReadyDrainOutcome>
     where
-        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+        F: FnMut(&mut TerminalRenderer, &[u8]) -> Result<()>,
     {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
-        let mut display = String::new();
+        let mut display = Vec::new();
         let mut bytes_read = 0usize;
         let mut eof = false;
         let mut budget_exhausted = false;
@@ -263,7 +254,7 @@ impl OutputMonitor {
             match self.inner.get_ref().read(&mut chunk[..read_len]) {
                 Ok(0) => {
                     // EOF: no future output can complete the fragment.
-                    let _ = self.flush_pending_fragment(&mut display);
+                    self.flush_pending_fragment(&mut display);
                     eof = true;
                     break;
                 }
@@ -272,9 +263,7 @@ impl OutputMonitor {
                 Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                 Ok(n) => {
                     bytes_read += n;
-                    // A bad record drops itself; later records in the same
-                    // chunk still publish, and the running drain stays `Ok`.
-                    let _ = self.feed_bytes(&mut display, &chunk[..n]);
+                    self.feed_bytes(&mut display, &chunk[..n]);
                     if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
                         self.flush_display_with(&mut display, flush);
                     }
@@ -302,30 +291,22 @@ impl OutputMonitor {
 
     async fn drain_to_eof_with<F>(&mut self, flush: &mut F) -> Result<()>
     where
-        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+        F: FnMut(&mut TerminalRenderer, &[u8]) -> Result<()>,
     {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
-        let mut display = String::new();
+        let mut display = Vec::new();
         let mut first_error: Option<anyhow::Error> = None;
         loop {
             let mut readiness = self.inner.readable().await?;
             match readiness.try_io(|inner| inner.get_ref().read(&mut chunk)) {
                 Ok(Ok(0)) => {
-                    if let Some(err) = self.flush_pending_fragment(&mut display)
-                        && first_error.is_none()
-                    {
-                        first_error = Some(err);
-                    }
+                    self.flush_pending_fragment(&mut display);
                     break;
                 }
                 // A signal interrupted the syscall, not the stream: retry.
                 Ok(Err(err)) if err.kind() == ErrorKind::Interrupted => continue,
                 Ok(Ok(n)) => {
-                    if let Some(err) = self.feed_bytes(&mut display, &chunk[..n])
-                        && first_error.is_none()
-                    {
-                        first_error = Some(err);
-                    }
+                    self.feed_bytes(&mut display, &chunk[..n]);
                     if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
                         self.flush_display_with(&mut display, flush);
                     }
@@ -374,10 +355,10 @@ impl OutputMonitor {
 
     fn finalize_ready_now_with<F>(&mut self, flush: &mut F) -> Result<()>
     where
-        F: FnMut(&mut TerminalRenderer, &str) -> Result<()>,
+        F: FnMut(&mut TerminalRenderer, &[u8]) -> Result<()>,
     {
         let mut chunk = [0u8; READ_CHUNK_BYTES];
-        let mut display = String::new();
+        let mut display = Vec::new();
         let mut first_error: Option<anyhow::Error> = None;
         loop {
             match self.inner.get_ref().read(&mut chunk) {
@@ -386,11 +367,7 @@ impl OutputMonitor {
                 // the wait-free read rather than recording an error.
                 Err(err) if err.kind() == ErrorKind::Interrupted => continue,
                 Ok(n) => {
-                    if let Some(err) = self.feed_bytes(&mut display, &chunk[..n])
-                        && first_error.is_none()
-                    {
-                        first_error = Some(err);
-                    }
+                    self.feed_bytes(&mut display, &chunk[..n]);
                     if self.renderer_failed || display.len() >= RENDER_FLUSH_BYTES {
                         self.flush_display_with(&mut display, flush);
                     }
@@ -404,11 +381,7 @@ impl OutputMonitor {
                 }
             }
         }
-        if let Some(err) = self.flush_pending_fragment(&mut display)
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
+        self.flush_pending_fragment(&mut display);
         if !display.is_empty() {
             self.flush_display_with(&mut display, flush);
         }

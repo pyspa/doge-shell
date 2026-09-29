@@ -15,7 +15,9 @@
 - Renderer failure never terminates a drain, changes wait status, or releases the capture-pipe reader early.
 - After renderer failure, pipe drain, captured_output, and SharedOutputObserver continue normally.
 - ReadyNow still reads until EOF/WouldBlock; ToEof still owns the reader until EOF.
-- Actual read/readiness/framing errors retain their existing Result semantics.
+- Capture-pipe stream authority is raw bytes: `OutputMonitor::captured_output` is byte-preserving (`Vec<u8>`), and terminal rendering takes raw bytes.
+- `SharedOutputObserver` stays a text-only surface: project with `String::from_utf8_lossy` after a record completes (newline `0x0A` never splits a UTF-8 sequence), never per read chunk.
+- Actual fd/read/readiness errors retain their existing Result semantics; invalid UTF-8 is presentation data, not an I/O failure.
 - Lifecycle: `Job.state` は process tree から導出する lifecycle summary のまま（導出順序は「ライフサイクル」節通り）。pipefail status を `Job.state` に書き込まない。
 - Logical pipeline exit status: policy は `Job::launch` 時に `ShellOptions` から snapshot し、`Job` が frozen で所有する。pipefail OFF → tail stage の `shell_exit_code()`、pipefail ON → 右端に最も近い non-zero `shell_exit_code()`（全成功なら 0）。finalization は live `ShellOptions` を読まない。
 - final status は `Job::final_exit_status()`（`dsh/src/process/pipeline_status.rs`）の single resolver から取る（`job.state` の blind read 禁止）。signal 死は既存 `ProcessState::shell_exit_code()` の 128+N を使う。`NoCommand` stage も通常 stage として参加する。未完了 tree は `None`（status を捏造しない）。

@@ -631,14 +631,14 @@ pub async fn capture_completed_output_and_history(
             .iter()
             .find(|monitor| monitor.stream() == ObservedStream::Stdout)
         {
-            stdout_cap = monitor.captured_output.clone();
+            stdout_cap = monitor.captured_text_lossy().into_owned();
         }
         if let Some(monitor) = job
             .monitors
             .iter()
             .find(|monitor| monitor.stream() == ObservedStream::Stderr)
         {
-            stderr_cap = monitor.captured_output.clone();
+            stderr_cap = monitor.captured_text_lossy().into_owned();
         }
     }
 

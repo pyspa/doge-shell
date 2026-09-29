@@ -552,14 +552,15 @@ mod tests {
         for monitor in job.monitors.iter_mut() {
             monitor.drain_to_eof().await.expect("drain helper output");
         }
-        let captured: String = job
+        let captured: Vec<u8> = job
             .monitors
             .iter()
-            .map(|monitor| monitor.captured_output.clone())
+            .flat_map(|monitor| monitor.captured_output.iter().copied())
             .collect();
+        let captured_text = String::from_utf8_lossy(&captured);
         assert!(
-            captured.contains("async-list-marker"),
-            "helper output missing from capture: {captured:?}"
+            captured_text.contains("async-list-marker"),
+            "helper output missing from capture: {captured_text:?}"
         );
     }
 

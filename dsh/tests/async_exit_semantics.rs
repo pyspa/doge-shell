@@ -213,27 +213,69 @@ fn wait_for_parent_change_while_alive(pid: Pid, original_parent: Pid, timeout: D
     }
 }
 
-/// Observe the nested helper's parent while the subshell helper holds its
-/// short `sleep 2` window. Reads twice: a change between the two reads means
-/// the subshell exited mid-observation, which is reported as such instead of
-/// being mistaken for a stable original parent.
-fn observe_original_parent(nested: Pid) -> Pid {
-    let first = parent_pid_of(nested)
-        .expect("nested helper must have a live subshell parent during observation window");
+/// Record the nested helper's parent while the subshell helper is
+/// deterministically held alive by the FIFO handshake (it is blocked in
+/// `head -n 1 sync.fifo`, which only the test can release). A single `ps`
+/// read is authoritative: no inter-read sleep is needed because the hold is
+/// synchronized, not inferred from elapsed time. The extra checks prove the
+/// recorded pid really is the live subshell helper — a running child of the
+/// top shell — and not an already-adopted parent observed through
+/// scheduling luck.
+fn record_original_parent_while_held(nested: Pid, top: Pid) -> Pid {
+    let original = parent_pid_of(nested)
+        .expect("nested helper must have a parent while the subshell is held in the handshake");
     assert_ne!(
-        first, nested,
+        original, nested,
         "nested helper {nested} cannot be its own parent"
     );
-    assert!(first.as_raw() > 0, "original parent pid must be positive");
-    std::thread::sleep(Duration::from_millis(50));
-    let second = parent_pid_of(nested)
-        .expect("nested helper must have a live subshell parent during observation window");
-    assert_eq!(
-        first, second,
-        "nested helper {nested} changed parent from {first} to {second} during observation; \
-         subshell helper exited before the original parent could be stably observed"
+    assert!(
+        original.as_raw() > 0,
+        "original parent pid must be positive"
     );
-    first
+    assert!(
+        kill(original, None).is_ok(),
+        "original subshell parent {original} must still be alive: \
+         the release has not been sent yet"
+    );
+    assert_eq!(
+        parent_pid_of(original),
+        Some(top),
+        "original parent {original} must still be a child of the top shell {top}; \
+         otherwise the subshell already exited before observation"
+    );
+    original
+}
+
+/// Explicitly release a subshell helper blocked in `head -n 1 sync.fifo`.
+///
+/// The FIFO is opened `O_RDWR`, which never blocks on Linux or macOS
+/// regardless of whether the reader has arrived yet, so endpoint-open
+/// ordering cannot deadlock. One line suffices: `head -n 1` exits on the
+/// first line without needing EOF. The returned handle must stay alive until
+/// the subshell's exit has been observed: closing it before `head` opens the
+/// FIFO would discard the buffered line and strand the subshell (lost
+/// wakeup). Dropping it afterwards only closes an already-consumed endpoint.
+fn release_subshell_via_fifo(fifo: &std::path::Path) -> std::fs::File {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fifo.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "sync fifo {} never appeared",
+            fifo.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut releaser = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(fifo)
+        .expect("sync fifo must open O_RDWR without blocking");
+    use std::io::Write as _;
+    releaser
+        .write_all(b"go\n")
+        .expect("release line must write to the sync fifo");
+    releaser.flush().expect("release line must flush");
+    releaser
 }
 
 /// Process group of another process, via `ps` (portable across
@@ -335,6 +377,33 @@ fn poll_group_sleep(pgid: Pid, timeout: Duration) {
         assert!(
             Instant::now() < deadline,
             "no sleep process appeared in group {pgid}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Wait until no `sleep` process remains in `pgid`. Group SIGKILL reaches
+/// every group member at once, but an orphaned survivor keeps its pgid
+/// across reparenting, so a leaked `sleep` is still caught here by group.
+/// `pgrep -g`/`-x` exist on both Linux (procps) and macOS; no `/proc`
+/// dependency.
+fn poll_no_group_sleep(pgid: Pid, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let found = Command::new("pgrep")
+            .arg("-g")
+            .arg(pgid.as_raw().to_string())
+            .arg("-x")
+            .arg("sleep")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if !found {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a sleep process leaked in group {pgid} after cleanup"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -474,13 +543,15 @@ fn late_stderr_to_regular_file_survives_parent_exit() {
 fn nested_async_child_survives_subshell_helper_exit() {
     let _guard = common::serial_guard();
     let mut parent = spawn_parent(
-        "( sleep 30 & echo $! > nested.pid; sleep 2 )",
+        "( sleep 30 & echo $! > nested.pid; mkfifo sync.fifo; echo ready > subshell.ready; head -n 1 sync.fifo > /dev/null )",
         Stdio::null(),
         Stdio::null(),
     );
-    // The subshell helper writes the nested pid, stays alive briefly so the
-    // original parent is observable, then exits without waiting for it
-    // (normal helper exit + detach). The nested helper inherits the
+    // Handshake, not wall-clock: the subshell publishes the nested pid, then
+    // blocks in `head` on the FIFO until this test sends one line. The
+    // subshell therefore cannot exit before the explicit release below, so
+    // the original-parent read is synchronized rather than inferred from a
+    // fixed observation window. The nested helper inherits the
     // subshell's capture pipe, so the top shell's EOF wait legitimately
     // lasts until the nested child goes away (pipe lifetime, not process
     // waiting). The contract is that the nested async child outlives the
@@ -488,22 +559,38 @@ fn nested_async_child_survives_subshell_helper_exit() {
     // is deliberately not part of this test: POSIX does not require PID 1,
     // and Linux child subreapers may become the new parent.
     let nested = read_helper_pid(&parent.workdir, "nested.pid");
+    poll_file_contains(
+        &parent.workdir.join("subshell.ready"),
+        "ready",
+        Duration::from_secs(10),
+    );
     let mut survivor = SurvivingChild::new(nested, nested);
     survivor.assert_alive();
-    let original_parent = observe_original_parent(nested);
+    let original_parent = record_original_parent_while_held(nested, parent.pid);
+    parent.assert_running(
+        "top shell must remain blocked while the subshell is held in the handshake",
+    );
+    // Explicit test-controlled release. The held-open FIFO handle keeps the
+    // buffered line alive until `head` consumes it (see the release helper).
+    let release = release_subshell_via_fifo(&parent.workdir.join("sync.fifo"));
     let adopted_by =
         wait_for_parent_change_while_alive(nested, original_parent, Duration::from_secs(10));
     assert_ne!(
         adopted_by, original_parent,
         "nested helper {nested} must leave its original subshell parent"
     );
+    drop(release);
     survivor.assert_alive();
     parent.assert_running(
         "top shell must remain blocked until the nested capture writer is released",
     );
     // Releasing the nested child closes the last capture-pipe write end:
     // the top shell then EOFs and exits 0 without any further wait.
+    // Observe the group while the helper is known alive so the leak guard
+    // below checks the real group even if group assumptions ever change.
+    let nested_group = Pid::from_raw(pgid_of(nested).unwrap_or(nested.as_raw()));
     survivor.cleanup();
+    poll_no_group_sleep(nested_group, Duration::from_secs(10));
     let status = parent.wait_exit(Duration::from_secs(15));
     assert!(status.success(), "parent must exit 0 after nested cleanup");
 }
@@ -520,11 +607,22 @@ fn nested_async_child_survives_outer_async_helper_exit() {
     assert!(status.success());
     let outer = read_helper_pid(&parent.workdir, "outer.pid");
     let nested = read_helper_pid(&parent.workdir, "nested.pid");
-    // The nested helper joins the outer helper's group; group-kill the
-    // outer group to reap the whole tree without touching anyone else's.
-    let mut survivor = SurvivingChild::new(nested, outer);
+    // The nested helper leads its own process group (it does not join the
+    // outer helper's group: the exec'd `sleep` is the helper's child in the
+    // helper's group). Group-kill the nested helper's own observed group so
+    // the `sleep` child dies with its helper instead of leaking as a
+    // reparented orphan; killing the outer group would miss it.
+    let nested_pgid = pgid_of(nested)
+        .unwrap_or_else(|| panic!("nested helper {nested} must have a process group for cleanup"));
+    // `outer.pid` is still awaited above so the outer helper is known to
+    // have spawned; only its pid is unneeded for cleanup targeting.
+    let _ = outer;
+    let mut survivor = SurvivingChild::new(nested, Pid::from_raw(nested_pgid));
     survivor.assert_alive();
     survivor.cleanup();
+    // Guard the observed group, not just `survivor.pgid`, so a wrong
+    // cleanup target cannot make this check vacuous.
+    poll_no_group_sleep(Pid::from_raw(nested_pgid), Duration::from_secs(10));
 }
 
 /// Without job control an async AND-OR list starts with SIGINT ignored

@@ -1,4 +1,10 @@
 name: Agent evaluation
+# Support boundary (PER-13): this workflow intentionally stays Codex/Claude-only.
+# `opencode` and generic `command` are local-only runners: OpenCode needs
+# provider model/auth configuration with dynamic CLI probing, and `command`
+# accepts arbitrary argv, so workflow credentials/installs would be less
+# bounded than this pinned setup. See docs/ai/evals/README.md and
+# scripts/check-agent-eval-support.py, which rejects runner/secret drift.
 permissions:
   contents: read
 on:

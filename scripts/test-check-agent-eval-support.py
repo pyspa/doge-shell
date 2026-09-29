@@ -101,6 +101,114 @@ class DriftRejectionTest(unittest.TestCase):
             errors = self.checker.check(workflow_path=workflow)
             self.assertTrue(errors, "checker must reject broadened workflow secrets")
 
+    def _minimal_workflow(self, secret_expr: str) -> str:
+        return (
+            "on:\n  workflow_dispatch:\n    inputs:\n"
+            "      runner:\n        type: choice\n"
+            "        options: [codex, claude]\n"
+            "jobs:\n  evaluate:\n    steps:\n"
+            f"      - run: echo {secret_expr}\n"
+        )
+
+    def test_accepts_approved_dot_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = self._write(tmp, "agent-eval.yml",
+                                   self._minimal_workflow("${{ secrets.OPENAI_API_KEY }}"))
+            self.assertEqual(self.checker.parse_workflow_secrets(workflow), {"OPENAI_API_KEY"})
+            self.assertEqual(self.checker.check(workflow_path=workflow), [])
+
+    def test_accepts_approved_single_quoted_bracket_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = self._write(tmp, "agent-eval.yml",
+                                   self._minimal_workflow("${{ secrets['OPENAI_API_KEY'] }}"))
+            self.assertEqual(self.checker.parse_workflow_secrets(workflow), {"OPENAI_API_KEY"})
+            self.assertEqual(self.checker.check(workflow_path=workflow), [])
+
+    def test_accepts_approved_double_quoted_bracket_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = self._write(tmp, "agent-eval.yml",
+                                   self._minimal_workflow('${{ secrets["ANTHROPIC_API_KEY"] }}'))
+            self.assertEqual(self.checker.parse_workflow_secrets(workflow), {"ANTHROPIC_API_KEY"})
+            self.assertEqual(self.checker.check(workflow_path=workflow), [])
+
+    def test_rejects_unapproved_single_quoted_bracket_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = self._write(tmp, "agent-eval.yml",
+                                   self._minimal_workflow("${{ secrets['EXTRA_PROVIDER_TOKEN'] }}"))
+            errors = self.checker.check(workflow_path=workflow)
+            self.assertTrue(errors, "checker must reject unapproved single-quoted bracket secret")
+
+    def test_rejects_unapproved_double_quoted_bracket_secret(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = self._write(tmp, "agent-eval.yml",
+                                   self._minimal_workflow('${{ secrets["EXTRA_PROVIDER_TOKEN"] }}'))
+            errors = self.checker.check(workflow_path=workflow)
+            self.assertTrue(errors, "checker must reject unapproved double-quoted bracket secret")
+
+    def test_rejects_dynamic_secret_access(self):
+        cases = (
+            "${{ secrets[inputs.secret_name] }}",
+            "${{ secrets[env.KEY] }}",
+            "${{ secrets[foo] }}",
+            "${{ secrets }}",
+            "${{ SECRETS[inputs.secret_name] }}",
+            "${{ Secrets[foo] }}",
+            "${{ SECRETS }}",
+            "${{ toJSON(secrets) }}",
+            "${{ toJSON(SECRETS) }}",
+        )
+        for expr in cases:
+            with self.subTest(expr=expr), tempfile.TemporaryDirectory() as tmp:
+                workflow = self._write(tmp, "agent-eval.yml", self._minimal_workflow(expr))
+                with self.assertRaises(ValueError):
+                    self.checker.parse_workflow_secrets(workflow)
+                errors = self.checker.check(workflow_path=workflow)
+                self.assertTrue(errors, f"checker must fail closed on dynamic access: {expr}")
+
+    def test_accepts_approved_secret_case_insensitive(self):
+        cases = (
+            ("${{ secrets.openai_api_key }}", {"OPENAI_API_KEY"}),
+            ("${{ SECRETS['openai_api_key'] }}", {"OPENAI_API_KEY"}),
+            ('${{ Secrets["anthropic_api_key"] }}', {"ANTHROPIC_API_KEY"}),
+            ("${{ SECRETS.OPENAI_API_KEY }}", {"OPENAI_API_KEY"}),
+        )
+        for expr, expected in cases:
+            with self.subTest(expr=expr), tempfile.TemporaryDirectory() as tmp:
+                workflow = self._write(tmp, "agent-eval.yml", self._minimal_workflow(expr))
+                self.assertEqual(self.checker.parse_workflow_secrets(workflow), expected)
+                self.assertEqual(self.checker.check(workflow_path=workflow), [])
+
+    def test_rejects_unapproved_secret_case_insensitive(self):
+        cases = (
+            "${{ SECRETS.EXTRA_PROVIDER_TOKEN }}",
+            "${{ Secrets['EXTRA_PROVIDER_TOKEN'] }}",
+            '${{ SECRETS["extra_provider_token"] }}',
+        )
+        for expr in cases:
+            with self.subTest(expr=expr), tempfile.TemporaryDirectory() as tmp:
+                workflow = self._write(tmp, "agent-eval.yml", self._minimal_workflow(expr))
+                errors = self.checker.check(workflow_path=workflow)
+                self.assertTrue(errors, f"checker must reject unapproved secret: {expr}")
+
+    def test_rejects_malformed_secret_access(self):
+        cases = (
+            "${{ secrets. }}",
+            "${{ secrets['OPENAI_API_KEY] }}",
+            '${{ secrets["OPENAI_API_KEY] }}',
+            "${{ secrets[''] }}",
+        )
+        for expr in cases:
+            with self.subTest(expr=expr), tempfile.TemporaryDirectory() as tmp:
+                workflow = self._write(tmp, "agent-eval.yml", self._minimal_workflow(expr))
+                failed = False
+                try:
+                    self.checker.parse_workflow_secrets(workflow)
+                except ValueError:
+                    failed = True
+                if not failed:
+                    failed = bool(self.checker.check(workflow_path=workflow))
+                self.assertTrue(failed, f"checker must fail closed on malformed access: {expr}")
+
     def test_rejects_schema_runner_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
             schema = {

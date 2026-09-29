@@ -36,6 +36,15 @@ struct ObservedParent {
 }
 
 impl ObservedParent {
+    fn assert_running(&mut self, context: &str) {
+        let child = self.child.as_mut().expect("parent already waited");
+        let status = child.try_wait().expect("failed to inspect dogesh parent");
+        assert!(
+            status.is_none(),
+            "{context}: dogesh parent exited unexpectedly: {status:?}"
+        );
+    }
+
     fn wait_exit(&mut self, timeout: Duration) -> std::process::ExitStatus {
         let child = self.child.as_mut().expect("parent already waited");
         match child
@@ -161,7 +170,7 @@ fn spawn_parent(script: &str, stdout: Stdio, stderr: Stdio) -> ObservedParent {
 
 /// Parent pid of another process, via `ps` (portable across Linux/macOS;
 /// no `/proc` dependency). `None` when the process is already gone.
-fn parent_pid_of(pid: Pid) -> Option<i32> {
+fn parent_pid_of(pid: Pid) -> Option<Pid> {
     let output = Command::new("ps")
         .arg("-o")
         .arg("ppid=")
@@ -172,10 +181,59 @@ fn parent_pid_of(pid: Pid) -> Option<i32> {
     if !output.status.success() {
         return None;
     }
-    String::from_utf8_lossy(&output.stdout)
+    let raw = String::from_utf8_lossy(&output.stdout)
         .trim()
         .parse::<i32>()
-        .ok()
+        .ok()?;
+    (raw > 0).then(|| Pid::from_raw(raw))
+}
+
+/// Wait until `pid` is still alive but parented to someone other than
+/// `original_parent`. Returns the adopting parent. Liveness authority is
+/// `kill(pid, 0)`; a transient `None` from `ps` never counts as death.
+fn wait_for_parent_change_while_alive(pid: Pid, original_parent: Pid, timeout: Duration) -> Pid {
+    let deadline = Instant::now() + timeout;
+    loop {
+        assert!(
+            kill(pid, None).is_ok(),
+            "nested helper {pid} died before its subshell parent released it"
+        );
+        if let Some(current_parent) = parent_pid_of(pid)
+            && current_parent != original_parent
+        {
+            return current_parent;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "nested helper {pid} remained parented to {original_parent}; \
+             subshell helper did not exit within {timeout:?} \
+             (or the original parent was already gone before observation)"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Observe the nested helper's parent while the subshell helper holds its
+/// short `sleep 2` window. Reads twice: a change between the two reads means
+/// the subshell exited mid-observation, which is reported as such instead of
+/// being mistaken for a stable original parent.
+fn observe_original_parent(nested: Pid) -> Pid {
+    let first = parent_pid_of(nested)
+        .expect("nested helper must have a live subshell parent during observation window");
+    assert_ne!(
+        first, nested,
+        "nested helper {nested} cannot be its own parent"
+    );
+    assert!(first.as_raw() > 0, "original parent pid must be positive");
+    std::thread::sleep(Duration::from_millis(50));
+    let second = parent_pid_of(nested)
+        .expect("nested helper must have a live subshell parent during observation window");
+    assert_eq!(
+        first, second,
+        "nested helper {nested} changed parent from {first} to {second} during observation; \
+         subshell helper exited before the original parent could be stably observed"
+    );
+    first
 }
 
 /// Process group of another process, via `ps` (portable across
@@ -416,35 +474,33 @@ fn late_stderr_to_regular_file_survives_parent_exit() {
 fn nested_async_child_survives_subshell_helper_exit() {
     let _guard = common::serial_guard();
     let mut parent = spawn_parent(
-        "( sleep 30 & echo $! > nested.pid )",
+        "( sleep 30 & echo $! > nested.pid; sleep 2 )",
         Stdio::null(),
         Stdio::null(),
     );
-    // The subshell helper writes the nested pid, then exits without waiting
-    // for it (normal helper exit + detach). The nested helper inherits the
+    // The subshell helper writes the nested pid, stays alive briefly so the
+    // original parent is observable, then exits without waiting for it
+    // (normal helper exit + detach). The nested helper inherits the
     // subshell's capture pipe, so the top shell's EOF wait legitimately
     // lasts until the nested child goes away (pipe lifetime, not process
-    // waiting) — the proof here is narrower and exact: while the top shell
-    // is still EOF-blocked, the nested child is alive and already
-    // reparented, i.e. its helper parent exited without killing it.
+    // waiting). The contract is that the nested async child outlives the
+    // subshell helper. The identity of the process that adopts the orphan
+    // is deliberately not part of this test: POSIX does not require PID 1,
+    // and Linux child subreapers may become the new parent.
     let nested = read_helper_pid(&parent.workdir, "nested.pid");
     let mut survivor = SurvivingChild::new(nested, nested);
     survivor.assert_alive();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if parent_pid_of(nested) == Some(1) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "nested helper {nested} never reparented (helper exit did not happen?)"
-        );
-        assert!(
-            kill(nested, None).is_ok(),
-            "nested helper {nested} died with its helper parent"
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    let original_parent = observe_original_parent(nested);
+    let adopted_by =
+        wait_for_parent_change_while_alive(nested, original_parent, Duration::from_secs(10));
+    assert_ne!(
+        adopted_by, original_parent,
+        "nested helper {nested} must leave its original subshell parent"
+    );
+    survivor.assert_alive();
+    parent.assert_running(
+        "top shell must remain blocked until the nested capture writer is released",
+    );
     // Releasing the nested child closes the last capture-pipe write end:
     // the top shell then EOFs and exits 0 without any further wait.
     survivor.cleanup();

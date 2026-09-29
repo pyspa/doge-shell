@@ -19,6 +19,12 @@
 
 The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package names from `package-map.md` when selecting commands.
 
+## CI layering
+
+- PR/push CI (`.github/workflows/ci.yml`): deterministic workspace + execution contract tests only (`test`/`contract` on Linux+macOS; `lint`/`msrv` on Ubuntu). Do not move stress jobs back into `ci.yml`.
+- develop push (`.github/workflows/stress.yml` `stress-develop`): lightweight Ubuntu execution stress (`--stress-count 2`). Not a PR merge gate.
+- nightly/manual (same file: `stress-full`, `stress-resource-fd`, `stress-resource-repeated`): full Linux/macOS stress (fast x10, FD-budget x3, repeated substitution x5) against `develop`. Full stress is never a PR merge gate.
+
 Do not start with workspace-wide tests unless the change clearly crosses crate boundaries.
 
 `--message-format short` を付けると clippy / rustc の 1 診断が 8 行から 1 行になる。広い範囲を確認するときは `cargo clippy -p doge-shell --all-targets --message-format short -- -D warnings` を使う。

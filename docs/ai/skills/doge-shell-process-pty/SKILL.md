@@ -16,5 +16,6 @@ description: Use for doge-shell PTY allocation, raw terminal mode, terminal inpu
 - A foreground child must not inherit terminal state the shell set up for itself (raw mode, the status line's scroll region). Pause it for the whole lifetime of the child, not just up to the spawn.
 - A stopped FullProxy job keeps PTY/output ownership but no terminal input proxy (`pty`/`pty_mode`/`pty_output_task` stay, `pty_input_task` is `None`). `fg` resume recreates exactly one input proxy on the existing PTY session.
 - Terminal raw mode is scoped to each active FullProxy foreground interval (`ForegroundPtyRawModeGuard`, reused for resume; no independent mechanism).
+- `OutputMonitor`/`PtyMonitor` captured-output authority is raw bytes; only `SharedOutputObserver`/`OutputHistory` take a lossy UTF-8 text projection.
 - For lifecycle/status/ownership semantics beyond PTY ownership (wait, `wait -n`/`-p`, `$!`, `fg`/`bg` lifecycle, pipeline final status, ECHILD, process substitution ownership, no-command pipelines, reexec), switch to [doge-shell-execution-semantics](../doge-shell-execution-semantics/SKILL.md).
 - Validate with `cargo test -p doge-shell`; use a narrower test filter only after identifying the affected module.

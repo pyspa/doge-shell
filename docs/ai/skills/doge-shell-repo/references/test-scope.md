@@ -13,6 +13,7 @@
 - `scripts/check-portability.py`: `target_os` arms, OS-specific paths, absolute command paths in tests, or `.cargo/config.toml` changes
 - `scripts/check-file-budget.py`: a new or split `.rs` file over 400/800 lines, or path references inside `AGENTS.md`/`CLAUDE.md`/`docs/ai/`
 - `scripts/check-ai-guidance.sh`: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, Skill, runtime skill installer, or `.claude/` changes
+- `docs/ai/agent-routing.json`、`docs/ai/evals/`、`scripts/agent_routing.py`、`scripts/agent-context.py`、またはroutingに影響するSkill metadataを変えたら: `python3 scripts/eval-agent-routing.py` と `python3 scripts/check-agent-eval-fixtures.py`。mutation/task自体を変えたら `python3 scripts/check-agent-eval-fixtures.py --case <case-id> --smoke` も回す。全AI guidance変更で毎回全smokeは要求しない（routing/evalに影響する変更に限定）
 - `scripts/check-project-consistency.py`: workspace `Cargo.toml`, crate manifests, `README.md`, or `LICENSE` changes
 - `scripts/install-runtime-skills.sh --dry-run --target codex --profile codex-core`: Codex runtime profile changes
 - `scripts/install-runtime-skills.sh --status --target codex --profile codex-core`: canonical/runtime state display (always exits zero for valid arguments)
@@ -39,6 +40,7 @@ Do not start with workspace-wide tests unless the change clearly crosses crate b
 - `dsh/src/process/`・`dsh/src/proxy/builtin/jobs/`・`dsh/src/shell/{job,job_exit}.rs`・`dsh/src/shell/process_substitution/`: `scripts/check-execution-authority.py` と `cargo test -p doge-shell --test shell_contract` / `--test resource_contract`
 - `ShellProxy` / capability trait: `scripts/check-shell-proxy-capabilities.py`
 - AI guidance・Skill・`.claude/`: `scripts/check-ai-guidance.sh`
+- routing/evalに影響する変更（`docs/ai/agent-routing.json`、`docs/ai/evals/`、`scripts/agent_routing.py`、`scripts/agent-context.py`、routingに影響するSkill metadata）: `python3 scripts/eval-agent-routing.py` と `python3 scripts/check-agent-eval-fixtures.py`。mutation/task自体を変更した場合は `python3 scripts/check-agent-eval-fixtures.py --case <case-id> --smoke` も推奨
 - `Cargo.toml` / `README.md` / `LICENSE`: `scripts/check-project-consistency.py`
 
 Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/job_pty.rs`, `dsh/src/process/job_wait.rs`, `dsh/src/shell/eval.rs`): see the "テストと実端末" section of `invariants/terminal.md` first. If a run leaves the terminal misbehaving, `cargo test < /dev/null` isolates fd 0, and `reset` clears a stale DECSTBM margin that `stty sane` cannot.

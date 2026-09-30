@@ -17,9 +17,20 @@ fn environment_is_send_and_sync() {
 #[test]
 fn test_lookup() {
     init();
-    let env = Environment::new();
-    let p = env.read().lookup("touch");
-    assert_eq!(Some("/usr/bin/touch".to_string()), p)
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let first = write_mode_file(dir_a.path(), "lookup-fixture", 0o755);
+    let second = write_mode_file(dir_b.path(), "lookup-fixture", 0o755);
+
+    let env = env_with_paths(vec![
+        dir_a.path().display().to_string(),
+        dir_b.path().display().to_string(),
+    ]);
+    assert_eq!(
+        env.read().lookup("lookup-fixture"),
+        Some(first.display().to_string())
+    );
+    assert_ne!(first.display().to_string(), second.display().to_string());
 }
 
 #[test]

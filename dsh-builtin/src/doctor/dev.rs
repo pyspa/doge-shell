@@ -1,5 +1,6 @@
 //! `doctor dev` / `doctor validate`: suggest validation commands from
-//! changed files, mirroring `scripts/check.sh`'s per-path rules.
+//! changed files, a per-path subset of the CI `lint`/`test` jobs in
+//! `.github/workflows/ci.yml` (which `scripts/check.sh` runs in full).
 use crate::ShellProxy;
 use dsh_types::Context;
 use dsh_types::process_runtime::CommandRuntimeSnapshot;
@@ -98,6 +99,15 @@ pub(super) fn parse_git_status_short(output: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Workspace packages in suggestion order.
+const PACKAGES: [&str; 5] = [
+    "dsh-builtin",
+    "doge-shell",
+    "dsh-openai",
+    "dsh-types",
+    "dsh-frecency",
+];
+
 pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut commands = Vec::new();
     let mut packages = BTreeSet::new();
@@ -109,9 +119,12 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     let mut needs_portability = false;
     let mut needs_file_budget = false;
     let mut needs_execution_authority = false;
+    let mut needs_runtime_authority = false;
 
     for path in paths {
         let text = path.to_string_lossy().replace('\\', "/");
+        // Keep these prefixes in sync with `EXECUTION_PREFIXES` in
+        // `scripts/agent-fast-check.py`, which runs the same lint per edit.
         if text.starts_with("dsh/src/process/")
             || text.starts_with("dsh/src/proxy/builtin/jobs/")
             || text.starts_with("dsh/src/shell/process_substitution/")
@@ -124,6 +137,11 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         }
         if text.ends_with(".rs") {
             has_rust = true;
+        }
+        if text == "scripts/check-runtime-authority.py"
+            || text == "scripts/runtime-authority-allowlist.txt"
+        {
+            needs_runtime_authority = true;
         }
         if text == "Cargo.toml" || text.ends_with("/Cargo.toml") || text == "Cargo.lock" {
             needs_workspace_check = true;
@@ -154,6 +172,7 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         if text == "AGENTS.md"
             || text == "CLAUDE.md"
             || text.starts_with("docs/ai/")
+            || text.starts_with("docs/design/")
             || text.starts_with(".claude/")
             || text == "scripts/install-runtime-skills.sh"
         {
@@ -164,6 +183,8 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
         // lint whenever Rust or guidance files change.
         if text.ends_with(".rs")
             || text.starts_with("docs/ai/")
+            || text.starts_with("docs/design/")
+            || text == "docs/cron.md"
             || text == "AGENTS.md"
             || text == "CLAUDE.md"
         {
@@ -213,13 +234,12 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     if has_rust || needs_portability {
         add_command(&mut commands, "scripts/check-portability.py");
     }
-    for package in [
-        "dsh-builtin",
-        "doge-shell",
-        "dsh-openai",
-        "dsh-types",
-        "dsh-frecency",
-    ] {
+    // CI's lint job runs the runtime-authority lint on every change, and a
+    // new `std::process::Command` or env read in any crate only fails there.
+    if has_rust || needs_runtime_authority {
+        add_command(&mut commands, "scripts/check-runtime-authority.py");
+    }
+    for package in PACKAGES {
         if packages.contains(package) {
             add_command(&mut commands, &format!("cargo test -p {package}"));
         }
@@ -227,8 +247,15 @@ pub(super) fn validation_commands_for_paths(paths: &[PathBuf]) -> Vec<String> {
     if needs_workspace_check || packages.len() > 1 {
         add_command(&mut commands, "cargo check --workspace");
     }
-    if packages.contains("doge-shell") {
-        add_command(&mut commands, "cargo clippy -p doge-shell -- -D warnings");
+    // CI runs `clippy --workspace --all-targets -D warnings`, so a lint in a
+    // test module or in a non-shell crate must surface here too.
+    for package in PACKAGES {
+        if packages.contains(package) {
+            add_command(
+                &mut commands,
+                &format!("cargo clippy -p {package} --all-targets -- -D warnings"),
+            );
+        }
     }
     if needs_ai_guidance {
         add_command(&mut commands, "scripts/check-ai-guidance.sh");

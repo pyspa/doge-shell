@@ -107,7 +107,7 @@ check_markdown_links() {
         done <<EOF
 $links
 EOF
-    done < <(find "$repo_root/docs/ai" -name '*.md' -type f | sort)
+    done < <(find "$repo_root/docs/ai" $([ -d "$repo_root/docs/design" ] && echo "$repo_root/docs/design") -name '*.md' -type f | sort)
 }
 
 # Tracked AI guidance AND per-tool guidance (.serena memories), so drift cannot
@@ -117,6 +117,9 @@ EOF
 # it tells the reader to run this script after changing it - which it could not
 # usefully do while its own contents went unchecked.
 guidance_targets="$repo_root/AGENTS.md $repo_root/CLAUDE.md $repo_root/docs/ai"
+if [ -d "$repo_root/docs/design" ]; then
+    guidance_targets="$guidance_targets $repo_root/docs/design"
+fi
 if [ -d "$repo_root/.serena/memories" ]; then
     guidance_targets="$guidance_targets $repo_root/.serena/memories"
 fi
@@ -129,7 +132,9 @@ check_bad_guidance() {
         fail "use the doge-shell package name (e.g. cargo test -p doge-shell), not -p dsh"
     fi
 
-    bad_readme=$(grep -RInE '(Start with|start with|最初に).*(README\.md)|README\.md.*( first|から読む|を読む)' "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'do not|読まない|only when|only for|Open.*only|読む条件' || true)
+    bad_readme=$(grep -RInE '(Start with|start with|最初に).*[^/[:alnum:]_-]README\.md|(^|[^/[:alnum:]_-])README\.md.*( first|から読む|を読む)' "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md" "$repo_root/docs/ai" 2>/dev/null | grep -vE 'do not|読まない|only when|only for|Open.*only|読む条件' || true)
+    # Only the root README.md is the too-broad first read; a directory's own
+    # index (`docs/design/ai/README.md`) is a legitimate entry point.
     if [ -n "$bad_readme" ]; then
         echo "$bad_readme" >&2
         fail "README.md must not be the first exploration target"

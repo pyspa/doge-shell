@@ -6,7 +6,7 @@
 //! `tools`-free request and reads the answer with `turn::answer_text` - the
 //! same shape a single-shot request like `perform_summary` or `safe_run`
 //! already uses. This is deliberately not a third agent loop (see §2 of
-//! `ai-architecture.md`, which names the four properties that keep it out of
+//! `docs/design/ai/README.md`, which names the four properties that keep it out of
 //! that rule):
 //!
 //! 1. No `tools` are sent, so no `tool_calls` can come back and nothing here
@@ -267,7 +267,7 @@ fn propose(
     let model = resolve_model(proxy, model_override);
     let language = super::response_language(proxy);
     // Never `apply_language` on a JSON-shaped request (§6 of
-    // `ai-architecture.md`): it would translate the field names and the
+    // `docs/design/ai/env-vars.md`): it would translate the field names and the
     // `action`/`scope` enum values along with the prose, and a `"replace"`
     // that comes back as something else matches nothing this reads. Only
     // the one field a person actually reads gets a language instruction.

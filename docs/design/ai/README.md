@@ -1,6 +1,6 @@
 # AI 機能の設計方針
 
-doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他の文書は「この repo を AI に
+doge-shell が**製品として持つ** AI 機能の設計方針の正典。`docs/ai/` は「この repo を AI に
 編集させるときの運用ルール」で、別物。ここは実装の話をする。
 
 新しい AI 機能を足すとき、既存の AI 機能を直すときに最初に読む。
@@ -14,10 +14,9 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 | 環境変数の正典 | [env-vars.md](env-vars.md) |
 | Skill | [skill.md](skill.md) |
 | AI chat hooks | [hooks.md](hooks.md) |
+| 対話ジョブ・Tool Search | [interactive-jobs.md](interactive-jobs.md) |
 | 未解決の設計判断 | [open-questions.md](open-questions.md) |
-| Herdr 連携・永続タスク (`agent`) | [herdr.md](herdr.md) |
-
-親ファイル [../ai-architecture.md](../ai-architecture.md) はこの索引を短くまとめたものへのリンクだけを持つ。
+| Herdr 連携 | [herdr.md](herdr.md) |
 
 ## 1. プロバイダは OpenAI 互換 chat/completions のみ
 
@@ -59,25 +58,27 @@ doge-shell が**製品として持つ** AI 機能の方針。`docs/ai/` の他�
 |---|---|---|
 | 入口 | `dsh/src/shell/eval.rs` → `dsh-builtin/src/chatgpt.rs` | `dsh/src/ai_features/service.rs` |
 | 実行 | 同期 | 非同期 |
-| ツール | builtin 10 種（`cron_manage` 含む）+ `job_status`/`job_output`/`job_cancel` + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
+| ツール | builtin 10 種（`cron_manage` 含む）+ `job_status`/`job_output`/`job_cancel` + `tool_search`/`mcp_list_groups`/`mcp_load_group` + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は
 ループを持たず、`turn::answer_text` で応答を読む。cron の各 run は
-`dsh -c "cron run-job <id>"` の別プロセスで走り、子プロセスの起動は
+`dogesh -c "cron run-job <id>"` の別プロセスで走り、子プロセスの起動は
 `dsh/src/detached_child.rs` を共有する。
 
-**コマンドは両経路とも managed job として走る**（`dsh-builtin/src/agent/jobs.rs` の
-`AgentJobs`）。タスクのジョブは `AgentRuntime` が持ち SQLite に artifact を残す。経路 A の
-ジョブは `dsh-builtin/src/chatgpt/jobs.rs` のプロセス内レジストリが持ち、**ターンを跨いで
-残りうる**。`execute` が待つ時間は `AI_CHAT_EXECUTE_YIELD_MS`。
+**コマンドは managed job として走る**（`dsh-builtin/src/agent/jobs.rs` の `AgentJobs`）。
+経路 A のジョブは `dsh-builtin/src/chatgpt/jobs.rs` のプロセス内レジストリが持ち、**ターンを跨いで
+残りうる**。
+
+`agent run` / `agent resume` builtin は削除済みで、本番の `Shell.agent_runtime` は常に `None`
+（`dsh/src/shell/mod.rs`）。`setup.runtime.is_some()` 側の分岐（タスク経路）は
+`dsh-builtin/src/test_support.rs` からしか到達しない。コード削除は別作業。`execute` が待つ時間は `AI_CHAT_EXECUTE_YIELD_MS`。
 
 触るときの不変条件:
 
 - **対話レジストリは経路 A だけのもの**。`chat_with_tools` の job 呼び出しは全て
-  `setup.runtime.is_none()` の内側に置く。epilogue は両経路で共有されているので、外に出すと
-  失敗した `agent run` が対話の `!` チャットのビルドを SIGKILL する。タスクの `job_status` は
-  `runtime.jobs` を引くので、対話ジョブの id を prompt に載せても解決できない。
+  `setup.runtime.is_none()` の内側に置く。epilogue はタスク経路と共有されているので、外に出すと
+  タスク経路の失敗が対話ジョブを SIGKILL する（テストが検出する）。
 - **ジョブを残してよいのは「後のターンが名前を呼べるとき」だけ**。判定は
   `session_ttl.is_some() && (outcome.is_ok() || rewound)` — `store` は ttl が無いと no-op なので、
   outcome だけ見ると `AI_CHAT_SESSION_TTL_SECS=0` でポーリング不能なジョブが残る。

@@ -2,7 +2,7 @@
 //! and the `chat_*` builtins that configure it. `chat_with_tools` (the
 //! tool-calling loop itself, ~550 lines) stays in this file - its meaning
 //! (iteration limits, where reflection runs, hook firing order) is the
-//! contract `ai-architecture.md` §2 documents and must not drift; everything
+//! contract `docs/design/ai/README.md` §2 documents and must not drift; everything
 //! decided once before the loop, or read only after it, moved out into the
 //! modules below.
 use super::ShellProxy;

@@ -1,8 +1,7 @@
 # 6. 環境変数の正典
 
-[README.md](README.md) の §6。AI 機能の設計方針全体の索引はそちらを見る。
-デバッグ/テスト用の環境変数は [../env-vars.md](../env-vars.md) にある（この表が正典で、
-あちらは「探しに行く先」だけの短いポインタ）。
+[README.md](README.md) の §6。AI 機能・Herdr 連携の環境変数はこのファイルが正典。
+デバッグ/テスト用の環境変数は `docs/ai/skills/doge-shell-repo/references/env-vars.md` にある。
 
 解決順は **shell 変数のみ**。起動時 process environment は
 `Environment::new()` で import 済みなので、runtime の `chatgpt::load_openai_config`
@@ -24,14 +23,14 @@
 | `AI_CHAT_TURN_TOKEN_BUDGET` | 無制限 | 同上 |
 | `AI_CHAT_STREAM` | on（`0`/`false`/`off`/`no` で無効） | 同上（`resolve_stream_enabled`） |
 | `AI_CHAT_EXECUTE_ALLOWLIST` | なし | `dsh-builtin/src/chatgpt/tool/execute.rs` |
-| `AI_CHAT_EXECUTE_YIELD_MS` | 10000（0〜60000 に clamp） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_execute_yield_ms`）。対話 `execute` がジョブハンドルを返すまでの待ち時間。ツール引数 `yield_time_ms` が優先。**agent タスクには効かない**（あちらは 1000ms 上限のまま） |
-| `AI_CHAT_EXECUTE_TIMEOUT_MS` | 600000（1000〜3600000 に clamp） | 同上（`resolve_execute_timeout_ms`）。**対話のみ**の既定 timeout。agent タスクは `DEFAULT_TIMEOUT_MS`(120000) のまま |
+| `AI_CHAT_EXECUTE_YIELD_MS` | 10000（0〜60000 に clamp） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_execute_yield_ms`）。対話 `execute` がジョブハンドルを返すまでの待ち時間。ツール引数 `yield_time_ms` が優先 |
+| `AI_CHAT_EXECUTE_TIMEOUT_MS` | 600000（1000〜3600000 に clamp） | 同上（`resolve_execute_timeout_ms`）。`!` チャットの `execute` の既定 timeout |
 | `AI_MESSAGE_LANG` | なし | `dsh-builtin/src/chatgpt/settings.rs`（`response_language`） |
 | `CHAT_PROMPT` | なし | 同上 |
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |
 | `DOGESH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
 | `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt/settings.rs` |
-| `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_skill_staging`）。`task` は agent タスクで `--write` グラントが無い対象だけステージ、`always` は対話も含め常時ステージ、`off` は今日の挙動（`InputRequired`） |
+| `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_skill_staging`）。`always` は常時ステージ。`off` と既定の `task` は通常の書き込み確認へ進む（`task` がステージするのは本番では到達しないタスク経路だけ。README §2） |
 | `AI_CHAT_SKILL_REFLECT` | off | `dsh-builtin/src/chatgpt/reflect.rs`。ターン末の tools 無し単発リクエストで skill 提案を試みる |
 | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | 5 | 同上。このツール呼び出し数未満のターンでは送らない |
 | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL` → チャットモデル | 同上 |
@@ -40,7 +39,7 @@
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
 | `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
 | `DOGESH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
-| `DOGESH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**唯一の例外 |
+| `DOGESH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**（シェル変数で消せると無限再帰する）。同種の例外は下の Herdr 連携の `HERDR_*` / `DOGESH_HERDR_OWNER_PID` だけ |
 
 `AI_MESSAGE_LANG` は**散文にだけ**効く。JSON を返させるリクエスト
 （`AiRequestOptions::json_object`）に `apply_language` を付けない。フィールド名と
@@ -62,8 +61,6 @@
 | `AgentPolicyHandles`（レベル・ガード・2 つの allowlist） | 同上 |
 
 `dsh-openai` の公開 API は `send_chat` / `send_chat_streaming` + `ChatRequestOptions` だけ。
-`send_message` / `send_message_with_model` / 位置引数版 `send_chat_request` は削除した
-（呼び出し元が無く、repo 最後の `choices[0].message.content` 直読みを抱えていた）。
 
 `send_chat_streaming` は SSE chunk を `dsh_openai::stream::DeltaAggregator` で集約し、
 `send_chat` と同じ形の `Value` を返す。呼び出し元（経路 A のみ）は
@@ -73,7 +70,18 @@
 シェル側の `AiRequestOptions` は tools を既定で送らない。MCP が必要なリクエストだけ
 `with_tools()` で opt-in し、未知の MCP binding は成功ではなく tool error として返す。
 `AI_MESSAGE_LANG` または `AI_CHAT_MODEL`/`OPENAI_MODEL` の shell 変数が変わったときは
-read-only answer cache（`dsh/src/ai_features/cache.rs`）を破棄する。cache のキーは
-`AI_MESSAGE_LANG` だけを含み、モデルは含めない（`std::env::var` はシェル変数を見えないので
-キーに混ぜても常に空になるだけ）。モデルの区別は変更時の全消しだけで足りている。
+read-only answer cache（`dsh/src/ai_features/cache.rs`）を全消しする。cache のキーは
+リクエスト内容だけで、言語もモデルも含めない（変更時の全消しで足りている）。
 API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` が正典。
+
+## Herdr 連携の変数
+
+| 変数 | 定義位置 | 用途 |
+|---|---|---|
+| `HERDR_ENV` / `HERDR_PANE_ID` / `HERDR_BIN_PATH` | `dsh/src/agent_lifecycle/herdr.rs`（`HerdrEnv::detect`） | Herdr pane 内で起動されたことの検出。**プロセス環境だけを見る**（`DOGESH_HOOK_DEPTH` と同じ理由。シェル変数で「Herdr 配下だ」と偽装・抑止できてはいけない） |
+| `DOGESH_HERDR_OWNER_PID` | 同上 | 同一 pane 内の入れ子 `dogesh` が lifecycle authority を取り合わないためのガード。プロセス環境だけを見る |
+| `DOGESH_HERDR_ENABLED` | `dsh/src/agent_lifecycle/agent_command.rs`（`herdr_enabled`） | Herdr 連携全体の ON/OFF。`1`/`true`/`on`/`yes` で有効、既定 OFF（Herdr pane 内でも自動では有効にならない） |
+| `DOGESH_HERDR_AGENT_COMMANDS` | `dsh/src/agent_lifecycle/agent_command.rs` | `codex`/`claude` など前景で認識するエージェント CLI 名の `:` 区切りリスト。素の名前は追加、`-name` は既定リストから除外 |
+| `DOGESH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
+
+`DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく shell 変数として解決する（`Environment::get_var`。起動時 process environment は `Environment::new()` で import 済み）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。

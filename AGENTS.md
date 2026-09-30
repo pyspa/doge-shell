@@ -20,7 +20,8 @@
 - routerは編集前のSkillとreferenceの入口だけを示す。使えないときは `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
 - typo、明白な1ファイルdocs編集、変更内容を完全指定された単純修正ではrouterを省略してよい。
 - 補完定義は `doge-shell-completion-spec` と `references/invariants/completion.md`、execution/job lifecycleは `doge-shell-execution-semantics` と `references/invariants/execution*.md` を読む。
-- 製品側のAI機能では `docs/ai/skills/doge-shell-repo/references/ai-architecture.md` を先に読む。
+- 製品側のAI機能では `docs/design/ai/README.md` を先に読む。
+- 構文・実行の挙動の仕様は `dsh/src/shell.pest`（文法）と `dsh/tests/spec/*.toml`（契約）が正典。仕様を変えるときは spec にケースを足してから実装する。
 
 ## 設計境界
 
@@ -30,18 +31,17 @@
 
 ## 編集後の検証
 
-- `doctor validate` が使える環境では、変更ファイルに応じた提案を優先する。routerを検証コマンドのauthorityにしない。
-- 使えない場合は `docs/ai/skills/doge-shell-repo/references/test-scope.md` から最小コマンドを選ぶ。
+- 検証コマンドは `docs/ai/skills/doge-shell-repo/references/test-scope.md` から最小のものを選ぶ。release バイナリがソースより新しい場合だけ `doctor validate` の提案を使ってよい。routerを検証コマンドのauthorityにしない。
 - `dsh/` はCargo package `doge-shell`、`dsh-builtin/` は `dsh-builtin`。複数crateに跨るときだけ広いtestを選ぶ。
-- AI guidance / Skill変更では `scripts/check-ai-guidance.sh` を実行する。runtime Skillの `--check-installed` はコピーの新旧を検査し、`--status` は表示専用。
+- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変えたら `scripts/check-ai-guidance.sh` を実行する。runtime Skillの `--check-installed` はコピーの新旧を検査し、`--status` は表示専用。
 - OS依存コード・設定では `scripts/check-portability.py`、ShellProxy・能力trait変更では `scripts/check-shell-proxy-capabilities.py` を実行する。
 - `Cargo.toml` / `README.md` / `LICENSE` 変更では `scripts/check-project-consistency.py` を実行する。
 - 全体の `./scripts/check.sh` は段階的な設計変更の最後とリリース前に実行する。
-- 長時間タスクで `.agent/TASK.md` が存在すれば再開前に読み、Current state / Decisions / Blockersを短く保つ。手順は `docs/ai/herdr-development.md` を参照する。
+- 長時間タスクで `.agent/TASK.md` が存在すれば再開前に読み、Current state / Decisions / Blockersを短く保つ。手順は `docs/ai/long-task-workflow.md` を参照する。
 - 失敗例の再発防止は `task-map.md` または該当Skillのreferenceへ短く戻す。
 
 ## Skillの配置
 
 - canonical sourceは `docs/ai/skills/`。Codex runtimeには原則 `doge-shell-repo` だけを常設し、領域別Skillは必要時に読む。
 - `.agents/skills` と `.claude/skills` はcore 3件だけをcanonical directoryへのsymlinkとして公開する。domain Skillはrouterが返す `skills[].path` を直接読む。
-- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変えたら `scripts/check-ai-guidance.sh` を実行する。
+- 製品AI機能の設計ノートは `docs/design/ai/` に置き、runtime Skillには入れない。

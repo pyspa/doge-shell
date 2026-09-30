@@ -48,7 +48,7 @@ doctor skills
 - 失敗しやすい実装パターンを見つけたら、`task-map.md` か該当 Skill の `references/` へ短く戻す。
 - `description` は dogesh のプロンプトでは 240 字で切られる（`skill_manage` が書き込める上限は 300 字）。trigger を先頭に置く。
 - `allowed-tools` などの他ツール向け frontmatter キーは dogesh では無視される（強制しない）。
-- `skill_manage` は書く内容を検査する。frontmatter が無い / `name`/`description` が読めない / `description` が空、のいずれかは確認を出す前に拒否される。既存の canonical skill はこの検査の corpus テストを兼ねる（`cargo test -p dsh-builtin the_repositorys_own_skills_pass_the_lint`）。
+- `skill_manage` が書く内容の lint（拒否条件の一覧）は `docs/design/ai/skill.md` が正典。既存の canonical skill はこの検査の corpus テストを兼ねる（`cargo test -p dsh-builtin the_repositorys_own_skills_pass_the_lint`）。
 - 変更後は `scripts/check-ai-guidance.sh` で軽量 lint する。
 
 ## 推奨 runtime Skill
@@ -60,7 +60,7 @@ doctor skills
 - Skill 自体を書き足すとき (製品利用者向けにも公開): `dsh-skill-authoring`
 - 製品利用者向け: `--profile dogesh-user` (`dsh-cron`, `dsh-skill-authoring`, `dsh-chat`)
 
-編集前の案内は `python3 scripts/agent-context.py --topic "<task>" --json`。`--path` は複数指定でき、`--changed` は作業ツリーの変更pathを使う。routing metadataは `agent-routing.json`、回帰ケースは `evals/routing-cases.json`。編集後の検証コマンドは `doctor validate` が選ぶ。Claude Codeでrust-analyzer Code Intelligenceが利用可能ならsymbol navigationを優先し、利用できなければ `rg` を使う。LSPはbuild/testの必須条件ではない。
+編集前の案内は `python3 scripts/agent-context.py --topic "<task>" --json`。`--path` は複数指定でき、`--changed` は作業ツリーの変更pathを使う。routing metadataは `agent-routing.json`、回帰ケースは `evals/routing-cases.json`。編集後の検証コマンドは `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ（release バイナリが新しければ `doctor validate` の提案も使える）。Claude Codeでrust-analyzer Code Intelligenceが利用可能ならsymbol navigationを優先し、利用できなければ `rg` を使う。LSPはbuild/testの必須条件ではない。
 
 ## 製品利用者向け Skill
 
@@ -68,7 +68,9 @@ doctor skills
 
 ## 製品側の AI 機能
 
-このディレクトリは「この repo を AI に編集させるときの運用ルール」で、doge-shell が製品として
-持つ AI 機能（`!` チャット、MCP、ツール、コマンドパレットの AI アクション、`ai-commit`、
-`safe-run`、ゴーストテキスト）の設計文書ではない。そちらの方針は
-`docs/ai/skills/doge-shell-repo/references/ai-architecture.md` に置く。
+doge-shell が製品として持つ AI 機能の設計文書は `docs/design/ai/` に置く（runtime Skill には入れない）。
+
+## その他の文書
+
+- `agent-adapters.md`: Codex / Claude Code / OpenCode ごとの対応表。
+- `long-task-workflow.md`: 長時間タスクの `.agent/TASK.md` と独立レビューの手順。

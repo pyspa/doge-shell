@@ -1,6 +1,6 @@
 # Schedule syntax
 
-`cron add` and `cron edit --schedule` accept three shapes in one argument:
+`cron add` and `cron edit --schedule` accept one of these forms in a single argument:
 
 | Form | Example | Meaning |
 |---|---|---|

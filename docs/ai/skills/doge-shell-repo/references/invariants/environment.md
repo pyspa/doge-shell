@@ -3,7 +3,7 @@
 [../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。
 
 ## ディレクトリ変更
-- cwd を変えるのは `ShellProxy::changepwd`（`dsh/src/proxy/mod.rs`）だけ。`std::env::set_current_dir` を直接呼ぶと `OLDPWD`・`path_history`（`z`）・`*on-chdir-hooks*`・`dir_stack[0]` が全部ずれる。
+- cwd を変えるのは `ShellProxy::changepwd`（`dsh/src/proxy/shell_proxy.rs`）だけ。`std::env::set_current_dir` を直接呼ぶと `OLDPWD`・`path_history`（`z`）・`*on-chdir-hooks*`・`dir_stack[0]` が全部ずれる。
 - `changepwd` は **chdir してから** hook / direnv で失敗しうる。`Err` を「何も起きなかった」と扱わないこと。呼び出し側は `get_current_dir()` と突き合わせて判定する（`dsh-builtin/src/dirstack.rs` の `apply` / `push_directory` が実例）。
 - `dir_stack[0]` は常に現在ディレクトリ。`dirs -v` の番号と `cd -N` はこの前提で一致している。
 
@@ -40,13 +40,6 @@
   spawn `/bin/sh` with env_clear + Environment::child_process_env().
 - `/bin/sh` is the internal interpreter boundary on supported Linux/macOS;
   it is not resolved through process-global or project-controlled PATH.
-- persistent agent execution does not receive the shell's full exported
-  environment. Its environment is the logical baseline plus explicitly
-  granted TaskGrant.environment names.
-- TaskGrant.environment lookup must use logical shell variables only.
-  A logically unset variable must never be resurrected from std::env.
-- agent sandbox runtime discovery (`srt`) uses logical command search paths,
-  never process-global PATH.
 - shell で変更された value は runtime consumer が即座に見る
   (`set AI_CHAT_MODEL` が次の `!` turn に効く、等)。
 - shell variable mutation は Environment の canonical setter/remover を通し、derived state を同期する。

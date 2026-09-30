@@ -19,35 +19,7 @@
 
 インストーラ側は `CODEX_HOME` / `XDG_CONFIG_HOME` / `CLAUDE_CONFIG_DIR` を見る（`scripts/install-runtime-skills.sh`）。`doctor skills` も `CODEX_HOME` を見る（`dsh-builtin/src/doctor/util.rs` の `codex_runtime_skills_dir`）。
 
-## AI 機能の変数
+## AI 機能・Herdr 連携の変数
 
-正典の表と既定値は [ai/env-vars.md](ai/env-vars.md) にある。ここには「探しに行く先」だけ置く。
-
-| 変数 | 定義位置 | 用途 |
-|---|---|---|
-| `AI_CHAT_API_KEY` / `AI_CHAT_BASE_URL` / `AI_CHAT_MODEL` / `AI_CHAT_TIMEOUT_SECS` / `AI_CHAT_ALLOW_INSECURE_HTTP` | `dsh-openai/src/config.rs` | プロバイダ設定。`OPENAI_*` は legacy alias |
-| `AI_SUMMARY_MODEL` / `AI_CHAT_CONTEXT_TOKEN_BUDGET` / `AI_CHAT_TURN_TOKEN_BUDGET` / `AI_MESSAGE_LANG` / `CHAT_PROMPT` / `AI_CHAT_STREAM` | `dsh-builtin/src/chatgpt/settings.rs` | `!` チャットの会話管理・応答言語・逐次表示の有効/無効（既定 on） |
-| `AI_CHAT_SESSION_TTL_SECS` | `dsh-builtin/src/chatgpt/session/mod.rs` | 連続する `!` が会話を共有する idle timeout。`0` で無効。継続範囲は cwd 完全一致ではなく `tool::workspace_root`（プロジェクト単位） |
-| `AI_CHAT_EXECUTE_ALLOWLIST` / `DOGESH_EXECUTE_TOOL_CONFIG` | `dsh-builtin/src/chatgpt/tool/execute.rs` | `execute` ツールの allowlist と JSON 設定の置き場所 |
-| `AI_CHAT_PROJECT_SKILLS` | `dsh-builtin/src/chatgpt/settings.rs` | `0`/`false`/`off`/`no` で `<project>/.dogesh/skills` をプロンプトから外す。既定 on |
-| `AI_CHAT_HOOKS` / `DOGESH_AI_HOOKS_CONFIG` | `dsh-builtin/src/chatgpt/hooks/config.rs` | AI chat hooks の有効/無効と `ai-hooks.json` の場所 |
-| `DOGESH_HOOK_DEPTH` | 同上 | hook プロセスに立つ。立っているシェルは hooks を全面無効化する。**プロセス環境だけを見る**（シェル変数で消せると無限再帰する） |
-| `SAFETY_LEVEL` | `dsh-types/src/safety_policy.rs` | 起動時に `policy_state.safety_level` へ seed される。**単一ソースは policy_state のほう**、変数は表示用 |
-
-これらは起動時 process environment を `Environment::new()` で import 済みの
-**shell 変数として**解決する（`chatgpt::load_openai_config` は
-`ShellProxy::get_var` のみを見る）。runtime に `std::env` への fallback は
-ない。`unset` は final で、起動時 process の同名値は復活しない。
-この表の中での例外は `DOGESH_HOOK_DEPTH` で、これは意図的にプロセス環境だけを見る（理由はコードのコメントにある）。同種の例外は下の「Herdr 連携の変数」にもある。
-
-## Herdr 連携の変数
-
-| 変数 | 定義位置 | 用途 |
-|---|---|---|
-| `HERDR_ENV` / `HERDR_PANE_ID` / `HERDR_BIN_PATH` | `dsh/src/agent_lifecycle/herdr.rs`（`HerdrEnv::detect`） | Herdr pane 内で起動されたことの検出。**プロセス環境だけを見る**（`DOGESH_HOOK_DEPTH` と同じ理由。シェル変数で「Herdr 配下だ」と偽装・抑止できてはいけない） |
-| `DOGESH_HERDR_OWNER_PID` | 同上 | 同一 pane 内の入れ子 `dogesh` が lifecycle authority を取り合わないためのガード。プロセス環境だけを見る |
-| `DOGESH_HERDR_ENABLED` | `dsh/src/agent_lifecycle/agent_command.rs`（`herdr_enabled`） | Herdr 連携全体の ON/OFF。`1`/`true`/`on`/`yes` で有効、既定 OFF（Herdr pane 内でも自動では有効にならない） |
-| `DOGESH_HERDR_AGENT_COMMANDS` | `dsh/src/agent_lifecycle/agent_command.rs` | `codex`/`claude` など前景で認識するエージェント CLI 名の `:` 区切りリスト。素の名前は追加、`-name` は既定リストから除外 |
-| `DOGESH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
-
-`DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく shell 変数として解決する（`Environment::get_var`。起動時 process environment は `Environment::new()` で import 済み）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。
+`AI_CHAT_*` / `AI_*` / `SAFETY_LEVEL` / `DOGESH_HOOK_DEPTH` / `HERDR_*` / `DOGESH_HERDR_*` の正典の表と
+既定値・解決順は `docs/design/ai/env-vars.md` にある。ここには重複して書かない。

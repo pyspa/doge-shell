@@ -1,7 +1,7 @@
-# 対話ジョブ（実装済み・残る制約）
+# 対話ジョブと Tool Search
 
-[../open-questions.md](../open-questions.md) から分割。AI 機能の設計方針全体の索引は
-[../README.md](../README.md) を見る。
+`!` チャット（経路 A）の managed job と Tool Search の設計。AI 機能の設計方針全体の索引は
+[README.md](README.md) を見る。
 
 経路 A の `execute` も `AgentJobs` を通るようになった（`dsh-builtin/src/chatgpt/tool/execute/jobs.rs`）。
 その際に受け入れたトレードオフ:
@@ -12,10 +12,9 @@
   `render_result` がどのみち 3072 字に中央切り詰めするので、実害は 1MiB 超の出力に限られる。
 - **正常終了時にも `killpg` する**。`AgentJobs` の worker は `try_wait` が成功した直後にも
   プロセスグループを落とすので、`execute` から `foo &` で残したプロセスは殺される。回避は
-  `setsid`。agent 経路は元からこの挙動で、両経路が揃う方向の変更として受け入れた。
+  `setsid`。
 - **連続ポーリング下限は対話だけ**（`chatgpt/jobs.rs` の `poll_backoff`）。`runtime.jobs` には
-  `JobMeta` が無く、agent の挙動を変えない方針を優先した。`wait_ms` は両経路に入っているが
-  既定 0 なので opt-in。
+  `JobMeta` が無い。`wait_ms` は既定 0 なので opt-in。
 - **`tool_search` は対話にも開いている**。`tool_search` is available to interactive turns.
   Interactive Tool Search loads only the matched MCP schemas into turn-local
   exposure. It does not enable the corresponding MCP group and does not persist
@@ -27,11 +26,11 @@
   activation するか、`tool_search` で個別に発見し、`tool_search` による変更は
   次 iteration の再構築で反映される。  `tool_search` は group の enabled 状態を変えない。
 
-## Tool Search exposure budget（実装済み）
+## Tool Search exposure budget
 
 `tool_search` を 1 turn 内で繰り返すと schema が際限なく累積する問題への対処。
 `dsh-builtin/src/chatgpt/tool/tool_search.rs` の `ToolSearchExposure` が
-turn-local に以下を課す（対話・Agent 共通、定数開始で env var / config なし）。
+turn-local に以下を課す（定数。env var / config なし）。
 
 - **tool数**: 1 turn に `tool_search` 経由で新規公開できるのは 32 tool まで
  （`MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN`）。
@@ -50,7 +49,7 @@ reset する。名前だけ保持し schema は `build_request_tools` で毎回�
 budget で skip が発生した `tool_search` の tool result には短い note を付けて
 model へ伝える（全件 loaded の場合は付けない）。
 
-## Tool Search eval（実装済み）
+## Tool Search eval
 
 ranking 自体の回帰検出用。`dsh-builtin/src/chatgpt/tool/tests/` の
 `tool_search_eval.rs` + `data/tool_search_eval.json`（45 tools / 66 queries、

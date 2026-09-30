@@ -1,6 +1,6 @@
 # 永続 cron ジョブ
 
-`cron` はシェルコマンドを、壁時計スケジュールで実行する永続的なジョブスケジューラです。旧 `sched`（セッション限り・インターバルのみ）を置き換えました。ジョブ定義は `$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
+`cron` はシェルコマンドを、壁時計スケジュールで実行する永続的なジョブスケジューラです。ジョブ定義は `$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3` に永続化され、シェルの再起動をまたいで残ります。
 
 ## 実行モデル: 二系統駆動
 
@@ -15,13 +15,13 @@
 
 ## スケジュール構文
 
-`--schedule`（または `cron add` の位置引数）は3種類の書式を受け付けます。
+`--schedule`（または `cron add` の位置引数）は次の書式を受け付けます。
 
 | 形式 | 例 | 意味 |
 |---|---|---|
 | interval | `30s` / `5m` / `1h` | 前回実行からの相対時間。5秒〜24時間。 |
 | cron 式 | `0 9 * * mon-fri` | 5フィールド（分 時 日 月 曜）、ローカル壁時計。 |
-| macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | 固定 cron 式の省略形。 |
+| macro | `@hourly` / `@daily`(`@midnight`) / `@weekly` / `@monthly` / `@yearly`(`@annually`) | 固定 cron 式の省略形。 |
 | `@reboot` | `@reboot` | 対話セッションの runner 開始ごとに一度だけ発火。外部 tick からは発火しない。 |
 | `@manual` | `@manual` | 明示的な `cron run` / `cron run --now` でのみ発火。スケジュール単独では発火しない。 |
 
@@ -37,7 +37,7 @@ DST（夏時間）境界をまたぐ場合: 存在しない時刻（春の繰り
 
 ## ジョブの永続化とストア
 
-- 置き場所: `$XDG_STATE_HOME/dogesh/cron/`（`agent_state_dir()` の**兄弟**であり子ではない — `SafetyGuard::task_file_allowed` が `agent_state_dir()` 配下を無条件拒否するため、notepad をそちらには置けない）。
+- 置き場所: `$XDG_STATE_HOME/dogesh/cron/`（`dsh-builtin/src/config_paths.rs` の `cron_state_dir()`）。
 - SQLite（WAL + `synchronous=NORMAL`）。`jobs` / `runs` / `incidents` の3テーブル。`runs` と `history` はテーブルを分けない — 1 fire = 1 attempt なので状態列（`queued`/`running`/`succeeded`/`failed`/`skipped`/`needs-approval`/`cancelled`）で区別すれば足ります。
 - マイグレーションは `PRAGMA user_version` + 番号付きステップ。**store が既知の最大バージョンより新しければ開くのを拒否**します（古い `dogesh` バイナリが新しいスキーマを壊さないため — 外部 tick は dogesh のアップグレードより長生きしうる）。
 - `runs` はジョブあたり200行・30日を超えた分を定期的に刈り込みます。
@@ -77,7 +77,7 @@ cron notepad digest --clear    # 消去
 
 ## 実行結果の確認
 
-`runs` テーブルには `stdout`/`stderr` 列（マスク済み、各 8KiB にクランプ）が最初からありましたが、それを読み出す口は `cron logs` を追加するまで存在しませんでした。
+`runs` テーブルの `stdout`/`stderr` 列（マスク済み、各 8KiB にクランプ）は `cron logs` で読みます。
 
 ```sh
 cron logs digest                # 最新の finished run の記録済み stdout/stderr を表示（各 8KiB clamp 済みの記録であり、実行時の全出力ではない）
@@ -101,8 +101,6 @@ cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "...
 | 外部 tick とセッション runner が同時に claim | 片方だけが成功。SQLite の条件付き UPDATE が保証 |
 | ジョブの `cwd` が消えた | run 時の `root-changed`/`transient` 判定は shell job では記録されない。`cron doctor` が `cwd-missing` として warn で報告する |
 
-旧バージョンの AI ジョブ由来の行にだけ残っている `config`/`root-changed`/`transient` などの reason は、新しい shell job の実行では記録されません。
-
 `cron doctor`（`--json` あり）は上の表に載らない、事前に気づける不整合を報告する: 一致し得ないスケジュール、消えた `cwd`、`config.lisp` の `sched-add` 残存、一度も run が完了していない、に加えて **`--on` が `never` 以外のジョブが1件でもあれば「通知はまだ配線されていない」旨の note を1行**、**現在 claim を握っている（`running`）ジョブがあればその経過時間を warn** で出す。
 
 ## Lisp からの登録
@@ -116,9 +114,9 @@ cron logs digest --json         # {"run": {...}, "stdout": "...", "stderr": "...
 
 対照的に **CLI の `cron add` は同名だとエラー**になり `--force` が必要です — 人がプロンプトで打つ場合はタイプミスの可能性の方が高いためです。
 
-`cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dogesh -c "cron tick"` や `dogesh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd/env を変えたい場合は `cron edit --cwd`（env は手段が無いため `cron rm` して作り直す）を使ってください。
+`cwd`/`env` は**最初の登録時のスナップショットのまま**で、以降の upsert では更新されません。`cron-add` に `--cwd`/`--env` に相当する引数は無く、常に「このプロセスの現在の cwd/env」を使う設計だからです — `config.lisp` は `dogesh -c "cron tick"` や `dogesh -c "cron run-job <uuid>"` の中でも評価されるため、上書きを許すと外部 tick（多くの場合 crontab のごく限られた環境）が走るたびにジョブの実行環境が意図せず入れ替わってしまいます。schedule/command/notify など他のフィールドは通常どおり毎回上書きされます。cwd を変えたい場合は `cron edit --cwd`、env を変えたい場合は新しい環境で `cron add --force`（同名ジョブを現在の cwd/env で置き換える）を使ってください。`cron edit` に `--env` はありません。
 
-`(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は1リリース限定の非推奨エイリアスとして残っており、対応する `cron-*` へ委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。委譲の前に stderr が tty のときだけ非推奨警告を出します（`cron tick`/`cron run-job` のような無人実行では出しません — `cron tick` は既定で無出力・exit 0 が契約なので、この警告が外部 tick のたびに system cron のメールを起こしては本末転倒です）。
+`(sched-add ...)` / `(sched-remove ...)` / `(sched-pause ...)` / `(sched-resume ...)` / `(sched-list)` は非推奨エイリアスとして残っており、対応する `cron-*` へ委譲します（`config.lisp` は最初のエラーで評価が打ち切られるため、いずれか1つでもいきなり未定義にすると alias・abbr・PATH 設定がまとめて消える事故になります）。委譲の前に stderr が tty のときだけ非推奨警告を出します（`cron tick`/`cron run-job` のような無人実行では出しません — `cron tick` は既定で無出力・exit 0 が契約なので、この警告が外部 tick のたびに system cron のメールを起こしては本末転倒です）。
 
 ## 関連ドキュメント
 

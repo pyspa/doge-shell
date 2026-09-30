@@ -128,9 +128,15 @@ fn a_prefix_does_not_outlive_the_command() {
     ]);
     let stdout = String::from_utf8_lossy(&output.stdout);
 
+    // `FOO` must be unset afterwards, which ordinary expansion maps to an
+    // empty value (`after=`). A leaked prefix would show `after=temporary`.
     assert!(
-        stdout.lines().any(|line| line.trim() == "after=$FOO"),
+        stdout.lines().any(|line| line.trim() == "after="),
         "the prefix should not have been kept: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("after=temporary"),
+        "prefix leaked into the shell: {stdout:?}"
     );
 }
 
@@ -382,8 +388,9 @@ fn assignment_with_failing_substitution_sets_var_and_reports_status() {
         stdout.lines().any(|line| line.trim() == "status=1"),
         "expected status=1 from A=$(false), got {stdout:?}"
     );
-    // `A` is set (to the empty substitution output): an unset name would
-    // echo back literally as `[$A]`, while the set-but-empty value is `[]`.
+    // `A` is set (to the empty substitution output). Ordinary expansion
+    // maps both unset and set-empty to an empty value; the set/unset
+    // distinction is retained internally for the upcoming `${VAR-op}` task.
     assert!(
         stdout.lines().any(|line| line.trim() == "A=[]"),
         "expected A to exist in the shell, got {stdout:?}"

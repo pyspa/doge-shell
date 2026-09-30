@@ -518,7 +518,7 @@ fn wait_p_real_child_status_127_still_assigns() {
 fn wait_p_unknown_pid_leaves_variable_unset() {
     let stdout = stdout_of(
         "done=old; wait -p done 999999; rc=$?; \
-         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+         test -z \"$done\" && echo DONE-UNSET; echo STATUS:$rc",
     );
     assert!(
         stdout.contains("STATUS:127"),
@@ -534,7 +534,7 @@ fn wait_p_unknown_pid_leaves_variable_unset() {
 fn wait_p_valid_then_unknown_leaves_variable_unset() {
     let stdout = stdout_of(
         "false & p=$!; wait -p done $p 999999; rc=$?; \
-         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+         test -z \"$done\" && echo DONE-UNSET; echo STATUS:$rc",
     );
     assert!(
         stdout.contains("STATUS:127"),
@@ -590,7 +590,7 @@ fn wait_p_multiple_valid_operands_publish_last_identity() {
 fn wait_p_bare_wait_publishes_nothing() {
     let stdout = stdout_of(
         "false & p=$!; done=old; wait -p done; rc=$?; \
-         test \"$done\" = '$done' && echo DONE-UNSET; echo STATUS:$rc",
+         test -z \"$done\" && echo DONE-UNSET; echo STATUS:$rc",
     );
     assert!(
         stdout.contains("STATUS:0"),
@@ -627,7 +627,7 @@ fn wait_np_assigns_selected_pid_and_keeps_other() {
 fn wait_np_without_targets_leaves_variable_unset() {
     let stdout = stdout_of(
         "DONE=old; wait -n -p DONE; rc=$?; \
-         test \"$DONE\" = '$DONE' && echo DONE-UNSET; echo STATUS:$rc",
+         test -z \"$DONE\" && echo DONE-UNSET; echo STATUS:$rc",
     );
     assert!(
         stdout.contains("STATUS:127"),

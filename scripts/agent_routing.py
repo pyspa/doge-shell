@@ -97,6 +97,10 @@ def is_multi_word(term: str) -> bool:
     return " " in term.strip() and len(term.strip().split()) > 1
 
 
+def _is_ascii_word(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char == "_")
+
+
 def term_hit(folded_topic: str, term: str) -> bool:
     """True when a term matches the casefolded topic.
 
@@ -117,7 +121,9 @@ def term_hit(folded_topic: str, term: str) -> bool:
                 continue
             before = folded_topic[index - 1] if index > 0 else " "
             after = folded_topic[index + len(folded)] if index + len(folded) < len(folded_topic) else " "
-            if not before.isalnum() and before != "_" and not after.isalnum() and after != "_":
+            # Only ASCII word characters count as a boundary break, so a
+            # term glued to CJK prose ("cronが", "fgで") still matches.
+            if not _is_ascii_word(before) and not _is_ascii_word(after):
                 return True
         return False
     return folded in folded_topic

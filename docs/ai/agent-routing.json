@@ -32,13 +32,20 @@
         "dsh/src/process/launch_outcome.rs",
         "dsh/src/process/pipeline_status.rs",
         "dsh/src/shell/job.rs",
-        "dsh/src/shell/job_exit.rs"
+        "dsh/src/shell/job_exit.rs",
+        "dsh/src/shell/eval.rs",
+        "dsh/src/shell/job_ledger.rs",
+        "dsh/src/shell/job_selection.rs",
+        "dsh/src/process/async_list.rs",
+        "dsh/src/process/job_process.rs",
+        "dsh/src/process/job_process_launch.rs"
       ],
       "path_prefixes": [
         "dsh/src/proxy/builtin/jobs/",
         "dsh/src/shell/process_substitution/",
         "dsh/src/process/job/",
-        "dsh/src/process/reexec/"
+        "dsh/src/process/reexec/",
+        "dsh/src/shell/eval/"
       ],
       "skills": [
         "doge-shell-execution-semantics"
@@ -58,15 +65,25 @@
         "terminal input proxy",
         "ANSI rendering",
         "stdout rendering",
-        "端末描画"
+        "端末描画",
+        "posix_spawn",
+        "fork child",
+        "signal handler",
+        "シグナル"
       ],
       "exact_paths": [
         "dsh/src/process/pty.rs",
         "dsh/src/process/job_pty.rs",
-        "dsh/src/process/io.rs"
+        "dsh/src/process/io.rs",
+        "dsh/src/process/redirect.rs",
+        "dsh/src/process/child_exec.rs",
+        "dsh/src/process/fork.rs",
+        "dsh/src/process/signal.rs"
       ],
       "path_prefixes": [
-        "dsh/src/terminal/"
+        "dsh/src/terminal/",
+        "dsh/src/process/io/",
+        "dsh/src/process/job_pty/"
       ],
       "skills": [
         "doge-shell-process-pty"
@@ -83,14 +100,20 @@
         "dynamic completion provider",
         "LocalSpec",
         "family_for",
-        "補完定義"
+        "補完定義",
+        "completion",
+        "completion for",
+        "補完を追加"
       ],
       "exact_paths": [
-        "command-completion-schema.json"
+        "command-completion-schema.json",
+        "dsh/src/completion/json_loader.rs",
+        "dsh/src/completion/dynamic.rs"
       ],
       "path_prefixes": [
         "completions/",
-        "dsh/src/completion/dynamic/"
+        "dsh/src/completion/dynamic/",
+        "dsh/src/completion/json_loader/"
       ],
       "skills": [
         "doge-shell-completion-spec"
@@ -107,13 +130,37 @@
         "suggestion",
         "TAB completion",
         "user completion",
-        "ユーザー補完"
+        "ユーザー補完",
+        "completion engine",
+        "completion menu",
+        "fuzzy",
+        "skim",
+        "keybind",
+        "key binding",
+        "Alt+.",
+        "補完エンジン",
+        "補完候補",
+        "キーバインド"
       ],
       "exact_paths": [
-        "dsh/src/completion/generators/user.rs"
+        "dsh/src/completion/generators/user.rs",
+        "dsh/src/completion/integrated.rs",
+        "dsh/src/completion/fuzzy.rs",
+        "dsh/src/completion/skim_adapter.rs",
+        "dsh/src/repl/input_analysis.rs",
+        "dsh/src/repl/last_arg.rs",
+        "dsh/src/repl/suggestion_manager.rs"
       ],
       "path_prefixes": [
-        "dsh/src/repl/completion/"
+        "dsh/src/repl/completion/",
+        "dsh/src/completion/integrated/",
+        "dsh/src/completion/context/",
+        "dsh/src/completion/display/",
+        "dsh/src/completion/generator/",
+        "dsh/src/completion/parser/",
+        "dsh/src/repl/keybind/",
+        "dsh/src/repl/key_handlers/",
+        "dsh/src/repl/key_action/"
       ],
       "skills": [
         "doge-shell-repl-completion"
@@ -132,11 +179,31 @@
         "brace expansion",
         "AST",
         "パーサ",
-        "リダイレクト"
+        "リダイレクト",
+        "redirect",
+        "pipe",
+        "パイプ",
+        "glob",
+        "word expansion",
+        "alias",
+        "grammar",
+        "shell.pest",
+        "syntax error",
+        "構文",
+        "展開"
       ],
-      "exact_paths": [],
+      "exact_paths": [
+        "dsh/src/shell.pest",
+        "dsh/src/shell/plan.rs",
+        "dsh/src/shell/word_expand.rs",
+        "dsh/src/shell/materialize.rs",
+        "dsh/src/shell/dry_materialize.rs",
+        "dsh/src/shell/substitution.rs"
+      ],
       "path_prefixes": [
-        "dsh/src/parser/"
+        "dsh/src/parser/",
+        "dsh/src/shell/parse/",
+        "dsh/tests/spec/"
       ],
       "skills": [
         "doge-shell-parser-shell"
@@ -150,13 +217,20 @@
         "right prompt",
         "transient prompt",
         "status line",
-        "プロンプト"
+        "プロンプト",
+        "prompt",
+        "git status",
+        "shell integration",
+        "OSC 133"
       ],
       "exact_paths": [
-        "dsh/src/repl/status_line.rs"
+        "dsh/src/repl/status_line.rs",
+        "dsh/src/repl/shell_integration.rs",
+        "dsh/src/repl/prompt_refresh.rs"
       ],
       "path_prefixes": [
-        "dsh/src/prompt/"
+        "dsh/src/prompt/",
+        "dsh/src/repl/render/"
       ],
       "skills": [
         "doge-shell-prompt-terminal-ui"
@@ -215,9 +289,14 @@
         "frecency",
         "command history",
         "command timing",
-        "履歴"
+        "履歴",
+        "history"
       ],
-      "exact_paths": [],
+      "exact_paths": [
+        "dsh-builtin/src/history.rs",
+        "dsh-builtin/src/command_timing.rs",
+        "dsh/src/repl/history_nav.rs"
+      ],
       "path_prefixes": [
         "dsh/src/history/",
         "dsh-frecency/"
@@ -236,14 +315,32 @@
         "ShellProxy capability",
         "directory stack",
         "pushd",
-        "popd"
+        "popd",
+        "組み込みコマンド",
+        "add builtin",
+        "new builtin",
+        "BuiltinSpec",
+        "background_mode",
+        "mise",
+        "task runner"
       ],
       "exact_paths": [
         "dsh-types/src/process_runtime.rs",
-        "dsh-builtin/src/shell_capabilities.rs"
+        "dsh-builtin/src/shell_capabilities.rs",
+        "dsh-builtin/src/registry.rs",
+        "dsh-builtin/src/background.rs",
+        "dsh-builtin/src/project.rs",
+        "dsh-builtin/src/project_context.rs",
+        "dsh-builtin/src/task.rs",
+        "dsh-builtin/src/dirstack.rs",
+        "dsh-builtin/src/help.rs",
+        "dsh-builtin/src/snippet.rs"
       ],
       "path_prefixes": [
-        "dsh-builtin/src/doctor/"
+        "dsh-builtin/src/doctor/",
+        "dsh-builtin/src/project/",
+        "dsh-builtin/src/project_context/",
+        "dsh-builtin/src/task/"
       ],
       "skills": [
         "doge-shell-builtin-commands"
@@ -253,18 +350,58 @@
       ]
     },
     {
+      "id": "cron",
+      "risk": "normal",
+      "terms": [
+        "cron",
+        "crontab",
+        "cron tick",
+        "schedule syntax",
+        "定期実行"
+      ],
+      "exact_paths": [
+        "dsh-builtin/src/cron.rs",
+        "dsh-builtin/src/removed_sched.rs",
+        "dsh-types/src/cron.rs",
+        "dsh-types/src/schedule.rs",
+        "docs/cron.md"
+      ],
+      "path_prefixes": [
+        "dsh/src/cron/",
+        "dsh-types/src/cron/"
+      ],
+      "skills": [
+        "doge-shell-builtin-commands"
+      ],
+      "references": [
+        "docs/ai/skills/doge-shell-repo/references/invariants/cron.md"
+      ]
+    },
+    {
       "id": "chat-tools",
       "risk": "normal",
       "terms": [
         "chatgpt",
         "MCP tool",
         "AI chat hooks",
-        "skill_manage"
+        "skill_manage",
+        "chat",
+        "チャット",
+        "system prompt",
+        "skill mention",
+        "runtime skill",
+        "MCP"
       ],
-      "exact_paths": [],
+      "exact_paths": [
+        "dsh-builtin/src/chatgpt.rs",
+        "dsh-builtin/src/mcp.rs",
+        "dsh-builtin/src/skill.rs",
+        "dsh-types/src/mcp.rs"
+      ],
       "path_prefixes": [
         "dsh-builtin/src/chatgpt/",
-        "dsh-openai/"
+        "dsh-openai/",
+        "dsh-builtin/src/skill/"
       ],
       "skills": [
         "doge-shell-chat-tools"
@@ -281,13 +418,23 @@
         "command policy",
         "AgentCommandPolicy",
         "安全確認",
-        "コマンドポリシー"
+        "コマンドポリシー",
+        "safe_run",
+        "safety",
+        "SafetyGuard",
+        "approval",
+        "承認"
       ],
       "exact_paths": [
-        "dsh-builtin/src/safe_run.rs"
+        "dsh-builtin/src/safe_run.rs",
+        "dsh/src/shell/authorize.rs",
+        "dsh/src/proxy/agent_policy.rs",
+        "dsh-types/src/safety_policy.rs",
+        "dsh-builtin/src/safety_policy.rs"
       ],
       "path_prefixes": [
-        "dsh/src/safety/"
+        "dsh/src/safety/",
+        "dsh-types/src/safety_policy/"
       ],
       "skills": [
         "doge-shell-safety-policy"
@@ -303,9 +450,16 @@
         "command palette",
         "AI action",
         "quick fix",
-        "コマンドパレット"
+        "コマンドパレット",
+        "ai-commit",
+        "ai commit",
+        "QuickFixProvider"
       ],
-      "exact_paths": [],
+      "exact_paths": [
+        "dsh/src/repl/repl_ai.rs",
+        "dsh-builtin/src/commit_ai.rs",
+        "dsh-types/src/quick_fix.rs"
+      ],
       "path_prefixes": [
         "dsh/src/command_palette/",
         "dsh/src/ai_features/"
@@ -324,7 +478,9 @@
         "HTTP serve",
         "static files",
         "CORS",
-        "path validation"
+        "path validation",
+        "web server",
+        "serve builtin"
       ],
       "exact_paths": [],
       "path_prefixes": [
@@ -341,10 +497,15 @@
       "terms": [
         "Markdown notebook",
         "notebook rendering",
-        "output history"
+        "output history",
+        "notebook",
+        "runbook",
+        "ノートブック"
       ],
       "exact_paths": [
-        "dsh-builtin/src/notebook_play.rs"
+        "dsh-builtin/src/notebook_play.rs",
+        "dsh-builtin/src/runbook.rs",
+        "dsh-types/src/notebook.rs"
       ],
       "path_prefixes": [
         "dsh-builtin/src/markdown/"
@@ -366,7 +527,10 @@
       "exact_paths": [
         "AGENTS.md",
         "CLAUDE.md",
-        ".claude/settings.json"
+        ".claude/settings.json",
+        "docs/ai/agent-routing.json",
+        "scripts/agent_routing.py",
+        "scripts/agent-context.py"
       ],
       "path_prefixes": [
         "docs/ai/skills/",

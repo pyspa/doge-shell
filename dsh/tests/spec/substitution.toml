@@ -81,3 +81,23 @@ script = "printf 'echo outer-out\\n' > outer.sh; echo $({{SH}} outer.sh)"
 [case.expect]
 status = 0
 stdout_contains = ["outer-out"]
+
+[[case]]
+id = "substitution.unquoted-respects-custom-ifs"
+class = "posix"
+mode = "command"
+script = "IFS=:; printf '[%s]\\n' $(printf 'a:b')"
+
+[case.expect]
+status = 0
+stdout_contains = ["[a]", "[b]"]
+
+[[case]]
+id = "substitution.unquoted-keeps-space-under-comma-ifs"
+class = "posix"
+mode = "command"
+script = "IFS=,; printf '[%s]\\n' $(printf 'a b')"
+
+[case.expect]
+status = 0
+stdout_contains = ["[a b]"]

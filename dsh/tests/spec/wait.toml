@@ -19,7 +19,7 @@ stdout_contains = ["MATCH", "STATUS:1"]
 id = "wait.p-unknown-target-leaves-variable-unset"
 class = "dogesh"
 mode = "command"
-script = "done=old; wait -p done 999999; rc=$?; test \"$done\" = '$done' && echo UNSET; echo STATUS:$rc"
+script = "done=old; wait -p done 999999; rc=$?; test -z \"$done\" && echo UNSET; echo STATUS:$rc"
 
 [case.expect]
 status = 0

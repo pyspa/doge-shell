@@ -52,3 +52,43 @@ script = "FOO=bar; echo '$FOO'"
 status = 0
 stdout_contains = ["$FOO"]
 stdout_not_contains = ["bar"]
+
+[[case]]
+id = "expansion.unquoted-variable-splits"
+class = "posix"
+mode = "command"
+script = "CMD='echo hello'; $CMD"
+
+[case.expect]
+status = 0
+stdout_contains = ["hello"]
+
+[[case]]
+id = "expansion.custom-ifs-splits"
+class = "posix"
+mode = "command"
+script = "IFS=:; CMD='echo:hello'; $CMD"
+
+[case.expect]
+status = 0
+stdout_contains = ["hello"]
+
+[[case]]
+id = "expansion.quoted-variable-stays-one-field"
+class = "posix"
+mode = "command"
+script = "X='a b'; printf '[%s]\\n' \"$X\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[a b]"]
+
+[[case]]
+id = "expansion.unset-variable-is-empty"
+class = "posix"
+mode = "command"
+script = "echo $DOGESH_UNSET_PROBE_XYZ"
+
+[case.expect]
+status = 0
+stdout_not_contains = ["$DOGESH_UNSET_PROBE_XYZ", "DOGESH_UNSET_PROBE_XYZ"]

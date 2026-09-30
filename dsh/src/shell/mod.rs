@@ -1,6 +1,7 @@
 pub mod authorize;
 pub mod dry_materialize;
 pub mod eval;
+pub(crate) mod field_split;
 pub mod hooks;
 pub mod job;
 pub mod job_exit;

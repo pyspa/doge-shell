@@ -248,6 +248,79 @@ fn validation_commands_follow_changed_paths() {
     );
 }
 
+/// CI's lint job runs the runtime-authority lint on every change, so a Rust
+/// edit must surface it locally instead of failing only in CI.
+#[test]
+fn rust_changes_request_the_runtime_authority_check() {
+    for path in [
+        "dsh/src/repl/mod.rs",
+        "dsh-types/src/cron.rs",
+        "scripts/runtime-authority-allowlist.txt",
+    ] {
+        let commands = validation_commands_for_paths(&[PathBuf::from(path)]);
+        assert!(
+            commands
+                .iter()
+                .any(|cmd| cmd == "scripts/check-runtime-authority.py"),
+            "{path}: {commands:?}"
+        );
+    }
+    let docs = validation_commands_for_paths(&[PathBuf::from("docs/ai/README.md")]);
+    assert!(
+        !docs
+            .iter()
+            .any(|cmd| cmd == "scripts/check-runtime-authority.py"),
+        "{docs:?}"
+    );
+}
+
+/// CI runs clippy over every target of every package, so the suggestion must
+/// cover test code and each changed package, not only `doge-shell`.
+#[test]
+fn clippy_is_suggested_per_changed_package_with_all_targets() {
+    let commands = validation_commands_for_paths(&[
+        PathBuf::from("dsh-builtin/src/task.rs"),
+        PathBuf::from("dsh-types/src/cron.rs"),
+    ]);
+    for package in ["dsh-builtin", "dsh-types"] {
+        let expected = format!("cargo clippy -p {package} --all-targets -- -D warnings");
+        assert!(commands.contains(&expected), "{expected}: {commands:?}");
+    }
+    assert!(
+        !commands
+            .iter()
+            .any(|cmd| cmd.starts_with("cargo clippy -p doge-shell")),
+        "{commands:?}"
+    );
+}
+
+/// Product design notes live outside the runtime skills but are still guidance.
+#[test]
+fn design_docs_request_the_guidance_and_budget_checks() {
+    let commands = validation_commands_for_paths(&[PathBuf::from("docs/design/ai/hooks.md")]);
+    for expected in [
+        "scripts/check-ai-guidance.sh",
+        "scripts/check-file-budget.py",
+    ] {
+        assert!(
+            commands.iter().any(|cmd| cmd == expected),
+            "{expected}: {commands:?}"
+        );
+    }
+}
+
+/// `docs/cron.md` is path-checked by the file budget, so it must request it.
+#[test]
+fn cron_doc_requests_the_file_budget_check() {
+    let commands = validation_commands_for_paths(&[PathBuf::from("docs/cron.md")]);
+    assert!(
+        commands
+            .iter()
+            .any(|cmd| cmd == "scripts/check-file-budget.py"),
+        "{commands:?}"
+    );
+}
+
 #[test]
 fn execution_paths_request_authority_check() {
     for path in [

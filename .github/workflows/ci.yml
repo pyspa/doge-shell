@@ -96,9 +96,13 @@ jobs:
           python3 scripts/check-agent-eval-fixtures.py
           python3 scripts/test-check-agent-eval-support.py
           python3 scripts/check-agent-eval-support.py
-          python3 scripts/eval-agent-routing.py
-          scripts/check-ai-guidance.sh
           python3 scripts/check-agent-context-budget.py
+
+      # The lint job runs this on Linux; this leg proves the script (and the
+      # routing eval it ends with) under macOS's BSD grep/sed/find.
+      - name: AI guidance (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/check-ai-guidance.sh
 
   contract:
     name: contract (${{ matrix.os }})

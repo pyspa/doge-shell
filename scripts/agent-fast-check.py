@@ -9,6 +9,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# Keep in sync with the execution-authority prefixes in
+# `dsh-builtin/src/doctor/dev.rs` (`validation_commands_for_paths`).
+EXECUTION_PREFIXES = ("dsh/src/process/", "dsh/src/proxy/builtin/jobs/", "dsh/src/shell/process_substitution/")
+EXECUTION_FILES = ("dsh/src/shell/job.rs", "dsh/src/shell/job_exit.rs")
+GUIDANCE_PREFIXES = ("docs/ai/", "docs/design/", ".agents/", ".claude/", ".github/workflows/",
+                     "scripts/agent_", "scripts/agent-", "scripts/check-agent-", "scripts/check-project-skill-")
 
 
 def validate_schema(value, rule: dict, schema: dict, where: str = "$", depth: int = 0) -> list[str]:
@@ -98,6 +104,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--changed", action="store_true")
     parser.add_argument("--path", action="append", default=[])
+    parser.add_argument("--verbose", action="store_true", help="print a summary line on success")
     args = parser.parse_args()
     if not args.changed and not args.path:
         parser.error("supply --changed or --path")
@@ -108,18 +115,22 @@ def main() -> int:
         try:
             rel = path.resolve().relative_to(ROOT) if path.is_absolute() else path
         except ValueError:
-            parser.error(f"path outside repository: {raw}")
+            # Hooks fire for every edit, including plan files and scratch
+            # files outside the checkout; none of the checks apply there.
+            continue
         relative.add(rel.as_posix())
+    if not relative:
+        return 0
 
     checks = set()
     for path in relative:
         if path.endswith(".rs"):
             checks.update(("check-runtime-authority.py", "check-portability.py"))
-            if path.startswith(("dsh/src/process/", "dsh/src/proxy/builtin/jobs/", "dsh/src/shell/process_substitution/")) or path in ("dsh/src/shell/job.rs", "dsh/src/shell/job_exit.rs"):
+            if path.startswith(EXECUTION_PREFIXES) or path in EXECUTION_FILES:
                 checks.add("check-execution-authority.py")
             if path.startswith("dsh-builtin/") or "shell_capabilities" in path:
                 checks.add("check-shell-proxy-capabilities.py")
-        if path.startswith(("docs/ai/", ".agents/", ".claude/", ".github/workflows/")) or path in ("AGENTS.md", "CLAUDE.md") or path.startswith(("scripts/agent_", "scripts/agent-", "scripts/check-agent-", "scripts/check-project-skill-")):
+        if path.startswith(GUIDANCE_PREFIXES) or path in ("AGENTS.md", "CLAUDE.md"):
             checks.update(("check-project-skill-surface.py", "check-agent-context-budget.py", "eval-agent-routing.py"))
     errors = []
     if "command-completion-schema.json" in relative:
@@ -128,13 +139,18 @@ def main() -> int:
         if path.startswith("completions/") and path.endswith(".json") and (ROOT / path).is_file():
             errors.extend(completion_errors(ROOT / path))
     for name in sorted(checks):
-        result = subprocess.run([sys.executable, str(ROOT / "scripts" / name)], cwd=ROOT)
+        # Checker output only matters on failure; a success line per edit is
+        # noise in the agent's context.
+        result = subprocess.run([sys.executable, str(ROOT / "scripts" / name)], cwd=ROOT,
+                                capture_output=True, text=True)
         if result.returncode:
-            errors.append(f"{name} failed")
+            output = (result.stdout + result.stderr).strip()
+            errors.append(f"{name} failed" + (f"\n{output}" if output else ""))
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"ok agent fast check ({len(relative)} paths, {len(checks)} checkers)")
+    if args.verbose:
+        print(f"ok agent fast check ({len(relative)} paths, {len(checks)} checkers)")
     return 0
 
 

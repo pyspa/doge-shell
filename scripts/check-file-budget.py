@@ -14,10 +14,10 @@ the mechanical backstop:
      existing seams - mirrors scripts/check-portability.py's allowlist, so a
      *new* violation fails immediately while existing ones are a tracked,
      visible, shrinking debt rather than a wall no one can pass.
-  2. `docs/ai/**/references/**/*.md` stays under 20KB, so a single reference
+  2. `docs/ai/**/references/**/*.md` and `docs/design/**/*.md` stay under 20KB, so a single reference
      read does not blow an agent's context on its own.
   3. Repo-root-relative paths named in `AGENTS.md`, `CLAUDE.md`, and
-     `docs/ai/**/*.md` actually exist, so a stale rename does not send an
+     `docs/ai/**/*.md` / `docs/design/**/*.md` actually exist, so a stale rename does not send an
      agent looking for a file that moved.
 
 See docs/ai/skills/doge-shell-repo/references/task-map.md and AGENTS.md.
@@ -48,8 +48,14 @@ CATEGORIES = (OVERSIZED, NO_DOC, DOC_PATH_OK)
 # `dsh/completions/` as the old duplicate directory this repo stopped using.
 # Prefer fixing the doc; use this only for genuinely historical prose.
 
-GUIDANCE_DOCS = (REPO_ROOT / "AGENTS.md", REPO_ROOT / "CLAUDE.md")
-GUIDANCE_DIR = REPO_ROOT / "docs/ai"
+GUIDANCE_DOCS = (REPO_ROOT / "AGENTS.md", REPO_ROOT / "CLAUDE.md", REPO_ROOT / "docs/cron.md")
+# `docs/design/` holds product design notes moved out of the runtime skills;
+# they cite code paths just as often and drift the same way.
+GUIDANCE_DIRS = (REPO_ROOT / "docs/ai", REPO_ROOT / "docs/design")
+
+
+def guidance_markdown(pattern: str) -> list[Path]:
+    return sorted(path for root in GUIDANCE_DIRS if root.is_dir() for path in root.rglob(pattern))
 
 # Only a backtick span starting with one of these is unambiguously a
 # repo-root-relative path. Prose elsewhere routinely writes crate-relative
@@ -141,14 +147,17 @@ def collect_entries() -> set[tuple[str, str]]:
 
 def check_reference_sizes() -> list[str]:
     failures = []
-    for path in sorted(GUIDANCE_DIR.rglob("references/**/*.md")):
+    # Design notes are read one file at a time exactly like references.
+    design = REPO_ROOT / "docs/design"
+    design_docs = sorted(design.rglob("*.md")) if design.is_dir() else []
+    for path in sorted(set(guidance_markdown("references/**/*.md")) | set(design_docs)):
         size = path.stat().st_size
         if size > MAX_REFERENCE_BYTES:
             relative = path.relative_to(REPO_ROOT).as_posix()
             failures.append(
                 f"{relative}: {size} bytes, over the {MAX_REFERENCE_BYTES}-byte "
-                "reference budget; split it by topic the way ai-architecture.md "
-                "and invariants.md were split (see docs/ai/README.md)"
+                "reference budget; split it by topic the way invariants.md was "
+                "split into invariants/*.md (see docs/ai/README.md)"
             )
     return failures
 
@@ -165,7 +174,7 @@ def candidate_paths(text: str) -> set[str]:
         span = span.strip()
         if not span.startswith(ROOT_PREFIXES):
             continue
-        if any(marker in span for marker in ("<", ">", "*", " ")):
+        if any(marker in span for marker in ("<", ">", "*", " ", "{")):
             continue
         # `path/to/file.rs:123` or `:123-456` (a line or range reference).
         span = TRAILING_LOCATION.sub("", span)
@@ -176,7 +185,7 @@ def candidate_paths(text: str) -> set[str]:
 def check_guidance_paths(allowed: set[tuple[str, str]]) -> list[str]:
     doc_path_ok = {relative for category, relative in allowed if category == DOC_PATH_OK}
     failures = []
-    docs = list(GUIDANCE_DOCS) + sorted(GUIDANCE_DIR.rglob("*.md"))
+    docs = list(GUIDANCE_DOCS) + guidance_markdown("*.md")
     for doc in docs:
         if not doc.exists():
             continue

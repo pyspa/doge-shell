@@ -8,5 +8,6 @@ mod alias;
 mod glob;
 pub use alias::rewrite_aliases;
 pub(crate) use glob::{
-    escape_glob_metacharacters, expand_braces, expand_glob_pattern, unescape_glob_metacharacters,
+    escape_brace_metacharacters, escape_glob_metacharacters, expand_braces, expand_glob_pattern,
+    unescape_glob_metacharacters,
 };

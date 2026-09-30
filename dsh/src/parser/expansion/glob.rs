@@ -151,12 +151,33 @@ pub(crate) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<Stri
 
 /// Escape the characters that would otherwise start matching files.
 ///
-/// Applied to text that came from a quote or a variable value: those are
-/// literals, even when another part of the same word is a real pattern.
+/// Applied to text that came from a quote or a protected expansion: those
+/// are literals, even when another part of the same word is a real pattern.
+/// Unquoted parameter and command-substitution results are *not* escaped
+/// here; they stay eligible for pathname expansion (see
+/// [`escape_brace_metacharacters`]).
 pub(crate) fn escape_glob_metacharacters(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
         if matches!(c, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// Escape brace metacharacters while leaving glob metacharacters active.
+///
+/// Applied to unquoted dynamic values (parameter expansion, command
+/// substitution) after field splitting: `* ? [` stay live for pathname
+/// expansion, but `{ }` and `\` are escaped so a value like `{a,b}` never
+/// retroactively activates brace expansion. Quoted values use
+/// [`escape_glob_metacharacters`] instead and stay fully literal.
+pub(crate) fn escape_brace_metacharacters(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if matches!(c, '\\' | '{' | '}') {
             out.push('\\');
         }
         out.push(c);

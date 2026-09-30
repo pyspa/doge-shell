@@ -4,13 +4,19 @@
 //! current shell state at materialization time (variables, `$?`, `HOME`, cwd)
 //! and builds concrete fields. Alias rewriting is syntax-time only and never
 //! happens here.
+//!
+//! Field splitting is IFS-aware and runs across the whole expanded word via
+//! `super::field_split`: only unquoted parameter and command-substitution
+//! results may delimit, and splitting happens before pathname expansion.
 
 use super::authorize::ConfirmFn;
+use super::field_split::{ExpandedSegment, IfsSpec, PatternKind, SplitField, split_segments};
 use super::plan::{PlannedLiteral, PlannedSubstitutionKind, PlannedWord, QuoteMode, WordPart};
 use super::process_substitution::{ExecutionResources, start_process_substitution};
 use super::substitution::capture_subshell_plan_stdout;
 use crate::parser::expansion::{
-    escape_glob_metacharacters, expand_braces, expand_glob_pattern, unescape_glob_metacharacters,
+    escape_brace_metacharacters, escape_glob_metacharacters, expand_braces, expand_glob_pattern,
+    unescape_glob_metacharacters,
 };
 use crate::process::reexec::PlanExecMode;
 use crate::shell::Shell;
@@ -18,111 +24,59 @@ use anyhow::{Result, bail};
 use dsh_types::Context;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
-struct ExpandedField {
-    text: String,
-    pattern: String,
-    has_active_pattern: bool,
-    has_brace: bool,
-    preserve_empty: bool,
+/// Set/unset-preserving parameter resolution.
+///
+/// Ordinary `$FOO` maps both unset and set-empty to an empty value, but the
+/// distinction is kept for the upcoming `${FOO-default}` family. Never fall
+/// back to the literal source spelling for unset parameters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedParameter {
+    value: String,
+    is_set: bool,
 }
 
-#[derive(Debug, Default)]
-struct FieldBuilder {
-    fields: Vec<ExpandedField>,
+fn resolve_parameter(source: &str, shell: &Shell) -> ResolvedParameter {
+    match shell.environment.read().get_var(source) {
+        Some(value) => ResolvedParameter {
+            value,
+            is_set: true,
+        },
+        None => ResolvedParameter {
+            value: String::new(),
+            is_set: false,
+        },
+    }
 }
 
-impl FieldBuilder {
-    fn new() -> Self {
-        Self {
-            fields: vec![ExpandedField {
-                text: String::new(),
-                pattern: String::new(),
-                has_active_pattern: false,
-                has_brace: false,
-                preserve_empty: false,
-            }],
-        }
+/// Which expansion semantics apply to one word.
+///
+/// Argument words field-split on IFS and allow unquoted dynamics to glob.
+/// Assignment right-hand sides are scalar (no split, no glob). Redirect
+/// targets are scalar for splitting (a variable containing spaces stays one
+/// target) but keep source glob behaviour so existing ambiguous-wildcard
+/// contracts hold. DryArgument mirrors Argument without executing bodies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExpansionContext {
+    Argument,
+    Assignment,
+    Redirect,
+    DryArgument,
+}
+
+impl ExpansionContext {
+    fn do_field_split(self) -> bool {
+        matches!(
+            self,
+            ExpansionContext::Argument | ExpansionContext::DryArgument
+        )
     }
 
-    fn current_mut(&mut self) -> &mut ExpandedField {
-        if self.fields.is_empty() {
-            self.fields.push(ExpandedField {
-                text: String::new(),
-                pattern: String::new(),
-                has_active_pattern: false,
-                has_brace: false,
-                preserve_empty: false,
-            });
-        }
-        self.fields.last_mut().expect("field")
-    }
-
-    fn append_single(
-        &mut self,
-        text: &str,
-        pattern: &str,
-        active: bool,
-        brace: bool,
-        preserve: bool,
-    ) {
-        let current = self.current_mut();
-        current.text.push_str(text);
-        current.pattern.push_str(pattern);
-        current.has_active_pattern |= active;
-        current.has_brace |= brace;
-        current.preserve_empty |= preserve;
-    }
-
-    fn append_multi(&mut self, fragments: Vec<(String, String)>) {
-        if fragments.is_empty() {
-            return;
-        }
-        let mut iter = fragments.into_iter();
-        let (first_text, first_pattern) = iter.next().expect("non-empty");
-        {
-            let current = self.current_mut();
-            current.text.push_str(&first_text);
-            current.pattern.push_str(&first_pattern);
-        }
-        for (text, pattern) in iter {
-            self.fields.push(ExpandedField {
-                text,
-                pattern,
-                has_active_pattern: false,
-                has_brace: false,
-                preserve_empty: false,
-            });
-        }
-    }
-
-    fn finish_argument(self, cwd: &std::path::Path) -> Vec<String> {
-        let mut out = Vec::new();
-        for field in self.fields {
-            if !field.has_active_pattern && !field.has_brace {
-                if field.text.is_empty() && !field.preserve_empty {
-                    continue;
-                }
-                out.push(field.text);
-                continue;
-            }
-            for expanded in expand_braces(&field.pattern) {
-                // `expand_glob_pattern` braces again harmlessly; unescape turns
-                // a no-match pattern back into its literal view.
-                for matched in expand_glob_pattern(&expanded, cwd) {
-                    out.push(unescape_glob_metacharacters(&matched));
-                }
-            }
-        }
-        out
-    }
-
-    fn finish_scalar(self) -> String {
-        let mut out = String::new();
-        for field in self.fields {
-            out.push_str(&field.text);
-        }
-        out
+    /// Whether literal source patterns stay live for brace/glob matching.
+    fn source_glob_active(self) -> bool {
+        matches!(
+            self,
+            ExpansionContext::Argument | ExpansionContext::Redirect | ExpansionContext::DryArgument
+        )
     }
 }
 
@@ -158,36 +112,103 @@ fn apply_tilde(text: &str, pattern: &str, shell: &Shell) -> (String, String) {
     }
 }
 
-fn resolve_variable(source: &str, shell: &Shell) -> String {
-    shell
-        .environment
-        .read()
-        .get_var(source)
-        .unwrap_or_else(|| source.to_string())
+fn resolve_ifs(shell: &Shell) -> IfsSpec {
+    let value = shell.environment.read().lookup_variable("IFS");
+    IfsSpec::resolve(value.as_deref())
 }
 
-fn literal_fragment(
-    text: &str,
-    raw: &str,
+fn literal_segment(
+    literal: &PlannedLiteral,
+    shell: &Shell,
+    first: bool,
+    ctx: ExpansionContext,
+) -> ExpandedSegment {
+    let (mut text, mut raw) = (literal.text.clone(), literal.raw.clone());
+    if first && literal.tilde_candidate {
+        (text, raw) = apply_tilde(&text, &raw, shell);
+    }
+    if !ctx.source_glob_active() {
+        // Scalar assignment context: no brace/glob, pattern unused.
+        return ExpandedSegment::protected(text, String::new(), PatternKind::Inactive, true);
+    }
+    match literal.quote {
+        QuoteMode::Unquoted if literal.pattern_active || literal.brace_active => {
+            ExpandedSegment::protected(
+                text,
+                raw,
+                PatternKind::Source {
+                    glob: literal.pattern_active,
+                    brace: literal.brace_active,
+                },
+                false,
+            )
+        }
+        _ => {
+            let pattern = escape_glob_metacharacters(&text);
+            let preserve = !text.is_empty() || literal.quote != QuoteMode::Unquoted;
+            ExpandedSegment::protected(text, pattern, PatternKind::Inactive, preserve)
+        }
+    }
+}
+
+fn variable_segment(
+    source: &str,
     quote: QuoteMode,
-    pattern_active: bool,
-    brace_active: bool,
-) -> (String, String, bool, bool, bool) {
-    match quote {
-        QuoteMode::Unquoted if pattern_active || brace_active => (
-            text.to_string(),
-            raw.to_string(),
-            pattern_active,
-            brace_active,
-            false,
-        ),
-        _ => (
-            text.to_string(),
-            escape_glob_metacharacters(text),
-            false,
-            false,
-            !text.is_empty() || quote != QuoteMode::Unquoted,
-        ),
+    shell: &Shell,
+    ctx: ExpansionContext,
+) -> ExpandedSegment {
+    let resolved = resolve_parameter(source, shell);
+    let quoted = quote != QuoteMode::Unquoted;
+    match ctx {
+        ExpansionContext::Assignment | ExpansionContext::Redirect => {
+            // Scalar contexts: no splitting, no dynamic glob. Unquoted
+            // empties still contribute `""` to the single scalar value.
+            ExpandedSegment::protected(resolved.value, String::new(), PatternKind::Inactive, true)
+        }
+        ExpansionContext::Argument | ExpansionContext::DryArgument => {
+            if quoted {
+                ExpandedSegment::protected(
+                    resolved.value.clone(),
+                    escape_glob_metacharacters(&resolved.value),
+                    PatternKind::Inactive,
+                    true,
+                )
+            } else {
+                // Unquoted: split-eligible, glob-active, brace-inactive.
+                // `is_set` is retained in `ResolvedParameter` for the
+                // upcoming `${VAR-op}` task; both states map to empty here.
+                let _ = resolved.is_set;
+                ExpandedSegment::splittable_dynamic(
+                    resolved.value.clone(),
+                    escape_brace_metacharacters(&resolved.value),
+                )
+            }
+        }
+    }
+}
+
+fn dynamic_text_segment(value: String, quoted: bool, ctx: ExpansionContext) -> ExpandedSegment {
+    match ctx {
+        ExpansionContext::Assignment | ExpansionContext::Redirect => {
+            ExpandedSegment::protected(value, String::new(), PatternKind::Inactive, true)
+        }
+        // Argument/DryArgument: quoted stays protected; unquoted is
+        // split-eligible with glob active and braces inactive.
+        ExpansionContext::Argument | ExpansionContext::DryArgument => {
+            if quoted {
+                ExpandedSegment::protected(
+                    value.clone(),
+                    escape_glob_metacharacters(&value),
+                    PatternKind::Inactive,
+                    true,
+                )
+            } else {
+                ExpandedSegment::splittable_dynamic(
+                    value.clone(),
+                    escape_brace_metacharacters(&value),
+                )
+            }
+        }
     }
 }
 
@@ -195,47 +216,29 @@ fn cwd_for_expansion() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Push one static-text part, applying a leading tilde and deciding whether
-/// its metacharacters stay live for glob/brace matching.
-///
-/// Shared by the live and dry paths so the two cannot drift apart.
-fn push_literal_fragment(
-    builder: &mut FieldBuilder,
-    literal: &PlannedLiteral,
-    shell: &Shell,
-    first: bool,
-) {
-    let (mut text, mut pattern) = (literal.text.clone(), literal.raw.clone());
-    if first && literal.tilde_candidate {
-        (text, pattern) = apply_tilde(&text, &pattern, shell);
-    }
-    let (text, pattern, active, brace, preserve) = literal_fragment(
-        &text,
-        &pattern,
-        literal.quote,
-        literal.pattern_active,
-        literal.brace_active,
-    );
-    builder.append_single(&text, &pattern, active, brace, preserve);
-}
-
-/// Push one variable part as a single protected fragment.
-///
-/// An empty value still keeps its field (the pre-migration engine re-parsed
-/// it as `''`): unquoted `$EMPTY` is one empty argv, not zero fields.
-fn push_variable_fragment(builder: &mut FieldBuilder, source: &str, shell: &Shell) {
-    let value = resolve_variable(source, shell);
-    builder.append_single(
-        &value,
-        &escape_glob_metacharacters(&value),
-        false,
-        false,
-        true,
-    );
-}
-
 fn trim_substitution_output(output: &str) -> String {
     output.trim_end_matches(['\n', '\r']).to_string()
+}
+
+fn finish_split_fields(fields: &[SplitField], cwd: &std::path::Path) -> Vec<String> {
+    let mut out = Vec::new();
+    for field in fields {
+        if !field.has_active_pattern && !field.has_brace {
+            if field.text.is_empty() && !field.preserve_empty {
+                continue;
+            }
+            out.push(field.text.clone());
+            continue;
+        }
+        for expanded in expand_braces(&field.pattern) {
+            // `expand_glob_pattern` braces again harmlessly; unescape turns
+            // a no-match pattern back into its literal view.
+            for matched in expand_glob_pattern(&expanded, cwd) {
+                out.push(unescape_glob_metacharacters(&matched));
+            }
+        }
+    }
+    out
 }
 
 /// Per-stage trace of runtime expansion, kept in stage order.
@@ -260,16 +263,20 @@ pub async fn expand_argument_word(
     resources: &mut ExecutionResources,
     trace: &mut ExpansionTrace,
 ) -> Result<Vec<String>> {
-    let cwd = cwd_for_expansion();
-    let mut builder = FieldBuilder::new();
+    if word.parts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ifs = resolve_ifs(shell);
+    let context = ExpansionContext::Argument;
+    let mut segments = Vec::with_capacity(word.parts.len());
     let mut first_part = true;
     for part in &word.parts {
         match part {
             WordPart::Literal(literal) => {
-                push_literal_fragment(&mut builder, literal, shell, first_part);
+                segments.push(literal_segment(literal, shell, first_part, context));
             }
-            WordPart::Variable { source, .. } => {
-                push_variable_fragment(&mut builder, source, shell);
+            WordPart::Variable { source, quote } => {
+                segments.push(variable_segment(source, *quote, shell, context));
             }
             WordPart::Substitution {
                 substitution,
@@ -277,62 +284,24 @@ pub async fn expand_argument_word(
             } => {
                 let quoted = *quote != QuoteMode::Unquoted;
                 match substitution.kind {
-                    PlannedSubstitutionKind::Command => {
+                    PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
+                        let mode = match substitution.kind {
+                            PlannedSubstitutionKind::Subshell => PlanExecMode::Subshell,
+                            _ => PlanExecMode::CommandSubstitution,
+                        };
                         let captured = capture_subshell_plan_stdout(
                             shell,
                             ctx,
                             &substitution.plan,
-                            PlanExecMode::CommandSubstitution,
+                            mode,
                             confirm,
                         )
                         .await?;
-                        trace.last_command_substitution_status = Some(captured.exit_code);
-                        let output = captured.stdout;
-                        if quoted {
-                            let value = trim_substitution_output(&output);
-                            builder.append_single(
-                                &value,
-                                &escape_glob_metacharacters(&value),
-                                false,
-                                false,
-                                true,
-                            );
-                        } else {
-                            let fragments: Vec<(String, String)> = output
-                                .split_whitespace()
-                                .map(|fragment| {
-                                    (fragment.to_string(), escape_glob_metacharacters(fragment))
-                                })
-                                .collect();
-                            builder.append_multi(fragments);
+                        if substitution.kind == PlannedSubstitutionKind::Command {
+                            trace.last_command_substitution_status = Some(captured.exit_code);
                         }
-                    }
-                    PlannedSubstitutionKind::Subshell => {
-                        let captured = capture_subshell_plan_stdout(
-                            shell,
-                            ctx,
-                            &substitution.plan,
-                            PlanExecMode::Subshell,
-                            confirm,
-                        )
-                        .await?;
-                        let output = captured.stdout;
-                        if quoted {
-                            let value = trim_substitution_output(&output);
-                            builder.append_single(
-                                &value,
-                                &escape_glob_metacharacters(&value),
-                                false,
-                                false,
-                                true,
-                            );
-                        } else {
-                            let fragments: Vec<(String, String)> = output
-                                .lines()
-                                .map(|line| (line.to_string(), escape_glob_metacharacters(line)))
-                                .collect();
-                            builder.append_multi(fragments);
-                        }
+                        let value = trim_substitution_output(&captured.stdout);
+                        segments.push(dynamic_text_segment(value, quoted, context));
                     }
                     PlannedSubstitutionKind::Process(direction) => {
                         let substitution = start_process_substitution(
@@ -344,25 +313,22 @@ pub async fn expand_argument_word(
                         )
                         .await?;
                         let path = resources.add_process_substitution(substitution);
-                        builder.append_single(
-                            &path,
-                            &escape_glob_metacharacters(&path),
-                            false,
-                            false,
+                        segments.push(ExpandedSegment::protected(
+                            path.clone(),
+                            escape_glob_metacharacters(&path),
+                            PatternKind::Inactive,
                             true,
-                        );
+                        ));
                     }
                 }
             }
         }
         first_part = false;
     }
-    // A word with no parts (empty assignment value aside) expands to nothing;
-    // an empty quoted word keeps one empty field via `preserve_empty`.
-    if word.parts.is_empty() {
-        return Ok(Vec::new());
-    }
-    Ok(builder.finish_argument(&cwd))
+    debug_assert!(context.do_field_split());
+    let split = split_segments(&segments, &ifs);
+    let cwd = cwd_for_expansion();
+    Ok(finish_split_fields(&split, &cwd))
 }
 
 /// Expand an assignment value into exactly one string: no splitting, no glob.
@@ -378,6 +344,11 @@ pub async fn expand_assignment_value(
 }
 
 /// Expand a redirect target into exactly one path.
+///
+/// Scalar for IFS splitting (a variable containing spaces stays one
+/// target) while preserving source glob behaviour for ambiguous-wildcard
+/// detection. Unquoted dynamics stay protected from both splitting and
+/// pathname expansion, matching the pre-existing redirect contract.
 pub async fn expand_redirect_target(
     shell: &mut Shell,
     ctx: &Context,
@@ -386,7 +357,93 @@ pub async fn expand_redirect_target(
     resources: &mut ExecutionResources,
     trace: &mut ExpansionTrace,
 ) -> Result<String> {
-    let fields = expand_argument_word(shell, ctx, word, confirm, resources, trace).await?;
+    let context = ExpansionContext::Redirect;
+    let mut text = String::new();
+    let mut pattern = String::new();
+    let mut has_active = false;
+    let mut has_brace = false;
+    let mut first_part = true;
+    for part in &word.parts {
+        match part {
+            WordPart::Literal(literal) => {
+                let seg = literal_segment(literal, shell, first_part, context);
+                text.push_str(&seg.text);
+                pattern.push_str(&seg.pattern);
+                match seg.pattern_kind {
+                    PatternKind::Inactive | PatternKind::DynamicGlob => {}
+                    PatternKind::Source { glob, brace } => {
+                        has_active |= glob;
+                        has_brace |= brace;
+                    }
+                }
+            }
+            WordPart::Variable { source, quote } => {
+                let seg = variable_segment(source, *quote, shell, context);
+                text.push_str(&seg.text);
+                // Redirect dynamics stay literal: `variable_segment` for
+                // `Redirect` always returns an inactive segment with an
+                // empty pattern, so escape the value for the literal pattern
+                // (keeps `*` from globbing while preserving the spelling).
+                // `seg.pattern_kind` is never `DynamicGlob` here.
+                pattern.push_str(&escape_glob_metacharacters(&seg.text));
+            }
+            WordPart::Substitution { substitution, .. } => {
+                // Redirect targets are scalar: quoting affects neither
+                // splitting (disabled) nor globbing (dynamics are literal),
+                // so the quote mode is intentionally ignored here.
+                match substitution.kind {
+                    PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
+                        let mode = match substitution.kind {
+                            PlannedSubstitutionKind::Subshell => PlanExecMode::Subshell,
+                            _ => PlanExecMode::CommandSubstitution,
+                        };
+                        let captured = capture_subshell_plan_stdout(
+                            shell,
+                            ctx,
+                            &substitution.plan,
+                            mode,
+                            confirm,
+                        )
+                        .await?;
+                        if substitution.kind == PlannedSubstitutionKind::Command {
+                            trace.last_command_substitution_status = Some(captured.exit_code);
+                        }
+                        let value = trim_substitution_output(&captured.stdout);
+                        text.push_str(&value);
+                        pattern.push_str(&escape_glob_metacharacters(&value));
+                    }
+                    PlannedSubstitutionKind::Process(direction) => {
+                        let substitution = start_process_substitution(
+                            shell,
+                            ctx,
+                            &substitution.plan,
+                            direction,
+                            confirm,
+                        )
+                        .await?;
+                        let path = resources.add_process_substitution(substitution);
+                        text.push_str(&path);
+                        pattern.push_str(&escape_glob_metacharacters(&path));
+                    }
+                }
+            }
+        }
+        first_part = false;
+    }
+    if word.parts.is_empty() {
+        bail!("ambiguous redirect: '{}' expands to 0 fields", word.source);
+    }
+    // Single scalar field; run the existing brace/glob path so `*.txt`
+    // matching several files still reports ambiguous.
+    let field = SplitField {
+        text,
+        pattern,
+        has_active_pattern: has_active,
+        has_brace,
+        preserve_empty: true,
+    };
+    let cwd = cwd_for_expansion();
+    let fields = finish_split_fields(std::slice::from_ref(&field), &cwd);
     if fields.len() != 1 {
         bail!(
             "ambiguous redirect: '{}' expands to {} fields",
@@ -405,20 +462,21 @@ async fn expand_scalar_word(
     resources: &mut ExecutionResources,
     trace: &mut ExpansionTrace,
 ) -> Result<String> {
-    let mut builder = FieldBuilder::new();
+    if word.parts.is_empty() {
+        return Ok(String::new());
+    }
+    let context = ExpansionContext::Assignment;
+    let mut out = String::new();
     let mut first_part = true;
     for part in &word.parts {
         match part {
             WordPart::Literal(literal) => {
-                let (mut text, _) = (literal.text.clone(), literal.raw.clone());
-                if first_part && literal.tilde_candidate {
-                    (text, _) = apply_tilde(&text, &text, shell);
-                }
-                builder.append_single(&text, "", false, false, true);
+                let seg = literal_segment(literal, shell, first_part, context);
+                out.push_str(&seg.text);
             }
-            WordPart::Variable { source, .. } => {
-                let value = resolve_variable(source, shell);
-                builder.append_single(&value, "", false, false, true);
+            WordPart::Variable { source, quote } => {
+                let seg = variable_segment(source, *quote, shell, context);
+                out.push_str(&seg.text);
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
                 PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
@@ -433,8 +491,7 @@ async fn expand_scalar_word(
                         trace.last_command_substitution_status = Some(captured.exit_code);
                     }
                     // Scalar context never splits; keep newlines except trailing.
-                    let value = trim_substitution_output(&captured.stdout);
-                    builder.append_single(&value, "", false, false, true);
+                    out.push_str(&trim_substitution_output(&captured.stdout));
                 }
                 PlannedSubstitutionKind::Process(direction) => {
                     let substitution = start_process_substitution(
@@ -445,37 +502,38 @@ async fn expand_scalar_word(
                         confirm,
                     )
                     .await?;
-                    let path = resources.add_process_substitution(substitution);
-                    builder.append_single(&path, "", false, false, true);
+                    out.push_str(&resources.add_process_substitution(substitution));
                 }
             },
         }
         first_part = false;
     }
-    if word.parts.is_empty() {
-        return Ok(String::new());
-    }
-    Ok(builder.finish_scalar())
+    Ok(out)
 }
 
 /// Read-only expansion for safety preflight: no spawn, no env mutation.
 ///
-/// Mirrors [`expand_argument_word`] through the shared `push_*_fragment`
-/// helpers; only substitution handling differs (diagnostic placeholder).
+/// Mirrors [`expand_argument_word`] with the same IFS semantics for current
+/// variable values; substitution bodies stay diagnostic placeholders.
 pub fn dry_expand_argument_word(
     word: &PlannedWord,
     shell: &Shell,
     cwd: &std::path::Path,
 ) -> Vec<String> {
-    let mut builder = FieldBuilder::new();
+    if word.parts.is_empty() {
+        return Vec::new();
+    }
+    let ifs = resolve_ifs(shell);
+    let context = ExpansionContext::DryArgument;
+    let mut segments = Vec::with_capacity(word.parts.len());
     let mut first_part = true;
     for part in &word.parts {
         match part {
             WordPart::Literal(literal) => {
-                push_literal_fragment(&mut builder, literal, shell, first_part);
+                segments.push(literal_segment(literal, shell, first_part, context));
             }
-            WordPart::Variable { source, .. } => {
-                push_variable_fragment(&mut builder, source, shell);
+            WordPart::Variable { source, quote } => {
+                segments.push(variable_segment(source, *quote, shell, context));
             }
             WordPart::Substitution {
                 substitution,
@@ -492,21 +550,20 @@ pub fn dry_expand_argument_word(
                     PlannedSubstitutionKind::Subshell => format!("({})", substitution.source),
                 };
                 let quoted = *quote != QuoteMode::Unquoted;
-                builder.append_single(
-                    &placeholder,
-                    &escape_glob_metacharacters(&placeholder),
-                    false,
-                    false,
+                // Placeholders never split or glob; they only shape the dry
+                // argv for SafetyGuard inspection.
+                segments.push(ExpandedSegment::protected(
+                    placeholder.clone(),
+                    escape_glob_metacharacters(&placeholder),
+                    PatternKind::Inactive,
                     quoted || !placeholder.is_empty(),
-                );
+                ));
             }
         }
         first_part = false;
     }
-    if word.parts.is_empty() {
-        return Vec::new();
-    }
-    builder.finish_argument(cwd)
+    debug_assert!(context.do_field_split());
+    finish_split_fields(&split_segments(&segments, &ifs), cwd)
 }
 
 /// Read-only scalar expansion for safety preflight.
@@ -516,14 +573,11 @@ pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &Shell) -> String {
     for part in &word.parts {
         match part {
             WordPart::Literal(literal) => {
-                let mut text = literal.text.clone();
-                if first_part && literal.tilde_candidate {
-                    (text, _) = apply_tilde(&text, &text, shell);
-                }
-                out.push_str(&text);
+                let seg = literal_segment(literal, shell, first_part, ExpansionContext::Assignment);
+                out.push_str(&seg.text);
             }
             WordPart::Variable { source, .. } => {
-                out.push_str(&resolve_variable(source, shell));
+                out.push_str(&resolve_parameter(source, shell).value);
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
                 PlannedSubstitutionKind::Command => {
@@ -567,31 +621,45 @@ mod tests {
         Shell::new(env)
     }
 
-    /// An unquoted empty variable keeps one empty field: the pre-migration
-    /// engine re-parsed it as `''`, so `$EMPTY` was one empty argv, not zero
-    /// fields.
-    #[tokio::test]
-    async fn unquoted_empty_variable_keeps_one_empty_field() {
-        let mut shell = shell_with_empty_var();
+    async fn expand_single_arg(shell: &mut Shell, input: &str) -> Vec<String> {
         let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        let plan = super::super::parse::parse_execution_plan(
-            "echo $DOGESH_EMPTY_PROBE",
-            Arc::clone(&shell.environment),
-        )
-        .expect("plan");
+        let plan = super::super::parse::parse_execution_plan(input, Arc::clone(&shell.environment))
+            .expect("plan");
         let word = &plan.lists[0].jobs[0].stages[0].argv[1];
         let mut resources = ExecutionResources::new();
         let mut trace = ExpansionTrace::default();
-        let fields = expand_argument_word(
-            &mut shell,
-            &ctx,
-            word,
-            allow_all,
-            &mut resources,
-            &mut trace,
-        )
-        .await
-        .expect("expand");
+        expand_argument_word(shell, &ctx, word, allow_all, &mut resources, &mut trace)
+            .await
+            .expect("expand")
+    }
+
+    /// An unquoted empty variable contributes zero fields; only quoted
+    /// empties keep one empty argv.
+    #[tokio::test]
+    async fn unquoted_empty_variable_expands_to_zero_fields() {
+        let mut shell = shell_with_empty_var();
+        let fields = expand_single_arg(&mut shell, "echo $DOGESH_EMPTY_PROBE").await;
+        assert!(fields.is_empty());
+    }
+
+    #[tokio::test]
+    async fn quoted_empty_variable_keeps_one_empty_field() {
+        let mut shell = shell_with_empty_var();
+        let fields = expand_single_arg(&mut shell, "echo \"$DOGESH_EMPTY_PROBE\"").await;
+        assert_eq!(fields, vec![String::new()]);
+    }
+
+    #[tokio::test]
+    async fn unset_variable_expands_to_empty_not_literal() {
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env);
+        shell
+            .environment
+            .write()
+            .unset_shell_var("DOGESH_DEFINITELY_UNSET_PROBE");
+        let fields = expand_single_arg(&mut shell, "echo $DOGESH_DEFINITELY_UNSET_PROBE").await;
+        assert!(fields.is_empty());
+        let fields = expand_single_arg(&mut shell, "echo \"$DOGESH_DEFINITELY_UNSET_PROBE\"").await;
         assert_eq!(fields, vec![String::new()]);
     }
 

@@ -161,6 +161,157 @@ fn protected_glob_behavior() {
 }
 
 #[test]
+fn default_ifs_splits_unquoted_variable() {
+    let out = stdout_of("unset IFS; X='a b'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[a]\n[b]", "got {out:?}");
+}
+
+#[test]
+fn quoted_variable_stays_one_field() {
+    let out = stdout_of("X='a b'; /usr/bin/printf '[%s]\\n' \"$X\"");
+    assert_eq!(out.trim(), "[a b]", "got {out:?}");
+}
+
+#[test]
+fn set_empty_unquoted_contributes_zero_fields() {
+    let out = stdout_of("EMPTY=; /usr/bin/printf '[%s]\\n' before $EMPTY after");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[before]", "[after]"], "got {out:?}");
+}
+
+#[test]
+fn unset_unquoted_contributes_zero_fields() {
+    let out = stdout_of("/usr/bin/printf '[%s]\\n' before $DOGESH_UNSET_PROBE_XYZ after");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[before]", "[after]"], "got {out:?}");
+    assert!(
+        !out.contains("DOGESH_UNSET_PROBE_XYZ"),
+        "unset must not leak source spelling, got {out:?}"
+    );
+}
+
+#[test]
+fn quoted_empty_keeps_one_empty_argv() {
+    let out = stdout_of("EMPTY=; /usr/bin/printf '[%s]\\n' \"$EMPTY\"");
+    assert_eq!(out.trim(), "[]", "got {out:?}");
+}
+
+#[test]
+fn ifs_empty_disables_splitting() {
+    let out = stdout_of("IFS=; X='a b'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[a b]", "got {out:?}");
+}
+
+#[test]
+fn custom_comma_ifs_keeps_interior_empty() {
+    let out = stdout_of("IFS=,; X='a,,b'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[a]\n[]\n[b]", "got {out:?}");
+    let out = stdout_of("IFS=,; X=',a'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[]\n[a]", "got {out:?}");
+    let out = stdout_of("IFS=,; X='a,'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[a]", "got {out:?}");
+}
+
+#[test]
+fn mixed_ifs_whitespace_and_delimiter() {
+    let out = stdout_of("IFS=': '; X='a: :b'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[a]\n[]\n[b]", "got {out:?}");
+}
+
+#[test]
+fn cross_wordpart_leading_delimiter() {
+    let out = stdout_of("X=' a'; /usr/bin/printf '[%s]\\n' pre$X");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[pre]", "[a]"], "got {out:?}");
+}
+
+#[test]
+fn cross_wordpart_trailing_delimiter() {
+    let out = stdout_of("X='a '; /usr/bin/printf '[%s]\\n' ${X}post");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[a]", "[post]"], "got {out:?}");
+}
+
+#[test]
+fn variable_generated_glob_expands_unquoted_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+    let out = stdout_of(&format!(
+        "cd {}; PAT='*.txt'; /usr/bin/printf '[%s]\\n' $PAT",
+        dir.path().display()
+    ));
+    assert!(
+        out.contains("a.txt") && out.contains("b.txt"),
+        "unquoted PAT must glob, got {out:?}"
+    );
+    let out = stdout_of(&format!(
+        "cd {}; PAT='*.txt'; /usr/bin/printf '[%s]\\n' \"$PAT\"",
+        dir.path().display()
+    ));
+    assert_eq!(
+        out.trim(),
+        "[*.txt]",
+        "quoted PAT must stay literal, got {out:?}"
+    );
+}
+
+#[test]
+fn variable_generated_braces_do_not_expand() {
+    let out = stdout_of("X='{a,b}'; /usr/bin/printf '[%s]\\n' $X");
+    assert_eq!(out.trim(), "[{a,b}]", "got {out:?}");
+}
+
+#[test]
+fn command_substitution_respects_custom_ifs() {
+    let out = stdout_of("IFS=:; /usr/bin/printf '[%s]\\n' $(/usr/bin/printf 'a:b')");
+    assert_eq!(out.trim(), "[a]\n[b]", "got {out:?}");
+    let out = stdout_of("IFS=,; /usr/bin/printf '[%s]\\n' $(/usr/bin/printf 'a b')");
+    assert_eq!(out.trim(), "[a b]", "got {out:?}");
+}
+
+#[test]
+fn command_substitution_trailing_newlines_removed_before_split() {
+    let out = stdout_of("IFS=,; /usr/bin/printf '[%s]\\n' $(/usr/bin/printf 'a\\n')");
+    assert_eq!(out.trim(), "[a]", "got {out:?}");
+}
+
+#[test]
+fn assignment_rhs_does_not_split() {
+    let out = stdout_of("IFS=:; X='a:b'; Y=$X; /usr/bin/printf '%s\\n' \"$Y\"");
+    assert_eq!(out.trim(), "a:b", "got {out:?}");
+}
+
+#[test]
+fn redirect_target_with_spaces_stays_one_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run_command(&format!(
+        "cd {}; TARGET='file with spaces.txt'; echo hello > $TARGET",
+        dir.path().display()
+    ));
+    assert!(out.status.success(), "redirect line failed: {out:?}");
+    let body =
+        std::fs::read_to_string(dir.path().join("file with spaces.txt")).expect("spaced target");
+    assert_eq!(body.trim(), "hello");
+}
+
+#[test]
 fn glob_uses_changed_cwd_inside_substitution() {
     let root = tempfile::tempdir().expect("tempdir");
     let target = root.path().join("target");

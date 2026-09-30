@@ -403,49 +403,43 @@ fn mise_skips_non_executable_candidate() {
 
 #[test]
 fn mise_subprocess_does_not_inherit_process_env() {
+    // Use the fixed system shell instead of a freshly written fake executable.
+    // This test owns the subprocess environment boundary, not mise CLI behavior.
+    // Dedicated mise tests cover argument/probe behavior separately.
     let _lock = crate::chatgpt::tool::execute::tests::env_lock();
     let _guard = ProcessEnvGuard::set("DOGESH_PROCESS_ONLY", "must-not-leak");
     let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("env.log");
-    let executable = dir.path().join("mise-env-fake");
-    std::fs::write(
-        &executable,
-        format!(
-            r#"#!/bin/sh
-printf 'SHELL_ONLY=%s\n' "${{DOGESH_SHELL_ONLY-unset}}" >> "{}"
-printf 'PROCESS_ONLY=%s\n' "${{DOGESH_PROCESS_ONLY-unset}}" >> "{}"
-printf '%s\n' '{{}}'
-"#,
-            log.display(),
-            log.display()
-        ),
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&executable, permissions).unwrap();
 
     let mut child_env = HashMap::new();
     child_env.insert("DOGESH_SHELL_ONLY".to_string(), "from-shell".to_string());
     let runtime = ProjectProviderRuntime::new(Vec::new(), child_env);
     let output = mise_output(
-        &executable,
+        Path::new("/bin/sh"),
         dir.path(),
-        &["--no-hooks", "ls", "--missing", "--json"],
+        &[
+            "-c",
+            r#"
+printf 'SHELL_ONLY=%s\n' "${DOGESH_SHELL_ONLY-unset}"
+printf 'PROCESS_ONLY=%s\n' "${DOGESH_PROCESS_ONLY-unset}"
+"#,
+        ],
         &runtime,
     )
     .unwrap();
     assert!(output.status.success());
-    let logged = std::fs::read_to_string(&log).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        logged.contains("SHELL_ONLY=from-shell"),
-        "shell exported env must reach mise, got:\n{logged}"
+        stdout.contains("SHELL_ONLY=from-shell"),
+        "shell exported env must reach mise subprocess, got:\n{stdout}"
     );
     assert!(
-        logged.contains("PROCESS_ONLY=unset"),
-        "process-only env must not leak into mise, got:\n{logged}"
+        stdout.contains("PROCESS_ONLY=unset"),
+        "process-only env must not leak into mise subprocess, got:\n{stdout}"
     );
-    assert!(!logged.contains("must-not-leak"));
+    assert!(
+        !stdout.contains("must-not-leak"),
+        "process-global env leaked into mise subprocess:\n{stdout}"
+    );
 }
 
 #[test]

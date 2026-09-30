@@ -27,7 +27,7 @@
   `allowed-tools` を**強制しないと決めた**理由は 3 つ: 名前空間が違う（慣習は `Bash`/`Read`、
   dogesh は `execute`/`read_file`）のでマッピングは推測になり両側の変更ごとに腐る。narrowing は
   escalation ではないが **availability 攻撃**になる（未信頼 repo のファイルが `task_plan` を
-  消せると `agent run` の完了条件記録が原因不明で壊れる）。効くのは `@mention` したターンだけ。
+  消せるとタスク経路の完了条件記録が原因不明で壊れる）。効くのは `@mention` したターンだけ。
 - **`~/.agents/skills` は 4 つ目の root にしない。** user scope に trust ゲートは無く、ユーザーが
   知らないディレクトリの description が全プロンプトに無言で入る。`skills_dir()` は `is_dir()` =
   symlink 追従なので `ln -s ~/.agents/skills ~/.config/dogesh/skills` が今日そのまま動く。
@@ -56,16 +56,16 @@
 - **skill 一覧は会話の identity に含めない**（`build_system_prompt` が返す
   `SystemPrompt { identity, text }`）。含めると `skill_manage` が書いた瞬間に
   `session::take` の一致判定が外れ、学習した直後に会話が消える。
-  `session.rs` が比較するのは `identity`、`pinned_messages[0]` に入るのは `text`。
+  `session/mod.rs` が比較するのは `identity`、`pinned_messages[0]` に入るのは `text`。
   再開時は `set_system_prompt` で毎回 `text` を貼り直す。
-- **会話の継続境界は cwd 完全一致ではなく `tool::workspace_root`**（`chatgpt.rs` の
+- **会話の継続境界は cwd 完全一致ではなく `tool::workspace_root`**（`chatgpt/settings.rs` の
   `conversation_scope(cwd)` が `tool::workspace_root` を呼び、結果を `scope` として
   `session::take`/`store` に渡す）。ツールサンドボックス（`allowed_tool_roots`）と skill roots
   が既に使っている境界と同じにすることで、`cd src` のようなプロジェクト内移動だけでは会話を
   切らない。cwd 完全一致に戻さないこと。`scope` の計算（canonicalize + 祖先探索）は
-  `session_ttl.is_some()` のときだけ行う — agent 経路は `session_ttl` が常に `None` なので、
+  `session_ttl.is_some()` のときだけ行う — タスク経路は `session_ttl` が常に `None` なので、
   結果を誰も読まない計算を毎ターン払わないため。
-- **会話は再起動を越えて1件だけ残る**（`session.rs` の `PersistedSession`、
+- **会話は再起動を越えて1件だけ残る**（`session/mod.rs` の `PersistedSession`、
   `config_paths::chat_session_file`）。`store` がスロットとファイルの両方へ書き、
   `take`/`check`/`peek_id`/`session_description` はスロット空き時にファイルから復元する
   （TTL・identity・scope の判定は同じ `mismatch`）。`take` が `Continued` を返した時点で
@@ -140,8 +140,8 @@
   生の値）で、`render_fragment` が使う `summary()`（切った後、プロンプト表示用）とは別物。
   表示予算 `MAX_SKILL_SUMMARY_CHARS` を変えても digest は動かない — `summary()` を食わせていた
   頃は、表示予算を上げるだけで無関係な全プロジェクトの trust が同時に無効化されていた。
-  対話は 1 度聞く（`y` = セッション、`a` = 永続）。**永続タスクでは聞かず、未信頼なら読まない**
-  — 無人実行を承認待ちで止めないため、かつ人が見ていない入口の既定を対話より厳しくするため。
+  対話は 1 度聞く（`y` = セッション、`a` = 永続）。**タスク経路（テスト専用）では聞かず、未信頼なら読まない**
+  — 人が見ていない入口の既定を対話より厳しくするため。
   digest は FNV-1a。`DefaultHasher` は Rust のリリース間で安定しないので、toolchain 更新の
   たびに全プロジェクトを聞き直すことになる。
 - **`@name` で明示起動できる**（`skills::split_leading_mentions` / `render_mention`）。

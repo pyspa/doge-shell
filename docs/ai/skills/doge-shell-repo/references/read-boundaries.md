@@ -2,6 +2,7 @@
 
 - Start with `rg --files` or `rg -n`; do not open `README.md` or broad directories first.
 - Open `README.md` only when the task depends on user-facing behavior, config examples, installation guidance, or public docs updates.
+- `README.md` は約 2000 行。開くときは先に見出し索引を取り、該当範囲だけ offset 指定で読む: `rg -n '^#{1,3} ' README.md`（コードブロック内の `#` コメント行も拾うので、絵文字付きの `## ` 見出しを目安にする）。builtin 一覧・Lisp 関数・`config.lisp`・MCP 設定・AI 連携はそれぞれ独立した `##` 節にある。
 - Read `module-map.md` only when crate ownership is unclear after targeted `rg`.
 - Read `package-map.md` before choosing `cargo test -p ...` when the directory name may differ from the package name.
 - Run `cargo test` for the whole workspace only when the change clearly crosses crate boundaries.

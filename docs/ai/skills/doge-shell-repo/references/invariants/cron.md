@@ -1,8 +1,8 @@
 # Invariants: cron
 
-[../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。旧 `sched`（`dsh/src/scheduler/`）は削除済み — `cron`（`dsh/src/cron/`）に統合された。
+[../invariants.md](../invariants.md) の索引から。開発側の不変条件だけを置く。利用者向けの挙動（スケジュール構文・`cron tick` の設定・トラブルシュート）は `docs/cron.md` が正典。
 
-- `Shell` は `!Send`（`Rc<RefCell<LispEngine>>`）。spawn したタスクから `eval_str` は呼べない。AI ジョブは `dogesh -c "cron run-job <uuid>"` という別プロセスで実行する（`dsh/src/cron/run_job.rs`）。子プロセスに渡すのは UUID だけで、goal や grant は SQLite 経由で渡す。
+- `Shell` は `!Send`（`Rc<RefCell<LispEngine>>`）。spawn したタスクから `eval_str` は呼べない。各 run は `dogesh -c "cron run-job <uuid>"` という別プロセスで実行する（`dsh/src/cron/run_job.rs`）。子プロセスに渡すのは UUID だけで、コマンド・cwd・env は SQLite から読む。cron が走らせるのは shell ジョブだけ（AI ジョブは削除済み）。
 - セッション内 runner（`dsh/src/cron/runner.rs`）はセッション内の due スキャンだけを担当し、実際の claim・実行は `dsh/src/cron/tick.rs` の `run_once` に一本化されている。外部 tick（`dogesh -c "cron tick"`）も同じ関数を呼ぶ。
 - 二重実行の防止は SQLite の `BEGIN IMMEDIATE` トランザクション + 条件付き `UPDATE`（`claimed_by`/`claimed_until`）で行う。in-process の `RwLock`/`AtomicBool` には依存しない — 複数セッション・外部 tick が同時に動く前提だから。
 - claim は `next_run_at` を同じトランザクション内で前進させる。skip したときも必ず動かす。さもないと永久に due のままスピンする。

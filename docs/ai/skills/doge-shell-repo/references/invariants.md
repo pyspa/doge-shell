@@ -9,7 +9,7 @@
 | キー入力・端末描画・テストと実端末・出力履歴 | [invariants/terminal.md](invariants/terminal.md) |
 | cron | [invariants/cron.md](invariants/cron.md) |
 | Completion 定義 | [invariants/completion.md](invariants/completion.md) |
-| プラットフォーム | [invariants/platform.md](invariants/platform.md) |
+| プラットフォーム | [platform-support.md](platform-support.md) |
 | 安全判定 | [invariants/safety.md](invariants/safety.md) |
 | 実行セマンティクス・ライフサイクル・所有権・ハーネス | [invariants/execution.md](invariants/execution.md) |
 | background job / `$!` / `wait` | [invariants/execution-background.md](invariants/execution-background.md) |

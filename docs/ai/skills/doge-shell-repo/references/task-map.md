@@ -4,10 +4,11 @@
   - Skill: `docs/ai/skills/doge-shell-repl-completion/SKILL.md`（JSON 定義の追加/編集は `doge-shell-completion-spec` へ）
   - Read: `dsh/src/completion/`, `dsh/src/repl/completion/`, `dsh/src/repl/input_analysis.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` when `DYNAMIC_COMPLETION_PROVIDERS` changes
-- parser / AST / redirect / expansion / brace
+- parser / AST / redirect / expansion / brace / 構文の挙動・互換性の質問
   - Skill: `docs/ai/skills/doge-shell-parser-shell/SKILL.md`
-  - Read: `dsh/src/parser/`
-  - Validate: `cargo test -p doge-shell`
+  - 仕様の正典: 文法は `dsh/src/shell.pest`、対応構文の契約は `dsh/tests/spec/*.toml`（`class` = posix/bash/dogesh、既知 bug は `xfail-allowlist.txt`）。挙動の質問はコードより先にここを読む
+  - Read: `dsh/src/parser/`, `dsh/src/shell/plan.rs`, `dsh/src/shell/parse/`, `dsh/src/shell/word_expand.rs`
+  - Validate: `cargo test -p doge-shell --lib parser`; 構文・実行の契約を変えたら `cargo test -p doge-shell --test shell_contract`
 - prompt / right prompt / transient / terminal UI / status line
   - Skill: `docs/ai/skills/doge-shell-prompt-terminal-ui/SKILL.md`
   - Read: `dsh/src/prompt/`, `dsh/src/terminal/`, `dsh/src/repl/`, `dsh/src/repl/status_line.rs`, `dsh/src/repl/shell_integration.rs`
@@ -24,7 +25,7 @@
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` for CLI changes and `cargo test -p dsh-types` for shared types
 - directory stack / pushd / popd / dirs / cd -N
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
-  - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/mod.rs`
+  - Read: `dsh-builtin/src/dirstack.rs`, `dsh-builtin/src/cd.rs`, `dsh/src/proxy/shell_proxy.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when `changepwd` behavior changes
 - process / PTY / raw terminal / colored output
   - Skill: `docs/ai/skills/doge-shell-process-pty/SKILL.md`
@@ -37,22 +38,22 @@
   - Validate: `cargo test -p doge-shell`; `waitpid` site や `wait_jobs` mutation を動かしたら `scripts/check-execution-authority.py` も通す
 - chatgpt / MCP / tool / runtime skill / OpenAI config
   - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
-  - 先に読む: [ai/README.md](ai/README.md)（AI 機能の方針。再実装してはいけないものの一覧）
-  - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`
+  - 先に読む: `docs/design/ai/README.md`（AI 機能の方針。再実装してはいけないものの一覧）
+  - Read: `dsh-builtin/src/chatgpt/`, `dsh-openai/src/`, `dsh-builtin/src/config_paths.rs`, `dsh-builtin/src/doctor.rs`, `dsh-builtin/src/doctor/`
   - Validate: `cargo test -p dsh-builtin`
 - skill / SKILL.md / skill_manage / project skill / 使用統計
   - Skill: `docs/ai/skills/dsh-skill-authoring/SKILL.md`
-  - 先に読む: [ai/skill.md](ai/skill.md)（Regression チェックリストは同ファイル末尾）
+  - 先に読む: `docs/design/ai/skill.md`（Regression チェックリストは同ファイル末尾）
   - Read: `dsh-builtin/src/chatgpt/skills/`, `dsh-builtin/src/chatgpt/tool/skill.rs`, `dsh-builtin/src/skill.rs`
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::skills`; `cargo test -p dsh-builtin --lib chatgpt::tool::skill`; `cargo test -p dsh-builtin --lib chatgpt::reflect`; `cargo test -p dsh-builtin --lib skill::`
 - AI chat hooks / ai-hooks.json / pre-tool-use / 外部コマンド
   - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
-  - 先に読む: [ai/hooks.md](ai/hooks.md)（Regression チェックリストは同ファイル末尾。hook は許可を与えられない）
+  - 先に読む: `docs/design/ai/hooks.md`（Regression チェックリストは同ファイル末尾。hook は許可を与えられない）
   - Read: `dsh-builtin/src/chatgpt/hooks/`
   - Validate: `cargo test -p dsh-builtin --lib chatgpt::hooks`; `cargo test -p dsh-builtin --lib chatgpt::tool::tests`
-- serve / MCP server / shared MCP types
-  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`（静的ファイル配信は `doge-shell-serve-web`）
-  - Read: `dsh-builtin/src/serve/`, `dsh-builtin/src/mcp.rs`, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
+- MCP client / `mcp` builtin / shared MCP types
+  - Skill: `docs/ai/skills/doge-shell-chat-tools/SKILL.md`
+  - Read: `dsh-builtin/src/mcp.rs`（`mcp status/connect/disconnect` の client manager）, `dsh-builtin/src/chatgpt/mcp/`, `dsh-types/src/mcp.rs`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared types change
 - serve / static files / HTTP handlers / CORS / path validation
   - Skill: `docs/ai/skills/doge-shell-serve-web/SKILL.md`
@@ -82,7 +83,7 @@
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` when shared data shapes change
 - safety / guard / command policy
   - Skill: `docs/ai/skills/doge-shell-safety-policy/SKILL.md`
-  - Read: `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `dsh/src/proxy/mod.rs` の `AgentCommandPolicy`
+  - Read: `dsh/src/safety/`, `dsh-types/src/safety_policy.rs`, `AgentCommandPolicy`（trait は `dsh-builtin/src/shell_capabilities.rs`、`Shell` の impl は `dsh/src/proxy/agent_policy.rs`）
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-types` and `cargo test -p dsh-builtin` when shared判定や tool 側の適用を触ったとき
 - safe-run / ai-watch / AI から実行するコマンドの承認
   - Skill: `docs/ai/skills/doge-shell-safety-policy/SKILL.md`
@@ -102,20 +103,26 @@
   - Validate: package for touched files; use `cargo test -p dsh-frecency` for frecency changes
 - command palette / AI actions
   - Skill: `docs/ai/skills/doge-shell-command-palette-ai/SKILL.md`
-  - 先に読む: [ai/README.md](ai/README.md)
+  - 先に読む: `docs/design/ai/README.md`
   - Read: `dsh/src/command_palette/`, `dsh/src/ai_features/`, `dsh/src/repl/repl_ai.rs`, `dsh-types/src/quick_fix.rs`, `dsh/src/argument_explainer.rs`, `dsh-openai/src/`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-openai` when client/config changes
 - AI guidance / Skills / runtime skill installer
   - Skill: `docs/ai/skills/dsh-skill-authoring/SKILL.md`
   - Read: `AGENTS.md`, `CLAUDE.md`, `docs/ai/`, `scripts/install-runtime-skills.sh`, `.claude/`
-  - Validate: `doctor validate` when available, `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks (`--status` is informational)
+  - Validate: `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks (`--status` is informational)
 - validation command selection / changed-file checks
   - Skill: `docs/ai/skills/doge-shell-validation/SKILL.md`
-  - Read: `dsh-builtin/src/doctor.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
-  - Validate: `cargo test -p dsh-builtin`; run proposed commands from `doctor validate` when available (`doctor validate` は提案のみで実行はしない)
+  - Read: `dsh-builtin/src/doctor/dev.rs`, `docs/ai/skills/doge-shell-repo/references/test-scope.md`
+  - Validate: `cargo test -p dsh-builtin --lib doctor`（`doctor validate` は提案のみで実行はしない）
 - プラットフォーム分岐 / macOS 移植 / OS 固有のソース
   - Read: `docs/ai/skills/doge-shell-repo/references/platform-support.md`, `dsh/src/completion/generators/`, `dsh/src/process/`
   - Validate: `scripts/check-portability.py`; 触った package の `cargo test`; macOS 側の腕の実証は CI の macos ジョブ（Linux からのクロスコンパイルは Apple SDK が要るので不可）
 - cross-crate integration
   - Read: affected crate entry points from `module-map.md`
   - Validate: `cargo test` or `cargo check --workspace` only when the behavior spans crates
+
+## 再発防止
+
+- 機能を削除したら、その機能を説明する docs（`docs/design/ai/`、invariants、Skill、`docs/cron.md`）も同じ変更で消す。コードに無い機能の説明が一番トークンを浪費させる。
+- ファイル・シンボルを移動したら `rg -n '<旧パス or 旧シンボル>' AGENTS.md CLAUDE.md docs` で参照を直す。行番号は docs に書かない。
+- 同じルールを複数ファイルに書かない。正典を 1 つ決め、他は 1 行のリンクにする。

@@ -260,7 +260,7 @@ const PATH_ARGUMENT_FIELDS: &[(&str, &[&str])] = &[
     // `file` is relative to the *skill directory*, not to the chat's working
     // directory, so joining it with the latter tests a path the call never
     // touches. Resolving it properly would mean re-deriving the skill root
-    // here, which `ai-architecture.md` §7 keeps to `skill_roots` alone. A hook
+    // here, which `docs/design/ai/skill.md` (§7) keeps to `skill_roots` alone. A hook
     // that wants to watch skill writes matches `tools: ["skill_manage"]`.
     ("skill_manage", &[]),
 ];

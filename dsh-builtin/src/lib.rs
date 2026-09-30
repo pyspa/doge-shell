@@ -180,7 +180,7 @@ impl CoreShellAction {
 /// This allows builtin commands to perform shell operations without direct coupling
 ///
 /// No method here has a default body, deliberately. There are exactly two
-/// implementors - the real `Shell` (`dsh/src/proxy/mod.rs`) and the shared
+/// implementors - the real `Shell` (`dsh/src/proxy/shell_proxy.rs`) and the shared
 /// test double [`crate::test_support::TestShellProxy`] - and both provide
 /// every method explicitly. A default body would let either one silently
 /// fall back to a no-op if a method were forgotten after a signature change;

@@ -2,7 +2,8 @@
 
 - `cargo test -p dsh-builtin`: builtin, chat, MCP, runtime skill loading
 - `cargo test -p doge-shell`: parser, repl, completion, prompt, shell behavior
-- `cargo test -p doge-shell --lib <filter>`: 反復ループの既定。`dsh/tests/` の統合テストはサブプロセスをグローバル Mutex で直列化するので、実装を回している間は `--lib` とテスト名フィルタが速い。コミット前に一度だけフルの `cargo test -p doge-shell` を回す
+- `cargo test -p doge-shell --lib <filter>`: 反復ループの既定。`dsh/tests/` の統合テストはサブプロセスをグローバル Mutex で直列化するので、実装を回している間は `--lib` とテスト名フィルタが速い。完了前に一度だけフルの `cargo test -p doge-shell` を回す
+- `cargo test -p doge-shell --test shell_contract`: 構文・実行の契約（`dsh/tests/spec/*.toml`）を変えたとき
 - `completions/*.json` を触ったとき: `cargo test -p doge-shell --lib completion::json_loader`
 - `cargo test -p dsh-openai`: OpenAI-compatible client or config loading
 - `cargo test -p dsh-types`: shared type changes, especially MCP/project/output data shapes
@@ -27,10 +28,19 @@ The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package
 
 Do not start with workspace-wide tests unless the change clearly crosses crate boundaries.
 
-`--message-format short` を付けると clippy / rustc の 1 診断が 8 行から 1 行になる。広い範囲を確認するときは `cargo clippy -p doge-shell --all-targets --message-format short -- -D warnings` を使う。
+`--message-format short` を付けると clippy / rustc の 1 診断が 8 行から 1 行になる。clippy は CI と同じく必ず `--all-targets` を付ける: `cargo clippy -p <package> --all-targets --message-format short -- -D warnings`。
 
-Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/job_pty.rs`, `dsh/src/process/job_wait.rs`, `dsh/src/shell/eval.rs`): see the "テストと実端末" section of `invariants.md` first. If a run leaves the terminal misbehaving, `cargo test < /dev/null` isolates fd 0, and `reset` clears a stale DECSTBM margin that `stty sane` cannot.
+## CI をローカルで再現する最小セット
+
+`doctor validate`（`./target/release/dogesh -c "doctor validate --json"`）は release バイナリがソースより新しいときだけ使う。無い・古いときはこのセットと上の package 表を正とする。
+
+- 常に: `cargo fmt --all -- --check`、触った package ごとに `cargo clippy -p <package> --all-targets -- -D warnings`、触った package の `cargo test`
+- `.rs` を触ったら: `scripts/check-portability.py`、`scripts/check-runtime-authority.py`、`scripts/check-file-budget.py`
+- `dsh/src/process/`・`dsh/src/proxy/builtin/jobs/`・`dsh/src/shell/{job,job_exit}.rs`・`dsh/src/shell/process_substitution/`: `scripts/check-execution-authority.py` と `cargo test -p doge-shell --test shell_contract` / `--test resource_contract`
+- `ShellProxy` / capability trait: `scripts/check-shell-proxy-capabilities.py`
+- AI guidance・Skill・`.claude/`: `scripts/check-ai-guidance.sh`
+- `Cargo.toml` / `README.md` / `LICENSE`: `scripts/check-project-consistency.py`
+
+Terminal-touching code (`dsh/src/repl/`, `dsh/src/terminal/`, `dsh/src/process/job_pty.rs`, `dsh/src/process/job_wait.rs`, `dsh/src/shell/eval.rs`): see the "テストと実端末" section of `invariants/terminal.md` first. If a run leaves the terminal misbehaving, `cargo test < /dev/null` isolates fd 0, and `reset` clears a stale DECSTBM margin that `stty sane` cannot.
 
 Never use `cargo test -p dsh`; the `dsh/` directory is the `doge-shell` package.
-
-Use `cargo test -p doge-shell --lib` only as a fallback for library-scoped edits when package-level tests are blocked by known macOS sandbox child-`dogesh` tracing failures.

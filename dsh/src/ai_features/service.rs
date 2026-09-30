@@ -446,7 +446,7 @@ impl LiveAiService {
         // then discarded it. (The MCP execution block below is currently
         // unreachable in production for the same reason; it is kept for a
         // future `with_tools()` caller rather than deleted. See
-        // ai-architecture.md §2.)
+        // docs/design/ai/README.md §2.)
         let tools = if options.allow_tools {
             self.mcp_manager.read().tool_definitions()
         } else {

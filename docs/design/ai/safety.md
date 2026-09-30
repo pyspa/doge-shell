@@ -22,18 +22,10 @@
   レベル・trust によらずゲートを開ける。operator 自身の verbatim 承認であり
   server-controlled な分類ではないためで、trust 導入前の動作（Strict での
   素コマンド承認を含む）を維持する。
-- **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するので、
-  guard がその一部しか読めないなら approve ではなく refuse する。
-  - コマンド置換（`` ` ``, `$(...)`, `<(...)`, `(...)`）— `shell::parse::parse_command` が
-    評価してしまうので、「安全か」を尋ねること自体が実行になる。
-  - 文法が最後まで消費できない行（heredoc など）— `get_jobs` は警告するだけ。
-  - 複合文（`{ ... }`, `for`, `if`, `while` …）— 中のコマンドは分類できない。
-  - 文字列をコードとして渡す経路 — `-c` 系フラグに加えて、stdin から読むシェル
-    （`printf ... | sh`）、入力リダイレクト（`bash < script.sh`）、`eval`。
-- 分類は**行全体を対象に**。`Job.cmd` はパイプラインもまとめて 1 本の文字列なので、
-  オペレータで区切り、ラッパー（`sudo` / `timeout` / `env` …）を覗いてから
-  各段を分類する（`split_command_segments` + `command_candidates`）。
-  先頭トークンだけを見ると `true | rm -rf ~` も `sudo rm -rf ~` も素通りする。
+- **判定した行と実行する行を一致させる**・行全体の分類（`split_command_segments` +
+  `command_candidates`）・コマンド置換の事前拒否・文字列をコードとして渡す経路の扱いは、
+  実装不変条件として `docs/ai/skills/doge-shell-repo/references/invariants/safety.md` が正典。
+  ここには書き写さない（`get_jobs` / `parse_execution_plan` は fail closed で、置換を実行しない）。
 - **ツール名は判定の security input にしない**（`is_read_only_mcp_tool` /
   `read markers` / `mutating markers` / `SafetyGuard::words` は認可経路から
   削除済み）。ツール名はサーバが決める文字列であり、`readOnlyHint: true` を
@@ -53,10 +45,8 @@
   取り違えてもコンパイルが通り、判定だけが静かに変わる（`mcp__ops__bash` は `"bash"` に
   一度も一致しないので、シェルツールが実行するコマンドとして判定されなくなる）。
   一度実際に起きた退行なので型で塞ぐ。
-- ツール一覧からバインディングを作るのは **`mcp::bind_tool` 1 箇所**。以前は起動時・リフレッシュ時・
-  `mcp add` の 3 箇所に手書きの複製があり、`ToolBinding` にフィールドを足すと 2 箇所にだけ届いて
-  残り 1 箇所が静かに欠ける、という形のバグを許していた（テストは手書きのバインディングを使うので
-  全部通る）。
+- ツール一覧からバインディングを作るのは **`mcp::bind_tool` 1 箇所**。起動時・リフレッシュ時・
+  `mcp add` で手書きの複製を作らない（テストは手書きのバインディングを使うので漏れを検出できない）。
 - MCP ツールの危険度は **function name ではなく実ツール名 + サーバ trust** で判定する。
   モデルが呼ぶ名前は `mcp__<label>__<tool>` なので、`"bash"` との完全一致は**一度も成立しない**。
   `check_mcp_tool` は `McpToolCall` struct（`function_name` / `server_label` /
@@ -66,7 +56,6 @@
   Trusted サーバの宣言が担う。ラベルはサーバの通称なので、それだけで分類しない。
 - `SafetyResult` は **`Allowed | Confirm` の 2 値**。ガードは人が答えられる場所で走るので、
   一番強い返答は質問。拒否はエージェント経路の `AgentCommandVerdict::Denied` が担う。
-  以前は `Denied` が 1 箇所からも生成されず、到達不能なハンドラが 9 箇所あった。
 - **常に `None` を返す checker を登録しない**。登録されていることと効いていることの区別が
   つかなくなり、README が起きない確認を約束していた（`check_mv` / `check_package_manager`）。
 - allowlist は 3 種類あり、意味が違う。混ぜない。
@@ -75,7 +64,7 @@
   - エージェントのセッション承認（`policy_state.agent_session_allowlist`）— **完全一致**。
     `rm -rf target` の承認が `rm -rf target ~/documents` に及んではいけない。
     経路 A（`AgentCommandPolicy::remember_agent_approval`）と経路 B（`LiveAiService`）は
-    **同じ箱**に書く。以前 B だけが設定 allowlist に書いていた。
+    **同じ箱**に書く。
   - ユーザー自身の "always"（`shell_always_allowlist`）— **AI には渡らない**。
     自分に許可したことは AI に許可したことではない。
 - セッション承認のキーは接頭辞で区別する。いずれも完全一致。
@@ -85,8 +74,8 @@
   | `mcp:<function_name>:<args>` | その MCP 呼び出しを再確認しない |
   | `write:<canonical path>` | `edit` / `str_replace` がそのファイルを再確認しない |
   | `sensitive:<action>:<canonical path>` | 機微パスの read / list / search を再確認しない |
-| `delete:<canonical path>` | `skill_manage` の削除を再確認しない。`write:` の always は削除に及ばない |
-| `hook:<hook id>:<subject>` | その hook の `ask` を再確認しない。`execute` や MCP の always とは別の箱で、`agent run --allow-command` / `--allow-mcp` では満たせない |
+  | `delete:<canonical path>` | `skill_manage` の削除を再確認しない。`write:` の always は削除に及ばない |
+  | `hook:<hook id>:<subject>` | その hook の `ask` を再確認しない。`execute` や MCP の always とは別の箱 |
 - 承認 UI は `ApprovalDecision`（Allow / AllowAlways / Deny）ただ 1 つ。
   `dsh-builtin/src/chatgpt/tool/safety_gates.rs` の `confirm_agent_action` を通す。
   **質問文に "Proceed?" を書かない**。`repl/confirmation.rs` が
@@ -96,8 +85,7 @@
   ゲートでなくなる。差分は `dsh-builtin/src/diff.rs` の `preview`（`skill diff` と同じ
   `unified_lines` を共有。2 本目の diff 実装を作らない）で、変更のない行は畳み、長い行は切り、
   `MAX_PREVIEW_LINES` で打ち切り、`redact_sensitive_text` を通す。質問文には `+3 -1` の要約が入る。
-  **プレビューを出すのは「実際に人に訊く枝」だけ** — タスクの `stop_reason` に入れると保存レコードと
-  `cron logs` の incident 本文が膨らみ、セッションの "always" 済みなら訊かないのだから出す意味がない。
+  **プレビューを出すのは「実際に人に訊く枝」だけ**（セッションの "always" 済みなら訊かないので出さない）。
   対象は `edit` / `str_replace` / `skill_manage` の書き込み。`!` チャットの間は raw mode が
   off（`shell/eval.rs`）なので素の `\n` でよい。`confirm_action` 側は raw mode で描くので
   `crlf()` で改行を正規化する。
@@ -108,18 +96,15 @@
   そこだけ通常のコマンドポリシーに落ちると `loose` で無確認実行になる。
   判定は `resolve_tool_path` を**通さない**。あれはアクセス判定で、タスクでは grant 外のパスを
   拒むため、grant 外の skill script が「skill script ではない」と分類されてしまう。
-  永続タスクでも同じで、**`--allow-command` は skill script を覆わない**。grant は人が読んだ
-  コマンド行を指すが、skill script はエージェント自身が書けるファイルでもある。
   判定対象は program だけでなく **stage の全トークン**（`touches_skill_file`）。`bash` /
   `python3` は透過ラッパーではない（`COMMAND_WRAPPERS` に入れてはいけない）ので、program
-  だけを見ていると `bash <skill>/run.sh` が素通りした。相対パスの解決基準は **`execute` の
-  `cwd` 引数**。シェルの cwd で解決していたため `{"command":"./run.sh","cwd":"<skill dir>"}`
-  でも抜けられた。読み取り（`cat <skill>/SKILL.md`）まで確認が出るのは意図的で、引数から
+  だけを見ていると `bash <skill>/run.sh` が素通りする。相対パスの解決基準は **`execute` の
+  `cwd` 引数**（シェルの cwd で解決すると `{"command":"./run.sh","cwd":"<skill dir>"}` で抜けられる）。読み取り（`cat <skill>/SKILL.md`）まで確認が出るのは意図的で、引数から
   実行と読み取りを見分ける推測が、上の 2 つの穴を生んだ側だから。
 - **AI chat hooks は 4 つ目のゲートではない。** `HookDecision` に `Allow` バリアントは無く、JSON の
   `"decision": "allow"` はパースエラーにする。hook にできるのは「通る予定だったものを止める」か
   「追加で人に訊く」かの 2 つだけで、`SafetyGuard` / `AgentCommandPolicy` の判定を緩める手段は
-  型として存在しない。`hooks::dispatch` は `ChatToolHost` を受け取らないので、
+  型として存在しない。hook の dispatcher（`HookContext::fire`、`chatgpt/hooks/mod.rs`）は `ChatToolHost` を受け取らないので、
   `remember_agent_approval` にも allowlist にも触れない。
   順序は hook → policy。hook が `Continue` を返した後は今日と完全に同じ経路が走る。
   gate イベント（`user-prompt-submit` / `pre-tool-use`）は hook の失敗・タイムアウトで **deny**、

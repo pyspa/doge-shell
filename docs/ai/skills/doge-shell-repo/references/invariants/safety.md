@@ -1,8 +1,8 @@
 # Invariants: 安全判定
 
 [../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。
-AI 機能側の安全ゲート方針は [../ai/safety.md](../ai/safety.md) にもある（そちらが §4 の正典、
-これは事故った箇所だけを載せた短いルール集）。
+実装不変条件の正典はこのファイル。製品側の安全ゲート方針（MCP trust・承認キー・allowlist の種類）は
+`docs/design/ai/safety.md` にあり、同じ内容を両方に書かない。
 
 - `SafetyGuard::check_jobs` は `Job.cmd`（**行全体。パイプラインもまとめて 1 本の文字列**）を見る。先頭トークンだけを分類すると `true | rm -rf ~` は `true`、`sudo rm -rf ~` は `sudo` になり、どちらもルールが無いので**全チェックを素通りする**。オペレータで区切り、ラッパーを覗いてから分類すること（`dsh_types::safety_policy::{split_command_segments, command_candidates}`）。
 - 行の分割は**生文字列**に対してやる。`shell_words::split` は空白でしか切らないので `echo hi; rm -rf ~` は `["echo", "hi;", "rm", ...]` になり、トークン単位の分割では `;` が見えない。
@@ -10,7 +10,7 @@ AI 機能側の安全ゲート方針は [../ai/safety.md](../ai/safety.md) に�
 - **判定した行と実行する行を一致させる**。`sh -c` は行全体を実行するのに、dogesh の文法は grouping・制御構文・heredoc を持たない。Execution planning is strict: any non-whitespace unparsed tail is a syntax error and no prefix is executed (`get_jobs` / `parse_execution_plan` が fail closed)。安全判定側は `compound_statement_keyword` で fail closed にする。`{ rm -rf ~; }` は `{` という名前のコマンドとして完全にパースされてしまう。
 - コマンド置換（`` ` ``、`$(...)`、`<(...)`、`(...)`）は agent 実行では**判定より前に拒否する**（`AgentCommandPolicy` の方針。parser とは無関係）。shell parsing/planning は side-effect-free で、substitution は evaluation まで deferred される。every substitution body は実行前に safety-checked され、final materialized command がもう一度 checked される。
 - Execution planning preserves word structure and performs no runtime word expansion. Alias rewriting is syntax-time only. Variable, tilde, brace/glob and substitution expansion happen only when a selected job is materialized. Final concrete argv is authorized after expansion. A source containing runtime expansion (`Variable` / substitution / tilde / glob / brace / dynamic redirect or assignment) is a dynamic source: an exact raw-source allowlist match must not bypass the concrete argv safety check (`SafetyCheckContext::dynamic_source`).
-- Re-exec helper 内でも final concrete argv を `SafetyGuard` に通す（`evaluate_plan` は top-level と同じ gate→materialize→authorize→launch 順）。re-exec を理由に skip しない。snapshot 越境するのは safety level・allowlist の値だけで、confirm の `AlwaysAllow` は helper 内で死ぬ（parent へ永続化しない）。
+- Re-exec helper 内でも final concrete argv を `SafetyGuard` に通す（`evaluate_plan_in`（`dsh/src/shell/eval/plan_eval.rs`）は top-level と同じ gate→materialize→authorize→launch 順）。re-exec を理由に skip しない。snapshot 越境するのは safety level・allowlist の値だけで、confirm の `AlwaysAllow` は helper 内で死ぬ（parent へ永続化しない）。
 - Helper 内の nested denial は status fd の 1 バイト（`b'D'`）で親へ戻し、`AuthorizationCancelled` として outer chain を abort する。空出力の成功と区別できない exit code だけに頼らない（`echo $(denied)` が空で実行された事故を再発させない）。
 - Helper の confirm は `helper_confirm` のみ：stdout は capture data なので `/dev/tty` に 1 行聞き、端末がなければ `No`（fail closed）。interactive の keypress prompt（`confirm_action`）を helper で使わない。
 - 文字列をコードとして渡す経路は flag だけではない。stdin から読むシェル（`printf ... | sh`）、入力リダイレクト（`bash < script.sh`）、`eval` は flag を持たない（`execute.rs` の `hidden_code_source`）。`shell_words::split` は `<` を独立トークンにするので「全引数が `-` 始まり」では捕まらない。

@@ -1,6 +1,6 @@
 ---
 name: doge-shell-review
-description: Use for independent review of doge-shell changes, especially high-risk execution, safety, lifecycle, portability, or cross-crate changes. Review the diff and invariants without implementing the original change.
+description: Use for independent review of an existing doge-shell diff after changes are made, レビュー, コードレビュー, especially high-risk execution, safety, lifecycle, portability, or cross-crate changes. Review the diff and invariants without implementing the change.
 ---
 
 # Doge Shell Review

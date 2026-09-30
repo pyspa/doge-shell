@@ -411,7 +411,7 @@ impl<T: ShellProxy + ?Sized> ShellAiIntegration for T {
 /// `output-gen`'s AI-generated output-schema is the one caller: its system
 /// prompt asks for a JSON object whose `type`/`parse`/`separator` fields are
 /// enum values, and `AI_MESSAGE_LANG` translating those broke the parse
-/// (`docs/ai/skills/doge-shell-repo/references/ai/env-vars.md` §6: "JSON を
+/// (`docs/design/ai/env-vars.md` §6: "JSON を
 /// 返させるリクエストに `apply_language` を付けない").
 pub trait AiJsonRequest {
     fn ask_ai_json_async<'a>(

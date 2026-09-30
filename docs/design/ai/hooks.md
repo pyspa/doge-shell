@@ -28,8 +28,7 @@
   失敗した場合は巻き戻す先が無いので、そのケースだけ従来どおり何も保存しない。
   **chat 経路のクロージャに、この巻き戻し処理を経由しない新しい早期 return
   （`?` や `return`）を足さないこと** - 足すと、そのパスだけ会話が丸ごと消える退行になる。
-  agent 経路（`session_ttl` が常に `None`）は `turn_mark` を一度も持たないので、この巻き戻しは
-  常に no-op で、agent の挙動は変わらない。
+  タスク経路（テスト専用。`session_ttl` が常に `None`）は `turn_mark` を持たないので no-op。
 - **`response-complete` に「継続を強制する」機能は入れない**。継続の強制は「もっと副作用を使う許可」で、
   §4 の方針に真っ向から反する。
 - **`match` は 4 種類**（`tools` / `programs` / `paths` / `arguments`）。**種類間は AND、
@@ -96,7 +95,11 @@
   出口として文書化されているので、予算値のタイポがその出口を塞いではいけない。
   計測は `run_hook` の前後だけ — 承認プロンプトは `fire` の呼び出し側にあるので、人が考えている
   時間で予算が尽きて次の gate が deny されることはない。
-- **観測イベントの非同期化は入れない**（§9 参照）。
+- **観測イベントの非同期化は入れない**（決定済み）。pre/post のペア保証が壊れる（`tool/mod.rs` が
+  守る対称性）、応答（`message` / `additional_context` / `decision`）の読み手が居ない時刻に答える、
+  `match` とターン予算で動機が消えた、「1 行出して exit、重い処理は自分の子で」が今日書ける
+  （`a_hook_that_leaves_a_grandchild_holding_stdin_still_returns` が担保）の 4 点。reap の担い手
+  （`dsh/src/detached_child.rs`）ができたことだけを理由に再検討しない。
 - **設定は argv 配列のみ**。文字列は拒否する。`execute` が `sh -c` を使えるのは `authorize` が
   行全体を判定しているからで、hooks には判定者がいない。あるのはモデルが決めたツール引数と
   ユーザーが打った任意の文字列だけなので、シェル文字列を許すと hook 作者は必ず補間する。
@@ -141,8 +144,8 @@
   `chat_with_tools` の本体をクロージャに包んであるのはそのため。prompt hook の deny、
   checkpoint の復元失敗、`before_tool` の失敗はいずれも早期 return で、`session-start` に
   対応する終わりが来なかった。ツール層で直した pre/post 非対称と同じもの。
-- **`session-start` は checkpoint のある再開では鳴らさない**。タスクは `session_ttl` が
-  `None` なので `take` が必ず外れ、`agent resume` のたびに同じ session id で鳴っていた。
+- **`session-start` は checkpoint のある再開では鳴らさない**（タスク経路は `session_ttl` が
+  `None` なので `take` が必ず外れ、再開のたびに同じ session id で鳴ってしまう）。
 - 確認は `doctor hooks`。**doctor から hook を実行しない**（argv[0] の存在確認まで）。
 
 ## Regression チェックリスト（`task-map.md` から）

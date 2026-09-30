@@ -5,7 +5,7 @@
 //!
 //! # A hook cannot grant permission
 //!
-//! `HookDecision` has no `Allow`. `ai-architecture.md` §4 says the safety gate
+//! `HookDecision` has no `Allow`. `docs/design/ai/safety.md` (§4) says the safety gate
 //! is `SafetyGuard` and nothing else, and the cheapest way to keep that true is
 //! to give the hook layer no vocabulary for permitting anything. A hook can:
 //!

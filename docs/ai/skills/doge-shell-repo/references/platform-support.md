@@ -11,16 +11,18 @@
 ## 層ごとの要求
 
 - **コア** (パーサ / REPL / ジョブ制御 / PTY / 履歴 / 補完エンジン): 両 OS で `cargo clippy --workspace --all-targets -- -D warnings` と `cargo test --workspace` が通り、挙動が一致すること。
-- **host-fact provider** (`dsh/src/completion/generators/`, `dsh/src/completion/dynamic.rs` の user / group / process / interface / signal / mount / sysctl): 片方の OS にしかないソースを読むなら、**もう一方の OS 用のソースを必ず用意する**。「ファイルが無いので静かに 0 件」は不可。macOS の `/etc/passwd` は実在するのに実質空、というのが最悪の形で、これを踏んだ (`f45fcc2`)。
+- **host-fact provider** (`dsh/src/completion/generators/`, `dsh/src/completion/dynamic.rs` の user / group / process / interface / signal / mount / sysctl): 片方の OS にしかないソースを読むなら、**もう一方の OS 用のソースを必ず用意する**。「ファイルが無いので静かに 0 件」は不可。macOS の `/etc/passwd` は実在するのに実質空（対話ユーザーは Open Directory にいる）、というのが最悪の形で、これを踏んだ (`f45fcc2`)。`/etc/group` は macOS でも埋まっているが、Open Directory が足すグループは持たない。
 - **OS 固有 CLI の補完定義** (`completions/pacman.json`, `systemctl.json`, `brew.json` …): パリティは不要。Linux 専用の定義が多数あって macOS 専用はほぼ `brew.json` だけ、という非対称は仕様通り。要求は「そのコマンドが無い OS でエラーもハングも起こさず静かに 0 件になる」ことだけ。
 
 ## 分岐の書き方
 
 - `#[cfg(not(target_os = "macos"))]` と `#[cfg(target_os = "macos")]` を必ず**対で**書く。片方だけ書くと、もう一方の OS では**その項目が存在しないだけ**で、コンパイルも通りテストも落ちない。`scripts/check-portability.py` の片肺 cfg 検査がこれを見る。
 - 共通ロジックは cfg の外の純粋関数に置く。手本は `dsh/src/completion/generators/user.rs` の `is_offered`: OS ごとに違うのは「どこから読むか」と定数だけで、判定は 1 つ。
+- シグナル番号は 1-15 しか共通でない（`SIGUSR1` は Linux 10 / macOS 30、`SIGCHLD` は 17 / 20）。番号表は per-OS に持つ (`59855e1`)。
+- config パスは `dsh-builtin/src/config_paths.rs`（`dsh` crate 内は `environment::get_config_file`）を通す。`dirs::config_dir()` は macOS で `~/Library/Application Support` を指し、XDG を使う installer / loader と食い違う。`scripts/check-portability.py` が直接呼び出しを禁止している。
 - OS ごとに違う定数表には `libc` に突き合わせるテストを付ける。手本は `dsh/src/completion/generators/signal.rs` の `the_table_uses_this_platforms_signal_numbers`。ただしこのテストは**走ったホストの側だけ**を検証するので、CI の両ジョブが揃って初めて完全になる。
 - per-OS の依存は `[target.'cfg(target_os = "macos")'.dependencies]` へ。`dsh/Cargo.toml` の `sysinfo` と `nix` の `net` feature が唯一の実例。追加する前に他 crate で既に無条件依存になっていないか確認する (`sysinfo` は `dsh-builtin` では全 OS で入っているので、`dsh` 側を macOS 限定にした節約効果は限定的)。
-- テストから外部コマンドを絶対パスで呼ぶときは `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `tr_path()` / `first_existing()` を使う。`/bin/true` と `/bin/false` は macOS に無く `/usr/bin` にしかない。`/bin/sh` `/bin/echo` `/bin/ls` `/bin/cat` は両方にある。
+- テストから外部コマンドを絶対パスで呼ぶときは `dsh/tests/common/mod.rs` の `true_path()` / `false_path()` / `tr_path()` / `first_existing()` を使う。`/bin/true` と `/bin/false` は macOS に無く `/usr/bin` にしかない。`/bin/sh` `/bin/echo` `/bin/ls` `/bin/cat` は両方にある。`/etc/hostname` も macOS に無いので `/etc/hosts` を使う。`/tmp` は macOS で `/private/tmp` に解決されるので `canonicalize` して比べる (`ae2f192`)。
 
 ## macOS 側の腕を Linux ホストで確認する
 

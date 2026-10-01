@@ -292,6 +292,164 @@ fn command_substitution_trailing_newlines_removed_before_split() {
     assert_eq!(out.trim(), "[a]", "got {out:?}");
 }
 
+fn strip_display_prefix(stdout: &[u8]) -> &[u8] {
+    stdout.strip_prefix(b"\r\n").unwrap_or(stdout)
+}
+
+#[test]
+fn quoted_substitution_preserves_trailing_cr() {
+    let out = run_command("/usr/bin/printf '[%s]' \"$(/usr/bin/printf 'a\\r')\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\r]",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn quoted_substitution_crlf_removes_lf_only() {
+    let out = run_command("/usr/bin/printf '[%s]' \"$(/usr/bin/printf 'a\\r\\n')\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\r]",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn quoted_substitution_removes_multiple_trailing_lf() {
+    let out = run_command("/usr/bin/printf '[%s]' \"$(/usr/bin/printf 'a\\n\\n\\n')\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a]",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn quoted_substitution_preserves_embedded_cr_lf() {
+    let out = run_command("/usr/bin/printf '[%s]' \"$(/usr/bin/printf 'a\\rb\\nc')\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\rb\nc]",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn unquoted_substitution_preserves_cr_after_lf_trim() {
+    let out = run_command("/usr/bin/printf '[%s]\\n' $(/usr/bin/printf 'a\\r\\n')");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\r]\n",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn assignment_preserves_trailing_cr() {
+    let out = run_command("X=$(/usr/bin/printf 'a\\r'); /usr/bin/printf '[%s]' \"$X\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\r]",
+        "got {:?}",
+        out.stdout
+    );
+    let out = run_command("X=$(/usr/bin/printf 'a\\r\\n'); /usr/bin/printf '[%s]' \"$X\"");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a\r]",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn redirect_body_preserves_trailing_cr_from_substitution() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let target = dir.path().join("cr.txt");
+    let target_str = target.to_string_lossy().to_string();
+    let out = run_command(&format!(
+        "/usr/bin/printf '%s' \"$(/usr/bin/printf 'a\\r\\n')\" > {target_str}"
+    ));
+    assert!(out.status.success(), "redirect line failed: {out:?}");
+    let body = std::fs::read(&target).expect("redirect target file");
+    assert_eq!(body, b"a\r", "got {body:?}");
+}
+
+#[test]
+fn redirect_target_from_substitution_preserves_cr() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_str = dir.path().to_string_lossy().to_string();
+    let out = run_command(&format!(
+        "cd {dir_str}; TARGET=$(/usr/bin/printf 'cr-target\\r\\n'); /usr/bin/printf hi > \"$TARGET\"; /usr/bin/printf '[%s]' \"$(cat \"$TARGET\")\""
+    ));
+    assert!(out.status.success(), "redirect line failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[hi]",
+        "got {:?}",
+        out.stdout
+    );
+    assert!(
+        dir.path().join("cr-target\r").exists(),
+        "CR-suffixed target must be created, entries: {:?}",
+        std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn redirect_target_direct_substitution_preserves_cr() {
+    // Direct `> $(...)` coverage for `expand_redirect_target`'s substitution
+    // branch: the variable-indirect test above never executes
+    // `trim_substitution_output` in the redirect context.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir_str = dir.path().to_string_lossy().to_string();
+    let out = run_command(&format!(
+        "cd {dir_str}; /usr/bin/printf hi > $(/usr/bin/printf 'direct-cr-target\\r\\n')"
+    ));
+    assert!(out.status.success(), "redirect line failed: {out:?}");
+    assert!(
+        dir.path().join("direct-cr-target\r").exists(),
+        "CR-suffixed target must be created, entries: {:?}",
+        std::fs::read_dir(dir.path())
+            .expect("read dir")
+            .map(|e| e.expect("entry").file_name())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !dir.path().join("direct-cr-target").exists(),
+        "LF-stripped name must not be created without CR"
+    );
+}
+
+#[test]
+fn unquoted_substitution_custom_ifs_keeps_cr() {
+    let out = run_command("IFS=:; /usr/bin/printf '[%s]\\n' $(/usr/bin/printf 'a:b\\r\\n')");
+    assert!(out.status.success(), "command failed: {out:?}");
+    assert_eq!(
+        strip_display_prefix(&out.stdout),
+        b"[a]\n[b\r]\n",
+        "got {:?}",
+        out.stdout
+    );
+}
+
 #[test]
 fn assignment_rhs_does_not_split() {
     let out = stdout_of("IFS=:; X='a:b'; Y=$X; /usr/bin/printf '%s\\n' \"$Y\"");

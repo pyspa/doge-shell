@@ -101,3 +101,23 @@ script = "IFS=,; printf '[%s]\\n' $(printf 'a b')"
 [case.expect]
 status = 0
 stdout_contains = ["[a b]"]
+
+[[case]]
+id = "substitution.quoted-trailing-cr-preserved"
+class = "posix"
+mode = "command"
+script = "printf '[%s]' \"$(printf 'a\\r')\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[a\r]"]
+
+[[case]]
+id = "substitution.quoted-crlf-removes-lf-only"
+class = "posix"
+mode = "command"
+script = "printf '[%s]' \"$(printf 'a\\r\\n')\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[a\r]"]

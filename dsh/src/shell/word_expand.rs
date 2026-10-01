@@ -217,7 +217,7 @@ fn cwd_for_expansion() -> PathBuf {
 }
 
 fn trim_substitution_output(output: &str) -> String {
-    output.trim_end_matches(['\n', '\r']).to_string()
+    output.trim_end_matches('\n').to_string()
 }
 
 fn finish_split_fields(fields: &[SplitField], cwd: &std::path::Path) -> Vec<String> {
@@ -675,5 +675,22 @@ mod tests {
             let (text, _) = apply_tilde(candidate, candidate, &shell);
             assert_eq!(text, expected, "for {candidate:?}");
         }
+    }
+
+    #[test]
+    fn substitution_trims_lf_only() {
+        assert_eq!(trim_substitution_output("a\n"), "a");
+        assert_eq!(trim_substitution_output("a\n\n\n"), "a");
+        assert_eq!(trim_substitution_output("a\r"), "a\r");
+        assert_eq!(trim_substitution_output("a\r\n"), "a\r");
+        assert_eq!(trim_substitution_output("a\r\n\n"), "a\r");
+        assert_eq!(trim_substitution_output("a\rb\nc"), "a\rb\nc");
+        assert_eq!(trim_substitution_output("a\nb\r\n"), "a\nb\r");
+        assert_eq!(trim_substitution_output(""), "");
+        assert_eq!(trim_substitution_output("\n"), "");
+        assert_eq!(trim_substitution_output("\r"), "\r");
+        assert_eq!(trim_substitution_output("\r\n"), "\r");
+        assert_eq!(trim_substitution_output("\n\r"), "\n\r");
+        assert_eq!(trim_substitution_output("\r\r\n"), "\r\r");
     }
 }

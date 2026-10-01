@@ -266,3 +266,169 @@ fn nested_output_substitution_keeps_write() {
         )],
     );
 }
+
+fn single_parameter_expansion(
+    input: &str,
+) -> (
+    String,
+    super::super::plan::ParameterCondition,
+    super::super::plan::ParameterAction,
+    super::super::plan::QuoteMode,
+) {
+    use super::super::plan::WordPart;
+
+    let env = test_env();
+    let plan = parse_execution_plan(input, Arc::clone(&env)).expect("plan");
+    let word = &plan.lists[0].jobs[0].stages[0].argv[1];
+    assert_eq!(word.parts.len(), 1, "for {input:?}: {word:?}");
+    match &word.parts[0] {
+        WordPart::ParameterExpansion { expansion, quote } => (
+            expansion.name.clone(),
+            expansion.condition,
+            expansion.action,
+            *quote,
+        ),
+        other => panic!("for {input:?}: expected ParameterExpansion, got {other:?}"),
+    }
+}
+
+/// All eight `${VAR-op}` forms parse to their two semantic axes.
+#[test]
+fn all_eight_forms_parse_to_condition_and_action() {
+    use super::super::plan::{ParameterAction, ParameterCondition, QuoteMode};
+
+    for (input, cond, act) in [
+        (
+            "echo ${A:-fallback}",
+            ParameterCondition::UnsetOrNull,
+            ParameterAction::Default,
+        ),
+        (
+            "echo ${A-fallback}",
+            ParameterCondition::UnsetOnly,
+            ParameterAction::Default,
+        ),
+        (
+            "echo ${A:=fallback}",
+            ParameterCondition::UnsetOrNull,
+            ParameterAction::Assign,
+        ),
+        (
+            "echo ${A=fallback}",
+            ParameterCondition::UnsetOnly,
+            ParameterAction::Assign,
+        ),
+        (
+            "echo ${A:?message}",
+            ParameterCondition::UnsetOrNull,
+            ParameterAction::Error,
+        ),
+        (
+            "echo ${A?message}",
+            ParameterCondition::UnsetOnly,
+            ParameterAction::Error,
+        ),
+        (
+            "echo ${A:+alternative}",
+            ParameterCondition::UnsetOrNull,
+            ParameterAction::Alternate,
+        ),
+        (
+            "echo ${A+alternative}",
+            ParameterCondition::UnsetOnly,
+            ParameterAction::Alternate,
+        ),
+    ] {
+        let (name, c, a, q) = single_parameter_expansion(input);
+        assert_eq!(name, "A", "for {input:?}");
+        assert_eq!(c, cond, "for {input:?}");
+        assert_eq!(a, act, "for {input:?}");
+        assert_eq!(q, QuoteMode::Unquoted, "for {input:?}");
+    }
+}
+
+/// `"${A:-fallback}"` carries outer `Double` quote.
+#[test]
+fn double_quoted_outer_carries_double_quote() {
+    use super::super::plan::QuoteMode;
+
+    let (_, _, _, quote) = single_parameter_expansion("echo \"${A:-fallback}\"");
+    assert_eq!(quote, QuoteMode::Double);
+}
+
+/// `${A:-${B:-fallback}}` nests structurally.
+#[test]
+fn nested_parameter_expansion_stays_structured() {
+    use super::super::plan::WordPart;
+
+    let env = test_env();
+    let plan = parse_execution_plan("echo ${A:-${B:-fallback}}", Arc::clone(&env)).expect("plan");
+    let word = &plan.lists[0].jobs[0].stages[0].argv[1];
+    let WordPart::ParameterExpansion { expansion, .. } = &word.parts[0] else {
+        panic!("outer missing: {word:?}");
+    };
+    assert_eq!(expansion.name, "A");
+    let operand = expansion.word.as_deref().expect("operand");
+    assert_eq!(operand.parts.len(), 1);
+    match &operand.parts[0] {
+        WordPart::ParameterExpansion { expansion, .. } => {
+            assert_eq!(expansion.name, "B");
+            assert!(expansion.word.is_some());
+        }
+        other => panic!("nested missing: {other:?}"),
+    }
+    assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
+}
+
+/// Planning `${A:-$(touch marker)}` records but never runs the body.
+#[test]
+fn parameter_operand_substitution_is_side_effect_free() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("param_parse_must_not_run");
+    let input = format!("echo ${{A:-$(touch {})}}", marker.display());
+    let env = test_env();
+    let plan = parse_execution_plan(&input, Arc::clone(&env)).expect("plan");
+    assert!(plan.lists[0].jobs[0].contains_dynamic_expansion());
+    assert!(
+        !marker.exists(),
+        "planning executed an operand it must only record"
+    );
+}
+
+/// Matching `}` respects nesting, quotes, escapes, and substitutions.
+#[test]
+fn matching_brace_is_structural() {
+    let env = test_env();
+    for input in [
+        "echo ${A:-${B:-x}}",
+        "echo ${A:-\"a}b\"}",
+        "echo ${A:-'a}b'}",
+        "echo ${A:-a\\}b}",
+        "echo ${A:-$(printf '}')}",
+    ] {
+        let plan = parse_execution_plan(input, Arc::clone(&env)).expect("plan {input:?}");
+        assert_eq!(plan.lists.len(), 1, "for {input:?}");
+    }
+    let err = parse_execution_plan("echo ${A:-unterminated", Arc::clone(&test_env()))
+        .expect_err("unterminated must fail");
+    assert!(err.to_string().contains("syntax error"), "got {err:?}");
+}
+
+/// Unsupported `${...}` forms fail strict parsing instead of running truncated.
+#[test]
+fn unsupported_modified_forms_fail_cleanly() {
+    for input in [
+        "echo ${#X}",
+        "echo ${X%foo}",
+        "echo ${X%%foo}",
+        "echo ${X#foo}",
+        "echo ${X##foo}",
+    ] {
+        let err = parse_execution_plan(input, Arc::clone(&test_env()))
+            .expect_err("{input:?} must not parse");
+        assert!(
+            err.to_string().contains("syntax error"),
+            "for {input:?}: got {err:?}"
+        );
+    }
+}

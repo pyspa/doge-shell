@@ -9,6 +9,7 @@ pub mod job_ledger;
 pub(crate) mod job_selection;
 pub mod materialize;
 pub mod no_command;
+pub mod parameter_expand;
 pub mod parse;
 pub mod pipeline_isolation;
 pub mod plan;
@@ -16,6 +17,7 @@ pub mod process_substitution;
 pub mod struct_pipe;
 pub mod substitution;
 pub mod word_expand;
+pub(crate) mod word_expand_param;
 
 use crate::environment::Environment;
 use crate::history::{FrecencyHistory, HistoryMetadata};

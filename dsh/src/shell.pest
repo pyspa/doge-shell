@@ -17,6 +17,31 @@ variable_special    =  { "$" ~ special_var }
 variable_named      =  { "$" ~ var_name }
 variable_indexed    =  { "$" ~ var_name ~ "[" ~ ASCII_DIGIT+ ~ "]" }
 variable            =  { variable_braced | variable_indexed | variable_special | variable_named }
+
+// Structured POSIX parameter expansion for named shell variables only
+// (`${VAR:-word}` and the seven sibling forms). Simple `${VAR}` stays
+// `variable_braced`; anything else (`${#X}`, `${X%foo}`, ...) matches
+// neither and fails strict parsing instead of running truncated.
+parameter_name     =  { (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+parameter_operator =  { ":-" | ":=" | ":?" | ":+" | "-" | "=" | "?" | "+" }
+parameter_expansion = { "${" ~ parameter_name ~ parameter_operator ~ parameter_word? ~ "}" }
+// Operand text: any run that starts none of `$ " ' \` `}`. Spaces, `* ? [`,
+// `{`, `| & ; < > ( )` and newlines stay literal content here (they are only
+// separators at the top-level command layer). `\` starts an `escape_sequence`
+// and `$` starts a nested expansion/variable/substitution, so both terminate
+// the run and become their own part, preserving escape provenance.
+parameter_text      = ${ ( !("$" | "\"" | "'" | "\\" | "}") ~ ANY )+ }
+parameter_word      =  { parameter_word_part+ }
+parameter_word_part = _{
+      parameter_expansion
+    | quoted
+    | command_subst
+    | proc_subst
+    | subshell
+    | variable
+    | escape_sequence
+    | parameter_text
+}
 glob_char           = _{ "*" | "?" | "[" }
 glob_remaining_char = _{ word_char | glob_char | "]" | "{" | "}" | escape_sequence }
 glob_word           =  { (word_char | escape_sequence)* ~ glob_char ~ glob_remaining_char* }
@@ -31,7 +56,9 @@ literal_s_quoted = ${ ("\\'" | !("\'") ~ ANY | sp)+ }
 
 d_quoted         =  { "\"" ~ d_quoted_inner* ~ "\"" }
 // `command_subst` first so `"$(date)"` is not read as a `$` variable.
-d_quoted_inner   = _{ command_subst | variable | literal_d_quoted }
+// `parameter_expansion` before `variable` so `"${A:-x}"` is not read as a
+// truncated `${A}` prefix.
+d_quoted_inner   = _{ command_subst | parameter_expansion | variable | literal_d_quoted }
 // A `$` that starts no variable stays literal, so `"price is $"` keeps working.
 // Backtick is literal here: the grammar has no backtick-substitution rule, and
 // excluding it made the whole line truncate instead.
@@ -80,7 +107,7 @@ fd_dup_out                          = { fd_number? ~ ">&" ~ fd_dup_target }
 fd_dup_in                           = { fd_number? ~ "<&" ~ fd_dup_target }
 fd_dup                              = { fd_dup_out | fd_dup_in }
 redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
-word_part                           = _{ quoted | command_subst | proc_subst | subshell | variable | glob_word | brace_word | word }
+word_part                           = _{ parameter_expansion | quoted | command_subst | proc_subst | subshell | variable | glob_word | brace_word | word }
 span                                = { word_part+ }
 argv0                               = { span }
 args                                = { (sp* ~ redirect | sp+ ~ span)+ }

@@ -29,6 +29,8 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+mod parameter;
+
 /// Pure parse context: nesting flags only, no shell handle.
 ///
 /// Background state is not tracked here: `&` separates whole AND-OR lists
@@ -380,111 +382,146 @@ fn parse_word(span: Pair<Rule>, ctx: &ParseContext) -> Result<PlannedWord> {
     let mut parts = Vec::new();
     let mut first = true;
     for part in span.into_inner() {
-        match part.as_rule() {
-            Rule::word => parts.push(WordPart::Literal(unquoted_literal(part, first))),
-            Rule::glob_word | Rule::brace_word => {
-                parts.push(WordPart::Literal(active_literal(part, first)));
+        parse_word_part(part, ctx, &mut parts, &mut first)?;
+    }
+    Ok(PlannedWord { source, parts })
+}
+
+/// One top-level `word_part` alternative becomes zero or more `WordPart`s.
+///
+/// Side-effect-free: only builds plan data, never reads variables or runs
+/// substitutions. `first` tracks the leading-part tilde candidate.
+fn parse_word_part(
+    part: Pair<Rule>,
+    ctx: &ParseContext,
+    parts: &mut Vec<WordPart>,
+    first: &mut bool,
+) -> Result<()> {
+    match part.as_rule() {
+        Rule::word => parts.push(WordPart::Literal(unquoted_literal(part, *first))),
+        Rule::glob_word | Rule::brace_word => {
+            parts.push(WordPart::Literal(active_literal(part, *first)));
+        }
+        Rule::variable => parts.push(WordPart::Variable {
+            source: part.as_str().to_string(),
+            quote: QuoteMode::Unquoted,
+        }),
+        Rule::parameter_expansion => {
+            parts.push(parameter::parse_parameter_expansion(
+                part,
+                ctx,
+                QuoteMode::Unquoted,
+            )?);
+        }
+        Rule::s_quoted => {
+            let raw = part.as_str().to_string();
+            let text = parser::get_string(part).unwrap_or_default();
+            parts.push(WordPart::Literal(PlannedLiteral {
+                text,
+                raw,
+                quote: QuoteMode::Single,
+                pattern_active: false,
+                brace_active: false,
+                tilde_candidate: false,
+            }));
+        }
+        Rule::d_quoted => {
+            parts.extend(parse_double_quoted_parts(part, ctx)?);
+        }
+        Rule::command_subst => {
+            for subst in substitution_from_wrapper(part, PlannedSubstitutionKind::Command, ctx)? {
+                parts.push(WordPart::Substitution {
+                    substitution: subst,
+                    quote: QuoteMode::Unquoted,
+                });
             }
-            Rule::variable => parts.push(WordPart::Variable {
-                source: part.as_str().to_string(),
-                quote: QuoteMode::Unquoted,
-            }),
-            Rule::s_quoted => {
-                let raw = part.as_str().to_string();
-                let text = parser::get_string(part).unwrap_or_default();
+        }
+        Rule::proc_subst => {
+            // Direction comes from the inline `proc_subst_direction`
+            // token; the placeholder is replaced once it is seen.
+            for subst in substitution_from_wrapper(
+                part,
+                PlannedSubstitutionKind::Process(ProcessSubstitutionDirection::Read),
+                ctx,
+            )? {
+                parts.push(WordPart::Substitution {
+                    substitution: subst,
+                    quote: QuoteMode::Unquoted,
+                });
+            }
+        }
+        Rule::subshell => {
+            for subst in substitution_from_wrapper(part, PlannedSubstitutionKind::Subshell, ctx)? {
+                parts.push(WordPart::Substitution {
+                    substitution: subst,
+                    quote: QuoteMode::Unquoted,
+                });
+            }
+        }
+        _ => {
+            let raw = part.as_str().to_string();
+            if let Some(text) = parser::get_string(part) {
                 parts.push(WordPart::Literal(PlannedLiteral {
-                    text,
                     raw,
-                    quote: QuoteMode::Single,
+                    text,
+                    quote: QuoteMode::Unquoted,
                     pattern_active: false,
                     brace_active: false,
                     tilde_candidate: false,
                 }));
             }
-            Rule::d_quoted => {
-                for inner in part.into_inner() {
-                    match inner.as_rule() {
-                        Rule::variable => parts.push(WordPart::Variable {
-                            source: inner.as_str().to_string(),
-                            quote: QuoteMode::Double,
-                        }),
-                        Rule::command_subst => {
-                            for subst in substitution_from_wrapper(
-                                inner,
-                                PlannedSubstitutionKind::Command,
-                                ctx,
-                            )? {
-                                parts.push(WordPart::Substitution {
-                                    substitution: subst,
-                                    quote: QuoteMode::Double,
-                                });
-                            }
-                        }
-                        _ => {
-                            let raw = inner.as_str().to_string();
-                            let text = parser::get_string(inner).unwrap_or_default();
-                            parts.push(WordPart::Literal(PlannedLiteral {
-                                text,
-                                raw,
-                                quote: QuoteMode::Double,
-                                pattern_active: false,
-                                brace_active: false,
-                                tilde_candidate: false,
-                            }));
-                        }
-                    }
-                }
+        }
+    }
+    *first = false;
+    Ok(())
+}
+
+/// Double-quoted content shared by top-level words and parameter operands.
+///
+/// Every part carries `QuoteMode::Double`; nested `${...}` stays structured.
+pub(super) fn parse_double_quoted_parts(
+    d_quoted: Pair<Rule>,
+    ctx: &ParseContext,
+) -> Result<Vec<WordPart>> {
+    let mut parts = Vec::new();
+    for inner in d_quoted.into_inner() {
+        match inner.as_rule() {
+            Rule::variable => parts.push(WordPart::Variable {
+                source: inner.as_str().to_string(),
+                quote: QuoteMode::Double,
+            }),
+            Rule::parameter_expansion => {
+                parts.push(parameter::parse_parameter_expansion(
+                    inner,
+                    ctx,
+                    QuoteMode::Double,
+                )?);
             }
             Rule::command_subst => {
-                for subst in substitution_from_wrapper(part, PlannedSubstitutionKind::Command, ctx)?
-                {
-                    parts.push(WordPart::Substitution {
-                        substitution: subst,
-                        quote: QuoteMode::Unquoted,
-                    });
-                }
-            }
-            Rule::proc_subst => {
-                // Direction comes from the inline `proc_subst_direction`
-                // token; the placeholder is replaced once it is seen.
-                for subst in substitution_from_wrapper(
-                    part,
-                    PlannedSubstitutionKind::Process(ProcessSubstitutionDirection::Read),
-                    ctx,
-                )? {
-                    parts.push(WordPart::Substitution {
-                        substitution: subst,
-                        quote: QuoteMode::Unquoted,
-                    });
-                }
-            }
-            Rule::subshell => {
                 for subst in
-                    substitution_from_wrapper(part, PlannedSubstitutionKind::Subshell, ctx)?
+                    substitution_from_wrapper(inner, PlannedSubstitutionKind::Command, ctx)?
                 {
                     parts.push(WordPart::Substitution {
                         substitution: subst,
-                        quote: QuoteMode::Unquoted,
+                        quote: QuoteMode::Double,
                     });
                 }
             }
             _ => {
-                let raw = part.as_str().to_string();
-                if let Some(text) = parser::get_string(part) {
-                    parts.push(WordPart::Literal(PlannedLiteral {
-                        raw,
-                        text,
-                        quote: QuoteMode::Unquoted,
-                        pattern_active: false,
-                        brace_active: false,
-                        tilde_candidate: false,
-                    }));
-                }
+                let raw = inner.as_str().to_string();
+                let text = parser::get_string(inner).unwrap_or_default();
+                parts.push(WordPart::Literal(PlannedLiteral {
+                    text,
+                    raw,
+                    quote: QuoteMode::Double,
+                    pattern_active: false,
+                    brace_active: false,
+                    tilde_candidate: false,
+                }));
             }
         }
-        first = false;
     }
-    Ok(PlannedWord { source, parts })
+    Ok(parts)
 }
 
 fn build_argv(ctx: &ParseContext, stage: &mut PlannedCommand, pair: Pair<Rule>) -> Result<()> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::chatgpt::settings::{DEFAULT_MCP_BRIDGE_SCHEMA_BYTES, McpToolModePreference};
 use tokio::io::AsyncReadExt;
 
 #[test]
@@ -196,13 +197,13 @@ fn a_disconnected_server_stops_offering_its_tools() {
     );
 
     assert_eq!(manager.tool_definitions().len(), 1);
-    assert!(manager.system_prompt_fragment().is_some());
+    assert!(manager.system_prompt_fragment(McpToolMode::Eager).is_some());
 
     manager.disconnect("ops").unwrap();
 
     assert!(manager.is_disabled("ops"));
     assert!(manager.tool_definitions().is_empty());
-    assert!(manager.system_prompt_fragment().is_none());
+    assert!(manager.system_prompt_fragment(McpToolMode::Eager).is_none());
     let err = manager
         .execute_tool("mcp__ops__bash", "{}")
         .expect_err("a disconnected server must not run tools");
@@ -719,7 +720,7 @@ fn group_disable_is_exposure_only_not_a_disconnect() {
     // marked disconnected. Only the model's view shrinks.
     assert!(manager.has_tool_binding("mcp__github__list_issues"));
     assert!(!manager.is_disabled("github"));
-    assert!(manager.system_prompt_fragment().is_some());
+    assert!(manager.system_prompt_fragment(McpToolMode::Eager).is_some());
 }
 
 #[test]
@@ -793,7 +794,7 @@ fn prompt_fragment_guides_discovery_while_groups_are_hidden() {
     manager.disable_group("filesystem").unwrap();
 
     let fragment = manager
-        .system_prompt_fragment()
+        .system_prompt_fragment(McpToolMode::Eager)
         .expect("connected servers must still guide discovery");
     assert!(fragment.contains("mcp_list_groups"), "{fragment}");
     assert!(fragment.contains("mcp_load_group"), "{fragment}");
@@ -801,7 +802,7 @@ fn prompt_fragment_guides_discovery_while_groups_are_hidden() {
 
     manager.disconnect("github").unwrap();
     manager.disconnect("filesystem").unwrap();
-    assert!(manager.system_prompt_fragment().is_none());
+    assert!(manager.system_prompt_fragment(McpToolMode::Eager).is_none());
 }
 
 /// The lazy-loading guidance never orders the model to enumerate first: a
@@ -809,7 +810,7 @@ fn prompt_fragment_guides_discovery_while_groups_are_hidden() {
 #[test]
 fn prompt_fragment_does_not_force_list_before_load() {
     let fragment = grouped_manager()
-        .system_prompt_fragment()
+        .system_prompt_fragment(McpToolMode::Eager)
         .expect("groups enabled by default");
     let guidance = fragment
         .lines()
@@ -821,4 +822,153 @@ fn prompt_fragment_does_not_force_list_before_load() {
             "guidance must not force enumeration: {guidance}"
         );
     }
+}
+
+/// A synthetic catalog with representative parameter schemas, for the
+/// bridge threshold and footprint tests below.
+fn large_catalog_manager(servers: usize, tools_per_server: usize) -> McpManager {
+    let mut manager = McpManager::default();
+    for server in 0..servers {
+        let label = format!("bulk{server:02}");
+        for tool in 0..tools_per_server {
+            manager.insert_test_tool_full(
+                &label,
+                &format!("helper_{tool:02}"),
+                &format!("helper {tool} description with enough words to rank over"),
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "what to act on"},
+                        "options": {"type": "object", "description": "extra options"},
+                    },
+                    "required": ["target"],
+                }),
+            );
+        }
+    }
+    manager
+}
+
+#[test]
+fn discoverable_footprint_counts_hidden_groups_but_not_disconnected_servers() {
+    let manager = large_catalog_manager(4, 25);
+    let footprint = manager.discoverable_tool_footprint();
+    assert_eq!(footprint.tools, 100);
+    assert!(footprint.schema_bytes > DEFAULT_MCP_BRIDGE_SCHEMA_BYTES);
+
+    // Hiding every group changes exposure, not discoverability: the
+    // footprint - and therefore the auto decision - must not move.
+    for server in 0..4 {
+        manager.disable_group(&format!("bulk{server:02}")).unwrap();
+    }
+    assert_eq!(manager.active_tool_count(), 0);
+    assert_eq!(manager.discoverable_tool_footprint(), footprint);
+
+    // Disconnecting takes tools out of the catalog: nothing can offer them
+    // without a reconnect, so they must not count toward the bridge.
+    manager.disconnect("bulk00").unwrap();
+    let smaller = manager.discoverable_tool_footprint();
+    assert_eq!(smaller.tools, 75);
+    assert!(smaller.schema_bytes < footprint.schema_bytes);
+}
+
+#[test]
+fn auto_mode_selects_bridge_only_above_the_schema_threshold() {
+    use McpToolModePreference as Preference;
+
+    let small = grouped_manager();
+    assert!(small.discoverable_tool_footprint().schema_bytes < DEFAULT_MCP_BRIDGE_SCHEMA_BYTES);
+    assert_eq!(
+        small.resolve_mcp_tool_mode(Preference::Auto, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Eager
+    );
+
+    // A large catalog hidden behind group disables still selects the
+    // bridge: group disable is exposure control, not absence.
+    let large = large_catalog_manager(4, 25);
+    assert_eq!(
+        large.resolve_mcp_tool_mode(Preference::Auto, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Bridge
+    );
+    for server in 0..4 {
+        large.disable_group(&format!("bulk{server:02}")).unwrap();
+    }
+    assert_eq!(
+        large.resolve_mcp_tool_mode(Preference::Auto, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Bridge
+    );
+}
+
+#[test]
+fn explicit_preferences_win_over_the_catalog_size() {
+    use McpToolModePreference as Preference;
+
+    let huge = large_catalog_manager(4, 25);
+    assert_eq!(
+        huge.resolve_mcp_tool_mode(Preference::Eager, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Eager
+    );
+
+    let mut tiny = McpManager::default();
+    tiny.insert_test_tool("github", "list_issues");
+    assert_eq!(
+        tiny.resolve_mcp_tool_mode(Preference::Bridge, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Bridge
+    );
+
+    // With no usable MCP tool there is nothing to bridge, whatever the
+    // operator asked for.
+    let empty = McpManager::default();
+    assert_eq!(
+        empty.resolve_mcp_tool_mode(Preference::Bridge, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Eager
+    );
+    let mut disconnected = McpManager::default();
+    disconnected.insert_test_tool("github", "list_issues");
+    disconnected.disconnect("github").unwrap();
+    assert_eq!(
+        disconnected.resolve_mcp_tool_mode(Preference::Bridge, DEFAULT_MCP_BRIDGE_SCHEMA_BYTES),
+        McpToolMode::Eager
+    );
+    assert!(huge.tool_exposure().schema_bytes > 0);
+}
+
+/// Bridge guidance names the stable surface and the usable servers - hidden
+/// groups included, disconnected servers excluded - and never individual
+/// tool schemas.
+#[test]
+fn bridge_prompt_fragment_lists_usable_servers_only() {
+    let manager = grouped_manager();
+    manager.disable_group("github").unwrap();
+
+    let fragment = manager
+        .system_prompt_fragment(McpToolMode::Bridge)
+        .expect("connected servers must still guide discovery");
+    assert!(fragment.contains("tool_search"), "{fragment}");
+    assert!(fragment.contains("tool_describe"), "{fragment}");
+    assert!(fragment.contains("tool_call"), "{fragment}");
+    assert!(!fragment.contains("mcp_list_groups"), "{fragment}");
+    assert!(!fragment.contains("mcp_load_group"), "{fragment}");
+    // Hidden but connected: still searchable, still listed.
+    assert!(fragment.contains("github"), "{fragment}");
+    assert!(!fragment.contains("mcp__"), "{fragment}");
+
+    manager.disconnect("github").unwrap();
+    manager.disconnect("filesystem").unwrap();
+    assert!(
+        manager
+            .system_prompt_fragment(McpToolMode::Bridge)
+            .is_none()
+    );
+}
+
+/// The bridge prompt depends only on capability facts: same servers, same
+/// servers listed - no search results, no turn state.
+#[test]
+fn bridge_prompt_fragment_is_stable_across_turn_state() {
+    let manager = grouped_manager();
+    let first = manager.system_prompt_fragment(McpToolMode::Bridge).unwrap();
+    manager.disable_group("github").unwrap();
+    let second = manager.system_prompt_fragment(McpToolMode::Bridge).unwrap();
+    assert_eq!(first, second);
 }

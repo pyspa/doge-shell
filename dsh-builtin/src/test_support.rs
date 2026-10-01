@@ -45,6 +45,11 @@ pub(crate) struct TestShellProxy {
     /// What `evaluate_agent_tool` answers. Separate from `agent_verdict` so a
     /// test can pin the MCP policy without also unlocking `execute`.
     pub agent_tool_verdict: AgentCommandVerdict,
+    /// The last `(name, arguments)` `evaluate_agent_tool` was asked about, in
+    /// order. Lets a bridge test assert the logical MCP call - not the
+    /// `tool_call` wrapper - reached the policy, without changing the
+    /// production capability trait.
+    pub evaluated_tools: Vec<(String, String)>,
     pub agent_session_allowlist: Vec<String>,
     /// The MCP manager the chat runtime is handed. Shared, so a test can seed a
     /// binding the way the shell would.
@@ -152,6 +157,7 @@ impl Default for TestShellProxy {
             agent_tool_verdict: AgentCommandVerdict::Confirm(
                 "test policy requires confirmation".to_string(),
             ),
+            evaluated_tools: Vec::new(),
             agent_session_allowlist: Vec::new(),
             mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
@@ -587,7 +593,9 @@ impl AgentCommandPolicy for TestShellProxy {
         self.execute_allowlist.clone()
     }
 
-    fn evaluate_agent_tool(&mut self, _name: &str, _arguments: &str) -> AgentCommandVerdict {
+    fn evaluate_agent_tool(&mut self, name: &str, arguments: &str) -> AgentCommandVerdict {
+        self.evaluated_tools
+            .push((name.to_string(), arguments.to_string()));
         self.agent_tool_verdict.clone()
     }
 

@@ -16,6 +16,7 @@ pub(crate) mod execute;
 mod gitignore;
 mod jobs;
 mod ls;
+pub(crate) mod mcp_bridge;
 pub(crate) mod mcp_groups;
 mod paths;
 mod read;
@@ -234,7 +235,10 @@ pub fn execute_tool_call(
 
     // The merge in `run_tool_calls` parses this JSON to load schemas, so
     // truncating it here would break same-turn loading of discovered tools.
-    let mut content = if name == "tool_search" && !failed {
+    // `tool_describe` joins the exemption only because it enforces its own
+    // whole-schema byte budget (`mcp_bridge`): its output is always complete
+    // JSON by construction, never middle-truncated.
+    let mut content = if (name == "tool_search" || name == mcp_bridge::DESCRIBE_NAME) && !failed {
         raw
     } else {
         truncate_output(raw)
@@ -318,6 +322,21 @@ fn dispatch_tool(
         mcp.write()
             .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
         tool_search::run(&mcp.read(), arguments)?
+    } else if name == mcp_bridge::DESCRIBE_NAME {
+        mcp.write()
+            .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
+        mcp_bridge::run_describe(&mcp.read(), arguments)?
+    } else if name == mcp_bridge::CALL_NAME {
+        // `tool_call` never dispatches directly: `run_tool_calls` unwraps the
+        // wrapper into its logical MCP call before `execute_tool_call`, so
+        // hooks, authorization, SafetyGuard, approvals, and the task ledger
+        // see the underlying `mcp__*` function. Reaching here means the
+        // wrapper bypassed that normalization (an eager turn has no bridge),
+        // and executing it as itself would hide the real operation.
+        return Err(
+            "`tool_call` is bridge transport, not a callable tool here. Call the MCP tool directly."
+                .into(),
+        );
     } else if matches!(
         name,
         "task_plan" | "task_verify" | "mcp_task_status" | "mcp_task_cancel"
@@ -633,13 +652,28 @@ pub(crate) fn job_definitions() -> Vec<Value> {
 }
 
 pub(crate) fn agent_definitions() -> Vec<Value> {
-    use crate::agent::definition;
     let mut tools = vec![tool_search::definition()];
     tools.extend(job_definitions());
-    for name in ["mcp_task_status", "mcp_task_cancel"] {
-        tools.push(definition(name,"Poll or request cancellation of a remote task created by this agent. Cancellation does not guarantee the remote action stopped.",serde_json::json!({"server":{"type":"string"},"task_id":{"type":"string"}}), &["server","task_id"]));
-    }
+    tools.extend(mcp_task_definitions());
     tools
+}
+
+/// Agent-turn bridge surface: the fixed `tool_search`/`tool_describe`/
+/// `tool_call` trio plus the same job and remote-task tools. No
+/// `mcp_list_groups`/`mcp_load_group`, no `mcp__*` schemas.
+pub(crate) fn bridge_agent_definitions() -> Vec<Value> {
+    let mut tools = mcp_bridge::bridge_definitions();
+    tools.extend(job_definitions());
+    tools.extend(mcp_task_definitions());
+    tools
+}
+
+pub(crate) fn mcp_task_definitions() -> Vec<Value> {
+    use crate::agent::definition;
+    ["mcp_task_status", "mcp_task_cancel"]
+        .into_iter()
+        .map(|name| definition(name,"Poll or request cancellation of a remote task created by this agent. Cancellation does not guarantee the remote action stopped.",serde_json::json!({"server":{"type":"string"},"task_id":{"type":"string"}}), &["server","task_id"]))
+        .collect()
 }
 /// Reads a subset of `PRESERVED_STATUS_FIELDS` (`exit_code`, `status`); a
 /// field this comes to depend on must be added there too, or a truncated

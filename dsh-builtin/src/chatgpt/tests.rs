@@ -38,6 +38,9 @@ struct ScriptedClient {
     /// Tool names offered on each request, in order. Proves a mid-turn
     /// activation reaches the *next* model request of the same turn.
     seen_tools: std::sync::Mutex<Vec<Vec<String>>>,
+    /// Full serialized `tools` payloads, in order. Names alone cannot prove
+    /// cache stability: bridge mode must carry byte-identical definitions.
+    seen_payloads: std::sync::Mutex<Vec<String>>,
 }
 
 impl ScriptedClient {
@@ -45,11 +48,16 @@ impl ScriptedClient {
         Self {
             responses: std::sync::Mutex::new(responses.into_iter().collect()),
             seen_tools: std::sync::Mutex::new(Vec::new()),
+            seen_payloads: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     fn tools_seen(&self) -> Vec<Vec<String>> {
         self.seen_tools.lock().unwrap().clone()
+    }
+
+    fn payloads_seen(&self) -> Vec<String> {
+        self.seen_payloads.lock().unwrap().clone()
     }
 }
 
@@ -59,10 +67,8 @@ impl ChatClient for ScriptedClient {
         _messages: &[Value],
         options: &ChatRequestOptions,
     ) -> anyhow::Result<Value> {
-        let names = options
-            .tools
-            .as_deref()
-            .unwrap_or_default()
+        let tools = options.tools.as_deref().unwrap_or_default();
+        let names = tools
             .iter()
             .filter_map(|tool| {
                 tool.get("function")?
@@ -72,6 +78,10 @@ impl ChatClient for ScriptedClient {
             })
             .collect();
         self.seen_tools.lock().unwrap().push(names);
+        self.seen_payloads
+            .lock()
+            .unwrap()
+            .push(serde_json::to_string(&tools).unwrap_or_default());
         self.responses
             .lock()
             .unwrap()
@@ -106,6 +116,16 @@ fn hermetic_chat_proxy(cwd: std::path::PathBuf) -> crate::test_support::TestShel
         ]),
         ..crate::test_support::TestShellProxy::default()
     }
+}
+
+/// Like [`hermetic_chat_proxy`], but forcing the stable MCP bridge even for
+/// catalogs small enough that `auto` would stay eager.
+fn bridge_chat_proxy(cwd: std::path::PathBuf) -> crate::test_support::TestShellProxy {
+    let mut proxy = hermetic_chat_proxy(cwd);
+    proxy
+        .vars
+        .insert(MCP_TOOL_MODE_KEY.to_string(), "bridge".to_string());
+    proxy
 }
 
 #[test]
@@ -370,6 +390,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut manager,
         &mut Vec::new(),
         &mut ToolSearchExposure::default(),
+        McpToolMode::Eager,
     )
     .unwrap();
     assert!(mcp_manager.read().is_group_enabled("github"));
@@ -393,6 +414,7 @@ fn interactive_turns_read_loaded_groups_through_fresh_exposure() {
         &mut manager,
         &mut Vec::new(),
         &mut ToolSearchExposure::default(),
+        McpToolMode::Eager,
     )
     .unwrap();
     let rebuilt_again = tool::mcp_turn_definitions(&mcp_manager.read(), true);
@@ -418,6 +440,7 @@ fn is_mutating_tool_call_classifies_state_changing_tools() {
         "str_replace",
         "execute",
         "skill_manage",
+        "tool_call",
         "mcp__ops__bash",
     ] {
         let call = json!({"function": {"name": name, "arguments": "{}"}});
@@ -947,11 +970,17 @@ fn test_build_system_prompt_with_language() {
     let mcp_manager = McpManager::load_blocking(vec![]);
 
     // Case 1: No language
-    let prompt_no_lang = build_system_prompt(None, None, &mcp_manager, &[]);
+    let prompt_no_lang = build_system_prompt(None, None, &mcp_manager, &[], McpToolMode::Eager);
     assert!(!prompt_no_lang.text.contains("MUST respond in"));
 
     // Case 2: With language
-    let prompt_lang = build_system_prompt(None, Some("Japanese".to_string()), &mcp_manager, &[]);
+    let prompt_lang = build_system_prompt(
+        None,
+        Some("Japanese".to_string()),
+        &mcp_manager,
+        &[],
+        McpToolMode::Eager,
+    );
     assert!(
         prompt_lang
             .text
@@ -964,6 +993,7 @@ fn test_build_system_prompt_with_language() {
         Some("French".to_string()),
         &mcp_manager,
         &[],
+        McpToolMode::Eager,
     );
     assert!(
         prompt_mixed
@@ -1230,9 +1260,9 @@ fn system_prompt_identity_ignores_the_skills_list() {
     }];
 
     skills::clear_skills_fragment_cache();
-    let without = build_system_prompt(None, None, &mcp_manager, &[]);
+    let without = build_system_prompt(None, None, &mcp_manager, &[], McpToolMode::Eager);
     skills::clear_skills_fragment_cache();
-    let with = build_system_prompt(None, None, &mcp_manager, &roots);
+    let with = build_system_prompt(None, None, &mcp_manager, &roots, McpToolMode::Eager);
 
     assert_eq!(without.identity, with.identity);
     assert!(with.text.contains("a fresh lesson"));
@@ -1464,6 +1494,7 @@ fn run_one_tool(
         manager,
         tools,
         exposure,
+        McpToolMode::Eager,
     )
     .unwrap();
 }
@@ -1480,7 +1511,13 @@ fn interactive_tool_search_loads_only_the_matched_tool() {
     let mut exposure = ToolSearchExposure::default();
     let base = interactive_base_tools();
 
-    let first = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let first = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let first_names = request_tool_names(&first);
     assert!(
         first_names.contains(&"tool_search".to_string()),
@@ -1507,7 +1544,13 @@ fn interactive_tool_search_loads_only_the_matched_tool() {
     let discovered: Vec<String> = exposure.names().cloned().collect();
     assert_eq!(discovered, vec!["mcp__github__search_issues".to_string()]);
 
-    let second = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let second = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let second_names = request_tool_names(&second);
     assert!(
         second_names.contains(&"mcp__github__search_issues".to_string()),
@@ -1550,7 +1593,13 @@ fn interactive_tool_search_dedupes_against_active_schemas() {
         r#"{"query":"search issues","limit":1}"#,
     );
 
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let count = rebuilt
         .iter()
         .filter(|tool| tool["function"]["name"] == "mcp__github__search_issues")
@@ -1582,7 +1631,13 @@ fn interactive_tool_search_does_not_reexpose_disconnected_tools() {
     assert!(!exposure.names().cloned().collect::<Vec<_>>().is_empty());
 
     mcp_manager.read().disconnect("github").unwrap();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let names = request_tool_names(&rebuilt);
     assert!(
         !names.contains(&"mcp__github__search_issues".to_string()),
@@ -1612,7 +1667,13 @@ fn interactive_tool_search_does_not_keep_stale_schemas() {
     );
 
     assert!(mcp_manager.write().remove_server("github"));
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let names = request_tool_names(&rebuilt);
     assert!(
         !names.contains(&"mcp__github__search_issues".to_string()),
@@ -1650,12 +1711,13 @@ fn interactive_tool_search_does_not_persist_across_turns() {
     assert!(fresh.names().next().is_none());
 
     let base = interactive_base_tools();
-    let with_previous = build_request_tools(&base, &[], &mcp_manager, &exposure);
+    let with_previous =
+        build_request_tools(McpToolMode::Eager, &base, &[], &mcp_manager, &exposure);
     assert!(
         request_tool_names(&with_previous).contains(&"mcp__github__search_issues".to_string()),
         "sanity: previous exposure resolves"
     );
-    let rebuilt = build_request_tools(&base, &[], &mcp_manager, &fresh);
+    let rebuilt = build_request_tools(McpToolMode::Eager, &base, &[], &mcp_manager, &fresh);
     let names = request_tool_names(&rebuilt);
     assert!(
         !names.contains(&"mcp__github__search_issues".to_string()),
@@ -1797,7 +1859,13 @@ fn tool_search_budget_charges_a_repeat_search_only_once() {
     assert_eq!(exposure.used_schema_bytes(), bytes);
 
     let base = interactive_base_tools();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     assert_eq!(
         rebuilt
             .iter()
@@ -1885,7 +1953,13 @@ fn tool_search_budget_caps_interactive_exposure_per_turn() {
     assert!(content.contains(&skipped_name), "{content}");
 
     let base = interactive_base_tools();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     assert_eq!(
         request_tool_names(&rebuilt)
             .iter()
@@ -1925,7 +1999,13 @@ fn tool_search_budget_skips_an_oversized_schema_but_loads_its_sibling() {
     assert!(content.contains("skipped 1"), "{content}");
 
     let base = interactive_base_tools();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     let names = request_tool_names(&rebuilt);
     assert!(
         names.contains(&"mcp__big__note_tool".to_string()),
@@ -1964,7 +2044,13 @@ fn tool_search_budget_is_not_refunded_by_a_disconnect() {
     assert_eq!(exposure.used_schema_bytes(), bytes);
 
     let base = interactive_base_tools();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     assert!(
         !request_tool_names(&rebuilt).contains(&"mcp__github__search_issues".to_string()),
         "a disconnect still hides the charged tool"
@@ -2034,6 +2120,7 @@ fn run_one_agent_tool(
         manager,
         tools,
         exposure,
+        McpToolMode::Eager,
     )
     .unwrap();
 }
@@ -2209,9 +2296,642 @@ fn mcp_load_group_stays_outside_the_tool_search_budget() {
     assert!(mcp_manager.read().is_group_enabled("beta"));
     assert_eq!(exposure.charged_tool_count(), 32);
     let base = interactive_base_tools();
-    let rebuilt = build_request_tools(&base, &accumulated, &mcp_manager, &exposure);
+    let rebuilt = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &mcp_manager,
+        &exposure,
+    );
     assert!(
         request_tool_names(&rebuilt).contains(&skipped_beta),
         "an explicit group load exposes even budget-skipped tools"
+    );
+}
+
+/// Bridge stability is the primary acceptance property: once the turn
+/// resolves bridge mode, every request of that turn carries byte-identical
+/// tool definitions - through search, describe, and call alike.
+#[test]
+fn bridge_mode_keeps_an_identical_tools_payload_across_search_describe_and_call() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = bridge_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![
+        tool_call_response("call-1", "tool_search", r#"{"query":"github issues"}"#),
+        tool_call_response(
+            "call-2",
+            "tool_describe",
+            r#"{"names":["mcp__github__list_issues"]}"#,
+        ),
+        tool_call_response(
+            "call-3",
+            "tool_call",
+            r#"{"name":"mcp__github__list_issues","arguments":{}}"#,
+        ),
+        final_answer("done"),
+    ]);
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    inner.insert_test_tool("github", "create_issue");
+    inner.disable_group("github").unwrap();
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let payloads = client.payloads_seen();
+    assert_eq!(payloads.len(), 4);
+    for payload in &payloads[1..] {
+        assert_eq!(
+            *payload, payloads[0],
+            "bridge tools must not mutate mid-turn"
+        );
+    }
+}
+
+/// In bridge mode no request carries a direct MCP schema, even after the
+/// model searched for and described the tool: only the stable trio plus the
+/// ordinary builtin/job tools.
+#[test]
+fn bridge_mode_never_offers_direct_mcp_schemas() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = bridge_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![
+        tool_call_response("call-1", "tool_search", r#"{"query":"github issues"}"#),
+        tool_call_response(
+            "call-2",
+            "tool_describe",
+            r#"{"names":["mcp__github__list_issues"]}"#,
+        ),
+        final_answer("done"),
+    ]);
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "find my open GitHub issues",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let seen = client.tools_seen();
+    assert_eq!(seen.len(), 3);
+    for (index, offered) in seen.iter().enumerate() {
+        for name in ["tool_search", "tool_describe", "tool_call"] {
+            assert!(
+                offered.contains(&name.to_string()),
+                "request {index} must offer {name}: {seen:?}"
+            );
+        }
+        assert!(
+            !offered.iter().any(|name| name.starts_with("mcp__")),
+            "request {index} must not offer direct MCP schemas: {seen:?}"
+        );
+        for name in ["mcp_list_groups", "mcp_load_group"] {
+            assert!(
+                !offered.contains(&name.to_string()),
+                "request {index} must not offer {name}: {seen:?}"
+            );
+        }
+    }
+}
+
+/// A bridge call reaches the real policy path under its own name: the
+/// underlying function is what `evaluate_agent_tool` sees, the refusal names
+/// it, and no MCP transport is needed to prove it (a transport attempt
+/// against the test binding could only fail with a connection error).
+#[test]
+fn bridge_call_reaches_policy_under_its_own_name() {
+    use crate::shell_capabilities::AgentCommandVerdict;
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut proxy = crate::test_support::TestShellProxy {
+        agent_tool_verdict: AgentCommandVerdict::Denied("nope".to_string()),
+        ..crate::test_support::TestShellProxy::default()
+    };
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    let wire = json!({
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "arguments": r#"{"name":"mcp__github__list_issues","arguments":{}}"#,
+        }
+    });
+    run_tool_calls(
+        std::slice::from_ref(&wire),
+        &mcp_manager,
+        None,
+        &hooks::HookContext::disabled(),
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        McpToolMode::Bridge,
+    )
+    .unwrap();
+
+    assert_eq!(
+        proxy.evaluated_tools,
+        vec![("mcp__github__list_issues".to_string(), "{}".to_string())]
+    );
+    let result = manager.buffer.last().expect("tool result recorded");
+    assert_eq!(result["tool_call_id"], "call-1");
+    let content = result["content"].as_str().unwrap_or_default();
+    assert!(content.contains("mcp__github__list_issues"), "{content}");
+    assert!(content.contains("nope"), "{content}");
+    assert!(!content.contains("tool_call"), "{content}");
+}
+
+/// A hook matching `mcp__*` fires exactly once for a bridge invocation, sees
+/// the logical operation, and never the wrapper: denying at pre-tool-use
+/// stops the underlying transport before it runs.
+#[test]
+fn bridge_call_fires_hooks_once_under_its_own_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let record = dir.path().join("hook-input.log");
+    let script = dir.path().join("hook.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "cat >> {}\necho '{{\"decision\":\"deny\",\"reason\":\"no deploys here\"}}'\n",
+            record.display()
+        ),
+    )
+    .unwrap();
+    let config = format!(
+        r#"{{"version":1,"hooks":[{{"id":"gatekeeper","events":["pre-tool-use"],"match":{{"tools":["mcp__*"]}},"command":["sh","{}"]}}]}}"#,
+        script.display()
+    );
+    let hooks = hooks::HookContext::with_hooks(
+        hooks::config::parse(&config).expect("test hook config"),
+        dir.path().to_path_buf(),
+    );
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("ops", "deploy");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut proxy = crate::test_support::TestShellProxy {
+        agent_tool_verdict: crate::shell_capabilities::AgentCommandVerdict::Allowed,
+        ..crate::test_support::TestShellProxy::default()
+    };
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    let wire = json!({
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "arguments": r#"{"name":"mcp__ops__deploy","arguments":{}}"#,
+        }
+    });
+    run_tool_calls(
+        std::slice::from_ref(&wire),
+        &mcp_manager,
+        None,
+        &hooks,
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        McpToolMode::Bridge,
+    )
+    .unwrap();
+
+    let result = manager.buffer.last().expect("tool result recorded");
+    let content = result["content"].as_str().unwrap_or_default();
+    assert!(
+        content.contains("Blocked by hook `gatekeeper`"),
+        "{content}"
+    );
+    assert!(content.contains("no deploys here"), "{content}");
+
+    let recorded = std::fs::read_to_string(&record).expect("hook saw one call");
+    assert_eq!(
+        recorded
+            .matches("\"tool_name\":\"mcp__ops__deploy\"")
+            .count(),
+        1,
+        "the hook must see the logical call exactly once: {recorded}"
+    );
+    assert!(
+        !recorded.contains("\"tool_name\":\"tool_call\""),
+        "the hook must never see the wrapper: {recorded}"
+    );
+    // The denial landed before dispatch: the policy was never asked, so no
+    // transport could have run either.
+    assert!(proxy.evaluated_tools.is_empty());
+}
+
+/// Even though production tasks cannot reach this entry point today, the
+/// tested contract holds: a bridge MCP call without a plan is rejected the
+/// same way a direct `mcp__*` call is. The wrapper must not bypass
+/// `AgentRuntime::before_tool` by virtue of its outer name.
+#[test]
+fn bridge_call_requires_a_task_plan_like_a_direct_mcp_call() {
+    let dir = tempfile::tempdir().unwrap();
+    // `running_task` carries a plan but no criteria, which is exactly the
+    // missing-plan refusal for a mutating call.
+    let runtime = crate::test_support::test_runtime(dir.path());
+    let mut proxy = crate::test_support::TestShellProxy {
+        agent_runtime: Some(runtime.clone()),
+        ..crate::test_support::TestShellProxy::default()
+    };
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    let wire = json!({
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "arguments": r#"{"name":"mcp__github__list_issues","arguments":{}}"#,
+        }
+    });
+    run_tool_calls(
+        std::slice::from_ref(&wire),
+        &mcp_manager,
+        Some(&runtime),
+        &hooks::HookContext::disabled(),
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        McpToolMode::Bridge,
+    )
+    .unwrap();
+
+    let result = manager.buffer.last().expect("tool result recorded");
+    let content = result["content"].as_str().unwrap_or_default();
+    assert!(
+        content.contains(crate::agent::MISSING_PLAN_MESSAGE),
+        "{content}"
+    );
+}
+
+/// The task ledger records the logical bridge operation - not the wrapper -
+/// so failure signatures, pending operations, and reconciliation still name
+/// the real tool. A bridge parsing failure, meanwhile, stays an ordinary
+/// `failure`, never an `OutcomeUnknown`.
+#[test]
+fn task_ledger_records_the_logical_bridge_call() {
+    use crate::shell_capabilities::AgentTaskStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(crate::test_support::MemoryTaskStore::default());
+    let mut task = crate::test_support::running_task(dir.path());
+    task.criteria = vec![dsh_types::agent::Verification {
+        criterion: "done".to_string(),
+        evidence_event: None,
+        passed: false,
+    }];
+    store.save(&task, None).expect("in-memory save");
+    let runtime = Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
+        task,
+        store.clone(),
+    )));
+    let mut proxy = crate::test_support::TestShellProxy {
+        agent_runtime: Some(runtime.clone()),
+        agent_tool_verdict: crate::shell_capabilities::AgentCommandVerdict::Allowed,
+        ..crate::test_support::TestShellProxy::default()
+    };
+
+    let mut inner = McpManager::default();
+    inner.insert_test_tool("github", "list_issues");
+    let mcp_manager = Arc::new(RwLock::new(inner));
+    let mut manager = manager_with(vec![]);
+    let mut tools = Vec::new();
+    let mut exposure = ToolSearchExposure::default();
+
+    // The test binding has no live transport, so execution fails with a
+    // connection error - the ledger entry is what matters here.
+    let wire = json!({
+        "id": "call-1",
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "arguments": r#"{"name":"mcp__github__list_issues","arguments":{}}"#,
+        }
+    });
+    let broken = json!({
+        "id": "call-2",
+        "type": "function",
+        "function": {
+            "name": "tool_call",
+            "arguments": r#"{"name":"mcp__nope__missing","arguments":{}}"#,
+        }
+    });
+    run_tool_calls(
+        &[wire, broken],
+        &mcp_manager,
+        Some(&runtime),
+        &hooks::HookContext::disabled(),
+        &mut proxy,
+        &mut manager,
+        &mut tools,
+        &mut exposure,
+        McpToolMode::Bridge,
+    )
+    .unwrap();
+
+    let events = store.events("test-task").expect("in-memory events");
+    let results: Vec<&dsh_types::agent::TaskEvent> = events
+        .iter()
+        .filter(|event| event.kind == "tool_result")
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        results[0].data["call"]["function"]["name"],
+        "mcp__github__list_issues"
+    );
+    assert_eq!(results[0].data["call"]["id"], "call-1");
+    // An unparseable wrapper is an ordinary failure for the model to
+    // correct - recorded against the wire call it rejected.
+    assert_eq!(results[1].data["call"]["function"]["name"], "tool_call");
+    assert_eq!(results[1].data["outcome"], "failure");
+}
+
+/// An uncertain MCP mutation stays uncertain through the bridge: the
+/// transport's unknown outcome reaches `after_tool` with the logical call,
+/// putting the task into reconciliation instead of an ordinary failure.
+#[test]
+fn bridge_transport_unknown_outcome_stays_unknown() {
+    use crate::shell_capabilities::AgentTaskStore;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("server.py");
+    std::fs::write(
+        &script,
+        r#"
+import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    if 'id' not in request: continue
+    method = request['method']
+    if method == 'initialize':
+        result = {'protocolVersion':request['params']['protocolVersion'], 'capabilities':{'tools':{}}, 'serverInfo':{'name':'fixture','version':'1'}}
+    elif method == 'tools/list':
+        result = {'tools':[{'name':'counter','inputSchema':{'type':'object'}}]}
+    elif method == 'tools/call':
+        time.sleep(10)
+        result = {'content':[{'type':'text','text':'late'}]}
+    else:
+        result = {}
+    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}), flush=True)
+"#,
+    )
+    .unwrap();
+    // A real (stdio fixture) server, so the call below travels the actual
+    // transport: nothing here is stubbed at the binding layer.
+    let config = dsh_types::mcp::McpServerConfig {
+        label: "fixture".to_string(),
+        description: None,
+        trust: dsh_types::mcp::McpServerTrust::Untrusted,
+        transport: dsh_types::mcp::McpTransport::Stdio {
+            command: "python3".to_string(),
+            args: vec![script.to_string_lossy().into()],
+            env: Default::default(),
+            cwd: None,
+        },
+    };
+    let manager = McpManager::load_blocking(vec![config]);
+    assert!(manager.has_tool_binding("mcp__fixture__counter"));
+
+    // The call is cancelled mid-flight: the mutation may or may not have
+    // run, exactly the `OutcomeUnknown` the shell must preserve.
+    let started = std::time::Instant::now();
+    let err = manager
+        .execute_tool_cancellable(
+            "mcp__fixture__counter",
+            r#"{}"#,
+            &|| started.elapsed() > std::time::Duration::from_millis(200),
+            true,
+        )
+        .unwrap_err();
+    assert!(err.outcome_unknown());
+    let tool_err: tool::ToolCallError = err.into();
+    assert_eq!(tool_err.outcome, crate::agent::ToolOutcome::OutcomeUnknown);
+
+    // And the ledger transition for that outcome names the logical call,
+    // the same entry a direct MCP call would record.
+    let store = Arc::new(crate::test_support::MemoryTaskStore::default());
+    let mut task = crate::test_support::running_task(dir.path());
+    task.criteria = vec![dsh_types::agent::Verification {
+        criterion: "done".to_string(),
+        evidence_event: None,
+        passed: false,
+    }];
+    store.save(&task, None).expect("in-memory save");
+    let runtime = Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
+        task,
+        store.clone(),
+    )));
+    let logical = json!({
+        "id": "call-9",
+        "type": "function",
+        "function": {"name": "mcp__fixture__counter", "arguments": "{}"},
+    });
+    let sequence = runtime
+        .lock()
+        .after_tool(
+            &logical,
+            "Error: MCP wait cancelled or deadline exceeded",
+            crate::agent::ToolOutcome::OutcomeUnknown,
+        )
+        .expect("ledger records unknown outcomes");
+    assert_eq!(sequence, 1);
+    assert_eq!(
+        runtime.lock().task.status,
+        dsh_types::agent::TaskStatus::InputRequired
+    );
+    assert_eq!(runtime.lock().task.pending_operation, Some(logical.clone()));
+    let events = store.events("test-task").expect("in-memory events");
+    let recorded = events
+        .iter()
+        .find(|event| event.kind == "tool_result")
+        .expect("tool result recorded");
+    assert_eq!(recorded.data["call"], logical);
+    assert_eq!(recorded.data["outcome"], "unknown");
+}
+
+/// `AI_CHAT_MCP_TOOL_MODE=eager` preserves current behavior even when the
+/// catalog is large enough that `auto` would bridge: active schemas appear
+/// directly, a search exposes a hidden schema, and a group load activates
+/// the whole group - all within one turn.
+#[test]
+fn explicit_eager_mode_preserves_direct_schemas_on_a_large_catalog() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    proxy
+        .vars
+        .insert(MCP_TOOL_MODE_KEY.to_string(), "eager".to_string());
+    let client = ScriptedClient::new(vec![
+        tool_call_response("call-1", "tool_search", r#"{"query":"bulk00 helper"}"#),
+        tool_call_response("call-2", "mcp_load_group", r#"{"group":"bulk01"}"#),
+        final_answer("done"),
+    ]);
+    let mut inner = McpManager::default();
+    for server in 0..4 {
+        let label = format!("bulk{server:02}");
+        for tool in 0..25 {
+            inner.insert_test_tool(&label, &format!("helper_{tool:02}"));
+        }
+    }
+    inner.disable_group("bulk00").unwrap();
+    inner.disable_group("bulk01").unwrap();
+    // Sanity: `auto` would bridge this catalog, so only the explicit
+    // override can explain eager behavior below.
+    assert_eq!(inner.discoverable_tool_footprint().tools, 100,);
+    assert!(
+        inner.discoverable_tool_footprint().schema_bytes
+            > crate::chatgpt::settings::DEFAULT_MCP_BRIDGE_SCHEMA_BYTES
+    );
+    let mcp_manager = Arc::new(RwLock::new(inner));
+
+    let result = chat_with_tools(
+        &client,
+        "use the bulk tools",
+        None,
+        None,
+        Some(0.0),
+        None,
+        &mcp_manager,
+        None,
+        &mut proxy,
+    );
+
+    assert_eq!(result, Ok("done".to_string()));
+    let seen = client.tools_seen();
+    assert_eq!(seen.len(), 3);
+    // Active schemas appear directly on the first request, with the eager
+    // discovery tools and no bridge-only definitions.
+    assert!(
+        seen[0].contains(&"mcp__bulk02__helper_00".to_string()),
+        "active schemas appear directly: {seen:?}"
+    );
+    assert!(seen[0].contains(&"tool_search".to_string()));
+    assert!(seen[0].contains(&"mcp_load_group".to_string()));
+    assert!(!seen[0].contains(&"tool_describe".to_string()));
+    // A search exposes a hidden individual schema on the next request...
+    assert!(
+        seen[1].iter().any(|name| name.starts_with("mcp__bulk00__")),
+        "search exposes the hidden tool: {seen:?}"
+    );
+    // ...and a group load activates the whole group on the one after.
+    assert!(
+        seen[2].contains(&"mcp__bulk01__helper_00".to_string()),
+        "group load exposes the group: {seen:?}"
+    );
+}
+
+/// Adding MCP tools must not grow the bridge `tools` array: the model
+/// surface is bounded independently of the catalog size, while the eager
+/// surface grows with it.
+#[test]
+fn bridge_surface_does_not_grow_with_the_catalog() {
+    let base = Some(tool::build_tools());
+    let accumulated: Vec<Value> = Vec::new();
+    let exposure = ToolSearchExposure::default();
+
+    let mut hundred = McpManager::default();
+    for server in 0..4 {
+        let label = format!("bulk{server:02}");
+        for tool in 0..25 {
+            hundred.insert_test_tool(&label, &format!("helper_{tool:02}"));
+        }
+    }
+    let mut two_hundred = McpManager::default();
+    for server in 0..8 {
+        let label = format!("bulk{server:02}");
+        for tool in 0..25 {
+            two_hundred.insert_test_tool(&label, &format!("helper_{tool:02}"));
+        }
+    }
+    let hundred = Arc::new(RwLock::new(hundred));
+    let two_hundred = Arc::new(RwLock::new(two_hundred));
+
+    let bridge_100 = build_request_tools(
+        McpToolMode::Bridge,
+        &base,
+        &accumulated,
+        &hundred,
+        &exposure,
+    );
+    let bridge_200 = build_request_tools(
+        McpToolMode::Bridge,
+        &base,
+        &accumulated,
+        &two_hundred,
+        &exposure,
+    );
+    let bridge_bytes = serde_json::to_string(&bridge_100).unwrap().len();
+    assert_eq!(
+        serde_json::to_string(&bridge_200).unwrap().len(),
+        bridge_bytes,
+        "100 more MCP tools must not grow the bridge surface"
+    );
+    // The MCP-related slice of that surface - the stable trio - stays small
+    // on its own: the unconditional builtins ride along in both modes and
+    // are not this task's tax to remove.
+    let trio_bytes = serde_json::to_string(&tool::mcp_bridge::bridge_definitions())
+        .unwrap()
+        .len();
+    assert!(
+        trio_bytes < 8 * 1024,
+        "bridge trio stays small: {trio_bytes} bytes"
+    );
+    let names = request_tool_names(&bridge_100);
+    for name in ["tool_search", "tool_describe", "tool_call"] {
+        assert!(names.contains(&name.to_string()), "{names:?}");
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("mcp__")),
+        "{names:?}"
+    );
+
+    // The eager surface, by contrast, grows with the catalog: that is the
+    // tax the bridge removes.
+    let eager_100 =
+        build_request_tools(McpToolMode::Eager, &base, &accumulated, &hundred, &exposure);
+    let eager_200 = build_request_tools(
+        McpToolMode::Eager,
+        &base,
+        &accumulated,
+        &two_hundred,
+        &exposure,
+    );
+    assert!(
+        serde_json::to_string(&eager_200).unwrap().len()
+            > serde_json::to_string(&eager_100).unwrap().len()
     );
 }

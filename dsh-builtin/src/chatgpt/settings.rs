@@ -81,11 +81,41 @@ pub(super) const SKILL_REFLECT_MODEL_KEY: &str = "AI_CHAT_SKILL_REFLECT_MODEL";
 pub(super) const SKILL_AUTO_ARCHIVE_DAYS_KEY: &str = "AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS";
 /// Environment key turning on a one-shot verification nudge for `!` chat.
 /// Off by default: when on, a turn that ran a mutating tool (`edit` /
-/// `str_replace` / `execute` / `skill_manage` / `mcp__*`) gets its first
-/// final answer bounced back once with a request to state what was checked.
-/// The second answer is always accepted, so this costs at most one extra
-/// round trip per mutating turn.
+/// `str_replace` / `execute` / `skill_manage` / `tool_call` / `mcp__*`) gets
+/// its first final answer bounced back once with a request to state what was
+/// checked. The second answer is always accepted, so this costs at most one
+/// extra round trip per mutating turn.
 pub(super) const VERIFY_AFTER_MUTATION_KEY: &str = "AI_CHAT_VERIFY_AFTER_MUTATION";
+/// Environment key selecting the MCP model surface: `auto` (default),
+/// `eager`, or `bridge`. Anything else safely falls back to `auto`.
+pub(crate) const MCP_TOOL_MODE_KEY: &str = "AI_CHAT_MCP_TOOL_MODE";
+/// Discoverable MCP schema bytes above which `auto` selects the stable
+/// bridge. A byte proxy, not a tokenizer count: no tokenizer dependency.
+pub(crate) const DEFAULT_MCP_BRIDGE_SCHEMA_BYTES: usize = 12 * 1024;
+
+/// Operator preference for [`super::McpToolMode`], read once per turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum McpToolModePreference {
+    Auto,
+    Eager,
+    Bridge,
+}
+
+/// The one place `AI_CHAT_MCP_TOOL_MODE` is read, so turn setup and
+/// diagnostics cannot disagree about what the operator asked for.
+pub(crate) fn resolve_mcp_tool_mode_preference(
+    proxy: &mut dyn ShellProxy,
+) -> McpToolModePreference {
+    match resolve_setting(proxy, MCP_TOOL_MODE_KEY)
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("auto") => McpToolModePreference::Auto,
+        Some("eager") => McpToolModePreference::Eager,
+        Some("bridge") => McpToolModePreference::Bridge,
+        Some(_) => McpToolModePreference::Auto,
+    }
+}
 /// Told to the model after a rewound turn (`ConversationManager::note_turn_rewound`).
 pub(super) const REWIND_NOTICE: &str = "The previous turn was removed from this conversation because it did not finish. Any tool calls it made may already have taken effect; check the actual state rather than assuming.";
 
@@ -248,6 +278,30 @@ pub(super) fn resolve_verify_after_mutation(proxy: &mut dyn ShellProxy) -> bool 
     }
 }
 
+/// A tool call that changes state outside the conversation, mirroring the
+/// mutation set `AgentRuntime::before_tool` gates on `task_plan`.
+///
+/// `tool_call` counts as mutating too: it is only ever the transport for an
+/// underlying MCP call, and direct `mcp__*` calls count conservatively
+/// regardless of read-only metadata - the wrapper must not become a way
+/// around the verification nudge.
+pub(super) fn is_mutating_tool_call(call: &Value) -> bool {
+    let name = call
+        .get("function")
+        .and_then(|function| function.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    matches!(
+        name,
+        "edit" | "str_replace" | "execute" | "skill_manage" | "tool_call"
+    ) || name.starts_with("mcp__")
+}
+
+/// Sent once when `AI_CHAT_VERIFY_AFTER_MUTATION` is on and a mutating `!`
+/// turn tries to finish on its first answer. The second answer is always
+/// accepted, so this costs at most one extra round trip.
+pub(super) const VERIFY_AFTER_MUTATION_NUDGE: &str = "You ran mutating tool(s) this turn. Briefly state what you checked to verify the result (command output, file content, or test). If you have not verified yet, run the checks now instead of finishing.";
+
 /// The operator's response language, for any AI request the shell makes.
 ///
 /// Public because `ai-commit`, `safe-run` and `blocks` need the same answer:
@@ -309,6 +363,60 @@ mod tests {
         assert_eq!(
             resolve_setting(&mut proxy, "DOGESH_REGRESSION_SETTING"),
             Some("shell-value".to_string())
+        );
+    }
+
+    /// Unset means `auto`; explicit values select their mode; anything else
+    /// safely falls back to `auto` rather than silently becoming `bridge`.
+    #[test]
+    fn mcp_tool_mode_preference_parsing() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let mut proxy = TestShellProxy::default();
+        assert_eq!(
+            resolve_mcp_tool_mode_preference(&mut proxy),
+            McpToolModePreference::Auto
+        );
+
+        for (raw, expected) in [
+            ("auto", McpToolModePreference::Auto),
+            ("eager", McpToolModePreference::Eager),
+            ("bridge", McpToolModePreference::Bridge),
+            (" Bridge ", McpToolModePreference::Bridge),
+            ("EAGER", McpToolModePreference::Eager),
+        ] {
+            proxy
+                .vars
+                .insert(MCP_TOOL_MODE_KEY.to_string(), raw.to_string());
+            assert_eq!(
+                resolve_mcp_tool_mode_preference(&mut proxy),
+                expected,
+                "{raw}"
+            );
+        }
+
+        for raw in ["everything", "1", "yes", "off"] {
+            proxy
+                .vars
+                .insert(MCP_TOOL_MODE_KEY.to_string(), raw.to_string());
+            assert_eq!(
+                resolve_mcp_tool_mode_preference(&mut proxy),
+                McpToolModePreference::Auto,
+                "{raw} must not silently select a mode"
+            );
+        }
+    }
+
+    /// A process-only value must not select the mode, matching every other
+    /// runtime chat setting.
+    #[test]
+    fn process_only_mcp_tool_mode_is_ignored() {
+        let _lock = crate::chatgpt::tool::execute::tests::env_lock();
+        let _guard = ProcessEnvGuard::set(MCP_TOOL_MODE_KEY, "bridge");
+        let mut proxy = TestShellProxy::default();
+
+        assert_eq!(
+            resolve_mcp_tool_mode_preference(&mut proxy),
+            McpToolModePreference::Auto
         );
     }
 }

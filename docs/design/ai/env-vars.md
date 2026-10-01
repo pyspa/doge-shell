@@ -35,8 +35,9 @@
 | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | 5 | 同上。このツール呼び出し数未満のターンでは送らない |
 | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL` → チャットモデル | 同上 |
 | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off（0 または未設定） | `dsh-builtin/src/chatgpt/skills/usage.rs`（`sweep`）。`created_by == "agent"` かつ unpinned かつ user scope の skill だけを、指定日数未読で archive する |
-| `AI_CHAT_VERIFY_AFTER_MUTATION` | off（`1`/`true`/`on`/`yes` で on） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_verify_after_mutation`）。`!` チャットで変異ツール（`edit`/`str_replace`/`execute`/`skill_manage`/`mcp__*`）実行後の最初の最終回答を1回だけ差し戻し、何を確認したかの記述を求める。2回目の回答は必ず採用（最大1往復の追加のみ） |
+| `AI_CHAT_VERIFY_AFTER_MUTATION` | off（`1`/`true`/`on`/`yes` で on） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_verify_after_mutation`）。`!` チャットで変異ツール（`edit`/`str_replace`/`execute`/`skill_manage`/`tool_call`/`mcp__*`）実行後の最初の最終回答を1回だけ差し戻し、何を確認したかの記述を求める。2回目の回答は必ず採用（最大1往復の追加のみ） |
 | `AI_CHAT_HOOKS` | on（同上で off） | `dsh-builtin/src/chatgpt/hooks/config.rs` |
+| `AI_CHAT_MCP_TOOL_MODE` | `auto`（`eager`/`bridge` も可、不正値は `auto`） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_mcp_tool_mode_preference`）。`!` チャットの MCP モデル表面。`eager` は既存動作（active group の schema＋turn-local な Tool Search 公開を毎リクエスト再構築）。`bridge` は MCP catalog がある限り安定した `tool_search`/`tool_describe`/`tool_call` のみを載せ、`mcp__*` schema・`mcp_list_groups`/`mcp_load_group` を載せない。`auto` は discoverable な MCP schema 合計が `12 KiB`（`DEFAULT_MCP_BRIDGE_SCHEMA_BYTES`、tokenizer 不要の byte proxy）を超えたら bridge、そうでなければ eager。判定は group 無効化を無視する（hidden でも search 可能なため）が、disconnect 済み server と stale binding は除外する。mode は turn 開始時に1回だけ解決し、その turn 中は不変 |
 | `AI_CHAT_HOOK_TURN_BUDGET_MS` | 無制限（`0` も無制限） | 同上 |
 | `DOGESH_AI_HOOKS_CONFIG` | XDG の `ai-hooks.json` | 同上 |
 | `DOGESH_HOOK_DEPTH` | なし（hook プロセスにだけ立つ） | 同上。**プロセス環境だけを見る**（シェル変数で消せると無限再帰する）。同種の例外は下の Herdr 連携の `HERDR_*` / `DOGESH_HERDR_OWNER_PID` だけ |

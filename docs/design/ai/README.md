@@ -58,7 +58,7 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
 |---|---|---|
 | 入口 | `dsh/src/shell/eval.rs` → `dsh-builtin/src/chatgpt.rs` | `dsh/src/ai_features/service.rs` |
 | 実行 | 同期 | 非同期 |
-| ツール | builtin 10 種（`cron_manage` 含む）+ `job_status`/`job_output`/`job_cancel` + `tool_search`/`mcp_list_groups`/`mcp_load_group` + MCP | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
+| ツール | builtin 10 種（`cron_manage` 含む）+ `job_status`/`job_output`/`job_cancel` + MCP。小さな MCP catalog（Eager）は `tool_search`/`mcp_list_groups`/`mcp_load_group` + active group の schema直載せ。大きな catalog（Bridge、`AI_CHAT_MCP_TOOL_MODE` の `auto` 既定で自動選択）は安定した `tool_search`/`tool_describe`/`tool_call` のみで `mcp__*` schema を載せない。どちらも dispatch adapter の違いだけで、ループは1つ | MCP 用の実行ループは持つが、本番の呼び出し元は全て `without_tools()` で opt-out しており実際には未使用 |
 | 反復上限 | `MAX_TOOL_ITERATIONS` (100) | `MAX_ASSIST_ITERATIONS` (10) |
 
 3 つ目を作らない。単発リクエスト（`ai-commit` / `safe-run` / ゴーストテキスト）は

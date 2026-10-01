@@ -5,7 +5,7 @@ mod naming;
 mod servers;
 use anyhow::Result;
 use dsh_types::mcp::{McpServerConfig, McpServerTrust, McpTransport};
-pub use groups::{McpToolExposure, McpToolGroup, SearchableTool};
+pub use groups::{McpCatalogFootprint, McpToolExposure, McpToolGroup, McpToolMode, SearchableTool};
 use naming::*;
 use rmcp::{
     ServiceExt,
@@ -671,12 +671,25 @@ impl McpManager {
     /// MCP guidance for the system prompt, or `None` when there is nothing
     /// the model could use: no servers at all, or every server disconnected.
     ///
+    /// The text follows the turn's [`McpToolMode`] (resolved once in
+    /// `TurnSetup`, never recomputed here): eager mode keeps the direct
+    /// function/meta-tool guidance, while bridge mode names only the stable
+    /// `tool_search`/`tool_describe`/`tool_call` surface plus the usable
+    /// server summaries.
+    ///
     /// Groups hidden via `mcp group disable` still count as discoverable -
     /// unlike a disconnected server, their tools come back through
     /// `mcp_load_group` - so an all-hidden (but connected) setup still gets
     /// the discovery guidance rather than silence. Without it the model would
     /// never learn the meta tools exist.
-    pub fn system_prompt_fragment(&self) -> Option<String> {
+    pub fn system_prompt_fragment(&self, mode: McpToolMode) -> Option<String> {
+        match mode {
+            McpToolMode::Eager => self.eager_prompt_fragment(),
+            McpToolMode::Bridge => self.bridge_prompt_fragment(),
+        }
+    }
+
+    fn eager_prompt_fragment(&self) -> Option<String> {
         if self.servers.is_empty() {
             return None;
         }

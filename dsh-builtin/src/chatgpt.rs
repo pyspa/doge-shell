@@ -40,8 +40,9 @@ use ui::*;
 
 mod mcp;
 pub use mcp::{
-    LEGACY_SSE_UNSUPPORTED_MESSAGE, McpConnectionStatus, McpManager, McpRuntimeStateSnapshot,
-    McpServerStatus, McpToolExposure, McpToolFacts, McpToolGroup,
+    LEGACY_SSE_UNSUPPORTED_MESSAGE, McpCatalogFootprint, McpConnectionStatus, McpManager,
+    McpRuntimeStateSnapshot, McpServerStatus, McpToolExposure, McpToolFacts, McpToolGroup,
+    McpToolMode,
 };
 pub(crate) mod tool;
 
@@ -56,22 +57,6 @@ pub(crate) mod hooks;
 mod reflect;
 pub(crate) mod skills;
 use skills::{SkillRoot, SkillsManager};
-
-/// A tool call that changes state outside the conversation, mirroring the
-/// mutation set `AgentRuntime::before_tool` gates on `task_plan`.
-fn is_mutating_tool_call(call: &Value) -> bool {
-    let name = call
-        .get("function")
-        .and_then(|function| function.get("name"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    matches!(name, "edit" | "str_replace" | "execute" | "skill_manage") || name.starts_with("mcp__")
-}
-
-/// Sent once when `AI_CHAT_VERIFY_AFTER_MUTATION` is on and a mutating `!`
-/// turn tries to finish on its first answer. The second answer is always
-/// accepted, so this costs at most one extra round trip.
-const VERIFY_AFTER_MUTATION_NUDGE: &str = "You ran mutating tool(s) this turn. Briefly state what you checked to verify the result (command output, file content, or test). If you have not verified yet, run the checks now instead of finishing.";
 
 #[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
@@ -290,7 +275,7 @@ fn chat_with_tools(
         }
 
         let (interactive_base, mut tools) =
-            split_turn_tool_bases(mcp_manager, setup.runtime.is_some());
+            split_turn_tool_bases(mcp_manager, setup.runtime.is_some(), setup.mcp_tool_mode);
         // Tool Search hits live here: names plus charged schema bytes, for
         // this turn only. The next user message builds a fresh one, so
         // nothing persists across turns and lazy loading cannot accumulate
@@ -435,6 +420,7 @@ fn chat_with_tools(
 
             // Tools for this request only; see `build_request_tools`.
             let request_tools = build_request_tools(
+                setup.mcp_tool_mode,
                 &interactive_base,
                 &tools,
                 mcp_manager,
@@ -566,6 +552,7 @@ fn chat_with_tools(
                         &mut manager,
                         &mut tools,
                         &mut tool_search_exposure,
+                        setup.mcp_tool_mode,
                     ) {
                         break Err(err);
                     }

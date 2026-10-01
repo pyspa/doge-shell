@@ -55,6 +55,7 @@ pub(super) fn build_system_prompt(
     language: Option<String>,
     mcp_manager: &McpManager,
     skill_roots: &[SkillRoot],
+    mcp_tool_mode: McpToolMode,
 ) -> SystemPrompt {
     let skills_fragment = if skill_roots.is_empty() {
         String::new()
@@ -68,12 +69,14 @@ pub(super) fn build_system_prompt(
             operator_prompt.as_deref(),
             language.as_deref(),
             mcp_manager,
+            mcp_tool_mode,
         ),
         text: assemble_system_prompt(
             &skills_fragment,
             operator_prompt.as_deref(),
             language.as_deref(),
             mcp_manager,
+            mcp_tool_mode,
         ),
     }
 }
@@ -83,6 +86,7 @@ pub(super) fn assemble_system_prompt(
     operator_prompt: Option<&str>,
     language: Option<&str>,
     mcp_manager: &McpManager,
+    mcp_tool_mode: McpToolMode,
 ) -> String {
     let mut base = TOOL_SYSTEM_PROMPT.to_string();
 
@@ -90,7 +94,7 @@ pub(super) fn assemble_system_prompt(
         base.push_str(skills_fragment);
     }
 
-    if let Some(fragment) = mcp_manager.system_prompt_fragment() {
+    if let Some(fragment) = mcp_manager.system_prompt_fragment(mcp_tool_mode) {
         base.push_str("\n\nMCP access:");
         base.push('\n');
         base.push_str(&fragment);

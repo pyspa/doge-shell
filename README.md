@@ -1389,6 +1389,7 @@ The shell includes AI-powered command completion using OpenAI. To use this featu
    | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off | Archive an agent-written, unpinned personal skill once unread this many days; unset or `0` disables it |
    | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
    | `AI_CHAT_HOOK_TURN_BUDGET_MS` | unset | Ceiling on the wall time one `!` turn waits for hooks; `0` removes it |
+   | `AI_CHAT_MCP_TOOL_MODE` | `auto` | MCP model surface for `!` chat: `auto` bridges large catalogs (discoverable schemas over 12 KiB) behind `tool_search`/`tool_describe`/`tool_call` and keeps small ones eager; `eager`/`bridge` force either side |
    | `DOGESH_AI_HOOKS_CONFIG` | `~/.config/dogesh/ai-hooks.json` | Path of the hook configuration |
 
    Transient failures (429, 5xx, timeouts) are retried with backoff, honouring

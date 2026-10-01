@@ -270,11 +270,16 @@ pub(super) fn status_report(proxy: &mut dyn ChatToolHost) -> StatusReport {
     let identity = {
         let manager = proxy.agent_mcp_manager();
         let manager = manager.read();
+        let mcp_tool_mode = manager.resolve_mcp_tool_mode(
+            resolve_mcp_tool_mode_preference(proxy),
+            DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
+        );
         assemble_system_prompt(
             "",
             proxy.get_var(PROMPT_KEY).as_deref(),
             proxy.get_var(LANGUAGE_KEY).as_deref(),
             &manager,
+            mcp_tool_mode,
         )
     };
     let scope = conversation_scope(proxy.get_current_dir().ok().as_deref());
@@ -420,7 +425,7 @@ mod tests {
     /// it, with the identity and scope this proxy would compute itself.
     fn seed_session(proxy: &mut TestShellProxy, id: &str) {
         let manager = proxy.agent_mcp_manager();
-        let identity = assemble_system_prompt("", None, None, &manager.read());
+        let identity = assemble_system_prompt("", None, None, &manager.read(), McpToolMode::Eager);
         let scope = conversation_scope(Some(&proxy.current_dir));
         session::store(
             resolve_session_ttl(proxy),

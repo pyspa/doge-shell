@@ -282,6 +282,20 @@ pub(crate) fn definition() -> Value {
     )
 }
 
+/// The same search ranker behind the stable bridge surface: compact ranked
+/// matches only, never schema exposure. The wording deliberately avoids the
+/// eager "become available on the next request" promise - in bridge mode no
+/// search mutates the next request's tools; the model reads schemas through
+/// `tool_describe` and invokes through `tool_call` instead.
+pub(crate) fn bridge_definition() -> Value {
+    crate::agent::definition(
+        "tool_search",
+        "Find MCP tools by capability: words in their name, description, parameters, or server/group. Returns compact ranked matches with server and group. Use tool_describe when you need the full argument schema, then invoke the selected tool through tool_call. Discovery does not authorize execution.",
+        serde_json::json!({"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20,"description":"Maximum matches to return. Defaults to 5."}}),
+        &["query"],
+    )
+}
+
 /// Per-turn cap on schemas `tool_search` may newly expose: without it,
 /// repeating searches accumulates every MCP schema and defeats lazy loading.
 pub(crate) const MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN: usize = 32;

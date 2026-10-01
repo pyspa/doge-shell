@@ -21,6 +21,10 @@ pub(super) use super::tool::tool_search::ToolSearchExposure;
 pub(super) struct TurnSetup {
     pub(super) skill_roots: Vec<skills::SkillRoot>,
     pub(super) prompt: SystemPrompt,
+    /// The MCP model surface for this turn, resolved once here and immutable
+    /// for the rest of the turn: recomputing it per request would let the
+    /// `tools` array mutate mid-turn and defeat the bridge's stable prefix.
+    pub(super) mcp_tool_mode: McpToolMode,
     /// Optional durable task context. `chat_with_tools` treats a turn
     /// differently in several places when this is `Some` - session
     /// continuity is disabled, an unverified `Answer` is retried, and the
@@ -62,8 +66,35 @@ impl TurnSetup {
         gate_project_skills(&mut skill_roots, proxy);
 
         // Build System Prompt (fixed for the session)
-        let prompt =
-            build_system_prompt(operator_prompt, language, &mcp_manager.read(), &skill_roots);
+        let mcp_tool_mode = mcp_manager.read().resolve_mcp_tool_mode(
+            resolve_mcp_tool_mode_preference(proxy),
+            DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
+        );
+        {
+            let mcp = mcp_manager.read();
+            let footprint = mcp.discoverable_tool_footprint();
+            let active_bytes = mcp.tool_exposure().schema_bytes;
+            tracing::debug!(
+                mode = ?mcp_tool_mode,
+                discoverable_tools = footprint.tools,
+                discoverable_schema_bytes = footprint.schema_bytes,
+                active_schema_bytes = active_bytes,
+                threshold = DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
+                "MCP tool surface: mode={:?} discoverable_tools={} discoverable_schema_bytes={} active_schema_bytes={} threshold={}",
+                mcp_tool_mode,
+                footprint.tools,
+                footprint.schema_bytes,
+                active_bytes,
+                DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
+            );
+        }
+        let prompt = build_system_prompt(
+            operator_prompt,
+            language,
+            &mcp_manager.read(),
+            &skill_roots,
+            mcp_tool_mode,
+        );
 
         let runtime = proxy.agent_runtime();
         let session_ttl = if runtime.is_some() {
@@ -98,6 +129,7 @@ impl TurnSetup {
         Ok(Self {
             skill_roots,
             prompt,
+            mcp_tool_mode,
             runtime,
             session_ttl,
             scope,
@@ -120,18 +152,36 @@ impl TurnSetup {
 /// exposure for the rest of the turn. Agent turns keep accumulating into the
 /// vec instead (their `tool_search` discoveries live only there, not in
 /// manager state), so the two paths must not share one construction.
+///
+/// In bridge mode the agent accumulator is seeded with the fixed bridge trio
+/// instead of the group meta tools, and `run_tool_calls` never grows it, so
+/// it stays byte-stable for the whole turn exactly like the interactive
+/// bridge surface.
 pub(super) fn split_turn_tool_bases(
     mcp_manager: &Arc<RwLock<McpManager>>,
     is_agent: bool,
+    mcp_tool_mode: McpToolMode,
 ) -> (Option<Vec<Value>>, Vec<Value>) {
     if is_agent {
         let mut tools = tool::build_tools();
         {
             let mcp = mcp_manager.read();
-            tools.extend(tool::mcp_turn_definitions(&mcp, false));
+            match mcp_tool_mode {
+                McpToolMode::Eager => {
+                    tools.extend(tool::mcp_turn_definitions(&mcp, false));
+                }
+                McpToolMode::Bridge => {
+                    if !mcp.is_empty() {
+                        tools.extend(tool::mcp_bridge::bridge_definitions());
+                    }
+                }
+            }
         }
         tools.extend(crate::agent::definitions());
-        tools.extend(tool::agent_definitions());
+        match mcp_tool_mode {
+            McpToolMode::Eager => tools.extend(tool::agent_definitions()),
+            McpToolMode::Bridge => tools.extend(tool::bridge_agent_definitions()),
+        }
         (None, tools)
     } else {
         (Some(tool::build_tools()), Vec::new())
@@ -139,7 +189,6 @@ pub(super) fn split_turn_tool_bases(
 }
 
 /// Tools for one LLM request.
-///
 /// Interactive turns rebuild the MCP part from current exposure every
 /// iteration: `mcp_load_group` flips the toggle inside `McpManager` during
 /// `run_tool_calls`, and the next pass here picks the newly active schemas
@@ -158,25 +207,55 @@ pub(super) fn split_turn_tool_bases(
 /// `accumulated` (the vec `run_tool_calls` grows) is read on the agent path
 /// only; on the interactive path that function never grows it, so it stays
 /// an unused placeholder that keeps one shared call site.
+///
+/// In bridge mode this is fixed for the whole turn: the builtin base plus
+/// the three bridge definitions plus the job tools. Search, describe, and
+/// call results never mutate it, so every request of the turn carries
+/// byte-identical tool definitions.
 pub(super) fn build_request_tools(
+    mcp_tool_mode: McpToolMode,
     interactive_base: &Option<Vec<Value>>,
     accumulated: &[Value],
     mcp_manager: &Arc<RwLock<McpManager>>,
     tool_search_exposure: &ToolSearchExposure,
 ) -> Vec<Value> {
     if let Some(base) = interactive_base {
-        let mcp = mcp_manager.read();
-        let mut current = base.clone();
-        current.extend(tool::mcp_turn_definitions(&mcp, true));
-        let searched_names: Vec<String> = tool_search_exposure.names().cloned().collect();
-        if !searched_names.is_empty() {
-            extend_unique_tool_definitions(&mut current, mcp.tool_definitions_for(&searched_names));
+        match mcp_tool_mode {
+            McpToolMode::Bridge => build_bridge_request_tools(base, mcp_manager),
+            McpToolMode::Eager => {
+                build_eager_request_tools(base, mcp_manager, tool_search_exposure)
+            }
         }
-        current.extend(tool::job_definitions());
-        current
     } else {
         accumulated.to_vec()
     }
+}
+
+/// Bridge-mode request tools: fixed for the whole turn.
+fn build_bridge_request_tools(base: &[Value], mcp_manager: &Arc<RwLock<McpManager>>) -> Vec<Value> {
+    let mut current = base.to_vec();
+    if !mcp_manager.read().is_empty() {
+        current.extend(tool::mcp_bridge::bridge_definitions());
+    }
+    current.extend(tool::job_definitions());
+    current
+}
+
+/// Eager-mode request tools: rebuilt from current exposure every iteration.
+fn build_eager_request_tools(
+    base: &[Value],
+    mcp_manager: &Arc<RwLock<McpManager>>,
+    tool_search_exposure: &ToolSearchExposure,
+) -> Vec<Value> {
+    let mcp = mcp_manager.read();
+    let mut current = base.to_vec();
+    current.extend(tool::mcp_turn_definitions(&mcp, true));
+    let searched_names: Vec<String> = tool_search_exposure.names().cloned().collect();
+    if !searched_names.is_empty() {
+        extend_unique_tool_definitions(&mut current, mcp.tool_definitions_for(&searched_names));
+    }
+    current.extend(tool::job_definitions());
+    current
 }
 
 /// Append definitions the target does not already carry, keyed on
@@ -242,9 +321,13 @@ fn search_result_names_in(text: &str) -> Option<Vec<String>> {
     )
 }
 
-/// Runs one round's tool calls against the shell: `before_tool`/`after_tool`
-/// bookkeeping for a durable task (when there is one), dispatch through
-/// `execute_tool_call`, and appending each result to `manager`. Growing
+/// Runs one round's tool calls against the shell: bridge normalization, then
+/// `before_tool`/`after_tool` bookkeeping for a durable task (when there is
+/// one), dispatch through `execute_tool_call`, and appending each result to
+/// `manager`. In bridge mode a `tool_call` wrapper is unwrapped into its
+/// logical MCP call before every policy boundary, so hooks, authorization,
+/// `SafetyGuard`, approvals, and the task ledger see the underlying
+/// `mcp__*` function - never the wrapper. Growing
 /// `tools` here is an agent-turn mechanism only: `tool_search` discoveries
 /// and `mcp_load_group` activations accumulate in that vec because an agent
 /// turn's per-request view is the accumulated vec, not a fresh exposure read.
@@ -261,8 +344,8 @@ fn search_result_names_in(text: &str) -> Option<Vec<String>> {
 /// leaves schemas over budget appends a short note to its own tool result so
 /// the model learns why not every match became callable.
 ///
-/// Takes just the two pieces of `TurnSetup` this round actually reads
-/// (`runtime`, `hook_ctx`), not the whole struct - so a change to
+/// Takes just the three pieces of `TurnSetup` this round actually reads
+/// (`runtime`, `hook_ctx`, `mcp_tool_mode`), not the whole struct - so a change to
 /// `TurnSetup`'s other fields (skill roots, prompt, session ttl/scope,
 /// budgets) is visibly unrelated to this function.
 ///
@@ -284,6 +367,7 @@ pub(super) fn run_tool_calls(
     manager: &mut ConversationManager,
     tools: &mut Vec<Value>,
     tool_search_exposure: &mut ToolSearchExposure,
+    mcp_tool_mode: McpToolMode,
 ) -> Result<(), String> {
     for tool_call in tool_calls {
         let tool_call_id = tool_call
@@ -292,9 +376,48 @@ pub(super) fn run_tool_calls(
             .unwrap_or_default()
             .to_string();
 
+        // Bridge normalization runs before every policy boundary below. A
+        // stale catalog settles first (`refresh_tools_if_expired`, the same
+        // call `tool_search` makes), so a tool removed after a search fails
+        // here instead of executing a stale binding. There is deliberately
+        // no bridge-level tool cache: `McpManager` stays the single
+        // authority.
+        enum Effective {
+            Call(Value),
+            InvalidBridge(String),
+        }
+        let effective = if mcp_tool_mode == McpToolMode::Bridge
+            && tool_call
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                == Some(tool::mcp_bridge::CALL_NAME)
+        {
+            mcp_manager
+                .write()
+                .refresh_tools_if_expired(&|| super::task_cancelled(proxy))?;
+            match tool::mcp_bridge::resolve_wire_call(tool_call, &mcp_manager.read()) {
+                Ok(resolved) => {
+                    // History keeps what the provider asked for; only the
+                    // logical call below may differ.
+                    debug_assert_eq!(resolved.wire_call, *tool_call);
+                    Effective::Call(resolved.logical_call)
+                }
+                Err(message) => Effective::InvalidBridge(message),
+            }
+        } else {
+            Effective::Call(tool_call.clone())
+        };
+        // The logical call is what policy sees; an unparseable wrapper has
+        // no logical call, so the ledger records the wire call it rejected.
+        let active_call: Value = match &effective {
+            Effective::Call(call) => call.clone(),
+            Effective::InvalidBridge(_) => tool_call.clone(),
+        };
+
         if let Some(runtime) = runtime
             && let Err(e) = runtime.lock().before_tool(
-                tool_call,
+                &active_call,
                 serde_json::to_value(&*manager).map_err(|e| e.to_string())?,
             )
         {
@@ -314,13 +437,19 @@ pub(super) fn run_tool_calls(
             }
             return Err(e.to_string());
         }
-        let execution = match execute_tool_call(tool_call, mcp_manager, hook_ctx, proxy) {
-            Ok(execution) => execution,
-            Err(error) => tool::ToolExecution {
-                content: format!(
-                    "Error: {error}\nPlease analyze the error and retry with corrected arguments."
-                ),
-                outcome: error.outcome,
+        let execution = match &effective {
+            Effective::InvalidBridge(message) => tool::ToolExecution {
+                content: format!("Error: {message}"),
+                outcome: crate::agent::ToolOutcome::Failure,
+            },
+            Effective::Call(call) => match execute_tool_call(call, mcp_manager, hook_ctx, proxy) {
+                Ok(execution) => execution,
+                Err(error) => tool::ToolExecution {
+                    content: format!(
+                        "Error: {error}\nPlease analyze the error and retry with corrected arguments."
+                    ),
+                    outcome: error.outcome,
+                },
             },
         };
         let mut tool_result = execution.content;
@@ -328,15 +457,22 @@ pub(super) fn run_tool_calls(
         // without flipping any group toggle so the next request can call
         // exactly these tools. A hit removed between search and load resolves
         // to nothing and is skipped; calling it would report the error instead.
-        let discovered = tool_search_result_names(tool_call, execution.outcome, &tool_result);
+        //
+        // Eager-only: bridge searches never add schemas, so there is nothing
+        // to merge, charge, or note here.
+        let discovered = if mcp_tool_mode == McpToolMode::Eager {
+            tool_search_result_names(&active_call, execution.outcome, &tool_result)
+        } else {
+            Vec::new()
+        };
         // Agent turns only: their per-request view is this accumulated vec,
         // so a freshly activated group must be merged in to take effect the
         // same turn. Interactive turns skip this - they rebuild from current
         // exposure before every request, which already reflects the toggle
         // flip above. Reading the group's definitions here duplicates that
         // rebuild for no gain and would reintroduce chat-loop state tracking.
-        if runtime.is_some() {
-            merge_activated_group_tools(tool_call, execution.outcome, mcp_manager, tools);
+        if mcp_tool_mode == McpToolMode::Eager && runtime.is_some() {
+            merge_activated_group_tools(&active_call, execution.outcome, mcp_manager, tools);
             if !discovered.is_empty() {
                 let offered: BTreeSet<String> = tools
                     .iter()
@@ -354,7 +490,7 @@ pub(super) fn run_tool_calls(
                     ));
                 }
             }
-        } else if !discovered.is_empty() {
+        } else if mcp_tool_mode == McpToolMode::Eager && !discovered.is_empty() {
             // Interactive turns keep names only: `build_request_tools`
             // re-resolves them every iteration, so a disconnect or refresh
             // drops what no longer exists instead of serving a stale schema.
@@ -386,7 +522,7 @@ pub(super) fn run_tool_calls(
         if let Some(runtime) = runtime {
             let sequence = runtime
                 .lock()
-                .after_tool(tool_call, &tool_result, execution.outcome)
+                .after_tool(&active_call, &tool_result, execution.outcome)
                 .map_err(|e| e.to_string())?;
             tool_result.push_str(&format!("\n[task event {sequence}]"));
         }

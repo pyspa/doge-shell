@@ -35,6 +35,37 @@ pub struct McpToolExposure {
     pub schema_bytes: usize,
 }
 
+/// Which MCP surface one turn offers the model.
+///
+/// Resolved once per turn (see `TurnSetup`): recomputing it before every
+/// request would let the `tools` array mutate mid-turn and defeat the stable
+/// prefix the bridge exists to provide.
+///
+/// - `Eager` is today's behavior: active group schemas plus turn-local
+///   Tool Search exposure, rebuilt before every request.
+/// - `Bridge` is the stable adapter: exactly `tool_search`/`tool_describe`/
+///   `tool_call`, with no `mcp__*` schema in any request of the turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpToolMode {
+    Eager,
+    Bridge,
+}
+
+/// The whole discoverable MCP catalog, regardless of group toggles.
+///
+/// Unlike [`McpToolExposure`] (what the model currently sees), this measures
+/// what Tool Search *could* reach: every registered, resolving tool on a
+/// connected server. Group disable is exposure control, not authorization -
+/// hidden tools stay searchable - so a large hidden catalog must still count
+/// toward the automatic bridge threshold. Disconnected servers and stale
+/// bindings that no longer resolve are excluded: nothing can offer them
+/// without a reconnect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct McpCatalogFootprint {
+    pub tools: usize,
+    pub schema_bytes: usize,
+}
+
 /// One MCP tool with the metadata Tool Search ranks over.
 ///
 /// Built fresh from current bindings on every search, so it is never a
@@ -347,6 +378,102 @@ impl McpManager {
         exposure
     }
 
+    /// The discoverable catalog footprint behind the automatic bridge decision.
+    ///
+    /// Built with the same canonical [`tool_definition`] builder as
+    /// [`McpManager::active_tool_definitions`], never a second serialization:
+    /// group toggles are ignored (hidden tools stay searchable), while
+    /// disconnected servers and stale bindings are excluded (nothing can
+    /// offer them without a reconnect).
+    pub fn discoverable_tool_footprint(&self) -> McpCatalogFootprint {
+        let disabled = self.disabled_read();
+        let definitions =
+            self.definitions_matching(|binding| !disabled.contains(&binding.server_label));
+        let schema_bytes = serde_json::to_string(&definitions)
+            .map(|text| text.len())
+            .unwrap_or(0);
+        McpCatalogFootprint {
+            tools: definitions.len(),
+            schema_bytes,
+        }
+    }
+
+    /// Resolve this turn's [`McpToolMode`] from one operator preference.
+    ///
+    /// The caller reads the preference once and passes it in; nothing here
+    /// re-reads configuration, so the decision cannot drift mid-turn. With no
+    /// usable MCP tool there is nothing to bridge, and every preference
+    /// falls back to `Eager`.
+    pub(crate) fn resolve_mcp_tool_mode(
+        &self,
+        preference: crate::chatgpt::settings::McpToolModePreference,
+        auto_threshold_bytes: usize,
+    ) -> McpToolMode {
+        use crate::chatgpt::settings::McpToolModePreference;
+        let footprint = self.discoverable_tool_footprint();
+        if footprint.tools == 0 {
+            return McpToolMode::Eager;
+        }
+        match preference {
+            McpToolModePreference::Eager => McpToolMode::Eager,
+            McpToolModePreference::Bridge => McpToolMode::Bridge,
+            McpToolModePreference::Auto => {
+                if footprint.schema_bytes > auto_threshold_bytes {
+                    McpToolMode::Bridge
+                } else {
+                    McpToolMode::Eager
+                }
+            }
+        }
+    }
+
+    /// Bridge-mode guidance: the stable `tool_search`/`tool_describe`/
+    /// `tool_call` surface plus usable server summaries only.
+    ///
+    /// Group-disabled servers are still listed: their tools remain searchable
+    /// through `tool_search` (group disable is exposure control, not
+    /// authorization), just as hidden groups are searchable today.
+    /// Disconnected servers are omitted: nothing can reach them without a
+    /// reconnect. Individual tool descriptions never appear here; the model
+    /// reads schemas on demand through `tool_describe`.
+    pub(super) fn bridge_prompt_fragment(&self) -> Option<String> {
+        if self.servers.is_empty() {
+            return None;
+        }
+        let disabled = self.disabled_read();
+        if self
+            .servers
+            .iter()
+            .all(|server| disabled.contains(&server.label))
+        {
+            return None;
+        }
+
+        let mut lines = vec![
+            "External MCP capabilities are available through tool_search, tool_describe and tool_call."
+                .to_string(),
+            "Use tool_search to find an MCP capability. Use tool_describe if you need its parameter schema. Invoke it with tool_call."
+                .to_string(),
+            "Discovery does not authorize execution; actual calls still pass the shell's safety policy."
+                .to_string(),
+        ];
+        if !self.warnings.is_empty() {
+            lines.push("Warnings: ".to_string());
+            for warning in &self.warnings {
+                lines.push(format!("- {warning}"));
+            }
+        }
+
+        for server in &self.servers {
+            if disabled.contains(&server.label) {
+                continue;
+            }
+            lines.push(server_summary_line(server));
+        }
+
+        Some(lines.join("\n"))
+    }
+
     /// Whether a binding still points at a registered server tool.
     ///
     /// `definitions_matching` answers the same question inline because it
@@ -414,6 +541,20 @@ fn tool_definition(server: &McpServer, tool: &Tool, function_name: &str) -> Valu
             "parameters": schema,
         }
     })
+}
+
+/// One prompt line naming a usable server: label, description, tool
+/// count. Depends only on capability facts, never on turn state, so the
+/// bridge prompt stays stable across a turn's iterations.
+fn server_summary_line(server: &McpServer) -> String {
+    let mut header = format!("- {}", server.label);
+    if let Some(desc) = &server.description
+        && !desc.trim().is_empty()
+    {
+        header.push_str(&format!(": {desc}"));
+    }
+    header.push_str(&format!(" ({} tools)", server.tools.len()));
+    header
 }
 
 /// Sorted parameter names and parameter descriptions from an MCP tool's

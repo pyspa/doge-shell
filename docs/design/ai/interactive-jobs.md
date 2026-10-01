@@ -26,11 +26,36 @@
   activation するか、`tool_search` で個別に発見し、`tool_search` による変更は
   次 iteration の再構築で反映される。  `tool_search` は group の enabled 状態を変えない。
 
+## MCP モデル表面の二つの mode（Eager / Bridge）
+
+`AI_CHAT_MCP_TOOL_MODE`（`auto` 既定）が `!` チャットの MCP 表面を決める。
+mode は turn 開始時に1回だけ解決し（`TurnSetup::mcp_tool_mode`）、その turn の
+全 iteration で不変。iteration ごとに変えると provider prefix cache が毎回
+外れるため、再計算しない。
+
+- **Eager**: 既存動作。active group の schema＋turn-local な Tool Search 公開
+  （`ToolSearchExposure`）を毎リクエスト再構築する。`mcp_list_groups` /
+  `mcp_load_group` も載る。小さな catalog では発見の1往復より schema 直載せが
+  安いため、互換 fallback としても残る。
+- **Bridge**: 安定した `tool_search` / `tool_describe` / `tool_call` のみ。
+  `mcp__*` schema・`mcp_list_groups` / `mcp_load_group` は載せない。
+  `tool_search` は compact な候補だけ返し、次のリクエストを変えない。
+  full schema は `tool_describe` が都度解決し、実行は `tool_call` が論理 MCP
+  呼び出しへ unwrap してから既存の policy（hooks / SafetyGuard / approval /
+  AgentRuntime / MCP task）へ渡す。`tool_call` 自体は transport adapter で、
+  第二の MCP 実行経路ではない。
+
+`auto` は discoverable な MCP schema 合計（group 無効化は無視、disconnect・
+stale は除外）が `12 KiB` を超えたら Bridge を選ぶ。group disable は
+authorization ではなく exposure 制御なので、bridge の `tool_call` も通常通り
+SafetyGuard を通る。
+
 ## Tool Search exposure budget
 
 `tool_search` を 1 turn 内で繰り返すと schema が際限なく累積する問題への対処。
 `dsh-builtin/src/chatgpt/tool/tool_search.rs` の `ToolSearchExposure` が
-turn-local に以下を課す（定数。env var / config なし）。
+turn-local に以下を課す（定数。env var / config なし）。**この budget は
+Eager mode のみに適用する。Bridge mode は schema を動的追加しない。**
 
 - **tool数**: 1 turn に `tool_search` 経由で新規公開できるのは 32 tool まで
  （`MAX_TOOL_SEARCH_EXPOSED_TOOLS_PER_TURN`）。

@@ -510,3 +510,327 @@ fn ambiguous_redirect_is_an_error() {
         before_b
     );
 }
+
+fn param_stdout(script: &str) -> String {
+    stdout_of(script)
+}
+
+// Truth table: set non-empty / set empty / unset × all eight operators.
+// Uses observable markers PARAM / WORD / EMPTY / ERROR rather than fragile
+// whitespace.
+#[test]
+fn parameter_truth_table() {
+    // Default colon: set->PARAM, empty->WORD, unset->WORD
+    assert!(param_stdout("X=PARAM; echo ${X:-WORD}").contains("PARAM"));
+    assert!(param_stdout("X=; echo ${X:-WORD}").contains("WORD"));
+    assert!(param_stdout("echo ${DOGESH_TT_U1:-WORD}").contains("WORD"));
+    // Default unset-only: set->PARAM, empty->EMPTY (empty, not WORD), unset->WORD
+    assert!(param_stdout("X=PARAM; echo ${X-WORD}").contains("PARAM"));
+    let out = param_stdout("X=; /usr/bin/printf '[%s]\\n' \"${X-WORD}\"");
+    assert_eq!(out.trim(), "[]", "empty must stay empty, got {out:?}");
+    assert!(param_stdout("echo ${DOGESH_TT_U2-WORD}").contains("WORD"));
+    // Assign colon: set->PARAM (no assign), empty->WORD+assign, unset->WORD+assign
+    assert!(param_stdout("X=PARAM; echo ${X:=WORD}; echo $X").contains("PARAM"));
+    let out = param_stdout("X=; echo ${X:=WORD}; echo $X");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["WORD", "WORD"], "got {out:?}");
+    // Assign unset-only: empty stays empty, no assign
+    let out = param_stdout(
+        "X=; /usr/bin/printf '[%s]\\n' \"${X=WORD}\"; /usr/bin/printf '[%s]\\n' \"$X\"",
+    );
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[]", "[]"], "got {out:?}");
+    // Error colon: set->PARAM, empty->ERROR, unset->ERROR
+    assert!(param_stdout("X=PARAM; echo ${X:?boom}").contains("PARAM"));
+    let out = run_command("X=; echo ${X:?boom}; echo SHOULD_NOT_RUN");
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("boom"));
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("SHOULD_NOT_RUN"));
+    // Error unset-only: empty->EMPTY (succeeds), unset->ERROR
+    let out = param_stdout("X=; /usr/bin/printf '[%s]\\n' \"${X?boom}\"");
+    assert_eq!(out.trim(), "[]", "got {out:?}");
+    let out = run_command("echo ${DOGESH_TT_UE1?boom}; echo SHOULD_NOT_RUN");
+    assert!(!out.status.success());
+    // Alternate colon: set->WORD, empty->null, unset->null
+    assert!(param_stdout("X=PARAM; echo ${X:+WORD}").contains("WORD"));
+    let out = param_stdout("X=; /usr/bin/printf '[%s]\\n' before ${X:+WORD} after");
+    assert!(!out.contains("WORD"), "got {out:?}");
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' before ${DOGESH_TT_UA1:+WORD} after");
+    assert!(!out.contains("WORD"), "got {out:?}");
+    // Alternate unset-only: set->WORD, empty->WORD, unset->null
+    assert!(param_stdout("X=PARAM; echo ${X+WORD}").contains("WORD"));
+    assert!(param_stdout("X=; echo ${X+WORD}").contains("WORD"));
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' before ${DOGESH_TT_UA2+WORD} after");
+    assert!(!out.contains("WORD"), "got {out:?}");
+}
+
+#[test]
+fn lazy_operand_filesystem_markers() {
+    // Must not run
+    let dir = tempfile::tempdir().expect("tempdir");
+    let m1 = dir.path().join("m1");
+    let out = run_command(&format!("X=set; echo ${{X:-$(touch {})}}", m1.display()));
+    assert!(out.status.success());
+    assert!(!m1.exists(), "unselected operand ran");
+    let m2 = dir.path().join("m2");
+    let out = run_command(&format!("echo ${{DOGESH_LZ1:+$(touch {})}}", m2.display()));
+    assert!(out.status.success());
+    assert!(!m2.exists(), "unselected alternate ran");
+    // Must run exactly once (marker present)
+    let m3 = dir.path().join("m3");
+    let out = run_command(&format!("echo ${{DOGESH_LZ2:-$(touch {})}}", m3.display()));
+    assert!(out.status.success());
+    assert!(m3.exists(), "selected default did not run");
+    let m4 = dir.path().join("m4");
+    let out = run_command(&format!("X=set; echo ${{X:+$(touch {})}}", m4.display()));
+    assert!(out.status.success());
+    assert!(m4.exists(), "selected alternate did not run");
+}
+
+#[test]
+fn assign_persistence() {
+    let out = param_stdout(
+        "/usr/bin/printf '[%s]\\n' \"${DOGESH_AP1:=value}\"; /usr/bin/printf '[%s]\\n' \"$DOGESH_AP1\"",
+    );
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[value]", "[value]"], "got {out:?}");
+    // No-colon with empty preserves empty, no assign
+    let out = param_stdout(
+        "X=; /usr/bin/printf '[%s]\\n' \"${X=value}\"; /usr/bin/printf '[%s]\\n' \"$X\"",
+    );
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[]", "[]"], "got {out:?}");
+    // Colon with empty assigns
+    let out = param_stdout(
+        "X=; /usr/bin/printf '[%s]\\n' \"${X:=value}\"; /usr/bin/printf '[%s]\\n' \"$X\"",
+    );
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[value]", "[value]"], "got {out:?}");
+}
+
+#[test]
+fn nested_assignments_and_lazy_nesting() {
+    let out = param_stdout(
+        "echo \"${DOGESH_NA1:=${DOGESH_NB1:=value}}\"; echo \"$DOGESH_NA1/$DOGESH_NB1\"",
+    );
+    assert!(out.contains("value/value"), "got {out:?}");
+    let out = param_stdout(
+        "A=already; echo \"${A:-${DOGESH_NLB1:=should-not-exist}}\"; echo \"${DOGESH_NLB1-unset}\"",
+    );
+    assert!(out.contains("already"), "got {out:?}");
+    assert!(out.contains("unset"), "B leaked: {out:?}");
+    assert!(
+        !out.contains("should-not-exist"),
+        "eager expansion: {out:?}"
+    );
+}
+
+#[test]
+fn assign_vs_default_escaped_space() {
+    // Default keeps escape protection: one field
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' ${DOGESH_QD1:-a\\ b}");
+    assert_eq!(out.trim(), "[a b]", "got {out:?}");
+    // Assign substitutes the value as an ordinary parameter: splits
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' ${DOGESH_QA1:=a\\ b}");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[a]", "[b]"], "got {out:?}");
+    let out = param_stdout(
+        "/usr/bin/printf '[%s]\\n' ${DOGESH_QA2:=a\\ b}; /usr/bin/printf '[%s]\\n' \"$DOGESH_QA2\"",
+    );
+    assert!(
+        out.contains("[a b]"),
+        "stored value must keep space: {out:?}"
+    );
+}
+
+#[test]
+fn whole_word_composition() {
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' pre${DOGESH_WW1:-a b}post");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[prea]", "[bpost]"], "got {out:?}");
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' \"pre${DOGESH_WW2:-a b}post\"");
+    assert_eq!(out.trim(), "[prea bpost]", "got {out:?}");
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' ${DOGESH_WW3:-${DOGESH_WW4:-c d}}");
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[c]", "[d]"], "got {out:?}");
+    let out = param_stdout("/usr/bin/printf '[%s]\\n' \"${DOGESH_WW5:-${DOGESH_WW6:-c d}}\"");
+    assert_eq!(out.trim(), "[c d]", "got {out:?}");
+}
+
+#[test]
+fn operand_pathname_expansion() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("a.txt"), "a").unwrap();
+    std::fs::write(dir.path().join("b.txt"), "b").unwrap();
+    let out = param_stdout(&format!(
+        "cd {}; /usr/bin/printf '[%s]\\n' ${{DOGESH_PE1:-*.txt}}",
+        dir.path().display()
+    ));
+    assert!(
+        out.contains("a.txt") && out.contains("b.txt"),
+        "got {out:?}"
+    );
+    let out = param_stdout(&format!(
+        "cd {}; /usr/bin/printf '[%s]\\n' \"${{DOGESH_PE2:-*.txt}}\"",
+        dir.path().display()
+    ));
+    assert_eq!(out.trim(), "[*.txt]", "got {out:?}");
+    let out = param_stdout(&format!(
+        "cd {}; /usr/bin/printf '[%s]\\n' ${{DOGESH_PE3:-\\*.txt}}",
+        dir.path().display()
+    ));
+    assert_eq!(out.trim(), "[*.txt]", "got {out:?}");
+    // Runtime braces never expand
+    let out = param_stdout("X='{a,b}'; /usr/bin/printf '[%s]\\n' ${DOGESH_PE4:-$X}");
+    assert_eq!(out.trim(), "[{a,b}]", "got {out:?}");
+}
+
+#[test]
+fn assignment_context_is_scalar() {
+    let out = param_stdout("Y=${DOGESH_AC1:-a b}; /usr/bin/printf '[%s]\\n' \"$Y\"");
+    assert_eq!(out.trim(), "[a b]", "got {out:?}");
+    let out = param_stdout("Y=${DOGESH_AC2:=a b}; /usr/bin/printf '[%s]\\n' \"$Y/$DOGESH_AC2\"");
+    assert_eq!(out.trim(), "[a b/a b]", "got {out:?}");
+}
+
+#[test]
+fn error_behavior_command_mode() {
+    // Colon empty fails
+    let out = run_command("X=; echo ${X:?boom}; echo SHOULD_NOT_RUN");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains('X') && stderr.contains("boom"),
+        "got {stderr:?}"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("SHOULD_NOT_RUN"));
+    // No-colon empty succeeds with empty field
+    let out = param_stdout("X=; /usr/bin/printf '[%s]\\n' \"${X?boom}\"");
+    assert_eq!(out.trim(), "[]", "got {out:?}");
+    // AND/OR: expansion error does not continue
+    let out = run_command("echo ${DOGESH_EB1:?boom} || echo FALLBACK");
+    assert!(!out.status.success());
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("FALLBACK"));
+}
+
+#[test]
+fn interactive_error_survival_reports_status_one() {
+    let output = run_interactive(&["echo ${DOGESH_IE1:?boom}", "echo alive", "echo $?"]);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(stdout.contains("alive"), "shell died: {stdout:?}");
+    // After `alive` (status 0), `$?` is 0; the failure itself published 1
+    // before `alive` ran. Check the dedicated sequence below.
+    assert!(stderr.contains("DOGESH_IE1") && stderr.contains("boom"));
+    let output = run_interactive(&["echo ${DOGESH_IE2:?boom}", "echo $?"]);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        stdout.lines().any(|l| l.trim() == "1"),
+        "logical $? must be 1 after expansion failure, got {stdout:?}"
+    );
+}
+
+#[test]
+fn parameter_error_inside_command_substitution_is_shell_failure() {
+    let out = run_command("/usr/bin/printf '<%s>\\n' \"$(printf '%s' ${DOGESH_CS1:?inner-boom})\"");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    assert!(
+        stderr.contains("DOGESH_CS1") && stderr.contains("inner-boom"),
+        "got {stderr:?}"
+    );
+    assert!(
+        !stderr.to_lowercase().contains("internal exec failed"),
+        "semantic error misreported as infrastructure: {stderr:?}"
+    );
+    // Helper returns shell status 1; outer substitution yields empty.
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        "<>",
+        "got {:?}",
+        out.stdout
+    );
+}
+
+#[test]
+fn helper_isolation_of_assign() {
+    let out = param_stdout(
+        "/usr/bin/printf '[%s]\\n' \"$(printf '%s' \"${DOGESH_HI1:=inside}\")\"; /usr/bin/printf '[%s]\\n' \"${DOGESH_HI1-unset}\"",
+    );
+    let lines: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert_eq!(lines, vec!["[inside]", "[unset]"], "got {out:?}");
+}
+
+#[test]
+fn gating_skips_unselected_assign() {
+    let out = param_stdout(&format!(
+        "{} && echo ${{DOGESH_GU1:=created}}; echo \"${{DOGESH_GU1-unset}}\"",
+        false_path()
+    ));
+    assert_eq!(out.trim(), "unset", "gated-out assign leaked: {out:?}");
+    let out = param_stdout(&format!(
+        "{} || echo ${{DOGESH_GU2:=created}}; echo \"${{DOGESH_GU2-unset}}\"",
+        true_path()
+    ));
+    assert_eq!(out.trim(), "unset", "gated-out assign leaked: {out:?}");
+}
+
+#[test]
+fn redirect_target_does_not_split() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = run_command(&format!(
+        "cd {}; TARGET='file with spaces'; echo x > ${{DOGESH_RT2:-$TARGET}}",
+        dir.path().display()
+    ));
+    assert!(out.status.success(), "redirect failed: {out:?}");
+    assert!(dir.path().join("file with spaces").exists());
+}
+
+#[test]
+fn unselected_dangerous_substitution_never_runs() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let victim = dir.path().join("victim");
+    std::fs::create_dir(&victim).expect("victim");
+    let out = run_command(&format!(
+        "X=safe; echo ${{X:-$(rm -rf {})}}",
+        victim.display()
+    ));
+    assert!(out.status.success(), "safe default failed: {out:?}");
+    assert!(victim.exists(), "unselected rm ran");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("safe"));
+}

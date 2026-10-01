@@ -375,6 +375,80 @@ mod tests {
         assert!(victim.exists(), "denied nested body must not run");
     }
 
+    /// Unselected `${X:-$(rm ...)}` never authorizes or runs the operand.
+    #[tokio::test]
+    async fn unselected_parameter_operand_needs_no_authorization() {
+        fn allow_all(_: &str) -> Result<ConfirmationAction> {
+            Ok(ConfirmationAction::Yes)
+        }
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let victim = dir.path().join("victim");
+        std::fs::create_dir(&victim).expect("victim");
+        let input = format!(
+            "echo ${{DOGESH_SAFE_PARAM:-$(rm -rf {})}}",
+            victim.display()
+        );
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env);
+        shell
+            .environment
+            .write()
+            .set_shell_var("DOGESH_SAFE_PARAM".to_string(), "safe".to_string());
+        let plan =
+            super::super::parse::parse_execution_plan(&input, Arc::clone(&shell.environment))
+                .expect("plan");
+        // Even with `deny_all`, the unselected operand produces no prompt
+        // and no process: materialization succeeds with the parameter value.
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], deny_all)
+            .await
+            .expect("unselected operand must materialize")
+        {
+            MaterializeOutcome::Runnable(materialized) => {
+                let argv = materialized
+                    .job
+                    .process
+                    .as_ref()
+                    .expect("process")
+                    .command_argv()
+                    .expect("argv");
+                assert_eq!(argv.1.to_vec(), vec!["safe".to_string()]);
+            }
+            MaterializeOutcome::NoCommand(_) => panic!("expected runnable"),
+            MaterializeOutcome::Rejected(f) => panic!("unexpected rejection: {f:?}"),
+        }
+        assert!(victim.exists(), "unselected rm must not run");
+        let _ = allow_all;
+    }
+
+    /// Selected `${UNSET:-$(rm ...)}` goes through the existing
+    /// authorize-before-run path and is denyable.
+    #[tokio::test]
+    async fn selected_parameter_operand_is_denyable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let victim = dir.path().join("victim");
+        std::fs::create_dir(&victim).expect("victim");
+        let input = format!(
+            "echo ${{DOGESH_UNSET_PARAM:-$(rm -rf {})}}",
+            victim.display()
+        );
+        let env = crate::environment::Environment::new();
+        let mut shell = Shell::new(env);
+        let plan =
+            super::super::parse::parse_execution_plan(&input, Arc::clone(&shell.environment))
+                .expect("plan");
+        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
+        match materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], deny_all).await {
+            Err(err) => assert!(
+                is_authorization_cancelled(&err),
+                "selected denial must surface as cancellation, got {err:?}"
+            ),
+            Ok(_) => panic!("denied selected operand must not materialize"),
+        }
+        assert!(victim.exists(), "denied selected operand must not run");
+    }
+
     /// A variable-derived command is dynamic: the concrete argv is `rm ...`
     /// and the raw source must not bypass the guard.
     #[tokio::test]

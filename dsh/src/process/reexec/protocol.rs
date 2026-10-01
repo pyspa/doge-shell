@@ -26,7 +26,10 @@ use std::os::unix::io::RawFd;
 /// Bumped to 7: `PlannedSubstitution` carries explicit input/output
 /// process-substitution direction (`PlannedSubstitutionKind::Process(Read)`
 /// vs `Process(Write)`).
-pub const PROTOCOL_VERSION: u32 = 7;
+/// Bumped to 8: `ExecutionPlan` / `WordPart` carries structured modified
+/// parameter expansion (`WordPart::ParameterExpansion` with
+/// `PlannedParameterExpansion`).
+pub const PROTOCOL_VERSION: u32 = 8;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -710,5 +713,114 @@ mod tests {
             err.to_string()
                 .contains("unsupported internal exec version")
         );
+    }
+
+    #[test]
+    fn request_rejects_legacy_v7() {
+        // v7 payloads (no structured `ParameterExpansion`) must fail closed
+        // after the v8 migration, never parse as a v8 request.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 7,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        let err = read_internal_request(read_fd).expect_err("legacy v7 must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
+    }
+
+    #[test]
+    fn parameter_expansion_roundtrips_through_v8() {
+        use crate::shell::plan::{ParameterAction, ParameterCondition, QuoteMode, WordPart};
+
+        let env_arc = crate::environment::Environment::new();
+        let plan = crate::shell::parse::parse_execution_plan("echo ${A:-${B:-fallback}}", env_arc)
+            .expect("parse outer");
+        // Outer word is `echo` + one parameter expansion.
+        let word = &plan.lists[0].jobs[0].stages[0].argv[1];
+        let (outer, outer_quote) = match &word.parts[0] {
+            WordPart::ParameterExpansion { expansion, quote } => (expansion, *quote),
+            other => panic!("expected outer ParameterExpansion, got {other:?}"),
+        };
+        assert_eq!(outer.name, "A");
+        assert_eq!(outer.condition, ParameterCondition::UnsetOrNull);
+        assert_eq!(outer.action, ParameterAction::Default);
+        assert_eq!(outer_quote, QuoteMode::Unquoted);
+        let operand = outer.word.as_deref().expect("outer operand");
+        assert_eq!(operand.parts.len(), 1);
+        match &operand.parts[0] {
+            WordPart::ParameterExpansion { expansion, quote } => {
+                assert_eq!(expansion.name, "B");
+                assert_eq!(expansion.condition, ParameterCondition::UnsetOrNull);
+                assert_eq!(expansion.action, ParameterAction::Default);
+                assert_eq!(*quote, QuoteMode::Unquoted);
+                let inner_operand = expansion.word.as_deref().expect("inner operand");
+                assert_eq!(inner_operand.source, "fallback");
+            }
+            other => panic!("expected nested ParameterExpansion, got {other:?}"),
+        }
+
+        // Serialize the whole plan through the re-exec JSON and verify the
+        // structure survives verbatim.
+        let snapshot = ChildShellSnapshot::capture(&crate::environment::Environment::new().read());
+        let request = InternalExecRequest {
+            version: PROTOCOL_VERSION,
+            snapshot,
+            kind: InternalExecKind::Plan(PlanExecRequest {
+                plan,
+                mode: PlanExecMode::CommandSubstitution,
+                signal_policy: PlanSignalPolicy::Normal,
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        assert!(bytes.len() <= MAX_INTERNAL_EXEC_REQUEST);
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let decoded = read_internal_request(read.into_raw_fd()).expect("decode");
+        assert_eq!(decoded.version, PROTOCOL_VERSION);
+        match decoded.kind {
+            InternalExecKind::Plan(plan_request) => {
+                let word = &plan_request.plan.lists[0].jobs[0].stages[0].argv[1];
+                match &word.parts[0] {
+                    WordPart::ParameterExpansion { expansion, quote } => {
+                        assert_eq!(expansion.name, "A");
+                        assert_eq!(expansion.condition, ParameterCondition::UnsetOrNull);
+                        assert_eq!(expansion.action, ParameterAction::Default);
+                        assert_eq!(*quote, QuoteMode::Unquoted);
+                        let operand = expansion.word.as_deref().expect("operand");
+                        match &operand.parts[0] {
+                            WordPart::ParameterExpansion { expansion, quote } => {
+                                assert_eq!(expansion.name, "B");
+                                assert_eq!(*quote, QuoteMode::Unquoted);
+                                assert!(expansion.word.is_some());
+                            }
+                            other => panic!("nested lost, got {other:?}"),
+                        }
+                    }
+                    other => panic!("outer lost, got {other:?}"),
+                }
+            }
+            other => panic!("expected Plan, got {other:?}"),
+        }
     }
 }

@@ -257,6 +257,13 @@ pub async fn eval_str(
                     publish_exit_status(shell, 130);
                     return Ok(130);
                 }
+                Err(err) if crate::shell::parameter_expand::is_parameter_expansion_error(&err) => {
+                    // Fatal `${VAR:?}` expansion: publish logical status 1,
+                    // abort the current evaluation (no `||` continuation),
+                    // and return for one user-facing diagnostic.
+                    publish_exit_status(shell, 1);
+                    return Err(err);
+                }
                 Err(err) => return Err(err),
             };
             let mut job = materialized.job;

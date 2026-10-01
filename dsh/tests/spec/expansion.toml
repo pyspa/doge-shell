@@ -92,3 +92,181 @@ script = "echo $DOGESH_UNSET_PROBE_XYZ"
 [case.expect]
 status = 0
 stdout_not_contains = ["$DOGESH_UNSET_PROBE_XYZ", "DOGESH_UNSET_PROBE_XYZ"]
+
+[[case]]
+id = "expansion.parameter-default-colon"
+class = "posix"
+mode = "command"
+script = "echo ${DOGESH_PARAM_UNSET_DEFAULT:-fallback}"
+
+[case.expect]
+status = 0
+stdout_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-default-colon-empty"
+class = "posix"
+mode = "command"
+script = "X=; echo ${X:-fallback}"
+
+[case.expect]
+status = 0
+stdout_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-default-colon-set"
+class = "posix"
+mode = "command"
+script = "X=value; echo ${X:-fallback}"
+
+[case.expect]
+status = 0
+stdout_contains = ["value"]
+stdout_not_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-default-unset-only"
+class = "posix"
+mode = "command"
+script = "echo ${DOGESH_PARAM_UNSET_DEFAULT2-fallback}"
+
+[case.expect]
+status = 0
+stdout_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-default-unset-only-empty"
+class = "posix"
+mode = "command"
+script = "X=; printf '[%s]\\n' \"${X-fallback}\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[]"]
+stdout_not_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-default-unset-only-set"
+class = "posix"
+mode = "command"
+script = "X=value; echo ${X-fallback}"
+
+[case.expect]
+status = 0
+stdout_contains = ["value"]
+stdout_not_contains = ["fallback"]
+
+[[case]]
+id = "expansion.parameter-assign-colon"
+class = "posix"
+mode = "command"
+script = "echo ${DOGESH_PARAM_ASSIGN_COLON:=assigned}; echo $DOGESH_PARAM_ASSIGN_COLON"
+
+[case.expect]
+status = 0
+stdout_contains = ["assigned"]
+
+[[case]]
+id = "expansion.parameter-assign-colon-empty"
+class = "posix"
+mode = "command"
+script = "X=; echo ${X:=assigned}; echo $X"
+
+[case.expect]
+status = 0
+stdout_contains = ["assigned"]
+
+[[case]]
+id = "expansion.parameter-assign-unset-only"
+class = "posix"
+mode = "command"
+script = "X=; printf '[%s]\\n' \"${X=value}\"; printf '[%s]\\n' \"$X\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[]"]
+stdout_not_contains = ["value"]
+
+[[case]]
+id = "expansion.parameter-assign-unset-only-unset"
+class = "posix"
+mode = "command"
+script = "echo ${DOGESH_PARAM_ASSIGN_UNSET:=assigned}; echo $DOGESH_PARAM_ASSIGN_UNSET"
+
+[case.expect]
+status = 0
+stdout_contains = ["assigned"]
+
+[[case]]
+id = "expansion.parameter-error-colon"
+class = "posix"
+mode = "command"
+script = "X=; echo ${X:?boom}; echo SHOULD_NOT_RUN"
+
+[case.expect]
+status = 1
+stderr_contains = ["X", "boom"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "expansion.parameter-error-unset-only"
+class = "posix"
+mode = "command"
+script = "X=; printf '[%s]\\n' \"${X?boom}\""
+
+[case.expect]
+status = 0
+stdout_contains = ["[]"]
+
+[[case]]
+id = "expansion.parameter-error-unset-only-unset"
+class = "posix"
+mode = "command"
+script = "echo ${DOGESH_PARAM_ERR_UNSET?boom}; echo SHOULD_NOT_RUN"
+
+[case.expect]
+status = 1
+stderr_contains = ["DOGESH_PARAM_ERR_UNSET", "boom"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "expansion.parameter-alternate-colon"
+class = "posix"
+mode = "command"
+script = "X=value; echo ${X:+alternative}"
+
+[case.expect]
+status = 0
+stdout_contains = ["alternative"]
+
+[[case]]
+id = "expansion.parameter-alternate-colon-empty"
+class = "posix"
+mode = "command"
+script = "X=; printf '[%s]\\n' before ${X:+value} after"
+
+[case.expect]
+status = 0
+stdout_contains = ["[before]", "[after]"]
+stdout_not_contains = ["[value]"]
+
+[[case]]
+id = "expansion.parameter-alternate-set-only"
+class = "posix"
+mode = "command"
+script = "X=; echo ${X+alternative}"
+
+[case.expect]
+status = 0
+stdout_contains = ["alternative"]
+
+[[case]]
+id = "expansion.parameter-alternate-set-only-unset"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' before ${DOGESH_PARAM_ALT_UNSET+value} after"
+
+[case.expect]
+status = 0
+stdout_contains = ["[before]", "[after]"]
+stdout_not_contains = ["[value]"]

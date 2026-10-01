@@ -81,7 +81,9 @@ fn collect_highlight_from_pair(
             push_token(pair.as_span(), kind, out);
         }
         Rule::assign_name => push_token(pair.as_span(), HighlightKind::Assignment, out),
-        Rule::variable => push_token(pair.as_span(), HighlightKind::Variable, out),
+        Rule::variable | Rule::parameter_expansion => {
+            push_token(pair.as_span(), HighlightKind::Variable, out)
+        }
         Rule::s_quoted => push_token(pair.as_span(), HighlightKind::SingleQuoted, out),
         // A double-quoted string is now a run of literal and variable parts, so
         // walk it and colour the variables. `write_colored_ranges_to` slices a
@@ -95,7 +97,7 @@ fn collect_highlight_from_pair(
             if !pair
                 .clone()
                 .into_inner()
-                .any(|inner| inner.as_rule() == Rule::variable)
+                .any(|inner| matches!(inner.as_rule(), Rule::variable | Rule::parameter_expansion))
             {
                 push_token(pair.as_span(), HighlightKind::DoubleQuoted, out);
                 return;
@@ -109,7 +111,9 @@ fn collect_highlight_from_pair(
                     push_range(cursor, span.start(), HighlightKind::DoubleQuoted, out);
                 }
                 match inner.as_rule() {
-                    Rule::variable => push_token(span, HighlightKind::Variable, out),
+                    Rule::variable | Rule::parameter_expansion => {
+                        push_token(span, HighlightKind::Variable, out)
+                    }
                     _ => push_token(span, HighlightKind::DoubleQuoted, out),
                 }
                 cursor = span.end();

@@ -177,9 +177,42 @@ impl PlannedWord {
             WordPart::Literal(literal) => {
                 literal.tilde_candidate || literal.pattern_active || literal.brace_active
             }
-            WordPart::Variable { .. } | WordPart::Substitution { .. } => true,
+            WordPart::Variable { .. }
+            | WordPart::Substitution { .. }
+            | WordPart::ParameterExpansion { .. } => true,
         })
     }
+}
+
+/// Whether a modified parameter expansion tests unset-only or unset-or-null.
+///
+/// `UnsetOnly` is the no-colon form (`-`, `=`, `?`, `+`): only an unset
+/// parameter selects the alternate branch. `UnsetOrNull` is the colon form
+/// (`:-`, `:=`, `:?`, `:+`): an empty value selects it too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ParameterCondition {
+    UnsetOnly,
+    UnsetOrNull,
+}
+
+/// What a modified parameter expansion does when its condition selects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ParameterAction {
+    Default,
+    Assign,
+    Error,
+    Alternate,
+}
+
+/// Structured `${VAR<op>word}` operand: parsed without reading variables,
+/// executing substitutions, splitting, or globbing. Runtime semantics live
+/// in `super::parameter_expand`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedParameterExpansion {
+    pub name: String,
+    pub condition: ParameterCondition,
+    pub action: ParameterAction,
+    pub word: Option<Box<PlannedWord>>,
 }
 
 /// A fragment of a word: static text, a deferred variable, or a deferred
@@ -189,6 +222,10 @@ pub enum WordPart {
     Literal(PlannedLiteral),
     Variable {
         source: String,
+        quote: QuoteMode,
+    },
+    ParameterExpansion {
+        expansion: PlannedParameterExpansion,
         quote: QuoteMode,
     },
     Substitution {

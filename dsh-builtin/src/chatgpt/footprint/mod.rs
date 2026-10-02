@@ -28,7 +28,7 @@ use std::sync::{LazyLock, Mutex};
 /// Scripts may consume this output; future attribution changes must bump this
 /// rather than silently reshaping fields. Unrelated to any re-exec protocol
 /// version.
-pub(crate) const FOOTPRINT_REPORT_VERSION: u32 = 1;
+pub(crate) const FOOTPRINT_REPORT_VERSION: u32 = 2;
 
 /// Which chat entry point a measured request belongs to: `!` interactive
 /// turns and durable agent turns do not share a tool surface.
@@ -159,9 +159,28 @@ pub(crate) struct RequestFootprint {
     /// Never the provider's tokenizer input length.
     pub context_json_bytes: usize,
     pub conversation: ConversationFootprint,
+    pub observations: ObservationFootprint,
     pub dynamic_context_json_bytes: usize,
     pub agent_runtime_context_json_bytes: usize,
     pub provider_usage: Option<ProviderUsageFootprint>,
+}
+
+/// Observation Store attribution: lifetime storage versus active references.
+///
+/// `stored_*` is everything retained for the conversation lifetime;
+/// `active_*` counts only stubs currently in the provider-bound
+/// conversation. Only active references contribute current prompt saving,
+/// measured as exact deterministic `original serialized tool-message bytes
+/// minus current stub-message bytes` (`active_reclaimed_json_bytes`). Never
+/// a token count.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub(crate) struct ObservationFootprint {
+    pub stored_entries: usize,
+    pub stored_content_bytes: usize,
+    pub active_references: usize,
+    pub active_original_message_bytes: usize,
+    pub active_stub_message_bytes: usize,
+    pub active_reclaimed_json_bytes: usize,
 }
 
 /// The full profiler report: fixed offline measurements plus the last real
@@ -260,6 +279,7 @@ pub(super) fn snapshot_request(
         tools_array_overhead_bytes: tools_json_bytes.saturating_sub(sum_tool_definition_bytes),
         context_json_bytes: messages_json_bytes.saturating_add(tools_json_bytes),
         conversation: manager.footprint(),
+        observations: manager.observation_footprint(),
         dynamic_context_json_bytes,
         agent_runtime_context_json_bytes,
         provider_usage: None,

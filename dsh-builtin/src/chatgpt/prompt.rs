@@ -33,6 +33,7 @@ Tools:
 - `edit`: create a file, or replace an existing one in full
 - `execute`: run a shell command; pipes, redirection and `&&` all work
 - `skill_manage`: create, update or delete a reusable skill in the directories listed below
+- `observation_read`: retrieve a tool result that history says was offloaded; use this instead of rerunning the original operation merely to recover its old output.
 
 Respond in Markdown. Be concise and avoid unnecessary repetition.
 "#;

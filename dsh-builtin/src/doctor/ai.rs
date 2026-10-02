@@ -255,6 +255,28 @@ pub(super) fn check_prompt_footprint(ctx: &Context, proxy: &mut dyn ShellProxy) 
             ] {
                 let _ = ctx.write_stdout(&format!("  {label:<22} {bytes} B"));
             }
+            let observations = &request.observations;
+            let _ = ctx.write_stdout("Observations");
+            let _ = ctx.write_stdout(&format!(
+                "  {:<22} {} / {} B",
+                "stored", observations.stored_entries, observations.stored_content_bytes
+            ));
+            let _ = ctx.write_stdout(&format!(
+                "  {:<22} {}",
+                "active references", observations.active_references
+            ));
+            let _ = ctx.write_stdout(&format!(
+                "  {:<22} {} B",
+                "original messages", observations.active_original_message_bytes
+            ));
+            let _ = ctx.write_stdout(&format!(
+                "  {:<22} {} B",
+                "active stubs", observations.active_stub_message_bytes
+            ));
+            let _ = ctx.write_stdout(&format!(
+                "  {:<22} {} B",
+                "active context reclaimed", observations.active_reclaimed_json_bytes
+            ));
             match &request.provider_usage {
                 None => {
                     let _ = ctx

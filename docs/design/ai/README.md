@@ -160,3 +160,28 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 system prompt + core tool 定義 + bridge trio）には `budget.json` の上限が
 あり、`actual <= max` の片方向ラチェットで CI が保護する。ユーザー設定
 （skills 数、`CHAT_PROMPT`、 live の MCP catalog）は上限の対象外。
+
+## 7. Observation Store（recoverable tool-result offloading）
+
+大きな履歴 tool 結果は `compact_buffer()` で単なる stub にせず、会話所有の
+Observation Store（`dsh-builtin/src/chatgpt/observation/`）に exact
+model-visible 文字列のまま残し、buffer には `(offloaded tool result: ...,
+observation obs-000001; use observation_read if needed)` のみを置く。回収は
+read-only の `observation_read(id, offset, limit)` で行い、元の
+`read_file` / `search` / `execute` / MCP を再実行しない。
+
+- 所有は `ConversationManager` のみ。session 継続・shell 再起動・durable
+  task checkpoint と同じシリアライズで運ばれ、第二の DB やファイルを作らない。
+- 通常は inline のまま持ち、compaction が選んだ時点で store へ move する。
+  毎結果の複製はしない。
+- `unseen_tool_results` にある結果（成功した provider request に一度も
+  載っていない）は offload しない。並列 tool batch・失敗リトライ・resume
+  repair の保護が目的。
+- Store は有界（entries / total bytes / single bytes）。満杯時は新規の
+  recoverable 化を止め、従来の非 recoverable stub に fallback する。既存
+  `obs-*` の eviction はしない。
+- `observation_read` 自身の結果は再 offload しない（再帰防止）。要約・
+  reflection は stub のまま読み、store 全体を再展開しない。
+- 計測は `doctor ai --prompt-size` の `observations`（stored / active /
+  `active_reclaimed_json_bytes`＝元シリアライズ差分）で行い、token 換算はしない。
+  report の `version` は store 導入で `2`。

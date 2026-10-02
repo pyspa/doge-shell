@@ -19,7 +19,7 @@ use super::word_expand::{
 };
 use crate::parser::expansion::escape_glob_metacharacters;
 use crate::process::reexec::PlanExecMode;
-use crate::shell::Shell;
+use crate::shell::expansion_host::ExpansionHost;
 use anyhow::Result;
 use dsh_types::Context;
 use std::future::Future;
@@ -36,7 +36,7 @@ use std::pin::Pin;
 /// such as `(1 / 0)` or `(X = 9)`, which the evaluator skips lazily.
 /// Assignments mutate the current shell environment; errors are typed.
 pub(crate) fn expand_arithmetic_to_decimal<'a>(
-    shell: &'a mut Shell,
+    shell: &'a mut impl ExpansionHost,
     ctx: &'a Context,
     expansion: &'a PlannedArithmeticExpansion,
     confirm: ConfirmFn,
@@ -59,7 +59,7 @@ pub(crate) fn expand_arithmetic_to_decimal<'a>(
 /// run before the outer arithmetic parse, so outer `&&` / `||` / `?:`
 /// short-circuit cannot suppress them. The caller parses the joined string.
 fn expand_body_scalar<'a>(
-    shell: &'a mut Shell,
+    shell: &'a mut impl ExpansionHost,
     ctx: &'a Context,
     word: &'a PlannedWord,
     confirm: ConfirmFn,
@@ -139,7 +139,7 @@ fn expand_body_scalar<'a>(
 /// existing IFS pipeline while quoted stays protected.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn expand_arithmetic_to_segments<'a>(
-    shell: &'a mut Shell,
+    shell: &'a mut impl ExpansionHost,
     ctx: &'a Context,
     expansion: &'a PlannedArithmeticExpansion,
     quote: QuoteMode,
@@ -165,7 +165,7 @@ pub(crate) fn dry_arithmetic_placeholder(expansion: &PlannedArithmeticExpansion)
 pub(crate) fn dry_arithmetic_to_segments(
     expansion: &PlannedArithmeticExpansion,
     quote: QuoteMode,
-    shell: &Shell,
+    shell: &impl ExpansionHost,
 ) -> Vec<ExpandedSegment> {
     let _ = shell;
     let placeholder = dry_arithmetic_placeholder(expansion);
@@ -181,7 +181,7 @@ pub(crate) fn dry_arithmetic_to_segments(
 
 pub(crate) fn dry_arithmetic_to_scalar(
     expansion: &PlannedArithmeticExpansion,
-    shell: &Shell,
+    shell: &impl ExpansionHost,
 ) -> String {
     let _ = shell;
     dry_arithmetic_placeholder(expansion)
@@ -190,6 +190,7 @@ pub(crate) fn dry_arithmetic_to_scalar(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::Shell;
 
     #[test]
     fn dry_placeholder_never_evaluates() {

@@ -58,6 +58,7 @@ pub fn dry_materialize_job(planned: &PlannedJob, shell: &Shell) -> Result<Option
             }
         }
         expanded.push(ExpandedStage {
+            execution_environment: crate::process::stage_environment::StageEnvironment::Current,
             argv,
             redirects,
             env_overrides,

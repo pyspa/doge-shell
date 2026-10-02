@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 /// Plain-data shell state for one re-exec helper.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildShellSnapshot {
     pub cwd: PathBuf,
     pub last_exit_status: i32,

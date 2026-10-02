@@ -211,6 +211,14 @@ impl Environment {
             .checked_add(1)
             .expect("logical PATH generation overflow");
 
+        if self.isolated_projection {
+            // Stage PATH updates project locally; completion's global generation
+            // and background prewarming belong to the live session only.
+            self.variable_state.paths = paths;
+            self.completion_state.command_cache.write().clear();
+            return;
+        }
+
         if paths == self.variable_state.paths {
             // Bulk snapshot restore assigns `variable_state.paths` directly
             // before rebuilding projections. Re-activate even when the value

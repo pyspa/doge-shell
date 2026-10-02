@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "max_base_system_prompt_bytes": 2100,
+  "max_interactive_core_tools_json_bytes": 13500,
+  "max_agent_core_tools_json_bytes": 16000,
+  "max_mcp_bridge_tools_json_bytes": 1800
+}

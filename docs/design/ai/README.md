@@ -137,3 +137,26 @@ XDG を使う installer や `config.lisp` のローダと食い違う。
 `(set-auto-fix-enabled t)` / `(pref-ai-explanation t)`。
 
 `!` チャット、`Alt+d`、`aic`、`safe-run`、`ai-watch` は明示的な操作なので、この既定とは無関係。
+
+## 6. プロンプトの計測はバイトと provider 報告だけ
+
+トークン効率の回帰検出は `doctor ai --prompt-size`（実装は
+`dsh-builtin/src/chatgpt/footprint/`）が行う。2 種類の計測を混同しない:
+
+- **ローカル footprint**（compact JSON / UTF-8 バイト）: system prompt
+  の内訳（base guidance / skills index / MCP guidance / operator
+  instructions / language）、interactive/agent の tool surface、MCP
+  catalog（discoverable と model surface の区別）、直近の main
+  リクエストの会話カテゴリ（tool results は独立計上）。API キー不要・
+  オフライン。`4 bytes = 1 token` のような換算を計測値として扱わない。
+- **provider 報告の token usage**: `prompt_tokens` /
+  `cached_prompt_tokens` / `completion_tokens` のみを実トークンと呼ぶ。
+  `uncached = prompt - cached`（saturating）、
+  `cache_hit_ratio = cached / prompt`。cached の欠測は `0%` ではなく
+  unavailable として表示する。
+
+`last_request` は main chat-loop の直近リクエストのみ。要約・リフレクション
+の paid 補助リクエストは上書きしない。固定 canonical footprint（base
+system prompt + core tool 定義 + bridge trio）には `budget.json` の上限が
+あり、`actual <= max` の片方向ラチェットで CI が保護する。ユーザー設定
+（skills 数、`CHAT_PROMPT`、 live の MCP catalog）は上限の対象外。

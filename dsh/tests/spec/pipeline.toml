@@ -296,3 +296,263 @@ timeout_ms = 8000
 [case.expect]
 status = 0
 stdout_contains = ["WAIT:1"]
+
+[[case]]
+id = "pipeline.expansion-arithmetic-keeps-parent"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo $((DOGESH_ISO_X=9)) | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+
+[[case]]
+id = "pipeline.expansion-stage-order-and-sibling"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo \"$((DOGESH_ISO_X=9))\" \"$DOGESH_ISO_X\" > first.txt | echo \"$DOGESH_ISO_X\" \"$((DOGESH_ISO_X+=2))\" > second.txt; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "first.txt", content_exact = "9 9\n" },
+  { path = "second.txt", content_exact = "1 3\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-middle-last"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo x | echo \"$((DOGESH_ISO_X=5))\" \"$DOGESH_ISO_X\" > middle.txt | echo \"$((DOGESH_ISO_X=7))\" \"$DOGESH_ISO_X\" > last.txt; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "middle.txt", content_exact = "5 5\n" },
+  { path = "last.txt", content_exact = "7 7\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-parameter-unset-empty"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_E=; echo \"${DOGESH_ISO_U=value}\" \"${DOGESH_ISO_E=value}\" \"${DOGESH_ISO_E:=filled}\" > values.txt | cat; echo \"PARENT:${DOGESH_ISO_U-unset}:${DOGESH_ISO_E-empty}\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:unset:"]
+files = [
+  { path = "values.txt", content_exact = "value  filled\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-export-to-child"
+class = "dogesh"
+mode = "command"
+script = "printf '%s\\n' 'echo \"$DOGESH_ISO_X:${DOGESH_ISO_PRIVATE-unset}\"' > child.sh; printf '%s\\n' 'echo \"$DOGESH_ISO_X\"' > sibling.sh; export DOGESH_ISO_X=1; DOGESH_ISO_PRIVATE=1; {{SH}} child.sh \"$((DOGESH_ISO_X=9))\" \"$((DOGESH_ISO_PRIVATE=8))\" > child.txt | {{SH}} sibling.sh > sibling.txt; echo \"PARENT:$DOGESH_ISO_X:$DOGESH_ISO_PRIVATE\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1:1"]
+files = [
+  { path = "child.txt", content_exact = "9:unset\n" },
+  { path = "sibling.txt", content_exact = "1\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-prefix-wins"
+class = "dogesh"
+mode = "command"
+script = "printf '%s\\n' 'echo \"$DOGESH_ISO_X\"' > child.sh; export DOGESH_ISO_X=1; DOGESH_ISO_X=3 DOGESH_ISO_X=4 {{SH}} child.sh \"$((DOGESH_ISO_X=9))\" > child.txt | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "child.txt", content_exact = "4\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-assignment-redirect-order"
+class = "dogesh"
+mode = "command"
+script = "printf '%s\\n' 'echo \"$DOGESH_ISO_A\"' > child.sh; DOGESH_ISO_X=1; DOGESH_ISO_A=\"$((DOGESH_ISO_X+=2)):$DOGESH_ISO_X\" {{SH}} child.sh \"$((DOGESH_ISO_X=9))\" > \"$DOGESH_ISO_X.txt\" | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+stdout_not_contains = ["PARENT:11"]
+files = [
+  { path = "11.txt", content_exact = "11:11\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-redirect-once"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo target &> \"$((DOGESH_ISO_X+=1)).txt\" | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "2.txt", content_exact = "target\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-nested-substitution"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo \"$((DOGESH_ISO_X=9))\" \"$(echo $DOGESH_ISO_X)\" | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["9 9", "PARENT:1"]
+
+[[case]]
+id = "pipeline.expansion-substitution-pipeline"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo \"$(echo $((DOGESH_ISO_X=9)) | cat; echo HELPER:$DOGESH_ISO_X)\"; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["HELPER:1", "PARENT:1"]
+
+[[case]]
+id = "pipeline.expansion-no-command-and-empty"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; DOGESH_ISO_A=\"$((DOGESH_ISO_X=9))\" | cat; echo x | $(echo \"$((DOGESH_ISO_X=7))\" > subst.txt) | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "subst.txt", content_exact = "7\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-async-sharing"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo \"$((DOGESH_ISO_X=3))\" > single.txt && echo \"$DOGESH_ISO_X\" > visible.txt && echo \"$((DOGESH_ISO_X=9))\" | cat > pipe.txt && echo \"$DOGESH_ISO_X\" > helper.txt & wait; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "single.txt", content_exact = "3\n" },
+  { path = "visible.txt", content_exact = "3\n" },
+  { path = "pipe.txt", content_exact = "9\n" },
+  { path = "helper.txt", content_exact = "3\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-single-command-control"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo \"$((DOGESH_ISO_X=9))\"; echo \"${DOGESH_ISO_U:=value}\"; echo \"PARENT:$DOGESH_ISO_X:$DOGESH_ISO_U\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:9:value"]
+
+[[case]]
+id = "pipeline.expansion-local-path"
+class = "dogesh"
+mode = "command"
+script = "mkdir iso-bin iso-probe; printf '#!/bin/sh\\necho LOCAL-PATH\\n' > iso-bin/iso-probe; chmod +x iso-bin/iso-probe; printf '' > noop.sh; printf '%s\\n' 'echo \"PARENT:${PATH-unset}:${PATH+set}\"' > checkpath.sh; DOGESH_ISO_SAVE_PATH=$PATH; PATH=; iso-probe \"${PATH:=iso-bin}\" > path.txt | {{SH}} noop.sh; {{SH}} checkpath.sh; PATH=$DOGESH_ISO_SAVE_PATH"
+[case.expect]
+status = 0
+stdout_contains = ["PARENT::set"]
+files = [
+  { path = "path.txt", content_exact = "LOCAL-PATH\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-builtin-environment"
+class = "dogesh"
+mode = "command"
+script = "export DOGESH_ISO_X=1; var $((DOGESH_ISO_X=9)) > builtin.txt | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [{ path = "builtin.txt", content_contains = ["DOGESH_ISO_X=9"], content_not_contains = ["DOGESH_ISO_X=1"] }]
+
+[[case]]
+id = "pipeline.expansion-parameter-redirect"
+class = "dogesh"
+mode = "command"
+script = "echo target > \"${DOGESH_ISO_U:=target.txt}\" | cat; echo \"PARENT:${DOGESH_ISO_U-unset}\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:unset"]
+files = [
+  { path = "target.txt", content_exact = "target\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-read-specials"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_HOME=$HOME; DOGESH_ISO_IFS=$IFS; HOME=iso-home; IFS=:; {{TRUE}} & DOGESH_ISO_PID=$!; {{FALSE}}; echo \"$?:$!:$HOME\" > specials.txt | echo \"$?:$!:$HOME\" > sibling.txt; cmp specials.txt sibling.txt; echo MATCH:$?; echo \"PARENT:$HOME\"; HOME=$DOGESH_ISO_HOME; IFS=$DOGESH_ISO_IFS; wait"
+[case.expect]
+status = 0
+stdout_contains = ["MATCH:0", "PARENT:iso-home"]
+files = [{ path = "specials.txt", content_contains = ["1:", ":iso-home"] }]
+
+[[case]]
+id = "pipeline.expansion-process-substitution-state"
+class = "dogesh"
+mode = "command"
+script = "printf '%s\\n' 'cat \"$2\"' > reader.sh; DOGESH_ISO_X=1; {{SH}} reader.sh \"$((DOGESH_ISO_X=9))\" <(echo \"$DOGESH_ISO_X\") | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+
+[[case]]
+id = "pipeline.expansion-gated-and-lazy"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; DOGESH_ISO_SET=kept; {{FALSE}} && echo $((DOGESH_ISO_X=9)) $(touch skipped.txt) | cat; echo \"${DOGESH_ISO_SET:-$(touch operand.txt)}\" \"$DOGESH_ISO_X\" | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["kept 1", "PARENT:1"]
+files = [{ path = "skipped.txt", exists = false }, { path = "operand.txt", exists = false }]
+
+[[case]]
+id = "pipeline.expansion-fatal-stops-list"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo $((DOGESH_ISO_X=9)) $((1/0)) | cat || echo MUST-NOT-RUN"
+[case.expect]
+status = 1
+stdout_contains = []
+stdout_not_contains = ["MUST-NOT-RUN"]
+
+[[case]]
+id = "pipeline.expansion-parameter-state-matrix"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_E1=; DOGESH_ISO_E2=; echo \"${DOGESH_ISO_U1:=colon}\" \"${DOGESH_ISO_U2=equal}\" \"${DOGESH_ISO_E1:=filled}\" \"${DOGESH_ISO_E2=kept}\" > matrix.txt | cat; echo \"PARENT:${DOGESH_ISO_U1-unset}:${DOGESH_ISO_U2-unset}:${DOGESH_ISO_E1+set}:${DOGESH_ISO_E1}:${DOGESH_ISO_E2+set}:${DOGESH_ISO_E2}\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:unset:unset:set::set:"]
+files = [
+  { path = "matrix.txt", content_exact = "colon equal filled \n" }
+]
+
+[[case]]
+id = "pipeline.expansion-assignment-parameter-entry"
+class = "dogesh"
+mode = "command"
+script = "printf '%s\\n' 'echo \"$DOGESH_ISO_VALUE\"' > reader.sh; DOGESH_ISO_X=1; DOGESH_ISO_VALUE=\"${DOGESH_ISO_U:=rhs}:$DOGESH_ISO_U\" {{SH}} reader.sh > assigned.txt | cat; echo \"PARENT:${DOGESH_ISO_U-unset}\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:unset"]
+files = [
+  { path = "assigned.txt", content_exact = "rhs:rhs\n" }
+]
+
+[[case]]
+id = "pipeline.expansion-append-redirect-once"
+class = "dogesh"
+mode = "command"
+script = "DOGESH_ISO_X=1; echo first &>> \"$((DOGESH_ISO_X+=1)).txt\" | cat; echo \"PARENT:$DOGESH_ISO_X\""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [
+  { path = "2.txt", content_exact = "first\n" }
+]

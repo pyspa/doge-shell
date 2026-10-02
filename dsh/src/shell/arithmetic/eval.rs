@@ -7,7 +7,7 @@
 //! (including assignments inside them).
 
 use super::parser::{ArithmeticExpr, AssignmentOp, BinaryOp, UnaryOp, parse_integer_literal};
-use crate::shell::Shell;
+use crate::shell::expansion_host::ExpansionHost;
 use std::fmt;
 
 /// Fatal `$((...))` expansion failure.
@@ -54,9 +54,9 @@ fn fail(expression: &str, message: String) -> ArithmeticExpansionError {
 fn resolve_variable(
     expression: &str,
     name: &str,
-    shell: &Shell,
+    shell: &impl ExpansionHost,
 ) -> Result<i64, ArithmeticExpansionError> {
-    let value = shell.environment.read().lookup_variable(name);
+    let value = shell.expansion_environment().read().lookup_variable(name);
     match value {
         None => Ok(0),
         Some(text) if text.is_empty() => Ok(0),
@@ -138,7 +138,7 @@ fn checked_shr(expression: &str, lhs: i64, rhs: i64) -> Result<i64, ArithmeticEx
 pub(crate) fn eval_expr(
     expression: &str,
     expr: &ArithmeticExpr,
-    shell: &mut Shell,
+    shell: &mut impl ExpansionHost,
 ) -> Result<i64, ArithmeticExpansionError> {
     match expr {
         ArithmeticExpr::Integer(value) => Ok(*value),
@@ -221,7 +221,7 @@ pub(crate) fn eval_expr(
             let current = resolve_variable(expression, target, shell)?;
             let result = apply_assignment_op(expression, *op, current, rhs_value)?;
             shell
-                .environment
+                .expansion_environment()
                 .write()
                 .set_shell_var(target.clone(), result.to_string());
             Ok(result)
@@ -245,7 +245,7 @@ fn is_valid_assignment_target(name: &str) -> bool {
 pub(crate) fn evaluate_expression(
     expression: &str,
     body: &str,
-    shell: &mut Shell,
+    shell: &mut impl ExpansionHost,
 ) -> Result<i64, ArithmeticExpansionError> {
     let ast = super::parser::parse_arithmetic(expression, body)?;
     eval_expr(expression, &ast, shell)
@@ -255,6 +255,7 @@ pub(crate) fn evaluate_expression(
 mod tests {
     use super::super::parser::parse_arithmetic;
     use super::*;
+    use crate::shell::Shell;
 
     fn test_shell() -> Shell {
         Shell::new(crate::environment::Environment::new())

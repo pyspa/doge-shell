@@ -68,3 +68,29 @@ timeout_ms = 15000
 [case.expect]
 status = 0
 files = [{ path = "replay.txt", content_exact = "y" }]
+
+[[case]]
+id = "smart-pipe.expansion-source-counts-for-isolation"
+class = "dogesh"
+mode = "interactive"
+script = """
+DOGESH_ISO_X=1; echo cached
+| echo "$((DOGESH_ISO_X=9))" "$DOGESH_ISO_X" > stage.txt
+echo "PARENT:$DOGESH_ISO_X"
+"""
+[case.expect]
+status = 0
+stdout_contains = ["PARENT:1"]
+files = [{ path = "stage.txt", content_exact = "9 9\n" }]
+
+[[case]]
+id = "smart-pipe.expansion-output-history-view"
+class = "dogesh"
+mode = "interactive"
+script = """
+echo previous
+ echo "$OUT" "$OUT[1]" > history.txt | cat
+"""
+[case.expect]
+status = 0
+files = [{ path = "history.txt", content_exact = "previous\n previous\n\n" }]

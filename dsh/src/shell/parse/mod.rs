@@ -410,6 +410,10 @@ fn parse_word_part(
                 QuoteMode::Unquoted,
             )?);
         }
+        Rule::invocation_parameter => parts.push(parse_invocation_parameter(
+            part.as_str(),
+            QuoteMode::Unquoted,
+        )?),
         Rule::variable => parts.push(WordPart::Variable {
             source: part.as_str().to_string(),
             quote: QuoteMode::Unquoted,
@@ -501,6 +505,10 @@ pub(super) fn parse_double_quoted_parts(
                     QuoteMode::Double,
                 )?);
             }
+            Rule::invocation_parameter => parts.push(parse_invocation_parameter(
+                inner.as_str(),
+                QuoteMode::Double,
+            )?),
             Rule::variable => parts.push(WordPart::Variable {
                 source: inner.as_str().to_string(),
                 quote: QuoteMode::Double,
@@ -735,3 +743,22 @@ fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJo
 
 #[cfg(test)]
 mod tests;
+
+fn parse_invocation_parameter(source: &str, quote: QuoteMode) -> Result<WordPart> {
+    use super::plan::InvocationParameter;
+    let name = source.strip_prefix('$').unwrap_or(source);
+    let name = name
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(name);
+    let parameter = match name {
+        "#" => InvocationParameter::Count,
+        "@" => InvocationParameter::At,
+        "*" => InvocationParameter::Star,
+        _ => match name.parse::<usize>()? {
+            0 => InvocationParameter::Arg0,
+            n => InvocationParameter::Positional(n),
+        },
+    };
+    Ok(WordPart::InvocationParameter { parameter, quote })
+}

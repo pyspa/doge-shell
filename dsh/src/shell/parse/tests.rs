@@ -432,3 +432,70 @@ fn unsupported_modified_forms_fail_cleanly() {
         );
     }
 }
+
+#[test]
+fn invocation_parameters_keep_identity_and_single_digit_unbraced_positions() {
+    use crate::shell::plan::InvocationParameter::*;
+    for (source, expected) in [
+        ("$0", Arg0),
+        ("$1", Positional(1)),
+        ("$9", Positional(9)),
+        ("${0}", Arg0),
+        ("${1}", Positional(1)),
+        ("${10}", Positional(10)),
+        ("${123}", Positional(123)),
+        ("$#", Count),
+        ("${#}", Count),
+        ("$@", At),
+        ("${@}", At),
+        ("$*", Star),
+        ("${*}", Star),
+    ] {
+        for quoted in [false, true] {
+            let input = if quoted {
+                format!("echo \"{source}\"")
+            } else {
+                format!("echo {source}")
+            };
+            let plan = parse_execution_plan(&input, test_env()).unwrap();
+            assert_eq!(
+                plan.lists[0].jobs[0].stages[0].argv[1].parts,
+                vec![WordPart::InvocationParameter {
+                    parameter: expected,
+                    quote: if quoted {
+                        QuoteMode::Double
+                    } else {
+                        QuoteMode::Unquoted
+                    }
+                }]
+            );
+        }
+    }
+    let plan = parse_execution_plan("echo $10 ${10} $$ $! $?", test_env()).unwrap();
+    let argv = &plan.lists[0].jobs[0].stages[0].argv;
+    assert!(matches!(argv[1].parts.as_slice(), [
+        WordPart::InvocationParameter { parameter: Positional(1), .. },
+        WordPart::Literal(literal)] if literal.text == "0"));
+    assert_eq!(argv[2].parts.len(), 1);
+    for word in &argv[3..] {
+        assert!(matches!(word.parts.as_slice(), [WordPart::Variable { .. }]));
+    }
+}
+
+#[test]
+fn invocation_parameters_parse_in_operands_and_arithmetic() {
+    for source in [
+        "echo ${X:-$1}",
+        "echo ${X:-$#}",
+        "echo ${X:-$*}",
+        "echo $(( $1 + $# ))",
+    ] {
+        assert!(parse_execution_plan(source, test_env()).is_ok(), "{source}");
+    }
+    for source in ["echo ${1:-default}", "echo ${@:+value}"] {
+        assert!(
+            parse_execution_plan(source, test_env()).is_err(),
+            "{source}"
+        );
+    }
+}

@@ -149,7 +149,24 @@ pub(crate) struct CompletionState {
     pub(crate) path_generation: u64,
 }
 
+/// Read-only invocation state, independent of user variables and child process env.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct InvocationParameters {
+    pub argv0: String,
+    pub positional: Vec<String>,
+}
+
+impl Default for InvocationParameters {
+    fn default() -> Self {
+        Self {
+            argv0: "dogesh".into(),
+            positional: Vec::new(),
+        }
+    }
+}
+
 pub struct Environment {
+    pub(crate) invocation: InvocationParameters,
     /// In-process stage state projects setters locally: no session-wide cache
     /// activation or AI invalidation. Re-exec helpers have their own process.
     pub(crate) isolated_projection: bool,
@@ -215,6 +232,10 @@ fn parse_z_exclude_from_vars(vars: &HashMap<String, String>) -> Vec<String> {
 }
 
 impl Environment {
+    pub(crate) fn invocation(&self) -> &InvocationParameters {
+        &self.invocation
+    }
+
     /// Create a new environment with default settings.
     ///
     /// Imports the process environment once: every inherited name lands in
@@ -238,6 +259,7 @@ impl Environment {
         let env_arc = Arc::new(RwLock::new(Environment {
             isolated_projection: false,
             expansion_output: None,
+            invocation: InvocationParameters::default(),
             last_exit_status: 0,
             last_async_pid: None,
             variable_state: VariableState {
@@ -319,7 +341,7 @@ impl Environment {
 
     /// Create a child environment that inherits from the parent.
     pub fn extend(parent: Arc<RwLock<Environment>>) -> Arc<RwLock<Self>> {
-        let (variable_state, shell_options) = {
+        let (variable_state, shell_options, invocation) = {
             let parent = parent.read();
             (
                 VariableState {
@@ -338,6 +360,7 @@ impl Environment {
                 // `ShellOptions` is `Copy`: the child gets the parent's
                 // values without sharing mutable state.
                 parent.shell_options,
+                parent.invocation.clone(),
             )
         };
         let (integration_state, policy_state, completion_state) = {
@@ -373,6 +396,7 @@ impl Environment {
             expansion_output: None,
             last_exit_status: 0,
             last_async_pid: None,
+            invocation,
             variable_state,
             policy_state,
             integration_state,
@@ -585,4 +609,39 @@ pub(crate) fn save_cached_executables_with_signature(
     let contents = serde_json::to_string(&cache)?;
     std::fs::write(path, contents)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod invocation_tests {
+    use super::child_snapshot::ChildShellSnapshot;
+    use super::*;
+    #[test]
+    fn invocation_state_inherits_without_export_or_variable_shadowing() {
+        let env = Environment::new();
+        assert_eq!(env.read().invocation(), &InvocationParameters::default());
+        {
+            let mut guard = env.write();
+            guard.invocation = InvocationParameters {
+                argv0: "worker".into(),
+                positional: vec!["secret".into(), "".into()],
+            };
+            guard.set_shell_var("1".into(), "shadow".into());
+        }
+        let expected = env.read().invocation.clone();
+        assert_eq!(
+            Environment::extend(env.clone()).read().invocation(),
+            &expected
+        );
+        assert_eq!(
+            Environment::isolated_expansion(&env.read())
+                .read()
+                .invocation(),
+            &expected
+        );
+        let snapshot = ChildShellSnapshot::capture(&env.read());
+        let child = Environment::new();
+        snapshot.apply_to(&mut child.write());
+        assert_eq!(child.read().invocation(), &expected);
+        assert!(!child.read().child_process_env().contains_key("1"));
+    }
 }

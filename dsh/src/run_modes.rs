@@ -54,6 +54,15 @@ pub async fn run_shell() -> ExitCode {
 
     let run_mode = RunMode::from_cli(&cli);
     let env = Environment::new();
+    if let RunMode::Command {
+        argv0, positional, ..
+    } = &run_mode
+    {
+        env.write().invocation = crate::environment::InvocationParameters {
+            argv0: argv0.clone(),
+            positional: positional.clone(),
+        };
+    }
     let mut shell = Shell::new(env);
     let mut startup_tasks = StartupBackgroundTasks::default();
 
@@ -215,7 +224,7 @@ pub async fn run_shell() -> ExitCode {
 
     let code = match run_mode {
         RunMode::Lisp(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
-        RunMode::Command(command) => execute_command(&mut shell, &mut ctx, &command).await,
+        RunMode::Command { command, .. } => execute_command(&mut shell, &mut ctx, &command).await,
         RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
     };
     // Interactive / notebook normal exit likewise releases `>(...)`

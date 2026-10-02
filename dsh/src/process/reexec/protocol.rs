@@ -32,7 +32,8 @@ use std::os::unix::io::RawFd;
 /// Bumped to 9: `ExecutionPlan` / `WordPart` carries structured arithmetic
 /// expansion (`WordPart::ArithmeticExpansion` with
 /// `PlannedArithmeticExpansion`).
-pub const PROTOCOL_VERSION: u32 = 9;
+/// Bumped to 10: ExecutionPlan/WordPart and ChildShellSnapshot carry invocation parameters.
+pub const PROTOCOL_VERSION: u32 = 10;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -779,6 +780,36 @@ mod tests {
     }
 
     #[test]
+    fn request_rejects_legacy_v9() {
+        // v9 payloads have no invocation state/WordPart schema; reject them
+        // before interpreting helper execution data.
+        let env_arc = crate::environment::Environment::new();
+        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
+        let request = InternalExecRequest {
+            version: 9,
+            snapshot,
+            kind: InternalExecKind::Builtin(BuiltinExecRequest {
+                name: "echo".to_string(),
+                argv: vec!["echo".to_string()],
+                env_overrides: vec![],
+            }),
+        };
+        let bytes = serde_json::to_vec(&request).expect("encode");
+        let (read, write) = crate::process::io::cloexec_pipe().expect("pipe");
+        use std::io::Write as _;
+        use std::os::fd::IntoRawFd as _;
+        let mut write = unsafe { std::fs::File::from_raw_fd(write.into_raw_fd()) };
+        write.write_all(&bytes).expect("write");
+        drop(write);
+        let read_fd = read.into_raw_fd();
+        let err = read_internal_request(read_fd).expect_err("legacy v9 must fail");
+        assert!(
+            err.to_string()
+                .contains("unsupported internal exec version")
+        );
+    }
+
+    #[test]
     fn parameter_expansion_roundtrips_through_v8() {
         use crate::shell::plan::{ParameterAction, ParameterCondition, QuoteMode, WordPart};
 
@@ -908,5 +939,49 @@ mod tests {
             }
             other => panic!("expected Plan, got {other:?}"),
         }
+    }
+    #[test]
+    fn invocation_plan_and_snapshot_roundtrip() {
+        use crate::shell::plan::{InvocationParameter, WordPart};
+        let env = crate::environment::Environment::new();
+        env.write().invocation = crate::environment::InvocationParameters {
+            argv0: "worker".into(),
+            positional: vec!["alpha".into(), "".into()],
+        };
+        let plan = crate::shell::parse::parse_execution_plan(
+            "printf '%s\n' \"$@\" \"${10}\"",
+            env.clone(),
+        )
+        .unwrap();
+        let request = InternalExecRequest {
+            version: PROTOCOL_VERSION,
+            snapshot: ChildShellSnapshot::capture(&env.read()),
+            kind: InternalExecKind::Plan(PlanExecRequest {
+                plan,
+                mode: PlanExecMode::CommandSubstitution,
+                signal_policy: PlanSignalPolicy::Normal,
+            }),
+        };
+        let decoded: InternalExecRequest =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(decoded.snapshot.invocation, env.read().invocation);
+        let InternalExecKind::Plan(request) = decoded.kind else {
+            panic!("plan lost")
+        };
+        let argv = &request.plan.lists[0].jobs[0].stages[0].argv;
+        assert!(matches!(
+            argv[2].parts.as_slice(),
+            [WordPart::InvocationParameter {
+                parameter: InvocationParameter::At,
+                ..
+            }]
+        ));
+        assert!(matches!(
+            argv[3].parts.as_slice(),
+            [WordPart::InvocationParameter {
+                parameter: InvocationParameter::Positional(10),
+                ..
+            }]
+        ));
     }
 }

@@ -177,7 +177,8 @@ impl PlannedWord {
             WordPart::Literal(literal) => {
                 literal.tilde_candidate || literal.pattern_active || literal.brace_active
             }
-            WordPart::Variable { .. }
+            WordPart::InvocationParameter { .. }
+            | WordPart::Variable { .. }
             | WordPart::Substitution { .. }
             | WordPart::ParameterExpansion { .. }
             | WordPart::ArithmeticExpansion { .. } => true,
@@ -231,10 +232,24 @@ pub struct PlannedArithmeticExpansion {
     pub body: Box<PlannedWord>,
 }
 
+/// Invocation parameter identity, preserved by planning and re-exec serialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum InvocationParameter {
+    Arg0,
+    Positional(usize),
+    Count,
+    At,
+    Star,
+}
+
 /// A fragment of a word: static text, a deferred variable, or a deferred
 /// substitution body.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WordPart {
+    InvocationParameter {
+        parameter: InvocationParameter,
+        quote: QuoteMode,
+    },
     Literal(PlannedLiteral),
     Variable {
         source: String,

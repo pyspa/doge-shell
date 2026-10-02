@@ -23,7 +23,7 @@ fn capture_output(parent: &Environment) -> HashMap<String, String> {
 }
 impl Environment {
     pub(crate) fn isolated_expansion(parent: &Environment) -> Arc<RwLock<Self>> {
-        let (variable_state, shell_options) = {
+        let (variable_state, shell_options, invocation) = {
             (
                 VariableState {
                     alias: parent.variable_state.alias.clone(),
@@ -41,6 +41,7 @@ impl Environment {
                 // `ShellOptions` is `Copy`: the child gets the parent's
                 // values without sharing mutable state.
                 parent.shell_options,
+                parent.invocation.clone(),
             )
         };
         let (integration_state, policy_state, completion_state) = {
@@ -79,6 +80,7 @@ impl Environment {
         Arc::new(RwLock::new(Environment {
             last_exit_status: parent.last_exit_status,
             last_async_pid: parent.last_async_pid,
+            invocation,
             variable_state,
             policy_state,
             integration_state,

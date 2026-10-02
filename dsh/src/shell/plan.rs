@@ -179,7 +179,8 @@ impl PlannedWord {
             }
             WordPart::Variable { .. }
             | WordPart::Substitution { .. }
-            | WordPart::ParameterExpansion { .. } => true,
+            | WordPart::ParameterExpansion { .. }
+            | WordPart::ArithmeticExpansion { .. } => true,
         })
     }
 }
@@ -215,6 +216,21 @@ pub struct PlannedParameterExpansion {
     pub word: Option<Box<PlannedWord>>,
 }
 
+/// Structured POSIX `$((expression))` operand: parsed without reading
+/// variables, evaluating arithmetic, executing substitutions, splitting,
+/// or globbing. The `body` keeps parameter / command substitution structure
+/// for runtime scalar expansion; the arithmetic text itself is evaluated
+/// only when the selected job is materialized. Runtime semantics live in
+/// `super::word_expand_arithmetic` plus `super::arithmetic`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PlannedArithmeticExpansion {
+    /// `$((` / `))` stripped source for diagnostics.
+    pub source: String,
+    /// Structured body: literal arithmetic tokens plus deferred
+    /// variable / `${...}` / `$(...)` / nested `$((...))` parts.
+    pub body: Box<PlannedWord>,
+}
+
 /// A fragment of a word: static text, a deferred variable, or a deferred
 /// substitution body.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -226,6 +242,10 @@ pub enum WordPart {
     },
     ParameterExpansion {
         expansion: PlannedParameterExpansion,
+        quote: QuoteMode,
+    },
+    ArithmeticExpansion {
+        expansion: PlannedArithmeticExpansion,
         quote: QuoteMode,
     },
     Substitution {

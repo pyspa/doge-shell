@@ -270,3 +270,83 @@ script = "printf '[%s]\\n' before ${DOGESH_PARAM_ALT_UNSET+value} after"
 status = 0
 stdout_contains = ["[before]", "[after]"]
 stdout_not_contains = ["[value]"]
+
+[[case]]
+id = "expansion.arithmetic-basic"
+class = "posix"
+mode = "command"
+script = "echo $((1 + 2 * 3))"
+
+[case.expect]
+status = 0
+stdout_contains = ["7"]
+
+[[case]]
+id = "expansion.arithmetic-precedence-parens"
+class = "posix"
+mode = "command"
+script = "echo $(((1 + 2) * 3))"
+
+[case.expect]
+status = 0
+stdout_contains = ["9"]
+
+[[case]]
+id = "expansion.arithmetic-variable"
+class = "posix"
+mode = "command"
+script = "X=7; echo $((X + 1))"
+
+[case.expect]
+status = 0
+stdout_contains = ["8"]
+
+[[case]]
+id = "expansion.arithmetic-parameter-operand"
+class = "posix"
+mode = "command"
+script = "X=2; echo $(( ${X:-1} + 3 ))"
+
+[case.expect]
+status = 0
+stdout_contains = ["5"]
+
+[[case]]
+id = "expansion.arithmetic-assignment"
+class = "posix"
+mode = "command"
+script = "X=1; echo $((X += 2)); echo \"$X\""
+
+[case.expect]
+status = 0
+stdout_contains = ["3"]
+
+[[case]]
+id = "expansion.arithmetic-short-circuit-and"
+class = "posix"
+mode = "command"
+script = "echo $((0 && 1 / 0))"
+
+[case.expect]
+status = 0
+stdout_contains = ["0"]
+
+[[case]]
+id = "expansion.arithmetic-short-circuit-or"
+class = "posix"
+mode = "command"
+script = "echo $((1 || 1 / 0))"
+
+[case.expect]
+status = 0
+stdout_contains = ["1"]
+
+[[case]]
+id = "expansion.arithmetic-conditional"
+class = "posix"
+mode = "command"
+script = "echo $((1 ? 10 : 20))"
+
+[case.expect]
+status = 0
+stdout_contains = ["10"]

@@ -80,6 +80,13 @@ pub(super) fn parse_parameter_word(word: Pair<Rule>, ctx: &ParseContext) -> Resu
     let mut parts = Vec::new();
     for part in word.into_inner() {
         match part.as_rule() {
+            Rule::arithmetic_expansion => {
+                parts.push(super::arithmetic::parse_arithmetic_expansion(
+                    part,
+                    ctx,
+                    QuoteMode::Unquoted,
+                )?);
+            }
             Rule::parameter_expansion => {
                 parts.push(parse_parameter_expansion(part, ctx, QuoteMode::Unquoted)?);
             }

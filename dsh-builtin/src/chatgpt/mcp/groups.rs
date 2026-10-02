@@ -45,7 +45,11 @@ pub struct McpToolExposure {
 ///   Tool Search exposure, rebuilt before every request.
 /// - `Bridge` is the stable adapter: exactly `tool_search`/`tool_describe`/
 ///   `tool_call`, with no `mcp__*` schema in any request of the turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serialized (lowercase) into the prompt-footprint diagnostic report, so
+/// scripts can tell which surface a measurement describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum McpToolMode {
     Eager,
     Bridge,
@@ -409,12 +413,24 @@ impl McpManager {
         preference: crate::chatgpt::settings::McpToolModePreference,
         auto_threshold_bytes: usize,
     ) -> McpToolMode {
+        self.resolve_mcp_tool_mode_and_footprint(preference, auto_threshold_bytes)
+            .0
+    }
+
+    /// Like [`McpManager::resolve_mcp_tool_mode`], but also hands back the
+    /// discoverable footprint the decision was made on, so diagnostics that
+    /// need both do not serialize the catalog twice.
+    pub(crate) fn resolve_mcp_tool_mode_and_footprint(
+        &self,
+        preference: crate::chatgpt::settings::McpToolModePreference,
+        auto_threshold_bytes: usize,
+    ) -> (McpToolMode, McpCatalogFootprint) {
         use crate::chatgpt::settings::McpToolModePreference;
         let footprint = self.discoverable_tool_footprint();
         if footprint.tools == 0 {
-            return McpToolMode::Eager;
+            return (McpToolMode::Eager, footprint);
         }
-        match preference {
+        let mode = match preference {
             McpToolModePreference::Eager => McpToolMode::Eager,
             McpToolModePreference::Bridge => McpToolMode::Bridge,
             McpToolModePreference::Auto => {
@@ -424,7 +440,8 @@ impl McpManager {
                     McpToolMode::Eager
                 }
             }
-        }
+        };
+        (mode, footprint)
     }
 
     /// Bridge-mode guidance: the stable `tool_search`/`tool_describe`/

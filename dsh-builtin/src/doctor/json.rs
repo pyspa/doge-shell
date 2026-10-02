@@ -14,10 +14,11 @@ pub(super) fn print_json_report(
     ctx: &Context,
     proxy: &mut dyn ShellProxy,
     current_dir: &Path,
-    section: Option<&str>,
+    options: &DoctorOptions,
 ) -> ExitStatus {
+    let section = options.section.as_deref();
     let project = project_context::resolve_project_context(current_dir);
-    let details = json_section_details(proxy, current_dir, section);
+    let details = json_section_details(proxy, current_dir, options);
     let runtimes = project
         .runtimes
         .iter()
@@ -70,8 +71,9 @@ pub(super) fn print_json_report(
 pub(super) fn json_section_details(
     proxy: &mut dyn ShellProxy,
     current_dir: &Path,
-    section: Option<&str>,
+    options: &DoctorOptions,
 ) -> serde_json::Value {
+    let section = options.section.as_deref();
     match section {
         Some("config") => {
             let config = crate::config_paths::config_file("config.lisp");
@@ -88,7 +90,7 @@ pub(super) fn json_section_details(
         Some("ai") => {
             let usage = dsh_openai::usage::session_total();
             let config = crate::chatgpt::load_openai_config(proxy);
-            json!({
+            let mut details = json!({
             "configured": config.api_key().is_some(),
             "model": config.default_model(),
             "base_url": config.base_url(),
@@ -103,13 +105,44 @@ pub(super) fn json_section_details(
                 "cached_prompt_tokens": usage.cached_prompt_tokens,
                 "completion_tokens": usage.completion_tokens
             }
-            })
+            });
+            if options.prompt_size {
+                use crate::chatgpt::footprint;
+                // Built as the versioned report struct, so the JSON shape
+                // cannot drift from the type scripts consume.
+                let footprint = serde_json::to_value(&footprint::PromptFootprintReport {
+                    version: footprint::FOOTPRINT_REPORT_VERSION,
+                    fixed: footprint::fixed_prompt_footprint(proxy),
+                    last_request: footprint::last_request(),
+                })
+                .unwrap_or(json!(null));
+                if let Some(object) = details.as_object_mut() {
+                    object.insert("prompt_footprint".to_string(), footprint);
+                }
+            }
+            details
         }
         Some("mcp") => {
             let servers = proxy.list_mcp_servers();
+            // Same authoritative manager as the text report and the chat
+            // runtime: display projections from `MCP_*` variables are not a
+            // second source of truth.
+            let handle = proxy.agent_mcp_manager();
+            let manager = handle.read();
+            let status = crate::chatgpt::footprint::mcp_footprint_status_from(proxy, &manager);
+            let mode = match status.mode {
+                crate::McpToolMode::Eager => "eager",
+                crate::McpToolMode::Bridge => "bridge",
+            };
             json!({
                 "configured": servers.len(),
-                "tools": proxy.get_var("MCP_TOOLS").and_then(|value| value.parse::<usize>().ok()).unwrap_or(0),
+                "connected": manager.connected_count(),
+                "tools": manager.tool_count(),
+                "active_tools": status.active_tools,
+                "active_schema_bytes": status.active_schema_bytes,
+                "discoverable_tools": status.discoverable_tools,
+                "discoverable_schema_bytes": status.discoverable_schema_bytes,
+                "mode": mode,
                 "servers": servers.iter().map(|server| {
                     let transport = match &server.transport {
                         McpTransport::Stdio { .. } => "stdio",

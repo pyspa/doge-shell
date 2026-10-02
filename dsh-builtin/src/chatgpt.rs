@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 mod commands;
 mod context;
 mod conversation;
+pub(crate) mod footprint;
 mod prompt;
 mod settings;
 mod turn_support;
@@ -31,6 +32,7 @@ mod ui;
 pub use commands::*;
 use context::*;
 use conversation::*;
+use footprint::*;
 use prompt::*;
 pub use settings::response_language;
 use settings::*;
@@ -412,12 +414,6 @@ fn chat_with_tools(
                 }
             }
 
-            let mut current_messages =
-                manager.build_messages_for_chat(dynamic_context.message(proxy));
-            if let Some(runtime) = &setup.runtime {
-                current_messages.push(json!({"role":"system","content":runtime.lock().context()}));
-            }
-
             // Tools for this request only; see `build_request_tools`.
             let request_tools = build_request_tools(
                 setup.mcp_tool_mode,
@@ -425,6 +421,17 @@ fn chat_with_tools(
                 &tools,
                 mcp_manager,
                 &tool_search_exposure,
+            );
+
+            // Assembled and measured in one helper (`footprint`), so the
+            // recorded sizes are exactly what is sent below.
+            let current_messages = footprint::build_and_record_request(
+                &setup,
+                &manager,
+                &mut dynamic_context,
+                &request_tools,
+                iterations,
+                proxy,
             );
 
             let options = ChatRequestOptions::new()
@@ -491,6 +498,7 @@ fn chat_with_tools(
             ));
             if let Some(reported) = usage::TokenUsage::from_response(&response) {
                 manager.note_prompt_tokens(reported.prompt_tokens);
+                footprint::attach_provider_usage(&response);
             } else if setup.runtime.is_some() {
                 break Err(
                     "agent: provider omitted token usage; cannot enforce the task budget".into(),

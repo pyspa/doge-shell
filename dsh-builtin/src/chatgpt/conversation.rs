@@ -354,6 +354,71 @@ impl ConversationManager {
         Ok(())
     }
 
+    /// Category byte sizes of everything this manager contributes to a
+    /// request: the pinned system message and initial goal, the optional
+    /// summary, and the buffer split by role with tool results counted
+    /// separately. Uses the same compact-JSON ruler as the request totals,
+    /// so `total_object_bytes` is exactly the sum of the categories.
+    pub(super) fn footprint(&self) -> ConversationFootprint {
+        let mut footprint = ConversationFootprint::default();
+        let mut pinned = self.pinned_messages.iter();
+        if let Some(message) = pinned.next() {
+            footprint.pinned_system_json_bytes = compact_len(message);
+        }
+        if let Some(message) = pinned.next() {
+            footprint.pinned_goal_json_bytes = compact_len(message);
+        }
+        for message in pinned {
+            footprint.other_json_bytes += compact_len(message);
+            footprint.other_messages += 1;
+        }
+        if let Some(summary) = &self.summary {
+            // The same shape `build_messages_for_chat` sends: a `system`
+            // message wrapping the summary text.
+            footprint.summary_json_bytes = compact_len(&summary_message(summary));
+            footprint.summary_messages = 1;
+        }
+        for message in &self.buffer {
+            let bytes = compact_len(message);
+            match message_role(message) {
+                Some("user") => {
+                    footprint.user_json_bytes += bytes;
+                    footprint.user_messages += 1;
+                }
+                Some("assistant") => {
+                    footprint.assistant_json_bytes += bytes;
+                    footprint.assistant_messages += 1;
+                    if let Some(calls) = message.get("tool_calls") {
+                        footprint.assistant_tool_call_json_bytes += compact_len(calls);
+                    }
+                }
+                Some("tool") => {
+                    footprint.tool_result_json_bytes += bytes;
+                    footprint.tool_messages += 1;
+                }
+                Some("system") => {
+                    footprint.system_notice_json_bytes += bytes;
+                    footprint.system_messages += 1;
+                }
+                _ => {
+                    footprint.other_json_bytes += bytes;
+                    footprint.other_messages += 1;
+                }
+            }
+        }
+        footprint.total_object_bytes = footprint.pinned_system_json_bytes
+            + footprint.pinned_goal_json_bytes
+            + footprint.summary_json_bytes
+            + footprint.user_json_bytes
+            + footprint.assistant_json_bytes
+            + footprint.tool_result_json_bytes
+            + footprint.system_notice_json_bytes
+            + footprint.other_json_bytes;
+        footprint.total_messages =
+            self.pinned_messages.len() + footprint.summary_messages + self.buffer.len();
+        footprint
+    }
+
     /// Assemble the request, stable prefix first.
     ///
     /// Providers cache the longest common prefix of a request, so nothing
@@ -371,10 +436,7 @@ impl ConversationManager {
 
         // Summary if present
         if let Some(summary) = &self.summary {
-            messages.push(json!({
-                "role": "system",
-                "content": format!("## Previous Conversation Summary\nThe following is a summary of the earlier conversation. Use this to maintain context.\n\n{summary}")
-            }));
+            messages.push(summary_message(summary));
         }
 
         // Buffer (recent messages)
@@ -384,6 +446,18 @@ impl ConversationManager {
         messages.push(dynamic_context);
         messages
     }
+}
+
+/// The `system` message carrying the conversation summary, if any.
+///
+/// One constructor for both `build_messages_for_chat` and
+/// [`ConversationManager::footprint`], so the measured bytes are the bytes
+/// actually sent.
+fn summary_message(summary: &str) -> Value {
+    json!({
+        "role": "system",
+        "content": format!("## Previous Conversation Summary\nThe following is a summary of the earlier conversation. Use this to maintain context.\n\n{summary}")
+    })
 }
 
 /// Flatten the buffer to `"role: content [Called: tool(args)]"` lines, one

@@ -69,6 +69,23 @@ impl TokenUsage {
         self.prompt_tokens + self.completion_tokens
     }
 
+    /// Prompt tokens the provider did not serve from its prefix cache.
+    ///
+    /// Saturating: a broken or odd provider response reporting more cached
+    /// tokens than prompt tokens must not underflow.
+    pub fn uncached_prompt_tokens(&self) -> u64 {
+        self.prompt_tokens.saturating_sub(self.cached_prompt_tokens)
+    }
+
+    /// Share of prompt tokens served from the provider's prefix cache.
+    ///
+    /// `None` when the request reported no prompt tokens at all; callers
+    /// must render that as "unavailable", never as `0%`.
+    pub fn cache_hit_ratio(&self) -> Option<f64> {
+        (self.prompt_tokens > 0)
+            .then(|| self.cached_prompt_tokens as f64 / self.prompt_tokens as f64)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.requests == 0 && self.total_tokens() == 0
     }
@@ -216,5 +233,39 @@ mod tests {
         assert_eq!(delta.prompt_tokens, 7);
         assert_eq!(delta.cached_prompt_tokens, 3);
         assert_eq!(delta.completion_tokens, 2);
+    }
+
+    #[test]
+    fn cache_math_reports_uncached_tokens_and_hit_ratio() {
+        let usage = TokenUsage {
+            requests: 1,
+            prompt_tokens: 1000,
+            cached_prompt_tokens: 750,
+            completion_tokens: 50,
+        };
+
+        assert_eq!(usage.uncached_prompt_tokens(), 250);
+        assert_eq!(usage.cache_hit_ratio(), Some(0.75));
+        // Cached tokens are still input tokens: the total is unchanged.
+        assert_eq!(usage.total_tokens(), 1050);
+    }
+
+    #[test]
+    fn cache_math_never_underflows_on_an_odd_provider_response() {
+        let usage = TokenUsage {
+            requests: 1,
+            prompt_tokens: 100,
+            cached_prompt_tokens: 250,
+            completion_tokens: 0,
+        };
+
+        assert_eq!(usage.uncached_prompt_tokens(), 0);
+    }
+
+    #[test]
+    fn cache_math_reports_no_ratio_without_prompt_tokens() {
+        let usage = TokenUsage::default();
+
+        assert_eq!(usage.cache_hit_ratio(), None);
     }
 }

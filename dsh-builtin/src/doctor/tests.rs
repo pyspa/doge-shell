@@ -22,6 +22,15 @@ fn observed_stdout(observer: &SharedOutputObserver) -> String {
     observer.lock().unwrap().snapshot().stdout
 }
 
+fn json_test_options(section: &str) -> DoctorOptions {
+    DoctorOptions {
+        section: Some(section.to_string()),
+        json: true,
+        prompt_size: false,
+        section_args: Vec::new(),
+    }
+}
+
 #[test]
 fn mask_secret_hides_prefix() {
     assert_eq!(mask_secret(Some("abcdef".to_string())), "***cdef");
@@ -173,7 +182,7 @@ fn skills_text_and_json_use_the_same_codex_runtime_root() {
         ..TestProxy::default()
     };
 
-    let details = json_section_details(&mut proxy, &repo_root, Some("skills"));
+    let details = json_section_details(&mut proxy, &repo_root, &json_test_options("skills"));
     assert_eq!(
         details["codex_runtime"]["path"],
         serde_json::Value::String(expected.display().to_string())
@@ -1041,12 +1050,20 @@ fn doctor_mcp_reports_legacy_sse_as_configuration_only() {
 }
 
 #[test]
-fn doctor_mcp_warns_on_large_tool_footprint() {
+fn doctor_mcp_bridge_mode_defers_a_large_catalog() {
     let mut proxy = TestProxy {
         current_dir: PathBuf::from("."),
-        vars: HashMap::from([("MCP_TOOLS".to_string(), "42".to_string())]),
         ..TestProxy::default()
     };
+    // Well past the auto-bridge threshold, so `auto` resolves bridge.
+    for server in 0..3 {
+        for tool in 0..25 {
+            proxy
+                .mcp_manager
+                .write()
+                .insert_test_tool(&format!("bulk{server:02}"), &format!("helper_{tool:02}"));
+        }
+    }
     let (ctx, observer) = observed_context();
 
     let status = command(
@@ -1057,18 +1074,55 @@ fn doctor_mcp_warns_on_large_tool_footprint() {
 
     assert_eq!(status, ExitStatus::ExitedWith(0));
     let output = observed_stdout(&observer);
-    assert!(output.contains("ok tools 42"), "{output}");
+    assert!(output.contains("ok mcp-mode bridge"), "{output}");
     assert!(
-        output.contains("warn mcp-tools-footprint high tools=42"),
+        output.contains("ok mcp-tools-footprint mode=bridge"),
         "{output}"
+    );
+    assert!(output.contains("deferred"), "{output}");
+    assert!(
+        !output.contains("carry all active definitions"),
+        "bridge mode must not warn as if every schema rode the request: {output}"
     );
 }
 
 #[test]
-fn doctor_mcp_reports_small_tool_footprint_as_ok() {
+fn doctor_mcp_eager_warns_on_measured_schema_bytes() {
     let mut proxy = TestProxy {
         current_dir: PathBuf::from("."),
-        vars: HashMap::from([("MCP_TOOLS".to_string(), "3".to_string())]),
+        vars: HashMap::from([("AI_CHAT_MCP_TOOL_MODE".to_string(), "eager".to_string())]),
+        ..TestProxy::default()
+    };
+    for server in 0..3 {
+        for tool in 0..25 {
+            proxy
+                .mcp_manager
+                .write()
+                .insert_test_tool(&format!("bulk{server:02}"), &format!("helper_{tool:02}"));
+        }
+    }
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec!["doctor".to_string(), "mcp".to_string()],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(output.contains("ok mcp-mode eager"), "{output}");
+    assert!(
+        output.contains("warn mcp-tools-footprint mode=eager"),
+        "{output}"
+    );
+    assert!(output.contains("active-schema-bytes="), "{output}");
+}
+
+#[test]
+fn doctor_mcp_reports_a_small_catalog_as_ok() {
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
         ..TestProxy::default()
     };
     let (ctx, observer) = observed_context();
@@ -1082,41 +1136,196 @@ fn doctor_mcp_reports_small_tool_footprint_as_ok() {
     assert_eq!(status, ExitStatus::ExitedWith(0));
     let output = observed_stdout(&observer);
     assert!(
-        output.contains("ok mcp-tools-footprint tools=3"),
+        output.contains("ok mcp-tools-footprint mode=eager active=0"),
         "{output}"
     );
 }
 
-/// Disabling groups quiets the footprint warning: it is driven by the active
-/// count, while the registered total is still reported.
+fn seed_last_request() {
+    use crate::chatgpt::footprint;
+    footprint::record_request(footprint::RequestFootprint {
+        surface: footprint::PromptSurface::Interactive,
+        iteration: 2,
+        mcp_mode: crate::McpToolMode::Bridge,
+        messages_json_bytes: 4242,
+        sum_message_object_bytes: 4200,
+        messages_array_overhead_bytes: 42,
+        tools_json_bytes: 8842,
+        sum_tool_definition_bytes: 8800,
+        tools_array_overhead_bytes: 42,
+        context_json_bytes: 13084,
+        conversation: Default::default(),
+        dynamic_context_json_bytes: 128,
+        agent_runtime_context_json_bytes: 0,
+        provider_usage: Some(footprint::ProviderUsageFootprint {
+            prompt_tokens: 1200,
+            cached_prompt_tokens: 900,
+            uncached_prompt_tokens: 300,
+            completion_tokens: 50,
+            cache_hit_ratio: Some(0.75),
+            cache_reporting_available: true,
+        }),
+    });
+}
+
+/// `doctor ai --prompt-size` renders offline with no API key: the footprint
+/// section appears alongside the usual `warn api-key` line.
 #[test]
-fn doctor_mcp_footprint_follows_active_tools() {
+fn doctor_ai_prompt_size_renders_offline_without_an_api_key() {
+    let _snapshot = crate::chatgpt::footprint::snapshot_test_guard();
+    let dir = tempfile::tempdir().unwrap();
     let mut proxy = TestProxy {
-        current_dir: PathBuf::from("."),
-        vars: HashMap::from([
-            ("MCP_TOOLS".to_string(), "42".to_string()),
-            ("MCP_ACTIVE_TOOLS".to_string(), "5".to_string()),
-            ("MCP_ACTIVE_GROUPS".to_string(), "2".to_string()),
-        ]),
+        current_dir: dir.path().to_path_buf(),
+        ..TestProxy::default()
+    };
+    seed_last_request();
+    let (ctx, observer) = observed_context();
+
+    let status = command(
+        &ctx,
+        vec![
+            "doctor".to_string(),
+            "ai".to_string(),
+            "--prompt-size".to_string(),
+        ],
+        &mut proxy,
+    );
+
+    assert_eq!(status, ExitStatus::ExitedWith(0));
+    let output = observed_stdout(&observer);
+    assert!(output.contains("warn api-key"), "{output}");
+    assert!(output.contains("[prompt-footprint]"), "{output}");
+    assert!(output.contains("compact JSON / UTF-8 bytes"), "{output}");
+    for section in [
+        "Fixed system prompt",
+        "Tool schemas",
+        "MCP catalog",
+        "Largest tool schemas",
+        "Last main request",
+        "Provider usage",
+    ] {
+        assert!(output.contains(section), "{output}");
+    }
+    assert!(output.contains("1200 tokens"), "{output}");
+    assert!(output.contains("900 tokens"), "{output}");
+    assert!(output.contains("300 tokens"), "{output}");
+}
+
+/// Plain `doctor ai` stays compact: no footprint sections.
+#[test]
+fn doctor_ai_without_the_flag_stays_compact() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut proxy = TestProxy {
+        current_dir: dir.path().to_path_buf(),
         ..TestProxy::default()
     };
     let (ctx, observer) = observed_context();
 
     let status = command(
         &ctx,
-        vec!["doctor".to_string(), "mcp".to_string()],
+        vec!["doctor".to_string(), "ai".to_string()],
         &mut proxy,
     );
 
     assert_eq!(status, ExitStatus::ExitedWith(0));
     let output = observed_stdout(&observer);
-    assert!(output.contains("ok tools 42"), "{output}");
-    assert!(output.contains("ok active-tools 5"), "{output}");
-    assert!(output.contains("ok active-groups 2"), "{output}");
-    assert!(
-        output.contains("ok mcp-tools-footprint tools=5"),
-        "{output}"
+    assert!(!output.contains("[prompt-footprint]"), "{output}");
+    assert!(!output.contains("Largest tool schemas"), "{output}");
+}
+
+/// `--prompt-size` on any other section is a usage error, not silence.
+#[test]
+fn doctor_prompt_size_is_rejected_outside_ai() {
+    for section in ["mcp", "project", "skills"] {
+        let mut proxy = TestProxy {
+            current_dir: PathBuf::from("."),
+            ..TestProxy::default()
+        };
+        let (ctx, _) = observed_context();
+        let status = command(
+            &ctx,
+            vec![
+                "doctor".to_string(),
+                section.to_string(),
+                "--prompt-size".to_string(),
+            ],
+            &mut proxy,
+        );
+        assert_eq!(status, ExitStatus::ExitedWith(1), "{section}");
+    }
+
+    let mut proxy = TestProxy {
+        current_dir: PathBuf::from("."),
+        ..TestProxy::default()
+    };
+    let (ctx, _) = observed_context();
+    assert_eq!(
+        command(
+            &ctx,
+            vec!["doctor".to_string(), "--prompt-size".to_string()],
+            &mut proxy
+        ),
+        ExitStatus::ExitedWith(1)
     );
+}
+
+/// Both flag orders work, and JSON carries a versioned structured report
+/// with real numbers - never stringified JSON.
+#[test]
+fn doctor_ai_prompt_size_json_reports_versioned_numbers() {
+    let _snapshot = crate::chatgpt::footprint::snapshot_test_guard();
+    let dir = tempfile::tempdir().unwrap();
+    for argv in [
+        vec![
+            "doctor".to_string(),
+            "ai".to_string(),
+            "--prompt-size".to_string(),
+            "--json".to_string(),
+        ],
+        vec![
+            "doctor".to_string(),
+            "ai".to_string(),
+            "--json".to_string(),
+            "--prompt-size".to_string(),
+        ],
+    ] {
+        let mut proxy = TestProxy {
+            current_dir: dir.path().to_path_buf(),
+            ..TestProxy::default()
+        };
+        seed_last_request();
+        let (ctx, observer) = observed_context();
+        let status = command(&ctx, argv, &mut proxy);
+        assert_eq!(status, ExitStatus::ExitedWith(0));
+        let value: serde_json::Value =
+            serde_json::from_str(observed_stdout(&observer).trim()).unwrap();
+        let footprint = &value["details"]["prompt_footprint"];
+        assert_eq!(footprint["version"], 1);
+        assert!(
+            footprint["fixed"]["system_prompt"]["total_text_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert!(
+            footprint["fixed"]["interactive_tools"]["tools_json_bytes"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
+        assert_eq!(
+            footprint["last_request"]["provider_usage"]["prompt_tokens"],
+            1200
+        );
+        assert_eq!(
+            footprint["last_request"]["provider_usage"]["cached_prompt_tokens"],
+            900
+        );
+        assert_eq!(
+            footprint["last_request"]["provider_usage"]["cache_hit_ratio"],
+            0.75
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -1165,7 +1374,7 @@ mod runtime_authority_tests {
             "text report must name the logical executable: {text}"
         );
 
-        let details = json_section_details(&mut proxy, dir.path(), Some("runtime"));
+        let details = json_section_details(&mut proxy, dir.path(), &json_test_options("runtime"));
         let commands = details["commands"].as_array().unwrap();
         let cargo = commands
             .iter()

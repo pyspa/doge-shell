@@ -284,7 +284,7 @@ pub(super) struct Carried {
 
 /// The result of claiming the stored conversation.
 pub(super) enum Claim {
-    Continued(Carried),
+    Continued(Box<Carried>),
     /// `Some` names why the previous conversation was dropped, for the one
     /// line a turn prints. `None` is the ordinary first `!` of a shell, where
     /// there is nothing to explain.
@@ -319,11 +319,11 @@ pub(super) fn take(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) 
         return Claim::Fresh(Some(reason));
     }
 
-    Claim::Continued(Carried {
+    Claim::Continued(Box::new(Carried {
         manager: stored.manager,
         id: stored.id,
         stored_at: stored.stored_at,
-    })
+    }))
 }
 
 /// The id this turn will continue, without consuming the conversation.

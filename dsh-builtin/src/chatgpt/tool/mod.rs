@@ -18,6 +18,7 @@ mod jobs;
 mod ls;
 pub(crate) mod mcp_bridge;
 pub(crate) mod mcp_groups;
+pub(crate) mod observation;
 mod paths;
 mod read;
 mod replace;
@@ -108,6 +109,10 @@ pub fn build_tools() -> Vec<Value> {
         shell_context::definition(),
         shell_history::definition(),
         skill::definition(),
+        // Appended, never reordered: a stable unconditional surface keeps the
+        // provider prefix cache stable. Small fixed schema cost for large
+        // repeated historical-result savings.
+        observation::definition(),
     ]
 }
 
@@ -160,6 +165,7 @@ pub fn execute_tool_call(
     mcp: &Arc<RwLock<McpManager>>,
     hooks: &HookContext,
     proxy: &mut dyn ChatToolHost,
+    observations: &super::observation::ObservationStore,
 ) -> Result<ToolExecution, ToolCallError> {
     let function = tool_call
         .get("function")
@@ -224,7 +230,7 @@ pub fn execute_tool_call(
     // After the hook and after any approval: this is how long the tool took,
     // not how long someone took to answer a question about it.
     let started = std::time::Instant::now();
-    let dispatched = dispatch_tool(name, arguments, is_mcp_tool, mcp, proxy);
+    let dispatched = dispatch_tool(name, arguments, is_mcp_tool, mcp, proxy, observations);
     let elapsed = started.elapsed();
 
     let failed = dispatched.is_err();
@@ -308,6 +314,7 @@ fn dispatch_tool(
     is_mcp_tool: bool,
     mcp: &Arc<RwLock<McpManager>>,
     proxy: &mut dyn ChatToolHost,
+    observations: &super::observation::ObservationStore,
 ) -> Result<String, ToolCallError> {
     // The job tools work under either entry point: a task polls its own
     // runtime, an interactive turn polls the process-wide registry. `tool_search`
@@ -403,6 +410,7 @@ fn dispatch_tool(
             ls::NAME => ls::run(arguments, proxy)?,
             mcp_groups::LIST_NAME => mcp_groups::run_list(&mcp.read()),
             mcp_groups::LOAD_NAME => mcp_groups::run_load(&mcp.read(), arguments)?,
+            observation::NAME => observation::run(arguments, proxy, observations)?,
             read::NAME => read::run(arguments, proxy)?,
             replace::NAME => replace::run(arguments, proxy)?,
             search::NAME => search::run(arguments, proxy)?,

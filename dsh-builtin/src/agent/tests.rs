@@ -328,3 +328,20 @@ fn missing_plan_classifier_survives_context() {
     let other = anyhow::anyhow!("agent: task stopped or time budget exhausted");
     assert!(!is_missing_plan_error(&other));
 }
+
+/// `observation_read` is read-only retrieval: it must pass the durable-task
+/// mutation gate without a plan, while a mutating tool on the same plan-less
+/// task is rejected with the missing-plan error.
+#[test]
+fn observation_read_needs_no_plan_while_execute_does() {
+    let store = Arc::new(MemoryStore::running());
+    let mut runtime = AgentRuntime::new(running_task(), store);
+    let read = json!({"id":"call-1","function":{"name":"observation_read","arguments":"{\"id\":\"obs-000001\"}"}});
+    runtime.before_tool(&read, Value::Null).unwrap();
+
+    let store = Arc::new(MemoryStore::running());
+    let mut runtime = AgentRuntime::new(running_task(), store);
+    let execute = json!({"id":"call-2","function":{"name":"execute","arguments":"{\"command\":\"cargo test\"}"}});
+    let err = runtime.before_tool(&execute, Value::Null).unwrap_err();
+    assert!(is_missing_plan_error(&err), "{err:?}");
+}

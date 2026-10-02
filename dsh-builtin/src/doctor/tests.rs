@@ -1155,6 +1155,7 @@ fn seed_last_request() {
         tools_array_overhead_bytes: 42,
         context_json_bytes: 13084,
         conversation: Default::default(),
+        observations: Default::default(),
         dynamic_context_json_bytes: 128,
         agent_runtime_context_json_bytes: 0,
         provider_usage: Some(footprint::ProviderUsageFootprint {
@@ -1202,6 +1203,7 @@ fn doctor_ai_prompt_size_renders_offline_without_an_api_key() {
         "MCP catalog",
         "Largest tool schemas",
         "Last main request",
+        "Observations",
         "Provider usage",
     ] {
         assert!(output.contains(section), "{output}");
@@ -1300,7 +1302,7 @@ fn doctor_ai_prompt_size_json_reports_versioned_numbers() {
         let value: serde_json::Value =
             serde_json::from_str(observed_stdout(&observer).trim()).unwrap();
         let footprint = &value["details"]["prompt_footprint"];
-        assert_eq!(footprint["version"], 1);
+        assert_eq!(footprint["version"], 2);
         assert!(
             footprint["fixed"]["system_prompt"]["total_text_bytes"]
                 .as_u64()
@@ -1324,6 +1326,11 @@ fn doctor_ai_prompt_size_json_reports_versioned_numbers() {
         assert_eq!(
             footprint["last_request"]["provider_usage"]["cache_hit_ratio"],
             0.75
+        );
+        // Observations are structured numbers, never stringified JSON.
+        assert!(footprint["last_request"]["observations"]["stored_entries"].is_number());
+        assert!(
+            footprint["last_request"]["observations"]["active_reclaimed_json_bytes"].is_number()
         );
     }
 }

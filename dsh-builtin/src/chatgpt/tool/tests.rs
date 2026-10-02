@@ -209,6 +209,7 @@ fn execute_tool_call_returns_parseable_json_after_the_global_cap() {
         &Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
         &HookContext::disabled(),
         &mut proxy,
+        &Default::default(),
     )
     .unwrap();
 
@@ -239,7 +240,13 @@ fn test_execute_tool_call_unknown_tool() {
         }
     });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy);
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    );
     assert!(result.is_err());
     assert_eq!(
         result.unwrap_err().to_string(),
@@ -265,8 +272,14 @@ fn an_allowed_mcp_tool_runs_without_asking() {
 
     // No binding is actually connected, so the call fails after the gate -
     // what matters is that the gate did not ask.
-    let error =
-        execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
+    let error = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap_err();
     assert_eq!(error.outcome, ToolOutcome::Failure);
     assert_eq!(proxy.confirm_calls, 0);
 }
@@ -284,8 +297,14 @@ fn a_denied_mcp_tool_is_refused_without_asking() {
         "function": {"name": "mcp__test__tool", "arguments": "{}"}
     });
 
-    let err =
-        execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
+    let err = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("policy says no"));
     assert_eq!(proxy.confirm_calls, 0);
 }
@@ -304,7 +323,13 @@ fn an_always_answer_is_remembered_for_the_session() {
         "function": {"name": "mcp__test__tool", "arguments": "{}"}
     });
 
-    let _ = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy);
+    let _ = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    );
     assert_eq!(proxy.agent_session_allowlist, vec!["mcp:mcp__test__tool"]);
 }
 
@@ -321,7 +346,14 @@ fn execute_tool_call_requires_confirmation_for_mcp_tool() {
         }
     });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.content, "MCP tool execution cancelled by user.");
     assert_eq!(result.outcome, ToolOutcome::Failure);
@@ -389,7 +421,8 @@ fn a_hook_matching_on_the_command_narrows_to_one_call() {
         agent_verdict: AgentCommandVerdict::Allowed,
         ..TestShellProxy::default()
     };
-    let allowed = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let allowed =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
     assert_eq!(allowed.outcome, ToolOutcome::Success);
 
     // The one it does care about is stopped before the policy is asked.
@@ -398,8 +431,14 @@ fn a_hook_matching_on_the_command_narrows_to_one_call() {
         agent_verdict: AgentCommandVerdict::Allowed,
         ..TestShellProxy::default()
     };
-    let denied =
-        execute_tool_call(&execute_call("rm -rf /tmp/x"), &mcp, &hooks, &mut proxy).unwrap();
+    let denied = execute_tool_call(
+        &execute_call("rm -rf /tmp/x"),
+        &mcp,
+        &hooks,
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(denied.outcome, ToolOutcome::Failure);
     assert!(
         denied.content.contains("no removals here"),
@@ -413,7 +452,14 @@ fn a_hook_matching_on_the_command_narrows_to_one_call() {
         agent_verdict: AgentCommandVerdict::Allowed,
         ..TestShellProxy::default()
     };
-    let other = execute_tool_call(&execute_call("true"), &mcp, &hooks, &mut proxy).unwrap();
+    let other = execute_tool_call(
+        &execute_call("true"),
+        &mcp,
+        &hooks,
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(other.outcome, ToolOutcome::Success);
 }
 
@@ -435,7 +481,8 @@ fn pre_tool_use_deny_skips_execution() {
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Failure);
     assert!(
@@ -462,7 +509,8 @@ fn pre_tool_use_ask_requires_approval_even_when_the_policy_allows() {
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(result.outcome, ToolOutcome::Success);
@@ -480,7 +528,8 @@ fn pre_tool_use_ask_denied_by_user_does_not_run_the_tool() {
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Failure);
     assert!(
@@ -504,7 +553,7 @@ fn pre_tool_use_ask_uses_its_own_approval_key() {
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert!(
         proxy
@@ -534,7 +583,8 @@ exit 0"#,
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Failure);
     assert!(
@@ -564,7 +614,8 @@ exit 0"#,
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Success);
     assert!(
@@ -591,7 +642,8 @@ exit 0"#,
     };
     let mcp = Arc::new(RwLock::new(McpManager::default()));
 
-    let result = execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy).unwrap();
+    let result =
+        execute_tool_call(&ls_call(), &mcp, &hooks, &mut proxy, &Default::default()).unwrap();
 
     assert!(
         result.content.starts_with("read-only day"),
@@ -622,7 +674,7 @@ fn post_tool_use_fires_for_a_failing_tool() {
         "function": {"name": "ls", "arguments": "{\"path\":\"../outside\"}"}
     });
 
-    let error = execute_tool_call(&failing, &mcp, &hooks, &mut proxy)
+    let error = execute_tool_call(&failing, &mcp, &hooks, &mut proxy, &Default::default())
         .expect_err("the path is outside the allowed roots");
 
     assert_eq!(error.outcome, ToolOutcome::Failure);
@@ -721,8 +773,14 @@ fn job_status_works_without_an_agent_task() {
         }
     });
 
-    let error = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy)
-        .expect_err("an unknown job is still an error");
+    let error = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .expect_err("an unknown job is still an error");
 
     // The point is *which* error: "unknown job" means the interactive registry
     // answered, where "requires an agent task" would mean the gate refused.
@@ -748,9 +806,15 @@ fn the_task_only_tools_still_require_an_agent_task() {
     ] {
         let mut proxy = NoopProxy::default();
         let tool_call = json!({ "function": { "name": name, "arguments": arguments } });
-        let error = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy)
-            .expect_err("{name} should need a task")
-            .to_string();
+        let error = execute_tool_call(
+            &tool_call,
+            &mcp,
+            &HookContext::disabled(),
+            &mut proxy,
+            &Default::default(),
+        )
+        .expect_err("{name} should need a task")
+        .to_string();
         assert!(error.contains("requires an agent task"), "{name}: {error}");
     }
 }
@@ -786,7 +850,14 @@ fn mcp_list_groups_runs_without_approval() {
     let mcp = Arc::new(RwLock::new(inner));
     let tool_call = json!({ "function": { "name": "mcp_list_groups", "arguments": "{}" } });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Success);
     assert_eq!(proxy.confirm_calls, 0);
@@ -807,7 +878,14 @@ fn mcp_load_group_activates_through_dispatch_without_approval() {
     let tool_call =
         json!({ "function": { "name": "mcp_load_group", "arguments": r#"{"group":"github"}"# } });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Success);
     assert_eq!(proxy.confirm_calls, 0);
@@ -816,8 +894,14 @@ fn mcp_load_group_activates_through_dispatch_without_approval() {
     // Unknown groups come back as a model-readable error, not a stopped turn.
     let missing =
         json!({ "function": { "name": "mcp_load_group", "arguments": r#"{"group":"nope"}"# } });
-    let error =
-        execute_tool_call(&missing, &mcp, &HookContext::disabled(), &mut proxy).unwrap_err();
+    let error = execute_tool_call(
+        &missing,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap_err();
     assert!(
         error.to_string().contains("Unknown MCP tool group"),
         "{error}"
@@ -1433,7 +1517,14 @@ fn tool_search_runs_through_dispatch_for_an_agent_task() {
         "function": {"name": "tool_search", "arguments": "{\"query\":\"search github issues\"}"}
     });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Success);
     let rendered: Value = serde_json::from_str(&result.content).expect("valid JSON");
@@ -1450,7 +1541,14 @@ fn tool_search_runs_through_dispatch_without_an_agent_task() {
         "function": {"name": "tool_search", "arguments": "{\"query\":\"search github issues\"}"}
     });
 
-    let result = execute_tool_call(&tool_call, &mcp, &HookContext::disabled(), &mut proxy).unwrap();
+    let result = execute_tool_call(
+        &tool_call,
+        &mcp,
+        &HookContext::disabled(),
+        &mut proxy,
+        &Default::default(),
+    )
+    .unwrap();
 
     assert_eq!(result.outcome, ToolOutcome::Success);
     let rendered: Value = serde_json::from_str(&result.content).expect("valid JSON");
@@ -1516,4 +1614,44 @@ fn agent_toolbox_still_carries_exactly_one_tool_search() {
         .find(|tool| tool["function"]["name"] == "tool_search")
         .expect("agent tool_search");
     assert_eq!(agent_definition, tool_search::definition());
+}
+
+#[test]
+fn observation_read_passes_through_pre_and_post_hooks() {
+    use crate::chatgpt::observation::ObservationStore;
+    let dir = tempdir().unwrap();
+    let log = dir.path().join("seen.log");
+    let hooks = hook_context(
+        &dir,
+        &format!("printf '%s\\n' \"$DOGESH_HOOK_EVENT\" >> {}", log.display()),
+    );
+    let mut store = ObservationStore::default();
+    let id = store
+        .insert("c1", "read_file", "hello".repeat(1000), 5100)
+        .unwrap();
+    let mut proxy = NoopProxy::default();
+    let mcp = Arc::new(RwLock::new(McpManager::default()));
+    let call = serde_json::json!({
+        "id": "obs-call",
+        "function": {"name": "observation_read", "arguments": format!(r#"{{"id":"{id}"}}"#)}
+    });
+    let result = execute_tool_call(&call, &mcp, &hooks, &mut proxy, &store).unwrap();
+    assert!(result.content.contains(&id), "{}", result.content);
+    assert!(result.content.contains("hello"), "{}", result.content);
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    let seen = std::fs::read_to_string(&log).unwrap();
+    assert!(seen.contains("pre-tool-use"), "{seen}");
+    assert!(seen.contains("post-tool-use"), "{seen}");
+}
+
+#[test]
+fn observation_read_is_read_only_for_mutation_policy() {
+    // Both mutation gates must treat retrieval as read-only: the
+    // verify-after-mutation nudge (`is_mutating_tool_call`) and the durable
+    // `AgentRuntime::before_tool` plan gate (covered in agent/tests.rs).
+    let call = serde_json::json!({
+        "id": "obs-call",
+        "function": {"name": "observation_read", "arguments": r#"{"id":"obs-000001"}"#}
+    });
+    assert!(!super::super::settings::is_mutating_tool_call(&call));
 }

@@ -3,7 +3,9 @@
 //! (`compact_buffer`/`superseded_tool_indices`), and the paid summarization
 //! fallback (`perform_summary`). The free functions below it are the
 //! transcript-shape helpers `perform_summary` and `reflect` share.
+use super::observation::ObservationStore;
 use super::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct ConversationManager {
@@ -32,6 +34,22 @@ pub(super) struct ConversationManager {
     /// always `None` for them, so nothing here is read).
     #[serde(default)]
     pub(super) turn_mark: Option<TurnStart>,
+    /// Recoverable tool results offloaded from the buffer, keyed by
+    /// conversation-local `obs-*` ids. Serialized with the conversation so
+    /// session restore and task checkpoints keep retrieval working.
+    #[serde(default)]
+    pub(super) observations: ObservationStore,
+    /// Tool-call ids whose results are in the buffer but have not yet been
+    /// contained in a successful provider request. Such results must never be
+    /// compacted: the model has not seen them once yet.
+    #[serde(default)]
+    pub(super) unseen_tool_results: BTreeSet<String>,
+    /// Logical tool name per tool-call id, recorded at insertion time.
+    /// Needed because bridge-mode history keeps the wire `tool_call` request
+    /// while policy saw the logical `mcp__*` call; the observation stub must
+    /// name the logical tool.
+    #[serde(default)]
+    pub(super) tool_names: BTreeMap<String, String>,
 }
 
 /// What `rewind_to_turn_start` restores.
@@ -58,6 +76,9 @@ impl ConversationManager {
             turn_usage: usage::TokenUsage::default(),
             pinned_messages: vec![system_prompt, first_user_message],
             turn_mark: None,
+            observations: ObservationStore::default(),
+            unseen_tool_results: BTreeSet::new(),
+            tool_names: BTreeMap::new(),
         }
     }
 
@@ -100,6 +121,10 @@ impl ConversationManager {
     /// mid-turn summarization. Returns `false` when there was no mark to
     /// rewind to (a brand new conversation, or a restored task checkpoint),
     /// in which case nothing is touched.
+    ///
+    /// Deterministic compaction already applied to older history is not
+    /// reversed, and Observation Store entries survive: an `obs-*` created
+    /// before the failed turn stays retrievable.
     pub(super) fn rewind_to_turn_start(&mut self) -> bool {
         let Some(start) = self.turn_mark.take() else {
             return false;
@@ -107,6 +132,7 @@ impl ConversationManager {
         if start.buffer_index < self.buffer.len() {
             self.buffer.truncate(start.buffer_index);
             self.buffer_chars = sum_message_lengths(&self.buffer);
+            self.prune_sidecar_to_buffer();
         }
         self.summary = start.summary;
         // The measured prompt size describes the larger request that just
@@ -140,12 +166,24 @@ impl ConversationManager {
     /// `summary` snapshot is left untouched - it is the value from *before*
     /// this turn started, and must survive whatever `perform_summary` does to
     /// the live `self.summary` during the turn.
+    ///
+    /// Observation Store entries are kept even when their stub drops: the
+    /// summary may retain the `obs-*` id, and deleting it would dangle.
     pub(super) fn drop_buffer_prefix(&mut self, retain_start: usize) {
         self.buffer = self.buffer.split_off(retain_start);
         self.buffer_chars = sum_message_lengths(&self.buffer);
         if let Some(start) = &mut self.turn_mark {
             start.buffer_index = start.buffer_index.saturating_sub(retain_start);
         }
+        self.prune_sidecar_to_buffer();
+    }
+
+    /// Drop `unseen` and `tool_names` entries for tool-call ids no longer in
+    /// the buffer. Observations themselves are never pruned here.
+    fn prune_sidecar_to_buffer(&mut self) {
+        let live = observation::buffer_tool_call_ids(&self.buffer);
+        self.unseen_tool_results.retain(|id| live.contains(id));
+        self.tool_names.retain(|id, _| live.contains(id));
     }
 
     pub(super) fn last_prompt_tokens(&self) -> u64 {
@@ -163,77 +201,6 @@ impl ConversationManager {
     pub(super) fn should_summarize(&self) -> bool {
         self.buffer_size_chars() > MAX_BUFFER_CHARS
             || self.last_prompt_tokens > self.prompt_token_budget
-    }
-
-    /// Shrink the buffer without paying a model to do it.
-    ///
-    /// Summarizing costs a whole extra request, and most of what makes a long
-    /// agent conversation large is not conversation at all: it is tool output
-    /// the model has already acted on, and files it read more than once. Both
-    /// can be dropped by rule.
-    ///
-    /// Only the `content` of a `tool` message is replaced, never the message
-    /// itself. A `tool` message is only valid directly after the assistant
-    /// message that asked for it, so removing one would leave the request
-    /// dangling and the API answers that with a 400.
-    ///
-    /// Returns the number of characters reclaimed.
-    pub(super) fn compact_buffer(&mut self) -> usize {
-        let before = self.buffer_chars;
-
-        for index in self.superseded_tool_indices() {
-            // The stub is not free. Replacing a two-byte "ok" with a sentence
-            // naming the call makes the buffer *larger*, which is the opposite
-            // of the job.
-            if message_serialized_len(&self.buffer[index]) <= MIN_ELIDABLE_TOOL_CHARS {
-                continue;
-            }
-            let label = tool_call_label(&self.buffer, index)
-                .unwrap_or_else(|| "identical call".to_string());
-            replace_tool_content(
-                &mut self.buffer[index],
-                &format!("(superseded by a later {label}; its newer result is below)"),
-            );
-        }
-
-        // Everything before the last few exchanges is history the model has
-        // already folded into what it did next.
-        let keep_from = retain_boundary(&self.buffer, RECENT_BUFFER_MESSAGES_KEPT);
-        for index in 0..keep_from {
-            if message_role(&self.buffer[index]) != Some("tool") {
-                continue;
-            }
-            let size = message_serialized_len(&self.buffer[index]);
-            if size <= MIN_ELIDABLE_TOOL_CHARS {
-                continue;
-            }
-            let label =
-                tool_call_label(&self.buffer, index).unwrap_or_else(|| "tool result".to_string());
-            replace_tool_content(
-                &mut self.buffer[index],
-                &format!("(elided: {label}, {size} bytes; call it again if you need it)"),
-            );
-        }
-
-        self.buffer_chars = sum_message_lengths(&self.buffer);
-        let reclaimed = before.saturating_sub(self.buffer_chars);
-        // The measured prompt size describes the larger request that
-        // `should_summarize` just fired on. Left in place, a
-        // `prompt_tokens`-triggered summary is billed again even when the
-        // free pass already shrank the buffer enough to fit: the next
-        // request is smaller, but `last_prompt_tokens` still names the old
-        // one. Scale only the buffer-attributable portion down, keeping any
-        // overhead (system prompt, tool schemas, summary) intact. When the
-        // estimate is wrong the next measured response corrects it, while
-        // always summarizing wastes a paid request every turn.
-        if reclaimed > 0 && self.last_prompt_tokens > 0 && before > 0 {
-            const CHARS_PER_TOKEN: usize = 4;
-            let before_tokens = (before / CHARS_PER_TOKEN) as u64;
-            let new_tokens = (self.buffer_chars / CHARS_PER_TOKEN) as u64;
-            let overhead = self.last_prompt_tokens.saturating_sub(before_tokens);
-            self.last_prompt_tokens = overhead.saturating_add(new_tokens);
-        }
-        reclaimed
     }
 
     /// Indices of tool results that a later identical call has replaced.

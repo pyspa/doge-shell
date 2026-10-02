@@ -24,6 +24,7 @@ mod commands;
 mod context;
 mod conversation;
 pub(crate) mod footprint;
+pub(crate) mod observation;
 mod prompt;
 mod settings;
 mod turn_support;
@@ -360,39 +361,33 @@ fn chat_with_tools(
             // summarization request below never happens.
             if manager.should_summarize() {
                 let buffer_before = manager.buffer_size_chars();
-                // Read before compaction, like `buffer_before`: the free pass
-                // can bring the buffer back under its limit, and asking
-                // afterwards then names `prompt_tokens` for a round the buffer
-                // size triggered.
                 let reason = if buffer_before > MAX_BUFFER_CHARS {
                     "buffer_chars"
                 } else {
                     "prompt_tokens"
                 };
-                let reclaimed = manager.compact_buffer();
-                if reclaimed > 0 {
-                    tracing::debug!("compacted {reclaimed} chars of tool output out of the buffer");
+                let report = manager.compact_buffer_report();
+                if report.reclaimed_bytes > 0 {
+                    tracing::debug!(
+                        "compacted {} chars ({} offloads, {} fallback, {} unseen)",
+                        report.reclaimed_bytes,
+                        report.recoverable_offloads,
+                        report.fallback_elisions,
+                        report.skipped_unseen,
+                    );
                 }
-
-                // Fired after the free pass and before the paid one, so the
-                // payload can say whether this round is about to cost anything.
-                // Observation only: refusing compaction would leave the request
-                // too large to send, so there is no safe `deny` to offer.
                 let will_summarize = manager.should_summarize();
                 setup.hook_ctx.fire(
                     hooks::HookEvent::PreCompact,
                     hooks::HookSubject::none(),
                     || {
-                        json!({
-                            "reason": reason,
-                            "buffer_chars": manager.buffer_size_chars(),
-                            "buffer_chars_before": buffer_before,
-                            "buffer_messages": manager.buffer_len(),
-                            "reclaimed_chars": reclaimed,
-                            "last_prompt_tokens": manager.last_prompt_tokens(),
-                            "prompt_token_budget": manager.prompt_token_budget(),
-                            "will_summarize": will_summarize,
-                        })
+                        observation::compaction::precompact_hook_payload(
+                            &manager,
+                            reason,
+                            buffer_before,
+                            &report,
+                            will_summarize,
+                        )
                     },
                     &|| proxy.is_canceled(),
                 );
@@ -509,6 +504,13 @@ fn chat_with_tools(
                 Ok(turn) => turn,
                 Err(err) => break Err(format!("chat: {err}")),
             };
+
+            // Every tool result in the request just succeeded in reaching the
+            // model. Mark them seen before adding this response's new
+            // messages: only now is offloading safe. Network errors above
+            // `break` before this point, so failed requests keep results
+            // inline for the retry.
+            manager.mark_sent_tool_results_seen();
 
             // Streamed this round's text already appeared as rendered Markdown
             // blocks; a response that fell back to non-streaming (or streaming

@@ -17,6 +17,7 @@
 ## 編集前のルーティング
 
 - 非自明な実装・調査・refactorでは、まず `python3 scripts/agent-context.py --topic "<task>" --json` を使う。pathが既知なら `--path <repo-relative-path>` を追加できる。
+- routerの結果があれば該当Skillから読み、全体のtask-mapは先読みしない。同一タスクで読んだ文書は、変更・スコープ変更・文脈喪失がなければ再読しない。
 - routerは編集前のSkillとreferenceの入口だけを示す。使えないときは `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
 - typo、明白な1ファイルdocs編集、変更内容を完全指定された単純修正ではrouterを省略してよい。
 - 補完定義は `doge-shell-completion-spec` と `references/invariants/completion.md`、execution/job lifecycleは `doge-shell-execution-semantics` と `references/invariants/execution*.md` を読む。

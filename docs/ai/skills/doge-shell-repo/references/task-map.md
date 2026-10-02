@@ -1,5 +1,7 @@
 # Task Map
 
+routerが使えない・`repo-general` のときに該当節を検索する索引。`Validate` は対象packageや関連検証の候補であり、実行範囲・完了条件は [test-scope.md](test-scope.md) を正とする。
+
 - completion / suggestion / ghost text / TAB
   - Skill: `docs/ai/skills/doge-shell-repl-completion/SKILL.md`（JSON 定義の追加/編集は `doge-shell-completion-spec` へ）
   - Read: `dsh/src/completion/`, `dsh/src/repl/completion/`, `dsh/src/repl/input_analysis.rs`

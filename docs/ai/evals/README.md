@@ -1,6 +1,6 @@
 # Agent evaluation
 
-`routing-cases.json` checks the deterministic pre-edit router across execution, PTY, completion, parser, and other domains. Add a routing case when a routing mistake is found. Post-edit validation remains owned by `doctor validate` (see `docs/ai/skills/doge-shell-repo/references/test-scope.md` when no fresh release binary exists). `tasks/*.json` reintroduce one regression each in a detached temporary worktree. The source checkout is never the agent's working directory. The runner removes each worktree in `finally` and writes artifacts outside the repository (default: `/tmp/doge-shell-agent-evals`).
+`routing-cases.json` checks the deterministic pre-edit router across execution, PTY, completion, parser, and other domains. Add a routing case when a routing mistake is found. Post-edit validation uses `docs/ai/skills/doge-shell-repo/references/test-scope.md`; `doctor validate` can suggest commands when its release binary is fresh. `tasks/*.json` reintroduce one regression each in a detached temporary worktree. The source checkout is never the agent's working directory. The runner removes each worktree in `finally` and writes artifacts outside the repository (default: `/tmp/doge-shell-agent-evals`).
 
 ```sh
 python3 scripts/check-agent-eval-schemas.py

@@ -18,7 +18,7 @@ use super::authorize::{AuthorizationCancelled, ConfirmFn};
 use super::plan::ExecutionPlan;
 use crate::process::reexec::{ChildStdio, PlanExecMode, PlanSignalPolicy, spawn_plan_helper};
 use crate::process::{ProcessState, WaitPidObservation};
-use crate::shell::expansion_host::ExpansionHost;
+use crate::shell::Shell;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
 use std::future::Future;
@@ -33,12 +33,8 @@ pub use super::process_substitution::{
 
 /// Snapshot the shell state one helper needs. The snapshot is authoritative;
 /// per-job gating of the *outer* line already happened before this call.
-fn helper_snapshot(
-    shell: &impl ExpansionHost,
-) -> crate::environment::child_snapshot::ChildShellSnapshot {
-    crate::environment::child_snapshot::ChildShellSnapshot::capture(
-        &shell.expansion_environment().read(),
-    )
+fn helper_snapshot(shell: &Shell) -> crate::environment::child_snapshot::ChildShellSnapshot {
+    crate::environment::child_snapshot::ChildShellSnapshot::capture(&shell.environment.read())
 }
 
 /// Captured `$(...)` output plus the helper's actual shell exit code.
@@ -65,7 +61,7 @@ pub struct CapturedSubstitution {
 /// `AuthorizationCancelled` (reported on the status fd), exactly as if the
 /// body had run in-process: the outer command never runs on empty output.
 pub fn capture_subshell_plan_stdout<'a>(
-    shell: &'a mut impl ExpansionHost,
+    shell: &'a mut Shell,
     parent_ctx: &'a Context,
     plan: &'a ExecutionPlan,
     mode: PlanExecMode,
@@ -97,7 +93,7 @@ pub fn capture_subshell_plan_stdout<'a>(
                 stdout: write_end.as_raw_fd(),
                 stderr: parent_ctx.errfile,
             },
-            shell.runtime().pgid,
+            shell.pgid,
             Some(status_write.as_raw_fd()),
         )?;
         // The helper owns the write ends now (dup'd to its stdout/status

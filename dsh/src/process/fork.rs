@@ -112,9 +112,7 @@ pub(crate) fn fork_process(
 
     // Prepare execution data BEFORE forking, including the null-terminated
     // pointer arrays: the child only reads, never allocates.
-    let bundle = match process
-        .prepare_execution(process.stage_environment.environment(&shell.environment))
-    {
+    let bundle = match process.prepare_execution(shell.environment.clone()) {
         Ok(prepared) => prepared.into_bundle(),
         Err(err) => {
             for fd in created_writes {
@@ -273,8 +271,8 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
     // Command-scoped `PATH=...` selects the lookup PATH (last wins, matching
     // `prepare_execution`); slash names still bypass it as explicit pathnames.
     let path_override = process.path_override();
-    let environment = process.stage_environment.environment(&shell.environment);
-    if let Some(path) = environment
+    if let Some(path) = shell
+        .environment
         .read()
         .lookup_with_path_override(&name, path_override)
     {
@@ -286,9 +284,7 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
 
     let mut message = format!("dsh: {name}: command not found\r\n");
 
-    let paths = path_override
-        .map(|path| path.split(':').map(str::to_string).collect())
-        .unwrap_or_else(|| environment.read().variable_state.paths.clone());
+    let paths = shell.environment.read().variable_state.paths.clone();
     let builtins: Vec<String> = dsh_builtin::get_all_commands()
         .iter()
         .map(|(name, _)| name.to_string())
@@ -305,16 +301,14 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
             // exported child environment. The lock is released before any
             // task filesystem scan or provider subprocess runs.
             let runtime = {
-                let env = environment.read();
+                let env = shell.environment.read();
                 dsh_builtin::task::TaskDiscoveryRuntime::new(
-                    paths.iter().map(std::path::PathBuf::from).collect(),
-                    {
-                        let mut child_env = env.child_process_env();
-                        for (name, value) in &process.env_overrides {
-                            child_env.insert(name.clone(), value.clone());
-                        }
-                        child_env
-                    },
+                    env.variable_state
+                        .paths
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect(),
+                    env.child_process_env(),
                 )
             };
             dsh_builtin::task::list_tasks_in_dir(&cwd, &runtime).ok()
@@ -342,121 +336,6 @@ mod tests {
     use crate::environment::Environment;
     use crate::shell::Shell;
     use nix::unistd::{getpgid, getpgrp, getpid};
-
-    #[tokio::test]
-    async fn isolated_command_not_found_keeps_live_hook_and_parent_expansion_state() {
-        use crate::process::JobProcess;
-        use crate::repl::confirmation::ConfirmationAction;
-        use crate::shell::materialize::{MaterializeOutcome, materialize_job};
-
-        let empty_path = tempfile::tempdir().unwrap();
-        let env = Environment::new();
-        env.write().set_shell_var(
-            "PATH".into(),
-            empty_path.path().to_string_lossy().into_owned(),
-        );
-        env.write().unset_shell_var("DOGESH_ISO_HOOK_SEEN");
-        env.write()
-            .set_shell_var("DOGESH_ISO_HOOK_X".into(), "1".into());
-        let mut shell = Shell::new(env.clone());
-        shell.lisp_engine.borrow().run(
-            "(define *command-not-found-hooks* (list (lambda (name) (vset \"DOGESH_ISO_HOOK_SEEN\" name))))",
-        ).unwrap();
-        let missing = "dogesh-iso-command-not-found-probe";
-        let plan = crate::shell::parse::parse_execution_plan(
-            &format!("{missing} $((DOGESH_ISO_HOOK_X=9)) | cat"),
-            env.clone(),
-        )
-        .unwrap();
-        let ctx = Context::new_safe(shell.pid, shell.pgid, false);
-        let MaterializeOutcome::Runnable(mut job) =
-            materialize_job(&mut shell, &ctx, &plan.lists[0].jobs[0], |_| {
-                Ok(ConfirmationAction::Yes)
-            })
-            .await
-            .unwrap()
-        else {
-            panic!("expected runnable pipeline")
-        };
-        let JobProcess::Command(process) = job.job.process.as_deref_mut().unwrap() else {
-            panic!("expected external command")
-        };
-        assert_eq!(
-            process.stage_environment.snapshot(&env).variables["DOGESH_ISO_HOOK_X"],
-            "9"
-        );
-        assert!(resolve_program(process, &mut shell).is_some());
-        // The existing live Lisp hook runs; only the expansion mutation is isolated.
-        assert_eq!(
-            env.read()
-                .lookup_variable("DOGESH_ISO_HOOK_SEEN")
-                .as_deref(),
-            Some(missing)
-        );
-        assert_eq!(
-            env.read().lookup_variable("DOGESH_ISO_HOOK_X").as_deref(),
-            Some("1")
-        );
-        assert!(
-            !process
-                .stage_environment
-                .snapshot(&env)
-                .variables
-                .contains_key("DOGESH_ISO_HOOK_SEEN")
-        );
-    }
-
-    #[test]
-    fn isolated_snapshot_path_prefix_and_explicit_lookup_preserve_parent_cache() {
-        use crate::environment::child_snapshot::ChildShellSnapshot;
-        use crate::process::stage_environment::StageEnvironment;
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let mut paths = Vec::new();
-        for name in ["parent", "stage", "prefix"] {
-            let path = dir.path().join(name);
-            std::fs::create_dir(&path).unwrap();
-            let program = path.join("iso-probe");
-            std::fs::write(&program, "lookup-only").unwrap();
-            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-            paths.push(path.to_string_lossy().into_owned());
-        }
-        let env = Environment::new();
-        env.write().set_shell_var("PATH".into(), paths[0].clone());
-        let parent_path = env.read().lookup("iso-probe").unwrap();
-        let local = Environment::isolated_expansion(&env.read());
-        local.write().set_shell_var("PATH".into(), paths[1].clone());
-        let state =
-            StageEnvironment::Isolated(Box::new(ChildShellSnapshot::capture(&local.read())));
-        let mut shell = Shell::new(env.clone());
-        let mut p = Process::new("iso-probe".into(), vec!["iso-probe".into()]);
-        p.stage_environment = state.clone();
-        assert!(resolve_program(&mut p, &mut shell).is_none());
-        assert_eq!(p.cmd, format!("{}/iso-probe", paths[1]));
-        p.cmd = "iso-probe".into();
-        p.env_overrides = vec![
-            ("PATH".into(), paths[0].clone()),
-            ("PATH".into(), paths[2].clone()),
-        ];
-        assert!(resolve_program(&mut p, &mut shell).is_none());
-        assert_eq!(p.cmd, format!("{}/iso-probe", paths[2]));
-        p.cmd = parent_path.clone();
-        assert!(resolve_program(&mut p, &mut shell).is_none());
-        assert_eq!(p.cmd, parent_path);
-        assert_eq!(
-            env.read().lookup("iso-probe").as_deref(),
-            Some(parent_path.as_str())
-        );
-        assert_eq!(env.read().variable_state.paths, vec![paths[0].clone()]);
-        assert_eq!(
-            env.read()
-                .completion_state
-                .command_cache
-                .read()
-                .get("iso-probe"),
-            Some(&parent_path)
-        );
-    }
 
     #[test]
     fn interactive_external_initial_child_becomes_process_group_leader() {

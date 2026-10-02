@@ -21,7 +21,7 @@ use super::word_expand::{
 };
 use crate::parser::expansion::{escape_brace_metacharacters, escape_glob_metacharacters};
 use crate::process::reexec::PlanExecMode;
-use crate::shell::expansion_host::ExpansionHost;
+use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
 use std::future::Future;
@@ -29,12 +29,9 @@ use std::pin::Pin;
 
 /// Named parameter state for structured `${VAR-op}`: bare name only, never
 /// the full `${VAR:-word}` spelling.
-fn named_parameter_state(
-    name: &str,
-    shell: &impl ExpansionHost,
-) -> super::parameter_expand::ParameterState {
+fn named_parameter_state(name: &str, shell: &Shell) -> super::parameter_expand::ParameterState {
     use super::parameter_expand::ParameterState;
-    match shell.expansion_environment().read().lookup_variable(name) {
+    match shell.environment.read().lookup_variable(name) {
         Some(value) => ParameterState::set(value),
         None => ParameterState::unset(),
     }
@@ -46,7 +43,7 @@ fn named_parameter_state(
 /// never executes substitutions, assigns, or authorizes. Selected operands
 /// share the same mutable trace in left-to-right order.
 pub(crate) fn expand_parameter_to_segments<'a>(
-    shell: &'a mut impl ExpansionHost,
+    shell: &'a mut Shell,
     ctx: &'a Context,
     expansion: &'a PlannedParameterExpansion,
     quote: QuoteMode,
@@ -125,7 +122,7 @@ pub(crate) fn expand_parameter_to_segments<'a>(
                 // Through the logical environment so `PATH` refreshes derived
                 // state and existing export attributes are preserved.
                 shell
-                    .expansion_environment()
+                    .environment
                     .write()
                     .set_shell_var(expansion.name.clone(), scalar.clone());
                 if outer_quoted {
@@ -190,7 +187,7 @@ pub(crate) fn default_parameter_error_message(
 /// Nested `${...}` may assign or fail recursively; the same trace observes
 /// selected substitutions in order. Boxed for recursion.
 pub(crate) fn expand_operand_scalar<'a>(
-    shell: &'a mut impl ExpansionHost,
+    shell: &'a mut Shell,
     ctx: &'a Context,
     word: &'a PlannedWord,
     confirm: ConfirmFn,
@@ -272,7 +269,7 @@ pub(crate) fn expand_operand_scalar<'a>(
 /// Never splits or globs. `AssignWord` mutates through the environment;
 /// `Error` returns the typed failure after lazily expanding its diagnostic.
 pub(crate) fn expand_parameter_to_scalar<'a>(
-    shell: &'a mut impl ExpansionHost,
+    shell: &'a mut Shell,
     ctx: &'a Context,
     expansion: &'a PlannedParameterExpansion,
     _quote: QuoteMode,
@@ -300,7 +297,7 @@ pub(crate) fn expand_parameter_to_scalar<'a>(
                     None => String::new(),
                 };
                 shell
-                    .expansion_environment()
+                    .environment
                     .write()
                     .set_shell_var(expansion.name.clone(), scalar.clone());
                 Ok(scalar)
@@ -328,7 +325,7 @@ pub(crate) fn expand_parameter_to_scalar<'a>(
 pub(crate) fn dry_parameter_to_segments(
     expansion: &PlannedParameterExpansion,
     quote: QuoteMode,
-    shell: &impl ExpansionHost,
+    shell: &Shell,
 ) -> Vec<ExpandedSegment> {
     let state = named_parameter_state(&expansion.name, shell);
     let decision = decide_parameter_expansion(&state, expansion.condition, expansion.action);
@@ -419,10 +416,7 @@ pub(crate) fn dry_parameter_to_segments(
 
 /// Dry operand segments: unquoted text splittable, escaped/quoted protected,
 /// nested dynamics without spawning.
-pub(crate) fn dry_operand_segments(
-    word: &PlannedWord,
-    shell: &impl ExpansionHost,
-) -> Vec<ExpandedSegment> {
+pub(crate) fn dry_operand_segments(word: &PlannedWord, shell: &Shell) -> Vec<ExpandedSegment> {
     let mut segments = Vec::with_capacity(word.parts.len());
     for part in &word.parts {
         match part {
@@ -485,7 +479,7 @@ pub(crate) fn dry_operand_segments(
     segments
 }
 
-pub(crate) fn dry_operand_scalar(word: &PlannedWord, shell: &impl ExpansionHost) -> String {
+pub(crate) fn dry_operand_scalar(word: &PlannedWord, shell: &Shell) -> String {
     let mut out = String::new();
     let mut first_part = true;
     for part in &word.parts {
@@ -531,7 +525,7 @@ pub(crate) fn dry_operand_scalar(word: &PlannedWord, shell: &impl ExpansionHost)
 
 pub(crate) fn dry_parameter_to_scalar(
     expansion: &PlannedParameterExpansion,
-    shell: &impl ExpansionHost,
+    shell: &Shell,
 ) -> String {
     let state = named_parameter_state(&expansion.name, shell);
     let decision = decide_parameter_expansion(&state, expansion.condition, expansion.action);

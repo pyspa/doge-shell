@@ -2,7 +2,6 @@ pub mod arithmetic;
 pub mod authorize;
 pub mod dry_materialize;
 pub mod eval;
-pub mod expansion_host;
 pub(crate) mod field_split;
 pub mod hooks;
 pub mod job;

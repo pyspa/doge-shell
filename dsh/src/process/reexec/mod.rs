@@ -336,7 +336,7 @@ fn spawn_reexec_builtin_helper(
 ) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
-        snapshot: process.stage_environment.snapshot(&shell.environment),
+        snapshot: ChildShellSnapshot::capture(&shell.environment.read()),
         kind: InternalExecKind::Builtin(BuiltinExecRequest {
             name: process.name.clone(),
             argv: process.argv.clone(),
@@ -430,22 +430,26 @@ pub(crate) fn spawn_isolated_builtin(
 pub(crate) fn spawn_no_command(
     ctx: &mut Context,
     shell: &Shell,
-    process: &super::NoCommandProcess,
+    stdin: RawFd,
+    stdout: RawFd,
+    stderr: RawFd,
+    assignments: &[(String, String)],
+    last_command_substitution_status: Option<i32>,
 ) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
-        snapshot: process.stage_environment.snapshot(&shell.environment),
+        snapshot: ChildShellSnapshot::capture(&shell.environment.read()),
         kind: InternalExecKind::NoCommand(NoCommandExecRequest {
-            assignments: process.assignments.clone(),
-            last_command_substitution_status: process.last_command_substitution_status,
+            assignments: assignments.to_vec(),
+            last_command_substitution_status,
         }),
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
     let child = spawn_internal_helper(
-        process.stdin,
-        process.stdout,
-        process.stderr,
+        stdin,
+        stdout,
+        stderr,
         &bytes,
         pgroup,
         None,

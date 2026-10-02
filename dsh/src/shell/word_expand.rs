@@ -24,7 +24,7 @@ use crate::parser::expansion::{
     unescape_glob_metacharacters,
 };
 use crate::process::reexec::PlanExecMode;
-use crate::shell::expansion_host::ExpansionHost;
+use crate::shell::Shell;
 use anyhow::{Result, bail};
 use dsh_types::Context;
 use std::future::Future;
@@ -36,8 +36,8 @@ use std::pin::Pin;
 /// Ordinary `$FOO` maps both unset and set-empty to an empty value, but the
 /// distinction is kept for `${FOO-default}`. Never fall back to the literal
 /// source spelling for unset parameters.
-pub(crate) fn resolve_parameter(source: &str, shell: &impl ExpansionHost) -> ParameterState {
-    match shell.expansion_environment().read().get_var(source) {
+pub(crate) fn resolve_parameter(source: &str, shell: &Shell) -> ParameterState {
+    match shell.environment.read().get_var(source) {
         Some(value) => ParameterState::set(value),
         None => ParameterState::unset(),
     }
@@ -82,11 +82,11 @@ impl ExpansionContext {
     }
 }
 
-fn lookup_home(shell: &impl ExpansionHost) -> Option<String> {
-    shell.expansion_environment().read().lookup_variable("HOME")
+fn lookup_home(shell: &Shell) -> Option<String> {
+    shell.environment.read().lookup_variable("HOME")
 }
 
-fn apply_tilde(text: &str, pattern: &str, shell: &impl ExpansionHost) -> (String, String) {
+fn apply_tilde(text: &str, pattern: &str, shell: &Shell) -> (String, String) {
     if !text.starts_with('~') {
         return (text.to_string(), pattern.to_string());
     }
@@ -114,14 +114,14 @@ fn apply_tilde(text: &str, pattern: &str, shell: &impl ExpansionHost) -> (String
     }
 }
 
-fn resolve_ifs(shell: &impl ExpansionHost) -> IfsSpec {
-    let value = shell.expansion_environment().read().lookup_variable("IFS");
+fn resolve_ifs(shell: &Shell) -> IfsSpec {
+    let value = shell.environment.read().lookup_variable("IFS");
     IfsSpec::resolve(value.as_deref())
 }
 
 pub(crate) fn literal_segment(
     literal: &PlannedLiteral,
-    shell: &impl ExpansionHost,
+    shell: &Shell,
     first: bool,
     ctx: ExpansionContext,
 ) -> ExpandedSegment {
@@ -177,7 +177,7 @@ pub(crate) fn literal_segment(
 pub(crate) fn variable_segment(
     source: &str,
     quote: QuoteMode,
-    shell: &impl ExpansionHost,
+    shell: &Shell,
     ctx: ExpansionContext,
 ) -> ExpandedSegment {
     let resolved = resolve_parameter(source, shell);
@@ -288,7 +288,7 @@ pub struct ExpansionTrace {
 /// splices into the same outer stream and whole-word splitting happens once
 /// afterwards. Boxed because nested `${...}` makes this naturally recursive.
 pub(crate) fn expand_word_segments<'a>(
-    shell: &'a mut impl ExpansionHost,
+    shell: &'a mut Shell,
     ctx: &'a Context,
     word: &'a PlannedWord,
     confirm: ConfirmFn,
@@ -374,7 +374,7 @@ pub(crate) fn expand_word_segments<'a>(
 
 /// Expand one word into zero, one, or many argument fields.
 pub async fn expand_argument_word(
-    shell: &mut impl ExpansionHost,
+    shell: &mut Shell,
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
@@ -396,7 +396,7 @@ pub async fn expand_argument_word(
 
 /// Expand an assignment value into exactly one string: no splitting, no glob.
 pub async fn expand_assignment_value(
-    shell: &mut impl ExpansionHost,
+    shell: &mut Shell,
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
@@ -413,7 +413,7 @@ pub async fn expand_assignment_value(
 /// detection. Unquoted dynamics stay protected from both splitting and
 /// pathname expansion, matching the pre-existing redirect contract.
 pub async fn expand_redirect_target(
-    shell: &mut impl ExpansionHost,
+    shell: &mut Shell,
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
@@ -536,7 +536,7 @@ pub async fn expand_redirect_target(
 }
 
 async fn expand_scalar_word(
-    shell: &mut impl ExpansionHost,
+    shell: &mut Shell,
     ctx: &Context,
     word: &PlannedWord,
     confirm: ConfirmFn,
@@ -612,7 +612,7 @@ async fn expand_scalar_word(
 /// variable values; substitution bodies stay diagnostic placeholders.
 pub fn dry_expand_argument_word(
     word: &PlannedWord,
-    shell: &impl ExpansionHost,
+    shell: &Shell,
     cwd: &std::path::Path,
 ) -> Vec<String> {
     if word.parts.is_empty() {
@@ -672,7 +672,7 @@ pub fn dry_expand_argument_word(
 }
 
 /// Read-only scalar expansion for safety preflight.
-pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &impl ExpansionHost) -> String {
+pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &Shell) -> String {
     let mut out = String::new();
     let mut first_part = true;
     for part in &word.parts {
@@ -722,7 +722,6 @@ pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &impl ExpansionHost) ->
 mod tests {
     use super::*;
     use crate::repl::confirmation::ConfirmationAction;
-    use crate::shell::Shell;
     use anyhow::Result;
     use std::sync::Arc;
 

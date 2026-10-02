@@ -62,4 +62,5 @@ no-doc	dsh/src/shell/mod.rs
 no-doc	dsh/src/suggestion.rs
 oversized	dsh-builtin/src/test_support.rs
 oversized	dsh/src/process/reexec/protocol.rs
+oversized	dsh/src/shell/materialize.rs
 oversized	dsh/src/shell/word_expand.rs

@@ -38,5 +38,3 @@ pub use pty::Pty;
 pub use redirect::Redirect;
 pub use state::{ListOp, ProcessState, SubshellType, signal_exit_status};
 pub use wait::{WaitPidObservation, wait_pid_job};
-
-pub(crate) mod stage_environment;

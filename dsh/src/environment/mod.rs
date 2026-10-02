@@ -18,7 +18,6 @@ pub mod child_snapshot;
 mod mcp;
 mod paths;
 mod preferences;
-mod stage_expansion;
 pub(crate) mod variables;
 
 #[cfg(test)]
@@ -150,11 +149,6 @@ pub(crate) struct CompletionState {
 }
 
 pub struct Environment {
-    /// In-process stage state projects setters locally: no session-wide cache
-    /// activation or AI invalidation. Re-exec helpers have their own process.
-    pub(crate) isolated_projection: bool,
-    /// Plain read-only OUT/ERR view for isolated expansion; not helper wire data.
-    pub(crate) expansion_output: Option<HashMap<String, String>>,
     /// Exit status of the last command, for `$?`.
     ///
     /// Deliberately outside `variable_state`: this is runtime state, and
@@ -236,8 +230,6 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         let env_arc = Arc::new(RwLock::new(Environment {
-            isolated_projection: false,
-            expansion_output: None,
             last_exit_status: 0,
             last_async_pid: None,
             variable_state: VariableState {
@@ -369,8 +361,6 @@ impl Environment {
         };
 
         Arc::new(RwLock::new(Environment {
-            isolated_projection: false,
-            expansion_output: None,
             last_exit_status: 0,
             last_async_pid: None,
             variable_state,

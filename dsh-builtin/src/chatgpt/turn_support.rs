@@ -425,29 +425,42 @@ pub(super) fn run_tool_calls(
             // the turn as `Err`.
             if crate::agent::is_missing_plan_error(&e) {
                 let message = e.to_string();
-                manager.add_message(json!({
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": format!("Error: {message}. Call task_plan with plan and criteria first, then retry the operation."),
-                    }));
+                let logical_name = active_call
+                    .get("function")
+                    .and_then(|function| function.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                manager.add_tool_result(
+                    tool_call_id,
+                    logical_name,
+                    format!("Error: {message}. Call task_plan with plan and criteria first, then retry the operation."),
+                );
                 continue;
             }
             return Err(e.to_string());
         }
+        let logical_name = active_call
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
         let execution = match &effective {
             Effective::InvalidBridge(message) => tool::ToolExecution {
                 content: format!("Error: {message}"),
                 outcome: crate::agent::ToolOutcome::Failure,
             },
-            Effective::Call(call) => match execute_tool_call(call, mcp_manager, hook_ctx, proxy) {
-                Ok(execution) => execution,
-                Err(error) => tool::ToolExecution {
-                    content: format!(
-                        "Error: {error}\nPlease analyze the error and retry with corrected arguments."
-                    ),
-                    outcome: error.outcome,
-                },
-            },
+            Effective::Call(call) => {
+                match execute_tool_call(call, mcp_manager, hook_ctx, proxy, &manager.observations) {
+                    Ok(execution) => execution,
+                    Err(error) => tool::ToolExecution {
+                        content: format!(
+                            "Error: {error}\nPlease analyze the error and retry with corrected arguments."
+                        ),
+                        outcome: error.outcome,
+                    },
+                }
+            }
         };
         let mut tool_result = execution.content;
         // Tool-level loading: the compact result names the hits, resolved
@@ -523,12 +536,10 @@ pub(super) fn run_tool_calls(
                 .map_err(|e| e.to_string())?;
             tool_result.push_str(&format!("\n[task event {sequence}]"));
         }
-        // Add tool result to history buffer
-        manager.add_message(json!({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": tool_result,
-        }));
+        // Canonical insertion: the exact final model-visible content,
+        // including `[task event N]`, with the logical tool name for
+        // observation stubs.
+        manager.add_tool_result(tool_call_id, &logical_name, tool_result);
     }
     Ok(())
 }
@@ -645,27 +656,43 @@ pub(super) fn repair_interrupted_tool_calls(
     manager: &mut ConversationManager,
     events: &[dsh_types::agent::TaskEvent],
 ) {
-    let mut pending = Vec::new();
+    // Collect pending ids with their logical tool names: the assistant
+    // message holds the wire request, but the event log holds the logical
+    // call when bridge normalization applied.
+    let mut pending: Vec<(String, String)> = Vec::new();
     for message in &manager.buffer {
         if let Some(calls) = message["tool_calls"].as_array() {
             for call in calls {
                 if let Some(id) = call["id"].as_str() {
-                    pending.push(id.to_string());
+                    let name = call
+                        .get("function")
+                        .and_then(|function| function.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                        .to_string();
+                    pending.push((id.to_string(), name));
                 }
             }
         }
         if let Some(id) = message["tool_call_id"].as_str() {
-            pending.retain(|value| value != id);
+            pending.retain(|(pending_id, _)| pending_id != id);
         }
     }
-    for id in pending {
+    for (id, wire_name) in pending {
         let recorded = events
             .iter()
             .rev()
             .find(|event| event.kind == "tool_result" && event.data["call"]["id"] == id);
+        // Prefer the event log's logical name when present; otherwise the
+        // wire request name. A SQLite event existing does not mean the model
+        // consumed it, so repaired results start unseen.
+        let tool_name = recorded
+            .and_then(|event| event.data["call"]["function"]["name"].as_str())
+            .unwrap_or(&wire_name)
+            .to_string();
         let content = recorded.map(|event| format!("{}\n[task event {}]", event.data["result"].as_str().unwrap_or_default(), event.sequence))
             .unwrap_or_else(|| "Interrupted before the result was recorded. Do not replay. Inspect actual state; the user's reconciliation is recorded in task progress.".into());
-        manager.add_message(json!({"role":"tool","tool_call_id":id,"content":content}));
+        manager.add_tool_result(id, &tool_name, content);
     }
 }
 

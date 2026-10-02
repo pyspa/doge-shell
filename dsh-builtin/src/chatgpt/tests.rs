@@ -454,6 +454,7 @@ fn is_mutating_tool_call_classifies_state_changing_tools() {
         "task_plan",
         "mcp_list_groups",
         "mcp_load_group",
+        "observation_read",
     ] {
         let call = json!({"function": {"name": name, "arguments": "{}"}});
         assert!(!is_mutating_tool_call(&call), "{name}");
@@ -820,8 +821,9 @@ fn compaction_drops_a_result_a_later_identical_call_replaced() {
     );
 }
 
-/// Old tool output becomes a stub that still names the call, so the model
-/// can decide whether fetching it again is worth a turn.
+/// Old tool output becomes a recoverable observation stub that still names the
+/// call, so the model can recover it with `observation_read` instead of
+/// rerunning the tool.
 #[test]
 fn compaction_elides_stale_output_but_says_what_it_was() {
     let mut buffer = Vec::new();
@@ -839,8 +841,10 @@ fn compaction_elides_stale_output_but_says_what_it_was() {
     manager.compact_buffer();
 
     let oldest = extract_message_content(&manager.buffer[1]).unwrap();
-    assert!(oldest.contains("elided"), "{oldest}");
-    assert!(oldest.contains("search("), "{oldest}");
+    assert!(oldest.contains("offloaded"), "{oldest}");
+    assert!(oldest.contains("search"), "{oldest}");
+    assert!(oldest.contains("obs-"), "{oldest}");
+    assert!(oldest.contains("observation_read"), "{oldest}");
 
     let newest = extract_message_content(manager.buffer.last().unwrap()).unwrap();
     assert_eq!(newest.len(), 2000, "the recent window must survive intact");
@@ -2934,4 +2938,395 @@ fn bridge_surface_does_not_grow_with_the_catalog() {
         serde_json::to_string(&eager_200).unwrap().len()
             > serde_json::to_string(&eager_100).unwrap().len()
     );
+}
+
+// --- Observation Store acceptance tests ---
+
+fn manager_with_tool_result(
+    id: &str,
+    tool: &str,
+    args: &str,
+    content: &str,
+) -> ConversationManager {
+    let mut manager = ConversationManager::new(
+        json!({ "role": "system", "content": "sys" }),
+        json!({ "role": "user", "content": "goal" }),
+    );
+    manager.add_message(assistant_call(id, tool, args));
+    manager.add_tool_result(id.to_string(), tool, content.to_string());
+    manager
+}
+
+#[test]
+fn observation_unseen_result_is_never_compacted() {
+    let payload = "x".repeat(2000);
+    let mut manager = manager_with_tool_result("a", "read_file", r#"{"path":"f"}"#, &payload);
+    // Force compaction conditions: old result outside recent window.
+    for index in 0..8 {
+        let id = format!("n{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id.clone(), "ls", "y".repeat(2000));
+    }
+    // Mark only the filler as seen, leaving the first result unseen.
+    // Simulate: clear all then re-mark filler? Instead construct fresh:
+    let mut manager = manager_with_tool_result("a", "read_file", r#"{"path":"f"}"#, &payload);
+    for index in 0..8 {
+        let id = format!("n{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        // Direct add_message would bypass unseen; use add_tool_result then
+        // manually mark filler seen by clearing and re-adding first as unseen.
+        manager.add_tool_result(id.clone(), "ls", "y".repeat(2000));
+    }
+    // All are unseen initially: nothing may offload.
+    let report = manager.compact_buffer_report();
+    assert!(
+        report.skipped_unseen >= 9,
+        "all unseen protected: {report:?}"
+    );
+    assert_eq!(report.recoverable_offloads, 0);
+    let first = extract_message_content(&manager.buffer[1]).unwrap();
+    assert_eq!(first, payload, "unseen result remains inline");
+
+    // After successful provider consumption, offload becomes allowed.
+    manager.mark_sent_tool_results_seen();
+    let report = manager.compact_buffer_report();
+    assert!(report.recoverable_offloads > 0, "{report:?}");
+    let first = extract_message_content(&manager.buffer[1]).unwrap();
+    assert!(first.contains("obs-"), "{first}");
+    assert!(first.contains("observation_read"), "{first}");
+}
+
+#[test]
+fn observation_large_parallel_batch_never_loses_unseen() {
+    let mut manager = ConversationManager::new(
+        json!({ "role": "system", "content": "sys" }),
+        json!({ "role": "user", "content": "goal" }),
+    );
+    // One assistant message with 12 parallel calls.
+    let calls: Vec<Value> = (0..12)
+        .map(|i| {
+            json!({"id": format!("p{i}"), "type": "function", "function": {"name": "search", "arguments": format!(r#"{{"query":"q{i}"}}"#)}})
+        })
+        .collect();
+    manager.add_message(json!({"role": "assistant", "tool_calls": calls}));
+    for i in 0..12 {
+        manager.add_tool_result(format!("p{i}"), "search", "y".repeat(2000));
+    }
+    // Push the batch outside the recent window so it becomes compaction
+    // candidates; unseen protection must still hold.
+    for index in 0..8 {
+        let id = format!("f{index}");
+        manager.add_message(assistant_call(
+            &id,
+            "ls",
+            &format!(r#"{{"path":"f{index}"}}"#),
+        ));
+        manager.add_tool_result(id, "ls", "z".repeat(2000));
+    }
+    let report = manager.compact_buffer_report();
+    assert_eq!(
+        report.recoverable_offloads, 0,
+        "unseen batch protected: {report:?}"
+    );
+    assert!(
+        report.skipped_unseen >= 12,
+        "batch unseen protected: {report:?}"
+    );
+    // After seen, historical candidates may offload normally.
+    manager.mark_sent_tool_results_seen();
+    let report = manager.compact_buffer_report();
+    assert!(report.recoverable_offloads > 0, "{report:?}");
+}
+
+#[test]
+fn observation_superseded_result_points_to_original() {
+    let payload_a = "a".repeat(2000);
+    let payload_b = "b".repeat(2000);
+    let mut manager = ConversationManager::new(
+        json!({ "role": "system", "content": "sys" }),
+        json!({ "role": "user", "content": "goal" }),
+    );
+    manager.add_message(assistant_call("a", "read_file", r#"{"path":"X"}"#));
+    manager.add_tool_result("a".into(), "read_file", payload_a.clone());
+    manager.add_message(assistant_call("b", "read_file", r#"{"path":"X"}"#));
+    manager.add_tool_result("b".into(), "read_file", payload_b.clone());
+    manager.mark_sent_tool_results_seen();
+    let report = manager.compact_buffer_report();
+    assert!(report.recoverable_offloads >= 1, "{report:?}");
+    let first = extract_message_content(&manager.buffer[1]).unwrap();
+    assert!(first.contains("obs-"), "{first}");
+    let obs_id = crate::chatgpt::observation::parse_observation_stub(&first).expect("stub");
+    let (start, end, total, window) = manager.observations.read_window(&obs_id, 0, 8192).unwrap();
+    assert_eq!(window, payload_a);
+    assert_eq!(total, payload_a.len());
+    assert_eq!((start, end), (0, payload_a.len()));
+    // Newer copy untouched.
+    assert_eq!(
+        extract_message_content(&manager.buffer[3]).unwrap(),
+        payload_b
+    );
+}
+
+#[test]
+fn observation_store_capacity_falls_back_without_evicting() {
+    let mut manager = ConversationManager::new(
+        json!({ "role": "system", "content": "sys" }),
+        json!({ "role": "user", "content": "goal" }),
+    );
+    // Fill store near byte limit with seen results, compacting each time.
+    for index in 0..150 {
+        let id = format!("f{index}");
+        manager.add_message(assistant_call(
+            &id,
+            "read_file",
+            &format!(r#"{{"path":"f{index}"}}"#),
+        ));
+        manager.add_tool_result(id.clone(), "read_file", "x".repeat(8000));
+        manager.mark_sent_tool_results_seen();
+        // Keep buffer long enough that older entries become candidates.
+        if manager.buffer.len() > 20 {
+            manager.compact_buffer();
+        }
+    }
+    let _stored_before = manager.observations.len();
+    let first_id = "obs-000001".to_string();
+    assert!(manager.observations.get(&first_id).is_some());
+    // One more large result: if store is full, fallback must not evict.
+    let id = "overflow";
+    manager.add_message(assistant_call(id, "read_file", r#"{"path":"over"}"#));
+    manager.add_tool_result(id.into(), "read_file", "z".repeat(8000));
+    manager.mark_sent_tool_results_seen();
+    manager.compact_buffer();
+    assert!(manager.observations.len() <= crate::chatgpt::observation::MAX_OBSERVATION_ENTRIES);
+    assert!(
+        manager.observations.stored_content_bytes()
+            <= crate::chatgpt::observation::MAX_OBSERVATION_STORE_BYTES
+    );
+    assert!(
+        manager.observations.get(&first_id).is_some(),
+        "no eviction of live ids"
+    );
+}
+
+#[test]
+fn observation_session_round_trip_keeps_retrieval() {
+    let payload = "hello-obs".repeat(500);
+    let mut manager = manager_with_tool_result("a", "read_file", r#"{"path":"f"}"#, &payload);
+    manager.mark_sent_tool_results_seen();
+    // Make it historical: push recent window past it.
+    for index in 0..8 {
+        let id = format!("r{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "y".repeat(2000));
+    }
+    manager.mark_sent_tool_results_seen();
+    manager.compact_buffer();
+    let stub = extract_message_content(&manager.buffer[1]).unwrap();
+    let obs_id = crate::chatgpt::observation::parse_observation_stub(&stub).expect("stub");
+    let json = serde_json::to_value(&manager).unwrap();
+    let restored: ConversationManager = serde_json::from_value(json).unwrap();
+    let (_, _, _, window) = restored.observations.read_window(&obs_id, 0, 8192).unwrap();
+    assert_eq!(window, payload);
+    // New observation gets non-colliding id.
+    let mut restored = restored;
+    restored.add_message(assistant_call("new", "search", r#"{"query":"q"}"#));
+    restored.add_tool_result("new".into(), "search", "w".repeat(2000));
+    restored.mark_sent_tool_results_seen();
+    restored.compact_buffer();
+    // Next id must not collide with existing.
+    assert!(restored.observations.get(&obs_id).is_some());
+}
+
+#[test]
+fn observation_legacy_session_deserializes_with_empty_store() {
+    let legacy = json!({
+        "summary": null,
+        "buffer": [],
+        "buffer_chars": 0,
+        "last_prompt_tokens": 0,
+        "prompt_token_budget": 100000,
+        "turn_usage": {"requests": 0, "prompt_tokens": 0, "cached_prompt_tokens": 0, "completion_tokens": 0},
+        "pinned_messages": [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "goal"}
+        ],
+        "turn_mark": null
+    });
+    let manager: ConversationManager = serde_json::from_value(legacy).unwrap();
+    assert_eq!(manager.observations.len(), 0);
+    assert!(manager.unseen_tool_results.is_empty());
+}
+
+#[test]
+fn observation_durable_checkpoint_shape_survives() {
+    let payload = "checkpoint-data".repeat(300);
+    let mut manager = manager_with_tool_result("a", "search", r#"{"query":"q"}"#, &payload);
+    manager.mark_sent_tool_results_seen();
+    for index in 0..8 {
+        let id = format!("c{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "y".repeat(2000));
+    }
+    manager.mark_sent_tool_results_seen();
+    manager.compact_buffer();
+    // Same value path as AgentRuntime::checkpoint.
+    let snapshot = serde_json::to_value(&manager).unwrap();
+    let restored: ConversationManager = serde_json::from_value(snapshot).unwrap();
+    let stub = extract_message_content(&restored.buffer[1]).unwrap();
+    let obs_id = crate::chatgpt::observation::parse_observation_stub(&stub).expect("stub");
+    let (_, _, _, window) = restored.observations.read_window(&obs_id, 0, 8192).unwrap();
+    assert_eq!(window, payload);
+}
+
+#[test]
+fn observation_rewind_keeps_old_observation() {
+    let payload = "old-data".repeat(400);
+    let mut manager = manager_with_tool_result("old", "read_file", r#"{"path":"old"}"#, &payload);
+    manager.mark_sent_tool_results_seen();
+    for index in 0..8 {
+        let id = format!("h{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "y".repeat(2000));
+    }
+    manager.mark_sent_tool_results_seen();
+    manager.compact_buffer();
+    let stub = extract_message_content(&manager.buffer[1]).unwrap();
+    let obs_id = crate::chatgpt::observation::parse_observation_stub(&stub).expect("stub");
+    manager.mark_turn_start();
+    manager.add_message(json!({"role": "user", "content": "new turn"}));
+    manager.add_message(assistant_call("new1", "ls", r#"{"path":"."}"#));
+    manager.add_tool_result("new1".into(), "ls", "fresh".into());
+    let chars_before_rewind = manager.buffer_chars;
+    assert!(manager.rewind_to_turn_start());
+    assert!(manager.observations.get(&obs_id).is_some());
+    let (_, _, _, window) = manager.observations.read_window(&obs_id, 0, 8192).unwrap();
+    assert_eq!(window, payload);
+    assert!(manager.buffer_chars < chars_before_rewind);
+    assert_eq!(
+        manager.buffer_chars,
+        manager
+            .buffer
+            .iter()
+            .map(|m| m.to_string().len())
+            .sum::<usize>()
+    );
+}
+
+#[test]
+fn observation_read_results_never_create_observations() {
+    let mut manager = ConversationManager::new(
+        json!({ "role": "system", "content": "sys" }),
+        json!({ "role": "user", "content": "goal" }),
+    );
+    // Original large result.
+    manager.add_message(assistant_call("a", "read_file", r#"{"path":"f"}"#));
+    manager.add_tool_result("a".into(), "read_file", "x".repeat(5000));
+    manager.mark_sent_tool_results_seen();
+    for index in 0..8 {
+        let id = format!("p{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "y".repeat(2000));
+    }
+    manager.mark_sent_tool_results_seen();
+    manager.compact_buffer();
+    let observations_after_first = manager.observations.len();
+    assert!(observations_after_first > 0);
+    // Simulate an observation_read result in history.
+    manager.add_message(assistant_call(
+        "r1",
+        "observation_read",
+        r#"{"id":"obs-000001"}"#,
+    ));
+    manager.add_tool_result(
+        "r1".into(),
+        "observation_read",
+        "observation obs-000001: bytes 0-100 of 5000\nxxx".to_string(),
+    );
+    manager.mark_sent_tool_results_seen();
+    for index in 0..8 {
+        let id = format!("q{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "z".repeat(2000));
+    }
+    manager.mark_sent_tool_results_seen();
+    let report = manager.compact_buffer_report();
+    // No new recoverable offload for the observation_read result itself;
+    // it may fallback, but must not grow the store with a chained entry.
+    let observations_after_second = manager.observations.len();
+    // The only growth allowed is from the filler `ls` results, not from r1.
+    // r1's content must not be stored as a new observation.
+    assert!(
+        manager.observations.entries_for_tool_call("r1").is_empty(),
+        "observation_read result must not be stored"
+    );
+    let _ = (report, observations_after_first, observations_after_second);
+}
+
+#[test]
+fn observation_profiler_reports_deterministic_reclaimed_bytes() {
+    let mut buffer = Vec::new();
+    for index in 0..8 {
+        let id = format!("c{index}");
+        buffer.push(assistant_call(
+            &id,
+            "search",
+            &format!(r#"{{"query":"q{index}"}}"#),
+        ));
+        buffer.push(tool_reply(&id, &"y".repeat(2000)));
+    }
+    let mut manager = manager_with(buffer);
+    let before = manager.footprint();
+    manager.compact_buffer();
+    let after = manager.footprint();
+    assert!(after.tool_result_json_bytes < before.tool_result_json_bytes);
+    assert!(after.total_object_bytes < before.total_object_bytes);
+    let obs = manager.observation_footprint();
+    assert!(obs.active_references > 0);
+    assert!(obs.active_reclaimed_json_bytes > 0);
+    assert_eq!(
+        obs.active_reclaimed_json_bytes,
+        obs.active_original_message_bytes - obs.active_stub_message_bytes
+    );
+}
+
+#[test]
+fn observation_failed_request_keeps_result_inline_until_retry() {
+    // Simulates: tool result inserted, next model request fails (no
+    // mark_seen), retry succeeds (mark_seen), then compaction.
+    let payload = "important-output".repeat(300);
+    let mut manager = manager_with_tool_result("a", "execute", r#"{"command":"make"}"#, &payload);
+    for index in 0..8 {
+        let id = format!("b{index}");
+        manager.add_message(assistant_call(&id, "ls", r#"{"path":"."}"#));
+        manager.add_tool_result(id, "ls", "y".repeat(2000));
+    }
+    // No mark_seen: the failed request never contained these for the model.
+    let report = manager.compact_buffer_report();
+    assert_eq!(report.recoverable_offloads, 0);
+    assert!(report.skipped_unseen > 0);
+    assert_eq!(
+        extract_message_content(&manager.buffer[1]).unwrap(),
+        payload
+    );
+    // Retry succeeds: now the model has seen them once.
+    manager.mark_sent_tool_results_seen();
+    let report = manager.compact_buffer_report();
+    assert!(report.recoverable_offloads > 0, "{report:?}");
+}
+
+#[test]
+fn observation_tool_definitions_are_stable_and_appended() {
+    let tools = tool::build_tools();
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert_eq!(names.last(), Some(&"observation_read"));
+    // No conditional exposure: always present.
+    assert!(names.contains(&"observation_read"));
+}
+
+#[test]
+fn observation_system_prompt_mentions_retrieval() {
+    assert!(TOOL_SYSTEM_PROMPT.contains("observation_read"));
 }

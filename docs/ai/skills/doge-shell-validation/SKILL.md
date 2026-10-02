@@ -5,12 +5,11 @@ description: Use for doge-shell validation planning, smallest-test selection, æ¤
 
 # Doge Shell Validation
 
-- Read [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) before selecting `cargo test -p ...`.
-- Read [../doge-shell-repo/references/test-scope.md](../doge-shell-repo/references/test-scope.md) for the default validation boundaries.
-- Read [../doge-shell-repo/references/task-map.md](../doge-shell-repo/references/task-map.md) when the change maps to a known subsystem.
-- Default to `cargo test -p doge-shell` for `dsh/` changes and `cargo test -p dsh-builtin` for builtin/chat changes.
+- Use [../doge-shell-repo/references/test-scope.md](../doge-shell-repo/references/test-scope.md) as the validation authority, including iteration versus completion criteria.
+- Use [../doge-shell-repo/references/package-map.md](../doge-shell-repo/references/package-map.md) only when the package name is unknown.
+- Start with the affected module or integration target; widen when the call path crosses module/crate boundaries or focused checks cannot prove the contract. Check that the intended tests actually ran.
 - Never run `cargo test -p dsh`; the `dsh/` directory is the Cargo package `doge-shell`.
-- Use `cargo test -p doge-shell --lib` as a fallback only when package-level `doge-shell` tests are blocked by known macOS sandbox child-process tracing failures and the change is library-scoped.
+- If subprocess tests are blocked by the environment, report the blocked validation separately. A passing library test does not prove process/PTY behavior.
 - For `AGENTS.md`, `docs/ai/`, or runtime skill installer guidance, run `scripts/check-ai-guidance.sh`, `scripts/install-runtime-skills.sh --list`, and focused installer `--dry-run` / `--check-installed` checks instead of Rust tests. `--status` is informational only.
 - Use `cargo test` or `cargo check --workspace` only when the change clearly spans crates.
 - Add `scripts/check-portability.py` when the change touches a `target_os` arm, an OS-specific source (`/proc`, `/etc/passwd`, `sysctl`), an absolute command path in a test, or `.cargo/config.toml`. `cargo clippy` only ever sees the host's arm.

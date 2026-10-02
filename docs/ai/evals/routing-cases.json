@@ -19,7 +19,7 @@
   {"id":"parser-redirection","topic":"parser redirection","expected_primary_route":"parser-shell"},
   {"id":"macos-user-completion","topic":"macOS user completion","expected_primary_route":"repl-completion","required_references":["docs/ai/skills/doge-shell-repo/references/platform-support.md"]},
   {"id":"command-runtime-snapshot","topic":"CommandRuntimeSnapshot","expected_primary_route":"builtin-commands"},
-  {"id":"skill-guidance-change","topic":"skill guidance change","expected_primary_route":"ai-guidance"},
+  {"id":"skill-guidance-change","topic":"skill guidance change","expected_primary_route":"ai-guidance","required_references":["docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"]},
   {"id":"safe-run-policy","topic":"safe-run command policy","expected_primary_route":"safety-policy"},
   {"id":"config-lisp","topic":"config.lisp startup","expected_primary_route":"lisp-config"},
   {"id":"history-frecency","topic":"history frecency","expected_primary_route":"history-frecency"},
@@ -48,5 +48,12 @@
   {"id":"keybind-path","paths":["dsh/src/repl/keybind/mod.rs"],"expected_primary_route":"repl-completion"},
   {"id":"shell-parse-path","paths":["dsh/src/shell/parse/mod.rs"],"expected_primary_route":"parser-shell"},
   {"id":"authorize-path","paths":["dsh/src/shell/authorize.rs"],"expected_primary_route":"safety-policy"},
+  {"id":"guidance-agents-ja","topic":"AGENTS.mdを整備してください","expected_primary_route":"ai-guidance","required_references":["docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"]},
+  {"id":"guidance-development-ja","topic":"このプロジェクトをAIコーディングエージェントで開発する効率を上げたい","expected_primary_route":"ai-guidance","required_references":["docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"]},
+  {"id":"guidance-efficiency-ja","topic":"AIコーディングエージェントのトークン使用効率と実装の正確性を改善","expected_primary_route":"ai-guidance","required_references":["docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"]},
+  {"id":"guidance-skills-ja","topic":"Skillsの追加を含め開発ガイドを整備","expected_primary_route":"ai-guidance","required_references":["docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"]},
+  {"id":"product-ai-usage-not-guidance","topic":"chat token usageの表示を修正","expected_primary_route":"chat-tools"},
+  {"id":"coding-agent-mcp-not-guidance","topic":"AIコーディングエージェントがMCPツールを使えない","expected_primary_route":"chat-tools","max_routes":1},
+  {"id":"coding-agent-safe-run-not-guidance","topic":"AIコーディングエージェントからsafe-runが動かない","expected_primary_route":"safety-policy","max_routes":1},
   {"id":"unknown-fallback","topic":"unrelated task","expected_primary_route":"repo-general"}
 ]

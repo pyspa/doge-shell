@@ -522,7 +522,12 @@
         "skill guidance",
         "agent guidance",
         "SKILL.md",
-        "agent routing"
+        "agent routing",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "AIコーディングエージェントで開発",
+        "AIコーディングエージェントのトークン使用効率",
+        "開発ガイド"
       ],
       "exact_paths": [
         "AGENTS.md",
@@ -540,7 +545,7 @@
         "dsh-skill-authoring"
       ],
       "references": [
-        "docs/ai/skills/doge-shell-repo/references/task-map.md"
+        "docs/ai/skills/doge-shell-repo/references/agent-efficiency.md"
       ]
     }
   ]

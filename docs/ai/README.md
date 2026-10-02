@@ -72,5 +72,6 @@ doge-shell が製品として持つ AI 機能の設計文書は `docs/design/ai/
 
 ## その他の文書
 
+- [エージェント開発の改善と評価](skills/doge-shell-repo/references/agent-efficiency.md): ケース別の探索範囲、Skill追加基準、効率と正確性の測り方。
 - `agent-adapters.md`: Codex / Claude Code / OpenCode ごとの対応表。
 - `long-task-workflow.md`: 長時間タスクの `.agent/TASK.md` と独立レビューの手順。

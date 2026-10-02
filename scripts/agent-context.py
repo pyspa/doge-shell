@@ -8,8 +8,9 @@ Usage:
     python3 scripts/agent-context.py --changed --json
 
 This is the editing-before half of the workflow. It never suggests
-validation commands; after editing, `doctor validate` owns that half,
-so validation mappings (e.g. dev.rs) are never duplicated here.
+validation commands; after editing, use the canonical test-scope.md
+(or doctor validate from a fresh release binary). No validation mappings
+are duplicated here.
 """
 
 from __future__ import annotations

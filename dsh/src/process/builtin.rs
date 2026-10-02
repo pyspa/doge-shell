@@ -49,7 +49,6 @@ pub fn builtin_execution_placement(
 
 #[derive(Clone)]
 pub struct BuiltinProcess {
-    pub(crate) stage_environment: super::stage_environment::StageEnvironment,
     pub(crate) name: String,
     pub(crate) handler: BuiltinHandler,
     pub(crate) argv: Vec<String>,
@@ -102,7 +101,6 @@ impl BuiltinProcess {
             name,
             handler,
             argv,
-            stage_environment: Default::default(),
             state: ProcessState::Running,
             pid: None,
             next: None,

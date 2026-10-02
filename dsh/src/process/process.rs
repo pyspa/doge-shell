@@ -85,7 +85,6 @@ impl ExecveBundle {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Process {
-    pub(crate) stage_environment: super::stage_environment::StageEnvironment,
     pub(crate) cmd: String,
     pub(crate) argv: Vec<String>,
     pub(crate) pid: Option<Pid>,
@@ -125,7 +124,6 @@ impl Process {
             argv,
             pid: None,
             status: None,
-            stage_environment: Default::default(),
             state: ProcessState::Running,
             next: None,
             stdin: STDIN_FILENO,

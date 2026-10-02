@@ -25,7 +25,6 @@ use std::os::unix::io::RawFd;
 /// (or 0 when there was none).
 #[derive(Clone, PartialEq, Eq)]
 pub struct NoCommandProcess {
-    pub(crate) stage_environment: super::stage_environment::StageEnvironment,
     pub(crate) assignments: Vec<(String, String)>,
     pub(crate) redirects: Vec<Redirect>,
     pub(crate) last_command_substitution_status: Option<i32>,
@@ -63,7 +62,15 @@ pub(crate) fn spawn_no_command_process(
     shell: &crate::shell::Shell,
     process: &mut NoCommandProcess,
 ) -> anyhow::Result<nix::unistd::Pid> {
-    let child = super::reexec::spawn_no_command(ctx, shell, process)?;
+    let child = super::reexec::spawn_no_command(
+        ctx,
+        shell,
+        process.stdin,
+        process.stdout,
+        process.stderr,
+        &process.assignments,
+        process.last_command_substitution_status,
+    )?;
     process.pid = Some(child);
     Ok(child)
 }
@@ -78,7 +85,6 @@ impl NoCommandProcess {
             assignments,
             redirects,
             last_command_substitution_status,
-            stage_environment: Default::default(),
             state: ProcessState::Running,
             pid: None,
             next: None,
@@ -88,13 +94,6 @@ impl NoCommandProcess {
         }
     }
 
-    pub(crate) fn with_stage_environment(
-        mut self,
-        environment: super::stage_environment::StageEnvironment,
-    ) -> Self {
-        self.stage_environment = environment;
-        self
-    }
     pub fn set_state(&mut self, pid: Pid, state: ProcessState) -> bool {
         if let Some(self_pid) = self.pid
             && self_pid == pid

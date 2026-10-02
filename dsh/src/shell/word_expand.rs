@@ -314,6 +314,13 @@ pub(crate) fn expand_word_segments<'a>(
                     .await?;
                     segments.extend(produced);
                 }
+                WordPart::ArithmeticExpansion { expansion, quote } => {
+                    let produced = super::word_expand_arithmetic::expand_arithmetic_to_segments(
+                        shell, ctx, expansion, *quote, confirm, resources, trace, context,
+                    )
+                    .await?;
+                    segments.extend(produced);
+                }
                 WordPart::Substitution {
                     substitution,
                     quote,
@@ -452,6 +459,15 @@ pub async fn expand_redirect_target(
                 text.push_str(&scalar);
                 pattern.push_str(&escape_glob_metacharacters(&scalar));
             }
+            WordPart::ArithmeticExpansion { expansion, .. } => {
+                // Scalar redirect contract: decimal text, dynamics literal.
+                let scalar = super::word_expand_arithmetic::expand_arithmetic_to_decimal(
+                    shell, ctx, expansion, confirm, resources, trace,
+                )
+                .await?;
+                text.push_str(&scalar);
+                pattern.push_str(&escape_glob_metacharacters(&scalar));
+            }
             WordPart::Substitution { substitution, .. } => {
                 // Redirect targets are scalar: quoting affects neither
                 // splitting (disabled) nor globbing (dynamics are literal),
@@ -550,6 +566,13 @@ async fn expand_scalar_word(
                 .await?;
                 out.push_str(&scalar);
             }
+            WordPart::ArithmeticExpansion { expansion, .. } => {
+                let scalar = super::word_expand_arithmetic::expand_arithmetic_to_decimal(
+                    shell, ctx, expansion, confirm, resources, trace,
+                )
+                .await?;
+                out.push_str(&scalar);
+            }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
                 PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
                     let mode = match substitution.kind {
@@ -612,6 +635,11 @@ pub fn dry_expand_argument_word(
                     expansion, *quote, shell,
                 ));
             }
+            WordPart::ArithmeticExpansion { expansion, quote } => {
+                segments.extend(super::word_expand_arithmetic::dry_arithmetic_to_segments(
+                    expansion, *quote, shell,
+                ));
+            }
             WordPart::Substitution {
                 substitution,
                 quote,
@@ -658,6 +686,11 @@ pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &Shell) -> String {
             }
             WordPart::ParameterExpansion { expansion, .. } => {
                 out.push_str(&super::word_expand_param::dry_parameter_to_scalar(
+                    expansion, shell,
+                ));
+            }
+            WordPart::ArithmeticExpansion { expansion, .. } => {
+                out.push_str(&super::word_expand_arithmetic::dry_arithmetic_to_scalar(
                     expansion, shell,
                 ));
             }

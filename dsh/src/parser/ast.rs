@@ -225,7 +225,11 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
                 }
             }
         }
-        Rule::word | Rule::glob_word | Rule::variable | Rule::parameter_expansion => {
+        Rule::word
+        | Rule::glob_word
+        | Rule::variable
+        | Rule::parameter_expansion
+        | Rule::arithmetic_expansion => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {
                 return Some(pair_span);
@@ -361,6 +365,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::glob_word
         | Rule::variable
         | Rule::parameter_expansion
+        | Rule::arithmetic_expansion
         | Rule::literal_s_quoted
         | Rule::literal_d_quoted
         | Rule::proc_subst_direction

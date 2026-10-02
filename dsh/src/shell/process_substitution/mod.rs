@@ -494,8 +494,12 @@ fn clear_cloexec(fd: RawFd) -> Result<()> {
 
 /// Snapshot the shell state one helper needs. The snapshot is authoritative;
 /// per-job gating of the *outer* line already happened before this call.
-fn helper_snapshot(shell: &Shell) -> crate::environment::child_snapshot::ChildShellSnapshot {
-    crate::environment::child_snapshot::ChildShellSnapshot::capture(&shell.environment.read())
+fn helper_snapshot(
+    shell: &impl crate::shell::expansion_host::ExpansionHost,
+) -> crate::environment::child_snapshot::ChildShellSnapshot {
+    crate::environment::child_snapshot::ChildShellSnapshot::capture(
+        &shell.expansion_environment().read(),
+    )
 }
 
 /// Authorize-then-start a `<(...)` / `>(...)` helper and hand back ownership.
@@ -504,7 +508,7 @@ fn helper_snapshot(shell: &Shell) -> crate::environment::child_snapshot::ChildSh
 /// `&&`/`||` itself, so `cat <(false && echo bad; echo good)` prints only
 /// `good`.
 pub fn start_process_substitution<'a>(
-    shell: &'a mut Shell,
+    shell: &'a mut impl crate::shell::expansion_host::ExpansionHost,
     parent_ctx: &'a Context,
     plan: &'a ExecutionPlan,
     direction: ProcessSubstitutionDirection,
@@ -585,9 +589,10 @@ pub fn start_process_substitution<'a>(
         };
         if let Err(err) = clear_result {
             shell
+                .runtime()
                 .process_substitution_registry
                 .register(helper_pid, direction);
-            let registry = shell.process_substitution_registry.clone();
+            let registry = shell.runtime().process_substitution_registry.clone();
             let helper = ProcessSubstitutionHelper {
                 pid: helper_pid,
                 status_fd: status_read,
@@ -615,6 +620,7 @@ pub fn start_process_substitution<'a>(
         drop(status_write);
 
         shell
+            .runtime()
             .process_substitution_registry
             .register(helper_pid, direction);
         let argument = format!("/dev/fd/{}", retained_end.as_raw_fd());
@@ -625,7 +631,7 @@ pub fn start_process_substitution<'a>(
             helper: ProcessSubstitutionHelper {
                 pid: helper_pid,
                 status_fd: status_read,
-                registry: shell.process_substitution_registry.clone(),
+                registry: shell.runtime().process_substitution_registry.clone(),
             },
         })
     })

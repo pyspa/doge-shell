@@ -219,6 +219,13 @@ pub(crate) fn expand_operand_scalar<'a>(
                     let _ = quote;
                     out.push_str(&scalar);
                 }
+                WordPart::ArithmeticExpansion { expansion, .. } => {
+                    let scalar = super::word_expand_arithmetic::expand_arithmetic_to_decimal(
+                        shell, ctx, expansion, confirm, resources, trace,
+                    )
+                    .await?;
+                    out.push_str(&scalar);
+                }
                 WordPart::Substitution { substitution, .. } => match substitution.kind {
                     PlannedSubstitutionKind::Command | PlannedSubstitutionKind::Subshell => {
                         let mode = match substitution.kind {
@@ -440,6 +447,11 @@ pub(crate) fn dry_operand_segments(word: &PlannedWord, shell: &Shell) -> Vec<Exp
             WordPart::ParameterExpansion { expansion, quote } => {
                 segments.extend(dry_parameter_to_segments(expansion, *quote, shell));
             }
+            WordPart::ArithmeticExpansion { expansion, quote } => {
+                segments.extend(super::word_expand_arithmetic::dry_arithmetic_to_segments(
+                    expansion, *quote, shell,
+                ));
+            }
             WordPart::Substitution {
                 substitution,
                 quote,
@@ -481,6 +493,11 @@ pub(crate) fn dry_operand_scalar(word: &PlannedWord, shell: &Shell) -> String {
             }
             WordPart::ParameterExpansion { expansion, .. } => {
                 out.push_str(&dry_parameter_to_scalar(expansion, shell));
+            }
+            WordPart::ArithmeticExpansion { expansion, .. } => {
+                out.push_str(&super::word_expand_arithmetic::dry_arithmetic_to_scalar(
+                    expansion, shell,
+                ));
             }
             WordPart::Substitution { substitution, .. } => match substitution.kind {
                 PlannedSubstitutionKind::Command => {

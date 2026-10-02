@@ -349,8 +349,11 @@ async fn run_helper_plan(
             report_status_byte(status_fd, b'D');
             Ok(130)
         }
-        Err(err) if crate::shell::parameter_expand::is_parameter_expansion_error(&err) => {
-            // `${VAR:?}` inside an isolated helper is a shell-semantic
+        Err(err)
+            if crate::shell::parameter_expand::is_parameter_expansion_error(&err)
+                || crate::shell::arithmetic::is_arithmetic_expansion_error(&err) =>
+        {
+            // `${VAR:?}` / `$((...))` inside an isolated helper is a shell-semantic
             // failure, not infrastructure corruption: emit the diagnostic
             // once on the helper stderr, report a normal verdict (not `E`),
             // and return status 1.

@@ -81,7 +81,7 @@ fn collect_highlight_from_pair(
             push_token(pair.as_span(), kind, out);
         }
         Rule::assign_name => push_token(pair.as_span(), HighlightKind::Assignment, out),
-        Rule::variable | Rule::parameter_expansion => {
+        Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion => {
             push_token(pair.as_span(), HighlightKind::Variable, out)
         }
         Rule::s_quoted => push_token(pair.as_span(), HighlightKind::SingleQuoted, out),
@@ -94,11 +94,12 @@ fn collect_highlight_from_pair(
             // Downstream passes match on a range's exact text -- the cached
             // path check upgrades a whole quoted argument to `ValidPath` -- so
             // splitting unconditionally would break them.
-            if !pair
-                .clone()
-                .into_inner()
-                .any(|inner| matches!(inner.as_rule(), Rule::variable | Rule::parameter_expansion))
-            {
+            if !pair.clone().into_inner().any(|inner| {
+                matches!(
+                    inner.as_rule(),
+                    Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion
+                )
+            }) {
                 push_token(pair.as_span(), HighlightKind::DoubleQuoted, out);
                 return;
             }
@@ -111,7 +112,7 @@ fn collect_highlight_from_pair(
                     push_range(cursor, span.start(), HighlightKind::DoubleQuoted, out);
                 }
                 match inner.as_rule() {
-                    Rule::variable | Rule::parameter_expansion => {
+                    Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion => {
                         push_token(span, HighlightKind::Variable, out)
                     }
                     _ => push_token(span, HighlightKind::DoubleQuoted, out),

@@ -26,6 +26,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 - **Pipes and Redirections**: Support for pipes (`|`), structured pipes (`|:`), input/output redirection (`>`, `>>`, `<`), and error redirection
 - **Signal Handling**: Proper handling of signals like SIGINT, SIGQUIT, SIGTSTP
 - **Subshells**: Support for command substitution and process substitution (`<(...)` and `>(...)`)
+- **Arithmetic Expansion**: POSIX arithmetic expansion `$((...))` with integer, variable, assignment, and conditional operators
 - **Safe Paste**: Bracketed paste support ensures pasted multi-line text is not executed immediately
 
 ### Advanced Features

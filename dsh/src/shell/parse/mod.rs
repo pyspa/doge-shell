@@ -29,6 +29,7 @@ use std::os::unix::io::RawFd;
 use std::sync::Arc;
 use tracing::{debug, warn};
 
+mod arithmetic;
 mod parameter;
 
 /// Pure parse context: nesting flags only, no shell handle.
@@ -402,6 +403,13 @@ fn parse_word_part(
         Rule::glob_word | Rule::brace_word => {
             parts.push(WordPart::Literal(active_literal(part, *first)));
         }
+        Rule::arithmetic_expansion => {
+            parts.push(arithmetic::parse_arithmetic_expansion(
+                part,
+                ctx,
+                QuoteMode::Unquoted,
+            )?);
+        }
         Rule::variable => parts.push(WordPart::Variable {
             source: part.as_str().to_string(),
             quote: QuoteMode::Unquoted,
@@ -486,6 +494,13 @@ pub(super) fn parse_double_quoted_parts(
     let mut parts = Vec::new();
     for inner in d_quoted.into_inner() {
         match inner.as_rule() {
+            Rule::arithmetic_expansion => {
+                parts.push(arithmetic::parse_arithmetic_expansion(
+                    inner,
+                    ctx,
+                    QuoteMode::Double,
+                )?);
+            }
             Rule::variable => parts.push(WordPart::Variable {
                 source: inner.as_str().to_string(),
                 quote: QuoteMode::Double,

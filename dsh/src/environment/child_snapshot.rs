@@ -24,6 +24,7 @@ use std::path::PathBuf;
 /// Plain-data shell state for one re-exec helper.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChildShellSnapshot {
+    pub(crate) invocation: super::InvocationParameters,
     pub cwd: PathBuf,
     pub last_exit_status: i32,
     /// `$!` string value at capture time: the helper inherits what `$!`
@@ -71,6 +72,7 @@ impl ChildShellSnapshot {
     /// Capture parent state under a read lock. No live objects cross.
     pub fn capture(env: &Environment) -> Self {
         Self {
+            invocation: env.invocation.clone(),
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             last_exit_status: env.last_exit_status,
             last_async_pid: env.last_async_pid,
@@ -94,6 +96,7 @@ impl ChildShellSnapshot {
     /// normal startup). Afterwards `chdir` to the snapshot cwd — the helper
     /// must not depend on `posix_spawn` cwd inheritance alone.
     pub fn apply_to(&self, env: &mut Environment) {
+        env.invocation = self.invocation.clone();
         env.last_exit_status = self.last_exit_status;
         env.last_async_pid = self.last_async_pid;
         env.variable_state.variables = self.variables.clone();

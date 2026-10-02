@@ -81,9 +81,10 @@ fn collect_highlight_from_pair(
             push_token(pair.as_span(), kind, out);
         }
         Rule::assign_name => push_token(pair.as_span(), HighlightKind::Assignment, out),
-        Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion => {
-            push_token(pair.as_span(), HighlightKind::Variable, out)
-        }
+        Rule::invocation_parameter
+        | Rule::variable
+        | Rule::parameter_expansion
+        | Rule::arithmetic_expansion => push_token(pair.as_span(), HighlightKind::Variable, out),
         Rule::s_quoted => push_token(pair.as_span(), HighlightKind::SingleQuoted, out),
         // A double-quoted string is now a run of literal and variable parts, so
         // walk it and colour the variables. `write_colored_ranges_to` slices a
@@ -97,7 +98,10 @@ fn collect_highlight_from_pair(
             if !pair.clone().into_inner().any(|inner| {
                 matches!(
                     inner.as_rule(),
-                    Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion
+                    Rule::invocation_parameter
+                        | Rule::variable
+                        | Rule::parameter_expansion
+                        | Rule::arithmetic_expansion
                 )
             }) {
                 push_token(pair.as_span(), HighlightKind::DoubleQuoted, out);
@@ -112,9 +116,10 @@ fn collect_highlight_from_pair(
                     push_range(cursor, span.start(), HighlightKind::DoubleQuoted, out);
                 }
                 match inner.as_rule() {
-                    Rule::variable | Rule::parameter_expansion | Rule::arithmetic_expansion => {
-                        push_token(span, HighlightKind::Variable, out)
-                    }
+                    Rule::invocation_parameter
+                    | Rule::variable
+                    | Rule::parameter_expansion
+                    | Rule::arithmetic_expansion => push_token(span, HighlightKind::Variable, out),
                     _ => push_token(span, HighlightKind::DoubleQuoted, out),
                 }
                 cursor = span.end();
@@ -207,5 +212,25 @@ pub fn highlight_error_token(input: &str, location: InputLocation) -> Option<Hig
                 kind: HighlightKind::Error,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod invocation_tests {
+    use super::*;
+    use crate::parser::ShellParser;
+    use pest::Parser;
+    #[test]
+    fn invocation_parameters_are_highlighted_inside_and_outside_quotes() {
+        let source = r#"echo $1 "${10}:$#:$@:$*""#;
+        let pairs = ShellParser::parse(Rule::commands, source).unwrap();
+        let result = collect_highlight_tokens_from_pairs(pairs, source.len());
+        let variables: Vec<_> = result
+            .tokens
+            .iter()
+            .filter(|token| token.kind == HighlightKind::Variable)
+            .map(|token| &source[token.start..token.end])
+            .collect();
+        assert_eq!(variables, ["$1", "${10}", "$#", "$@", "$*"]);
     }
 }

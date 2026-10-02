@@ -20,6 +20,7 @@ pub mod struct_pipe;
 pub mod substitution;
 pub mod word_expand;
 pub(crate) mod word_expand_arithmetic;
+mod word_expand_invocation;
 pub(crate) mod word_expand_param;
 
 use crate::environment::Environment;

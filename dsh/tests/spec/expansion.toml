@@ -350,3 +350,22 @@ script = "echo $((1 ? 10 : 20))"
 [case.expect]
 status = 0
 stdout_contains = ["10"]
+
+[[case]]
+id = "expansion.invocation-default"
+class = "posix"
+mode = "command"
+script = 'printf "%s:%s:%s\n" "$0" "$#" "${10}"'
+[case.expect]
+status = 0
+stdout_contains = ["dogesh:0:"]
+
+[[case]]
+id = "expansion.invocation-zero-at"
+class = "posix"
+mode = "command"
+script = 'printf "<%s>\n" before "$@" after'
+[case.expect]
+status = 0
+stdout_contains = ["<before>", "<after>"]
+stdout_not_contains = ["<>"]

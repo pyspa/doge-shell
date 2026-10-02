@@ -19,6 +19,7 @@ use super::parameter_expand::ParameterState;
 use super::plan::{PlannedLiteral, PlannedSubstitutionKind, PlannedWord, QuoteMode, WordPart};
 use super::process_substitution::{ExecutionResources, start_process_substitution};
 use super::substitution::capture_subshell_plan_stdout;
+use super::word_expand_invocation::{invocation_scalar, invocation_segments};
 use crate::parser::expansion::{
     escape_brace_metacharacters, escape_glob_metacharacters, expand_braces, expand_glob_pattern,
     unescape_glob_metacharacters,
@@ -304,6 +305,9 @@ pub(crate) fn expand_word_segments<'a>(
                 WordPart::Literal(literal) => {
                     segments.push(literal_segment(literal, shell, first_part, context));
                 }
+                WordPart::InvocationParameter { parameter, quote } => {
+                    segments.extend(invocation_segments(*parameter, *quote, shell, context));
+                }
                 WordPart::Variable { source, quote } => {
                     segments.push(variable_segment(source, *quote, shell, context));
                 }
@@ -440,6 +444,11 @@ pub async fn expand_redirect_target(
                     }
                 }
             }
+            WordPart::InvocationParameter { parameter, .. } => {
+                let scalar = invocation_scalar(*parameter, shell);
+                text.push_str(&scalar);
+                pattern.push_str(&escape_glob_metacharacters(&scalar));
+            }
             WordPart::Variable { source, quote } => {
                 let seg = variable_segment(source, *quote, shell, context);
                 text.push_str(&seg.text);
@@ -555,6 +564,9 @@ async fn expand_scalar_word(
                 let seg = literal_segment(literal, shell, first_part, context);
                 out.push_str(&seg.text);
             }
+            WordPart::InvocationParameter { parameter, .. } => {
+                out.push_str(&invocation_scalar(*parameter, shell));
+            }
             WordPart::Variable { source, quote } => {
                 let seg = variable_segment(source, *quote, shell, context);
                 out.push_str(&seg.text);
@@ -627,6 +639,9 @@ pub fn dry_expand_argument_word(
             WordPart::Literal(literal) => {
                 segments.push(literal_segment(literal, shell, first_part, context));
             }
+            WordPart::InvocationParameter { parameter, quote } => {
+                segments.extend(invocation_segments(*parameter, *quote, shell, context));
+            }
             WordPart::Variable { source, quote } => {
                 segments.push(variable_segment(source, *quote, shell, context));
             }
@@ -680,6 +695,9 @@ pub fn dry_expand_scalar_word(word: &PlannedWord, shell: &impl ExpansionHost) ->
             WordPart::Literal(literal) => {
                 let seg = literal_segment(literal, shell, first_part, ExpansionContext::Assignment);
                 out.push_str(&seg.text);
+            }
+            WordPart::InvocationParameter { parameter, .. } => {
+                out.push_str(&invocation_scalar(*parameter, shell));
             }
             WordPart::Variable { source, .. } => {
                 out.push_str(&resolve_parameter(source, shell).value);
@@ -953,5 +971,29 @@ mod tests {
         let fields = dry_expand_argument_word(&word, &shell, &cwd);
         assert!(fields.iter().any(|f| f.contains("touch")));
         assert!(!marker.exists());
+    }
+    #[test]
+    fn dry_invocation_expansion_uses_real_values_and_field_count() {
+        let env = crate::environment::Environment::new();
+        env.write().invocation = crate::environment::InvocationParameters {
+            argv0: "worker".into(),
+            positional: vec!["important-file".into(), "".into(), "*.rs".into()],
+        };
+        let shell = Shell::new(env.clone());
+        let plan = super::super::parse::parse_execution_plan("rm \"$1\" \"$@\" \"pre$@post\"", env)
+            .unwrap();
+        let argv = &plan.lists[0].jobs[0].stages[0].argv;
+        assert_eq!(
+            dry_expand_argument_word(&argv[1], &shell, &std::env::current_dir().unwrap()),
+            ["important-file"]
+        );
+        assert_eq!(
+            dry_expand_argument_word(&argv[2], &shell, &std::env::current_dir().unwrap()),
+            ["important-file", "", "*.rs"]
+        );
+        assert_eq!(
+            dry_expand_argument_word(&argv[3], &shell, &std::env::current_dir().unwrap()),
+            ["preimportant-file", "", "*.rspost"]
+        );
     }
 }

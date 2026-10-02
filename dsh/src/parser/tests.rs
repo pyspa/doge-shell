@@ -1383,3 +1383,14 @@ fn test_expand_braces() {
         vec!["ae", "af", "bce", "bcf", "bde", "bdf"]
     );
 }
+
+#[test]
+fn invocation_parameters_remain_navigable_at_cursor() {
+    for token in ["$1", "${10}", "$#", "$@", "$*"] {
+        let source = format!("echo {token}");
+        let word = get_pos_word(&source, source.len())
+            .expect("parse")
+            .expect("invocation span");
+        assert_eq!(word.1.as_str(), token);
+    }
+}

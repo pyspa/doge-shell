@@ -143,6 +143,10 @@ pub(super) fn parse_parameter_word(word: Pair<Rule>, ctx: &ParseContext) -> Resu
                     });
                 }
             }
+            Rule::invocation_parameter => parts.push(super::parse_invocation_parameter(
+                part.as_str(),
+                QuoteMode::Unquoted,
+            )?),
             Rule::variable => parts.push(WordPart::Variable {
                 source: part.as_str().to_string(),
                 quote: QuoteMode::Unquoted,

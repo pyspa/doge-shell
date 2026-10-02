@@ -19,6 +19,7 @@ use super::word_expand::{
     ExpansionContext, ExpansionTrace, expand_word_segments, literal_segment, resolve_parameter,
     trim_substitution_output, variable_segment,
 };
+use super::word_expand_invocation::invocation_scalar;
 use crate::parser::expansion::{escape_brace_metacharacters, escape_glob_metacharacters};
 use crate::process::reexec::PlanExecMode;
 use crate::shell::expansion_host::ExpansionHost;
@@ -206,6 +207,9 @@ pub(crate) fn expand_operand_scalar<'a>(
                 WordPart::Literal(literal) => {
                     let seg = literal_segment(literal, shell, first_part, context);
                     out.push_str(&seg.text);
+                }
+                WordPart::InvocationParameter { parameter, .. } => {
+                    out.push_str(&invocation_scalar(*parameter, shell));
                 }
                 WordPart::Variable { source, quote } => {
                     let seg = variable_segment(source, *quote, shell, context);
@@ -442,6 +446,14 @@ pub(crate) fn dry_operand_segments(
                     )),
                 }
             }
+            WordPart::InvocationParameter { parameter, quote } => {
+                segments.extend(super::word_expand_invocation::invocation_segments(
+                    *parameter,
+                    *quote,
+                    shell,
+                    ExpansionContext::DryArgument,
+                ));
+            }
             WordPart::Variable { source, quote } => {
                 segments.push(variable_segment(
                     source,
@@ -493,6 +505,9 @@ pub(crate) fn dry_operand_scalar(word: &PlannedWord, shell: &impl ExpansionHost)
             WordPart::Literal(literal) => {
                 let seg = literal_segment(literal, shell, first_part, ExpansionContext::Assignment);
                 out.push_str(&seg.text);
+            }
+            WordPart::InvocationParameter { parameter, .. } => {
+                out.push_str(&invocation_scalar(*parameter, shell));
             }
             WordPart::Variable { source, .. } => {
                 out.push_str(&resolve_parameter(source, shell).value);

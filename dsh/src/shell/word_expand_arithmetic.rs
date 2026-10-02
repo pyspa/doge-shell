@@ -17,6 +17,7 @@ use super::word_expand::{
     ExpansionContext, ExpansionTrace, dynamic_text_segment, literal_segment,
     trim_substitution_output, variable_segment,
 };
+use super::word_expand_invocation::invocation_scalar;
 use crate::parser::expansion::escape_glob_metacharacters;
 use crate::process::reexec::PlanExecMode;
 use crate::shell::expansion_host::ExpansionHost;
@@ -75,6 +76,9 @@ fn expand_body_scalar<'a>(
                 super::plan::WordPart::Literal(literal) => {
                     let seg = literal_segment(literal, shell, first_part, context);
                     out.push_str(&seg.text);
+                }
+                super::plan::WordPart::InvocationParameter { parameter, .. } => {
+                    out.push_str(&invocation_scalar(*parameter, shell));
                 }
                 super::plan::WordPart::Variable { source, quote } => {
                     let seg = variable_segment(source, *quote, shell, context);

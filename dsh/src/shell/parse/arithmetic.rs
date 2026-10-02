@@ -67,6 +67,10 @@ fn push_arithmetic_inner(
                 QuoteMode::Unquoted,
             )?);
         }
+        Rule::invocation_parameter => parts.push(super::parse_invocation_parameter(
+            pair.as_str(),
+            QuoteMode::Unquoted,
+        )?),
         Rule::variable => parts.push(WordPart::Variable {
             source: pair.as_str().to_string(),
             quote: QuoteMode::Unquoted,

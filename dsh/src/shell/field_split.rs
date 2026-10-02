@@ -88,6 +88,8 @@ pub(crate) struct ExpandedSegment {
     pub split: SplitPolicy,
     pub pattern_kind: PatternKind,
     pub preserve_empty: bool,
+    /// Logical boundary between positional arguments; independent of IFS.
+    pub field_boundary_after: bool,
 }
 
 impl ExpandedSegment {
@@ -103,6 +105,7 @@ impl ExpandedSegment {
             split: SplitPolicy::Protected,
             pattern_kind,
             preserve_empty,
+            field_boundary_after: false,
         }
     }
 
@@ -113,6 +116,7 @@ impl ExpandedSegment {
             split: SplitPolicy::Splittable,
             pattern_kind: PatternKind::DynamicGlob,
             preserve_empty: false,
+            field_boundary_after: false,
         }
     }
 }
@@ -137,10 +141,6 @@ pub(crate) struct SplitField {
 /// that an explicitly quoted empty anchors a field so adjacent delimiters
 /// still split around it (`""$X` with `X=" b"` -> ``, `b`).
 pub(crate) fn split_segments(segments: &[ExpandedSegment], ifs: &IfsSpec) -> Vec<SplitField> {
-    if matches!(ifs, IfsSpec::Disabled) {
-        return concat_no_split(segments);
-    }
-
     // Flatten into ordered items so delimiter grouping can look across
     // segment edges. Protected blocks stay atomic: boundaries never occur
     // inside them.
@@ -148,6 +148,7 @@ pub(crate) fn split_segments(segments: &[ExpandedSegment], ifs: &IfsSpec) -> Vec
         Protected(&'a ExpandedSegment),
         SplittableChar(char),
         ExplicitMarker,
+        FieldBoundary,
     }
     let mut items: Vec<Item<'_>> = Vec::new();
     // Splittable chars need brace-escaping per char for pattern building;
@@ -158,15 +159,18 @@ pub(crate) fn split_segments(segments: &[ExpandedSegment], ifs: &IfsSpec) -> Vec
             if seg.preserve_empty {
                 items.push(Item::ExplicitMarker);
             }
-            continue;
-        }
-        match seg.split {
-            SplitPolicy::Protected => items.push(Item::Protected(seg)),
-            SplitPolicy::Splittable => {
-                for ch in seg.text.chars() {
-                    items.push(Item::SplittableChar(ch));
+        } else {
+            match seg.split {
+                SplitPolicy::Protected => items.push(Item::Protected(seg)),
+                SplitPolicy::Splittable => {
+                    for ch in seg.text.chars() {
+                        items.push(Item::SplittableChar(ch));
+                    }
                 }
             }
+        }
+        if seg.field_boundary_after {
+            items.push(Item::FieldBoundary);
         }
     }
 
@@ -201,6 +205,19 @@ pub(crate) fn split_segments(segments: &[ExpandedSegment], ifs: &IfsSpec) -> Vec
     let mut idx = 0;
     while idx < items.len() {
         match &items[idx] {
+            Item::FieldBoundary => {
+                if !cur_text.is_empty() || cur_explicit {
+                    push_kept_field(
+                        &mut fields,
+                        &mut cur_text,
+                        &mut cur_pattern,
+                        &mut cur_glob,
+                        &mut cur_brace,
+                        &mut cur_explicit,
+                    );
+                }
+                idx += 1;
+            }
             Item::ExplicitMarker => {
                 cur_explicit = true;
                 idx += 1;
@@ -341,39 +358,6 @@ pub(crate) fn split_segments(segments: &[ExpandedSegment], ifs: &IfsSpec) -> Vec
         });
     }
     fields
-}
-
-fn concat_no_split(segments: &[ExpandedSegment]) -> Vec<SplitField> {
-    let mut text = String::new();
-    let mut pattern = String::new();
-    let mut glob = false;
-    let mut brace = false;
-    let mut explicit = false;
-    for seg in segments {
-        text.push_str(&seg.text);
-        pattern.push_str(&seg.pattern);
-        match seg.pattern_kind {
-            PatternKind::Inactive => {}
-            PatternKind::DynamicGlob => {
-                glob = true;
-            }
-            PatternKind::Source { glob: g, brace: b } => {
-                glob |= g;
-                brace |= b;
-            }
-        }
-        explicit |= seg.preserve_empty;
-    }
-    if text.is_empty() && !explicit {
-        return Vec::new();
-    }
-    vec![SplitField {
-        text,
-        pattern,
-        has_active_pattern: glob,
-        has_brace: brace,
-        preserve_empty: true,
-    }]
 }
 
 #[cfg(test)]
@@ -609,5 +593,46 @@ mod tests {
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].text, "{a,b}");
         assert_eq!(fields[0].pattern, "\\{a,b\\}");
+    }
+    #[test]
+    fn intrinsic_boundaries_preserve_fields_prefix_suffix_and_empty_arguments() {
+        for ifs in [
+            IfsSpec::Default,
+            IfsSpec::Disabled,
+            IfsSpec::Custom(": ".into()),
+        ] {
+            let mut first = protected("a");
+            first.field_boundary_after = true;
+            assert_eq!(
+                texts(&split_segments(&[first.clone(), protected("b")], &ifs)),
+                ["a", "b"]
+            );
+            assert_eq!(
+                texts(&split_segments(
+                    &[protected("pre"), first, protected("b"), protected("post")],
+                    &ifs
+                )),
+                ["prea", "bpost"]
+            );
+            let mut empty = explicit_empty();
+            empty.field_boundary_after = true;
+            assert_eq!(
+                texts(&split_segments(&[empty, protected("b")], &ifs)),
+                ["", "b"]
+            );
+        }
+    }
+
+    #[test]
+    fn intrinsic_boundary_does_not_combine_ifs_delimiters() {
+        let mut first = splittable("a ");
+        first.field_boundary_after = true;
+        assert_eq!(
+            texts(&split_segments(
+                &[first, splittable(":b")],
+                &IfsSpec::Custom(": ".into())
+            )),
+            ["a", "", "b"]
+        );
     }
 }

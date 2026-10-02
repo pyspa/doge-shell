@@ -11,6 +11,9 @@ var_name            =  { var_name_char+ }
 // Only the specials the shell can actually answer. Adding a name here without
 // a resolver would turn `$x` into the literal string `$x`, which is a silently
 // wrong value rather than an error.
+// Unbraced positions consume exactly one digit: $10 is $1 followed by 0.
+invocation_special = _{ "#" | "@" | "*" }
+invocation_parameter = { "${" ~ (ASCII_DIGIT+ | invocation_special) ~ "}" | "$" ~ (ASCII_DIGIT | invocation_special) }
 special_var         =  { "?" | "$" | "!" }
 variable_braced     =  { "${" ~ var_name ~ "}" }
 variable_special    =  { "$" ~ special_var }
@@ -39,6 +42,7 @@ parameter_word_part = _{
     | command_subst
     | proc_subst
     | subshell
+    | invocation_parameter
     | variable
     | escape_sequence
     | parameter_text
@@ -59,13 +63,14 @@ d_quoted         =  { "\"" ~ d_quoted_inner* ~ "\"" }
 // `arithmetic_expansion` first so `$((...))` is not read as a `$(` prefix.
 // `parameter_expansion` before `variable` so `"${A:-x}"` is not read as a
 // truncated `${A}` prefix.
-d_quoted_inner   = _{ arithmetic_expansion | command_subst | parameter_expansion | variable | literal_d_quoted }
+d_quoted_inner   = _{ arithmetic_expansion | command_subst | parameter_expansion | invocation_parameter
+    | variable | literal_d_quoted }
 // A `$` that starts no variable stays literal, so `"price is $"` keeps working.
 // Backtick is literal here: the grammar has no backtick-substitution rule, and
 // excluding it made the whole line truncate instead.
 literal_d_quoted = ${
     ( "\\" ~ ANY
-    | "$" ~ !("{" | "(" | var_name_char | special_var)
+    | "$" ~ !("{" | "(" | var_name_char | special_var | invocation_special)
     | !("\"" | "\\" | "$") ~ ANY
     )+
 }
@@ -91,6 +96,7 @@ arithmetic_inner   = _{
       arithmetic_expansion
     | parameter_expansion
     | command_subst
+    | invocation_parameter
     | variable
     | quoted
     | arithmetic_paren
@@ -99,7 +105,7 @@ arithmetic_inner   = _{
 }
 arithmetic_paren     = { "(" ~ arithmetic_inner* ~ ")" }
 arithmetic_text      = @{ (
-      "$" ~ !("(" | "{" | ASCII_ALPHANUMERIC | "_" | "?" | "$" | "!")
+      "$" ~ !("(" | "{" | ASCII_ALPHANUMERIC | "_" | "?" | "$" | "!" | invocation_special)
     | !("$" | "\"" | "'" | "\\" | "(" | ")") ~ ANY
 )+ }
 group_list              = _{
@@ -130,7 +136,8 @@ fd_dup_out                          = { fd_number? ~ ">&" ~ fd_dup_target }
 fd_dup_in                           = { fd_number? ~ "<&" ~ fd_dup_target }
 fd_dup                              = { fd_dup_out | fd_dup_in }
 redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
-word_part                           = _{ arithmetic_expansion | parameter_expansion | quoted | command_subst | proc_subst | subshell | variable | glob_word | brace_word | word }
+word_part                           = _{ arithmetic_expansion | parameter_expansion | quoted | command_subst | proc_subst | subshell | invocation_parameter
+    | variable | glob_word | brace_word | word }
 span                                = { word_part+ }
 argv0                               = { span }
 args                                = { (sp* ~ redirect | sp+ ~ span)+ }

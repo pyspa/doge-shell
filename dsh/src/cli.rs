@@ -4,10 +4,20 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, args_conflicts_with_subcommands = true)]
 pub struct Cli {
-    #[arg(short, long)]
-    pub command: Option<String>,
+    /// Command followed by its optional invocation name and arguments.
+    /// Consume option-looking values here as well as in the trailing positional.
+    #[arg(short, long, num_args = 1.., allow_hyphen_values = true)]
+    pub command: Option<Vec<String>>,
+
+    /// COMMAND_NAME and arguments for -c (native script mode is not supported).
+    #[arg(
+        trailing_var_arg = true,
+        allow_hyphen_values = true,
+        requires = "command"
+    )]
+    pub command_args: Vec<String>,
 
     /// Lisp script to execute
     #[arg(short, long)]
@@ -62,7 +72,11 @@ pub enum SubCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RunMode {
     Interactive,
-    Command(String),
+    Command {
+        command: String,
+        argv0: String,
+        positional: Vec<String>,
+    },
     Lisp(String),
     Notebook(PathBuf),
 }
@@ -72,7 +86,23 @@ impl RunMode {
         if let Some(script) = &cli.lisp {
             Self::Lisp(script.clone())
         } else if let Some(command) = &cli.command {
-            Self::Command(command.clone())
+            Self::Command {
+                command: command[0].clone(),
+                argv0: command
+                    .iter()
+                    .skip(1)
+                    .chain(cli.command_args.iter())
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| "dogesh".into()),
+                positional: command
+                    .iter()
+                    .skip(1)
+                    .chain(cli.command_args.iter())
+                    .skip(1)
+                    .cloned()
+                    .collect(),
+            }
         } else if let Some(path) = &cli.notebook {
             Self::Notebook(PathBuf::from(path))
         } else {
@@ -93,6 +123,7 @@ mod tests {
     fn run_mode_limits_interactive_services_to_interactive_and_notebook() {
         let base = Cli {
             command: None,
+            command_args: Vec::new(),
             lisp: None,
             notebook: None,
             internal_exec_fd: None,
@@ -108,7 +139,7 @@ mod tests {
         assert!(RunMode::from_cli(&notebook).needs_interactive_services());
 
         let command = Cli {
-            command: Some("true".to_string()),
+            command: Some(vec!["true".to_string()]),
             notebook: None,
             ..notebook
         };
@@ -120,5 +151,60 @@ mod tests {
             ..command
         };
         assert!(!RunMode::from_cli(&lisp).needs_interactive_services());
+    }
+    #[test]
+    fn invocation_cli_preserves_subcommands_and_trailing_arguments() {
+        let cli = Cli::try_parse_from(["dogesh", "completion", "git"]).unwrap();
+        assert!(
+            matches!(cli.subcommand, Some(SubCommand::Completion { command, .. }) if command == "git")
+        );
+        let cli = Cli::try_parse_from(["dogesh", "import", "fish"]).unwrap();
+        assert!(
+            matches!(cli.subcommand, Some(SubCommand::Import { shell, .. }) if shell == "fish")
+        );
+        for arg in ["value", "-x", "--foo"] {
+            let cli = Cli::try_parse_from(["dogesh", "-c", "echo \"$1\"", "name", arg]).unwrap();
+            assert_eq!(cli.command.as_ref().unwrap(), &["echo \"$1\"", "name", arg]);
+            assert_eq!(
+                RunMode::from_cli(&cli),
+                RunMode::Command {
+                    command: "echo \"$1\"".into(),
+                    argv0: "name".into(),
+                    positional: vec![arg.into()]
+                }
+            );
+        }
+        assert!(Cli::try_parse_from(["dogesh", "foo"]).is_err());
+    }
+    #[test]
+    fn command_name_can_match_a_subcommand() {
+        for name in ["import", "completion"] {
+            let cli = Cli::try_parse_from(["dogesh", "-c", "echo", name, "arg"]).unwrap();
+            assert!(cli.subcommand.is_none());
+            assert_eq!(cli.command.as_ref().unwrap(), &["echo", name, "arg"]);
+        }
+    }
+    #[test]
+    fn option_looking_command_and_invocation_names_are_values() {
+        for name in ["--help", "-l", "-c", "--notebook", "--", ""] {
+            let cli = Cli::try_parse_from(["dogesh", "-c", "echo", name, "arg"]).unwrap();
+            assert_eq!(
+                RunMode::from_cli(&cli),
+                RunMode::Command {
+                    command: "echo".into(),
+                    argv0: name.into(),
+                    positional: vec!["arg".into()],
+                }
+            );
+        }
+        let cli = Cli::try_parse_from(["dogesh", "-c", "-command"]).unwrap();
+        assert_eq!(
+            RunMode::from_cli(&cli),
+            RunMode::Command {
+                command: "-command".into(),
+                argv0: "dogesh".into(),
+                positional: vec![],
+            }
+        );
     }
 }

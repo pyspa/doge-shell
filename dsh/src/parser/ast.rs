@@ -227,6 +227,7 @@ fn search_inner_word(pair: Pair<Rule>, pos: usize) -> Option<Span> {
         }
         Rule::word
         | Rule::glob_word
+        | Rule::invocation_parameter
         | Rule::variable
         | Rule::parameter_expansion
         | Rule::arithmetic_expansion => {
@@ -363,6 +364,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         }
         Rule::word
         | Rule::glob_word
+        | Rule::invocation_parameter
         | Rule::variable
         | Rule::parameter_expansion
         | Rule::arithmetic_expansion

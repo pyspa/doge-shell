@@ -83,6 +83,13 @@ impl Environment {
             _ => {}
         }
 
+        if let Some(values) = &self.expansion_output {
+            for prefix in ["OUT", "ERR"] {
+                if let Some(index) = output_history::parse_output_var(name, prefix) {
+                    return values.get(&format!("{prefix}[{index}]")).cloned();
+                }
+            }
+        }
         // Captured output: `$OUT`, `$OUT[2]`, `$ERR`, `$ERR[2]`.
         if let Some(index) = output_history::parse_output_var(name, "OUT") {
             return self
@@ -269,7 +276,7 @@ impl Environment {
             .filter(|value| !value.is_empty());
         let changed = self.integration_state.response_language.read().as_ref() != value.as_ref();
         *self.integration_state.response_language.write() = value;
-        if changed {
+        if changed && !self.isolated_projection {
             crate::ai_features::invalidate_read_only_cache();
         }
     }
@@ -294,7 +301,7 @@ impl Environment {
             .filter(|value| !value.is_empty());
         let changed = self.integration_state.chat_model.read().as_ref() != value.as_ref();
         *self.integration_state.chat_model.write() = value;
-        if changed {
+        if changed && !self.isolated_projection {
             crate::ai_features::invalidate_read_only_cache();
         }
     }

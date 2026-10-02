@@ -40,15 +40,22 @@ pub fn description() -> &'static str {
 }
 
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    let json_output = argv.iter().skip(1).any(|value| value == "--json");
-    let section = argv
-        .iter()
-        .skip(1)
-        .find(|value| value.as_str() != "--json")
-        .map(|value| value.as_str());
-    if matches!(section, Some("-h" | "--help" | "help")) {
+    if matches!(
+        argv.iter().skip(1).find(|value| {
+            value.as_str() != "--json" && value.as_str() != "--prompt-size"
+        }),
+        Some(value) if matches!(value.as_str(), "-h" | "--help" | "help")
+    ) {
         return print_help(ctx);
     }
+    let options = match parse_doctor_options(&argv) {
+        Ok(options) => options,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("doctor: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
+    let section = options.section.as_deref();
     if section.is_some_and(|value| !is_known_section(value)) {
         let _ = ctx.write_stderr(&format!(
             "doctor: unknown section `{}`. Use `doctor --help`.",
@@ -61,12 +68,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         .get_current_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
 
-    if json_output {
+    if options.json {
         if matches!(section, Some("fix")) {
             let _ = ctx.write_stderr("doctor: fix cannot be combined with --json");
             return ExitStatus::ExitedWith(1);
         }
-        return print_json_report(ctx, proxy, &current_dir, section);
+        return print_json_report(ctx, proxy, &current_dir, &options);
     }
 
     if matches!(section, Some("setup" | "fix")) {
@@ -82,6 +89,10 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     if show_section(section, "ai") {
         print_header(ctx, "ai");
         check_ai(ctx, proxy);
+        if options.prompt_size {
+            print_header(ctx, "prompt-footprint");
+            check_prompt_footprint(ctx, proxy);
+        }
     }
     if show_section(section, "hooks") {
         print_header(ctx, "hooks");
@@ -101,7 +112,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
     if show_section(section, "performance") || show_section(section, "perf") {
         print_header(ctx, "performance");
-        check_performance(ctx, proxy, argv.get(2..).unwrap_or(&[]));
+        check_performance(ctx, proxy, &options.section_args);
     }
     if show_section(section, "skills") {
         print_header(ctx, "skills");
@@ -130,6 +141,11 @@ fn help_text() -> &'static str {
         "\n",
         "Run diagnostics for the current shell setup. Without a section, all checks run.\n",
         "\n",
+        "Options:\n",
+        "  --json         Emit the report as JSON instead of human-readable lines\n",
+        "  --prompt-size  With `ai`: break down the prompt footprint into local\n",
+        "                 byte sizes and last-request provider token usage\n",
+        "\n",
         "Sections:\n",
         "  config   Check config.lisp and runtime skills directory\n",
         "  ai       Check AI-related environment and defaults\n",
@@ -148,6 +164,8 @@ fn help_text() -> &'static str {
         "Examples:\n",
         "  doctor\n",
         "  doctor ai\n",
+        "  doctor ai --prompt-size\n",
+        "  doctor ai --prompt-size --json\n",
         "  doctor project\n",
         "  doctor performance --top 5 --latency --latency-iters 1000\n",
         "  doctor hooks\n",
@@ -194,6 +212,44 @@ fn show_section(selected: Option<&str>, current: &str) -> bool {
 
 fn print_header(ctx: &Context, title: &str) {
     let _ = ctx.write_stdout(&format!("[{title}]"));
+}
+
+/// How `doctor` was invoked, parsed once so text, JSON, and section code
+/// cannot disagree about what was asked for.
+#[derive(Debug, Clone)]
+pub(super) struct DoctorOptions {
+    pub section: Option<String>,
+    pub json: bool,
+    pub prompt_size: bool,
+    pub section_args: Vec<String>,
+}
+
+/// Parse one `doctor` invocation. `--json` and `--prompt-size` are global
+/// flags accepted in any order; the first other argument is the section and
+/// everything after it belongs to that section (today only `performance`
+/// reads those). `--prompt-size` is only meaningful with `ai`.
+fn parse_doctor_options(argv: &[String]) -> Result<DoctorOptions, String> {
+    let mut section: Option<String> = None;
+    let mut json = false;
+    let mut prompt_size = false;
+    let mut section_args = Vec::new();
+    for arg in argv.iter().skip(1) {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--prompt-size" => prompt_size = true,
+            _ if section.is_none() => section = Some(arg.clone()),
+            _ => section_args.push(arg.clone()),
+        }
+    }
+    if prompt_size && section.as_deref() != Some("ai") {
+        return Err("--prompt-size is only supported with `doctor ai`".to_string());
+    }
+    Ok(DoctorOptions {
+        section,
+        json,
+        prompt_size,
+        section_args,
+    })
 }
 
 #[cfg(test)]

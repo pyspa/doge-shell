@@ -6,6 +6,10 @@
       "short": "-h",
       "long": "--help",
       "description": "Show help"
+    },
+    {
+      "long": "--json",
+      "description": "Emit the report as JSON"
     }
   ],
   "subcommands": [
@@ -15,7 +19,17 @@
     },
     {
       "name": "ai",
-      "description": "Check AI configuration"
+      "description": "Check AI configuration",
+      "options": [
+        {
+          "long": "--prompt-size",
+          "description": "Break down the prompt footprint into local byte sizes and last-request provider token usage"
+        },
+        {
+          "long": "--json",
+          "description": "Emit the report as JSON"
+        }
+      ]
     },
     {
       "name": "hooks",

@@ -4,6 +4,7 @@
 //! trust gate (a repository's own `.dogesh/skills` must be agreed to before its
 //! descriptions reach a prompt).
 use super::*;
+use crate::shell_capabilities::AgentCommandPolicy;
 
 /// System prompt that explains how to use the builtin tools
 pub(super) const TOOL_SYSTEM_PROMPT: &str = r#"You are DogeShell Assistant, an autonomous software engineering agent running inside doge-shell.
@@ -48,6 +49,9 @@ Respond in Markdown. Be concise and avoid unnecessary repetition.
 pub(super) struct SystemPrompt {
     pub(super) identity: String,
     pub(super) text: String,
+    /// Section byte sizes of `text`, measured by the same staged assembly
+    /// that rendered it - never reconstructed by searching for headers.
+    pub(super) footprint: SystemPromptFootprint,
 }
 
 pub(super) fn build_system_prompt(
@@ -63,6 +67,13 @@ pub(super) fn build_system_prompt(
         SkillsManager::with_roots(skill_roots.to_vec()).get_system_prompt_fragment()
     };
 
+    let (text, footprint) = assemble_system_prompt_traced(
+        &skills_fragment,
+        operator_prompt.as_deref(),
+        language.as_deref(),
+        mcp_manager,
+        mcp_tool_mode,
+    );
     SystemPrompt {
         identity: assemble_system_prompt(
             "",
@@ -71,34 +82,35 @@ pub(super) fn build_system_prompt(
             mcp_manager,
             mcp_tool_mode,
         ),
-        text: assemble_system_prompt(
-            &skills_fragment,
-            operator_prompt.as_deref(),
-            language.as_deref(),
-            mcp_manager,
-            mcp_tool_mode,
-        ),
+        text,
+        footprint,
     }
 }
 
-pub(super) fn assemble_system_prompt(
+/// The staged assembly behind [`assemble_system_prompt`], recording the byte
+/// length after each append so every separator and newline is attributed to
+/// exactly one section. `total_text_bytes` is always the sum of the parts.
+pub(super) fn assemble_system_prompt_traced(
     skills_fragment: &str,
     operator_prompt: Option<&str>,
     language: Option<&str>,
     mcp_manager: &McpManager,
     mcp_tool_mode: McpToolMode,
-) -> String {
+) -> (String, SystemPromptFootprint) {
     let mut base = TOOL_SYSTEM_PROMPT.to_string();
+    let base_end = base.len();
 
     if !skills_fragment.is_empty() {
         base.push_str(skills_fragment);
     }
+    let skills_end = base.len();
 
     if let Some(fragment) = mcp_manager.system_prompt_fragment(mcp_tool_mode) {
         base.push_str("\n\nMCP access:");
         base.push('\n');
         base.push_str(&fragment);
     }
+    let mcp_end = base.len();
 
     if let Some(extra) = operator_prompt.and_then(|p| {
         let trimmed = p.trim();
@@ -111,8 +123,44 @@ pub(super) fn assemble_system_prompt(
         base.push_str("\n\nAdditional operator instructions:\n");
         base.push_str(&extra);
     }
+    let operator_end = base.len();
 
-    dsh_openai::apply_language(&base, language)
+    // `apply_language` appends (or no-ops); it must never rewrite earlier
+    // content, or `language_bytes` below silently misattributes. The debug
+    // assertion - plus the dedicated test - fails loudly instead.
+    let text = dsh_openai::apply_language(&base, language);
+    debug_assert!(
+        text.starts_with(base.as_str()),
+        "apply_language rewrote the prompt instead of appending; section attribution is invalid"
+    );
+    let final_end = text.len();
+
+    let footprint = SystemPromptFootprint {
+        total_text_bytes: final_end,
+        base_guidance_bytes: base_end,
+        skills_bytes: skills_end - base_end,
+        mcp_guidance_bytes: mcp_end - skills_end,
+        operator_bytes: operator_end - mcp_end,
+        language_bytes: final_end.saturating_sub(operator_end),
+    };
+    (text, footprint)
+}
+
+pub(super) fn assemble_system_prompt(
+    skills_fragment: &str,
+    operator_prompt: Option<&str>,
+    language: Option<&str>,
+    mcp_manager: &McpManager,
+    mcp_tool_mode: McpToolMode,
+) -> String {
+    assemble_system_prompt_traced(
+        skills_fragment,
+        operator_prompt,
+        language,
+        mcp_manager,
+        mcp_tool_mode,
+    )
+    .0
 }
 
 /// Keep `pinned_messages[0]` - the system message - in one place.
@@ -181,17 +229,30 @@ pub(super) fn gate_project_skills(
     }
 }
 
-/// Does the user agree to this one project skills root?
-pub(super) fn trusts_project_root(
+/// The pure, already-trusted half of [`trusts_project_root`]: persisted trust
+/// plus the current session's approval, without ever asking.
+///
+/// The prompt profiler uses only this helper, so diagnostics stay
+/// non-interactive: they report what would be sent right now, never prompting
+/// for a repository's skills.
+pub(super) fn project_skill_root_already_trusted(
     decision: &skills::ProjectSkillDecision,
-    proxy: &mut dyn ChatToolHost,
+    proxy: &mut dyn AgentCommandPolicy,
 ) -> bool {
     if skills::trust::is_remembered(&decision.root, &decision.digest) {
         return true;
     }
 
     let session_key = skills::trust::session_key(&decision.root, &decision.digest);
-    if proxy.agent_session_approvals().contains(&session_key) {
+    proxy.agent_session_approvals().contains(&session_key)
+}
+
+/// Does the user agree to this one project skills root?
+pub(super) fn trusts_project_root(
+    decision: &skills::ProjectSkillDecision,
+    proxy: &mut dyn ChatToolHost,
+) -> bool {
+    if project_skill_root_already_trusted(decision, proxy as &mut dyn AgentCommandPolicy) {
         return true;
     }
 
@@ -203,6 +264,7 @@ pub(super) fn trusts_project_root(
         return false;
     }
 
+    let session_key = skills::trust::session_key(&decision.root, &decision.digest);
     let shown: Vec<&str> = decision.names.iter().take(8).map(String::as_str).collect();
     let more = decision.names.len().saturating_sub(shown.len());
     let suffix = if more > 0 {

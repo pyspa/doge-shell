@@ -66,10 +66,7 @@ impl TurnSetup {
         gate_project_skills(&mut skill_roots, proxy);
 
         // Build System Prompt (fixed for the session)
-        let mcp_tool_mode = mcp_manager.read().resolve_mcp_tool_mode(
-            resolve_mcp_tool_mode_preference(proxy),
-            DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
-        );
+        let mcp_tool_mode = resolve_mcp_mode(proxy, &mcp_manager.read());
         {
             let mcp = mcp_manager.read();
             let footprint = mcp.discoverable_tool_footprint();

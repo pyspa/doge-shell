@@ -1,6 +1,9 @@
 # Test Scope
 
 - `cargo test -p dsh-builtin`: builtin, chat, MCP, runtime skill loading
+- `cargo test -p dsh-builtin footprint`: prompt footprint profiler (`doctor ai --prompt-size` の計測・回帰。`budget.json` の上限更新時は `prompt_footprint_report_canonical_values_for_baselining -- --nocapture` で現在値を再測定する)
+- `cargo test -p dsh-builtin doctor`: doctor text/JSON レポート
+- `cargo test -p dsh-openai usage`: provider token usage と cache 計算
 - `cargo test -p doge-shell`: parser, repl, completion, prompt, shell behavior
 - `cargo test -p doge-shell --lib <filter>`: 反復ループの既定。`dsh/tests/` の統合テストはサブプロセスをグローバル Mutex で直列化するので、実装を回している間は `--lib` とテスト名フィルタが速い。完了前に一度だけフルの `cargo test -p doge-shell` を回す
 - `cargo test -p doge-shell --test shell_contract`: 構文・実行の契約（`dsh/tests/spec/*.toml`）を変えたとき

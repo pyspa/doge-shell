@@ -502,7 +502,11 @@ mod tests {
     #[tokio::test]
     async fn callback_state_issued_id_pkce_and_exact_redirect() {
         let dir = tempfile::tempdir().unwrap();
-        let store = AuthStore::new(dir.path().join("subscription-auth"));
+        let store = AuthStore::new(
+            std::fs::canonicalize(dir.path())
+                .unwrap()
+                .join("subscription-auth"),
+        );
         let attempt = LoginAttempt::start(store.clone(), false, None)
             .await
             .unwrap();
@@ -579,7 +583,11 @@ mod tests {
     #[tokio::test]
     async fn cancellation_and_timeout_do_not_activate_an_account() {
         let dir = tempfile::tempdir().unwrap();
-        let store = AuthStore::new(dir.path().join("subscription-auth"));
+        let store = AuthStore::new(
+            std::fs::canonicalize(dir.path())
+                .unwrap()
+                .join("subscription-auth"),
+        );
         let attempt = LoginAttempt::start(store.clone(), true, None)
             .await
             .unwrap();

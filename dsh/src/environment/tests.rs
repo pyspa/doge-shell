@@ -1443,3 +1443,38 @@ fn insert_path_entry_uses_logical_home_for_tilde() {
         "/logical/home/bin".to_string()
     );
 }
+
+#[test]
+fn subscription_settings_update_the_common_ai_slots_without_api_fallback() {
+    init();
+    let temp = tempfile::tempdir().unwrap();
+    let env = Environment::new();
+    env.write().set_shell_var(
+        "XDG_CONFIG_HOME".into(),
+        temp.path().to_string_lossy().into(),
+    );
+    env.write()
+        .set_shell_var("AI_CHAT_API_KEY".into(), "mock-must-not-fallback".into());
+    env.write()
+        .set_shell_var("AI_CHAT_BASE_URL".into(), "".into());
+    env.write()
+        .set_shell_var("OPENAI_BASE_URL".into(), "".into());
+    env.write()
+        .set_shell_var("AI_CHAT_PROVIDER".into(), "chatgpt_subscription".into());
+    env.write()
+        .set_shell_var("AI_CHAT_SUBSCRIPTION_MODEL".into(), "".into());
+    assert!(!env.read().ai_configured());
+    assert!(env.read().ai_readiness_hint().contains("chat_auth models"));
+    env.write().set_shell_var(
+        "AI_CHAT_SUBSCRIPTION_MODEL".into(),
+        "mock-subscription-model".into(),
+    );
+    let guard = env.read();
+    assert_eq!(
+        guard.integration_state.chat_model.read().as_deref(),
+        Some("mock-subscription-model")
+    );
+    assert!(guard.integration_state.ai_client.read().is_some());
+    assert!(!guard.ai_configured());
+    assert!(guard.ai_readiness_hint().contains("chat_auth login"));
+}

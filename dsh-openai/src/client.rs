@@ -23,6 +23,7 @@ const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
 
 mod body;
+mod provider;
 mod streaming;
 
 /// Optional body fields that an OpenAI-compatible endpoint may reject outright.
@@ -50,7 +51,7 @@ const DROPPABLE_FIELDS: &[&str] = &[
 ];
 
 #[derive(Debug)]
-struct RequestCancelled;
+pub(crate) struct RequestCancelled;
 
 impl fmt::Display for RequestCancelled {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -173,14 +174,15 @@ static SHARED_RUNTIME: LazyLock<Option<tokio::runtime::Runtime>> = LazyLock::new
         .ok()
 });
 
-fn shared_runtime() -> Result<&'static tokio::runtime::Runtime> {
+pub(crate) fn shared_runtime() -> Result<&'static tokio::runtime::Runtime> {
     SHARED_RUNTIME
         .as_ref()
         .ok_or_else(|| anyhow!("failed to start the OpenAI client runtime"))
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatGptClient {
+    subscription: Option<crate::responses::SubscriptionTransport>,
     api_key: String,
     default_model: String,
     chat_endpoint: String,
@@ -229,27 +231,6 @@ impl ChatGptClient {
         Self::try_from_config(&config)
     }
 
-    pub fn try_from_config(config: &OpenAiConfig) -> Result<Self> {
-        let api_key = config.api_key().ok_or_else(|| {
-            anyhow!(
-                "OpenAI-compatible API key is not configured. {}",
-                crate::API_KEY_SETUP_HINT
-            )
-        })?;
-
-        let client = Self {
-            api_key: api_key.to_string(),
-            default_model: config.default_model().to_string(),
-            chat_endpoint: config.chat_endpoint(),
-            client: Self::build_client(config.timeout())?,
-            request_timeout: config.timeout(),
-            unsupported: Arc::new(Mutex::new(Vec::new())),
-            default_reasoning_effort: config.reasoning_effort().map(str::to_string),
-            force_reasoning_none: Arc::new(AtomicBool::new(false)),
-        };
-        Ok(client)
-    }
-
     // `send_message`, `send_message_with_model` and the positional
     // `send_chat_request` used to live here. Nothing outside this file called
     // any of them, and `send_message_with_model` held the last
@@ -265,6 +246,15 @@ impl ChatGptClient {
         options: &ChatRequestOptions,
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
+        if let Some(subscription) = &self.subscription {
+            return self.block_on(subscription.send(
+                messages,
+                options,
+                cancel_check,
+                &mut |_| {},
+            ))?;
+        }
+        Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
         self.block_on(self.send_with_retry(body, cancel_check))?
     }
@@ -292,6 +282,10 @@ impl ChatGptClient {
         cancel_check: Option<&dyn Fn() -> bool>,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Value> {
+        if let Some(subscription) = &self.subscription {
+            return self.block_on(subscription.send(messages, options, cancel_check, on_delta))?;
+        }
+        Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
         self.block_on(self.send_streaming_with_retry(body, cancel_check, on_delta))?
     }

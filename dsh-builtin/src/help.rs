@@ -168,6 +168,19 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["comp-gen", "doctor", "help"],
     },
     HelpTopic {
+        name: "chat_auth",
+        category: "ai",
+        summary: "Sign in with ChatGPT and manage subscription accounts without API-key fallback.",
+        usage: "chat_auth login [--new] | status | models | logout | account <label>",
+        examples: &[
+            "chat_auth login",
+            "chat_auth status",
+            "chat_auth models",
+            "chat_auth logout",
+        ],
+        related: &["chat_model", "chat_reset", "doctor"],
+    },
+    HelpTopic {
         name: "chat_model",
         category: "ai",
         summary: "Show or set the AI chat model (takes effect immediately, everywhere).",

@@ -1655,3 +1655,39 @@ fn observation_read_is_read_only_for_mutation_policy() {
     });
     assert!(!super::super::settings::is_mutating_tool_call(&call));
 }
+
+#[test]
+fn subscription_credentials_are_never_read_listed_or_searched() {
+    let dir = tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let auth = root.join("subscription-auth");
+    std::fs::create_dir(&auth).unwrap();
+    std::fs::write(
+        auth.join("credentials.json"),
+        r#"{"access_token":"MOCK_PRIVATE_SENTINEL"}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(auth.join("credentials.json"), root.join("alias.json")).unwrap();
+    for level in ["strict", "normal", "loose"] {
+        let mut proxy = TestShellProxy {
+            current_dir: root.clone(),
+            ..Default::default()
+        };
+        proxy.set_var("SAFETY_LEVEL".into(), level.into());
+        for path in ["subscription-auth/credentials.json", "alias.json"] {
+            assert!(read::run(&json!({"path":path}).to_string(), &mut proxy).is_err());
+        }
+        assert!(ls::run(r#"{"path":"subscription-auth"}"#, &mut proxy).is_err());
+        let listed = ls::run(r#"{"path":"."}"#, &mut proxy).unwrap();
+        assert!(!listed.contains("credentials.json"));
+        for kind in ["content", "filename"] {
+            let result = search::run(
+                &json!({"type":kind,"path":".","query":"MOCK_PRIVATE_SENTINEL"}).to_string(),
+                &mut proxy,
+            )
+            .unwrap();
+            assert!(result.contains("(no matches found)"), "{result}");
+            assert!(!result.contains("access_token"));
+        }
+    }
+}

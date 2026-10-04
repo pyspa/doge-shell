@@ -1,0 +1,1 @@
+This RSA signing key and JWKS were generated solely for deterministic mock OIDC validation tests. They do not belong to any OpenAI account, client, or server. Never use this public test key for real identity verification or credentials. Tests build short-lived mock claims locally; no real login or inference is performed.

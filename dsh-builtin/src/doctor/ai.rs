@@ -38,7 +38,11 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
         .get_var("AI_MESSAGE_LANG")
         .unwrap_or_else(|| "default".to_string());
 
-    let key_state = if config.api_key().is_some() {
+    let _ = ctx.write_stdout(&format!("ok provider {}", config.provider_name()));
+    if let Err(error) = config.readiness() {
+        let _ = ctx.write_stdout(&format!("warn readiness {error}"));
+    }
+    let key_state = if config.readiness().is_ok() {
         "ok"
     } else {
         "warn"
@@ -49,7 +53,8 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     ));
     let _ = ctx.write_stdout(&format!("ok model {}", config.default_model()));
     let _ = ctx.write_stdout(&format!("ok base-url {}", config.base_url()));
-    if let Some(configured) = configured_base_url.as_deref()
+    if config.provider() == dsh_openai::AiProvider::ApiKey
+        && let Some(configured) = configured_base_url.as_deref()
         && configured.trim_end_matches('/') != config.base_url()
     {
         let _ = ctx.write_stdout(&format!(

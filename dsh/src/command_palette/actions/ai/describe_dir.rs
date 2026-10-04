@@ -30,7 +30,7 @@ impl Action for DescribeDirectoryAction {
         let Some(service) = get_ai_service(shell) else {
             println!(
                 "\r\nAI service is not configured. {}\r\n",
-                dsh_openai::API_KEY_SETUP_HINT
+                shell.environment.read().ai_readiness_hint()
             );
             return Ok(());
         };

@@ -126,6 +126,9 @@ pub(crate) fn confirm_sensitive_access(
     resolved: &Path,
     reason: &str,
 ) -> Result<bool, String> {
+    if dsh_types::safety_policy::is_subscription_auth_path(resolved) {
+        return Err("chat: subscription authentication files are never exposed to AI tools".into());
+    }
     if !safety_level(proxy).requires_confirmation_for_sensitive_access() {
         return Ok(true);
     }

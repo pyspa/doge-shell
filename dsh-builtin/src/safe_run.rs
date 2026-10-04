@@ -188,12 +188,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // 2. Initialize LLM client
     let config = load_openai_config(proxy);
-    if config.api_key().is_none() {
-        ctx.write_stderr(&format!(
-            "safe-run: AI service is not configured. {}",
-            dsh_openai::API_KEY_SETUP_HINT
-        ))
-        .ok();
+    if let Err(error) = config.readiness() {
+        ctx.write_stderr(&format!("safe-run: {error}")).ok();
         return ExitStatus::ExitedWith(1);
     }
 

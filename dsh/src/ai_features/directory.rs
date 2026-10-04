@@ -29,7 +29,8 @@ pub async fn describe_directory<S: AiService + ?Sized>(
         sanitized_cwd, sanitized_listing
     );
 
-    if let Some(cached) = cache::lookup("describe_dir", &[&query]) {
+    let cache_scope = service.cache_scope();
+    if let Some(cached) = cache::lookup_scoped(&cache_scope, "describe_dir", &[&query]) {
         return Ok(cached);
     }
 
@@ -46,7 +47,9 @@ pub async fn describe_directory<S: AiService + ?Sized>(
                 .with_prompt_cache_key("dsh-describe-dir"),
         )
         .await?;
-    cache::store("describe_dir", &[&query], &answer);
+    if service.cache_scope() == cache_scope {
+        cache::store_scoped(&cache_scope, "describe_dir", &[&query], &answer);
+    }
     Ok(answer)
 }
 

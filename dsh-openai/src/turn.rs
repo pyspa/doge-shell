@@ -27,7 +27,6 @@ pub enum TurnOutcome {
     Stalled,
 }
 
-#[derive(Debug)]
 pub struct Turn {
     /// The assistant message, when it is worth keeping in the history.
     ///
@@ -37,6 +36,20 @@ pub struct Turn {
     /// Text the model emitted alongside its tool calls.
     pub interim_text: Option<String>,
     pub outcome: TurnOutcome,
+}
+
+impl std::fmt::Debug for Turn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut message = self.assistant_message.clone();
+        if let Some(message) = message.as_mut().and_then(Value::as_object_mut) {
+            message.remove(crate::responses::CONTINUATION);
+        }
+        f.debug_struct("Turn")
+            .field("assistant_message", &message)
+            .field("interim_text", &self.interim_text)
+            .field("outcome", &self.outcome)
+            .finish()
+    }
 }
 
 pub fn interpret_response(response: &Value) -> Result<Turn, String> {

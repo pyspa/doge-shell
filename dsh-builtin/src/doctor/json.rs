@@ -52,7 +52,7 @@ pub(super) fn print_json_report(
             "mcp_servers": proxy.list_mcp_servers().len(),
             // Through the same resolver as the `ai` section, which also knows
             // about `OPEN_AI_API_KEY`; the two used to disagree.
-            "ai_configured": crate::chatgpt::load_openai_config(proxy).api_key().is_some()
+            "ai_configured": crate::chatgpt::load_openai_config(proxy).readiness().is_ok()
         },
         "details": details
     });
@@ -91,7 +91,9 @@ pub(super) fn json_section_details(
             let usage = dsh_openai::usage::session_total();
             let config = crate::chatgpt::load_openai_config(proxy);
             let mut details = json!({
-            "configured": config.api_key().is_some(),
+            "configured": config.readiness().is_ok(),
+            "provider": config.provider_name(),
+            "readiness_error": config.readiness().err().map(|e| e.to_string()),
             "model": config.default_model(),
             "base_url": config.base_url(),
             "message_lang": proxy.get_var("AI_MESSAGE_LANG").unwrap_or_else(|| "default".to_string()),

@@ -67,12 +67,8 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     // 2. Generate message using AI
     ctx.write_stdout("Generating commit message...").ok();
     let config = load_openai_config(proxy);
-    if config.api_key().is_none() {
-        ctx.write_stderr(&format!(
-            "ai-commit: AI service is not configured. {}",
-            dsh_openai::API_KEY_SETUP_HINT
-        ))
-        .ok();
+    if let Err(error) = config.readiness() {
+        ctx.write_stderr(&format!("ai-commit: {error}")).ok();
         return ExitStatus::ExitedWith(1);
     }
 

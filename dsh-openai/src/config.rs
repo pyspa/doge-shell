@@ -1,5 +1,15 @@
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+pub const PROVIDER_ENV: &str = "AI_CHAT_PROVIDER";
+pub const SUBSCRIPTION_MODEL_ENV: &str = "AI_CHAT_SUBSCRIPTION_MODEL";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProvider {
+    ApiKey,
+    ChatGptSubscription,
+}
 
 /// Environment key overriding the total per-request timeout, in seconds.
 pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
@@ -39,8 +49,11 @@ const MIN_TIMEOUT_SECS: u64 = 5;
 /// still needs a bound.
 pub(crate) const MAX_TIMEOUT_SECS: u64 = 1800;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OpenAiConfig {
+    provider: AiProvider,
+    auth_dir: Option<PathBuf>,
+    configuration_error: Option<String>,
     api_key: Option<String>,
     base_url: String,
     default_model: String,
@@ -74,6 +87,9 @@ impl OpenAiConfig {
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
         Self {
+            provider: AiProvider::ApiKey,
+            auth_dir: None,
+            configuration_error: None,
             // A blank key is not a key. Callers used to each re-check this and
             // `doctor` disagreed with the chat runtime about whether
             // `AI_CHAT_API_KEY=""` counted as configured.
@@ -94,6 +110,13 @@ impl OpenAiConfig {
     }
 
     pub fn from_getter(mut getter: impl FnMut(&str) -> Option<String>) -> Self {
+        let provider = getter(PROVIDER_ENV).unwrap_or_else(|| "api_key".into());
+        let subscription_model = getter(SUBSCRIPTION_MODEL_ENV).filter(|v| !v.trim().is_empty());
+        let auth_dir = getter("XDG_CONFIG_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| getter("HOME").map(|v| PathBuf::from(v).join(".config")))
+            .map(|v| v.join("dogesh").join("subscription-auth"));
         let api_key = API_KEY_ENV_VARS.iter().find_map(|key| getter(key));
 
         let base_url = getter("AI_CHAT_BASE_URL").or_else(|| getter("OPENAI_BASE_URL"));
@@ -110,9 +133,14 @@ impl OpenAiConfig {
             (!trimmed.is_empty()).then_some(trimmed)
         });
 
+        let has_custom_base = base_url.as_ref().is_some_and(|v| !v.trim().is_empty());
         let mut config = OpenAiConfig::new_with_http_policy(
             api_key,
-            base_url,
+            if provider.trim() == "chatgpt_subscription" {
+                None
+            } else {
+                base_url
+            },
             default_model,
             getter(ALLOW_INSECURE_HTTP_ENV),
         );
@@ -122,7 +150,63 @@ impl OpenAiConfig {
         if let Some(reasoning_effort) = reasoning_effort {
             config = config.with_reasoning_effort(Some(reasoning_effort));
         }
+        config.auth_dir = auth_dir;
+        match provider.trim() {
+            "api_key" | "" => {}
+            "chatgpt_subscription" => {
+                config.provider = AiProvider::ChatGptSubscription;
+                config.api_key = None;
+                config.base_url = DEFAULT_BASE_URL.trim_end_matches('/').into();
+                config.default_model = subscription_model.unwrap_or_default();
+                if has_custom_base {
+                    config.configuration_error = Some("ChatGPT subscription does not support custom base URLs. Unset AI_CHAT_BASE_URL and OPENAI_BASE_URL.".into());
+                }
+            }
+            _ => {
+                config.configuration_error =
+                    Some("AI_CHAT_PROVIDER must be api_key or chatgpt_subscription.".into())
+            }
+        }
         config
+    }
+
+    pub fn provider_name(&self) -> &'static str {
+        match self.provider {
+            AiProvider::ApiKey => "api_key",
+            AiProvider::ChatGptSubscription => "chatgpt_subscription",
+        }
+    }
+    pub fn provider(&self) -> AiProvider {
+        self.provider
+    }
+    pub fn auth_dir(&self) -> anyhow::Result<&Path> {
+        self.auth_dir.as_deref().ok_or_else(|| anyhow::anyhow!("Subscription authentication needs HOME or XDG_CONFIG_HOME in the shell environment."))
+    }
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if let Some(error) = &self.configuration_error {
+            anyhow::bail!("{error}");
+        }
+        Ok(())
+    }
+    pub fn readiness(&self) -> anyhow::Result<()> {
+        self.validate()?;
+        match self.provider {
+            AiProvider::ApiKey => {
+                if self.api_key.is_none() {
+                    anyhow::bail!(
+                        "OpenAI-compatible API key is not configured. {}",
+                        API_KEY_SETUP_HINT
+                    );
+                }
+            }
+            AiProvider::ChatGptSubscription => {
+                if self.default_model.is_empty() {
+                    anyhow::bail!("Select AI_CHAT_SUBSCRIPTION_MODEL after chat_auth models.");
+                }
+                crate::auth::AuthStore::new(self.auth_dir()?.to_path_buf()).status()?;
+            }
+        }
+        Ok(())
     }
 
     pub fn api_key(&self) -> Option<&str> {
@@ -410,5 +494,81 @@ mod tests {
         let _guard = EnvGuard::set(ALLOW_INSECURE_HTTP_ENV, "true");
         let cfg = OpenAiConfig::new(None, Some("http://localhost:8080/v1".to_string()), None);
         assert_eq!(cfg.base_url(), "http://localhost:8080/v1");
+    }
+}
+
+impl std::fmt::Debug for OpenAiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("default_model", &self.default_model)
+            .field("timeout", &self.timeout)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    use super::*;
+    fn config(values: &[(&str, &str)]) -> OpenAiConfig {
+        OpenAiConfig::from_getter(|key| {
+            values
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.to_string())
+        })
+    }
+    #[test]
+    fn provider_is_explicit_and_subscription_never_uses_api_credentials_or_model() {
+        let api = config(&[("AI_CHAT_API_KEY", "key")]);
+        assert_eq!(api.provider(), AiProvider::ApiKey);
+        assert_eq!(api.default_model(), DEFAULT_MODEL);
+        let sub = config(&[
+            (PROVIDER_ENV, "chatgpt_subscription"),
+            ("AI_CHAT_API_KEY", "key"),
+            ("AI_CHAT_MODEL", "api-model"),
+            ("HOME", "/tmp/mock-home"),
+        ]);
+        assert_eq!(sub.api_key(), None);
+        assert_eq!(sub.default_model(), "");
+        assert!(
+            sub.readiness()
+                .unwrap_err()
+                .to_string()
+                .contains("SUBSCRIPTION_MODEL")
+        );
+        assert_eq!(
+            sub.auth_dir().unwrap(),
+            Path::new("/tmp/mock-home/.config/dogesh/subscription-auth")
+        );
+        let sub = config(&[
+            (PROVIDER_ENV, "chatgpt_subscription"),
+            (SUBSCRIPTION_MODEL_ENV, "subscription-model"),
+            ("AI_CHAT_BASE_URL", "https://other.example"),
+        ]);
+        assert!(sub.validate().is_err());
+        assert_eq!(sub.api_key(), None);
+        assert!(
+            config(&[(PROVIDER_ENV, "typo"), ("AI_CHAT_API_KEY", "key")])
+                .validate()
+                .is_err()
+        );
+        assert!(!format!("{:?}", api).contains("\"key\""));
+    }
+    #[test]
+    fn missing_getter_values_are_final_and_no_auth_path_is_invented() {
+        let missing = OpenAiConfig::from_getter(|_| None);
+        assert_eq!(missing.api_key(), None);
+        assert!(missing.auth_dir().is_err());
+        let config = config(&[
+            (PROVIDER_ENV, "chatgpt_subscription"),
+            (SUBSCRIPTION_MODEL_ENV, "model"),
+            ("XDG_CONFIG_HOME", "/tmp/custom"),
+        ]);
+        assert_eq!(
+            config.auth_dir().unwrap(),
+            Path::new("/tmp/custom/dogesh/subscription-auth")
+        );
     }
 }

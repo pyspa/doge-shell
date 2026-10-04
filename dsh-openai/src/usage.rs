@@ -15,6 +15,12 @@ pub struct TokenUsage {
     /// Prompt tokens the provider served from its prefix cache.
     pub cached_prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Requests whose input/output counts were unavailable.
+    #[serde(default)]
+    pub unknown_usage_requests: u64,
+    /// Requests whose cached-input count was unavailable.
+    #[serde(default)]
+    pub unknown_cached_requests: u64,
 }
 
 impl TokenUsage {
@@ -33,14 +39,19 @@ impl TokenUsage {
             .get("completion_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let cached_prompt_tokens = usage
+        let cached = usage
             .get("prompt_tokens_details")
             .and_then(|details| details.get("cached_tokens"))
             .and_then(Value::as_u64)
-            .or_else(|| usage.get("cached_tokens").and_then(Value::as_u64))
-            .unwrap_or(0);
+            .or_else(|| usage.get("cached_tokens").and_then(Value::as_u64));
+        let cached_prompt_tokens = cached.unwrap_or(0);
 
-        if prompt_tokens == 0 && completion_tokens == 0 {
+        if usage.get("prompt_tokens").and_then(Value::as_u64).is_none()
+            && usage
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .is_none()
+        {
             return None;
         }
 
@@ -49,6 +60,8 @@ impl TokenUsage {
             prompt_tokens,
             cached_prompt_tokens,
             completion_tokens,
+            unknown_usage_requests: 0,
+            unknown_cached_requests: u64::from(cached.is_none()),
         })
     }
 
@@ -62,6 +75,10 @@ impl TokenUsage {
             self.prompt_tokens += usage.prompt_tokens;
             self.cached_prompt_tokens += usage.cached_prompt_tokens;
             self.completion_tokens += usage.completion_tokens;
+            self.unknown_cached_requests += usage.unknown_cached_requests;
+        } else {
+            self.unknown_usage_requests += 1;
+            self.unknown_cached_requests += 1;
         }
     }
 
@@ -82,7 +99,7 @@ impl TokenUsage {
     /// `None` when the request reported no prompt tokens at all; callers
     /// must render that as "unavailable", never as `0%`.
     pub fn cache_hit_ratio(&self) -> Option<f64> {
-        (self.prompt_tokens > 0)
+        (self.prompt_tokens > 0 && self.unknown_cached_requests == 0)
             .then(|| self.cached_prompt_tokens as f64 / self.prompt_tokens as f64)
     }
 
@@ -93,6 +110,12 @@ impl TokenUsage {
     /// Usage accumulated between an earlier snapshot and this one.
     pub fn since(&self, earlier: &Self) -> Self {
         Self {
+            unknown_usage_requests: self
+                .unknown_usage_requests
+                .saturating_sub(earlier.unknown_usage_requests),
+            unknown_cached_requests: self
+                .unknown_cached_requests
+                .saturating_sub(earlier.unknown_cached_requests),
             requests: self.requests.saturating_sub(earlier.requests),
             prompt_tokens: self.prompt_tokens.saturating_sub(earlier.prompt_tokens),
             cached_prompt_tokens: self
@@ -106,9 +129,19 @@ impl TokenUsage {
 
     /// One-line rendering for the shell and for `doctor ai`.
     pub fn summary_line(&self) -> String {
+        let cached = if self.unknown_cached_requests > 0 {
+            "unknown".into()
+        } else {
+            self.cached_prompt_tokens.to_string()
+        };
+        let suffix = if self.unknown_usage_requests > 0 {
+            format!(" ({} req usage unknown)", self.unknown_usage_requests)
+        } else {
+            String::new()
+        };
         format!(
-            "{} req / in {} (cached {}) / out {}",
-            self.requests, self.prompt_tokens, self.cached_prompt_tokens, self.completion_tokens
+            "{} req / in {} (cached {}) / out {}{}",
+            self.requests, self.prompt_tokens, cached, self.completion_tokens, suffix
         )
     }
 }
@@ -117,9 +150,13 @@ static REQUESTS: AtomicU64 = AtomicU64::new(0);
 static PROMPT_TOKENS: AtomicU64 = AtomicU64::new(0);
 static CACHED_PROMPT_TOKENS: AtomicU64 = AtomicU64::new(0);
 static COMPLETION_TOKENS: AtomicU64 = AtomicU64::new(0);
+static UNKNOWN_USAGE: AtomicU64 = AtomicU64::new(0);
+static UNKNOWN_CACHED: AtomicU64 = AtomicU64::new(0);
 
 /// Add `usage` to the process-wide totals.
 pub fn record(usage: TokenUsage) {
+    UNKNOWN_USAGE.fetch_add(usage.unknown_usage_requests, Ordering::Relaxed);
+    UNKNOWN_CACHED.fetch_add(usage.unknown_cached_requests, Ordering::Relaxed);
     REQUESTS.fetch_add(usage.requests, Ordering::Relaxed);
     PROMPT_TOKENS.fetch_add(usage.prompt_tokens, Ordering::Relaxed);
     CACHED_PROMPT_TOKENS.fetch_add(usage.cached_prompt_tokens, Ordering::Relaxed);
@@ -128,7 +165,11 @@ pub fn record(usage: TokenUsage) {
 
 /// Count one completed request and any usage it reported.
 pub(crate) fn record_response(response: &Value) {
-    let mut usage = TokenUsage::from_response(response).unwrap_or_default();
+    let mut usage = TokenUsage::from_response(response).unwrap_or(TokenUsage {
+        unknown_usage_requests: 1,
+        unknown_cached_requests: 1,
+        ..Default::default()
+    });
     usage.requests = 1;
     record(usage);
 }
@@ -136,6 +177,8 @@ pub(crate) fn record_response(response: &Value) {
 /// Totals since the shell started.
 pub fn session_total() -> TokenUsage {
     TokenUsage {
+        unknown_usage_requests: UNKNOWN_USAGE.load(Ordering::Relaxed),
+        unknown_cached_requests: UNKNOWN_CACHED.load(Ordering::Relaxed),
         requests: REQUESTS.load(Ordering::Relaxed),
         prompt_tokens: PROMPT_TOKENS.load(Ordering::Relaxed),
         cached_prompt_tokens: CACHED_PROMPT_TOKENS.load(Ordering::Relaxed),
@@ -201,12 +244,14 @@ mod tests {
             prompt_tokens: 100,
             cached_prompt_tokens: 40,
             completion_tokens: 10,
+            ..Default::default()
         };
         let later = TokenUsage {
             requests: 5,
             prompt_tokens: 350,
             cached_prompt_tokens: 240,
             completion_tokens: 35,
+            ..Default::default()
         };
 
         let delta = later.since(&earlier);
@@ -225,6 +270,7 @@ mod tests {
             prompt_tokens: 7,
             cached_prompt_tokens: 3,
             completion_tokens: 2,
+            ..Default::default()
         });
         let after = session_total();
 
@@ -242,6 +288,7 @@ mod tests {
             prompt_tokens: 1000,
             cached_prompt_tokens: 750,
             completion_tokens: 50,
+            ..Default::default()
         };
 
         assert_eq!(usage.uncached_prompt_tokens(), 250);
@@ -257,6 +304,7 @@ mod tests {
             prompt_tokens: 100,
             cached_prompt_tokens: 250,
             completion_tokens: 0,
+            ..Default::default()
         };
 
         assert_eq!(usage.uncached_prompt_tokens(), 0);
@@ -267,5 +315,21 @@ mod tests {
         let usage = TokenUsage::default();
 
         assert_eq!(usage.cache_hit_ratio(), None);
+    }
+    #[test]
+    fn missing_usage_and_cached_counts_remain_unknown() {
+        let mut tally = TokenUsage::default();
+        tally.add_response(&serde_json::json!({"choices":[]}));
+        assert_eq!(tally.unknown_usage_requests, 1);
+        assert!(tally.summary_line().contains("usage unknown"));
+        let known_input = TokenUsage::from_response(
+            &serde_json::json!({"usage":{"prompt_tokens":12,"completion_tokens":2}}),
+        )
+        .unwrap();
+        assert_eq!(known_input.unknown_cached_requests, 1);
+        assert_eq!(known_input.cache_hit_ratio(), None);
+        assert!(known_input.summary_line().contains("cached unknown"));
+        let zero = TokenUsage::from_response(&serde_json::json!({"usage":{"prompt_tokens":0,"completion_tokens":0,"cached_tokens":0}})).unwrap();
+        assert_eq!(zero.unknown_usage_requests, 0);
     }
 }

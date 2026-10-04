@@ -13,6 +13,10 @@ use serde_json::Value;
 
 /// Chat client trait for sending requests to chat APIs.
 pub trait ChatClient: Send + Sync {
+    /// Opaque provider/account identity for local answer caches; not a credential.
+    fn cache_scope(&self) -> String {
+        String::new()
+    }
     fn send_chat_cancellable(
         &self,
         messages: &[Value],
@@ -55,6 +59,9 @@ pub trait ChatClient: Send + Sync {
 }
 
 impl ChatClient for ChatGptClient {
+    fn cache_scope(&self) -> String {
+        ChatGptClient::cache_scope(self)
+    }
     fn send_chat_cancellable(
         &self,
         messages: &[Value],

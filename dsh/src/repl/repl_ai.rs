@@ -442,7 +442,7 @@ impl<'a> Repl<'a> {
                 renderer,
                 Print(format!(
                     "❌ AI service is not configured. {}\r\n",
-                    dsh_openai::API_KEY_SETUP_HINT
+                    self.shell.environment.read().ai_readiness_hint()
                 ))
             )
             .ok();
@@ -577,6 +577,15 @@ mod tests {
             .environment
             .write()
             .set_shell_var("AI_CHAT_API_KEY".into(), "test-key".into());
+        // Ghost initialization also sees the configured slot. Keep any incidental request local.
+        shell
+            .environment
+            .write()
+            .set_shell_var("AI_CHAT_ALLOW_INSECURE_HTTP".into(), "true".into());
+        shell
+            .environment
+            .write()
+            .set_shell_var("AI_CHAT_BASE_URL".into(), "http://127.0.0.1:9/v1".into());
         let mut repl = Repl::new(&mut shell);
 
         // Setup mock AI service

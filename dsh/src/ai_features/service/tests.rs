@@ -478,3 +478,37 @@ async fn path_b_without_a_handler_refuses_an_unknown_binding() {
             .is_some()
     );
 }
+
+struct NativeHistoryClient;
+impl ChatClient for NativeHistoryClient {
+    fn send_chat_request(&self, messages: &[Value], _: &ChatRequestOptions) -> Result<Value> {
+        if messages.iter().any(|m| m["role"] == "assistant") {
+            assert!(messages.iter().any(|m| m["_dsh_responses"]["output"][0]["encrypted_content"] == "mock-opaque"));
+        }
+        Ok(
+            json!({"choices":[{"message":{"role":"assistant","content":"done","_dsh_responses":{"identity":{"account":"mock"},"output":[{"type":"reasoning","encrypted_content":"mock-opaque"}]}},"finish_reason":"stop"}]}),
+        )
+    }
+}
+#[tokio::test]
+async fn diagnose_and_followup_preserve_native_history_in_the_shared_loop() {
+    let service = service(NativeHistoryClient);
+    let (_, mut history) =
+        super::super::diagnose_output_with_history(&service, "mock", "output", 1)
+            .await
+            .unwrap();
+    assert_eq!(
+        history.last().unwrap()["_dsh_responses"]["output"][0]["encrypted_content"],
+        "mock-opaque"
+    );
+    super::super::send_followup_question(&service, &mut history, "why?")
+        .await
+        .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|m| m.get("_dsh_responses").is_some())
+            .count(),
+        2
+    );
+}

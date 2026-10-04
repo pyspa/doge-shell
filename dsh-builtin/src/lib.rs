@@ -29,6 +29,7 @@ mod background;
 mod bg;
 mod blocks;
 pub mod cd;
+mod chat_auth;
 mod chatgpt;
 pub mod config_paths;
 pub mod cron;

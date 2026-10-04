@@ -29,12 +29,8 @@ pub fn execute_chat_message(
         ctx.write_stderr(&notice).ok();
     }
 
-    if config.api_key().is_none() {
-        ctx.write_stderr(&format!(
-            "chat: AI service is not configured. {}",
-            dsh_openai::API_KEY_SETUP_HINT
-        ))
-        .ok();
+    if let Err(error) = config.readiness() {
+        ctx.write_stderr(&format!("chat: {error}")).ok();
         return ExitStatus::ExitedWith(1);
     }
 
@@ -150,15 +146,26 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             // never ends up holding stray whitespace that every reader has
             // to trim around again.
             let new_model = argv[1].trim();
-            proxy.set_var(MODEL_KEY.to_string(), new_model.to_string());
+            let key = if load_openai_config(proxy).provider()
+                == dsh_openai::AiProvider::ChatGptSubscription
+            {
+                dsh_openai::SUBSCRIPTION_MODEL_ENV
+            } else {
+                MODEL_KEY
+            };
+            proxy.set_var(key.to_string(), new_model.to_string());
             let carried = carried_model_note(proxy);
             if new_model.is_empty() {
                 let config = load_openai_config(proxy);
-                ctx.write_stdout(&format!(
-                    "OpenAI model reset to default: {}{carried}",
-                    config.default_model()
-                ))
-                .ok();
+                if config.provider() == dsh_openai::AiProvider::ChatGptSubscription {
+                    ctx.write_stdout("ChatGPT subscription model cleared. Run chat_auth models and chat_model <slug>.").ok();
+                } else {
+                    ctx.write_stdout(&format!(
+                        "OpenAI model reset to default: {}{carried}",
+                        config.default_model()
+                    ))
+                    .ok();
+                }
             } else {
                 ctx.write_stdout(&format!("OpenAI model set to: {new_model}{carried}"))
                     .ok();

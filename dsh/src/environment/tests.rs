@@ -1451,7 +1451,10 @@ fn subscription_settings_update_the_common_ai_slots_without_api_fallback() {
     let env = Environment::new();
     env.write().set_shell_var(
         "XDG_CONFIG_HOME".into(),
-        temp.path().to_string_lossy().into(),
+        std::fs::canonicalize(temp.path())
+            .unwrap()
+            .to_string_lossy()
+            .into(),
     );
     env.write()
         .set_shell_var("AI_CHAT_API_KEY".into(), "mock-must-not-fallback".into());

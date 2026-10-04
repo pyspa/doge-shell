@@ -19,6 +19,11 @@ fn untrusted_diagnostic_fields_are_not_echoed() {
 }
 
 pub(crate) fn seeded_store(root: std::path::PathBuf) -> (AuthStore, Account) {
+    // macOS temporary paths can traverse the OS /var symlink. Fixtures use its
+    // canonical parent so the production symlink rejection stays meaningful.
+    let root = std::fs::canonicalize(root.parent().unwrap())
+        .unwrap()
+        .join(root.file_name().unwrap());
     let store = AuthStore::new(root);
     store.init().unwrap();
     let account = Account {

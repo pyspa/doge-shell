@@ -86,3 +86,13 @@ API キー名の優先順と未設定時の案内は `dsh-openai/src/config.rs` 
 | `DOGESH_HERDR_AGENT_HANDOFF` | 同上 | `0`/`false`/`off`/`no` で前景エージェントへの pane 明け渡し機能自体を無効化。既定 on |
 
 `DOGESH_HERDR_ENABLED`/`DOGESH_HERDR_AGENT_COMMANDS`/`DOGESH_HERDR_AGENT_HANDOFF` は他の AI 機能の変数と同じく shell 変数として解決する（`Environment::get_var`。起動時 process environment は `Environment::new()` で import 済み）。`HERDR_*`/`DOGESH_HERDR_OWNER_PID` は `DOGESH_HOOK_DEPTH` と同じ理由でプロセス環境のみを見る。
+
+## ChatGPT subscription
+
+`AI_CHAT_PROVIDER=chatgpt_subscription` は公式SIWC OAuthと公開Responses APIを選択する。
+`AI_CHAT_SUBSCRIPTION_MODEL` は `chat_auth models` の `slug` を明示指定する（既定なし）。
+API-key用の `AI_CHAT_MODEL` / `OPENAI_MODEL` はこのproviderの既定モデルに流用しない。
+`chat_model <slug>` は選択中providerの変数を設定する。未設定へ戻すとsubscriptionはモデル未選択となる。
+`AI_CHAT_PROVIDER` をunsetすると既定 `api_key` に戻る。runtimeの明示unsetをprocess environmentで補わない。
+認証記録はshellの `XDG_CONFIG_HOME` または `HOME/.config` 下の `dogesh/subscription-auth/`。
+このディレクトリはmodel-visible read/list/searchから除外する。

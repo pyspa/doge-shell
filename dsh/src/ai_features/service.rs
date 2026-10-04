@@ -102,6 +102,9 @@ pub struct AiCommandResponse {
 /// Core AI service trait for sending requests to AI backends.
 #[async_trait]
 pub trait AiService: Send + Sync {
+    fn cache_scope(&self) -> String {
+        String::new()
+    }
     /// Cancel requests already in flight; future requests use a new generation.
     fn cancel_requests(&self) {}
     /// Send a request to the AI service with the given messages and temperature.
@@ -117,6 +120,17 @@ pub trait AiService: Send + Sync {
         options: AiRequestOptions,
     ) -> Result<String> {
         self.send_request(messages, options.temperature).await
+    }
+
+    /// Return complete provider messages when a caller will continue the conversation.
+    async fn send_request_with_history(
+        &self,
+        mut messages: Vec<Value>,
+        options: AiRequestOptions,
+    ) -> Result<(String, Vec<Value>)> {
+        let answer = self.send_request_with(messages.clone(), options).await?;
+        messages.push(json!({"role":"assistant", "content":answer}));
+        Ok((answer, messages))
     }
 
     /// Get the safety guard if available.
@@ -202,6 +216,11 @@ impl SharedChatClient {
 }
 
 impl ChatClient for SharedChatClient {
+    fn cache_scope(&self) -> String {
+        self.current()
+            .map(|c| c.cache_scope())
+            .unwrap_or_else(|_| "unavailable".into())
+    }
     fn send_chat_request(&self, messages: &[Value], options: &ChatRequestOptions) -> Result<Value> {
         let client = self.current()?;
         client.send_chat(messages, options, None)
@@ -356,6 +375,9 @@ impl LiveAiService {
 
 #[async_trait]
 impl AiService for LiveAiService {
+    fn cache_scope(&self) -> String {
+        self.client.cache_scope()
+    }
     fn cancel_requests(&self) {
         self.cancellation_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -379,8 +401,10 @@ impl AiService for LiveAiService {
         messages_in: Vec<Value>,
         temperature: Option<f64>,
     ) -> Result<String> {
-        self.run_tool_loop(messages_in, AiRequestOptions::new(temperature))
-            .await
+        Ok(self
+            .run_tool_loop(messages_in, AiRequestOptions::new(temperature))
+            .await?
+            .0)
     }
 
     async fn send_request_with(
@@ -388,7 +412,14 @@ impl AiService for LiveAiService {
         messages_in: Vec<Value>,
         options: AiRequestOptions,
     ) -> Result<String> {
-        self.run_tool_loop(messages_in, options).await
+        Ok(self.run_tool_loop(messages_in, options).await?.0)
+    }
+    async fn send_request_with_history(
+        &self,
+        messages: Vec<Value>,
+        options: AiRequestOptions,
+    ) -> Result<(String, Vec<Value>)> {
+        self.run_tool_loop(messages, options).await
     }
 }
 
@@ -423,7 +454,7 @@ impl LiveAiService {
         &self,
         messages_in: Vec<Value>,
         options: AiRequestOptions,
-    ) -> Result<String> {
+    ) -> Result<(String, Vec<Value>)> {
         let generation = self
             .cancellation_generation
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -496,7 +527,12 @@ impl LiveAiService {
                         "AI response attempted a tool call for a request that does not allow tools"
                     )
                 }
-                TurnOutcome::Answer(content) => return Ok(content.trim().to_string()),
+                TurnOutcome::Answer(content) => {
+                    if let Some(assistant) = interpreted.assistant_message {
+                        messages.push(assistant);
+                    }
+                    return Ok((content.trim().to_string(), messages));
+                }
                 TurnOutcome::Cut {
                     finish_reason,
                     partial,

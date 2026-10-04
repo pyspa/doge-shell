@@ -398,3 +398,35 @@ async fn await_with_progress_works_without_a_terminal() {
 
     assert_eq!(value, Some("done"));
 }
+
+struct SwitchingScopeService {
+    scope: std::sync::atomic::AtomicUsize,
+}
+#[async_trait]
+impl AiService for SwitchingScopeService {
+    fn cache_scope(&self) -> String {
+        format!(
+            "scope-{}",
+            self.scope.load(std::sync::atomic::Ordering::SeqCst)
+        )
+    }
+    async fn send_request(&self, _: Vec<Value>, _: Option<f64>) -> Result<String> {
+        self.scope.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok("answer-from-new-account".into())
+    }
+}
+#[tokio::test]
+async fn changing_account_during_analysis_never_populates_old_cache() {
+    let _guard = super::cache::TEST_LOCK.lock().await;
+    super::cache::clear();
+    let service = SwitchingScopeService {
+        scope: std::sync::atomic::AtomicUsize::new(0),
+    };
+    explain_command(&service, "echo scoped").await.unwrap();
+    assert!(super::cache::lookup_scoped("scope-0", "explain", &["echo scoped"]).is_none());
+    describe_directory(&service, "Cargo.toml", "/mock")
+        .await
+        .unwrap();
+    let query = "Current directory: /mock\n\nFiles:\n```\nCargo.toml\n```";
+    assert!(super::cache::lookup_scoped("scope-1", "describe_dir", &[query]).is_none());
+}

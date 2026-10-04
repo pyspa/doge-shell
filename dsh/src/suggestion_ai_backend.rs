@@ -59,6 +59,7 @@ struct AiCachedContextSuggestion {
     /// Model that produced these suggestions. A `chat_model` switch must not
     /// keep serving the previous model's answers for up to the TTL.
     model: Option<String>,
+    scope: String,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +68,7 @@ struct AiCachedSuggestion {
     received_at: Instant,
     /// Model that produced this completion (same reason as above).
     model: Option<String>,
+    scope: String,
 }
 
 #[derive(Debug, Clone)]
@@ -140,8 +142,10 @@ impl AiSuggestionBackend {
     async fn worker_loop(self) {
         loop {
             let request = self.next_request().await;
+            let scope = self.cache_scope();
+            let model = self.inner.chat_model.read().clone();
             let completion = self.fetch_completion_async(&request).await;
-            self.handle_completion(request, completion);
+            self.handle_completion(request, completion, scope, model);
         }
     }
 
@@ -173,7 +177,17 @@ impl AiSuggestionBackend {
             .flatten()
     }
 
+    fn cache_scope(&self) -> String {
+        self.inner
+            .client_slot
+            .read()
+            .as_ref()
+            .map(|c| c.cache_scope())
+            .unwrap_or_else(|| "unavailable".into())
+    }
+
     fn try_cached(&self, request: &SuggestionRequest) -> Option<String> {
+        let scope = self.cache_scope();
         let state = self.inner.state.lock();
         let model = self.inner.chat_model.read().clone();
 
@@ -181,6 +195,7 @@ impl AiSuggestionBackend {
         if let Some(cached) = &state.cached
             && cached.received_at.elapsed() <= self.inner.settings.cache_ttl
             && cached.model == model
+            && cached.scope == scope
             && cached.completion.starts_with(&request.input)
             && cached.completion.len() > request.input.len()
         {
@@ -193,6 +208,7 @@ impl AiSuggestionBackend {
             && &ctx_cached.cwd == req_cwd
             && ctx_cached.received_at.elapsed() <= self.inner.settings.cache_ttl
             && ctx_cached.model == model
+            && ctx_cached.scope == scope
         {
             // Find a suggestion that matches the current input
             for suggestion in &ctx_cached.suggestions {
@@ -219,11 +235,20 @@ impl AiSuggestionBackend {
         self.inner.notify.notify_one();
     }
 
-    fn handle_completion(&self, request: SuggestionRequest, completion: Option<String>) {
+    fn handle_completion(
+        &self,
+        request: SuggestionRequest,
+        completion: Option<String>,
+        scope: String,
+        model: Option<String>,
+    ) {
         debug!(input = %request.input, "ai suggestion backend completed request");
         let mut state = self.inner.state.lock();
 
-        if let Some(content) = completion {
+        if let Some(content) = completion
+            && scope == self.cache_scope()
+            && model == *self.inner.chat_model.read()
+        {
             let model = self.inner.chat_model.read().clone();
             if request.input.is_empty() {
                 // Determine CWD from request or default
@@ -236,6 +261,7 @@ impl AiSuggestionBackend {
                         cwd,
                         received_at: Instant::now(),
                         model: model.clone(),
+                        scope: scope.clone(),
                     });
                     debug!("ai suggestion backend stored new context completion");
                 }
@@ -244,6 +270,7 @@ impl AiSuggestionBackend {
                     completion: content,
                     received_at: Instant::now(),
                     model,
+                    scope,
                 });
                 debug!("ai suggestion backend stored new completion");
             }
@@ -459,6 +486,7 @@ mod tests {
                 completion: "git status".to_string(),
                 received_at: Instant::now(),
                 model: Some("model-a".to_string()),
+                scope: backend.cache_scope(),
             });
         }
         let request = || {

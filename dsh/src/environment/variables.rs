@@ -247,7 +247,13 @@ impl Environment {
             }
             "Z_EXCLUDE" => self.reload_z_exclude(),
             "AI_MESSAGE_LANG" => self.reload_response_language(),
-            "AI_CHAT_MODEL" | "OPENAI_MODEL" => self.reload_chat_model(),
+            "AI_CHAT_MODEL"
+            | "OPENAI_MODEL"
+            | "AI_CHAT_SUBSCRIPTION_MODEL"
+            | "AI_CHAT_PROVIDER" => {
+                self.reload_chat_model();
+                self.reload_ai_client();
+            }
             // The API client snapshots these at construction, so a change
             // has to rebuild it - otherwise a rotated key or a switched
             // endpoint only reaches `!` chat (which resolves its config per
@@ -259,7 +265,9 @@ impl Environment {
             | "OPENAI_BASE_URL"
             | "AI_CHAT_TIMEOUT_SECS"
             | "AI_CHAT_REASONING_EFFORT"
-            | "AI_CHAT_ALLOW_INSECURE_HTTP" => self.reload_ai_client(),
+            | "AI_CHAT_ALLOW_INSECURE_HTTP"
+            | "HOME"
+            | "XDG_CONFIG_HOME" => self.reload_ai_client(),
             _ => {}
         }
     }
@@ -294,11 +302,15 @@ impl Environment {
     /// (`dsh_openai::DEFAULT_MODEL`), the same meaning `OpenAiConfig` gives an
     /// absent/blank value.
     pub fn reload_chat_model(&mut self) {
-        let value = self
-            .lookup_variable("AI_CHAT_MODEL")
-            .or_else(|| self.lookup_variable("OPENAI_MODEL"))
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
+        let config = dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key));
+        let value = if config.provider() == dsh_openai::AiProvider::ChatGptSubscription {
+            (!config.default_model().is_empty()).then(|| config.default_model().to_string())
+        } else {
+            self.lookup_variable("AI_CHAT_MODEL")
+                .or_else(|| self.lookup_variable("OPENAI_MODEL"))
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
         let changed = self.integration_state.chat_model.read().as_ref() != value.as_ref();
         *self.integration_state.chat_model.write() = value;
         if changed && !self.isolated_projection {
@@ -324,17 +336,22 @@ impl Environment {
     /// fallback here would resurrect a key the shell explicitly unset.
     pub fn reload_ai_client(&mut self) {
         let config = dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key));
-        let client = match config.api_key() {
-            None => None,
-            Some(_) => match dsh_openai::ChatGptClient::try_from_config(&config) {
-                Ok(client) => Some(Arc::new(client)),
-                Err(e) => {
-                    tracing::debug!("ai client reload failed, treating as not configured: {e}");
-                    None
+        let client =
+            if config.provider() == dsh_openai::AiProvider::ApiKey && config.api_key().is_none() {
+                None
+            } else {
+                match dsh_openai::ChatGptClient::try_from_config(&config) {
+                    Ok(client) => Some(Arc::new(client)),
+                    Err(e) => {
+                        tracing::debug!("ai client reload failed: {e}");
+                        None
+                    }
                 }
-            },
-        };
+            };
         *self.integration_state.ai_client.write() = client;
+        if !self.isolated_projection {
+            crate::ai_features::invalidate_read_only_cache();
+        }
     }
 
     /// Rebuild every variable-derived projection at once.
@@ -355,8 +372,19 @@ impl Environment {
     /// configured). Shell-side holders (`LiveAiService`, the ghost-text
     /// backend) are now always constructed and follow the slot, so callers
     /// must ask this instead of checking `ai_service.is_some()`.
+    pub fn ai_readiness_hint(&self) -> String {
+        dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key))
+            .readiness()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "AI client is unavailable.".into())
+    }
+
     pub fn ai_configured(&self) -> bool {
         self.integration_state.ai_client.read().is_some()
+            && dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key))
+                .readiness()
+                .is_ok()
     }
 
     /// The shell-side AI service when one can currently be used.

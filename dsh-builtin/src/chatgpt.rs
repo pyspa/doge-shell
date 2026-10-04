@@ -247,6 +247,7 @@ fn chat_with_tools(
                 set_system_prompt(&mut manager, &setup.prompt.text);
             }
         }
+        manager.bind_provider(client.cache_scope())?;
         // The interactive registry belongs to `!` alone. A task polls
         // `runtime.jobs`, so naming its session here - or telling it about jobs
         // whose ids resolve to nothing in its own runtime - would only send it
@@ -355,6 +356,9 @@ fn chat_with_tools(
                 setup.turn_token_budget,
             ));
 
+            if let Err(error) = manager.check_provider(&client.cache_scope()) {
+                break Err(error);
+            }
             // Compact by rule before paying a model to summarize. Superseded and
             // stale tool output is most of what makes a long run large, and
             // dropping it costs nothing; on the runs where this is enough, the
@@ -442,7 +446,7 @@ fn chat_with_tools(
                 let result = client.send_chat_streaming(
                     &current_messages,
                     &options,
-                    &|| task_cancelled(proxy),
+                    &|| manager.request_cancelled(client, proxy),
                     &mut |text| sink.on_delta(&spinner, text),
                 );
                 match result {
@@ -465,9 +469,9 @@ fn chat_with_tools(
                 }
             } else {
                 let _spinner = SpinnerGuard::start("");
-                match client
-                    .send_chat_cancellable(&current_messages, &options, &|| task_cancelled(proxy))
-                {
+                match client.send_chat_cancellable(&current_messages, &options, &|| {
+                    manager.request_cancelled(client, proxy)
+                }) {
                     Ok(response) => response,
                     Err(err) => {
                         break Err(if is_ctrl_c_cancelled(&err) {

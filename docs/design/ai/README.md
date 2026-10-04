@@ -18,12 +18,15 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
 | 未解決の設計判断 | [open-questions.md](open-questions.md) |
 | Herdr 連携 | [herdr.md](herdr.md) |
 
-## 1. プロバイダは OpenAI 互換 chat/completions のみ
+## 1. Provider別のtransport契約
 
-- エンドポイントは `{base_url}/chat/completions` 固定（`dsh-openai/src/config.rs`）。
+- 既定 `AI_CHAT_PROVIDER=api_key` は `{base_url}/chat/completions`（`dsh-openai/src/config.rs`）。
 - 認証は `Authorization: Bearer` 固定。
 - したがって **Anthropic Messages API（`x-api-key` + `anthropic-version`）はそのままでは使えない**。
-  OpenAI 互換ゲートウェイ経由で使う。Responses API も対象外。
+  API-key経路ではOpenAI互換ゲートウェイ経由で使う。
+- 明示 `chatgpt_subscription` は公式SIWC OAuthと固定公開 `/v1/responses` を使う。
+  APIキー・custom base URL・API課金へのfallbackは使わない。詳細は [subscription.md](subscription.md)。
+  以下のreasoning判定・400フィールドdropはAPI-key経路のみの契約で、Responsesに適用しない。
 - **`is_openai_reasoning_model`（`OPENAI_REASONING_MODEL_PREFIXES` = `gpt-5` / `o1` / `o3` / `o4`、
   大文字小文字を無視、`client.rs`。`pub` で `dsh-openai` から公開）に該当するモデルへの `tools` 付き
   リクエストは、`AI_CHAT_REASONING_EFFORT` 未設定でも `reasoning_effort: "none"` を最初から送る**
@@ -108,7 +111,7 @@ AI chat hooks（`dsh-builtin/src/chatgpt/hooks/`）は経路 A だけに掛か�
 
 | やりたいこと | 正の置き場所 |
 |---|---|
-| API 設定の解決（キー / モデル / base URL / timeout） | `OpenAiConfig::from_getter`（builtin からは `chatgpt::load_openai_config`） |
+| AI 設定の解決（provider / キー / モデル / base URL / timeout） | `OpenAiConfig::from_getter`（builtin からは `chatgpt::load_openai_config`） |
 | 応答の解釈（tool_calls / answer / `finish_reason` / stall） | `dsh_openai::turn::{interpret_response, answer_text}` |
 | 長い出力の切り詰め | `dsh_openai::turn::truncate_middle` |
 | 応答言語の指示 | `dsh_openai::apply_language` |

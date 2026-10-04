@@ -43,17 +43,10 @@ pub async fn handle_completion_command(
         guard.get_var(key)
     });
 
-    let _api_key = match config.api_key() {
-        Some(key) => key,
-        None => {
-            error!("OpenAI-compatible API key is not configured");
-            eprintln!(
-                "Error: OpenAI-compatible API key is not configured. {}",
-                dsh_openai::API_KEY_SETUP_HINT
-            );
-            return ExitCode::FAILURE;
-        }
-    };
+    if let Err(error) = config.readiness() {
+        eprintln!("Error: {error}");
+        return ExitCode::FAILURE;
+    }
 
     let client = match ChatGptClient::try_from_config(&config) {
         Ok(c) => c,

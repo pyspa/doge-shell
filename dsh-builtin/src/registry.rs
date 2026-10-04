@@ -222,6 +222,14 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
         ),
         // AI integration commands
         (
+            "chat_auth",
+            new(
+                crate::chat_auth::command,
+                "Manage Sign in with ChatGPT (login/status/models/logout/account).",
+                ParentSessionRequired,
+            ),
+        ),
+        (
             "chat_prompt",
             new(
                 chatgpt::chat_prompt,

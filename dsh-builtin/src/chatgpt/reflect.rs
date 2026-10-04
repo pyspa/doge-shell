@@ -85,6 +85,7 @@ struct OpenedSkill {
 
 /// Everything about this turn a reflection call might need.
 struct Snapshot {
+    provider_scope: Option<String>,
     transcript: String,
     index: Vec<(String, String)>,
     opened: Vec<OpenedSkill>,
@@ -237,6 +238,7 @@ fn snapshot(proxy: &mut dyn ChatToolHost, manager: &ConversationManager) -> Snap
     let transcript = truncate_middle(&raw_transcript, REFLECT_TRANSCRIPT_CHARS);
 
     Snapshot {
+        provider_scope: manager.provider_scope.clone(),
         transcript,
         index,
         opened,
@@ -297,7 +299,13 @@ fn propose(
         .with_response_format(Some(json_object_format()));
 
     let response = client
-        .send_chat_cancellable(&messages, &options, &|| super::task_cancelled(proxy))
+        .send_chat_cancellable(&messages, &options, &|| {
+            super::task_cancelled(proxy)
+                || snap
+                    .provider_scope
+                    .as_ref()
+                    .is_some_and(|scope| scope != &client.cache_scope())
+        })
         .map_err(|err| format!("request failed: {err}"))?;
     // Counted against this turn's budget like everything else it spent -
     // this is not a request the user gets for free just because it is
@@ -467,6 +475,7 @@ mod tests {
     #[test]
     fn a_replace_naming_a_skill_the_turn_never_read_is_refused() {
         let snap = Snapshot {
+            provider_scope: None,
             transcript: String::new(),
             index: Vec::new(),
             opened: vec![OpenedSkill {
@@ -495,6 +504,7 @@ mod tests {
     #[test]
     fn a_missing_name_on_create_is_refused() {
         let snap = Snapshot {
+            provider_scope: None,
             transcript: String::new(),
             index: Vec::new(),
             opened: Vec::new(),
@@ -540,6 +550,7 @@ mod tests {
 
         with_state_home(state.path(), || {
             let snap = Snapshot {
+                provider_scope: None,
                 transcript: String::new(),
                 index: Vec::new(),
                 opened: vec![OpenedSkill {

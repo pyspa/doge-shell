@@ -9,6 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct ConversationManager {
+    /// Persistent provider/model/account binding, including after summarization removes old output.
+    #[serde(default)]
+    pub(super) provider_scope: Option<String>,
     pub(super) summary: Option<String>,
     pub(super) buffer: Vec<Value>,
     pub(super) buffer_chars: usize,
@@ -68,6 +71,7 @@ pub(super) struct TurnStart {
 impl ConversationManager {
     pub(super) fn new(system_prompt: Value, first_user_message: Value) -> Self {
         Self {
+            provider_scope: None,
             summary: None,
             buffer: Vec::new(),
             buffer_chars: 0,
@@ -80,6 +84,34 @@ impl ConversationManager {
             unseen_tool_results: BTreeSet::new(),
             tool_names: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn request_cancelled(
+        &self,
+        client: &dyn ChatClient,
+        proxy: &dyn ChatToolHost,
+    ) -> bool {
+        task_cancelled(proxy) || self.check_provider(&client.cache_scope()).is_err()
+    }
+    pub(super) fn check_provider(&self, scope: &str) -> Result<(), String> {
+        if self.provider_scope.as_ref().is_some_and(|old| old != scope) {
+            return Err("Provider, model, or account changed. Run chat_reset before continuing this history.".into());
+        }
+        Ok(())
+    }
+    pub(super) fn bind_provider(&mut self, scope: String) -> Result<(), String> {
+        if scope.is_empty() {
+            return Ok(());
+        }
+        self.check_provider(&scope)?;
+        if self.provider_scope.is_none() && (self.summary.is_some() || !self.buffer.is_empty()) {
+            return Err(
+                "This older history has no provider identity. Run chat_reset to migrate safely."
+                    .into(),
+            );
+        }
+        self.provider_scope = Some(scope);
+        Ok(())
     }
 
     pub(super) fn add_message(&mut self, message: Value) {
@@ -268,7 +300,9 @@ impl ConversationManager {
             .with_temperature(Some(0.3)) // Lower temperature for consistent summarization
             .with_model(summary_model);
         let response = client
-            .send_chat_cancellable(&summary_messages, &options, &|| task_cancelled(proxy))
+            .send_chat_cancellable(&summary_messages, &options, &|| {
+                self.request_cancelled(client, proxy)
+            })
             .map_err(|e| format!("Summarization failed: {e}"))?;
         self.turn_usage.add_response(&response);
         if let Some(runtime) = proxy.agent_runtime() {

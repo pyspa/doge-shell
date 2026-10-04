@@ -604,3 +604,51 @@ fn reset_clears_the_session_file() {
     assert!(!crate::config_paths::chat_session_file().is_file());
     assert!(matches!(take(ttl(), "sys", None), Claim::Fresh(None)));
 }
+
+#[test]
+fn responses_native_continuation_survives_restart_compaction_and_clone() {
+    let _lock = TEST_LOCK.lock().unwrap();
+    let _state = isolated_state_home();
+    session_reset();
+    let native = json!({"identity":{"provider":"chatgpt_subscription","account":"mock-account","model":"mock-model"},"output":[{"type":"reasoning","encrypted_content":"mock-opaque"},{"type":"function_call","namespace":"doge_shell","name":"search","call_id":"mock-call","arguments":"{\"query\":\"x\"}"}]});
+    let mut conversation = manager();
+    conversation.provider_scope = Some("mock-provider-scope".into());
+    conversation.add_message(json!({"role":"assistant","content":"interim","tool_calls":[{"id":"mock-call","type":"function","function":{"name":"search","arguments":"{\"query\":\"x\"}"}}],"_dsh_responses":native}));
+    conversation.add_message(
+        json!({"role":"tool","tool_call_id":"mock-call","content":"result".repeat(2000)}),
+    );
+    for n in 0..20 {
+        conversation.add_message(json!({"role":"user","content":format!("next {n}")}));
+        conversation.add_message(json!({"role":"assistant","content":"answer"}));
+    }
+    assert!(conversation.compact_buffer() > 0);
+    assert_eq!(conversation.buffer[0]["_dsh_responses"], native);
+    let serialized = serde_json::to_string(&conversation).unwrap();
+    let copied: ConversationManager = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(copied.buffer[0]["_dsh_responses"], native);
+    store(ttl(), conversation, "mock-session", "identity", None, None);
+    *slot() = None;
+    let restored = read_persisted().expect("persisted Responses history");
+    assert_eq!(restored.manager.buffer[0]["_dsh_responses"], native);
+    assert_eq!(
+        restored.manager.provider_scope.as_deref(),
+        Some("mock-provider-scope")
+    );
+    session_reset();
+}
+
+#[test]
+fn summary_keeps_account_binding_after_all_original_output_is_removed() {
+    let mut conversation = manager();
+    conversation
+        .bind_provider("account-A-model".into())
+        .unwrap();
+    conversation.add_message(json!({"role":"assistant","content":"old"}));
+    conversation.summary = Some("summary of account A".into());
+    conversation.drop_buffer_prefix(1);
+    assert!(conversation.buffer.is_empty());
+    let restored: ConversationManager =
+        serde_json::from_str(&serde_json::to_string(&conversation).unwrap()).unwrap();
+    assert!(restored.check_provider("account-B-model").is_err());
+    assert!(restored.check_provider("account-A-model").is_ok());
+}

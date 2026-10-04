@@ -47,6 +47,10 @@ pub fn is_sensitive_key(key: &str) -> bool {
     .any(|needle| key.contains(needle))
 }
 
+pub fn is_subscription_auth_path(path: &Path) -> bool {
+    has_path_component(path, "subscription-auth")
+}
+
 pub fn is_sensitive_path(path: &Path) -> bool {
     let file_name = path
         .file_name()
@@ -65,6 +69,7 @@ pub fn is_sensitive_path(path: &Path) -> bool {
         || has_path_component_sequence(path, &[".aws", "credentials"])
         || has_path_component_sequence(path, &[".config", "gcloud"])
         || has_path_component(path, ".azure")
+        || is_subscription_auth_path(path)
         || has_path_component(path, "credentials")
         || has_path_component(path, "secrets")
 }
@@ -187,5 +192,22 @@ pub fn mask_env_value(key: &str, value: &str) -> String {
         "***".to_string()
     } else {
         value.to_string()
+    }
+}
+
+#[cfg(test)]
+mod subscription_tests {
+    #[test]
+    fn subscription_auth_records_are_excluded_from_model_file_tools() {
+        for file in [
+            "registration.json",
+            "credentials-account.json",
+            "session.lock",
+            ".credentials-temp.tmp",
+        ] {
+            assert!(super::is_sensitive_path(
+                &std::path::Path::new("/xdg/dogesh/subscription-auth").join(file)
+            ));
+        }
     }
 }

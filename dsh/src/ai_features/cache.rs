@@ -77,6 +77,24 @@ pub fn store(kind: &str, inputs: &[&str], answer: &str) {
     );
 }
 
+pub fn lookup_scoped(scope: &str, kind: &str, inputs: &[&str]) -> Option<String> {
+    if scope.is_empty() {
+        return lookup(kind, inputs);
+    }
+    let mut scoped = vec![scope];
+    scoped.extend_from_slice(inputs);
+    lookup(kind, &scoped)
+}
+pub fn store_scoped(scope: &str, kind: &str, inputs: &[&str], answer: &str) {
+    if scope.is_empty() {
+        store(kind, inputs, answer);
+        return;
+    }
+    let mut scoped = vec![scope];
+    scoped.extend_from_slice(inputs);
+    store(kind, &scoped, answer);
+}
+
 fn evict_oldest(cache: &mut HashMap<u64, Entry>) {
     let oldest = cache
         .iter()

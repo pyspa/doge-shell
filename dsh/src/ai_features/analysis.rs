@@ -60,7 +60,8 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
     Respond in the same language as the user's request (e.g., if they ask in Japanese, explain in Japanese).";
 
     // Explaining the same command twice is the same answer.
-    if let Some(cached) = cache::lookup("explain", &[&sanitized_command]) {
+    let cache_scope = service.cache_scope();
+    if let Some(cached) = cache::lookup_scoped(&cache_scope, "explain", &[&sanitized_command]) {
         return Ok(cached);
     }
 
@@ -72,7 +73,9 @@ pub async fn explain_command<S: AiService + ?Sized>(service: &S, command: &str) 
     let answer = service
         .send_request_with(messages, read_only_options(0.2, "explain", None))
         .await?;
-    cache::store("explain", &[&sanitized_command], &answer);
+    if service.cache_scope() == cache_scope {
+        cache::store_scoped(&cache_scope, "explain", &[&sanitized_command], &answer);
+    }
     Ok(answer)
 }
 
@@ -101,7 +104,10 @@ pub async fn explain_command_inline<S: AiService + ?Sized>(
     ];
 
     // The prompt asks for a single short line; cap the generation to match.
-    if let Some(cached) = cache::lookup("explain_inline", &[&sanitized_command]) {
+    let cache_scope = service.cache_scope();
+    if let Some(cached) =
+        cache::lookup_scoped(&cache_scope, "explain_inline", &[&sanitized_command])
+    {
         return Ok(cached);
     }
 
@@ -112,7 +118,14 @@ pub async fn explain_command_inline<S: AiService + ?Sized>(
             read_only_options(0.1, "explain-inline", Some(INLINE_ANSWER_TOKENS)),
         )
         .await?;
-    cache::store("explain_inline", &[&sanitized_command], &answer);
+    if service.cache_scope() == cache_scope {
+        cache::store_scoped(
+            &cache_scope,
+            "explain_inline",
+            &[&sanitized_command],
+            &answer,
+        );
+    }
     Ok(answer)
 }
 
@@ -159,7 +172,9 @@ pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> 
     Output 'SAFE' if the command appears safe. \
     Output 'WARNING: <reason>' if there are risks.";
 
-    if let Some(cached) = cache::lookup("check_safety", &[&sanitized_command]) {
+    let cache_scope = service.cache_scope();
+    if let Some(cached) = cache::lookup_scoped(&cache_scope, "check_safety", &[&sanitized_command])
+    {
         return Ok(cached);
     }
 
@@ -171,7 +186,9 @@ pub async fn check_safety<S: AiService + ?Sized>(service: &S, command: &str) -> 
     let answer = service
         .send_request_with(messages, read_only_options(0.1, "check-safety", None))
         .await?;
-    cache::store("check_safety", &[&sanitized_command], &answer);
+    if service.cache_scope() == cache_scope {
+        cache::store_scoped(&cache_scope, "check_safety", &[&sanitized_command], &answer);
+    }
     Ok(answer)
 }
 
@@ -199,7 +216,8 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
         sanitized_command, exit_code, truncated_output
     );
 
-    if let Some(cached) = cache::lookup("diagnose", &[&query]) {
+    let cache_scope = service.cache_scope();
+    if let Some(cached) = cache::lookup_scoped(&cache_scope, "diagnose", &[&query]) {
         return Ok(cached);
     }
 
@@ -211,7 +229,9 @@ pub async fn diagnose_output<S: AiService + ?Sized>(
     let answer = service
         .send_request_with(messages, read_only_options(0.2, "diagnose", None))
         .await?;
-    cache::store("diagnose", &[&query], &answer);
+    if service.cache_scope() == cache_scope {
+        cache::store_scoped(&cache_scope, "diagnose", &[&query], &answer);
+    }
     Ok(answer)
 }
 
@@ -241,20 +261,17 @@ pub async fn diagnose_output_with_history<S: AiService + ?Sized>(
         sanitized_command, exit_code, truncated_output
     );
 
-    let mut messages = vec![
+    let messages = vec![
         json!({"role": "system", "content": system_prompt}),
         json!({"role": "user", "content": query}),
     ];
 
-    let response = service
-        .send_request_with(
-            messages.clone(),
+    service
+        .send_request_with_history(
+            messages,
             read_only_options(0.2, "diagnose-conversation", None),
         )
-        .await?;
-    messages.push(json!({"role": "assistant", "content": response}));
-
-    Ok((response, messages))
+        .await
 }
 
 /// Send a followup question leveraging existing conversation history.
@@ -274,13 +291,13 @@ pub async fn send_followup_question<S: AiService + ?Sized>(
 
     history.push(json!({"role": "user", "content": sanitized_query}));
 
-    let response = service
-        .send_request_with(
+    let (response, continuation) = service
+        .send_request_with_history(
             history.clone(),
             read_only_options(0.2, "diagnose-conversation", None),
         )
         .await?;
-    history.push(json!({"role": "assistant", "content": response.clone()}));
+    *history = continuation;
 
     Ok(response)
 }

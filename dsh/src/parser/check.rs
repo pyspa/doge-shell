@@ -1,3 +1,20 @@
+use super::{Rule, ShellParser};
+use pest::Parser as _;
+use std::borrow::Cow;
+
+/// Mask only grammar-recognized comments, retaining byte offsets and newlines.
+/// The lexical scan also handles unfinished editor input and nested shell bodies.
+fn without_comments(input: &str) -> Cow<'_, str> {
+    let Ok(pairs) = ShellParser::parse(Rule::comment_scan, input) else {
+        return Cow::Borrowed(input);
+    };
+    pairs
+        .into_iter()
+        .next()
+        .map(super::source_without_comments)
+        .unwrap_or(Cow::Borrowed(input))
+}
+
 /// Checks if the input string is incomplete and more input is expected.
 /// This happens if:
 /// 1. There are unclosed quotes (' or ").
@@ -5,6 +22,8 @@
 /// 3. The line ends with a backslash (\).
 /// 4. The line ends with an operator that expects more input (|, &&, ||).
 pub fn is_incomplete_input(input: &str) -> bool {
+    let uncommented = without_comments(input);
+    let input = uncommented.as_ref();
     let chars = input.chars().peekable();
     let mut quote_char = None;
     let mut in_backslash = false;
@@ -69,33 +88,12 @@ pub fn is_incomplete_input(input: &str) -> bool {
     }
 
     // 4. Trailing operators
-    // Remove comments first? (simplification: assume incomplete logic doesn't strictly parse comments yet,
-    // but typical shell behavior treats # as comment start.
-    // However, if we are inside a string, we handled it. Outside string, # starts comment.)
-    // We should probably strip comments from the end before checking trailing operators.
-
-    // A simplified check for trailing operators on the *original* input might be risky if they are in comments.
-    // Let's rely on the tokenizer state we just ran?
-    // Actually, let's just do a quick backward scan ignoring whitespace and comments.
-
-    // Complex implementation for operators might need a more robust tokenizer or reuse the logic above.
-    // For now, let's stick to the quote/brace/backslash check as primary drivers for multiline.
-    // Operators | && || usually just fail in strict parse, checking them for "continuation" is a nice to have.
-    // Let's implement trailing operator check carefully.
-
     let trimmed = input.trim_end();
     if trimmed.ends_with('|')
         || trimmed.ends_with("|:")
         || trimmed.ends_with("&&")
         || trimmed.ends_with("||")
     {
-        // Need to verify these are not inside comments or strings.
-        // Since we already walked the string, we know if we ended in a quote.
-        // But we didn't track "valid code" vs "comment".
-        // Let's just return false for now for operators to avoid complexity,
-        // OR we can rely on pest failure? No, pest failure doesn't verify "incomplete" vs "error".
-
-        // Let's refine the loop to track "last significant token".
         return true;
     }
 
@@ -105,6 +103,73 @@ pub fn is_incomplete_input(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comments_do_not_request_continuation_or_hide_real_incompleteness() {
+        for input in [
+            "# \" ( { [ \\",
+            "echo OK # | && || |:",
+            "echo OK # )\necho NEXT",
+            "echo \"$(echo x # \" )\n)\"",
+            "echo ${X:-$(echo x # )\n)}",
+            "echo ${X:-(echo x # \" )\n)}",
+            "echo $((1 + $(echo 1 # )\n)))",
+        ] {
+            assert!(!is_incomplete_input(input), "{input}");
+        }
+        for input in [
+            "echo | # ignored",
+            "echo && # ignored",
+            "echo |: # ignored",
+            "echo $(echo x # )",
+            "echo <(echo x # )",
+            "echo 'unclosed # literal",
+            "echo \"unclosed # literal",
+            "echo a#b '\"",
+            "echo \\#escaped \"",
+        ] {
+            assert!(is_incomplete_input(input), "{input}");
+        }
+    }
+
+    #[test]
+    fn comment_scan_matches_execution_grammar_and_preserves_offsets() {
+        for input in [
+            "echo 日本語 # \" ( \\",
+            "echo a#b ''#c \"\"#d $X#e $(echo x)#f # tail",
+            "X=#value echo $# ${#} # tail\necho NEXT",
+            "echo \"$(echo x # \" )\n)\" # tail",
+            "echo ${X:-#literal $(echo x # )\n)} # tail",
+            "echo ${X:-(echo x # \" )\n)} # tail",
+            "echo $((1 + $(echo 1 # )\n))) # tail",
+            "echo <(echo x # )\n) >(echo y # )\n) # tail",
+            "echo x |: (list \"#t\" #t) # tail",
+            "echo x |: where name == \"#name\" # tail",
+        ] {
+            let spans = |rule| {
+                ShellParser::parse(rule, input)
+                    .unwrap()
+                    .flatten()
+                    .filter(|pair| pair.as_rule() == Rule::comment)
+                    .map(|pair| (pair.as_span().start(), pair.as_span().end()))
+                    .collect::<Vec<_>>()
+            };
+            let execution_spans = spans(Rule::commands);
+            assert_eq!(execution_spans, spans(Rule::comment_scan), "{input}");
+            let masked = without_comments(input);
+            assert_eq!(masked.len(), input.len());
+            for (index, byte) in input.bytes().enumerate() {
+                if execution_spans
+                    .iter()
+                    .any(|(start, end)| (*start..*end).contains(&index))
+                {
+                    assert_eq!(masked.as_bytes()[index], b' ');
+                } else {
+                    assert_eq!(masked.as_bytes()[index], byte);
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_quotes() {

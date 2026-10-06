@@ -17,6 +17,9 @@ mod tests;
 #[cfg(test)]
 mod tests_escape;
 
+#[cfg(test)]
+mod comment_tests;
+
 // Re-exports
 pub use ast::{get_pos_word, get_string, get_words, get_words_from_pairs};
 pub use expansion::rewrite_aliases;
@@ -26,6 +29,30 @@ pub use highlight::{
 };
 pub mod check;
 pub use check::is_incomplete_input;
+
+/// Mask comment spans from a parsed subtree without changing offsets/newlines.
+/// Word contents, quoted hashes and other embedded languages remain untouched.
+pub(crate) fn source_without_comments<'i>(
+    pair: pest::iterators::Pair<'i, Rule>,
+) -> std::borrow::Cow<'i, str> {
+    let input = pair.as_str();
+    let start = pair.as_span().start();
+    let mut bytes = None;
+    for inner in pair.into_inner().flatten() {
+        if inner.as_rule() == Rule::comment {
+            let span = inner.as_span();
+            bytes.get_or_insert_with(|| input.as_bytes().to_vec())
+                [span.start() - start..span.end() - start]
+                .fill(b' ');
+        }
+    }
+    match bytes {
+        Some(bytes) => {
+            std::borrow::Cow::Owned(String::from_utf8(bytes).expect("comment mask preserves UTF-8"))
+        }
+        None => std::borrow::Cow::Borrowed(input),
+    }
+}
 
 /// The portion of `input` the parser did not consume, or `None` when only
 /// whitespace is left.

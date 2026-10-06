@@ -1,0 +1,127 @@
+version = 1
+
+# Unsupported control syntax is rejected for the entire input, before any
+# selected job, word expansion, redirect, or helper can have side effects.
+# These are dogesh rejection contracts, not claims to implement POSIX control flow.
+
+[[case]]
+id = "unsupported-control.if-no-partial-execution"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; if false; then echo WRONG > inside; echo WRONG; fi; echo AFTER > after"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "if"]
+files = [{ path = "before", exists = false }, { path = "inside", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.for-no-prefix-redirection"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; > redirect X=value for x in a; do echo WRONG > inside; done"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "for"]
+files = [{ path = "before", exists = false }, { path = "redirect", exists = false }, { path = "inside", exists = false }]
+
+[[case]]
+id = "unsupported-control.while-no-expansion"
+class = "dogesh"
+mode = "command"
+script = "echo $(echo SUBST > substitution) > before; while false; do echo WRONG > inside; done; echo AFTER > after"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "while"]
+files = [{ path = "substitution", exists = false }, { path = "before", exists = false }, { path = "inside", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.nested-command-substitution"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; echo $(echo INNER > inner; if false; then echo WRONG; fi); echo AFTER > after"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "if"]
+files = [{ path = "before", exists = false }, { path = "inner", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.nested-process-substitution"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; cat <(echo INNER > inner; while false; do echo WRONG; done); echo AFTER > after"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "while"]
+files = [{ path = "before", exists = false }, { path = "inner", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.background-prefix-not-launched"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before & until true; do echo WRONG > inside; done; echo AFTER > after"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error", "unsupported control keyword", "until"]
+files = [{ path = "before", exists = false }, { path = "inside", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.alias-rejects-whole-line"
+class = "dogesh"
+mode = "interactive"
+script = """
+alias 'bad=if false; then echo WRONG; fi'
+echo BEFORE > before; bad; echo AFTER > after
+echo STATUS:$?
+echo SESSION_ALIVE
+"""
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1", "SESSION_ALIVE"]
+stdout_not_contains = ["WRONG"]
+stderr_contains = ["syntax error", "unsupported control keyword", "if"]
+files = [{ path = "before", exists = false }, { path = "after", exists = false }]
+
+[[case]]
+id = "unsupported-control.expansion-state-unchanged"
+class = "dogesh"
+mode = "interactive"
+script = """
+CONTROL_X=1
+echo $((CONTROL_X=9)) ${CONTROL_NEW:=changed}; if false; then echo WRONG; fi
+echo STATUS:$? X:$CONTROL_X NEW:${CONTROL_NEW-unset}
+"""
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1 X:1 NEW:unset"]
+stdout_not_contains = ["WRONG", "9 changed"]
+stderr_contains = ["syntax error", "unsupported control keyword", "if"]
+
+[[case]]
+id = "unsupported-control.words-remain-data"
+class = "dogesh"
+mode = "command"
+script = "echo if for while until case select function; echo 'if false; then echo quoted; fi'; echo \"while\"; echo $(echo if); X=for; echo $X"
+[case.expect]
+status = 0
+stdout_contains = ["if for while until case select function", "if false; then echo quoted; fi", "while"]
+stderr_exact = ""
+
+[[case]]
+id = "unsupported-control.ordinary-alias-and-substitution"
+class = "dogesh"
+mode = "interactive"
+script = """
+alias 'words=echo if for while'
+words
+echo $(words)
+"""
+[case.expect]
+status = 0
+stdout_contains = ["if for while"]
+stderr_exact = ""

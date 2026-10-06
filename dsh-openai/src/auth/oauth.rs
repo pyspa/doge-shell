@@ -5,7 +5,8 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jw
 use rand::RngCore;
 use reqwest::Url;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+mod callback;
 
 const SCOPES: &str =
     "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
@@ -209,6 +210,20 @@ impl LoginAttempt {
     pub fn authorization_url(&self) -> &str {
         self.authorization_url.as_str()
     }
+    /// Ephemeral user-facing login URL; never expose a saved ID token.
+    /// Omitting the optional hint keeps the same PKCE attempt and allows
+    /// the official account selector to choose the registered workspace.
+    pub fn manual_authorization_url(&self) -> String {
+        let mut url = self.authorization_url.clone();
+        let fields: Vec<(String, String)> = url
+            .query_pairs()
+            .into_owned()
+            .filter(|(key, _)| key != "id_token_hint")
+            .collect();
+        url.set_query(None);
+        url.query_pairs_mut().extend_pairs(fields);
+        url.into()
+    }
     fn callback(&self, target: &str) -> Result<(String, String)> {
         let url = Url::parse(&format!("http://127.0.0.1{target}"))
             .map_err(|_| anyhow!("Invalid OAuth callback."))?;
@@ -259,34 +274,7 @@ impl LoginAttempt {
         wait(self.finish_inner(), cancel, Duration::from_secs(300)).await
     }
     async fn finish_inner(self) -> Result<Account> {
-        let (mut connection, _) = self.listener.accept().await?;
-        let mut request = vec![0u8; 8192];
-        let length = tokio::time::timeout(Duration::from_secs(5), connection.read(&mut request))
-            .await
-            .map_err(|_| anyhow!("OAuth callback timed out."))??;
-        let first = std::str::from_utf8(&request[..length])
-            .map_err(|_| anyhow!("Invalid OAuth callback HTTP."))?
-            .lines()
-            .next()
-            .unwrap_or_default();
-        let mut words = first.split_whitespace();
-        if words.next() != Some("GET") {
-            bail!("OAuth callback requires GET.");
-        }
-        let callback = self.callback(words.next().unwrap_or_default());
-        let body = if callback.is_ok() {
-            "Return to doge-shell to complete sign-in."
-        } else {
-            "Sign-in could not be completed. Return to doge-shell."
-        };
-        let status = if callback.is_ok() {
-            "200 OK"
-        } else {
-            "400 Bad Request"
-        };
-        connection.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await?;
-        drop(connection);
-        let (code, client_id) = callback?;
+        let (code, client_id) = self.receive_callback().await?;
         if self.selected.is_none() {
             let _lock = self.store.lock(None).await?;
             self.store.save("pending-registration.json", &client_id)?;
@@ -638,6 +626,17 @@ mod tests {
             .collect();
         assert_eq!(fields["client_id"], account.client_id);
         assert_eq!(fields["id_token_hint"], "mock-id");
+        let manual = Url::parse(&attempt.manual_authorization_url()).unwrap();
+        let manual_fields: std::collections::HashMap<_, _> =
+            manual.query_pairs().into_owned().collect();
+        assert!(!manual_fields.contains_key("id_token_hint"));
+        assert!(!manual.as_str().contains("mock-id"));
+        assert!(!manual_fields.contains_key("code_verifier"));
+        for (key, value) in &fields {
+            if key != "id_token_hint" {
+                assert_eq!(manual_fields.get(key), Some(value));
+            }
+        }
         assert!(!fields.contains_key("agent_name_hint"));
         assert!(
             attempt

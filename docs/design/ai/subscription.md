@@ -6,7 +6,7 @@
 ## 操作
 
 ```sh
-(vset "AI_CHAT_PROVIDER" "chatgpt_subscription")
+chat_provider chatgpt_subscription
 chat_auth login
 chat_auth status
 chat_auth models
@@ -15,12 +15,14 @@ chat_model <catalog-slug>
 chat_auth logout
 ```
 
-`vset`は上記のLisp形式でshell変数を設定する。subscription modelには既定がない。
+`chat_provider` は現在のproviderを表示し、引数付きで明示選択する。`chatgpt`、`chatgpt-subscription`、`openai_subscription`、`openai-subscription` はsubscriptionのalias。`openai` は曖昧なため受け付けない。設定 `AI_CHAT_PROVIDER` も同じaliasを解決する。切替は現在のshell sessionへ即時反映し、永続化にはconfig.lispでcanonical値を設定する。subscription modelには既定がない。
+
+`chat_auth login --no-browser` は手動URLを表示する。browser openerが不在・失敗・10秒timeoutの場合も、同じlistener/state/PKCE試行を維持して手動URLを案内する。URLは同じhostのbrowserで開く（別hostでは127.0.0.1 callbackへの明示的port forwardingが必要）。全認証待機は5分timeout/Ctrl+C取消。loginはproviderを自動変更しない。status/account/logout/loginはinference設定のエラーに依存せず、modelsとinferenceはproviderとcustom base設定を検証する。
 `chat_auth login --new` は別account/workspaceを登録する。`status` のUUID labelはregistration単位で、
 `chat_auth account <label>` で既存登録を選ぶ。同じemailで登録を統合しない。
 再loginはissued client IDと安定host IDを再利用する。logoutは処理中リクエストを停止し、
 refresh tokenをrevokeする。remote revoke未確認時はその旨を表示し、local tokenだけを削除する。
-登録とhost IDは残す。認証URL/token/opaque reasoningはログやdoctorに表示しない。
+登録とhost IDは残す。token/opaque reasoningとprivate browser URLはログやdoctorに表示しない。手動操作時だけ、ID token hintを除いた一時URLをユーザーに表示する。code verifier/tokenは表示しない。
 
 モデルcatalogの掲載順とdisplay nameを表示し、slugを送信する。掲載はentitlement保証ではない。
 要約後もprovider/model/account識別を保持し、切替中の送信を取り消す。識別のない旧履歴の移行と、provider/model/accountを変更した履歴は自動流用せず `chat_reset` を案内する。
@@ -31,7 +33,7 @@ usage limit時は [ChatGPT Settings → Usage](https://chatgpt.com/settings/usag
 ## 認証と保存
 
 127.0.0.1のランダムportで `/auth/callback` を先にbindし、毎試行fresh state/nonce/PKCE S256。
-stateをcode/errorより先に検証する。dynamic登録のissued client IDを必須とし、再loginでの変更を拒否。
+HTTP headerを8KiB/接続あたり5秒に制限して分割受信し、無関係path・wrong state・不完全requestは拒否して同じ待受を継続する。stateをcode/errorより先に検証する。有効stateの認証拒否は試行を終了する。dynamic登録のissued client IDを必須とし、再loginでの変更を拒否。
 exact redirect URIとresourceをtoken交換へ送り、client secretは送らない。
 OIDC discovery/JWKSでRS256 signature・issuer・audience・expiry・nonceとsubjectを検証する。
 必要scopeも検証し、identityだけではreadyにしない。

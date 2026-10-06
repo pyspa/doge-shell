@@ -106,6 +106,7 @@ contract_test!(contract_wait, "wait.toml");
 contract_test!(contract_smart_pipe, "smart-pipe.toml");
 contract_test!(contract_interactive, "interactive.toml");
 contract_test!(contract_command_search, "command-search.toml");
+contract_test!(contract_unsupported_control, "unsupported-control.toml");
 
 /// Structural gates over the whole suite: unique IDs and the exact-match
 /// XFAIL allowlist. A new hidden `xfail` or a stale entry fails here.

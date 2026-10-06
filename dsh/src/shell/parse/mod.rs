@@ -9,7 +9,8 @@
 //! error and no prefix is executed. `Rule::commands` remains intentionally
 //! tolerant for REPL highlighting and completion; the strictness lives only in
 //! this execution path, which validates raw input before alias rewriting and
-//! validates alias-rewritten input again.
+//! validates alias-rewritten input again. Unsupported control keywords are
+//! rejected throughout that syntax tree before any job is materialized.
 
 use super::plan::{
     ExecutionPlan, ListExecutionMode, PlannedAndOrList, PlannedAssignment, PlannedCommand,
@@ -30,6 +31,7 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 mod arithmetic;
+mod control;
 mod parameter;
 
 /// Pure parse context: nesting flags only, no shell handle.
@@ -107,6 +109,7 @@ fn parse_commands_strict(input: &str) -> Result<pest::iterators::Pairs<'_, Rule>
         anyhow::bail!("syntax error: unexpected input {tail:?}");
     }
 
+    control::validate(pairs.clone())?;
     Ok(pairs)
 }
 

@@ -269,6 +269,64 @@ mod agent_policy_tests {
         ));
     }
 
+    #[test]
+    fn unsupported_control_is_denied_before_allowlists_at_every_safety_level() {
+        use dsh_types::safety_policy::SafetyLevel;
+
+        for level in [SafetyLevel::Strict, SafetyLevel::Normal, SafetyLevel::Loose] {
+            let mut shell = shell();
+            *shell.environment.read().policy_state.safety_level.write() = level;
+            shell
+                .environment
+                .write()
+                .variable_state
+                .alias
+                .insert("bad".into(), "if false; then echo wrong; fi".into());
+            for input in [
+                "echo before; if false; then echo wrong; fi",
+                "X=value for item in a; do echo wrong; done",
+                "echo before; bad; echo after",
+            ] {
+                shell
+                    .environment
+                    .read()
+                    .policy_state
+                    .execute_allowlist
+                    .write()
+                    .push(input.into());
+                assert!(
+                    matches!(
+                        shell.evaluate_agent_command(input),
+                        AgentCommandVerdict::Denied(_)
+                    ),
+                    "{level:?}: {input}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn control_words_in_arguments_and_quotes_remain_ordinary_policy_input() {
+        let mut shell = shell();
+        for input in [
+            "echo if for while",
+            "echo 'if false; then echo data; fi'",
+            "echo \"while\"",
+            "echo if''",
+        ] {
+            assert_eq!(
+                shell.evaluate_agent_command(input),
+                AgentCommandVerdict::Allowed,
+                "{input}"
+            );
+        }
+        // Shell support for substitutions does not grant agent execution of them.
+        assert!(matches!(
+            shell.evaluate_agent_command("echo $(echo if)"),
+            AgentCommandVerdict::Denied(_)
+        ));
+    }
+
     /// Path A resolves the same atomic snapshot as Path B: with no binding
     /// the facts fall back to untrusted, so an unknown tool asks at Normal
     /// instead of running.

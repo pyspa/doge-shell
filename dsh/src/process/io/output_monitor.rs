@@ -31,7 +31,7 @@
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::borrow::Cow;
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ErrorKind, IsTerminal, Read, Write};
 use std::os::fd::OwnedFd;
 
 use crate::terminal::renderer::TerminalRenderer;
@@ -85,6 +85,8 @@ pub struct OutputMonitor {
     // Safe to hold as it no longer holds StdoutLock persistently.
     pub(crate) renderer: TerminalRenderer,
     renderer_failed: bool,
+    // Prompt separation belongs only to interactive terminal presentation.
+    prefix_output: bool,
     observer: Option<SharedOutputObserver>,
     observed_stream: ObservedStream,
 }
@@ -114,9 +116,24 @@ impl OutputMonitor {
             captured_output: Vec::new(),
             renderer: TerminalRenderer::new(),
             renderer_failed: false,
+            prefix_output: true,
             observer,
             observed_stream,
         })
+    }
+
+    /// Capture without changing script output bytes. The renderer writes to
+    /// stdout, so only an interactive shell with a terminal stdout needs the
+    /// prompt-separating CRLF. Redirected stdout stays byte-exact even when
+    /// the shell's input is interactive.
+    pub(crate) fn new_for_context(
+        fd: OwnedFd,
+        ctx: &dsh_types::Context,
+        observed_stream: ObservedStream,
+    ) -> Result<Self> {
+        let mut monitor = Self::new(fd, ctx.output_observer.clone(), observed_stream)?;
+        monitor.prefix_output = ctx.interactive && std::io::stdout().is_terminal();
+        Ok(monitor)
     }
 
     pub(crate) fn stream(&self) -> ObservedStream {
@@ -131,7 +148,12 @@ impl OutputMonitor {
     }
 
     fn append_line(&mut self, buffer: &mut Vec<u8>, line: &[u8]) {
-        append_output_chunk(&mut self.outputed, buffer, line);
+        if self.prefix_output {
+            append_output_chunk(&mut self.outputed, buffer, line);
+        } else {
+            self.outputed = true;
+            buffer.extend_from_slice(line);
+        }
         // Raw capture: never lossy-convert here; text projection happens
         // only for the text-only observer below.
         self.captured_output.extend_from_slice(line);

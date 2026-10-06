@@ -64,3 +64,25 @@ script = "echo hello world"
 [case.expect]
 status = 0
 stdout_contains = ["hello world"]
+
+[[case]]
+id = "simple-command.external-stdout-byte-exact"
+class = "posix"
+mode = "command"
+script = "printf '%s' 'printf abc' > emit.sh; {{SH}} emit.sh"
+
+[case.expect]
+status = 0
+stdout_exact = "abc"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.external-streams-separate"
+class = "posix"
+mode = "command"
+script = "printf '%s' 'printf out; printf err >&2' > emit.sh; {{SH}} emit.sh"
+
+[case.expect]
+status = 0
+stdout_exact = "out"
+stderr_exact = "err"

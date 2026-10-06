@@ -556,3 +556,52 @@ async fn output_monitor_invalid_no_newline_fragment_published_at_retirement() {
     );
     drop(writer);
 }
+
+#[tokio::test]
+async fn noninteractive_monitor_keeps_display_capture_and_observer_payload() {
+    use dsh_types::observed_output::ObservedOutput;
+    let (read, mut writer) = unnamed_pipe();
+    let observer = ObservedOutput::shared(1024);
+    let mut ctx = dsh_types::Context::new_safe(nix::unistd::getpid(), nix::unistd::getpgrp(), true);
+    ctx.interactive = false;
+    ctx.output_observer = Some(observer.clone());
+    let mut monitor = OutputMonitor::new_for_context(read, &ctx, ObservedStream::Stdout)
+        .expect("create noninteractive monitor");
+    let payload = b"a\0\xff\nlast";
+    write_to_pipe(&mut writer, payload);
+    drop(writer);
+    let mut displayed = Vec::new();
+    let mut flush = |_: &mut TerminalRenderer, bytes: &[u8]| -> Result<()> {
+        displayed.extend_from_slice(bytes);
+        Ok(())
+    };
+    monitor.finalize_ready_now_with(&mut flush).unwrap();
+    assert_eq!(displayed, payload);
+    assert_eq!(monitor.captured_output, payload);
+    assert_eq!(
+        observer.lock().unwrap().snapshot().stdout,
+        String::from_utf8_lossy(payload)
+    );
+}
+
+/// Run this case with stdout on a pipe and on a dedicated scratch PTY.
+/// It never takes terminal ownership or changes terminal attributes.
+#[tokio::test]
+async fn interactive_monitor_uses_stdout_terminal_destination() {
+    use std::io::IsTerminal;
+    let (read, _writer) = unnamed_pipe();
+    let mut ctx = dsh_types::Context::new_safe(nix::unistd::getpid(), nix::unistd::getpgrp(), true);
+    ctx.interactive = true;
+    let mut monitor = OutputMonitor::new_for_context(read, &ctx, ObservedStream::Stdout)
+        .expect("create interactive monitor");
+    let mut displayed = Vec::new();
+    monitor.append_line(&mut displayed, b"first");
+    monitor.append_line(&mut displayed, b"last");
+    let expected: &[u8] = if std::io::stdout().is_terminal() {
+        b"\r\nfirstlast"
+    } else {
+        b"firstlast"
+    };
+    assert_eq!(displayed, expected);
+    assert_eq!(monitor.captured_output, b"firstlast");
+}

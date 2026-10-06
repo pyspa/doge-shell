@@ -1,4 +1,8 @@
 sp              = _{ " " | "\t" | "\r" }
+// Comments are recognized only where a new shell token can start. `#` stays
+// in word_char so a#b, X=#value and adjacent quoted/expanded parts keep it.
+comment         = @{ "#" ~ (!NEWLINE ~ ANY)* }
+linebreak       = _{ (sp* ~ comment? ~ NEWLINE)+ ~ sp* }
 word_char       = _{
     !("|" | "&" | ";" | " " | "\t" | "\r" | "\n" | "`" | "{" | "}" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "*" | "?" | "[" | "\\") ~ ANY
 }
@@ -131,16 +135,18 @@ stdin_redirect_direction            = { stdin_redirect_direction_in }
 // redirect fails, and `2` is left to be read as an ordinary argument -- which
 // is how `ls x 2>&1` ended up running `ls x 2`.
 fd_number                           = { ASCII_DIGIT+ }
-fd_dup_target                       = { fd_number | "-" }
+// Duplication targets must end at a token boundary: 2>&1#suffix is not a
+// target "1" followed by a comment, unlike 2>&1 # comment.
+fd_dup_target                       = { (fd_number | "-") ~ &(sp | NEWLINE | ";" | "&" | "|" | "<" | ">" | ")" | EOI) }
 fd_dup_out                          = { fd_number? ~ ">&" ~ fd_dup_target }
 fd_dup_in                           = { fd_number? ~ "<&" ~ fd_dup_target }
 fd_dup                              = { fd_dup_out | fd_dup_in }
-redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ span }
+redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ !"#" ~ span }
 word_part                           = _{ arithmetic_expansion | parameter_expansion | quoted | command_subst | proc_subst | subshell | invocation_parameter
     | variable | glob_word | brace_word | word }
 span                                = { word_part+ }
-argv0                               = { span }
-args                                = { (sp* ~ redirect | sp+ ~ span)+ }
+argv0                               = { !"#" ~ span }
+args                                = { (sp* ~ redirect | sp+ ~ !"#" ~ span)+ }
 
 background_op  = { !("&&") ~ "&" }
 capture_op     = { "|>" }
@@ -151,7 +157,8 @@ and_op         = { "&&" }
 or_op          = { "||" }
 
 and_or_op         =  { and_op | or_op }
-list_separator    =  { sequential_op | background_op }
+newline_op        =  { comment? ~ NEWLINE }
+list_separator    =  { sequential_op | background_op | newline_op }
 // A name=value prefix. Every branch below requires content, so
 // `simple_command` can never match empty -- it sits inside a `*` in
 // `command`, where an empty match would spin.
@@ -162,8 +169,8 @@ assignment          =  { assign_name ~ "=" ~ span? }
 // redirects such as `> file /bin/echo hello`, while plain `cmd args` still
 // takes the second branch.
 simple_command      =  { sp* ~ ((assignment | redirect) ~ (sp+ ~ (assignment | redirect))* ~ (sp+ ~ argv0 ~ args*)? | argv0 ~ args*) }
-pipe_command        =  { pipeline_op ~ sp* ~ simple_command ~ sp* }
-struct_pipe_command =  { struct_pipe_op ~ sp* ~ (lisp_expr | struct_pipe_dsl) ~ sp* }
+pipe_command        =  { pipeline_op ~ sp* ~ linebreak? ~ simple_command ~ sp* }
+struct_pipe_command =  { struct_pipe_op ~ sp* ~ linebreak? ~ (lisp_expr | struct_pipe_dsl) ~ sp* }
 lisp_expr           =  { "(" ~ lisp_inner* ~ ")" }
 lisp_inner          = _{ !(")" | "(") ~ ANY | lisp_expr }
 // The `|:` structured-pipe DSL (`where cpu > 5 | select pid`), tried only
@@ -173,7 +180,8 @@ lisp_inner          = _{ !(")" | "(") ~ ANY | lisp_expr }
 // `dsh/src/shell/struct_pipe.rs`, not interpreted by the grammar itself.
 struct_pipe_dsl_quoted = _{ ("\"" ~ (!"\"" ~ ANY)* ~ "\"") | ("\'" ~ (!"\'" ~ ANY)* ~ "\'") }
 struct_pipe_dsl        = @{
-    (struct_pipe_dsl_quoted | (!(NEWLINE | ";" | "&" | "||" | "|>" | "|:") ~ ANY))+
+    !"#" ~ (struct_pipe_dsl_quoted | (sp+ ~ !"#")
+    | (!(sp | NEWLINE | ";" | "&" | "||" | "|>" | "|:") ~ ANY))+
 }
 capture_suffix      =  { sp* ~ capture_op }
 // `&` is not a simple-command suffix: it separates whole AND-OR lists
@@ -183,5 +191,44 @@ capture_suffix      =  { sp* ~ capture_op }
 // `& echo`, `a & & b`, `a && & b` and `a &; b` all leave an unparsed tail
 // that strict execution rejects.
 command             =  { sp* ~ simple_command ~ sp* ~ (struct_pipe_command | pipe_command)* ~ capture_suffix? }
-and_or_list         =  { command ~ (sp* ~ and_or_op ~ sp* ~ command)* }
-commands            =  { sp* ~ and_or_list ~ (sp* ~ list_separator ~ sp* ~ and_or_list)* ~ (sp* ~ list_separator)? }
+and_or_list         =  { command ~ (sp* ~ and_or_op ~ sp* ~ linebreak? ~ command)* }
+commands            =  {
+    sp* ~ linebreak? ~ and_or_list
+    ~ (sp* ~ list_separator ~ sp* ~ linebreak? ~ and_or_list)*
+    ~ (sp* ~ list_separator)? ~ sp* ~ linebreak? ~ comment?
+    | sp* ~ (comment ~ linebreak? ~ comment? | linebreak ~ comment?)
+}
+
+// Lexical-only scan for continuation: unlike the execution grammar it accepts
+// unfinished quotes/expansions up to EOI. A scan_word joins all adjacent parts,
+// so # after a quote/variable/substitution is still data. Nested shell bodies
+// use scan_tokens recursively; parameter/arithmetic/Lisp text is not shell
+// token space. Only comment spans are consumed by parser::check.
+comment_scan = { scan_token* ~ EOI }
+scan_token = _{ sp | NEWLINE | comment | scan_struct | scan_word | scan_operator }
+scan_operator = _{ ";" | "&" | "|" | "<" | ">" | ")" }
+scan_struct = _{ "|:" ~ sp* ~ scan_lisp? }
+scan_lisp = _{ "(" ~ (scan_lisp | (!("(" | ")") ~ ANY))* ~ (")" | EOI) }
+scan_word = _{ scan_part+ }
+scan_part = _{
+    scan_arithmetic | scan_parameter | scan_substitution | scan_process
+    | scan_group | scan_double | scan_single | escape_sequence
+    | (!(sp | NEWLINE | ";" | "&" | "|" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "\\") ~ ANY)
+    | "$" | "\\"
+}
+scan_body = _{ (!")" ~ scan_token)* }
+scan_substitution = _{ "$(" ~ scan_body ~ (")" | EOI) }
+scan_process = _{ ("<(" | ">(") ~ scan_body ~ (")" | EOI) }
+scan_group = _{ "(" ~ scan_body ~ (")" | EOI) }
+scan_single = _{ "'" ~ ("\\'" | (!"'" ~ ANY))* ~ ("'" | EOI) }
+scan_double = _{ "\"" ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | escape_sequence | (!"\"" ~ ANY))* ~ ("\"" | EOI) }
+scan_parameter = _{ "${" ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | scan_process | (&subshell ~ scan_group) | scan_single | scan_double
+    | escape_sequence | (!"}" ~ ANY))* ~ ("}" | EOI) }
+scan_arithmetic = _{ "$((" ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | scan_single | scan_double | escape_sequence | scan_arithmetic_paren
+    | (!"))" ~ ANY))* ~ ("))" | EOI) }
+scan_arithmetic_paren = _{ "(" ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | scan_single | scan_double | escape_sequence | scan_arithmetic_paren
+    | (!("(" | ")") ~ ANY))* ~ (")" | EOI) }

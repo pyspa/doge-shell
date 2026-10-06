@@ -596,7 +596,9 @@ fn build_commands(ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<ExecutionP
             match pair.as_rule() {
                 Rule::and_or_list => {
                     let mut list = PlannedAndOrList {
-                        source: pair.as_str().trim().to_string(),
+                        source: parser::source_without_comments(pair.clone())
+                            .trim()
+                            .to_string(),
                         jobs: Vec::new(),
                         execution: ListExecutionMode::Foreground,
                     };
@@ -675,7 +677,11 @@ fn mark_nested_job(job: &mut PlannedJob, ctx: &ParseContext) {
 fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJob>) -> Result<()> {
     // Pest spans may carry surrounding whitespace (e.g. the space before a
     // `&` separator); user-facing sources stay trimmed.
-    let job_str = pair.as_str().trim().to_string();
+    // A continued pipeline can contain comments inside its source span. Keep
+    // ignored quotes/operators out of the later raw-source safety check too.
+    let job_str = parser::source_without_comments(pair.clone())
+        .trim()
+        .to_string();
 
     for inner_pair in pair.into_inner() {
         debug!(

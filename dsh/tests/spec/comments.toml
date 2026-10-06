@@ -1,0 +1,308 @@
+version = 1
+
+# Shell comments start only at an unquoted token boundary and end at newline.
+
+[[case]]
+id = "comments.fd-dup-suffix-is-not-a-comment"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; echo OK 2>&1#suffix"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error"]
+files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.tail-no-execution"
+class = "posix"
+mode = "command"
+script = "echo OK # ignored; echo SHOULD_NOT_RUN > marker"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["OK"]
+stdout_not_contains = ["ignored", "SHOULD_NOT_RUN"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.leading-comment"
+class = "posix"
+mode = "command"
+script = "# echo SHOULD_NOT_RUN > marker"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_exact = ""
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.no-redirect-or-expansion"
+class = "posix"
+mode = "command"
+script = "echo OK # > redirect $(echo WRONG > command) <(echo WRONG > process) & echo WRONG > background"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["OK"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "redirect", exists = false }, { path = "command", exists = false }, { path = "process", exists = false }, { path = "background", exists = false }]
+
+[[case]]
+id = "comments.malformed-comment-is-data"
+class = "posix"
+mode = "command"
+script = "echo OK # if false; then echo WRONG; fi; \" ( ${UNSET:?wrong} > marker"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["OK"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.newline-resumes"
+class = "posix"
+mode = "command"
+script = "# leading\necho FIRST # ignored\n# between\necho SECOND\n"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["FIRST", "SECOND"]
+stdout_not_contains = ["leading", "ignored", "between"]
+
+[[case]]
+id = "comments.command-substitution"
+class = "posix"
+mode = "command"
+script = "echo \"$(echo INNER # ) ; echo WRONG > marker\n)\""
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["INNER"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.process-substitution"
+class = "posix"
+mode = "command"
+script = "cat <(echo INNER # ) ; echo WRONG > marker\n)"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["INNER"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.operator-continuation"
+class = "posix"
+mode = "command"
+script = "echo abc | # ignored \" $(bad)\n{{TR}} a-z A-Z"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["ABC"]
+stdout_not_contains = ["ignored"]
+
+[[case]]
+id = "comments.interactive-no-false-continuation"
+class = "posix"
+mode = "interactive"
+script = "echo FIRST # \" ( { [ \\\necho SECOND # | && || |:\necho THIRD"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["FIRST", "SECOND", "THIRD"]
+stdout_not_contains = ["syntax error"]
+
+[[case]]
+id = "comments.alias-creates-comment"
+class = "dogesh"
+mode = "interactive"
+script = "alias 'words=echo ALIAS # ignored'\nwords; echo WRONG > marker\necho STATUS:$?"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["ALIAS", "STATUS:0"]
+stdout_not_contains = ["WRONG", "ignored"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.commented-alias-not-expanded"
+class = "dogesh"
+mode = "interactive"
+script = "alias 'bad=if false; then echo WRONG; fi'\necho OK # bad\necho STATUS:$?"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["OK", "STATUS:0"]
+stdout_not_contains = ["bad", "WRONG"]
+
+[[case]]
+id = "comments.hash-word-quote-escape"
+class = "posix"
+mode = "command"
+script = "echo a#b '# quoted' \"# double\" \\#escaped ''#suffix \"\"#suffix; X=#value; echo $X; echo ${UNSET:-#operand}"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["a#b # quoted # double #escaped #suffix #suffix", "#value", "#operand"]
+
+[[case]]
+id = "comments.invocation-parameters"
+class = "posix"
+mode = "command"
+script = "echo COUNT:$# BRACED:${#} # ignored"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["COUNT:0 BRACED:0"]
+stdout_not_contains = ["ignored"]
+
+[[case]]
+id = "comments.redirect-needs-target"
+class = "posix"
+mode = "command"
+script = "echo BEFORE > before; echo WRONG > # ignored"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error"]
+files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.control-after-newline-rejects-whole-input"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before # ignored\nif false; then echo WRONG; fi"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error"]
+files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.parameter-nested-comment"
+class = "posix"
+mode = "command"
+script = "echo ${COMMENT_UNSET:-$(echo INNER # ) ; echo WRONG > marker\n)}"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["INNER"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.arithmetic-nested-comment"
+class = "posix"
+mode = "command"
+script = "echo $((1 + $(echo 2 # ) ; echo WRONG > marker\n)))"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["3"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.write-process-nested-comment"
+class = "posix"
+mode = "command"
+script = "echo DATA > >(cat > result # ) ; echo WRONG > marker\n)"
+[case.expect]
+status = 0
+stderr_exact = ""
+files = [{ path = "result", content_exact = "DATA\n" }, { path = "marker", exists = false }]
+
+[[case]]
+id = "comments.backslash-in-comment-ends-at-newline"
+class = "posix"
+mode = "command"
+script = "echo FIRST # ignored \\\necho SECOND"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["FIRST", "SECOND"]
+stdout_not_contains = ["ignored"]
+
+[[case]]
+id = "comments.operator-boundary"
+class = "posix"
+mode = "command"
+script = "echo FIRST;# ignored; echo WRONG > marker\necho SECOND"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["FIRST", "SECOND"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.and-or-comment-continuation"
+class = "posix"
+mode = "command"
+script = "true && # \" if false; $(bad)\necho AND; false || # ( wrong\necho OR"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["AND", "OR"]
+
+[[case]]
+id = "comments.lisp-structured-pipe-preserved"
+class = "dogesh"
+mode = "command"
+script = "echo '[{\"a\":1},{\"a\":2}]' |: (json-parse $_) |: (table-count $_) # if \" $(bad)"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["2"]
+stdout_not_contains = ["bad"]
+
+[[case]]
+id = "comments.quoted-nested-alias"
+class = "dogesh"
+mode = "interactive"
+script = "alias 'nested=echo INNER'\necho \"$(nested)\" # ignored; echo WRONG > marker\necho STATUS:$?"
+[case.expect]
+status = 0
+stderr_exact = ""
+stdout_contains = ["INNER", "STATUS:0"]
+stdout_not_contains = ["WRONG"]
+files = [{ path = "marker", exists = false }]
+
+[[case]]
+id = "comments.fd-input-suffix-is-not-a-comment"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; echo OK 2<&0#suffix"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error"]
+files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.fd-close-suffix-is-not-a-comment"
+class = "dogesh"
+mode = "command"
+script = "echo BEFORE > before; echo OK 2>&-#suffix"
+[case.expect]
+status = 1
+stdout_exact = ""
+stderr_contains = ["syntax error"]
+files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.fd-dup-followed-by-comment"
+class = "dogesh"
+mode = "command"
+script = "echo OK 2>&1 # ignored; echo WRONG > before"
+[case.expect]
+status = 0
+stdout_contains = ["OK"]
+stdout_not_contains = ["WRONG", "ignored"]
+stderr_exact = ""
+files = [{ path = "before", exists = false }]

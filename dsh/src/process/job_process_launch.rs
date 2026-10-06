@@ -41,9 +41,8 @@ impl JobProcess {
             .cloned()
             .collect();
         // Any redirection at all disables the automatic capture below, input
-        // included: capture reroutes stdout through a monitor that reformats
-        // line endings, and a command the user redirected should reach its
-        // destination byte for byte.
+        // included: a command the user redirected should reach its destination
+        // directly, without an automatic capture pipe.
         let has_redirect = !self.redirects().is_empty();
         let observe_foreground_external = ctx.output_observer.is_some()
             && ctx.foreground
@@ -97,11 +96,8 @@ impl JobProcess {
                     // The monitor is built before the write end leaves this
                     // scope: construction failure drops both ends via RAII
                     // with `ctx` untouched and no child spawned.
-                    let monitor = OutputMonitor::new(
-                        read,
-                        ctx.output_observer.clone(),
-                        ObservedStream::Stdout,
-                    )?;
+                    let monitor =
+                        OutputMonitor::new_for_context(read, ctx, ObservedStream::Stdout)?;
                     ctx.outfile = write.into_raw_fd();
                     created_out = Some(ctx.outfile);
                     monitors.push(monitor);
@@ -115,7 +111,7 @@ impl JobProcess {
 
         if observe_foreground_external && ctx.errfile == STDERR_FILENO {
             let (read, write) = cloexec_pipe().context("failed stderr pipe")?;
-            match OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stderr) {
+            match OutputMonitor::new_for_context(read, ctx, ObservedStream::Stderr) {
                 Ok(monitor) => {
                     ctx.errfile = write.into_raw_fd();
                     created_err = Some(ctx.errfile);

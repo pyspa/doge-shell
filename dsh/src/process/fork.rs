@@ -58,8 +58,7 @@ pub(crate) fn fork_process(
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
         debug!("FORK: Creating capture pipe for stdout (background process)");
         let (read, write) = cloexec_pipe().context("failed pipe")?;
-        let monitor =
-            OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stdout)?;
+        let monitor = OutputMonitor::new_for_context(read, ctx, ObservedStream::Stdout)?;
         let write_fd = write.into_raw_fd();
         process.stdout = write_fd;
         created_writes.push(write_fd);
@@ -78,8 +77,7 @@ pub(crate) fn fork_process(
     if ctx.errfile == STDERR_FILENO && !ctx.foreground && pty.is_none() {
         debug!("FORK: Creating capture pipe for stderr (background process)");
         let (read, write) = cloexec_pipe().context("failed pipe")?;
-        let monitor =
-            OutputMonitor::new(read, ctx.output_observer.clone(), ObservedStream::Stderr)?;
+        let monitor = OutputMonitor::new_for_context(read, ctx, ObservedStream::Stderr)?;
         let write_fd = write.into_raw_fd();
         process.stderr = write_fd;
         created_writes.push(write_fd);

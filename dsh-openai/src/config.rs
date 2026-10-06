@@ -11,6 +11,30 @@ pub enum AiProvider {
     ChatGptSubscription,
 }
 
+impl AiProvider {
+    /// Shared provider spelling for configuration and the interactive selector.
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value.trim() {
+            "" | "api_key" => Ok(Self::ApiKey),
+            "chatgpt_subscription"
+            | "chatgpt"
+            | "chatgpt-subscription"
+            | "openai_subscription"
+            | "openai-subscription" => Ok(Self::ChatGptSubscription),
+            _ => anyhow::bail!(
+                "AI_CHAT_PROVIDER must be api_key or chatgpt_subscription (alias: chatgpt)."
+            ),
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ApiKey => "api_key",
+            Self::ChatGptSubscription => "chatgpt_subscription",
+        }
+    }
+}
+
 /// Environment key overriding the total per-request timeout, in seconds.
 pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
 
@@ -111,6 +135,7 @@ impl OpenAiConfig {
 
     pub fn from_getter(mut getter: impl FnMut(&str) -> Option<String>) -> Self {
         let provider = getter(PROVIDER_ENV).unwrap_or_else(|| "api_key".into());
+        let resolved_provider = AiProvider::parse(&provider);
         let subscription_model = getter(SUBSCRIPTION_MODEL_ENV).filter(|v| !v.trim().is_empty());
         let auth_dir = getter("XDG_CONFIG_HOME")
             .filter(|v| !v.is_empty())
@@ -136,7 +161,10 @@ impl OpenAiConfig {
         let has_custom_base = base_url.as_ref().is_some_and(|v| !v.trim().is_empty());
         let mut config = OpenAiConfig::new_with_http_policy(
             api_key,
-            if provider.trim() == "chatgpt_subscription" {
+            if resolved_provider
+                .as_ref()
+                .is_ok_and(|p| *p == AiProvider::ChatGptSubscription)
+            {
                 None
             } else {
                 base_url
@@ -151,9 +179,9 @@ impl OpenAiConfig {
             config = config.with_reasoning_effort(Some(reasoning_effort));
         }
         config.auth_dir = auth_dir;
-        match provider.trim() {
-            "api_key" | "" => {}
-            "chatgpt_subscription" => {
+        match resolved_provider {
+            Ok(AiProvider::ApiKey) => {}
+            Ok(AiProvider::ChatGptSubscription) => {
                 config.provider = AiProvider::ChatGptSubscription;
                 config.api_key = None;
                 config.base_url = DEFAULT_BASE_URL.trim_end_matches('/').into();
@@ -162,19 +190,13 @@ impl OpenAiConfig {
                     config.configuration_error = Some("ChatGPT subscription does not support custom base URLs. Unset AI_CHAT_BASE_URL and OPENAI_BASE_URL.".into());
                 }
             }
-            _ => {
-                config.configuration_error =
-                    Some("AI_CHAT_PROVIDER must be api_key or chatgpt_subscription.".into())
-            }
+            Err(error) => config.configuration_error = Some(error.to_string()),
         }
         config
     }
 
     pub fn provider_name(&self) -> &'static str {
-        match self.provider {
-            AiProvider::ApiKey => "api_key",
-            AiProvider::ChatGptSubscription => "chatgpt_subscription",
-        }
+        self.provider.name()
     }
     pub fn provider(&self) -> AiProvider {
         self.provider
@@ -511,6 +533,26 @@ impl std::fmt::Debug for OpenAiConfig {
 #[cfg(test)]
 mod subscription_tests {
     use super::*;
+    #[test]
+    fn subscription_alias_regression() {
+        for alias in [
+            "chatgpt",
+            "chatgpt-subscription",
+            "openai_subscription",
+            "openai-subscription",
+        ] {
+            let cfg = config(&[
+                (PROVIDER_ENV, alias),
+                (SUBSCRIPTION_MODEL_ENV, "catalog-model"),
+                ("OPENAI_API_KEY", "mock-key"),
+            ]);
+            assert!(cfg.validate().is_ok(), "{alias}");
+            assert_eq!(cfg.provider(), AiProvider::ChatGptSubscription);
+            assert_eq!(cfg.provider_name(), "chatgpt_subscription");
+            assert_eq!(cfg.default_model(), "catalog-model");
+            assert!(cfg.api_key().is_none());
+        }
+    }
     fn config(values: &[(&str, &str)]) -> OpenAiConfig {
         OpenAiConfig::from_getter(|key| {
             values

@@ -249,9 +249,18 @@ impl SubscriptionTransport {
         );
     }
     pub async fn models(&self, cancel: Option<&dyn Fn() -> bool>) -> Result<Vec<Value>> {
+        self.models_at("https://api.openai.com/v1/models", cancel)
+            .await
+    }
+    // Internal seam for mock HTTP tests; public catalog routing stays fixed.
+    async fn models_at(
+        &self,
+        endpoint: &str,
+        cancel: Option<&dyn Fn() -> bool>,
+    ) -> Result<Vec<Value>> {
         let (_, token) = self.store.access(cancel).await?;
         auth::wait(async {
-            let response = self.client.get("https://api.openai.com/v1/models").bearer_auth(token).send().await
+            let response = self.client.get(endpoint).bearer_auth(token).send().await
                 .map_err(|_| anyhow!("Cannot fetch ChatGPT model catalog."))?;
             let data = auth::checked_json(response).await?;
             let models = data.get("models").and_then(Value::as_array).ok_or_else(|| anyhow!("ChatGPT model catalog has no models array."))?;

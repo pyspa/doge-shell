@@ -313,6 +313,8 @@ The shell includes many built-in commands:
 | `project`           | Project management (see also `pm`, `pj`)                                                                                   |
 | `snippet`           | Snippet management command                                                                                                 |
 | `bookmark`          | Bookmark management command                                                                                                |
+| `chat_provider`     | Show or select the AI provider (`api_key`, `chatgpt_subscription`, alias `chatgpt`); effective immediately                    |
+| `chat_auth`         | Manage ChatGPT subscription sign-in, accounts, model catalog and logout                                                     |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Show or set the AI model (`chat_model ""` clears the override); takes effect immediately, everywhere                      |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
@@ -1349,7 +1351,48 @@ Easily record and replay sequences of shell commands without writing code manual
 
 ## 🤖 AI Integration
 
-The shell includes AI-powered command completion using OpenAI. To use this feature:
+The shell supports an OpenAI API key (default) or official Sign in with ChatGPT subscription usage.
+
+### ChatGPT subscription
+
+Run these commands in the same `dogesh` session:
+
+```sh
+chat_provider chatgpt_subscription
+chat_auth login                    # or: chat_auth login --no-browser
+chat_auth status
+chat_auth models
+chat_model <catalog-slug>           # select a slug returned by the catalog
+! hello
+```
+
+There is no default subscription model. `chatgpt`, `chatgpt-subscription`,
+`openai_subscription`, and `openai-subscription` are provider aliases; `openai`
+is not accepted. Provider/model changes reach AI consumers immediately. Login
+alone does not switch providers. Use `chat_reset` before continuing a conversation
+from another provider/account/model. To persist selection, set
+`AI_CHAT_PROVIDER` and `AI_CHAT_SUBSCRIPTION_MODEL` in `config.lisp`.
+
+If the system browser cannot open, login keeps waiting and shows a one-time
+manual URL with the private identity hint removed. Open it on the same host;
+a browser on another host needs forwarding for the exact loopback callback port.
+Sign-in waits up to five minutes and Ctrl+C cancels. `chat_auth login --new`
+registers another account/workspace; `chat_auth account <label>` selects a saved
+registration and `chat_auth logout` revokes the renewable session.
+
+Subscription inference rejects custom `AI_CHAT_BASE_URL`/`OPENAI_BASE_URL`;
+clear those settings explicitly before selecting subscription. Authentication
+management remains available to recover from invalid inference settings.
+No API-key fallback or token import from other apps occurs. Catalog inclusion
+does not guarantee entitlement. See [subscription details](docs/design/ai/subscription.md).
+
+For a noninteractive request, set `AI_CHAT_PROVIDER=chatgpt_subscription` and
+`AI_CHAT_SUBSCRIPTION_MODEL=<catalog-slug>` in the invoking environment (or
+`config.lisp`), then run `dogesh -c '! hello'` after user-operated sign-in.
+
+### API key
+
+To use the API-key provider:
 
 1. Set your OpenAI API key in the environment:
 

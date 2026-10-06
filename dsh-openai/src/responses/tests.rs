@@ -1,5 +1,79 @@
 use super::*;
 use crate::auth::tests::{mock_http, seeded_store};
+
+#[tokio::test]
+async fn subscription_alias_catalog_selection_and_inference_use_oauth() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = seeded_store(dir.path().join("auth"));
+    let (endpoint, requests, task) = mock_http(vec![
+        (
+            200,
+            "application/json",
+            json!({"models":[
+                {"slug":"catalog-first","display_name":"First","visibility":"list"},
+                {"slug":"hidden","display_name":"Hidden","visibility":"hide"},
+                {"slug":"catalog-second","display_name":"Second","visibility":"list"}
+            ]})
+            .to_string(),
+        ),
+        (
+            200,
+            "text/event-stream",
+            event(
+                "response.completed",
+                "response",
+                completed(vec![message("subscription answer")]),
+            ),
+        ),
+    ])
+    .await;
+    let config = crate::OpenAiConfig::from_getter(|key| match key {
+        crate::PROVIDER_ENV => Some("chatgpt".into()),
+        "OPENAI_API_KEY" => Some("mock-api-must-not-use".into()),
+        _ => None,
+    });
+    config.validate().unwrap();
+    let mut transport =
+        SubscriptionTransport::new(store, config.default_model().into(), Duration::from_secs(2))
+            .unwrap();
+    let models = transport.models_at(&endpoint, None).await.unwrap();
+    assert_eq!(
+        models,
+        vec![
+            json!({"slug":"catalog-first","display_name":"First"}),
+            json!({"slug":"catalog-second","display_name":"Second"})
+        ]
+    );
+    transport.model = models[0]["slug"].as_str().unwrap().into();
+    transport.endpoint = endpoint;
+    let result = transport
+        .send(
+            &[json!({"role":"user","content":"hello"})],
+            &ChatRequestOptions::new(),
+            None,
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        crate::turn::answer_text(&result).unwrap(),
+        "subscription answer"
+    );
+    task.await.unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in requests.iter() {
+        assert!(
+            request
+                .to_lowercase()
+                .contains("authorization: bearer mock-access")
+        );
+        assert!(!request.contains("mock-api-must-not-use"));
+    }
+    assert!(requests[1].contains("\"model\":\"catalog-first\""));
+    assert!(requests[1].contains("\"store\":false"));
+    assert!(requests[1].contains("\"stream\":true"));
+}
 fn account() -> Account {
     Account {
         label: "mock-label".into(),

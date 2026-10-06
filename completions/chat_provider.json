@@ -1,0 +1,20 @@
+{
+  "command": "chat_provider",
+  "description": "Show or select the AI provider",
+  "arguments": [
+    {
+      "name": "provider",
+      "type": {
+        "type": "Choice",
+        "data": [
+          "api_key",
+          "chatgpt_subscription",
+          "chatgpt",
+          "chatgpt-subscription",
+          "openai_subscription",
+          "openai-subscription"
+        ]
+      }
+    }
+  ]
+}

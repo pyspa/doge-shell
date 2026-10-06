@@ -2,10 +2,43 @@
   "command": "chat_auth",
   "description": "Manage Sign in with ChatGPT subscription authentication",
   "subcommands": [
-    {"name": "login", "description": "Continue with ChatGPT", "options": [{"long": "--new", "description": "Register another account or workspace"}]},
-    {"name": "status", "description": "Show saved and active account labels"},
-    {"name": "models", "description": "List the active account model catalog"},
-    {"name": "logout", "description": "Revoke the active renewable session"},
-    {"name": "account", "description": "Select a saved account label", "arguments": [{"name": "label", "type": {"type": "String"}}]}
+    {
+      "name": "login",
+      "description": "Continue with ChatGPT",
+      "options": [
+        {
+          "long": "--new",
+          "description": "Register another account or workspace"
+        },
+        {
+          "long": "--no-browser",
+          "description": "Show a one-time URL for manual sign-in on this host"
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Show saved and active account labels"
+    },
+    {
+      "name": "models",
+      "description": "List the active account model catalog"
+    },
+    {
+      "name": "logout",
+      "description": "Revoke the active renewable session"
+    },
+    {
+      "name": "account",
+      "description": "Select a saved account label",
+      "arguments": [
+        {
+          "name": "label",
+          "type": {
+            "type": "String"
+          }
+        }
+      ]
+    }
   ]
 }

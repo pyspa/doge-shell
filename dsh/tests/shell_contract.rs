@@ -93,6 +93,7 @@ macro_rules! contract_test {
 }
 
 contract_test!(contract_simple_command, "simple-command.toml");
+contract_test!(contract_directory_navigation, "directory-navigation.toml");
 contract_test!(contract_list_operators, "list-operators.toml");
 contract_test!(contract_pipeline, "pipeline.toml");
 contract_test!(contract_signal_status, "signal-status.toml");

@@ -1,0 +1,35 @@
+version = 1
+
+# Failed chdir must preserve the previous successful navigation target.
+[[case]]
+id = "directory-navigation.failed-absolute-cd-preserves-oldpwd"
+class = "dogesh"
+mode = "command"
+script = "ROOT=$(pwd); mkdir a b; echo A > a/tag; echo B > b/tag; cd a; cd ../b; dirs -v > before-stack; cd \"$ROOT/missing\"; echo FAIL:$?; dirs -v > after-stack; cmp before-stack after-stack; echo STACK:$?; cd - > /dev/null; cat tag"
+
+[case.expect]
+status = 0
+stdout_exact = "FAIL:1\nSTACK:0\nA\n"
+stderr_contains = ["cd:"]
+
+[[case]]
+id = "directory-navigation.failed-file-cd-preserves-oldpwd"
+class = "dogesh"
+mode = "command"
+script = "mkdir a b; echo A > a/tag; echo B > b/tag; echo file > b/notdir; cd a; cd ../b; cd notdir; echo FAIL:$?; cd - > /dev/null; cat tag"
+
+[case.expect]
+status = 0
+stdout_exact = "FAIL:1\nA\n"
+stderr_contains = ["cd:"]
+
+[[case]]
+id = "directory-navigation.successful-cd-minus-toggles"
+class = "dogesh"
+mode = "command"
+script = "mkdir a b; echo A > a/tag; echo B > b/tag; cd a; cd ../b; cd - > /dev/null; cat tag; cd - > /dev/null; cat tag"
+
+[case.expect]
+status = 0
+stdout_exact = "A\nB\n"
+stderr_exact = ""

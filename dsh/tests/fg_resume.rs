@@ -218,6 +218,34 @@ fn denied_path_candidate_displays_diagnostic_on_interactive_terminal() {
 }
 
 #[test]
+fn failed_cd_preserves_cd_minus_target_on_interactive_terminal() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    fs::create_dir(s.root.path().join("a")).unwrap();
+    fs::create_dir(s.root.path().join("b")).unwrap();
+    s.write_fixture("a/tag", "A-TARGET\n");
+    s.write_fixture("b/tag", "B-TARGET\n");
+    s.write_fixture("b/notdir", "file");
+    let a = s.root.path().join("a");
+    let b = s.root.path().join("b");
+    let missing = s.root.path().join("missing");
+    for target in [format!("\"{}\"", missing.display()), "notdir".into()] {
+        let first = s.send(&format!("cd \"{}\"", a.display()));
+        s.finished(first, 0);
+        let second = s.send(&format!("cd \"{}\"", b.display()));
+        s.finished(second, 0);
+        let failed = s.send(&format!("cd {target}"));
+        s.finished(failed, 1);
+        let back = s.send("cd - > /dev/null");
+        s.finished(back, 0);
+        let inspect = s.send("cat tag");
+        s.finished(inspect, 0);
+        s.until(|s| s.contains(inspect, b"A-TARGET"));
+        assert!(!s.contains(inspect, b"B-TARGET"));
+    }
+}
+
+#[test]
 fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
     let _serial = common::serial_guard();
     let mut s = Session::new();

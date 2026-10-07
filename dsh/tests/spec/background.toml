@@ -1,5 +1,17 @@
 version = 1
 
+[[case]]
+id = "background.fg-stopped-without-group-fails-closed"
+class = "dogesh"
+mode = "interactive"
+script = "printf '%s\\n' 'kill -STOP $$' > stop.sh\n{{SH}} stop.sh\nfg; echo FG:$?"
+timeout_ms = 5000
+
+[case.expect]
+status = 0
+stdout_contains = ["FG:1"]
+stderr_contains = ["cannot resume job without a process group"]
+
 # Background execution: an async launch reports status 0 at once, the next
 # list starts without waiting, and helper stdout/stderr follow ordinary fd
 # inheritance. The shell process itself never waits for background

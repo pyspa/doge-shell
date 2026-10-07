@@ -1,5 +1,6 @@
 use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
+use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, close, getpgid, getpgrp, getpid, setpgid};
 use std::os::unix::io::RawFd;
@@ -26,6 +27,17 @@ mod lifecycle;
 mod lifecycle_property_tests;
 #[cfg(test)]
 mod lifecycle_tests;
+
+/// A post-exec EACCES is harmless only when the child already belongs to
+/// the positive job group approved by the existing signal ownership guard.
+fn parent_setpgid_exec_race(
+    error: Errno,
+    owned_group: Option<Pid>,
+    observed_group: std::result::Result<Pid, Errno>,
+) -> bool {
+    error == Errno::EACCES
+        && owned_group.is_some_and(|group| group.as_raw() > 0 && observed_group == Ok(group))
+}
 
 #[derive(Debug)]
 pub struct Job {
@@ -482,20 +494,18 @@ impl Job {
                         target_pgid, pid
                     ),
                     Err(e) => {
-                        let tolerated_output_only_race = if self.pty_mode
-                            == Some(PtyMode::OutputOnly)
-                        {
-                            let already_in_group =
-                                getpgid(Some(pid)).is_ok_and(|pgid| pgid == target_pgid);
-                            debug!(
-                                "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
-                                pid, target_pgid, already_in_group, e
+                        // The fork boundary waits for the CLOEXEC exec-error
+                        // pipe: a successful child can already have exec'd.
+                        // Child-side setpgid precedes exec in both OutputOnly
+                        // and no-PTY jobs. Accept only that specific race and
+                        // only after verifying the owned child's actual group.
+                        let verified_exec_race = e == Errno::EACCES
+                            && parent_setpgid_exec_race(
+                                e,
+                                self.safe_job_pgid().filter(|pgid| *pgid == target_pgid),
+                                getpgid(Some(pid)),
                             );
-                            already_in_group
-                        } else {
-                            false
-                        };
-                        if !tolerated_output_only_race {
+                        if !verified_exec_race {
                             error!(
                                 "🔧 PGID: Failed to set pgid {} for pid {}: {}",
                                 target_pgid, pid, e

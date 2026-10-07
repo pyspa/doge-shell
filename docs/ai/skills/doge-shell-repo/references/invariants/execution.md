@@ -25,6 +25,8 @@
 - `ECHILD` は wait の観測であって合成 `ProcessState` ではない。実ステータスを消費したコードだけが tree に記録する。後続の ECHILD 観測が exit code を捏造しない。
 - `mark_stopped_processes_running` は `Stopped -> Running` のみ。`Completed` は触らない。
 
+- Interactive external command の親 `setpgid` は exec-error pipe の待機により exec 後になり得る。非 FullProxy（OutputOnly / no-PTY）で `EACCES` のみ、正の PGID・既存 signal ownership guard・実 child の `getpgid` 一致を確認して受理する。他 errno・membership 不一致・照会失敗は成功にしない。NO_PTY 回帰は実 tty が必要なため `dsh/tests/fg_resume.rs` の専用 controlling PTY で検証する。
+
 ## Foreground stop / PTY ownership
 
 - foreground `JobLaunchOutcome` は canonical tree から導出する。tail-only (`last_process_state`) を launch outcome に使わない。

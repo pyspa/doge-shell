@@ -296,3 +296,35 @@ async fn launch_restores_context_on_redirect_failure() {
         "process_count must be restored after failure"
     );
 }
+
+#[test]
+fn parent_setpgid_accepts_only_verified_post_exec_group() {
+    let group = Pid::from_raw(12345);
+    assert!(parent_setpgid_exec_race(
+        Errno::EACCES,
+        Some(group),
+        Ok(group)
+    ));
+    for error in [Errno::EPERM, Errno::ESRCH, Errno::EINVAL] {
+        assert!(!parent_setpgid_exec_race(error, Some(group), Ok(group)));
+    }
+    assert!(!parent_setpgid_exec_race(Errno::EACCES, None, Ok(group)));
+    assert!(!parent_setpgid_exec_race(
+        Errno::EACCES,
+        Some(group),
+        Ok(Pid::from_raw(54321))
+    ));
+    assert!(!parent_setpgid_exec_race(
+        Errno::EACCES,
+        Some(group),
+        Err(Errno::ESRCH)
+    ));
+    for raw in [0, -1] {
+        let invalid = Pid::from_raw(raw);
+        assert!(!parent_setpgid_exec_race(
+            Errno::EACCES,
+            Some(invalid),
+            Ok(invalid)
+        ));
+    }
+}

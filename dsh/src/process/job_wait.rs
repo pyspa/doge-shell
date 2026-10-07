@@ -116,63 +116,56 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         job.id, job.pgid, no_hang, cont
     );
 
-    if !owns_terminal() {
-        debug!("Not a terminal environment, skipping process group control");
-        debug!("About to call wait_job with no_hang: {}", no_hang);
-        wait_job(job, no_hang).await?;
-        debug!("wait_job completed in non-terminal mode");
-        return Ok(());
+    // FullProxy keeps the shell on the real terminal. Continuation belongs to
+    // the owned job group regardless of how terminal I/O is routed.
+    let handoff = owns_terminal() && !crate::process::job_pty::uses_full_pty_proxy(job);
+    if handoff
+        && let Some(pgid) = job.pgid
+        && let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
+    {
+        debug!(
+            "tcsetpgrp failed: {}, continuing without terminal control",
+            err
+        );
     }
 
-    debug!("Terminal environment detected, proceeding with process group control");
-
-    // Snapshot what the terminal handoff needs before any `&mut` wait borrow.
-    let job_pgid = job.pgid;
-    let uses_full_proxy = crate::process::job_pty::uses_full_pty_proxy(job);
-    if !uses_full_proxy {
-        if let Some(pgid) = job_pgid {
-            debug!("Setting foreground process group to {}", pgid);
-            if let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid) {
-                debug!(
-                    "tcsetpgrp failed: {}, continuing without terminal control",
-                    err
-                );
-            } else {
-                debug!("Successfully set foreground process group to {}", pgid);
-            }
-
-            if cont {
-                debug!("Sending SIGCONT to process group {}", pgid);
-                let cont_result = crate::process::signal::send_signal(pgid, Signal::SIGCONT)
-                    .context("failed send signal SIGCONT");
-                if let Err(err) = cont_result {
-                    debug!("SIGCONT failed, restoring shell foreground before returning");
-                    restore_shell_foreground(job);
-                    return Err(err);
-                }
-                debug!("SIGCONT sent successfully");
-            }
-        } else {
-            debug!("No pgid available, skipping process group operations");
+    if cont
+        && let Err(err) = resume_job_with(job, |pgid| {
+            killpg(pgid, Signal::SIGCONT).context("failed to send SIGCONT to job process group")
+        })
+    {
+        if handoff {
+            restore_shell_foreground(job);
         }
-    } else {
-        debug!("Full-proxy PTY job active, skipping tcsetpgrp (shell proxies I/O)");
+        return Err(err);
     }
 
-    debug!("About to call wait_job with no_hang: {}", no_hang);
     let wait_result = wait_job(job, no_hang).await;
-    debug!("wait_job completed (or failed), restoring shell foreground");
-    // Terminal ownership must come back even when the wait itself fails;
-    // a failed wait must not strand the real terminal on the job's pgid.
-    // Restoration stays best-effort (debug log, continue), so a restoration
-    // failure never masks the primary wait/SIGCONT error.
-    restore_shell_foreground(job);
+    // Restore on both wait success and failure, without masking that result.
+    if handoff {
+        restore_shell_foreground(job);
+    }
 
     match &wait_result {
         Ok(()) => debug!("put_in_foreground completed successfully"),
         Err(err) => debug!("put_in_foreground wait failed: {:?}", err),
     }
     wait_result
+}
+
+/// Advance only stopped stages, and only after the entire owned group was
+/// successfully continued. Completed stages remain terminal lifecycle facts.
+fn resume_job_with(job: &mut Job, send: impl FnOnce(Pid) -> Result<()>) -> Result<()> {
+    let pgid = job
+        .pgid
+        .context("cannot resume job without a process group")?;
+    anyhow::ensure!(
+        pgid.as_raw() > 0 && pgid != job.shell_pgid && pgid != nix::unistd::getpgrp(),
+        "cannot resume job with an invalid or shell process group"
+    );
+    send(pgid)?;
+    job.mark_stopped_processes_running();
+    Ok(())
 }
 
 fn restore_shell_foreground(job: &Job) {
@@ -603,3 +596,7 @@ mod tests {
         assert_eq!(job.last_process_state(), ProcessState::Completed(0, None));
     }
 }
+
+#[cfg(test)]
+#[path = "job_wait_resume_tests.rs"]
+mod resume_tests;

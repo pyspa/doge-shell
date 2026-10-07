@@ -2,7 +2,7 @@ use super::job_process::JobProcess;
 use anyhow::Result;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
-use tracing::{debug, error};
+use tracing::debug;
 
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, sigaction};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,26 +35,6 @@ fn unblock_sigint() -> Result<()> {
 
 pub(crate) fn check_and_clear_sigint() -> bool {
     RECEIVED_SIGINT.swap(false, Ordering::SeqCst)
-}
-
-pub(crate) fn send_signal(pid: Pid, signal: Signal) -> Result<()> {
-    debug!("📡 SIGNAL: Sending signal {:?} to pid {}", signal, pid);
-    match kill(pid, signal) {
-        Ok(_) => {
-            debug!(
-                "📡 SIGNAL: Successfully sent signal {:?} to pid {}",
-                signal, pid
-            );
-            Ok(())
-        }
-        Err(e) => {
-            error!(
-                "📡 SIGNAL: Failed to send signal {:?} to pid {}: {}",
-                signal, pid, e
-            );
-            Err(e.into())
-        }
-    }
 }
 
 /// Best-effort signal where `ESRCH` (already gone) is success-equivalent.

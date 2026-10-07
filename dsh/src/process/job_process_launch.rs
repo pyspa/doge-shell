@@ -177,6 +177,7 @@ impl JobProcess {
         // initial pid
         let current_pid = getpid();
 
+        let mut terminal_launch_failure = false;
         let launched: Result<Pid> = async {
             Ok(match self {
                 JobProcess::Builtin(process) => {
@@ -205,7 +206,18 @@ impl JobProcess {
                     // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
-                    let (child, fork_monitors) = fork_process(ctx, ctx.pgid, process, shell, pty)?;
+                    // Explicit redirects stay authoritative. Only an unredirected
+                    // FullProxy diagnostic may fall back from its revoked slave.
+                    let diagnostic_fallback = pty
+                        .filter(|pty| {
+                            pty.mode == super::pty::PtyMode::FullProxy
+                                && !has_redirect
+                                && process.stderr == pty.slave
+                        })
+                        .map(|_| entry_errfile);
+                    let (child, fork_monitors, reported_failure) =
+                        fork_process(ctx, ctx.pgid, process, shell, pty, diagnostic_fallback)?;
+                    terminal_launch_failure = reported_failure;
                     monitors.extend(fork_monitors);
                     child
                 }
@@ -280,6 +292,7 @@ impl JobProcess {
         // the caller now that the child exists)
         Ok(ProcessLaunchOutcome::Launched {
             pid,
+            terminal_launch_failure,
             next_process,
             redirects: applied,
             monitors,

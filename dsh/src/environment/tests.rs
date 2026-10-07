@@ -1481,3 +1481,74 @@ fn subscription_settings_update_the_common_ai_slots_without_api_fallback() {
     assert!(!guard.ai_configured());
     assert!(guard.ai_readiness_hint().contains("chat_auth login"));
 }
+
+#[test]
+fn external_lookup_preserves_executable_priority_and_refreshes_denied_candidates() {
+    use std::os::unix::fs::PermissionsExt;
+    let first_dir = tempfile::tempdir().unwrap();
+    let second_dir = tempfile::tempdir().unwrap();
+    let first = write_mode_file(first_dir.path(), "probe", 0o644);
+    let second = write_mode_file(second_dir.path(), "probe", 0o755);
+    let env = env_with_paths(vec![
+        first_dir.path().display().to_string(),
+        second_dir.path().display().to_string(),
+    ]);
+    let env = env.read();
+    assert_eq!(
+        env.lookup_external_command("probe", None),
+        Some(second.display().to_string())
+    );
+    std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        env.lookup_external_command("probe", None),
+        Some(first.display().to_string())
+    );
+    assert_eq!(env.lookup_with_path_override("probe", None), None);
+    assert!(env.completion_state.command_cache.read().is_empty());
+    std::fs::remove_file(&first).unwrap();
+    assert_eq!(
+        env.lookup_external_command("probe", None),
+        Some(second.display().to_string())
+    );
+    std::fs::set_permissions(&second, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(env.lookup("probe"), Some(second.display().to_string()));
+    std::fs::remove_file(&second).unwrap();
+    assert_eq!(env.lookup_external_command("probe", None), None);
+    assert!(env.completion_state.command_cache.read().is_empty());
+}
+
+#[test]
+fn external_lookup_scoped_denial_preserves_parent_cache_and_slash_bypass() {
+    let parent = tempfile::tempdir().unwrap();
+    let scoped = tempfile::tempdir().unwrap();
+    let parent_probe = write_mode_file(parent.path(), "probe", 0o755);
+    let denied = write_mode_file(scoped.path(), "probe", 0o644);
+    let nested = scoped.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    write_mode_file(&nested, "probe", 0o644);
+    let env = env_with_paths(vec![parent.path().display().to_string()]);
+    let env = env.read();
+    assert_eq!(
+        env.lookup("probe"),
+        Some(parent_probe.display().to_string())
+    );
+    let cache_before = env.completion_state.command_cache.read().clone();
+    let override_value = scoped.path().display().to_string();
+    assert_eq!(
+        env.lookup_external_command("probe", Some(&override_value)),
+        Some(denied.display().to_string())
+    );
+    assert_eq!(
+        env.lookup_with_path_override("probe", Some(&override_value)),
+        None
+    );
+    assert_eq!(
+        env.lookup_external_command("nested/probe", Some(&override_value)),
+        None
+    );
+    assert_eq!(*env.completion_state.command_cache.read(), cache_before);
+    assert_eq!(
+        env.lookup("probe"),
+        Some(parent_probe.display().to_string())
+    );
+}

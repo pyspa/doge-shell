@@ -397,27 +397,35 @@ impl Job {
         }
         let previous_infile = ctx.infile;
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_redirects, launched_monitors) = match process
-            .launch(ctx, shell, self.stdout, pty, pipeline_context)
-            .await
-        {
-            Ok(ProcessLaunchOutcome::Launched {
-                pid,
-                next_process,
-                redirects,
-                monitors,
-            }) => (pid, next_process, redirects, monitors),
-            // The stage never spawned and its own wiring is already unwound:
-            // stop upstream stages and
-            // report the command failure.
-            Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
-                self.abort_spawned_stages(ctx, previous_infile).await;
-                return Ok(StageLaunchOutcome::CommandFailed(failure));
-            }
-            Err(err) => {
-                return Err(err);
-            }
-        };
+        let (pid, mut next_process, applied_redirects, launched_monitors, terminal_launch_failure) =
+            match process
+                .launch(ctx, shell, self.stdout, pty, pipeline_context)
+                .await
+            {
+                Ok(ProcessLaunchOutcome::Launched {
+                    pid,
+                    next_process,
+                    redirects,
+                    monitors,
+                    terminal_launch_failure,
+                }) => (
+                    pid,
+                    next_process,
+                    redirects,
+                    monitors,
+                    terminal_launch_failure,
+                ),
+                // The stage never spawned and its own wiring is already unwound:
+                // stop upstream stages and
+                // report the command failure.
+                Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
+                    self.abort_spawned_stages(ctx, previous_infile).await;
+                    return Ok(StageLaunchOutcome::CommandFailed(failure));
+                }
+                Err(err) => {
+                    return Err(err);
+                }
+            };
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
@@ -470,7 +478,11 @@ impl Job {
                                 "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
                                 pid, target_pgid, already_in_group, e
                             );
+                            // The exec-error handshake can finish after the child
+                            // has exited. Retain its PID for the existing wait path;
+                            // ESRCH must not replace the real launch-failure status.
                             already_in_group
+                                || (e == nix::errno::Errno::ESRCH && terminal_launch_failure)
                         } else {
                             false
                         };

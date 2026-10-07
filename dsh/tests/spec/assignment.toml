@@ -31,3 +31,60 @@ script = "printf 'echo FOO:$FOO\\n' > showfoo.sh; FOO=bar {{SH}} showfoo.sh"
 [case.expect]
 status = 0
 stdout_contains = ["FOO:bar"]
+
+# Argumentless cd reads the current shell HOME; empty HOME fails without moving.
+
+[[case]]
+id = "assignment.cd-uses-logical-home"
+class = "posix"
+mode = "command"
+script = "mkdir \"logical home\"; printf \"LOGICAL-HOME\\n\" > \"logical home/tag\"; HOME=\"$(pwd)/logical home\"; cd; cat tag"
+
+[case.expect]
+status = 0
+stdout_contains = ["LOGICAL-HOME"]
+stderr_contains = []
+
+[[case]]
+id = "assignment.cd-uses-exported-home"
+class = "posix"
+mode = "command"
+script = "mkdir logical; printf \"EXPORTED-HOME\\n\" > logical/tag; export HOME=\"$(pwd)/logical\"; cd; cat tag"
+
+[case.expect]
+status = 0
+stdout_contains = ["EXPORTED-HOME"]
+stderr_contains = []
+
+[[case]]
+id = "assignment.cd-uses-relative-home"
+class = "posix"
+mode = "command"
+script = "mkdir relative; printf \"RELATIVE-HOME\\n\" > relative/tag; HOME=relative; cd; cat tag"
+
+[case.expect]
+status = 0
+stdout_contains = ["RELATIVE-HOME"]
+stderr_contains = []
+
+[[case]]
+id = "assignment.cd-empty-home-keeps-cwd"
+class = "dogesh"
+mode = "command"
+script = "pwd > before; OLDPWD=sentinel; HOME=; cd; echo CD:$? OLD:$OLDPWD; pwd > after; cmp before after"
+
+[case.expect]
+status = 0
+stdout_contains = ["CD:1 OLD:sentinel"]
+stderr_contains = ["cd: HOME not set or empty"]
+
+[[case]]
+id = "assignment.cd-invalid-home-keeps-cwd"
+class = "posix"
+mode = "command"
+script = "pwd > before; HOME=\"$(pwd)/missing\"; cd; echo MISSING:$?; pwd > after; cmp before after; printf file > notdir; HOME=\"$(pwd)/notdir\"; cd; echo FILE:$?; pwd > after; cmp before after"
+
+[case.expect]
+status = 0
+stdout_contains = ["MISSING:1", "FILE:1"]
+stderr_contains = ["cd:"]

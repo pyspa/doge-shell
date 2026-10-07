@@ -1,5 +1,4 @@
 use super::ShellProxy;
-use dirs;
 use dsh_types::{Context, ExitStatus};
 use std::path::Path;
 
@@ -15,7 +14,7 @@ pub fn description() -> &'static str {
 /// - Relative paths
 /// - `-` for the previous directory (`$OLDPWD`)
 /// - `-N` / `+N` for entry N of the directory stack (as numbered by `dirs -v`)
-/// - No argument (defaults to home directory)
+/// - No argument (uses logical `HOME`; missing/empty `HOME` fails without moving)
 pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
     // `cd -N` / `cd +N` jump into the directory stack. Checked before the
     // `-` arm below, which is plain $OLDPWD and must keep working.
@@ -79,14 +78,13 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
 
         // No argument provided - default to home directory
-        None => {
-            if let Some(home_dir) = dirs::home_dir() {
-                home_dir.to_string_lossy().into_owned()
-            } else {
-                // Fallback to root directory if home directory cannot be determined
-                String::from("/")
+        None => match proxy.get_var("HOME") {
+            Some(home) if !home.is_empty() => home,
+            _ => {
+                ctx.write_stderr("cd: HOME not set or empty").ok();
+                return ExitStatus::ExitedWith(1);
             }
-        }
+        },
     };
 
     // Attempt to change directory through shell proxy
@@ -96,5 +94,72 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
             ctx.write_stderr(&format!("cd: {err}: {dir}")).ok();
             ExitStatus::ExitedWith(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestShellProxy;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+
+    #[test]
+    fn no_argument_passes_logical_home_without_reinterpreting_it() {
+        let pid = nix::unistd::getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+        for home in ["/logical home", "relative", "~", "-"] {
+            let mut proxy = TestShellProxy {
+                allow_changepwd: true,
+                ..Default::default()
+            };
+            proxy.vars.insert("HOME".into(), home.into());
+            assert_eq!(
+                command(&ctx, vec!["cd".into()], &mut proxy),
+                ExitStatus::ExitedWith(0)
+            );
+            assert_eq!(proxy.changed_to.as_deref(), Some(home));
+        }
+    }
+
+    #[test]
+    fn missing_or_empty_logical_home_does_not_call_changepwd() {
+        let pid = nix::unistd::getpid();
+        for home in [None, Some("")] {
+            let mut errors = tempfile::tempfile().unwrap();
+            let mut ctx = Context::new_safe(pid, pid, false);
+            ctx.errfile = errors.as_raw_fd();
+            let mut proxy = TestShellProxy {
+                allow_changepwd: true,
+                ..Default::default()
+            };
+            if let Some(home) = home {
+                proxy.vars.insert("HOME".into(), home.into());
+            }
+            assert_eq!(
+                command(&ctx, vec!["cd".into()], &mut proxy),
+                ExitStatus::ExitedWith(1)
+            );
+            assert_eq!(proxy.changed_to, None);
+            errors.seek(SeekFrom::Start(0)).unwrap();
+            let mut diagnostic = String::new();
+            errors.read_to_string(&mut diagnostic).unwrap();
+            assert!(diagnostic.contains("cd: HOME not set or empty"));
+        }
+    }
+
+    #[test]
+    fn explicit_directory_does_not_require_home() {
+        let pid = nix::unistd::getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+        let mut proxy = TestShellProxy {
+            allow_changepwd: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            command(&ctx, vec!["cd".into(), "/explicit".into()], &mut proxy),
+            ExitStatus::ExitedWith(0)
+        );
+        assert_eq!(proxy.changed_to.as_deref(), Some("/explicit"));
     }
 }

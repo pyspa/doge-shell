@@ -32,3 +32,85 @@ script = "mkdir -p pa pb; printf '#!/bin/sh\\necho MARKER-A\\n' > pa/foo; chmod 
 [case.expect]
 status = 0
 stdout_contains = ["MARKER-B", "MARKER-A"]
+
+[[case]]
+id = "command-search.resolved-permission-denied"
+class = "posix"
+mode = "command"
+script = "printf blocked > denied; chmod 644 denied; ./denied; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.resolved-missing-interpreter"
+class = "posix"
+mode = "command"
+script = "printf '#!/doge-shell-no-such-interpreter-xyz\\n' > broken; chmod +x broken; ./broken; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.permission-status-pipeline-tail"
+class = "posix"
+mode = "command"
+script = "printf blocked > denied; chmod 644 denied; echo upstream | ./denied; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.permission-status-background-helper"
+class = "posix"
+mode = "command"
+script = "printf blocked > denied; chmod 644 denied; ./denied & wait $!; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.permission-status-command-substitution"
+class = "posix"
+mode = "command"
+script = "printf blocked > denied; chmod 644 denied; x=$(./denied); echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.missing-path-stays-127"
+class = "posix"
+mode = "command"
+script = "./doge-shell-no-such-program-xyz; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:127"]
+stderr_contains = ["command not found"]
+
+[[case]]
+id = "command-search.redirect-failure-stays-1"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > missing-dir/output; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to create redirect file"]
+
+[[case]]
+id = "command-search.permission-status-pipefail-head"
+class = "posix"
+mode = "command"
+script = "printf blocked > denied; chmod 644 denied; set -o pipefail; ./denied | {{TRUE}}; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]

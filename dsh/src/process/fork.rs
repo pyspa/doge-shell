@@ -203,23 +203,50 @@ fn drain_exec_error(
     argv: &[String],
     diagnostic_fallback: Option<RawFd>,
 ) -> bool {
+    drain_exec_error_with_reader(
+        |buffer| {
+            let chunk =
+                unsafe { libc::read(err_read_fd, buffer.as_mut_ptr().cast(), buffer.len()) };
+            if chunk < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(chunk as usize)
+            }
+        },
+        cmd,
+        stderr_fd,
+        argv,
+        diagnostic_fallback,
+    )
+}
+
+fn drain_exec_error_with_reader(
+    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+    cmd: &str,
+    stderr_fd: i32,
+    argv: &[String],
+    diagnostic_fallback: Option<RawFd>,
+) -> bool {
     // A single small record; a short read loop tolerates partial delivery.
-    let mut record = ChildExecError { stage: 0, errno: 0 };
+    let mut bytes = [0u8; std::mem::size_of::<ChildExecError>()];
     let mut filled = 0usize;
-    let size = std::mem::size_of::<ChildExecError>();
+    let size = bytes.len();
     while filled < size {
-        let chunk = unsafe {
-            libc::read(
-                err_read_fd,
-                (std::ptr::addr_of_mut!(record) as *mut u8).add(filled) as *mut libc::c_void,
-                size - filled,
-            )
-        };
-        if chunk <= 0 {
-            debug!(chunk, filled, error = ?(chunk < 0).then(std::io::Error::last_os_error), "exec-error read ended");
-            break;
+        match read(&mut bytes[filled..]) {
+            Ok(0) => break,
+            Ok(chunk) => filled += chunk,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => {
+                write_process_stderr_with_fallback(
+                    stderr_fd,
+                    diagnostic_fallback,
+                    format!("dsh: {cmd}: failed to read exec-error report: {error}\r\n").as_bytes(),
+                );
+                // A parent-side read error is not evidence that the child
+                // reported a terminal launch failure. Keep wait authoritative.
+                return false;
+            }
         }
-        filled += chunk as usize;
     }
     if filled == 0 {
         // EOF: the child exec'd and the write end closed.
@@ -233,6 +260,9 @@ fn drain_exec_error(
         );
         return true;
     }
+    // A complete native-layout POD record: both fields accept every bit
+    // pattern. The byte buffer need not have ChildExecError's alignment.
+    let record = unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<ChildExecError>()) };
     debug!(
         stage = record.stage,
         errno = record.errno,
@@ -271,6 +301,9 @@ fn drain_exec_error(
     );
     true
 }
+
+#[cfg(test)]
+mod exec_error_tests;
 
 pub(crate) fn write_process_stderr(fd: i32, bytes: &[u8]) {
     write_process_stderr_with_fallback(fd, None, bytes);

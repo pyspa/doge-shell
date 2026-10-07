@@ -208,7 +208,8 @@ fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
     s.finished(setup, 0);
     let denied = s.send("doge-path-denied-xyz");
     s.finished(denied, 126);
-    assert!(s.contains(denied, b"Permission denied"));
+    // PTY output can arrive after the completion marker, especially on macOS.
+    s.until(|s| s.contains(denied, b"Permission denied"));
     assert!(!s.contains(denied, b"command not found"));
     let recovered = s.send("echo path-prompt-ready");
     s.finished(recovered, 0);

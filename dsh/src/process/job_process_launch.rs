@@ -1,4 +1,4 @@
-//! Per-stage pipeline launch: pipe wiring, automatic capture, output
+//! Per-stage pipeline launch: pipe wiring, automatic capture, ordered
 //! redirect application, child spawn dispatch, and redirection-failure
 //! unwind for [`JobProcess`].
 
@@ -34,12 +34,9 @@ impl JobProcess {
         // has pipelines process ?
         let next_process = self.take_next();
         let has_next_process = next_process.is_some();
-        let output_redirects: Vec<Redirect> = self
-            .redirects()
-            .iter()
-            .filter(|redirect| !redirect.is_stdin())
-            .cloned()
-            .collect();
+        // Apply the entire sequence after default pipe/PTY wiring: splitting
+        // stdin from output changes both FD duplication and failure ordering.
+        let redirects: Vec<Redirect> = self.redirects().to_vec();
         // Any redirection at all disables the automatic capture below, input
         // included: a command the user redirected should reach its destination
         // directly, without an automatic capture pipe.
@@ -159,7 +156,7 @@ impl JobProcess {
         // error: unwind this call's pipe/capture wiring (the shell lives on,
         // so a leak here would be a persistent session leak) and report it
         // without the `?` operator.
-        let applied = match redirect::apply(&output_redirects, ctx) {
+        let applied = match redirect::apply(&redirects, ctx) {
             Ok(applied) => applied,
             Err(failure) => {
                 self.abort_stage_wiring(

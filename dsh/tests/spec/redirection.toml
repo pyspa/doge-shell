@@ -237,3 +237,143 @@ script = "{{TRUE}} > /doge-shell-no-such-dir-xyz/o1; {{TRUE}} > /doge-shell-no-s
 status = 0
 stdout_contains = ["PIPED", "PIPE:0", "data"]
 stderr_contains = ["failed to create redirect file"]
+
+# Input and output redirects share one left-to-right sequence.
+
+[[case]]
+id = "redirection.mixed-order-external"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; {{TRUE}} > target.txt < missing-input; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-builtin"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; help > target.txt < missing-input; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-pipeline"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; echo upstream | {{TRUE}} > target.txt < missing-input; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-background-helper"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; {{TRUE}} > target.txt < missing-input & wait $!; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-capture"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; x=$({{TRUE}} > target.txt < missing-input); echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["failed to open input redirect file"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-input-failure-stops-output"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; {{TRUE}} < missing-input > target.txt; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = "keep\n"
+
+[[case]]
+id = "redirection.mixed-order-no-command"
+class = "posix"
+mode = "command"
+script = "echo keep > target.txt; > target.txt < missing-input; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+
+[[case.expect.files]]
+path = "target.txt"
+exists = true
+content_exact = ""
+
+[[case]]
+id = "redirection.mixed-order-dup-input-keeps-owned-file"
+class = "posix"
+mode = "command"
+script = "echo payload > input.txt; cat < input.txt 0<&0 > copied.txt; echo STATUS:$?; cat copied.txt"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:0", "payload"]
+stderr_exact = ""
+
+[[case.expect.files]]
+path = "copied.txt"
+exists = true
+content_exact = "payload\n"
+
+[[case]]
+id = "redirection.mixed-order-first-failure-wins"
+class = "posix"
+mode = "command"
+script = "{{TRUE}} > missing-dir/output < missing-input; echo STATUS:$?; echo recovered | cat; echo $(echo capture-recovered)"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1", "recovered", "capture-recovered"]
+stderr_contains = ["failed to create redirect file"]
+stderr_not_contains = ["failed to open input redirect file"]

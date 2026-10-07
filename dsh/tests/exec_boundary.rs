@@ -17,10 +17,11 @@ fn permission_denied_executable_reports_on_stderr_without_hang() {
     let output = common::run_command(&format!("{}", prog.display()));
 
     // The shell must not hang (the harness kills after 10s) or crash: the
-    // child reports EACCES through the exec-error pipe and exits non-zero.
-    assert!(
-        !output.status.success(),
-        "permission-denied exec unexpectedly succeeded: {:?}",
+    // child reports EACCES through the exec-error pipe and exits 126.
+    assert_eq!(
+        output.status.code(),
+        Some(126),
+        "permission-denied exec status: {:?}",
         output
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -39,9 +40,10 @@ fn permission_denied_stderr_redirect_stays_quiet() {
 
     // The diagnostic belongs to the command's stderr target, not the shell's.
     let output = common::run_command(&format!("{} 2>/dev/null", prog.display()));
-    assert!(
-        !output.status.success(),
-        "permission-denied exec unexpectedly succeeded: {:?}",
+    assert_eq!(
+        output.status.code(),
+        Some(126),
+        "permission-denied redirected exec status: {:?}",
         output
     );
     assert!(

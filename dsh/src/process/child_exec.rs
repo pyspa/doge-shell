@@ -282,6 +282,8 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
         libc::execve(plan.executable, plan.argv, plan.envp);
         let errno = last_errno();
         report_error(plan.exec_error_fd, STAGE_EXECVE, errno);
-        libc::_exit(1);
+        // Resolution found this command, but execution failed. Keep shell
+        // setup failures at 1 and unresolved commands at 127 above.
+        libc::_exit(126);
     }
 }

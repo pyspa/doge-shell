@@ -206,8 +206,17 @@ impl JobProcess {
                     // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
+                    // Explicit redirects stay authoritative. Only an unredirected
+                    // FullProxy diagnostic may fall back from its revoked slave.
+                    let diagnostic_fallback = pty
+                        .filter(|pty| {
+                            pty.mode == super::pty::PtyMode::FullProxy
+                                && !has_redirect
+                                && process.stderr == pty.slave
+                        })
+                        .map(|_| entry_errfile);
                     let (child, fork_monitors, reported_failure) =
-                        fork_process(ctx, ctx.pgid, process, shell, pty)?;
+                        fork_process(ctx, ctx.pgid, process, shell, pty, diagnostic_fallback)?;
                     terminal_launch_failure = reported_failure;
                     monitors.extend(fork_monitors);
                     child

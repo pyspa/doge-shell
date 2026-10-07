@@ -238,6 +238,9 @@ fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
     let diagnostic = fs::read_to_string(s.root.path().join("denied.err")).unwrap();
     assert!(diagnostic.contains("Permission denied"));
     assert!(!diagnostic.contains("command not found"));
+    let quiet = s.send("doge-path-denied-xyz 2>/dev/null");
+    s.finished(quiet, 126);
+    assert!(!s.contains(quiet, b"Permission denied"));
     let missing = s.send("doge-path-missing-xyz 2>missing.err");
     s.finished(missing, 127);
     assert!(

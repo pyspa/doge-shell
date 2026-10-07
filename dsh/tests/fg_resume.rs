@@ -194,6 +194,28 @@ fn failed_exec_reports_126_and_returns_to_interactive_prompt() {
 }
 
 #[test]
+fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    fs::create_dir(s.root.path().join("bin")).unwrap();
+    s.write_fixture("bin/doge-path-denied-xyz", "blocked");
+    fs::set_permissions(
+        s.root.path().join("bin/doge-path-denied-xyz"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+    )
+    .unwrap();
+    let setup = s.send("PATH=bin:$PATH");
+    s.finished(setup, 0);
+    let denied = s.send("doge-path-denied-xyz");
+    s.finished(denied, 126);
+    assert!(s.contains(denied, b"Permission denied"));
+    assert!(!s.contains(denied, b"command not found"));
+    let recovered = s.send("echo path-prompt-ready");
+    s.finished(recovered, 0);
+    assert!(s.contains(recovered, b"path-prompt-ready"));
+}
+
+#[test]
 fn redirected_input_and_failure_preserve_interactive_pipeline() {
     let _serial = common::serial_guard();
     let mut s = Session::new();

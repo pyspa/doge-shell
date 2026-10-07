@@ -161,6 +161,30 @@ impl Environment {
         self.lookup(cmd)
     }
 
+    /// Resolve an already-dispatched external command. Executable candidates
+    /// retain priority; an uncached regular-file fallback lets `execve` report
+    /// permission failures instead of invoking command-not-found hooks.
+    /// Availability checks for auto-cd and completion keep using executable-only lookup.
+    pub(crate) fn lookup_external_command(
+        &self,
+        cmd: &str,
+        path_override: Option<&str>,
+    ) -> Option<String> {
+        let resolved = self.lookup_with_path_override(cmd, path_override);
+        if resolved.is_some() || command_contains_slash(cmd) {
+            return resolved;
+        }
+
+        let paths = path_override
+            .map(|value| value.split(':').map(str::to_string).collect())
+            .unwrap_or_else(|| self.variable_state.paths.clone());
+        paths
+            .iter()
+            .map(|dir| Path::new(dir).join(cmd))
+            .find(|candidate| candidate.is_file())
+            .and_then(|path| path.to_str().map(str::to_string))
+    }
+
     /// Lookup command with cache update (mutable version for cache population).
     /// Note: With the new interior mutability, this is functionally the same as lookup.
     pub fn lookup_cached(&mut self, cmd: &str) -> Option<String> {

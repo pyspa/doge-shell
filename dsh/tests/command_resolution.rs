@@ -203,25 +203,29 @@ fn a_non_executable_path_entry_is_skipped() {
     );
 }
 
-/// Without a negative cache, a command that missed once is found after it is
-/// installed (or made executable) later in the same session.
+/// A denied candidate is not cached as a failure: making it executable
+/// later in the same session allows the next invocation to run.
 #[test]
-fn a_previous_miss_does_not_hide_a_newly_executable_command() {
+fn a_previous_denial_does_not_hide_a_newly_executable_command() {
     let dir = tempfile::tempdir().expect("failed to create temp dir");
     let script = write_script(dir.path(), "foo", "now-runs");
     chmod_mode(&script, 0o644);
 
     let output = run_interactive(&[
         &format!("export PATH={}:$PATH", dir.path().display()),
-        "foo",
+        "foo; echo FIRST:$?",
         &format!("chmod +x {}", script.display()),
         "foo",
     ]);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("command not found"),
-        "expected the first lookup to miss in {stderr:?}"
+        stderr.contains("Permission denied") && !stderr.contains("command not found"),
+        "expected the first invocation to be denied in {stderr:?}"
+    );
+    assert!(
+        stdout.lines().any(|line| line.trim() == "FIRST:126"),
+        "expected status 126 in {stdout:?}"
     );
     assert!(
         stdout.lines().any(|line| line.trim() == "now-runs"),

@@ -274,7 +274,7 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
     let environment = process.stage_environment.environment(&shell.environment);
     if let Some(path) = environment
         .read()
-        .lookup_with_path_override(&name, path_override)
+        .lookup_external_command(&name, path_override)
     {
         process.cmd = path;
         return None;
@@ -340,6 +340,38 @@ mod tests {
     use crate::environment::Environment;
     use crate::shell::Shell;
     use nix::unistd::{getpgid, getpgrp, getpid};
+
+    #[tokio::test]
+    async fn denied_path_candidate_does_not_invoke_command_not_found_hook() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let denied = root.path().join("dogesh-denied-hook-probe");
+        std::fs::write(&denied, "blocked").unwrap();
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let env = Environment::new();
+        env.write()
+            .set_shell_var("PATH".into(), root.path().display().to_string());
+        env.write().unset_shell_var("DOGESH_PATH_HOOK_SEEN");
+        let mut shell = Shell::new(env.clone());
+        shell.lisp_engine.borrow().run(
+            "(define *command-not-found-hooks* (list (lambda (name) (vset \"DOGESH_PATH_HOOK_SEEN\" name))))",
+        ).unwrap();
+        let mut process = Process::new("dogesh-denied-hook-probe".into(), vec![]);
+        assert!(resolve_program(&mut process, &mut shell).is_none());
+        assert_eq!(process.cmd, denied.display().to_string());
+        assert!(
+            env.read()
+                .lookup_variable("DOGESH_PATH_HOOK_SEEN")
+                .is_none()
+        );
+        let missing = "dogesh-missing-hook-probe";
+        let mut process = Process::new(missing.into(), vec![]);
+        assert!(resolve_program(&mut process, &mut shell).is_some());
+        assert_eq!(
+            env.read().lookup_variable("DOGESH_PATH_HOOK_SEEN"),
+            Some(missing.into())
+        );
+    }
 
     #[tokio::test]
     async fn isolated_command_not_found_keeps_live_hook_and_parent_expansion_state() {

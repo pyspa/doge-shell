@@ -90,7 +90,8 @@
 
 - Runtime command search authority is Environment.variable_state.paths.
 - A command name containing '/' bypasses PATH search.
-- PATH search considers executable files only and preserves PATH order.
+- Availability lookup (completion and auto-cd) considers executable files only and preserves PATH order.
+- External-command dispatch prefers executable PATH candidates. If none exist, it passes the first regular-file candidate to exec for authoritative permission diagnostics (126), without caching the fallback or invoking command-not-found hooks. Slash-containing names still bypass PATH.
 - Explicit pathnames are passed toward exec even when non-executable so exec diagnostics remain authoritative.
 - command_cache stores successful absolute-PATH resolutions only.
 - command-not-found is never cached.

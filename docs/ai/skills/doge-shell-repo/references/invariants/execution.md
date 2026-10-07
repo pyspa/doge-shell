@@ -21,6 +21,8 @@
 
 - External launch status: unresolved command は 127、resolved pathname の `execve` failure は 126、pre-exec setup failure は 1。子は raw `_exit` で実ステータスを返し、診断整形は既存の親側 exec-error pipe に残す。PATH candidate policy と ENOEXEC text fallback は別の実行契約。
 
+- 外部 child の launch-failure report は completion/status ではない。OutputOnly PTY で報告済み失敗後の親 `setpgid` が ESRCH でも PID/monitor ownership を渡し、既存 wait が実ステータスを回収する。一般の group 設定失敗や非PTYにこの例外を広げない。
+
 - tree completion は strict: 全 stage `Completed` のときだけ完了。最終 stage の成功だけでは完了にしない。exit code は完了判定に使わない（non-zero も `Completed`）。
 - `has_stopped_process`（いずれか `Stopped`）は SIGCONT 要否に使う。`is_fully_stopped`（`Stopped` あり + `Running` なし）は foreground-wait 終了と `Job.state` 要約に使う。`Completed` は neutral。
 - `Job.state` は process tree から導出する。truth ではない。`refresh_lifecycle_state` の順序: 全完了 → 最終 stage の完了状態 / fully stopped → 実測の先頭 `Stopped` / それ以外 → `Running`。

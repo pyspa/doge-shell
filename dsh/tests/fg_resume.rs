@@ -43,7 +43,6 @@ impl Session {
             .envs(common::process::contract_env(&root))
             .env("TERM", "xterm")
             .env("SAFETY_LEVEL", "loose")
-            .env("DOGESH_LOG", "doge_shell::process=debug")
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave));
@@ -208,10 +207,12 @@ fn denied_path_candidate_displays_diagnostic_on_interactive_terminal() {
     .unwrap();
     let setup = s.send("PATH=bin:$PATH");
     s.finished(setup, 0);
-    let denied = s.send("doge-path-denied-xyz");
-    s.finished(denied, 126);
-    s.until(|s| s.contains(denied, b"Permission denied"));
-    assert!(!s.contains(denied, b"command not found"));
+    for _ in 0..8 {
+        let denied = s.send("doge-path-denied-xyz");
+        s.finished(denied, 126);
+        s.until(|s| s.contains(denied, b"Permission denied"));
+        assert!(!s.contains(denied, b"command not found"));
+    }
     let recovered = s.send("echo path-prompt-ready");
     s.finished(recovered, 0);
 }
@@ -237,6 +238,24 @@ fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
     let diagnostic = fs::read_to_string(s.root.path().join("denied.err")).unwrap();
     assert!(diagnostic.contains("Permission denied"));
     assert!(!diagnostic.contains("command not found"));
+    let missing = s.send("doge-path-missing-xyz 2>missing.err");
+    s.finished(missing, 127);
+    assert!(
+        fs::read_to_string(s.root.path().join("missing.err"))
+            .unwrap()
+            .contains("command not found")
+    );
+    let success = s.send("true 2>success.err");
+    s.finished(success, 0);
+    let pipeline = s.send("echo upstream | doge-path-denied-xyz 2>pipeline.err");
+    s.finished(pipeline, 126);
+    assert!(
+        fs::read_to_string(s.root.path().join("pipeline.err"))
+            .unwrap()
+            .contains("Permission denied")
+    );
+    let pipefail = s.send("set -o pipefail; doge-path-denied-xyz 2>head.err | true");
+    s.finished(pipefail, 126);
     let recovered = s.send("echo path-prompt-ready");
     s.finished(recovered, 0);
     assert!(s.contains(recovered, b"path-prompt-ready"));

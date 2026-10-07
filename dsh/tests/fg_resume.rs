@@ -175,6 +175,25 @@ impl Drop for Session {
 }
 
 #[test]
+fn failed_exec_reports_126_and_returns_to_interactive_prompt() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    s.write_fixture("denied", "#!/bin/sh\necho SHOULD-NOT-RUN\n");
+    std::fs::set_permissions(
+        s.root.path().join("denied"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+    )
+    .unwrap();
+    let denied = s.send("./denied");
+    s.finished(denied, 126);
+    let captured = s.send("x=$(./denied); echo CAPTURE:$?");
+    s.finished(captured, 0);
+    assert!(s.contains(captured, b"CAPTURE:126"));
+    let recovered = s.send("echo exec-prompt-ready");
+    s.finished(recovered, 0);
+}
+
+#[test]
 fn redirected_input_and_failure_preserve_interactive_pipeline() {
     let _serial = common::serial_guard();
     let mut s = Session::new();

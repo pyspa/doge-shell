@@ -1,5 +1,42 @@
 version = 1
 
+[[case]]
+id = "process-substitution.stopped-job-retains-read-helper"
+class = "dogesh"
+mode = "interactive"
+timeout_ms = 8000
+script = '''
+mkfifo started gate
+printf '%s\n' 'echo "$PPID" > helper.pid' 'echo ready > started' 'read release < gate' 'echo retained-input' > producer.sh
+printf '%s\n' 'read ready < started' 'kill -STOP $$' 'cat "$1"' > outer.sh
+printf '%s\n' 'read helper < helper.pid' 'kill -0 "$helper" || exit 1' 'echo retained-helper' > check.sh
+{{SH}} outer.sh <({{SH}} producer.sh)
+{{SH}} check.sh
+'''
+
+[case.expect]
+status = 0
+stdout_contains = ["retained-helper"]
+
+[[case]]
+id = "process-substitution.failed-launch-reaps-read-helper"
+class = "dogesh"
+mode = "command"
+timeout_ms = 8000
+script = '''
+mkfifo started gate
+printf '%s\n' 'echo "$PPID" > helper.pid' 'echo ready > started' 'read release < gate' > producer.sh
+printf '%s\n' 'read ready < started' 'echo ready' > ready.sh
+printf '%s\n' 'read helper < helper.pid' 'kill -0 "$helper" 2>/dev/null && exit 1' 'echo cleaned-helper' > check.sh
+{{SH}} unused.sh <({{SH}} producer.sh) $({{SH}} ready.sh) < missing-input
+{{SH}} check.sh
+'''
+
+[case.expect]
+status = 0
+stdout_contains = ["cleaned-helper"]
+stderr_contains = ["missing-input"]
+
 # Process substitution: producers behind /dev/fd handles.
 
 [[case]]

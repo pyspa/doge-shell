@@ -4,6 +4,7 @@
 
 ## ディレクトリ変更
 - cwd を変えるのは `ShellProxy::changepwd`（`dsh/src/proxy/shell_proxy.rs`）だけ。`std::env::set_current_dir` を直接呼ぶと `OLDPWD`・`path_history`（`z`）・`*on-chdir-hooks*`・`dir_stack[0]` が全部ずれる。
+- `OLDPWD` は chdir 成功後、hook / direnv 実行前に移動前 cwd へ更新する。chdir 自体が失敗した場合は既存値または未設定状態を維持する。
 - `changepwd` は **chdir してから** hook / direnv で失敗しうる。`Err` を「何も起きなかった」と扱わないこと。呼び出し側は `get_current_dir()` と突き合わせて判定する（`dsh-builtin/src/dirstack.rs` の `apply` / `push_directory` が実例）。
 - `dir_stack[0]` は常に現在ディレクトリ。`dirs -v` の番号と `cd -N` はこの前提で一致している。
 

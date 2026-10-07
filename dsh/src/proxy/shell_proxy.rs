@@ -82,15 +82,15 @@ impl ShellProxy for Shell {
     }
 
     fn changepwd(&mut self, path: &str) -> Result<()> {
-        // Save current directory as OLDPWD before changing
-        if let Ok(current) = std::env::current_dir() {
+        // Commit the captured old cwd only after chdir succeeds, before hooks run.
+        let previous_dir = std::env::current_dir().ok();
+        std::env::set_current_dir(path)?;
+        if let Some(current) = previous_dir {
             let old_pwd = current.to_string_lossy().into_owned();
             self.environment
                 .write()
                 .set_shell_var("OLDPWD".to_string(), old_pwd);
         }
-
-        std::env::set_current_dir(path)?;
 
         // Use the canonical path we actually landed in for history and hooks
         let final_path = if let Ok(canon) = std::env::current_dir() {

@@ -192,6 +192,93 @@ impl Drop for CwdGuard {
 }
 
 #[test]
+fn failed_chdir_preserves_previous_directory_and_navigation_state() {
+    use dsh_builtin::ShellProxy;
+    let _lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _cwd = CwdGuard::enter(root.path());
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let file = b.join("notdir");
+    std::fs::write(&file, "file").unwrap();
+    let environment = Environment::new();
+    let mut shell = crate::shell::Shell::new(environment.clone());
+    shell.changepwd(a.to_str().unwrap()).unwrap();
+    shell.changepwd(b.to_str().unwrap()).unwrap();
+    let oldpwd = environment.read().get_var("OLDPWD");
+    assert_eq!(
+        oldpwd,
+        Some(a.canonicalize().unwrap().display().to_string())
+    );
+    let pwd = environment.read().get_var("PWD");
+    let stack = environment.read().dir_stack.clone();
+    for target in [root.path().join("missing"), file] {
+        assert!(shell.changepwd(target.to_str().unwrap()).is_err());
+        assert_eq!(std::env::current_dir().unwrap(), b.canonicalize().unwrap());
+        let env = environment.read();
+        assert_eq!(env.get_var("OLDPWD"), oldpwd);
+        assert_eq!(env.get_var("PWD"), pwd);
+        assert_eq!(env.dir_stack, stack);
+    }
+}
+
+#[test]
+fn failed_chdir_does_not_create_oldpwd() {
+    use dsh_builtin::ShellProxy;
+    let _lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _cwd = CwdGuard::enter(root.path());
+    let environment = Environment::new();
+    environment.write().remove_shell_var("OLDPWD");
+    let mut shell = crate::shell::Shell::new(environment.clone());
+    let target = root.path().join("missing");
+    assert!(shell.changepwd(target.to_str().unwrap()).is_err());
+    assert_eq!(environment.read().get_var("OLDPWD"), None);
+}
+
+#[test]
+fn chdir_hook_failure_keeps_successful_navigation_state() {
+    use dsh_builtin::ShellProxy;
+    struct FailingHook;
+    impl ChangePwdHook for FailingHook {
+        fn call(&self, _: &Path, _: Arc<RwLock<Environment>>) -> anyhow::Result<()> {
+            anyhow::bail!("fixture chdir hook failure")
+        }
+    }
+    let _lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _cwd = CwdGuard::enter(root.path());
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let environment = Environment::new();
+    let mut shell = crate::shell::Shell::new(environment.clone());
+    shell.changepwd(a.to_str().unwrap()).unwrap();
+    environment
+        .write()
+        .variable_state
+        .chpwd_hooks
+        .push(Box::new(FailingHook));
+    let result = shell.changepwd(b.to_str().unwrap());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("fixture chdir hook failure")
+    );
+    let a = a.canonicalize().unwrap().display().to_string();
+    let b = b.canonicalize().unwrap();
+    assert_eq!(std::env::current_dir().unwrap(), b);
+    let env = environment.read();
+    assert_eq!(env.get_var("OLDPWD"), Some(a));
+    assert_eq!(env.get_var("PWD"), Some(b.display().to_string()));
+    assert_eq!(env.dir_stack, vec![b.display().to_string()]);
+}
+
+#[test]
 fn lookup_skips_non_executable_first_candidate() {
     init();
     let dir_a = tempfile::tempdir().unwrap();

@@ -29,13 +29,15 @@ use dsh_types::Context;
 use dsh_types::observed_output::ObservedStream;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 
+/// Return the child and its monitors without consuming its wait status.
+/// The final flag records a reported launch-failure path, never completion.
 pub(crate) fn fork_process(
     ctx: &Context,
     job_pgid: Option<Pid>,
     process: &mut Process,
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
-) -> Result<(Pid, Vec<OutputMonitor>)> {
+) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
     debug!(
@@ -151,9 +153,10 @@ pub(crate) fn fork_process(
             debug!("FORK: Parent process - child pid: {}", child);
             // The write end must close here so EOF reliably means "exec'd".
             unsafe { libc::close(err_write_fd) };
-            drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
+            let reported_failure =
+                drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
             unsafe { libc::close(err_read_fd) };
-            Ok((child, monitors))
+            Ok((child, monitors, reported_failure || not_found.is_some()))
         }
         ForkResult::Child => {
             // The ONLY post-fork logic: raw syscalls, then execve/_exit.
@@ -187,7 +190,7 @@ pub(crate) fn fork_process(
 /// Read the exec-error pipe to EOF. Success closes the write end via
 /// `CLOEXEC` and yields no bytes; failure yields one `ChildExecError` whose
 /// diagnostic the parent formats and writes to the process's stderr target.
-fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]) {
+fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]) -> bool {
     // A single small record; a short read loop tolerates partial delivery.
     let mut record = ChildExecError { stage: 0, errno: 0 };
     let mut filled = 0usize;
@@ -208,14 +211,14 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
     }
     if filled == 0 {
         // EOF: the child exec'd and the write end closed.
-        return;
+        return false;
     }
     if filled != size {
         write_process_stderr(
             stderr_fd,
             format!("dsh: {cmd}: failed to start (short exec-error report)\r\n").as_bytes(),
         );
-        return;
+        return true;
     }
     debug!(
         stage = record.stage,
@@ -241,7 +244,7 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
                     format!("dsh: {cmd}: Permission denied ({detail}). chmod(1) may help.\r\n")
                         .as_bytes(),
                 );
-                return;
+                return true;
             }
             "failed to execute"
         }
@@ -251,6 +254,7 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
         stderr_fd,
         format!("dsh: {cmd}: {what}: {detail}\r\n").as_bytes(),
     );
+    true
 }
 
 pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
@@ -263,7 +267,7 @@ pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
             Ok(0) => break,
             Ok(n) => bytes = &bytes[n..],
             Err(error) => {
-                debug!(fd, ?error, "process diagnostic write failed");
+                tracing::warn!(fd, ?error, "process diagnostic write failed");
                 break;
             }
         }
@@ -516,9 +520,10 @@ mod tests {
         let mut shell = Shell::new(env);
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
-        let (child, monitors) =
+        let (child, monitors, terminal_launch_failure) =
             fork_process(&ctx, None, &mut process, &mut shell, None).expect("fork_process failed");
         assert!(monitors.is_empty());
+        assert!(!terminal_launch_failure);
 
         // `fork_process` drains the exec-error pipe, so return means the
         // child already passed `setpgid` + `execve`. No timing sleep needed.

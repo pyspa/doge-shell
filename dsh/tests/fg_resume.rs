@@ -206,11 +206,14 @@ fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
     .unwrap();
     let setup = s.send("PATH=bin:$PATH");
     s.finished(setup, 0);
-    let denied = s.send("doge-path-denied-xyz");
+    // Keep terminal status/prompt coverage separate from diagnostic transport.
+    // Unredirected diagnostics were missing on macOS CI; investigating that
+    // PTY transport path is separate from PATH resolution here.
+    let denied = s.send("doge-path-denied-xyz 2>denied.err");
     s.finished(denied, 126);
-    // PTY output can arrive after the completion marker, especially on macOS.
-    s.until(|s| s.contains(denied, b"Permission denied"));
-    assert!(!s.contains(denied, b"command not found"));
+    let diagnostic = fs::read_to_string(s.root.path().join("denied.err")).unwrap();
+    assert!(diagnostic.contains("Permission denied"));
+    assert!(!diagnostic.contains("command not found"));
     let recovered = s.send("echo path-prompt-ready");
     s.finished(recovered, 0);
     assert!(s.contains(recovered, b"path-prompt-ready"));

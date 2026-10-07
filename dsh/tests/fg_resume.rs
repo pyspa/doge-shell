@@ -481,3 +481,27 @@ fn stopped_write_substitution_drains_to_eof_after_foreground_completion() {
     );
     s.release("after-drain");
 }
+
+#[test]
+fn argumentless_cd_uses_changed_home_on_interactive_terminal() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    let home = s.root.path().join("logical home");
+    fs::create_dir(&home).unwrap();
+    s.write_fixture("logical home/tag", "LOGICAL-HOME-TARGET\n");
+    let assigned = s.send(&format!("HOME=\"{}\"", home.display()));
+    s.finished(assigned, 0);
+    let moved = s.send("cd");
+    s.finished(moved, 0);
+    let inspect = s.send("cat tag");
+    s.finished(inspect, 0);
+    s.until(|s| s.contains(inspect, b"LOGICAL-HOME-TARGET"));
+    let empty = s.send("HOME=");
+    s.finished(empty, 0);
+    let rejected = s.send("cd");
+    s.finished(rejected, 1);
+    s.until(|s| s.contains(rejected, b"cd: HOME not set or empty"));
+    let inspect = s.send("cat tag");
+    s.finished(inspect, 0);
+    s.until(|s| s.contains(inspect, b"LOGICAL-HOME-TARGET"));
+}

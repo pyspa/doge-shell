@@ -34,6 +34,7 @@
 - logical unset は final。process-global startup value を再発見しない。
   (`AI_CHAT_API_KEY` を `unset` しても、起動時 process env の同名値で
   `!` chat が復活してはいけない、等)
+- 無引数 `cd` は logical `HOME` を読む。未設定・空文字なら診断と status 1 で移動せず、起動時 HOME・passwd・`/` へ fallback しない。
 - AI/capture subprocesses must not inherit process-global environment
   implicitly.
 - `command |!`, `ShellProxy::capture_command`, and interactive `execute`

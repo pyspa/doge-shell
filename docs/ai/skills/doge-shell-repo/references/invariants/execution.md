@@ -14,6 +14,7 @@
 - Read direction: outer consumer completion permits producer termination (synchronous bounded reap foreground, detached grace reaper background)。
 - Write direction: outer producer completion first closes parent write endpoint; helper consumer drains to EOF and is normally reaped without signal (detached natural reaper, prompt を block しない)。
 - Output consumers remain asynchronous with respect to the next shell command.
+- Foreground の正常な stop / incomplete return は completion ではない。helper と親 endpoint は `Job.resources` に保持し、`fg` で tree が全完了した後に PTY capture / ToEof drain より先に close + direction-aware reap する。launch failure の既存 cleanup と background の detached policy は維持する。
 - Normal shell exit may release Write-direction consumer ownership without signal (`detach_process_substitution_consumers_for_normal_exit`)。Abnormal `Shell::Drop` kills still-owned process-substitution groups (both directions)。
 
 ## ライフサイクル

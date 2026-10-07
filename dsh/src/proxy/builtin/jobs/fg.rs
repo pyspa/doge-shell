@@ -280,6 +280,10 @@ pub(crate) async fn finalize_foreground_job(
         "FG_CMD_DONE: Job {} completed, finalizing through the canonical path",
         job.job_id
     );
+    // Stop and resume retained these endpoints. Completion closes them before
+    // output retirement: Write helpers need EOF, and lingering Read helpers
+    // must be reaped even when the job originally launched in the background.
+    job.finish_foreground_resources();
     // PTY-specific completion first (shared with the initial foreground
     // launch path, not a duplicate algorithm), then the canonical
     // monitor/ledger finalizer. Both are attempted even when the wait

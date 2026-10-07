@@ -37,6 +37,7 @@ pub(crate) fn fork_process(
     process: &mut Process,
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
+    diagnostic_fallback: Option<RawFd>,
 ) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
@@ -153,8 +154,13 @@ pub(crate) fn fork_process(
             debug!("FORK: Parent process - child pid: {}", child);
             // The write end must close here so EOF reliably means "exec'd".
             unsafe { libc::close(err_write_fd) };
-            let reported_failure =
-                drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
+            let reported_failure = drain_exec_error(
+                err_read_fd,
+                &process.cmd,
+                process.stderr,
+                &process.argv,
+                diagnostic_fallback,
+            );
             unsafe { libc::close(err_read_fd) };
             Ok((child, monitors, reported_failure || not_found.is_some()))
         }
@@ -190,7 +196,13 @@ pub(crate) fn fork_process(
 /// Read the exec-error pipe to EOF. Success closes the write end via
 /// `CLOEXEC` and yields no bytes; failure yields one `ChildExecError` whose
 /// diagnostic the parent formats and writes to the process's stderr target.
-fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]) -> bool {
+fn drain_exec_error(
+    err_read_fd: i32,
+    cmd: &str,
+    stderr_fd: i32,
+    argv: &[String],
+    diagnostic_fallback: Option<RawFd>,
+) -> bool {
     // A single small record; a short read loop tolerates partial delivery.
     let mut record = ChildExecError { stage: 0, errno: 0 };
     let mut filled = 0usize;
@@ -214,8 +226,9 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
         return false;
     }
     if filled != size {
-        write_process_stderr(
+        write_process_stderr_with_fallback(
             stderr_fd,
+            diagnostic_fallback,
             format!("dsh: {cmd}: failed to start (short exec-error report)\r\n").as_bytes(),
         );
         return true;
@@ -239,8 +252,9 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
             // Keep the historical hint for the most common case.
             let _ = argv;
             if record.errno == libc::EACCES {
-                write_process_stderr(
+                write_process_stderr_with_fallback(
                     stderr_fd,
+                    diagnostic_fallback,
                     format!("dsh: {cmd}: Permission denied ({detail}). chmod(1) may help.\r\n")
                         .as_bytes(),
                 );
@@ -250,14 +264,26 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
         }
         _ => "failed to start",
     };
-    write_process_stderr(
+    write_process_stderr_with_fallback(
         stderr_fd,
+        diagnostic_fallback,
         format!("dsh: {cmd}: {what}: {detail}\r\n").as_bytes(),
     );
     true
 }
 
-pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
+pub(crate) fn write_process_stderr(fd: i32, bytes: &[u8]) {
+    write_process_stderr_with_fallback(fd, None, bytes);
+}
+
+/// A failed FullProxy child can revoke its PTY before its parent writes the
+/// exec diagnostic. Only that stage supplies the original stderr as fallback.
+/// Preserve partial-write progress and never redirect errors other than EIO.
+fn write_process_stderr_with_fallback(
+    mut fd: RawFd,
+    mut fallback: Option<RawFd>,
+    mut bytes: &[u8],
+) {
     if fd < 0 {
         return;
     }
@@ -266,6 +292,12 @@ pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
         match nix::unistd::write(fd_ref, bytes) {
             Ok(0) => break,
             Ok(n) => bytes = &bytes[n..],
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(nix::errno::Errno::EIO)
+                if fallback.is_some_and(|target| target >= 0 && target != fd) =>
+            {
+                fd = fallback.take().unwrap();
+            }
             Err(error) => {
                 tracing::warn!(fd, ?error, "process diagnostic write failed");
                 break;
@@ -354,6 +386,39 @@ mod tests {
     use crate::environment::Environment;
     use crate::shell::Shell;
     use nix::unistd::{getpgid, getpgrp, getpid};
+
+    #[test]
+    fn revoked_pty_diagnostic_uses_fallback_without_retargeting_other_errors() {
+        use std::os::fd::AsRawFd;
+        let pty = nix::pty::openpty(None, None).unwrap();
+        drop(pty.master);
+        let fallback = tempfile::NamedTempFile::new().unwrap();
+        let message = b"launch diagnostic\r\n";
+        write_process_stderr_with_fallback(
+            pty.slave.as_raw_fd(),
+            Some(fallback.as_raw_fd()),
+            message,
+        );
+        assert_eq!(std::fs::read(fallback.path()).unwrap(), message);
+
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let read_only = std::fs::File::open(source.path()).unwrap();
+        let untouched = tempfile::NamedTempFile::new().unwrap();
+        write_process_stderr_with_fallback(
+            read_only.as_raw_fd(),
+            Some(untouched.as_raw_fd()),
+            message,
+        );
+        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
+
+        write_process_stderr_with_fallback(
+            source.as_raw_fd(),
+            Some(untouched.as_raw_fd()),
+            message,
+        );
+        assert_eq!(std::fs::read(source.path()).unwrap(), message);
+        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
+    }
 
     #[tokio::test]
     async fn denied_path_candidate_does_not_invoke_command_not_found_hook() {
@@ -521,7 +586,8 @@ mod tests {
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
         let (child, monitors, terminal_launch_failure) =
-            fork_process(&ctx, None, &mut process, &mut shell, None).expect("fork_process failed");
+            fork_process(&ctx, None, &mut process, &mut shell, None, None)
+                .expect("fork_process failed");
         assert!(monitors.is_empty());
         assert!(!terminal_launch_failure);
 

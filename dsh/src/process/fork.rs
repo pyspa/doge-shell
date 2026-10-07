@@ -201,6 +201,7 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
             )
         };
         if chunk <= 0 {
+            debug!(chunk, filled, error = ?(chunk < 0).then(std::io::Error::last_os_error), "exec-error read ended");
             break;
         }
         filled += chunk as usize;
@@ -216,6 +217,12 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
         );
         return;
     }
+    debug!(
+        stage = record.stage,
+        errno = record.errno,
+        stderr_fd,
+        "exec-error record received"
+    );
     let detail = std::io::Error::from_raw_os_error(record.errno).to_string();
     let what = match record.stage {
         STAGE_SETPGID => "failed to join process group",
@@ -255,7 +262,10 @@ pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
         match nix::unistd::write(fd_ref, bytes) {
             Ok(0) => break,
             Ok(n) => bytes = &bytes[n..],
-            Err(_) => break,
+            Err(error) => {
+                debug!(fd, ?error, "process diagnostic write failed");
+                break;
+            }
         }
     }
 }

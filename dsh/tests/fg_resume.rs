@@ -43,6 +43,7 @@ impl Session {
             .envs(common::process::contract_env(&root))
             .env("TERM", "xterm")
             .env("SAFETY_LEVEL", "loose")
+            .env("DOGESH_LOG", "doge_shell::process=debug")
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stdout(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave));
@@ -133,8 +134,9 @@ impl Session {
         }
         assert!(
             predicate(self),
-            "PTY deadline: {}",
-            String::from_utf8_lossy(&self.output)
+            "PTY deadline: {}\nSpawn diagnostics: {}",
+            String::from_utf8_lossy(&self.output),
+            fs::read_to_string(self.root.path().join("state/dogesh/debug.log")).unwrap_or_default()
         );
     }
 
@@ -190,6 +192,27 @@ fn failed_exec_reports_126_and_returns_to_interactive_prompt() {
     s.finished(captured, 0);
     assert!(s.contains(captured, b"CAPTURE:126"));
     let recovered = s.send("echo exec-prompt-ready");
+    s.finished(recovered, 0);
+}
+
+#[test]
+fn denied_path_candidate_displays_diagnostic_on_interactive_terminal() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    fs::create_dir(s.root.path().join("bin")).unwrap();
+    s.write_fixture("bin/doge-path-denied-xyz", "blocked");
+    fs::set_permissions(
+        s.root.path().join("bin/doge-path-denied-xyz"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+    )
+    .unwrap();
+    let setup = s.send("PATH=bin:$PATH");
+    s.finished(setup, 0);
+    let denied = s.send("doge-path-denied-xyz");
+    s.finished(denied, 126);
+    s.until(|s| s.contains(denied, b"Permission denied"));
+    assert!(!s.contains(denied, b"command not found"));
+    let recovered = s.send("echo path-prompt-ready");
     s.finished(recovered, 0);
 }
 

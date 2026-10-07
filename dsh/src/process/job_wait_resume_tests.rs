@@ -89,11 +89,13 @@ fn missing_invalid_and_shell_groups_fail_before_delivery() {
 async fn foreground_resume_without_terminal_continues_owned_group() {
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Command, Stdio};
-    struct OwnedChild(Child);
+    struct OwnedChild(Child, bool);
     impl Drop for OwnedChild {
         fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            if self.1 && matches!(self.0.try_wait(), Ok(None)) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
         }
     }
     assert!(
@@ -109,6 +111,7 @@ async fn foreground_resume_without_terminal_continues_owned_group() {
             .process_group(0)
             .spawn()
             .unwrap(),
+        true,
     );
     let pid = Pid::from_raw(child.0.id() as i32);
     let observed = tokio::time::timeout(Duration::from_secs(3), async {
@@ -120,7 +123,16 @@ async fn foreground_resume_without_terminal_continues_owned_group() {
                 nix::sys::wait::WaitStatus::StillAlive => {
                     tokio::time::sleep(Duration::from_millis(1)).await
                 }
-                other => panic!("unexpected child state: {other:?}"),
+                other => {
+                    if matches!(
+                        other,
+                        nix::sys::wait::WaitStatus::Exited(..)
+                            | nix::sys::wait::WaitStatus::Signaled(..)
+                    ) {
+                        child.1 = false;
+                    }
+                    panic!("unexpected child state: {other:?}");
+                }
             }
         }
     })
@@ -133,13 +145,14 @@ async fn foreground_resume_without_terminal_continues_owned_group() {
     {
         process.pid = Some(pid);
     }
-    tokio::time::timeout(
+    let result = tokio::time::timeout(
         Duration::from_secs(3),
         put_in_foreground(&mut job, true, true),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await;
+    // wait_job owns waitpid and may already have reaped this child. Never
+    // send cleanup SIGKILL to a completed PID that could now be recycled.
+    child.1 = !job.is_process_tree_completed();
+    result.unwrap().unwrap();
     assert_eq!(job.last_process_state(), ProcessState::Completed(7, None));
-    let _ = child.0.wait();
 }

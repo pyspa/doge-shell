@@ -48,7 +48,7 @@ impl Session {
             .stderr(Stdio::from(slave));
         unsafe {
             cmd.pre_exec(|| {
-                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())

@@ -106,7 +106,7 @@ impl Session {
         // Each PID comes from an isolated fixture. FullProxy deliberately
         // creates its own session; that fixture also records its shell parent.
         let shell = Pid::from_raw(self.child.id() as i32);
-        for name in ["left.pid", "right.pid", "child.pid"] {
+        for name in ["left.pid", "right.pid", "child.pid", "producer.pid"] {
             if let Ok(text) = fs::read_to_string(self.root.path().join(name))
                 && let Ok(raw) = text.trim().parse::<i32>()
             {
@@ -160,8 +160,8 @@ impl Session {
     fn finished(&mut self, offset: usize, status: i32) {
         let marker = format!("\x1b]133;D;{status}");
         self.until(|s| s.contains(offset, marker.as_bytes()) && s.contains(offset, b"\x1b]133;B"));
-        // A successful bg command can return while its pipeline is live.
-        // Keep those owned fixtures available for failure-path cleanup.
+        // Background pipelines and substitution helpers can remain live after
+        // a command returns. Keep their ownership for failure-path cleanup.
         self.fixtures.retain(|(pid, session, group)| {
             getsid(Some(*pid)) == Ok(*session) && getpgid(Some(*pid)) == Ok(*group)
         });
@@ -389,4 +389,108 @@ fn no_pty_signal_fixture() {
     loop {
         unsafe { libc::pause() };
     }
+}
+
+impl Session {
+    fn fifo(&self, name: &str) {
+        nix::unistd::mkfifo(
+            &self.root.path().join(name),
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+    }
+
+    fn release(&mut self, name: &str) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let end = Instant::now() + Duration::from_secs(8);
+        let mut gate = loop {
+            match fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(self.root.path().join(name))
+            {
+                Ok(file) => break file,
+                Err(e) if e.raw_os_error() == Some(libc::ENXIO) && Instant::now() < end => {
+                    self.pump(Duration::from_millis(20))
+                }
+                Err(e) => panic!("release {name}: {e}"),
+            }
+        };
+        gate.write_all(b"release\n").unwrap();
+    }
+}
+
+#[test]
+fn stopped_read_substitution_survives_two_foreground_intervals() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    s.fifo("started");
+    s.fifo("gate");
+    s.fifo("linger");
+    s.write_fixture("producer.sh", "echo $$ > producer.pid\necho $PPID > helper.pid\necho ready > started\nread release < gate\nprintf retained-input\nread linger < linger\n");
+    s.write_fixture("outer.sh", "echo $$ > child.pid\necho $PPID > child.parent\nread ready < started\nkill -STOP $$\necho first > first-resume\nkill -STOP $$\necho second > second-resume\nhead -c 14 \"$1\" > actual\nexit 7\n");
+    s.stopped("sh outer.sh <(sh producer.sh)");
+    let helper = Pid::from_raw(
+        fs::read_to_string(s.root.path().join("helper.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap(),
+    );
+    assert!(
+        getpgid(Some(helper)).is_ok(),
+        "stopping the consumer must not reap its Read helper"
+    );
+    let first = s.send("fg");
+    s.until(|s| {
+        s.root.path().join("first-resume").exists()
+            && s.contains(first, b"Stopped")
+            && s.contains(first, b"\x1b]133;B")
+    });
+    assert!(
+        getpgid(Some(helper)).is_ok(),
+        "re-stopping must retain the same Read helper"
+    );
+    let second = s.send("fg");
+    s.until(|s| s.root.path().join("second-resume").exists());
+    s.release("gate");
+    s.finished(second, 7);
+    assert_eq!(
+        fs::read_to_string(s.root.path().join("actual")).unwrap(),
+        "retained-input"
+    );
+    assert!(
+        getpgid(Some(helper)).is_err(),
+        "completed foreground consumer must synchronously reap a lingering Read helper"
+    );
+}
+
+#[test]
+fn stopped_write_substitution_drains_to_eof_after_foreground_completion() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    s.fifo("started");
+    s.fifo("after-drain");
+    s.write_fixture(
+        "consumer.sh",
+        "echo $$ > producer.pid\necho ready > started\ncat > actual\necho drained > drained\nread release < after-drain\n",
+    );
+    s.write_fixture("outer.sh", "echo $$ > child.pid\necho $PPID > child.parent\nread ready < started\nprintf first > \"$1\"\nkill -STOP $$\nprintf second > \"$1\"\nexit 7\n");
+    s.stopped("sh outer.sh >(sh consumer.sh)");
+    assert!(
+        !s.root.path().join("drained").exists(),
+        "a stopped writer is not EOF"
+    );
+    let fg = s.send("fg");
+    s.finished(fg, 7);
+    s.until(|s| s.root.path().join("drained").exists());
+    assert_eq!(
+        fs::read_to_string(s.root.path().join("actual")).unwrap(),
+        "firstsecond"
+    );
+    assert!(
+        !s.fixtures.is_empty(),
+        "a live asynchronous consumer remains owned for failure cleanup"
+    );
+    s.release("after-drain");
 }

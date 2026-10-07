@@ -23,21 +23,11 @@ use crate::process::job_pty;
 use crate::process::job_wait;
 
 mod lifecycle;
+use lifecycle::parent_setpgid_exec_race;
 #[cfg(test)]
 mod lifecycle_property_tests;
 #[cfg(test)]
 mod lifecycle_tests;
-
-/// A post-exec EACCES is harmless only when the child already belongs to
-/// the positive job group approved by the existing signal ownership guard.
-fn parent_setpgid_exec_race(
-    error: Errno,
-    owned_group: Option<Pid>,
-    observed_group: std::result::Result<Pid, Errno>,
-) -> bool {
-    error == Errno::EACCES
-        && owned_group.is_some_and(|group| group.as_raw() > 0 && observed_group == Ok(group))
-}
 
 #[derive(Debug)]
 pub struct Job {
@@ -266,21 +256,30 @@ impl Job {
         let result = self.launch_inner(ctx, shell).await;
 
         // Every stage is spawned by now, so each outer command holds its own
-        // copies: finalize direction-aware here. Foreground jobs close parent
+        // copies: finalize completed foreground jobs direction-aware. Close parent
         // endpoint copies first (Write consumers see EOF), then reap Read
         // producers synchronously (bounded) and hand Write consumers to
         // detached natural reapers so the prompt never waits for them.
-        // Background jobs keep their resources in the job (which outlives
-        // this call on `wait_jobs`): handing them to detached reapers here
-        // would group-kill helpers while the background outer command still
+        // Background and stopped foreground jobs keep resources (and ownership)
+        // in the job, which outlives
+        // this call on `wait_jobs`: handing them to detached reapers here
+        // would group-kill helpers while the outer command still
         // needs their pipes (`cat <(sleep 5; echo done) &` lost its stream
         // after the 2s reaper grace). Ownership moves to detached reapers
         // only when the background job itself is dropped, by which point its
         // outer command no longer needs anything. `Job` never touches
         // producer/consumer/fd internals directly — only this API.
-        if self.foreground {
-            let resources = std::mem::take(&mut self.resources);
-            resources.finish_foreground();
+        // A stopped/running consumer still needs its helper and endpoints.
+        // Preserve them on the job until a later foreground completion.
+        // Failed launches keep the existing immediate cleanup policy.
+        let retains_live_resources = matches!(
+            &result,
+            Ok(JobLaunchOutcome::Process(
+                ProcessState::Running | ProcessState::Stopped(..)
+            ))
+        );
+        if self.foreground && !retains_live_resources {
+            self.finish_foreground_resources();
         }
 
         // Launching rewires `ctx` (pipes, capture, redirections, pgid routing,
@@ -294,6 +293,12 @@ impl Job {
         caller_ctx.restore(ctx);
 
         result
+    }
+
+    /// Close parent substitution endpoints and apply the foreground helper
+    /// policy after completion, or when a foreground launch has failed.
+    pub(crate) fn finish_foreground_resources(&mut self) {
+        std::mem::take(&mut self.resources).finish_foreground();
     }
 
     async fn launch_inner(
@@ -494,11 +499,8 @@ impl Job {
                         target_pgid, pid
                     ),
                     Err(e) => {
-                        // The fork boundary waits for the CLOEXEC exec-error
-                        // pipe: a successful child can already have exec'd.
-                        // Child-side setpgid precedes exec in both OutputOnly
-                        // and no-PTY jobs. Accept only that specific race and
-                        // only after verifying the owned child's actual group.
+                        // Exec-error pipe wait can outlast exec: verify the
+                        // owned group or a terminal, still-waitable child.
                         let verified_exec_race = e == Errno::EACCES
                             && parent_setpgid_exec_race(
                                 e,

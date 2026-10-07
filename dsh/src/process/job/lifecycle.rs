@@ -1,6 +1,7 @@
-//! Cached job lifecycle queries and transitions backed by the process tree.
+//! Job lifecycle transitions and process-group ownership predicates.
 
 use crate::process::{Job, JobProcess, state::ProcessState};
+use nix::{errno::Errno, unistd::Pid};
 
 impl Job {
     /// Whether every stage in the canonical process tree has completed.
@@ -56,4 +57,15 @@ impl Job {
         }
         self.refresh_lifecycle_state();
     }
+}
+
+/// A post-exec EACCES is harmless only when the child already belongs to
+/// the positive job group approved by the existing signal ownership guard.
+pub(super) fn parent_setpgid_exec_race(
+    error: Errno,
+    owned_group: Option<Pid>,
+    observed_group: std::result::Result<Pid, Errno>,
+) -> bool {
+    error == Errno::EACCES
+        && owned_group.is_some_and(|group| group.as_raw() > 0 && observed_group == Ok(group))
 }

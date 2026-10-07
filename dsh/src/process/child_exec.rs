@@ -147,14 +147,6 @@ unsafe fn reset_signal(sig: libc::c_int) -> i32 {
 /// Never returns: `execve` replaces the image on success, `_exit` otherwise.
 pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
     unsafe {
-        // Unresolved command: the message goes to *this* process's stderr
-        // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
-        // other shell.
-        if !plan.not_found_msg.is_null() {
-            write_all(plan.not_found_fd, plan.not_found_msg, plan.not_found_len);
-            libc::_exit(127);
-        }
-
         if plan.interactive && !plan.full_proxy_pty {
             // Joined by the parent's own `setpgid(child, pgid)` after the
             // fork; both sides calling it is the standard race-free pattern.
@@ -163,6 +155,14 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
                 report_error(plan.exec_error_fd, STAGE_SETPGID, errno);
                 libc::_exit(1);
             }
+        }
+
+        // Unresolved command: the message goes to *this* process's stderr
+        // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
+        // other shell.
+        if !plan.not_found_msg.is_null() {
+            write_all(plan.not_found_fd, plan.not_found_msg, plan.not_found_len);
+            libc::_exit(127);
         }
 
         // Restore the job-control defaults the shell itself ignores.

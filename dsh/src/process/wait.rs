@@ -25,6 +25,31 @@ pub fn is_job_completed(job: &Job) -> bool {
     job_completed
 }
 
+/// Confirm termination of one owned child without consuming its exit status.
+/// Darwin may return ESRCH from setpgid/getpgid for an unreaped zombie. Keep
+/// that child waitable so the canonical waiter still owns the actual status.
+/// `P_PID` and a positive PID never inspect another child or the shell itself.
+pub(crate) fn is_waitable_terminal_child(pid: Pid) -> nix::Result<bool> {
+    if pid.as_raw() <= 0 || pid == nix::unistd::getpid() {
+        return Err(nix::errno::Errno::EINVAL);
+    }
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid.as_raw() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    nix::errno::Errno::result(result)?;
+    Ok(unsafe { info.si_pid() } == pid.as_raw()
+        && matches!(
+            info.si_code,
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED
+        ))
+}
+
 /// What a single `waitpid(pid)` call observed.
 ///
 /// This separates three domains the old `Option<(Pid, ProcessState)>` return
@@ -410,5 +435,70 @@ mod tests {
             ProcessState::Completed(143, Some(Signal::SIGTERM))
         );
         assert_eq!(waited.1.shell_exit_code(), Some(143));
+    }
+
+    fn terminal_peek_until_ready(pid: Pid) -> nix::Result<bool> {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if is_waitable_terminal_child(pid)? {
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= end {
+                return Ok(false);
+            }
+            unsafe { libc::poll(std::ptr::null_mut(), 0, 10) };
+        }
+    }
+
+    #[test]
+    fn terminal_peek_preserves_owned_child_exit_status() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "exit 7"])
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        let terminal = terminal_peek_until_ready(pid);
+        let status = child.wait().unwrap();
+        assert_eq!(terminal, Ok(true));
+        assert_eq!(status.code(), Some(7));
+        assert_eq!(
+            is_waitable_terminal_child(pid),
+            Err(nix::errno::Errno::ECHILD)
+        );
+    }
+
+    #[test]
+    fn terminal_peek_rejects_live_stopped_and_non_child_pids() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "read value"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        let live = is_waitable_terminal_child(pid);
+        nix::sys::signal::kill(pid, Signal::SIGSTOP).unwrap();
+        let stopped = wait_pid_job(pid, false);
+        let stopped_peek = is_waitable_terminal_child(pid);
+        child.kill().unwrap();
+        let killed_peek = terminal_peek_until_ready(pid);
+        let killed = child.wait().unwrap();
+        assert_eq!(live, Ok(false));
+        assert!(
+            matches!(stopped, Ok(WaitPidObservation::State(waited, ProcessState::Stopped(..))) if waited == pid)
+        );
+        assert_eq!(stopped_peek, Ok(false));
+        assert_eq!(killed_peek, Ok(true));
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(killed.signal(), Some(libc::SIGKILL));
+        for raw in [0, -1, getpid().as_raw()] {
+            assert_eq!(
+                is_waitable_terminal_child(Pid::from_raw(raw)),
+                Err(nix::errno::Errno::EINVAL)
+            );
+        }
+        assert_eq!(
+            is_waitable_terminal_child(nix::unistd::getppid()),
+            Err(nix::errno::Errno::ECHILD)
+        );
     }
 }

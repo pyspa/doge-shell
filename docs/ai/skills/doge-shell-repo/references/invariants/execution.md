@@ -25,7 +25,7 @@
 - `ECHILD` は wait の観測であって合成 `ProcessState` ではない。実ステータスを消費したコードだけが tree に記録する。後続の ECHILD 観測が exit code を捏造しない。
 - `mark_stopped_processes_running` は `Stopped -> Running` のみ。`Completed` は触らない。
 
-- Interactive external command の親 `setpgid` は exec-error pipe の待機により exec 後になり得る。非 FullProxy（OutputOnly / no-PTY）で `EACCES` のみ、正の PGID・既存 signal ownership guard・実 child の `getpgid` 一致を確認して受理する。他 errno・membership 不一致・照会失敗は成功にしない。NO_PTY 回帰は実 tty が必要なため `dsh/tests/fg_resume.rs` の専用 controlling PTY で検証する。
+- Interactive external command の親 `setpgid` は exec-error pipe の待機により exec 後になり得る。非 FullProxy（OutputOnly / no-PTY）で `EACCES` のみ、正の PGID・既存 signal ownership guard・実 child の `getpgid` 一致を確認して受理する。`EACCES` / `ESRCH` で既に終了した既知 child は、canonical wait 境界の `waitid(P_PID, WEXITED|WNOHANG|WNOWAIT)` と実 PID/code 一致で非消費確認できた場合だけ許容する。live/stopped・ECHILD・他 errno を成功にしない。peek は status を記録/回収せず既存 wait に委ねる。not-found child も interactive grouping 後に終了し、pipeline の後段用 group を保つ。NO_PTY 回帰は実 tty が必要なため `dsh/tests/fg_resume.rs` の専用 controlling PTY で検証する。
 
 ## Foreground stop / PTY ownership
 

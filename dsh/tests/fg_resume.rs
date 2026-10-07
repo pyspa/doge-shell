@@ -303,8 +303,17 @@ fn no_pty_external_preserves_exit_status_after_exec() {
     s.finished(offset, 7);
     assert!(s.contains(offset, b"launched-no-pty"));
     assert!(!s.contains(offset, b"EACCES"));
+    s.write_fixture("fast.sh", "exit 7\n");
+    for _ in 0..4 {
+        let fast = s.send("sh fast.sh");
+        s.finished(fast, 7);
+    }
     let missing = s.send("missing_no_pty_command");
     s.finished(missing, 127);
+    let missing_first = s.send("missing_no_pty_command | sh fast.sh");
+    s.finished(missing_first, 7);
+    let missing_last = s.send("sh fast.sh | missing_no_pty_command");
+    s.finished(missing_last, 127);
     s.write_fixture("not-executable", "exit 99\n");
     let denied = s.send("./not-executable");
     // Preserve the existing exec-failure policy; do not turn it into success.

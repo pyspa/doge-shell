@@ -505,7 +505,13 @@ impl Job {
                                 self.safe_job_pgid().filter(|pgid| *pgid == target_pgid),
                                 getpgid(Some(pid)),
                             );
-                        if !verified_exec_race {
+                        let verified_exited_child = !verified_exec_race
+                            && matches!(e, Errno::EACCES | Errno::ESRCH)
+                            && self
+                                .safe_job_pgid()
+                                .is_some_and(|group| group == target_pgid && group.as_raw() > 0)
+                            && super::wait::is_waitable_terminal_child(pid).unwrap_or(false);
+                        if !verified_exec_race && !verified_exited_child {
                             error!(
                                 "🔧 PGID: Failed to set pgid {} for pid {}: {}",
                                 target_pgid, pid, e

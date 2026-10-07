@@ -26,6 +26,39 @@ use common::{head_path, run_command, serial_guard, tr_path, yes_path};
 
 const DRAIN_TIMEOUT: Duration = DEFAULT_CASE_TIMEOUT;
 
+/// An earlier failed output redirect must not open a later blocking FIFO.
+#[test]
+fn output_redirect_failure_does_not_open_later_fifo() {
+    let _serial = serial_guard();
+    let script = format!(
+        "mkfifo blocked-input; {} > missing-dir/output < blocked-input; echo CONTINUED:$?",
+        common::true_path()
+    );
+    let output = spawn_dsh_unlocked(["-c", &script], None)
+        .assert_group_drained(Duration::from_secs(8))
+        .expect("first redirect failure must return without blocking on the FIFO");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("CONTINUED:1"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failed to create redirect file"));
+}
+
+/// Replacing pipeline stdin must close the inherited reader so upstream exits.
+#[test]
+fn redirected_pipeline_input_releases_upstream_reader() {
+    let _serial = serial_guard();
+    let script = format!(
+        "echo finite-input > input.txt; {} | cat < input.txt; echo DONE:$?",
+        yes_path()
+    );
+    let output = spawn_dsh_unlocked(["-c", &script], None)
+        .assert_group_drained(Duration::from_secs(8))
+        .expect("redirected consumer and upstream producer must both finish");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success());
+    assert!(stdout.contains("finite-input"));
+    assert!(stdout.contains("DONE:0"));
+}
+
 /// Shell exit leaves no survivors in its group: simple command.
 #[test]
 fn group_drains_after_simple_command() {

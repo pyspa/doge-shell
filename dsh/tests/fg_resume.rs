@@ -175,6 +175,28 @@ impl Drop for Session {
 }
 
 #[test]
+fn redirected_input_and_failure_preserve_interactive_pipeline() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    s.write_fixture("input.txt", "PTY-REDIRECT-PAYLOAD\n");
+    let copied = s.send("cat < input.txt | cat > copied.txt");
+    s.finished(copied, 0);
+    assert_eq!(
+        fs::read_to_string(s.root.path().join("copied.txt")).unwrap(),
+        "PTY-REDIRECT-PAYLOAD\n"
+    );
+    let failed = s.send("echo unused > copied.txt < missing-input");
+    s.finished(failed, 1);
+    assert_eq!(fs::read(s.root.path().join("copied.txt")).unwrap(), b"");
+    let recovered = s.send("cat < input.txt | cat > recovered.txt");
+    s.finished(recovered, 0);
+    assert_eq!(
+        fs::read_to_string(s.root.path().join("recovered.txt")).unwrap(),
+        "PTY-REDIRECT-PAYLOAD\n"
+    );
+}
+
+#[test]
 fn full_proxy_resume_restops_and_restores_input() {
     let _serial = common::serial_guard();
     let mut s = Session::new();

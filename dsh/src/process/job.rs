@@ -7,12 +7,10 @@ use tracing::{debug, error};
 
 use super::io::OutputMonitor;
 use super::job_process::{JobProcess, ProcessLaunchOutcome};
-use super::launch_outcome::{
-    CommandFailure, JobLaunchContext, JobLaunchOutcome, StageLaunchOutcome,
-};
+use super::launch_outcome::{JobLaunchContext, JobLaunchOutcome, StageLaunchOutcome};
 use super::pipeline_status::PipelineStatusPolicy;
 use super::process::Process;
-use super::redirect::{self, Redirect};
+use super::redirect::Redirect;
 use super::state::{ListOp, ProcessState, SubshellType};
 use crate::process::pty::{Pty, PtyChildConfig, PtyMode};
 use crate::shell::Shell;
@@ -398,32 +396,8 @@ impl Job {
             return super::async_list::launch_async_list_process(self, ctx, shell, process);
         }
         let previous_infile = ctx.infile;
-        // Input redirection is applied here, before the process is launched;
-        // the output side is applied inside `launch`, after the pipe and PTY
-        // wiring, so `2>&1` sees where stdout actually ended up.
-        let stdin_redirects: Vec<Redirect> = process
-            .redirects()
-            .iter()
-            .filter(|redirect| redirect.is_stdin())
-            .cloned()
-            .collect();
-        // A failed input redirection fails the command, not the shell: stop
-        // any already-spawned upstream stages, then report the outcome
-        // without the `?` operator. No per-stage wiring exists yet, so there
-        // is nothing else to unwind.
-        let applied_stdin = match redirect::apply(&stdin_redirects, ctx) {
-            Ok(applied) => applied,
-            Err(failure) => {
-                self.abort_spawned_stages(ctx, previous_infile).await;
-                return Ok(StageLaunchOutcome::CommandFailed(CommandFailure::redirect(
-                    &failure,
-                )));
-            }
-        };
-        let input_fd = applied_stdin.changed_stdin().then_some(ctx.infile);
-
         // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_output, launched_monitors) = match process
+        let (pid, mut next_process, applied_redirects, launched_monitors) = match process
             .launch(ctx, shell, self.stdout, pty, pipeline_context)
             .await
         {
@@ -434,23 +408,13 @@ impl Job {
                 monitors,
             }) => (pid, next_process, redirects, monitors),
             // The stage never spawned and its own wiring is already unwound:
-            // restore the input redirection, stop upstream stages, and
+            // stop upstream stages and
             // report the command failure.
             Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
-                applied_stdin.restore(ctx);
-                if input_fd.is_some_and(|fd| ctx.infile == fd) {
-                    ctx.infile = previous_infile;
-                }
-                drop(applied_stdin);
                 self.abort_spawned_stages(ctx, previous_infile).await;
                 return Ok(StageLaunchOutcome::CommandFailed(failure));
             }
             Err(err) => {
-                // The guard is about to drop and close the input file, so
-                // put `ctx` back first rather than leaving it naming a
-                // descriptor that no longer exists.
-                applied_stdin.restore(ctx);
-                ctx.infile = previous_infile;
                 return Err(err);
             }
         };
@@ -535,10 +499,7 @@ impl Job {
         let (stdin, stdout, stderr) = process.get_io();
         let pty_slave = pty.map(|pty| pty.slave);
         if stdin != self.stdin {
-            let should_close = match input_fd {
-                Some(fd) => stdin != fd,
-                None => pty_slave != Some(stdin), // Don't close if it's pty_slave
-            } && !applied_stdin.owns(stdin);
+            let should_close = pty_slave != Some(stdin) && !applied_redirects.owns(stdin);
             if should_close && let Err(e) = close(stdin) {
                 debug!("failed close stdin: {}", e);
                 // Don't error out here, just log (avoid crash if EBADF)
@@ -548,23 +509,23 @@ impl Job {
         // end of the previous stage's pipe never reaches the check above and
         // nobody closed it. The writer then never saw EOF: `yes | wc -l < f`
         // left `yes` blocked forever with the shell still holding the pipe.
-        if applied_stdin.changed_stdin()
+        if applied_redirects.changed_stdin()
             && previous_infile != self.stdin
-            && previous_infile != ctx.infile
+            && previous_infile != stdin
             && pty_slave != Some(previous_infile)
-            && !applied_stdin.owns(previous_infile)
+            && !applied_redirects.owns(previous_infile)
             && let Err(e) = close(previous_infile)
         {
             debug!("failed close inherited pipe read end: {}", e);
         }
-        // A redirection's file is owned by `applied_output` and closed when it
+        // A redirection's file is owned by `applied_redirects` and closed when it
         // drops; closing it here as well would be a double close. `captured_out`
         // is the caller's pipe (`execute_with_capture`, `$( )`), which the
         // caller closes once every stage has been launched.
         if stdout != self.stdout
             && Some(stdout) != ctx.captured_out
             && pty_slave != Some(stdout)
-            && !applied_output.owns(stdout)
+            && !applied_redirects.owns(stdout)
             && let Err(e) = close(stdout)
         {
             debug!("failed close stdout: {}", e);
@@ -572,7 +533,7 @@ impl Job {
         if stderr != self.stderr
             && stdout != stderr
             && pty_slave != Some(stderr)
-            && !applied_output.owns(stderr)
+            && !applied_redirects.owns(stderr)
             && let Err(e) = close(stderr)
         {
             debug!("failed close stderr: {}", e);
@@ -581,17 +542,10 @@ impl Job {
         // Release the redirection files now. The child inherited them at fork,
         // and a duplicate of a pipe's write end kept here would stop the next
         // command in the pipeline from ever seeing EOF.
-        drop(applied_output);
-        drop(applied_stdin);
+        drop(applied_redirects);
 
         self.set_process(process.to_owned());
         self.show_job_status();
-
-        if let Some(fd) = input_fd
-            && ctx.infile == fd
-        {
-            ctx.infile = previous_infile;
-        }
 
         // run next pipeline process
         //

@@ -29,13 +29,16 @@ use dsh_types::Context;
 use dsh_types::observed_output::ObservedStream;
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 
+/// Return the child and its monitors without consuming its wait status.
+/// The final flag records a reported launch-failure path, never completion.
 pub(crate) fn fork_process(
     ctx: &Context,
     job_pgid: Option<Pid>,
     process: &mut Process,
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
-) -> Result<(Pid, Vec<OutputMonitor>)> {
+    diagnostic_fallback: Option<RawFd>,
+) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
     debug!(
@@ -151,9 +154,15 @@ pub(crate) fn fork_process(
             debug!("FORK: Parent process - child pid: {}", child);
             // The write end must close here so EOF reliably means "exec'd".
             unsafe { libc::close(err_write_fd) };
-            drain_exec_error(err_read_fd, &process.cmd, process.stderr, &process.argv);
+            let reported_failure = drain_exec_error(
+                err_read_fd,
+                &process.cmd,
+                process.stderr,
+                &process.argv,
+                diagnostic_fallback,
+            );
             unsafe { libc::close(err_read_fd) };
-            Ok((child, monitors))
+            Ok((child, monitors, reported_failure || not_found.is_some()))
         }
         ForkResult::Child => {
             // The ONLY post-fork logic: raw syscalls, then execve/_exit.
@@ -187,7 +196,13 @@ pub(crate) fn fork_process(
 /// Read the exec-error pipe to EOF. Success closes the write end via
 /// `CLOEXEC` and yields no bytes; failure yields one `ChildExecError` whose
 /// diagnostic the parent formats and writes to the process's stderr target.
-fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]) {
+fn drain_exec_error(
+    err_read_fd: i32,
+    cmd: &str,
+    stderr_fd: i32,
+    argv: &[String],
+    diagnostic_fallback: Option<RawFd>,
+) -> bool {
     // A single small record; a short read loop tolerates partial delivery.
     let mut record = ChildExecError { stage: 0, errno: 0 };
     let mut filled = 0usize;
@@ -201,21 +216,29 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
             )
         };
         if chunk <= 0 {
+            debug!(chunk, filled, error = ?(chunk < 0).then(std::io::Error::last_os_error), "exec-error read ended");
             break;
         }
         filled += chunk as usize;
     }
     if filled == 0 {
         // EOF: the child exec'd and the write end closed.
-        return;
+        return false;
     }
     if filled != size {
-        write_process_stderr(
+        write_process_stderr_with_fallback(
             stderr_fd,
+            diagnostic_fallback,
             format!("dsh: {cmd}: failed to start (short exec-error report)\r\n").as_bytes(),
         );
-        return;
+        return true;
     }
+    debug!(
+        stage = record.stage,
+        errno = record.errno,
+        stderr_fd,
+        "exec-error record received"
+    );
     let detail = std::io::Error::from_raw_os_error(record.errno).to_string();
     let what = match record.stage {
         STAGE_SETPGID => "failed to join process group",
@@ -229,24 +252,38 @@ fn drain_exec_error(err_read_fd: i32, cmd: &str, stderr_fd: i32, argv: &[String]
             // Keep the historical hint for the most common case.
             let _ = argv;
             if record.errno == libc::EACCES {
-                write_process_stderr(
+                write_process_stderr_with_fallback(
                     stderr_fd,
+                    diagnostic_fallback,
                     format!("dsh: {cmd}: Permission denied ({detail}). chmod(1) may help.\r\n")
                         .as_bytes(),
                 );
-                return;
+                return true;
             }
             "failed to execute"
         }
         _ => "failed to start",
     };
-    write_process_stderr(
+    write_process_stderr_with_fallback(
         stderr_fd,
+        diagnostic_fallback,
         format!("dsh: {cmd}: {what}: {detail}\r\n").as_bytes(),
     );
+    true
 }
 
-pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
+pub(crate) fn write_process_stderr(fd: i32, bytes: &[u8]) {
+    write_process_stderr_with_fallback(fd, None, bytes);
+}
+
+/// A failed FullProxy child can revoke its PTY before its parent writes the
+/// exec diagnostic. Only that stage supplies the original stderr as fallback.
+/// Preserve partial-write progress and never redirect errors other than EIO.
+fn write_process_stderr_with_fallback(
+    mut fd: RawFd,
+    mut fallback: Option<RawFd>,
+    mut bytes: &[u8],
+) {
     if fd < 0 {
         return;
     }
@@ -255,7 +292,16 @@ pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
         match nix::unistd::write(fd_ref, bytes) {
             Ok(0) => break,
             Ok(n) => bytes = &bytes[n..],
-            Err(_) => break,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(nix::errno::Errno::EIO)
+                if fallback.is_some_and(|target| target >= 0 && target != fd) =>
+            {
+                fd = fallback.take().unwrap();
+            }
+            Err(error) => {
+                tracing::warn!(fd, ?error, "process diagnostic write failed");
+                break;
+            }
         }
     }
 }
@@ -274,7 +320,7 @@ fn resolve_program(process: &mut Process, shell: &mut Shell) -> Option<Vec<u8>> 
     let environment = process.stage_environment.environment(&shell.environment);
     if let Some(path) = environment
         .read()
-        .lookup_with_path_override(&name, path_override)
+        .lookup_external_command(&name, path_override)
     {
         process.cmd = path;
         return None;
@@ -340,6 +386,71 @@ mod tests {
     use crate::environment::Environment;
     use crate::shell::Shell;
     use nix::unistd::{getpgid, getpgrp, getpid};
+
+    #[test]
+    fn revoked_pty_diagnostic_uses_fallback_without_retargeting_other_errors() {
+        use std::os::fd::AsRawFd;
+        let pty = nix::pty::openpty(None, None).unwrap();
+        drop(pty.master);
+        let fallback = tempfile::NamedTempFile::new().unwrap();
+        let message = b"launch diagnostic\r\n";
+        write_process_stderr_with_fallback(
+            pty.slave.as_raw_fd(),
+            Some(fallback.as_raw_fd()),
+            message,
+        );
+        assert_eq!(std::fs::read(fallback.path()).unwrap(), message);
+
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let read_only = std::fs::File::open(source.path()).unwrap();
+        let untouched = tempfile::NamedTempFile::new().unwrap();
+        write_process_stderr_with_fallback(
+            read_only.as_raw_fd(),
+            Some(untouched.as_raw_fd()),
+            message,
+        );
+        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
+
+        write_process_stderr_with_fallback(
+            source.as_raw_fd(),
+            Some(untouched.as_raw_fd()),
+            message,
+        );
+        assert_eq!(std::fs::read(source.path()).unwrap(), message);
+        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn denied_path_candidate_does_not_invoke_command_not_found_hook() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let denied = root.path().join("dogesh-denied-hook-probe");
+        std::fs::write(&denied, "blocked").unwrap();
+        std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let env = Environment::new();
+        env.write()
+            .set_shell_var("PATH".into(), root.path().display().to_string());
+        env.write().unset_shell_var("DOGESH_PATH_HOOK_SEEN");
+        let mut shell = Shell::new(env.clone());
+        shell.lisp_engine.borrow().run(
+            "(define *command-not-found-hooks* (list (lambda (name) (vset \"DOGESH_PATH_HOOK_SEEN\" name))))",
+        ).unwrap();
+        let mut process = Process::new("dogesh-denied-hook-probe".into(), vec![]);
+        assert!(resolve_program(&mut process, &mut shell).is_none());
+        assert_eq!(process.cmd, denied.display().to_string());
+        assert!(
+            env.read()
+                .lookup_variable("DOGESH_PATH_HOOK_SEEN")
+                .is_none()
+        );
+        let missing = "dogesh-missing-hook-probe";
+        let mut process = Process::new(missing.into(), vec![]);
+        assert!(resolve_program(&mut process, &mut shell).is_some());
+        assert_eq!(
+            env.read().lookup_variable("DOGESH_PATH_HOOK_SEEN"),
+            Some(missing.into())
+        );
+    }
 
     #[tokio::test]
     async fn isolated_command_not_found_keeps_live_hook_and_parent_expansion_state() {
@@ -474,9 +585,11 @@ mod tests {
         let mut shell = Shell::new(env);
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
-        let (child, monitors) =
-            fork_process(&ctx, None, &mut process, &mut shell, None).expect("fork_process failed");
+        let (child, monitors, terminal_launch_failure) =
+            fork_process(&ctx, None, &mut process, &mut shell, None, None)
+                .expect("fork_process failed");
         assert!(monitors.is_empty());
+        assert!(!terminal_launch_failure);
 
         // `fork_process` drains the exec-error pipe, so return means the
         // child already passed `setpgid` + `execve`. No timing sleep needed.

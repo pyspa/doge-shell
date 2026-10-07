@@ -108,6 +108,9 @@ fn strip_argv0<'a>(program: &str, argv: &'a [String]) -> &'a [String] {
 pub(crate) enum ProcessLaunchOutcome {
     Launched {
         pid: Pid,
+        /// The raw child reported a terminal launch failure; its real status
+        /// still belongs to the canonical process tree and existing wait path.
+        terminal_launch_failure: bool,
         next_process: Option<Box<JobProcess>>,
         redirects: AppliedRedirects,
         monitors: Vec<super::io::OutputMonitor>,

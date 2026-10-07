@@ -133,8 +133,9 @@ impl Session {
         }
         assert!(
             predicate(self),
-            "PTY deadline: {}",
-            String::from_utf8_lossy(&self.output)
+            "PTY deadline: {}\nSpawn diagnostics: {}",
+            String::from_utf8_lossy(&self.output),
+            fs::read_to_string(self.root.path().join("state/dogesh/debug.log")).unwrap_or_default()
         );
     }
 
@@ -191,6 +192,76 @@ fn failed_exec_reports_126_and_returns_to_interactive_prompt() {
     assert!(s.contains(captured, b"CAPTURE:126"));
     let recovered = s.send("echo exec-prompt-ready");
     s.finished(recovered, 0);
+}
+
+#[test]
+fn denied_path_candidate_displays_diagnostic_on_interactive_terminal() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    fs::create_dir(s.root.path().join("bin")).unwrap();
+    s.write_fixture("bin/doge-path-denied-xyz", "blocked");
+    fs::set_permissions(
+        s.root.path().join("bin/doge-path-denied-xyz"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+    )
+    .unwrap();
+    let setup = s.send("PATH=bin:$PATH");
+    s.finished(setup, 0);
+    for _ in 0..8 {
+        let denied = s.send("doge-path-denied-xyz");
+        s.finished(denied, 126);
+        s.until(|s| s.contains(denied, b"Permission denied"));
+        assert!(!s.contains(denied, b"command not found"));
+    }
+    let recovered = s.send("echo path-prompt-ready");
+    s.finished(recovered, 0);
+}
+
+#[test]
+fn denied_path_candidate_reports_126_and_returns_to_interactive_prompt() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    fs::create_dir(s.root.path().join("bin")).unwrap();
+    s.write_fixture("bin/doge-path-denied-xyz", "blocked");
+    fs::set_permissions(
+        s.root.path().join("bin/doge-path-denied-xyz"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o644),
+    )
+    .unwrap();
+    let setup = s.send("PATH=bin:$PATH");
+    s.finished(setup, 0);
+    // Keep terminal status/prompt coverage separate from diagnostic transport.
+    // Unredirected diagnostics were missing on macOS CI; investigating that
+    // PTY transport path is separate from PATH resolution here.
+    let denied = s.send("doge-path-denied-xyz 2>denied.err");
+    s.finished(denied, 126);
+    let diagnostic = fs::read_to_string(s.root.path().join("denied.err")).unwrap();
+    assert!(diagnostic.contains("Permission denied"));
+    assert!(!diagnostic.contains("command not found"));
+    let quiet = s.send("doge-path-denied-xyz 2>/dev/null");
+    s.finished(quiet, 126);
+    assert!(!s.contains(quiet, b"Permission denied"));
+    let missing = s.send("doge-path-missing-xyz 2>missing.err");
+    s.finished(missing, 127);
+    assert!(
+        fs::read_to_string(s.root.path().join("missing.err"))
+            .unwrap()
+            .contains("command not found")
+    );
+    let success = s.send("true 2>success.err");
+    s.finished(success, 0);
+    let pipeline = s.send("echo upstream | doge-path-denied-xyz 2>pipeline.err");
+    s.finished(pipeline, 126);
+    assert!(
+        fs::read_to_string(s.root.path().join("pipeline.err"))
+            .unwrap()
+            .contains("Permission denied")
+    );
+    let pipefail = s.send("set -o pipefail; doge-path-denied-xyz 2>head.err | true");
+    s.finished(pipefail, 126);
+    let recovered = s.send("echo path-prompt-ready");
+    s.finished(recovered, 0);
+    assert!(s.contains(recovered, b"path-prompt-ready"));
 }
 
 #[test]

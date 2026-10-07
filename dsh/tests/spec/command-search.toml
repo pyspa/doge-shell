@@ -1,6 +1,6 @@
 version = 1
 
-# External command search: slash bypass, executable-only PATH candidates,
+# External command search: slash bypass, executable candidate priority,
 # and command-scoped PATH overrides.
 
 [[case]]
@@ -114,3 +114,100 @@ script = "printf blocked > denied; chmod 644 denied; set -o pipefail; ./denied |
 [case.expect]
 status = 0
 stdout_contains = ["STATUS:126"]
+
+[[case]]
+id = "command-search.path-permission-denied"
+class = "posix"
+mode = "command"
+script = "mkdir -p pa pb; printf blocked > pa/doge-path-denied-xyz; chmod 644 pa/doge-path-denied-xyz; PATH=pa:pb:$PATH; doge-path-denied-xyz; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.scoped-path-permission-denied"
+class = "posix"
+mode = "command"
+script = "mkdir -p pa; printf blocked > pa/doge-path-denied-xyz; chmod 644 pa/doge-path-denied-xyz; PATH=pa doge-path-denied-xyz; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.relative-path-permission-refresh"
+class = "posix"
+mode = "command"
+script = "mkdir -p a/bin b/bin; printf blocked > a/bin/doge-path-denied-xyz; chmod 644 a/bin/doge-path-denied-xyz; printf '#!/bin/sh\\necho MARKER-B\\n' > b/bin/doge-path-denied-xyz; chmod +x b/bin/doge-path-denied-xyz; PATH=bin:$PATH; cd a; doge-path-denied-xyz; echo FIRST:$?; cd ../b; doge-path-denied-xyz; echo SECOND:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["FIRST:126", "MARKER-B", "SECOND:0"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.empty-path-permission-denied"
+class = "posix"
+mode = "command"
+script = "printf blocked > doge-path-denied-xyz; chmod 644 doge-path-denied-xyz; PATH=:$PATH; doge-path-denied-xyz; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.path-permission-background"
+class = "posix"
+mode = "command"
+script = "mkdir pa; printf blocked > pa/doge-path-denied-xyz; chmod 644 pa/doge-path-denied-xyz; PATH=pa:$PATH; doge-path-denied-xyz & wait $!; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.path-permission-command-substitution"
+class = "posix"
+mode = "command"
+script = "mkdir pa; printf blocked > pa/doge-path-denied-xyz; chmod 644 pa/doge-path-denied-xyz; PATH=pa:$PATH; x=$(doge-path-denied-xyz); echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.path-permission-pipefail"
+class = "posix"
+mode = "command"
+script = "mkdir pa; printf blocked > pa/doge-path-denied-xyz; chmod 644 pa/doge-path-denied-xyz; PATH=pa:$PATH; set -o pipefail; doge-path-denied-xyz | {{TRUE}}; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:126"]
+stderr_contains = ["Permission denied"]
+
+[[case]]
+id = "command-search.denied-path-preserves-auto-cd"
+class = "dogesh"
+mode = "command"
+script = "mkdir -p pa doge-path-dir-xyz; printf blocked > pa/doge-path-dir-xyz; chmod 644 pa/doge-path-dir-xyz; PATH=pa:$PATH; doge-path-dir-xyz; pwd"
+
+[case.expect]
+status = 0
+stdout_contains = ["/doge-path-dir-xyz"]
+
+[[case]]
+id = "command-search.denied-path-preserves-builtin"
+class = "dogesh"
+mode = "command"
+script = "mkdir -p pa builtin-target; printf blocked > pa/cd; chmod 644 pa/cd; PATH=pa:$PATH; cd builtin-target; pwd"
+
+[case.expect]
+status = 0
+stdout_contains = ["/builtin-target"]

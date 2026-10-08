@@ -54,10 +54,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
         // Handle previous directory (cd -)
         Some("-") => match proxy.get_var("OLDPWD") {
-            Some(old_pwd) => {
-                ctx.write_stdout(&old_pwd).ok();
-                old_pwd
-            }
+            Some(old_pwd) => old_pwd,
             None => {
                 ctx.write_stderr("cd: OLDPWD not set").ok();
                 return ExitStatus::ExitedWith(1);
@@ -89,7 +86,12 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     // Attempt to change directory through shell proxy
     match proxy.changepwd(&dir) {
-        Ok(_) => ExitStatus::ExitedWith(0),
+        Ok(_) => {
+            if argv.get(1).is_some_and(|arg| arg == "-") {
+                ctx.write_stdout(&dir).ok();
+            }
+            ExitStatus::ExitedWith(0)
+        }
         Err(err) => {
             ctx.write_stderr(&format!("cd: {err}: {dir}")).ok();
             ExitStatus::ExitedWith(1)
@@ -161,5 +163,32 @@ mod tests {
             ExitStatus::ExitedWith(0)
         );
         assert_eq!(proxy.changed_to.as_deref(), Some("/explicit"));
+    }
+
+    #[test]
+    fn cd_minus_prints_captured_destination_only_after_success() {
+        let pid = nix::unistd::getpid();
+        for succeeds in [false, true] {
+            let mut stdout = tempfile::tempfile().unwrap();
+            let stderr = tempfile::tempfile().unwrap();
+            let mut ctx = Context::new_safe(pid, pid, false);
+            ctx.outfile = stdout.as_raw_fd();
+            ctx.errfile = stderr.as_raw_fd();
+            let mut proxy = TestShellProxy {
+                allow_changepwd: succeeds,
+                ..Default::default()
+            };
+            proxy
+                .vars
+                .insert("OLDPWD".into(), "/previous target".into());
+            assert_eq!(
+                command(&ctx, vec!["cd".into(), "-".into()], &mut proxy),
+                ExitStatus::ExitedWith(if succeeds { 0 } else { 1 })
+            );
+            stdout.seek(SeekFrom::Start(0)).unwrap();
+            let mut printed = String::new();
+            stdout.read_to_string(&mut printed).unwrap();
+            assert_eq!(printed, if succeeds { "/previous target\n" } else { "" });
+        }
     }
 }

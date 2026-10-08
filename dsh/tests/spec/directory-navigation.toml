@@ -33,3 +33,38 @@ script = "mkdir a b; echo A > a/tag; echo B > b/tag; cd a; cd ../b; cd - > /dev/
 status = 0
 stdout_exact = "A\nB\n"
 stderr_exact = ""
+
+[[case]]
+id = "directory-navigation.cd-minus-missing-has-no-destination-output"
+class = "dogesh"
+mode = "command"
+script = "ROOT=$(pwd); mkdir \"logical home\"; HOME=\"$ROOT/logical home\"; cd; OLDPWD=\"$ROOT/missing\"; pwd > before-cwd; dirs -v > before-stack; cd - > minus-output; echo CD:$?; pwd > after-cwd; dirs -v > after-stack; cmp before-cwd after-cwd; echo CWD:$?; cmp before-stack after-stack; echo STACK:$?; echo OLD:$OLDPWD > old-state; echo HOME:$HOME > home-state"
+
+[case.expect]
+status = 0
+stdout_exact = "CD:1\nCWD:0\nSTACK:0\n"
+stderr_contains = ["cd:"]
+files = [{ path = "logical home/minus-output", content_exact = "" }, { path = "logical home/old-state", content_contains = ["/missing"] }, { path = "logical home/home-state", content_contains = ["/logical home"] }]
+
+[[case]]
+id = "directory-navigation.cd-minus-notdir-has-no-destination-output"
+class = "dogesh"
+mode = "command"
+script = "ROOT=$(pwd); mkdir \"logical home\"; printf file > notdir; HOME=\"$ROOT/logical home\"; cd; OLDPWD=\"$ROOT/notdir\"; pwd > before-cwd; dirs -v > before-stack; cd - > minus-output; echo CD:$?; pwd > after-cwd; dirs -v > after-stack; cmp before-cwd after-cwd; echo CWD:$?; cmp before-stack after-stack; echo STACK:$?; echo OLD:$OLDPWD > old-state; echo HOME:$HOME > home-state"
+
+[case.expect]
+status = 0
+stdout_exact = "CD:1\nCWD:0\nSTACK:0\n"
+stderr_contains = ["cd:"]
+files = [{ path = "logical home/minus-output", content_exact = "" }, { path = "logical home/old-state", content_contains = ["/notdir"] }, { path = "logical home/home-state", content_contains = ["/logical home"] }]
+
+[[case]]
+id = "directory-navigation.cd-minus-success-prints-destination-once"
+class = "dogesh"
+mode = "command"
+script = "ROOT=$(pwd); mkdir a b; cd a; cd ../b; cd - > \"$ROOT/printed\"; echo CD:$?; pwd > \"$ROOT/expected\"; cmp \"$ROOT/printed\" \"$ROOT/expected\"; echo OUTPUT:$?"
+
+[case.expect]
+status = 0
+stdout_exact = "CD:0\nOUTPUT:0\n"
+stderr_exact = ""

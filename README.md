@@ -758,9 +758,23 @@ dogesh
 # Execute a single command
 dogesh -c "echo 'Hello, World!'"
 
-# Execute a Lisp script
+# Execute an inline Lisp program
 dogesh -l "(print \"Hello from Lisp!\")"
+
+# Execute a Lisp script file
+dogesh lisp ./script.lisp
+dogesh lisp ./script.lisp -- first second
 ```
+
+Both inline (`-l`) and file (`dogesh lisp FILE`) modes evaluate every
+top-level form in order as one program. Inside a program, `*argv0*` is the
+script path (`"dogesh"` for `-l`) and `*argv*` is the list of remaining
+arguments — `(length *argv*)` gives the argument count, and option-looking
+arguments are kept verbatim (use `--` to separate them from the file path).
+The file path resolves against the current working directory, `config.lisp`
+loads before the program as usual, and the final value prints unless it is
+NIL. A successful evaluation exits 0; read, parse, or runtime failures exit
+non-zero with the script path in the diagnostic.
 
 > **Renamed from `dsh`:** the binary is now `dogesh`, the config directory is
 > `~/.config/dogesh`, project skills live in `<project>/.dogesh/skills`, and

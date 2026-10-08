@@ -1,6 +1,6 @@
-//! The four ways a `dsh` process can run: interactive REPL, `-c <command>`,
-//! `-l <lisp>`, and the subcommand dispatch in `run_shell` that precedes all
-//! of them. `Context` construction (`create_context`/`create_context_for_command`)
+//! The ways a `dsh` process can run: interactive REPL, `-c <command>`,
+//! `-l <lisp>`, `lisp <file>`, and the subcommand dispatch in `run_shell`
+//! that precedes all of them. `Context` construction (`create_context`/`create_context_for_command`)
 //! lives here too since each run mode builds its own.
 use crate::agent_lifecycle;
 use crate::bootstrap::{StartupBackgroundTasks, spawn_herdr_shutdown_signal_watcher};
@@ -17,7 +17,7 @@ use nix::unistd::isatty;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::fd::BorrowedFd;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use tracing::debug;
 
@@ -49,12 +49,19 @@ pub async fn run_shell() -> ExitCode {
             } => {
                 return handle_completion_command(command.clone(), output.clone(), *force).await;
             }
+            // `lisp <file>` runs through the normal one-shot shell
+            // initialization below (Environment, Shell, config.lisp) via
+            // `RunMode::LispFile`, so it is not returned here.
+            SubCommand::Lisp { .. } => {}
         }
     }
 
     let run_mode = RunMode::from_cli(&cli);
     let env = Environment::new();
     if let RunMode::Command {
+        argv0, positional, ..
+    }
+    | RunMode::LispFile {
         argv0, positional, ..
     } = &run_mode
     {
@@ -223,7 +230,8 @@ pub async fn run_shell() -> ExitCode {
     let _chat_jobs_shutdown = ChatJobsShutdown;
 
     let code = match run_mode {
-        RunMode::Lisp(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
+        RunMode::LispInline(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
+        RunMode::LispFile { path, .. } => execute_lisp_file(&mut shell, &mut ctx, &path).await,
         RunMode::Command { command, .. } => execute_command(&mut shell, &mut ctx, &command).await,
         RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
     };
@@ -438,12 +446,15 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
 }
 
 pub async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &str) -> ExitCode {
-    debug!("Executing Lisp script: {}", lisp_script);
+    debug!("Executing Lisp program: {}", lisp_script);
     shell.set_signals();
 
-    match shell.lisp_engine.borrow().run(lisp_script) {
+    // Program argv is bound after config.lisp so script invocation is the
+    // final authority; for `-l` this exposes `*argv0*` = "dogesh".
+    shell.lisp_engine.borrow().sync_program_invocation();
+    match shell.lisp_engine.borrow().run_program(lisp_script) {
         Ok(value) => {
-            debug!("Lisp script executed successfully: {:?}", value);
+            debug!("Lisp program executed successfully: {:?}", value);
             // Print the result if it's not NIL
             if value != Value::NIL
                 && let Err(err) = writeln!(std::io::stdout(), "{value}")
@@ -454,7 +465,36 @@ pub async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &s
             ExitCode::SUCCESS
         }
         Err(err) => {
-            eprintln!("Error executing Lisp script: {err}");
+            eprintln!("Error executing Lisp script: {err:#}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Execute a Lisp script file as a program.
+///
+/// Output contract matches [`execute_lisp`]: the final value prints unless
+/// NIL, success exits 0, and any read/parse/runtime failure exits 1 with
+/// the script path in the diagnostic. A non-NIL result never becomes the
+/// process exit status.
+pub async fn execute_lisp_file(shell: &mut Shell, _ctx: &mut Context, path: &Path) -> ExitCode {
+    debug!("Executing Lisp script file: {}", path.display());
+    shell.set_signals();
+
+    shell.lisp_engine.borrow().sync_program_invocation();
+    match shell.lisp_engine.borrow().run_program_file(path) {
+        Ok(value) => {
+            debug!("Lisp script file executed successfully: {:?}", value);
+            if value != Value::NIL
+                && let Err(err) = writeln!(std::io::stdout(), "{value}")
+            {
+                eprintln!("Error writing to stdout: {err}");
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("Error executing Lisp script: {err:#}");
             ExitCode::FAILURE
         }
     }

@@ -1639,3 +1639,77 @@ fn external_lookup_scoped_denial_preserves_parent_cache_and_slash_bypass() {
         Some(parent_probe.display().to_string())
     );
 }
+
+#[test]
+fn cd_minus_hook_failure_keeps_successful_navigation_state_without_auto_output() {
+    use dsh_builtin::ShellProxy;
+    use std::io::{Read, Seek, SeekFrom};
+    use std::os::fd::AsRawFd;
+    struct FailingHook;
+    impl ChangePwdHook for FailingHook {
+        fn call(&self, _: &Path, _: Arc<RwLock<Environment>>) -> anyhow::Result<()> {
+            anyhow::bail!("fixture cd-minus hook failure")
+        }
+    }
+    let _lock = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _cwd = CwdGuard::enter(root.path());
+    let a = root.path().join("a");
+    let b = root.path().join("logical home");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    let a = a.canonicalize().unwrap().display().to_string();
+    let b = b.canonicalize().unwrap().display().to_string();
+    let environment = Environment::new();
+    let mut shell = crate::shell::Shell::new(environment.clone());
+    shell.changepwd(&a).unwrap();
+    environment.write().set_shell_var("HOME".into(), b.clone());
+    let mut stdout = tempfile::tempfile().unwrap();
+    let mut stderr = tempfile::tempfile().unwrap();
+    let pid = nix::unistd::getpid();
+    let mut ctx = dsh_types::Context::new_safe(pid, pid, false);
+    ctx.outfile = stdout.as_raw_fd();
+    ctx.errfile = stderr.as_raw_fd();
+    assert_eq!(
+        dsh_builtin::cd::command(&ctx, vec!["cd".into()], &mut shell),
+        dsh_types::ExitStatus::ExitedWith(0)
+    );
+    environment
+        .write()
+        .variable_state
+        .chpwd_hooks
+        .push(Box::new(FailingHook));
+    assert_eq!(
+        dsh_builtin::cd::command(&ctx, vec!["cd".into(), "-".into()], &mut shell),
+        dsh_types::ExitStatus::ExitedWith(1)
+    );
+    stdout.seek(SeekFrom::Start(0)).unwrap();
+    let mut printed = String::new();
+    stdout.read_to_string(&mut printed).unwrap();
+    assert!(printed.is_empty(), "unexpected auto output: {printed:?}");
+    stderr.seek(SeekFrom::Start(0)).unwrap();
+    let mut diagnostic = String::new();
+    stderr.read_to_string(&mut diagnostic).unwrap();
+    assert!(diagnostic.contains("fixture cd-minus hook failure"));
+    assert_eq!(std::env::current_dir().unwrap().display().to_string(), a);
+    {
+        let env = environment.read();
+        assert_eq!(env.get_var("HOME"), Some(b.clone()));
+        assert_eq!(env.get_var("OLDPWD"), Some(b.clone()));
+        assert_eq!(env.get_var("PWD"), Some(a.clone()));
+        assert_eq!(env.dir_stack, vec![a.clone()]);
+    }
+    environment.write().variable_state.chpwd_hooks.clear();
+    assert_eq!(
+        dsh_builtin::cd::command(&ctx, vec!["cd".into(), "-".into()], &mut shell),
+        dsh_types::ExitStatus::ExitedWith(0)
+    );
+    stdout.seek(SeekFrom::Start(0)).unwrap();
+    printed.clear();
+    stdout.read_to_string(&mut printed).unwrap();
+    assert_eq!(printed, format!("{b}\n"));
+    let env = environment.read();
+    assert_eq!(env.get_var("OLDPWD"), Some(a));
+    assert_eq!(env.get_var("PWD"), Some(b.clone()));
+    assert_eq!(env.dir_stack, vec![b]);
+}

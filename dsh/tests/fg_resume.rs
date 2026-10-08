@@ -533,3 +533,61 @@ fn argumentless_cd_uses_changed_home_on_interactive_terminal() {
     s.finished(inspect, 0);
     s.until(|s| s.contains(inspect, b"LOGICAL-HOME-TARGET"));
 }
+
+#[test]
+fn failed_cd_minus_has_no_auto_output_and_preserves_interactive_navigation() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    let a = s.root.path().join("a");
+    let home = s.root.path().join("logical home");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&home).unwrap();
+    s.write_fixture("a/tag", "CD-MINUS-A-TARGET\n");
+    s.write_fixture("logical home/notdir", "file");
+    let pushed = s.send(&format!("pushd \"{}\" > /dev/null", a.display()));
+    s.finished(pushed, 0);
+    for target in [s.root.path().join("missing"), home.join("notdir")] {
+        let entered = s.send(&format!("cd \"{}\"", a.display()));
+        s.finished(entered, 0);
+        let assigned = s.send(&format!("HOME=\"{}\"", home.display()));
+        s.finished(assigned, 0);
+        let entered = s.send("cd");
+        s.finished(entered, 0);
+        let assigned = s.send(&format!("OLDPWD=\"{}\"", target.display()));
+        s.finished(assigned, 0);
+        let before = s.send("dirs -v > before-stack");
+        s.finished(before, 0);
+        let rejected = s.send("cd - > minus-output");
+        s.finished(rejected, 1);
+        s.until(|s| s.contains(rejected, b"cd:"));
+        assert_eq!(
+            fs::read(home.join("minus-output")).unwrap(),
+            Vec::<u8>::new()
+        );
+        let checked = s.send("dirs -v > after-stack; cmp before-stack after-stack");
+        s.finished(checked, 0);
+        let assigned = s.send(&format!("OLDPWD=\"{}\"", a.display()));
+        s.finished(assigned, 0);
+        let back = s.send("cd - > successful-output");
+        s.finished(back, 0);
+        assert_eq!(
+            fs::read_to_string(home.join("successful-output"))
+                .unwrap()
+                .trim(),
+            a.display().to_string()
+        );
+        let inspect = s.send("cat tag");
+        s.finished(inspect, 0);
+        s.until(|s| s.contains(inspect, b"CD-MINUS-A-TARGET"));
+    }
+    let popped = s.send("popd > /dev/null");
+    s.finished(popped, 0);
+    let inspect = s.send("pwd > recovered-cwd");
+    s.finished(inspect, 0);
+    assert_eq!(
+        fs::read_to_string(s.root.path().join("recovered-cwd"))
+            .unwrap()
+            .trim(),
+        s.root.path().canonicalize().unwrap().display().to_string()
+    );
+}

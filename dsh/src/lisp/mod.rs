@@ -14,6 +14,7 @@ use dsh_types::shell_options::ShellOptions;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::path::Path;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 
@@ -128,8 +129,7 @@ impl LispEngine {
             env.clear_mcp_servers();
         }
 
-        let wrapped_config = format!("(begin {config_lisp}\n)");
-        let run_result = self.run(&wrapped_config);
+        let run_result = self.run_program(&config_lisp);
 
         match run_result {
             Ok(_) => {
@@ -203,6 +203,63 @@ impl LispEngine {
         }
         // Return NIL if no expressions were evaluated
         Ok(Value::NIL)
+    }
+
+    /// Evaluate a complete Lisp program: every top-level form in order.
+    ///
+    /// All forms are parsed before the first one runs, so a syntax error
+    /// later in the file leaves no partial side effects behind. Runtime
+    /// errors are fail-fast: evaluation stops at the first failure.
+    /// An empty program (blank or comments only) yields `Value::NIL`;
+    /// otherwise the value of the last form is returned.
+    ///
+    /// `run()` stays the single-expression API used by the `lisp` shell
+    /// builtin and internal callers; `run_program()` is the authority for
+    /// `config.lisp` and CLI script execution (`-l`, `dogesh lisp FILE`).
+    pub fn run_program(&self, src: &str) -> anyhow::Result<Value> {
+        let expressions = parse(src).collect::<Result<Vec<_>, _>>().map_err(|err| {
+            tracing::error!("Lisp parse error: {}", err);
+            anyhow::anyhow!("Parse error: {}", err)
+        })?;
+
+        let mut result = Value::NIL;
+        for expression in expressions {
+            result = eval(Rc::clone(&self.env), &expression)?;
+        }
+        Ok(result)
+    }
+
+    /// Read a Lisp script file and evaluate it as a program.
+    ///
+    /// The path is used as given (no canonicalization); read and
+    /// evaluation failures carry the path as diagnostic context.
+    pub fn run_program_file(&self, path: &Path) -> anyhow::Result<Value> {
+        let src = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read Lisp script {}", path.display()))?;
+        self.run_program(&src)
+            .with_context(|| format!("failed to execute Lisp script {}", path.display()))
+    }
+
+    /// Bind `*argv0*` / `*argv*` from the shared `Environment::invocation`.
+    ///
+    /// Called just before executing a Lisp program (after `config.lisp`),
+    /// never as a permanent `default_env()` binding, so config evaluation
+    /// and interactive sessions stay free of script argv state.
+    pub(crate) fn sync_program_invocation(&self) {
+        let invocation = self.shell_env.read().invocation().clone();
+        self.env
+            .borrow_mut()
+            .define(Symbol::from("*argv0*"), Value::String(invocation.argv0));
+        self.env.borrow_mut().define(
+            Symbol::from("*argv*"),
+            Value::List(
+                invocation
+                    .positional
+                    .into_iter()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
     }
 
     pub fn run_func(&self, name: &str, args: Vec<String>) -> anyhow::Result<Value> {

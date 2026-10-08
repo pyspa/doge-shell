@@ -810,3 +810,118 @@ fn config_rollback_restores_ai_projections() {
         Some("model-a".to_string())
     );
 }
+
+/// `run_program()` evaluates every top-level form in order and returns the
+/// last value.
+#[test]
+fn run_program_evaluates_all_top_level_forms() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+
+    let result = engine
+        .borrow()
+        .run_program("(define x 1)\n(set x 2)\nx")
+        .unwrap();
+    assert_eq!(result, Value::Int(2.into()));
+}
+
+/// `run_program()` parses everything before evaluating anything: a syntax
+/// error later in the program must not leave earlier side effects behind.
+#[test]
+fn run_program_detects_syntax_errors_before_evaluating() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+
+    let result = engine.borrow().run_program("(define x 1)\n)");
+    assert!(result.is_err(), "expected a parse error, got {result:?}");
+    assert!(
+        !engine.borrow().has("x"),
+        "a form before the syntax error must not take effect"
+    );
+}
+
+/// `run_program()` is fail-fast on runtime errors: earlier effects stay,
+/// later forms never run.
+#[test]
+fn run_program_stops_after_the_first_runtime_error() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+
+    let result = engine
+        .borrow()
+        .run_program("(define x 1)\n(undefined-symbol)\n(set x 2)");
+    assert!(result.is_err(), "expected a runtime error, got {result:?}");
+    assert_eq!(
+        engine.borrow().run("x").unwrap(),
+        Value::Int(1.into()),
+        "effects before the failure stay, effects after it must not happen"
+    );
+}
+
+/// Empty, whitespace-only, and comment-only programs yield NIL.
+#[test]
+fn run_program_treats_empty_input_as_nil() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+
+    for src in ["", "   \n\t  ", ";; only a comment\n;; another one"] {
+        assert_eq!(engine.borrow().run_program(src).unwrap(), Value::NIL);
+    }
+}
+
+/// `run()` keeps its single-expression semantics: with several top-level
+/// forms only the first is evaluated. `run_program()` owns the rest.
+#[test]
+fn run_keeps_single_expression_semantics() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+
+    let result = engine.borrow().run("(define y 1)\n(set y 2)").unwrap();
+    assert_eq!(result, Value::Int(1.into()));
+    assert_eq!(
+        engine.borrow().run("y").unwrap(),
+        Value::Int(1.into()),
+        "run() must not evaluate forms after the first"
+    );
+}
+
+/// Program argv shares the shell's `Environment::invocation`: the same
+/// state the `$0`/`$1` resolver reads is what `*argv0*`/`*argv*` expose.
+#[test]
+fn program_invocation_sync_shares_shell_invocation_state() {
+    init();
+    let env = Environment::new();
+    env.write().invocation = crate::environment::InvocationParameters {
+        argv0: "./script.lisp".to_string(),
+        positional: vec!["alpha".to_string(), "--flag".to_string()],
+    };
+    let engine = LispEngine::new(env.clone());
+    engine.borrow().sync_program_invocation();
+
+    assert_eq!(
+        engine.borrow().run("*argv0*").unwrap(),
+        Value::String("./script.lisp".to_string())
+    );
+    assert_eq!(
+        engine.borrow().run("(nth 0 *argv*)").unwrap(),
+        Value::String("alpha".to_string())
+    );
+    assert_eq!(
+        engine.borrow().run("(nth 1 *argv*)").unwrap(),
+        Value::String("--flag".to_string())
+    );
+    assert_eq!(
+        engine.borrow().run("(length *argv*)").unwrap(),
+        Value::Int(2.into())
+    );
+    assert_eq!(env.read().invocation().argv0, "./script.lisp");
+    assert_eq!(
+        env.read().invocation().positional,
+        vec!["alpha".to_string(), "--flag".to_string()]
+    );
+}

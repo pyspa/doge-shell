@@ -67,6 +67,17 @@ pub enum SubCommand {
         #[arg(short, long)]
         force: bool,
     },
+
+    /// Execute a Lisp script file as a program
+    Lisp {
+        /// Lisp script file, resolved against the current working directory
+        file: PathBuf,
+
+        /// Arguments passed to the script (`*argv*`); option-looking
+        /// values are accepted, use `--` to separate them from the file
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,14 +88,25 @@ pub(crate) enum RunMode {
         argv0: String,
         positional: Vec<String>,
     },
-    Lisp(String),
+    LispInline(String),
+    LispFile {
+        path: PathBuf,
+        argv0: String,
+        positional: Vec<String>,
+    },
     Notebook(PathBuf),
 }
 
 impl RunMode {
     pub(crate) fn from_cli(cli: &Cli) -> Self {
-        if let Some(script) = &cli.lisp {
-            Self::Lisp(script.clone())
+        if let Some(SubCommand::Lisp { file, args }) = &cli.subcommand {
+            Self::LispFile {
+                path: file.clone(),
+                argv0: file.to_string_lossy().into_owned(),
+                positional: args.clone(),
+            }
+        } else if let Some(script) = &cli.lisp {
+            Self::LispInline(script.clone())
         } else if let Some(command) = &cli.command {
             Self::Command {
                 command: command[0].clone(),
@@ -153,6 +175,52 @@ mod tests {
         assert!(!RunMode::from_cli(&lisp).needs_interactive_services());
     }
     #[test]
+    fn lisp_file_subcommand_parses_path_and_arguments() {
+        let cli = Cli::try_parse_from(["dogesh", "lisp", "script.lisp"]).unwrap();
+        assert_eq!(
+            RunMode::from_cli(&cli),
+            RunMode::LispFile {
+                path: PathBuf::from("script.lisp"),
+                argv0: "script.lisp".into(),
+                positional: vec![],
+            }
+        );
+        assert!(!RunMode::from_cli(&cli).needs_interactive_services());
+
+        let cli = Cli::try_parse_from(["dogesh", "lisp", "script.lisp", "alpha", "beta"]).unwrap();
+        assert_eq!(
+            RunMode::from_cli(&cli),
+            RunMode::LispFile {
+                path: PathBuf::from("script.lisp"),
+                argv0: "script.lisp".into(),
+                positional: vec!["alpha".into(), "beta".into()],
+            }
+        );
+
+        let cli =
+            Cli::try_parse_from(["dogesh", "lisp", "script.lisp", "--", "--flag", "-x"]).unwrap();
+        assert_eq!(
+            RunMode::from_cli(&cli),
+            RunMode::LispFile {
+                path: PathBuf::from("script.lisp"),
+                argv0: "script.lisp".into(),
+                positional: vec!["--flag".into(), "-x".into()],
+            }
+        );
+
+        let cli = Cli::try_parse_from(["dogesh", "lisp", "./dir/script.lisp"]).unwrap();
+        assert_eq!(
+            RunMode::from_cli(&cli),
+            RunMode::LispFile {
+                path: PathBuf::from("./dir/script.lisp"),
+                argv0: "./dir/script.lisp".into(),
+                positional: vec![],
+            }
+        );
+
+        assert!(Cli::try_parse_from(["dogesh", "lisp"]).is_err());
+    }
+    #[test]
     fn invocation_cli_preserves_subcommands_and_trailing_arguments() {
         let cli = Cli::try_parse_from(["dogesh", "completion", "git"]).unwrap();
         assert!(
@@ -178,7 +246,7 @@ mod tests {
     }
     #[test]
     fn command_name_can_match_a_subcommand() {
-        for name in ["import", "completion"] {
+        for name in ["import", "completion", "lisp"] {
             let cli = Cli::try_parse_from(["dogesh", "-c", "echo", name, "arg"]).unwrap();
             assert!(cli.subcommand.is_none());
             assert_eq!(cli.command.as_ref().unwrap(), &["echo", name, "arg"]);

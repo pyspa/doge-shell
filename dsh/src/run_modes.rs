@@ -66,10 +66,13 @@ pub async fn run_shell() -> ExitCode {
     } = &run_mode
     {
         env.write().invocation = crate::environment::InvocationParameters {
+            interactive: false,
             argv0: argv0.clone(),
             positional: positional.clone(),
         };
     }
+    // RunMode is the invocation authority, even when a script inherits a TTY.
+    env.write().invocation.interactive = run_mode.needs_interactive_services();
     let mut shell = Shell::new(env);
     let mut startup_tasks = StartupBackgroundTasks::default();
 

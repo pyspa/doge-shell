@@ -50,27 +50,8 @@ fn capture(source: &str, limit: bool) -> Output {
     }
     let child = command.spawn().unwrap();
     let group = Pid::from_raw(child.id() as i32);
-    let mut result =
-        common::process::wait_child_with_output_deadline(child, group, Duration::from_secs(30))
-            .expect("capture must complete within the deadline");
-    // Interactive execution writes OSC titles to the outer stdout. They are
-    // presentation, not bytes returned by sh!; the fixture contains no ESC.
-    let mut plain = Vec::new();
-    let mut i = 0;
-    while i < result.stdout.len() {
-        if result.stdout[i..].starts_with(b"\x1b]") {
-            i += result.stdout[i..]
-                .iter()
-                .position(|&b| b == 7)
-                .expect("title terminator")
-                + 1;
-        } else {
-            plain.push(result.stdout[i]);
-            i += 1;
-        }
-    }
-    result.stdout = plain;
-    result
+    common::process::wait_child_with_output_deadline(child, group, Duration::from_secs(30))
+        .expect("capture must complete within the deadline")
 }
 
 #[test]
@@ -83,17 +64,10 @@ fn large_capture_is_exact_with_stderr_pipeline_and_nonzero_exit() {
         let result = capture(source, false);
         assert!(result.status.success(), "{:?}", result.stderr);
         let expected = "日本語 abc 0123456789\n".repeat(160_000);
-        let actual = if source.contains("diagnostic") {
-            // Existing stderr monitors render diagnostics on outer stdout.
-            let prefix = b"diagnostic\r\n";
-            assert!(
-                result.stdout.starts_with(prefix),
-                "stderr diagnostic must be presented separately"
-            );
-            &result.stdout[prefix.len()..]
-        } else {
-            result.stdout.as_slice()
-        };
+        if source.contains("diagnostic") {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("diagnostic"));
+        }
+        let actual = result.stdout.as_slice();
         assert!(
             actual == expected.as_bytes(),
             "capture length {}, expected {}",

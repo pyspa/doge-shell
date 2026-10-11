@@ -13,9 +13,8 @@ use crate::shell::Shell;
 use crate::utils::editor::launch_editor;
 use anyhow::Result;
 use dsh_types::Context;
-use nix::sys::termios::tcgetattr;
 use std::borrow::Cow;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
@@ -24,8 +23,6 @@ mod capture;
 mod exec;
 mod prefs;
 mod secret;
-#[cfg(test)]
-use exec::sh_core;
 pub use exec::{block_sh, block_sh_no_cap, command};
 pub use prefs::{
     pref_ai_explanation, pref_auto_notify, pref_auto_pair, pref_command_ledger, pref_diagnose_hint,
@@ -303,27 +300,8 @@ mod tests {
         let _ = tracing_subscriber::fmt::try_init();
     }
 
-    #[tokio::test]
-    #[ignore] // Ignore this test as it requires a TTY environment
-    async fn test_lisp_sh() {
-        init();
-        let env = Environment::new();
-        let engine = LispEngine::new(env);
-
-        // Skip TTY-dependent test in non-TTY environments
-        if !nix::unistd::isatty(unsafe { BorrowedFd::borrow_raw(0) }).unwrap_or(false) {
-            println!("Skipping TTY-dependent test");
-            return;
-        }
-
-        let args = vec!["ls".to_string(), "-al".to_string()];
-        let shell_env = Arc::clone(&engine.borrow().env.borrow().shell_env);
-        let res = sh_core(shell_env, args).await;
-        assert!(res.is_ok());
-        if let Ok(result) = res {
-            println!("{result}");
-        }
-    }
+    // The former ignored test used the developer's stdin TTY. Shell-form
+    // coverage now owns its PTY in tests/lisp_stdio.rs and lisp_capture.rs.
 
     fn shell_env_of(
         engine: &Rc<RefCell<crate::lisp::LispEngine>>,

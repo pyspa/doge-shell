@@ -3,13 +3,13 @@
 //! This module provides functions for generating shell commands from natural language,
 //! expanding smart pipes, and fixing failed commands.
 
-use super::sanitize_code_block;
 use super::service::{AiCommandResponse, AiRequestOptions, AiService};
 use crate::parser::render::render_literal_command;
 use crate::safety::{PromptInjectionResult, SafetyGuard, SafetyResult};
 use anyhow::Result;
 
-const LITERAL_ARGV_CONTRACT: &str = "The command field is one executable name, never a shell source string. \
+const LITERAL_ARGV_CONTRACT: &str = "Return exactly two required fields: command (string) and args (array of strings); no other fields. \
+The command field is one executable name, never a shell source string. \
 Each args element is one literal argv value, including spaces or an empty string. \
 Do not add shell quoting or escaping: JSON escaping only. \
 Globs, dollar expressions, pipes, redirects and separators in values are literal data, not shell syntax. \
@@ -64,16 +64,7 @@ pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) 
     let content = service
         .send_request_with(messages, command_json_options())
         .await?;
-    let content_clean = sanitize_code_block(&content);
-
-    // Parse JSON
-    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to parse AI response as JSON: {}. Content: {}",
-            e,
-            content_clean
-        )
-    })?;
+    let response = parse_command_response(&content)?;
 
     finalize_command(service, response, "pipeline suggestion")
 }
@@ -118,16 +109,7 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
     let content = service
         .send_request_with(messages, command_json_options())
         .await?;
-    let content_clean = sanitize_code_block(&content);
-
-    // Parse JSON
-    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to parse AI response as JSON: {}. Content: {}",
-            e,
-            content_clean
-        )
-    })?;
+    let response = parse_command_response(&content)?;
 
     finalize_command(service, response, "generated command")
 }
@@ -181,18 +163,41 @@ pub async fn fix_command<S: AiService + ?Sized>(
     let content = service
         .send_request_with(messages, command_json_options())
         .await?;
-    let content_clean = sanitize_code_block(&content);
-
-    // Parse JSON
-    let response: AiCommandResponse = serde_json::from_str(&content_clean).map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to parse AI response as JSON: {}. Content: {}",
-            e,
-            content_clean
-        )
-    })?;
+    let response = parse_command_response(&content)?;
 
     finalize_command(service, response, "fix suggestion")
+}
+
+/// Accept exactly one typed JSON object, with a complete legacy JSON fence.
+/// Do not repair malformed envelopes or parse through Value: that loses duplicate
+/// fields before Serde can reject them. Error text must not echo provider values
+/// or field names (Serde's detailed data errors can contain either).
+fn parse_command_response(content: &str) -> Result<AiCommandResponse> {
+    let content = content.trim_matches([' ', '\n', '\r', '\t']);
+    let payload = if content.starts_with("```") {
+        let (header, body) = content
+            .split_once('\n')
+            .ok_or_else(|| anyhow::anyhow!("Invalid AI command JSON: incomplete JSON fence"))?;
+        if !matches!(header.trim_end_matches('\r'), "```json" | "```") {
+            anyhow::bail!("Invalid AI command JSON: unsupported fence");
+        }
+        body.strip_suffix("\n```")
+            .ok_or_else(|| anyhow::anyhow!("Invalid AI command JSON: incomplete JSON fence"))?
+    } else {
+        content
+    };
+    if !payload
+        .trim_start_matches([' ', '\n', '\r', '\t'])
+        .starts_with('{')
+    {
+        anyhow::bail!("Invalid AI command JSON: expected a JSON object");
+    }
+    serde_json::from_str(payload).map_err(|error| {
+        anyhow::anyhow!(
+            "Invalid AI command JSON: {:?} at line {}, column {}; expected only command (string) and args (array of strings)",
+            error.classify(), error.line(), error.column()
+        )
+    })
 }
 
 /// Turn a validated AI command response into a command string.

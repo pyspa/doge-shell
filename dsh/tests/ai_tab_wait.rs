@@ -14,7 +14,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
@@ -75,11 +75,36 @@ async fn request(service: &DelayedService, pipe: bool) -> Result<String> {
     }
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn owned_pty_worker() {
+#[test]
+fn owned_pty_worker() {
     let Ok(mode) = std::env::var("DOGESH_TEST_AI_WAIT") else {
         return;
     };
+    if mode != "plain" {
+        // Acquire only this worker's inherited PTY after exec. This keeps
+        // session setup out of fork/pre_exec in the multithreaded test runner.
+        unsafe {
+            assert!(libc::setsid() >= 0, "{}", std::io::Error::last_os_error());
+            assert_eq!(
+                libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0),
+                0,
+                "{}",
+                std::io::Error::last_os_error()
+            );
+        }
+    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), run_owned_worker(&mode))
+                .await
+                .expect("owned AI wait worker must complete within its deadline");
+        });
+}
+
+async fn run_owned_worker(mode: &str) {
     let pipe = std::env::var("DOGESH_TEST_AI_PIPE").unwrap() == "true";
     let service = DelayedService::default();
     if mode == "plain" {
@@ -171,11 +196,19 @@ async fn owned_pty_worker() {
 }
 
 struct Worker {
-    child: Child,
+    child: Option<Child>,
     master: File,
     output: Vec<u8>,
 }
 impl Worker {
+    fn finish(&mut self) {
+        let status = wait_until_exit(self.child.as_mut().unwrap(), Duration::from_secs(5))
+            .unwrap()
+            .expect("owned AI wait worker did not exit after reporting success");
+        self.child.take();
+        assert!(status.success());
+    }
+
     fn until(&mut self, marker: &[u8], timeout: Duration) {
         let deadline = Instant::now() + timeout;
         while !self.output.windows(marker.len()).any(|w| w == marker) && Instant::now() < deadline {
@@ -209,8 +242,32 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            if !matches!(
+                wait_until_exit(&mut child, Duration::from_secs(1)),
+                Ok(Some(_))
+            ) {
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "AI wait fixture: killed worker was not reaped before cleanup deadline"
+                );
+            }
+        }
+    }
+}
+
+fn wait_until_exit(child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        std::thread::sleep(remaining.min(Duration::from_millis(5)));
     }
 }
 
@@ -239,24 +296,23 @@ fn run_on_owned_pty(mode: &str) {
                 .stdout(slave.try_clone().unwrap())
                 .stderr(slave.try_clone().unwrap());
             unsafe {
-                cmd.pre_exec(|| {
-                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
                 let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
                 assert!(flags >= 0);
                 assert!(
                     libc::fcntl(master.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) >= 0
                 );
             }
+            // Bypass libtest capture so a stuck spawn is visible in CI logs.
+            let _ = writeln!(
+                std::io::stderr(),
+                "AI wait fixture: spawn {mode}, pipe={pipe}, key={key:?}"
+            );
             let mut worker = Worker {
-                child: cmd.spawn().unwrap(),
+                child: Some(cmd.spawn().unwrap()),
                 master,
                 output: vec![],
             };
+            let _ = writeln!(std::io::stderr(), "AI wait fixture: spawned");
             worker.until(b"READER_READY", Duration::from_secs(5));
             worker.master.write_all(b"\t").unwrap();
             worker.until(b"REQUEST:1", Duration::from_secs(5));
@@ -279,7 +335,7 @@ fn run_on_owned_pty(mode: &str) {
             assert_eq!(nix::sys::termios::tcgetattr(&slave).unwrap(), modes);
             std::fs::write(root.path().join("release"), []).unwrap();
             worker.until(b"test result: ok", Duration::from_secs(5));
-            assert!(worker.child.wait().unwrap().success());
+            worker.finish();
         }
     }
 }

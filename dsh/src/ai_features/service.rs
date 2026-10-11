@@ -92,7 +92,11 @@ impl AiRequestOptions {
 /// returned a different amount depending on which loop invoked it.
 use dsh_openai::turn::limits::MAX_TOOL_OUTPUT_CHARS;
 
-/// Response structure for AI-generated commands
+/// One executable name and literal argv values returned by command AI flows.
+/// JSON escaping only: values contain no shell quoting/escaping. Patterns,
+/// substitutions, redirects and compound programs are not interpreted here.
+/// A shell-source response requires a separate contract; do not overload this.
+/// Empty args are valid; an empty command or NUL in any value is invalid.
 #[derive(Debug, Deserialize)]
 pub struct AiCommandResponse {
     pub command: String,

@@ -611,7 +611,7 @@ mod tests {
             .auto_fix_suggestion
             .take()
             .expect("auto fix expected");
-        assert_eq!(fix.replacement, "ls -la");
+        assert_eq!(fix.replacement, "\"ls\" -la");
         assert_eq!(fix.kind, crate::repl::AutoFixKind::AiFix);
     }
 

@@ -152,6 +152,9 @@ pub(crate) struct CompletionState {
 /// Read-only invocation state, independent of user variables and child process env.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct InvocationParameters {
+    /// Explicit invocation mode, not inferred from physical TTY capability.
+    #[serde(default)]
+    pub interactive: bool,
     pub argv0: String,
     pub positional: Vec<String>,
 }
@@ -159,6 +162,7 @@ pub(crate) struct InvocationParameters {
 impl Default for InvocationParameters {
     fn default() -> Self {
         Self {
+            interactive: false,
             argv0: "dogesh".into(),
             positional: Vec::new(),
         }
@@ -622,6 +626,7 @@ mod invocation_tests {
         {
             let mut guard = env.write();
             guard.invocation = InvocationParameters {
+                interactive: true,
                 argv0: "worker".into(),
                 positional: vec!["secret".into(), "".into()],
             };

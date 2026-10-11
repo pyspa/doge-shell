@@ -63,6 +63,8 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
     {
         let mut env = env_arc.write();
         request.snapshot.apply_to(&mut env);
+        // Helpers execute a noninteractive invocation, even with a TTY stdin.
+        env.invocation.interactive = false;
     }
     // Follow the snapshot cwd explicitly, not spawn inheritance alone.
     if let Err(err) = std::env::set_current_dir(&request.snapshot.cwd) {

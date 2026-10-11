@@ -976,6 +976,7 @@ mod tests {
     fn dry_invocation_expansion_uses_real_values_and_field_count() {
         let env = crate::environment::Environment::new();
         env.write().invocation = crate::environment::InvocationParameters {
+            interactive: false,
             argv0: "worker".into(),
             positional: vec!["important-file".into(), "".into(), "*.rs".into()],
         };

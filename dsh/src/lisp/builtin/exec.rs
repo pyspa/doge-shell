@@ -79,6 +79,14 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
     }
 }
 
+// Capability comes from Context; interactive intent comes from the invocation.
+fn shell_context(shell: &Shell) -> Context {
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
+    ctx.interactive &= shell.environment.read().invocation().interactive;
+    ctx.save_history = ctx.interactive;
+    ctx
+}
+
 // Helper core for sh
 pub(super) async fn sh_core(
     shell_env: Arc<parking_lot::RwLock<crate::environment::Environment>>,
@@ -88,18 +96,8 @@ pub(super) async fn sh_core(
 
     let mut shell = Shell::new(shell_env);
     shell.set_signals();
-    let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
-        Ok(tmode) => tmode,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Err(RuntimeError {
-                msg: err.to_string(),
-            });
-        }
-    };
-
-    let mut ctx = Context::new(shell.pid, shell.pgid, Some(shell_tmode), true);
-    let (pout, pin) = match pipe() {
+    let mut ctx = shell_context(&shell);
+    let (pout, pin) = match crate::process::io::cloexec_pipe() {
         Ok(p) => p,
         Err(err) => {
             eprintln!("error: {err}");
@@ -109,20 +107,22 @@ pub(super) async fn sh_core(
         }
     };
 
+    // Start before eval: both external children and in-process builtins can
+    // fill the pipe. The reader owns its fd and is joined on every return.
+    let reader = super::capture::CaptureReader::new(pout).map_err(|err| RuntimeError {
+        msg: format!("sh! capture: {err}"),
+    })?;
     ctx.captured_out = Some(pin.as_raw_fd());
-    if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
-        eprintln!("error: {err}");
-        return Err(RuntimeError {
-            msg: err.to_string(),
-        });
-    }
-
-    // Close write end in parent to avoid hang
+    let evaluation = shell.eval_str(&mut ctx, input, false).await;
+    ctx.captured_out = None;
     drop(pin);
-
-    let mut raw_stdout = Vec::new();
-    // use File::from(pout) to read and automatically close read end
-    File::from(pout).read_to_end(&mut raw_stdout).ok();
+    let captured = reader.finish();
+    evaluation.map_err(|err| RuntimeError {
+        msg: err.to_string(),
+    })?;
+    let raw_stdout = captured.map_err(|err| RuntimeError {
+        msg: format!("sh! capture: {err}"),
+    })?;
 
     let output = match std::str::from_utf8(&raw_stdout) {
         Ok(str) => str.trim_matches('\n').to_owned(),
@@ -167,18 +167,7 @@ async fn sh_no_cap_core(
 
     let mut shell = Shell::new(shell_env);
     shell.set_signals();
-    let shell_tmode = match tcgetattr(unsafe { BorrowedFd::borrow_raw(0) }) {
-        Ok(tmode) => tmode,
-        Err(err) => {
-            eprintln!("error: {err}");
-            return Err(RuntimeError {
-                msg: err.to_string(),
-            });
-        }
-    };
-
-    let mut ctx = Context::new(shell.pid, shell.pgid, Some(shell_tmode), true);
-    // ctx.captured_out = Some(pin);
+    let mut ctx = shell_context(&shell);
     if let Err(err) = shell.eval_str(&mut ctx, input, false).await {
         eprintln!("error: {err}");
         return Err(RuntimeError {

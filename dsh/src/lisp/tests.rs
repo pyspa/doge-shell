@@ -897,6 +897,7 @@ fn program_invocation_sync_shares_shell_invocation_state() {
     init();
     let env = Environment::new();
     env.write().invocation = crate::environment::InvocationParameters {
+        interactive: false,
         argv0: "./script.lisp".to_string(),
         positional: vec!["alpha".to_string(), "--flag".to_string()],
     };

@@ -591,3 +591,25 @@ fn failed_cd_minus_has_no_auto_output_and_preserves_interactive_navigation() {
         s.root.path().canonicalize().unwrap().display().to_string()
     );
 }
+
+#[test]
+fn interactive_lisp_shell_forms_restore_terminal_after_ctrl_c() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    s.write_fixture(
+        "interrupt.sh",
+        "echo $$ > child.pid\necho ready > started\nsleep 30\n",
+    );
+    let modes = nix::sys::termios::tcgetattr(&s.master).unwrap();
+    for form in ["sh", "sh!"] {
+        let _ = fs::remove_file(s.root.path().join("started"));
+        let offset = s.send(&format!("lisp '({form} \"sh interrupt.sh\")'"));
+        s.until(|s| s.root.path().join("started").exists());
+        s.master.write_all(b"\x03").unwrap();
+        s.finished(offset, 0);
+        assert_eq!(nix::sys::termios::tcgetattr(&s.master).unwrap(), modes);
+        let recovered = s.send("echo lisp-prompt-ready");
+        s.finished(recovered, 0);
+        assert!(s.contains(recovered, b"lisp-prompt-ready"));
+    }
+}

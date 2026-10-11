@@ -375,6 +375,7 @@ The embedded Lisp interpreter includes many built-in functions:
 - `alias` - Set command aliases from Lisp
 - `abbr` - Set abbreviations from Lisp
 - `command` - Execute external commands and capture output
+- `command-result` - Execute literal argv and return separate status/stdout/stderr data
 - `sh` - Execute shell commands in the current shell context
 - `sh!` - Execute shell commands with output capture
 - `setenv` - Set environment variables
@@ -391,6 +392,31 @@ The embedded Lisp interpreter includes many built-in functions:
 - `set-notify-config` - Configure notification behavior
 - `allow-direnv` - Configure direnv roots
 - `edit` - Open a file in the external editor
+
+### Structured Command Results
+
+`command-result` takes an executable string followed by literal argument strings;
+it does not parse shell source, expand globs, or apply aliases. It returns a hash
+with string keys: `exit-code` (integer, or `nil` on signal termination), `signal`
+(integer signal number, or `nil` on normal exit), `stdout`, and `stderr`.
+Both output strings retain trailing whitespace; invalid UTF-8 bytes become the
+replacement character. Child stdin is closed, just as with `command`.
+
+```lisp
+(let ((result (command-result "grep" "needle" "input.txt")))
+  (print (hash_get result "exit-code"))
+  (print (hash_get result "stdout"))
+  (print (hash_get result "stderr")))
+```
+
+Nonzero child exits and signal termination are result data. Invalid arguments,
+SafetyGuard confirmation requirements, executable lookup failures, and spawn
+errors remain Lisp errors. Execution uses the logical PATH, exported child
+environment and current working directory through the same runtime snapshot as
+`command`, and shares its synchronous capture/wait owner. This adds no timeout,
+background-job API or separate cancellation controller. `command` still returns
+trimmed stdout (or stderr when stdout is empty); `sh` and `sh!` retain their
+existing shell-source contracts.
 
 ### Table / Structured Data Functions
 

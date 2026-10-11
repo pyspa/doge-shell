@@ -23,7 +23,7 @@ mod capture;
 mod exec;
 mod prefs;
 mod secret;
-pub use exec::{block_sh, block_sh_no_cap, command};
+pub use exec::{block_sh, block_sh_no_cap, command, command_result};
 pub use prefs::{
     pref_ai_explanation, pref_auto_notify, pref_auto_pair, pref_command_ledger, pref_diagnose_hint,
     pref_failure_hint, pref_status_line,

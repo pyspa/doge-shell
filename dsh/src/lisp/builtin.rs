@@ -14,15 +14,13 @@ use crate::utils::editor::launch_editor;
 use anyhow::Result;
 use dsh_types::Context;
 use nix::sys::termios::tcgetattr;
-use nix::unistd::pipe;
 use std::borrow::Cow;
-use std::fs::File;
-use std::io::Read;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 use tracing::debug;
 
+mod capture;
 mod exec;
 mod prefs;
 mod secret;

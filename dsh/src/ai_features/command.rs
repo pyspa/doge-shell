@@ -5,8 +5,15 @@
 
 use super::sanitize_code_block;
 use super::service::{AiCommandResponse, AiRequestOptions, AiService};
+use crate::parser::render::render_literal_command;
 use crate::safety::{PromptInjectionResult, SafetyGuard, SafetyResult};
 use anyhow::Result;
+
+const LITERAL_ARGV_CONTRACT: &str = "The command field is one executable name, never a shell source string. \
+Each args element is one literal argv value, including spaces or an empty string. \
+Do not add shell quoting or escaping: JSON escaping only. \
+Globs, dollar expressions, pipes, redirects and separators in values are literal data, not shell syntax. \
+Do not put a compound shell program in command or args. NUL bytes are invalid.";
 
 fn command_json_options() -> AiRequestOptions {
     // No token cap: on a reasoning model `max_completion_tokens` also budgets
@@ -44,8 +51,9 @@ pub async fn expand_smart_pipe<S: AiService + ?Sized>(service: &S, query: &str) 
     Target platform: {}. \
     Given the user's natural language query, output the next command in the pipeline as a JSON object. \
     Format: {{\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}}. \
-    Do not output the pipe symbol '|'. Do not output markdown code blocks. Output ONLY the JSON object.",
-        target_platform_description()
+    {} Return one pipeline stage, never pipeline source. Do not output markdown code blocks. Output ONLY the JSON object.",
+        target_platform_description(),
+        LITERAL_ARGV_CONTRACT
     );
 
     let messages = vec![
@@ -93,12 +101,13 @@ pub async fn run_generative_command<S: AiService + ?Sized>(
     // prompt produces GNU-only flags (`sed -i` without an argument, `ls
     // --color`) that fail on the BSD tools actually installed.
     let system_prompt = format!(
-        "You are a shell command expert. Convert the following natural language request into a single-line shell command. \
+        "You are a shell command expert. Convert the following natural language request into a single executable invocation with literal arguments. \
     Target platform: {}. \
     Output the result as a JSON object. \
     Format: {{\"command\": \"rm\", \"args\": [\"-rf\", \"/\"]}}. \
-    Do not output markdown code blocks. Output ONLY the JSON object.",
-        target_platform_description()
+    {} Do not output markdown code blocks. Output ONLY the JSON object.",
+        target_platform_description(),
+        LITERAL_ARGV_CONTRACT
     );
 
     let messages = vec![
@@ -153,9 +162,10 @@ pub async fn fix_command<S: AiService + ?Sized>(
     Given the failed command, its exit code, and its output (including potential error messages), \
     output the corrected command as a JSON object. \
     Format: {{\"command\": \"grep\", \"args\": [\"-r\", \"pattern\"]}}. \
-    Do not output markdown code blocks. Output ONLY the JSON object. \
-    If you cannot determine a fix, output the original command inside the JSON.",
-        target_platform_description()
+    {} Do not output markdown code blocks. Output ONLY the JSON object. \
+    If you cannot determine a fix, preserve the original executable and literal argv in this schema; never put the entire original shell source into command.",
+        target_platform_description(),
+        LITERAL_ARGV_CONTRACT
     );
 
     let query = format!(
@@ -196,9 +206,7 @@ fn finalize_command<S: AiService + ?Sized>(
     response: AiCommandResponse,
     what: &str,
 ) -> Result<String> {
-    let mut parts = vec![response.command.clone()];
-    parts.extend(response.args.clone());
-    let rendered = parts.join(" ");
+    let rendered = render_literal_command(&response.command, &response.args)?;
 
     let (Some(guard), Some(level), Some(allowlist)) = (
         service.get_safety_guard(),

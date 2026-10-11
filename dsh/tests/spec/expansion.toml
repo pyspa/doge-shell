@@ -369,3 +369,16 @@ script = 'printf "<%s>\n" before "$@" after'
 status = 0
 stdout_contains = ["<before>", "<after>"]
 stdout_not_contains = ["<>"]
+
+[[case]]
+id = "expansion.rendered-literal-argv"
+class = "dogesh"
+mode = "command"
+script = '''"printf" '[%s]' "日本語" "a b" '' "a'b\"c" "*.rs" "a;b" "\$(echo injected)" "line1
+line2" "C:\\path\\" "a\\'b"'''
+
+[case.expect]
+status = 0
+stdout_exact = '''[日本語][a b][][a'b"c][*.rs][a;b][$(echo injected)][line1
+line2][C:\path\][a\'b]'''
+stderr_exact = ""

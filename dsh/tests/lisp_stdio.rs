@@ -7,8 +7,23 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Output, Stdio};
-use std::time::Duration;
+use std::process::{Child, Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+// Retain ownership until the bounded wait takes the child. Assertions and
+// fixture I/O errors must not leave the controller or its children behind.
+struct FixtureChild(Option<Child>);
+impl Drop for FixtureChild {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = nix::sys::signal::killpg(
+                Pid::from_raw(child.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            let _ = child.wait();
+        }
+    }
+}
 
 fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
     let _guard = common::serial_guard();
@@ -16,7 +31,22 @@ fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
     fs::write(root.path().join("payload"), "payload\n").unwrap();
     let program = format!("(print ({form} \"{command}\"))\n");
     fs::write(root.path().join("program.lisp"), &program).unwrap();
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_dogesh"));
+    let tty_input = matches!(input, "tty" | "full_tty");
+    let mut cmd = if tty_input {
+        // Darwin revokes the slave when its controlling session leader exits.
+        // Keep an owned controller alive after dogesh exits, inspect modes and
+        // output, then release it. No developer terminal is involved.
+        let mut controller = Command::new("/bin/sh");
+        controller.args([
+            "-c",
+            "\"$@\"; status=$?; : > completed; while [ ! -e release ]; do sleep 0.01; done; exit \"$status\"",
+            "lisp-stdio-controller",
+            env!("CARGO_BIN_EXE_dogesh"),
+        ]);
+        controller
+    } else {
+        Command::new(env!("CARGO_BIN_EXE_dogesh"))
+    };
     cmd.current_dir(root.path())
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -67,15 +97,26 @@ fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
         }
         _ => unreachable!(),
     }
-    let mut child = cmd.spawn().unwrap();
+    let mut owned = FixtureChild(Some(cmd.spawn().unwrap()));
+    let child = owned.0.as_mut().unwrap();
     if input == "pipe" {
         child.stdin.take().unwrap().write_all(b"payload\n").unwrap();
     }
     let pid = Pid::from_raw(child.id() as i32);
-    let mut result =
-        common::process::wait_child_with_output_deadline(child, pid, Duration::from_secs(10))
-            .unwrap();
-    if let Some((mut master, slave, modes)) = pty {
+    let mut pty_output = Vec::new();
+    let mut observed_modes = None;
+    if let Some((master, slave, _modes)) = &mut pty {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !root.path().join("completed").exists() && Instant::now() < deadline {
+            if child.try_wait().unwrap().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if !root.path().join("completed").exists() {
+            panic!("owned PTY controller did not reach the inspection barrier");
+        }
+        observed_modes = Some(tcgetattr(slave));
         if input == "full_tty" {
             unsafe {
                 let flags = libc::fcntl(master.as_raw_fd(), libc::F_GETFL);
@@ -88,15 +129,27 @@ fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
             loop {
                 match master.read(&mut bytes) {
                     Ok(0) => break,
-                    Ok(n) => result.stdout.extend_from_slice(&bytes[..n]),
+                    Ok(n) => pty_output.extend_from_slice(&bytes[..n]),
                     Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(e) => panic!("owned PTY read: {e}"),
+                    Err(e) => {
+                        panic!("owned PTY read: {e}");
+                    }
                 }
             }
         }
+        fs::write(root.path().join("release"), []).unwrap();
+    }
+    let mut result = common::process::wait_child_with_output_deadline(
+        owned.0.take().unwrap(),
+        pid,
+        Duration::from_secs(10),
+    )
+    .unwrap();
+    result.stdout.extend(pty_output);
+    if let Some((_master, _slave, modes)) = pty {
         assert_eq!(
-            tcgetattr(&slave).unwrap(),
+            observed_modes.unwrap().unwrap(),
             modes,
             "script must preserve owned terminal modes"
         );

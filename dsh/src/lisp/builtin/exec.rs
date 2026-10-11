@@ -1,5 +1,6 @@
 //! Running external programs from Lisp: `(command ...)` capturing stdout
-//! through a pipe, and the two `sh` forms -- captured (`block_sh`) and
+//! through a pipe, `(command-result ...)` retaining status and both streams,
+//! and the two `sh` forms -- captured (`block_sh`) and
 //! pass-through (`block_sh_no_cap`) -- together with the async cores that drive
 //! the shell's own evaluator for them.
 use super::*;
@@ -14,6 +15,82 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
     if cmd_args.is_empty() {
         return Err(RuntimeError::new("command requires at least 1 argument"));
     }
+    let output = execute_command(env, cmd_args)?;
+    let stdout = String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr)
+        .trim_end()
+        .to_string();
+    Ok(Value::String(if stdout.is_empty() {
+        stderr
+    } else {
+        stdout
+    }))
+}
+
+/// Execute literal argv and retain both streams and the actual termination.
+/// `exit-code` is nil on signal termination; `signal` is nil on normal exit.
+/// Strings use UTF-8 replacement for invalid bytes, without whitespace trimming.
+pub fn command_result(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, RuntimeError> {
+    if args.is_empty() {
+        return Err(RuntimeError::new(
+            "command-result requires an executable string",
+        ));
+    }
+    let cmd_args: Vec<String> = args
+        .into_iter()
+        .map(|value| match value {
+            Value::String(value) => Ok(value),
+            _ => Err(RuntimeError::new(
+                "command-result arguments must all be strings",
+            )),
+        })
+        .collect::<Result<_, _>>()?;
+    if cmd_args[0].is_empty() || cmd_args.iter().any(|arg| arg.contains('\0')) {
+        return Err(RuntimeError::new(
+            "command-result requires a nonempty executable and no NUL bytes",
+        ));
+    }
+    let output = execute_command(env, cmd_args)?;
+    use std::os::unix::process::ExitStatusExt;
+    // Only immutable string keys are stored; no interior-mutable keys are used.
+    #[allow(clippy::mutable_key_type)]
+    let fields = std::collections::HashMap::from([
+        (
+            Value::String("exit-code".into()),
+            output
+                .status
+                .code()
+                .map(|n| Value::Int(n.into()))
+                .unwrap_or(Value::NIL),
+        ),
+        (
+            Value::String("signal".into()),
+            output
+                .status
+                .signal()
+                .map(|n| Value::Int(n.into()))
+                .unwrap_or(Value::NIL),
+        ),
+        (
+            Value::String("stdout".into()),
+            Value::String(String::from_utf8_lossy(&output.stdout).into_owned()),
+        ),
+        (
+            Value::String("stderr".into()),
+            Value::String(String::from_utf8_lossy(&output.stderr).into_owned()),
+        ),
+    ]);
+    Ok(Value::HashMap(Rc::new(RefCell::new(fields))))
+}
+
+/// Both Lisp APIs share one spawn/capture/wait owner and the same authorization.
+/// Command::output owns and drains both pipes, and reaps its single child.
+fn execute_command(
+    env: Rc<RefCell<Env>>,
+    mut cmd_args: Vec<String>,
+) -> Result<std::process::Output, RuntimeError> {
     let cmd = cmd_args.remove(0);
 
     // SAFETY CHECK
@@ -57,26 +134,9 @@ pub fn command(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value, Runtime
     let mut spawn = snapshot.std_command(&cmd).ok_or_else(|| RuntimeError {
         msg: format!("command not found: {cmd}"),
     })?;
-    match spawn.args(cmd_args).output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout)
-                .trim_end()
-                .to_string();
-
-            let stderr = String::from_utf8_lossy(&output.stderr)
-                .trim_end()
-                .to_string();
-
-            if !stdout.is_empty() {
-                Ok(Value::String(stdout))
-            } else {
-                Ok(Value::String(stderr))
-            }
-        }
-        Err(err) => Err(RuntimeError {
-            msg: err.to_string(),
-        }),
-    }
+    spawn.args(cmd_args).output().map_err(|err| RuntimeError {
+        msg: err.to_string(),
+    })
 }
 
 // Capability comes from Context; interactive intent comes from the invocation.
@@ -198,6 +258,10 @@ pub fn block_sh_no_cap(env: Rc<RefCell<Env>>, args: Vec<Value>) -> Result<Value,
     })?
     .map(|_| Value::NIL)
 }
+
+#[cfg(test)]
+#[path = "command_result_tests.rs"]
+mod command_result_tests;
 
 #[cfg(test)]
 mod tests {

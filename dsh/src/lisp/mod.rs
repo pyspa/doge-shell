@@ -387,6 +387,10 @@ pub fn make_env(environment: Arc<RwLock<Environment>>) -> Rc<RefCell<Env>> {
     );
     env.borrow_mut()
         .define(Symbol::from("command"), Value::NativeFunc(builtin::command));
+    env.borrow_mut().define(
+        Symbol::from("command-result"),
+        Value::NativeFunc(builtin::command_result),
+    );
     env.borrow_mut()
         .define(Symbol::from("sh!"), Value::NativeFunc(builtin::block_sh));
     env.borrow_mut().define(

@@ -7,6 +7,7 @@ pub struct ShellParser;
 pub mod ast;
 pub mod expansion;
 pub mod highlight;
+pub(crate) mod render;
 
 #[cfg(test)]
 mod edge_case_tests;

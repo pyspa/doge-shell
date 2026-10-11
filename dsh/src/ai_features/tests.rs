@@ -54,7 +54,7 @@ async fn test_expand_smart_pipe() {
     let response = r#"{"command": "grep", "args": ["foo"]}"#;
     let service = MockAiService::new(response);
     let result = expand_smart_pipe(&service, "extract foo").await.unwrap();
-    assert_eq!(result, "grep foo");
+    assert_eq!(result, "\"grep\" foo");
 
     let messages = service.last_messages.lock().unwrap();
     assert_eq!(messages[1]["role"], "user");
@@ -68,7 +68,7 @@ async fn test_run_generative_command() {
     let result = run_generative_command(&service, "check status")
         .await
         .unwrap();
-    assert_eq!(result, "git status");
+    assert_eq!(result, "\"git\" status");
 }
 
 #[test]
@@ -113,7 +113,10 @@ async fn test_run_generative_command_complex() {
     let result = run_generative_command(&service, "find all rust files with TODO")
         .await
         .unwrap();
-    assert_eq!(result, "find . -name *.rs -exec grep -l TODO {} +");
+    assert_eq!(
+        result,
+        "\"find\" . -name \"*.rs\" -exec grep -l TODO \"{}\" +"
+    );
 }
 
 #[tokio::test]
@@ -123,7 +126,7 @@ async fn test_run_generative_command_japanese() {
     let result = run_generative_command(&service, "最後のコミットを取り消す")
         .await
         .unwrap();
-    assert_eq!(result, "git reset --soft HEAD~1");
+    assert_eq!(result, "\"git\" reset --soft \"HEAD~1\"");
 }
 
 #[tokio::test]
@@ -131,7 +134,7 @@ async fn test_fix_command() {
     let response = r#"{"command": "ls", "args": ["-la"]}"#;
     let service = MockAiService::new(response);
     let result = fix_command(&service, "lss -la", 127, "").await.unwrap();
-    assert_eq!(result, "ls -la");
+    assert_eq!(result, "\"ls\" -la");
 
     let messages = service.last_messages.lock().unwrap();
     assert_eq!(messages[1]["role"], "user");
@@ -146,7 +149,7 @@ async fn test_fix_command_with_code_block() {
 ```"#;
     let service = MockAiService::new(response);
     let result = fix_command(&service, "gti status", 127, "").await.unwrap();
-    assert_eq!(result, "git status");
+    assert_eq!(result, "\"git\" status");
 }
 
 #[tokio::test]
@@ -430,3 +433,6 @@ async fn changing_account_during_analysis_never_populates_old_cache() {
     let query = "Current directory: /mock\n\nFiles:\n```\nCargo.toml\n```";
     assert!(super::cache::lookup_scoped("scope-1", "describe_dir", &[query]).is_none());
 }
+
+#[path = "argv_tests.rs"]
+mod argv_tests;

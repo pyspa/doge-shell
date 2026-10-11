@@ -202,9 +202,19 @@ struct Worker {
 }
 impl Worker {
     fn finish(&mut self) {
-        let status = wait_until_exit(self.child.as_mut().unwrap(), Duration::from_secs(5))
-            .unwrap()
-            .expect("owned AI wait worker did not exit after reporting success");
+        let status = wait_until_exit(
+            self.child.as_mut().unwrap(),
+            &mut self.master,
+            &mut self.output,
+            Duration::from_secs(5),
+        )
+        .unwrap()
+        .unwrap_or_else(|| {
+            panic!(
+                "owned AI wait worker did not exit: {}",
+                String::from_utf8_lossy(&self.output)
+            )
+        });
         self.child.take();
         assert!(status.success());
     }
@@ -245,7 +255,12 @@ impl Drop for Worker {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             if !matches!(
-                wait_until_exit(&mut child, Duration::from_secs(1)),
+                wait_until_exit(
+                    &mut child,
+                    &mut self.master,
+                    &mut self.output,
+                    Duration::from_secs(1)
+                ),
                 Ok(Some(_))
             ) {
                 let _ = writeln!(
@@ -257,9 +272,30 @@ impl Drop for Worker {
     }
 }
 
-fn wait_until_exit(child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
+fn wait_until_exit(
+    child: &mut Child,
+    master: &mut File,
+    output: &mut Vec<u8>,
+    timeout: Duration,
+) -> std::io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + timeout;
     loop {
+        // Darwin session-leader exit calls ttywait before revoking the slave
+        // (xnu/bsd/kern/kern_exit.c). Keep draining after the success marker:
+        // libtest can still write the rest of its summary before process exit.
+        // Bound each pass so output cannot starve child/deadline checks.
+        let mut bytes = [0; 8192];
+        for _ in 0..4 {
+            match master.read(&mut bytes) {
+                Ok(0) => break,
+                Ok(n) => output.extend_from_slice(&bytes[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                // Linux uses EIO when the slave closes; Darwin can revoke it.
+                Err(e) if e.raw_os_error() == Some(libc::EIO) => break,
+                Err(e) => return Err(e),
+            }
+        }
         if let Some(status) = child.try_wait()? {
             return Ok(Some(status));
         }

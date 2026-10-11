@@ -66,21 +66,29 @@ pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
     }
 }
 
+// A cancelled wait is a handled Tab action: retain the query and do not open
+// ordinary completion. Only a completed request can replace the input.
+fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, smart_pipe: bool) {
+    let Some(expanded) = expanded else { return };
+    let replacement = if smart_pipe {
+        let Some(idx) = repl.input.as_str().rfind("|?") else {
+            return;
+        };
+        format!("{}| {expanded}", &repl.input.as_str()[..idx])
+    } else {
+        expanded
+    };
+    repl.input.reset(replacement);
+    repl.completion_ui.completion.clear();
+}
+
 pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
     // Check for Smart Pipe Expansion (|? query)
     if let Some(smart_pipe_query) = repl.detect_smart_pipe() {
         match repl.expand_smart_pipe(smart_pipe_query).await {
             Ok(expanded) => {
-                let input_str = repl.input.as_str();
-                if let Some(idx) = input_str.rfind("|?") {
-                    let prefix = &input_str[..idx];
-                    let mut new_input = prefix.to_string();
-                    new_input.push_str("| ");
-                    new_input.push_str(&expanded);
-                    repl.input.reset(new_input);
-                    repl.completion_ui.completion.clear();
-                    return Ok(ReplControlFlow::Continue);
-                }
+                apply_ai_completion(repl, expanded, true);
+                return Ok(ReplControlFlow::Continue);
             }
             Err(e) => {
                 warn!("Smart pipe expansion failed: {}", e);
@@ -93,8 +101,7 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     if let Some(generative_query) = repl.detect_generative_command() {
         match repl.run_generative_command(&generative_query).await {
             Ok(expanded) => {
-                repl.input.reset(expanded);
-                repl.completion_ui.completion.clear();
+                apply_ai_completion(repl, expanded, false);
                 return Ok(ReplControlFlow::Continue);
             }
             Err(e) => {
@@ -410,5 +417,77 @@ mod tests {
             completion_query_for_input(&input).as_deref(),
             Some(r#"dir\ with\ space/fo"#)
         );
+    }
+    #[tokio::test]
+    async fn cancelled_ai_completion_retains_query_and_completed_retry_replaces_it() {
+        use crate::environment::Environment;
+        use crate::repl::Repl;
+        use crate::shell::Shell;
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        for (query, smart_pipe, expected) in [
+            ("?? 日本語 query", false, "\"echo\" retry"),
+            (
+                "cat payload |? 日本語 query",
+                true,
+                "cat payload | \"echo\" retry",
+            ),
+        ] {
+            repl.input.reset(query.to_string());
+            let cursor = repl.input.cursor();
+            super::apply_ai_completion(&mut repl, None, smart_pipe);
+            assert_eq!(repl.input.as_str(), query);
+            assert_eq!(repl.input.cursor(), cursor);
+            super::apply_ai_completion(&mut repl, Some("\"echo\" retry".into()), smart_pipe);
+            assert_eq!(repl.input.as_str(), expected);
+        }
+    }
+    #[tokio::test]
+    async fn delayed_ai_tab_routes_use_mock_service_and_allow_fresh_requests() {
+        use crate::ai_features::AiService;
+        use crate::environment::Environment;
+        use crate::repl::Repl;
+        use crate::shell::Shell;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Delayed(AtomicUsize);
+        #[async_trait::async_trait]
+        impl AiService for Delayed {
+            async fn send_request(
+                &self,
+                _: Vec<serde_json::Value>,
+                _: Option<f64>,
+            ) -> anyhow::Result<String> {
+                let id = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                Ok(serde_json::json!({"command":"echo", "args":[id.to_string()]}).to_string())
+            }
+        }
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        // Configure availability after construction; every Tab request uses
+        // the mock below, with no live API or background request involved.
+        {
+            let mut env = repl.shell.environment.write();
+            env.set_shell_var("AI_CHAT_PROVIDER".into(), "api_key".into());
+            env.set_shell_var("AI_CHAT_ALLOW_INSECURE_HTTP".into(), "true".into());
+            env.set_shell_var("AI_CHAT_BASE_URL".into(), "http://127.0.0.1:9/v1".into());
+            env.set_shell_var("AI_CHAT_API_KEY".into(), "mock-only".into());
+        }
+        let service = Arc::new(Delayed(AtomicUsize::new(0)));
+        repl.services.ai = Some(service.clone());
+        for (query, expected) in [
+            ("?? 日本語 query", "echo 1"),
+            ("cat payload |? 日本語 query", "cat payload | echo 2"),
+            ("?? 日本語 query", "echo 3"),
+        ] {
+            repl.input.reset(query.to_string());
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            // Executable quoting belongs to the separate literal-argv change.
+            assert_eq!(repl.input.as_str().replace("\"echo\"", "echo"), expected);
+        }
+        assert_eq!(service.0.load(Ordering::SeqCst), 3);
     }
 }

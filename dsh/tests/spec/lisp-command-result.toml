@@ -1,0 +1,32 @@
+version = 1
+
+# Lisp callers observe child status as data; Lisp evaluation still succeeds.
+[[case]]
+id = "lisp-command-result.normal-success"
+class = "dogesh"
+mode = "command"
+script = '''lisp '(print (hash_get (command-result "{{TRUE}}") "exit-code"))' '''
+[case.expect]
+status = 0
+stdout_exact = "0\n"
+stderr_exact = ""
+
+[[case]]
+id = "lisp-command-result.normal-failure"
+class = "dogesh"
+mode = "command"
+script = '''lisp '(print (hash_get (command-result "{{FALSE}}") "exit-code"))' '''
+[case.expect]
+status = 0
+stdout_exact = "1\n"
+stderr_exact = ""
+
+[[case]]
+id = "lisp-command-result.separate-streams"
+class = "dogesh"
+mode = "command"
+script = '''printf '#!{{SH}}\nprintf out; printf err >&2; exit 7\n' > probe; chmod +x probe; lisp '(let ((r (command-result "./probe"))) (print (hash_get r "exit-code")) (print (hash_get r "stdout")) (print (hash_get r "stderr")))' '''
+[case.expect]
+status = 0
+stdout_exact = "7\nout\nerr\n"
+stderr_exact = ""

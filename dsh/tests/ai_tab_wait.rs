@@ -271,6 +271,11 @@ fn run_on_owned_pty(mode: &str) {
                 worker.until(b"RETRY_DONE", Duration::from_secs(5));
             }
             worker.until(b"MODES_RESTORED", Duration::from_secs(5));
+            // Darwin sets PENDIN when canonical input is restored, even when
+            // crossterm restores every configured flag. Flush this owned PTY's
+            // residual input before comparing modes; do not mask mode flags.
+            // See xnu/bsd/kern/tty.c: ttioctl_locked and ttyflush(FREAD).
+            nix::sys::termios::tcflush(&slave, nix::sys::termios::FlushArg::TCIFLUSH).unwrap();
             assert_eq!(nix::sys::termios::tcgetattr(&slave).unwrap(), modes);
             std::fs::write(root.path().join("release"), []).unwrap();
             worker.until(b"test result: ok", Duration::from_secs(5));

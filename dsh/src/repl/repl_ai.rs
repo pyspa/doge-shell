@@ -336,18 +336,34 @@ impl<'a> Repl<'a> {
         get_directory_listing_content(std::path::Path::new(".")).join("\n")
     }
 
-    pub(super) async fn expand_smart_pipe(&self, query: String) -> Result<String> {
+    pub(super) async fn expand_smart_pipe(&self, query: String) -> Result<Option<String>> {
         let service = self
             .ai_service()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
-        ai_features::expand_smart_pipe(service.as_ref(), &query).await
+        let _status_pause =
+            crate::repl::status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+        ai_features::await_with_progress(
+            "Expanding smart pipe",
+            service.as_ref(),
+            ai_features::expand_smart_pipe(service.as_ref(), &query),
+        )
+        .await
+        .transpose()
     }
 
-    pub(super) async fn run_generative_command(&self, query: &str) -> Result<String> {
+    pub(super) async fn run_generative_command(&self, query: &str) -> Result<Option<String>> {
         let service = self
             .ai_service()
             .ok_or_else(|| anyhow::anyhow!("AI client not configured"))?;
-        ai_features::run_generative_command(service.as_ref(), query).await
+        let _status_pause =
+            crate::repl::status_line::StatusLinePause::new(self.terminal_ui.status_line.clone());
+        ai_features::await_with_progress(
+            "Generating command",
+            service.as_ref(),
+            ai_features::run_generative_command(service.as_ref(), query),
+        )
+        .await
+        .transpose()
     }
 
     pub(crate) fn detect_smart_pipe(&self) -> Option<String> {

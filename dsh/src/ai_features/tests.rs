@@ -436,3 +436,6 @@ async fn changing_account_during_analysis_never_populates_old_cache() {
 
 #[path = "argv_tests.rs"]
 mod argv_tests;
+
+#[path = "command_json_tests.rs"]
+mod command_json_tests;

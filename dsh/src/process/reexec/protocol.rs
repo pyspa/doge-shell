@@ -945,6 +945,7 @@ mod tests {
         use crate::shell::plan::{InvocationParameter, WordPart};
         let env = crate::environment::Environment::new();
         env.write().invocation = crate::environment::InvocationParameters {
+            interactive: false,
             argv0: "worker".into(),
             positional: vec!["alpha".into(), "".into()],
         };

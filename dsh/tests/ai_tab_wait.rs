@@ -156,6 +156,18 @@ async fn owned_pty_worker() {
         println!("RETRY_DONE");
     }
     crossterm::terminal::disable_raw_mode().unwrap();
+    // Inspect before this owned session leader exits: Darwin revokes the
+    // slave at leader exit, so tcgetattr after child.wait is too late.
+    drop(repl_keys);
+    println!("MODES_RESTORED");
+    std::io::stdout().flush().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !std::path::Path::new("release").exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("parent must inspect and release the owned PTY");
 }
 
 struct Worker {
@@ -258,9 +270,11 @@ fn run_on_owned_pty(mode: &str) {
                 worker.until(b"LATE_RETIRED", Duration::from_secs(5));
                 worker.until(b"RETRY_DONE", Duration::from_secs(5));
             }
+            worker.until(b"MODES_RESTORED", Duration::from_secs(5));
+            assert_eq!(nix::sys::termios::tcgetattr(&slave).unwrap(), modes);
+            std::fs::write(root.path().join("release"), []).unwrap();
             worker.until(b"test result: ok", Duration::from_secs(5));
             assert!(worker.child.wait().unwrap().success());
-            assert_eq!(nix::sys::termios::tcgetattr(&slave).unwrap(), modes);
         }
     }
 }

@@ -98,6 +98,7 @@ use dsh_openai::turn::limits::MAX_TOOL_OUTPUT_CHARS;
 /// A shell-source response requires a separate contract; do not overload this.
 /// Empty args are valid; an empty command or NUL in any value is invalid.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiCommandResponse {
     pub command: String,
     pub args: Vec<String>,

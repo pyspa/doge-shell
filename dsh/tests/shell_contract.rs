@@ -109,6 +109,7 @@ contract_test!(contract_interactive, "interactive.toml");
 contract_test!(contract_command_search, "command-search.toml");
 contract_test!(contract_unsupported_control, "unsupported-control.toml");
 contract_test!(contract_comments, "comments.toml");
+contract_test!(contract_lisp_command_result, "lisp-command-result.toml");
 
 /// Structural gates over the whole suite: unique IDs and the exact-match
 /// XFAIL allowlist. A new hidden `xfail` or a stale entry fails here.

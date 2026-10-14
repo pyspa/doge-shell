@@ -469,11 +469,17 @@ impl Job {
                         target_pgid, pid
                     ),
                     Err(e) => {
+                        // One `getpgid` probe serves both tolerance checks below.
+                        // `Ok(target)` means the child already joined via its own
+                        // `setpgid(0, pgid)` before exec, so the parent call is
+                        // redundant. `Err` (usually ESRCH) means the child has
+                        // already exited and only the wait path still owns it.
+                        let pgid_probe = getpgid(Some(pid));
+                        let already_in_group =
+                            pgid_probe.as_ref().is_ok_and(|pgid| *pgid == target_pgid);
                         let tolerated_output_only_race = if self.pty_mode
                             == Some(PtyMode::OutputOnly)
                         {
-                            let already_in_group =
-                                getpgid(Some(pid)).is_ok_and(|pgid| pgid == target_pgid);
                             debug!(
                                 "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
                                 pid, target_pgid, already_in_group, e
@@ -484,15 +490,34 @@ impl Job {
                             already_in_group
                                 || (e == nix::errno::Errno::ESRCH && terminal_launch_failure)
                         } else {
-                            false
+                            // Outside output-only mode the parent call is still
+                            // redundant once the child is already in the group.
+                            already_in_group
                         };
-                        if !tolerated_output_only_race {
+                        // Fast-exiting pipeline stages (e.g. the `true` tail in
+                        // `denied | true`) can exit before the parent runs
+                        // `setpgid`. macOS returns ESRCH for such a zombie,
+                        // while Linux still succeeds. The child already
+                        // attempted its own `setpgid` before exec, so the
+                        // parent failure is benign in any PTY mode: the
+                        // existing wait path reaps the real exit status.
+                        let tolerated_fast_exit_race = e == nix::errno::Errno::ESRCH
+                            && (already_in_group || pgid_probe.is_err());
+                        if !(tolerated_output_only_race || tolerated_fast_exit_race) {
                             error!(
                                 "🔧 PGID: Failed to set pgid {} for pid {}: {}",
                                 target_pgid, pid, e
                             );
                             return Err(e.into());
                         }
+                        debug!(
+                            "🔧 PGID: Tolerated setpgid race for pid {} pgid {}: {} (already_in_group={}, child_gone={})",
+                            pid,
+                            target_pgid,
+                            e,
+                            already_in_group,
+                            pgid_probe.is_err()
+                        );
                     }
                 }
             } else {

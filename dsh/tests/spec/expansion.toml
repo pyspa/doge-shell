@@ -382,3 +382,91 @@ status = 0
 stdout_exact = '''[日本語][a b][][a'b"c][*.rs][a;b][$(echo injected)][line1
 line2][C:\path\][a\'b]'''
 stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-sorted"
+class = "posix"
+mode = "command"
+script = "touch z.txt m.txt a.txt; echo *.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "a.txt m.txt z.txt\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-star-excludes-hidden-and-self"
+class = "posix"
+mode = "command"
+script = "touch b visible.txt .hidden; mkdir -p sub; echo *"
+
+[case.expect]
+status = 0
+stdout_exact = "b sub visible.txt\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-star-txt-excludes-hidden"
+class = "posix"
+mode = "command"
+script = "touch visible.txt .hidden.txt; echo *.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "visible.txt\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-question-excludes-hidden"
+class = "posix"
+mode = "command"
+script = "touch bb cc .a; echo ??"
+
+[case.expect]
+status = 0
+stdout_exact = "bb cc\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-dotfile-explicit"
+class = "posix"
+mode = "command"
+script = "touch .hidden.txt visible.txt; echo .*.txt"
+
+[case.expect]
+status = 0
+stdout_exact = ".hidden.txt\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-bracket-does-not-match-leading-dot"
+class = "posix"
+mode = "command"
+script = "touch .h; echo [.]h"
+
+[case.expect]
+status = 0
+stdout_exact = "[.]h\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-dot-slash-prefix"
+class = "posix"
+mode = "command"
+script = "touch a.txt m.txt .h.txt; echo ./*.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "./a.txt ./m.txt\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-dot-slash-subdir"
+class = "posix"
+mode = "command"
+script = "mkdir -p sub; touch sub/x.txt sub/.hx; echo ./sub/*.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "./sub/x.txt\n"
+stderr_exact = ""

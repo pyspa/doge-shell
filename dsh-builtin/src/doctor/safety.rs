@@ -142,11 +142,14 @@ pub(super) fn check_safety(ctx: &Context, proxy: &mut dyn ShellProxy, current_di
         if !hooks_config::enabled(proxy) {
             let _ = ctx.write_stdout("ok ai-hooks off");
         } else {
-            match hooks_config::config_path(proxy).filter(|path| path.is_file()) {
-                None => {
+            match hooks_config::config_path(proxy).map(|path| path.filter(|path| path.is_file())) {
+                Err(error) => {
+                    let _ = ctx.write_stdout(&format!("error ai-hooks {error}"));
+                }
+                Ok(None) => {
                     let _ = ctx.write_stdout("ok ai-hooks none");
                 }
-                Some(path) => match hooks_config::read(&path) {
+                Ok(Some(path)) => match hooks_config::read(&path) {
                     Ok(hooks) if hooks.is_empty() => {
                         let _ = ctx.write_stdout(&format!("ok ai-hooks none {}", path.display()));
                     }

@@ -113,6 +113,7 @@
 - runtime command は `CommandRuntimeSnapshot`（`dsh-types/src/process_runtime.rs`）で先に解決する。snapshot は logical `PATH`・`Environment::child_process_env()`・snapshot cwd の3点のみを持ち、変数・alias・policy・cache は持たない。
 - child env は `Environment::child_process_env()` 由来のみ。export されていない変数を渡さない。
 - relative/empty PATH entry は snapshot cwd を基準に解決する。
+- 相対 `DOGESH_AI_HOOKS_CONFIG` の読込は `ShellProxy::get_current_dir()` 基準。background supervisor は前景とprocess cwdを共有するため、相対PathBufをそのままfilesystemへ渡さない（前景cdで開始時の設定を見失う）。
 - `/bin/sh` は内部 interpreter boundary であり、logical / process-global のいずれの PATH でも解決しない。
 - builtin が spawn する場合は `ProcessEnvironmentCapability::command_runtime_snapshot()` を使う。`ShellProxy` に新規メソッドを足さない。
 - process-global exception（`HERDR_*` 等の integration identity、bootstrap/debug/test-harness）は `scripts/runtime-authority-allowlist.txt` に理由付きで登録する。file 全体許可はしない。

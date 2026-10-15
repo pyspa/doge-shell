@@ -932,7 +932,7 @@ fn apply_stream_payload_surfaces_an_in_band_error_frame() {
     let mut delta_sent = false;
     let mut deltas = Vec::new();
 
-    let result = ChatGptClient::apply_stream_payload(
+    let result = client().apply_stream_payload(
         r#"{"error":{"message":"content policy violation"}}"#,
         &mut aggregator,
         &mut delta_sent,
@@ -956,7 +956,7 @@ fn apply_stream_payload_in_band_error_after_a_delta_is_not_retryable() {
     let mut delta_sent = true;
     let mut deltas = Vec::new();
 
-    let result = ChatGptClient::apply_stream_payload(
+    let result = client().apply_stream_payload(
         r#"{"error":{"message":"backend overloaded"}}"#,
         &mut aggregator,
         &mut delta_sent,
@@ -972,7 +972,7 @@ fn apply_stream_payload_forwards_a_normal_delta() {
     let mut delta_sent = false;
     let mut deltas = Vec::new();
 
-    let result = ChatGptClient::apply_stream_payload(
+    let result = client().apply_stream_payload(
         r#"{"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}"#,
         &mut aggregator,
         &mut delta_sent,

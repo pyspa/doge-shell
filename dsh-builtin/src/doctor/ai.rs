@@ -52,6 +52,16 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
         .unwrap_or_else(|| "default".to_string());
 
     let _ = ctx.write_stdout(&format!("ok provider {}", config.provider_name()));
+    if let Some(billing) = config.provider().opencode_billing() {
+        let _ = ctx.write_stdout(&format!(
+            "ok route {} chat/completions; {billing}",
+            config.base_url()
+        ));
+        let _ = ctx.write_stdout(&format!(
+            "ok key-reference {} or OPENCODE_API_KEY",
+            config.provider().opencode_key_env().unwrap()
+        ));
+    }
     if let Err(error) = config.readiness() {
         let _ = ctx.write_stdout(&format!("warn readiness {error}"));
     }
@@ -62,7 +72,15 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     };
     let _ = ctx.write_stdout(&format!(
         "{key_state} api-key {}",
-        mask_secret(config.api_key().map(str::to_string))
+        if config.provider().is_opencode() {
+            if config.api_key().is_some() {
+                "configured".into()
+            } else {
+                "missing".into()
+            }
+        } else {
+            mask_secret(config.api_key().map(str::to_string))
+        }
     ));
     let _ = ctx.write_stdout(&format!("ok model {}", config.default_model()));
     let _ = ctx.write_stdout(&format!("ok base-url {}", config.base_url()));

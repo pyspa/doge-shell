@@ -93,6 +93,9 @@ pub(super) fn json_section_details(
             let mut details = json!({
             "configured": config.readiness().is_ok(),
             "provider": config.provider_name(),
+            "protocol": if config.provider().is_opencode() { Some("chat/completions") } else { None },
+            "billing": config.provider().opencode_billing(),
+            "key_reference": config.provider().opencode_key_env(),
             "readiness_error": config.readiness().err().map(|e| e.to_string()),
             "model": config.default_model(),
             "base_url": config.base_url(),

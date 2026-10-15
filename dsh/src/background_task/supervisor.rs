@@ -34,6 +34,7 @@ use std::{
 };
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
+mod lifecycle;
 mod output;
 use output::{drain, safe_output};
 
@@ -173,6 +174,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         !self.shared.canceled.load(Ordering::Acquire)
+            && !self.shared.worker_disconnected()
             && active(inner.task.status())
             && inner.admitted.as_ref().is_some_and(|admitted| {
                 admitted.name == name
@@ -189,6 +191,7 @@ impl BackgroundTaskContext for LocalContext {
                 .as_ref()
                 .ok_or_else(|| anyhow!("no admitted background operation"))?;
             if self.shared.canceled.load(Ordering::Acquire)
+                || self.shared.worker_disconnected()
                 || admitted.epoch != inner.task.generation()
                 || !active(inner.task.status())
             {
@@ -206,6 +209,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         self.shared.canceled.load(Ordering::Acquire)
+            || self.shared.worker_disconnected()
             || !active(inner.task.status())
             || inner
                 .admitted
@@ -253,6 +257,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         !self.shared.canceled.load(Ordering::Acquire)
+            && !self.shared.worker_disconnected()
             && active(inner.task.status())
             && inner.task.generation() == epoch
             && inner
@@ -264,6 +269,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         !self.shared.canceled.load(Ordering::Acquire)
+            && !self.shared.worker_disconnected()
             && active(inner.task.status())
             && inner.admitted.as_ref().is_some_and(|admitted| {
                 admitted.epoch == inner.task.generation()
@@ -283,6 +289,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         !self.shared.canceled.load(Ordering::Acquire)
+            && !self.shared.worker_disconnected()
             && active(inner.task.status())
             && inner.admitted.as_ref().is_some_and(|admitted| {
                 admitted.epoch == inner.task.generation()
@@ -299,6 +306,7 @@ impl BackgroundTaskContext for LocalContext {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         !self.shared.canceled.load(Ordering::Acquire)
+            && !self.shared.worker_disconnected()
             && active(inner.task.status())
             && inner.admitted.as_ref().is_some_and(|admitted| {
                 admitted.epoch == inner.task.generation()
@@ -432,6 +440,7 @@ impl TaskHandle {
         request_id: u64,
         allow: bool,
     ) -> Result<()> {
+        self.shared.cancel_disconnected();
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         let valid = inner.task.task_id() == expected_task_id
@@ -507,6 +516,11 @@ fn await_approval(shared: &Shared, operation: Operation, guidance: bool) -> Resu
     });
     shared.changed.notify_all();
     loop {
+        // Check the private transport even while no protocol receive is running.
+        // Release authority before job cleanup to preserve the jobs/inner lock order.
+        drop(inner);
+        shared.cancel_disconnected();
+        inner = shared.inner.lock();
         inner.task.check_deadline(shared.elapsed());
         if shared.canceled.load(Ordering::Acquire)
             || !active(inner.task.status())
@@ -557,7 +571,7 @@ fn await_approval(shared: &Shared, operation: Operation, guidance: bool) -> Resu
             .saturating_sub(shared.elapsed());
         shared
             .changed
-            .wait_for(&mut inner, Duration::from_millis(remaining.min(1000)));
+            .wait_for(&mut inner, Duration::from_millis(remaining.min(50)));
     }
 }
 

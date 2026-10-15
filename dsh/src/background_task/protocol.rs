@@ -123,7 +123,7 @@ impl Channel {
             ));
         }
         stream.peer_addr()?;
-        stream.set_nonblocking(false)?;
+        stream.set_nonblocking(true)?;
         // SAFETY: stream owns fd throughout both fcntl calls.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
@@ -145,11 +145,14 @@ impl Channel {
             payload.0.push(b'\n');
             let mut remaining_bytes = payload.0.as_slice();
             while !remaining_bytes.is_empty() {
-                self.stream.set_write_timeout(Some(remaining(deadline)?))?;
+                remaining(deadline)?;
                 match self.stream.write(remaining_bytes) {
                     Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
                     Ok(count) => remaining_bytes = &remaining_bytes[count..],
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        wait_ready(&self.stream, libc::POLLOUT, deadline)?;
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -164,7 +167,7 @@ impl Channel {
             let deadline = deadline(timeout)?;
             let mut scanned = 0;
             loop {
-                let time_left = remaining(deadline)?;
+                remaining(deadline)?;
                 if let Some(relative_end) = self.incoming[scanned..]
                     .iter()
                     .position(|byte| *byte == b'\n')
@@ -184,11 +187,13 @@ impl Channel {
                 scanned = self.incoming.len();
                 let mut chunk = [0u8; 8192];
                 let capacity = chunk.len().min(MAX_FRAME + 1 - self.incoming.len());
-                self.stream.set_read_timeout(Some(time_left))?;
                 match self.stream.read(&mut chunk[..capacity]) {
                     Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
                     Ok(count) => self.incoming.extend_from_slice(&chunk[..count]),
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        wait_ready(&self.stream, libc::POLLIN, deadline)?;
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -228,6 +233,37 @@ impl Write for BoundedPayload {
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+// Do not change socket options between partial reads. Darwin rejects
+// setsockopt after a peer closes even when its final frame is still buffered.
+// Nonblocking I/O plus poll retains the whole-frame deadline on both platforms.
+fn wait_ready(stream: &UnixStream, events: libc::c_short, deadline: Instant) -> io::Result<()> {
+    loop {
+        let left = remaining(deadline)?;
+        let timeout_ms = left
+            .as_nanos()
+            .div_ceil(1_000_000)
+            .min(libc::c_int::MAX as u128) as libc::c_int;
+        let mut fd = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events,
+            revents: 0,
+        };
+        // SAFETY: stream owns this descriptor and poll receives one initialized entry.
+        let result = unsafe { libc::poll(&mut fd, 1, timeout_ms) };
+        if result > 0 {
+            // HUP also wakes the caller: read must drain queued data before EOF.
+            // The following nonblocking IO reports any actual transport error.
+            return Ok(());
+        }
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
     }
 }
 
@@ -282,6 +318,29 @@ mod tests {
         );
         let flags = unsafe { libc::fcntl(worker.stream.as_raw_fd(), libc::F_GETFD) };
         assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        // The final complete frame can already be queued when the peer exits.
+        // Receive must not configure socket options on a disconnected endpoint.
+        parent
+            .send(
+                &ParentMessage::Approval {
+                    serial: 9,
+                    allow: true,
+                },
+                TIMEOUT,
+            )
+            .unwrap();
+        drop(parent);
+        assert!(matches!(
+            worker.receive::<ParentMessage>(TIMEOUT).unwrap(),
+            ParentMessage::Approval {
+                serial: 9,
+                allow: true
+            }
+        ));
+        assert_eq!(
+            worker.receive::<ParentMessage>(TIMEOUT).unwrap_err().kind(),
+            io::ErrorKind::UnexpectedEof
+        );
         let secret = WorkerMessage::Confirm {
             serial: 8,
             message: "do-not-log".into(),
@@ -386,10 +445,12 @@ mod tests {
         let (left, _right) = UnixStream::pair().unwrap();
         let mut channel = Channel::new(left).unwrap();
         let start = Instant::now();
-        assert!(
+        assert_eq!(
             channel
                 .receive::<WorkerMessage>(Duration::from_millis(25))
-                .is_err()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
         );
         assert!(start.elapsed() < TIMEOUT);
         assert_eq!(
@@ -424,10 +485,12 @@ mod tests {
         let mut channel = Channel::new(left).unwrap();
         let start = Instant::now();
         // More than the configured send buffer, with no peer consuming it.
-        assert!(
+        assert_eq!(
             channel
                 .send(&"x".repeat(MAX_FRAME - 2), Duration::from_millis(25))
-                .is_err()
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::TimedOut
         );
         assert!(start.elapsed() < TIMEOUT);
     }

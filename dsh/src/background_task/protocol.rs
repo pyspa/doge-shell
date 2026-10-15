@@ -323,13 +323,52 @@ mod tests {
         for extra in [0, 1] {
             let (left, mut right) = UnixStream::pair().unwrap();
             let mut channel = Channel::new(left).unwrap();
+            // Keep fixture construction and sender startup outside the frame
+            // deadline, so this checks the byte boundary rather than startup.
+            let frame = format!("\"{}\"\n", "x".repeat(MAX_FRAME - 2 + extra));
+            let (ready, started) = std::sync::mpsc::sync_channel(0);
             let sender = std::thread::spawn(move || {
-                let frame = format!("\"{}\"\n", "x".repeat(MAX_FRAME - 2 + extra));
-                let _ = right.write_all(frame.as_bytes());
+                ready.send(()).unwrap();
+                right.write_all(frame.as_bytes())
             });
+            started
+                .recv_timeout(TIMEOUT)
+                .expect("frame sender did not start");
             let result = channel.receive::<String>(TIMEOUT);
-            assert_eq!(result.is_ok(), extra == 0);
-            sender.join().unwrap();
+            let sent = sender.join().expect("frame sender panicked");
+            if extra == 0 {
+                let payload = result.unwrap_or_else(|error| {
+                    panic!(
+                        "exact-limit frame rejected: kind={:?}, error={error}; sender={sent:?}",
+                        error.kind()
+                    )
+                });
+                assert_eq!(payload.len(), MAX_FRAME - 2);
+                sent.expect("exact-limit frame sender failed");
+            } else {
+                let error = result.expect_err("oversized frame was accepted");
+                assert_eq!(
+                    error.kind(),
+                    io::ErrorKind::Other,
+                    "{error}; sender={sent:?}"
+                );
+                assert_eq!(error.to_string(), "background frame exceeds limit");
+                // The receiver deliberately closes early on an oversized
+                // frame; a sender broken pipe is legitimate in this branch.
+                if let Err(error) = sent {
+                    assert!(
+                        matches!(
+                            error.kind(),
+                            io::ErrorKind::BrokenPipe | io::ErrorKind::ConnectionReset
+                        ),
+                        "unexpected oversized-frame sender failure: {error}"
+                    );
+                }
+                assert_eq!(
+                    channel.receive::<String>(TIMEOUT).unwrap_err().kind(),
+                    io::ErrorKind::BrokenPipe
+                );
+            }
         }
     }
 

@@ -1044,11 +1044,8 @@ async fn command_refresh_timeout_is_error_not_successful_empty_cache() {
         },
     );
     assert!(cold.is_empty(), "cold load must not block");
-    assert!(
-        provider.cache.read().command_pending.contains(&key),
-        "cold load should schedule a refresh"
-    );
-
+    // An immediate loader can settle before the cold call returns. The
+    // notification and committed error below prove the refresh was scheduled.
     await_command_settlement(&mut rx).await;
 
     // The notification must fire after the state is committed.

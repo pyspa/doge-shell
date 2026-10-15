@@ -27,6 +27,7 @@ use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
+mod content;
 mod frontmatter;
 pub(crate) mod lint;
 mod loader;
@@ -354,7 +355,7 @@ impl Skill {
             anyhow::bail!("SKILL.md not found in folder: {:?}", path);
         }
 
-        let content = std::fs::read_to_string(&skill_md_path)
+        let content = content::index(&skill_md_path, &root.path)
             .with_context(|| format!("Failed to read SKILL.md: {skill_md_path:?}"))?;
 
         debug!("Loaded folder skill: {}", name);
@@ -375,7 +376,7 @@ impl Skill {
             .unwrap_or("unknown")
             .to_string();
 
-        let content = std::fs::read_to_string(path)
+        let content = content::index(path, &root.path)
             .with_context(|| format!("Failed to read skill file: {path:?}"))?;
 
         debug!("Loaded file skill: {}", name);
@@ -463,3 +464,6 @@ pub(crate) const MAX_SKILL_SUMMARY_CHARS: usize = 240;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod retrieval_tests;

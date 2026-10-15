@@ -64,6 +64,8 @@ pub(super) const STREAM_KEY: &str = "AI_CHAT_STREAM";
 /// A `.dogesh/skills` directory arrives with a `git clone`, so its summaries reach
 /// the model the first time `!` is used in that checkout. Personal skills stay
 /// available when this is off.
+pub(super) const PROJECT_INSTRUCTIONS_KEY: &str = "AI_CHAT_PROJECT_INSTRUCTIONS";
+/// Environment key turning off project skill summaries.
 pub(super) const PROJECT_SKILLS_KEY: &str = "AI_CHAT_PROJECT_SKILLS";
 /// Environment key controlling whether `skill_manage` writes are staged for
 /// review instead of landing immediately. `task` (default) / `always` / `off`.
@@ -232,6 +234,16 @@ pub(crate) fn resolve_project_skills_enabled(proxy: &mut dyn ShellProxy) -> bool
             "0" | "false" | "off" | "no"
         ),
     }
+}
+
+/// Same shell-only opt-out convention as project skills.
+pub(crate) fn resolve_project_instructions_enabled(proxy: &mut dyn ShellProxy) -> bool {
+    !resolve_setting(proxy, PROJECT_INSTRUCTIONS_KEY).is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        )
+    })
 }
 
 /// Whether `skill_manage` writes land on disk immediately or wait for a

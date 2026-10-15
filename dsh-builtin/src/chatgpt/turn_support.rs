@@ -412,6 +412,13 @@ pub(super) fn run_tool_calls(
             Effective::InvalidBridge(_) => tool_call.clone(),
         };
 
+        if let Some(note) = manager.instructions.preflight(&active_call, proxy) {
+            let name = active_call["function"]["name"]
+                .as_str()
+                .unwrap_or("unknown");
+            manager.add_tool_result(tool_call_id, name, note);
+            continue;
+        }
         if let Some(runtime) = runtime
             && let Err(e) = runtime.lock().before_tool(
                 &active_call,

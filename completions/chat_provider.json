@@ -8,6 +8,9 @@
         "type": "Choice",
         "data": [
           "api_key",
+          "opencode_go",
+          "opencode_zen",
+          "models",
           "chatgpt_subscription",
           "chatgpt",
           "chatgpt-subscription",

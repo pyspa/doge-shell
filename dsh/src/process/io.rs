@@ -184,7 +184,11 @@ impl PtyMonitor {
         let flags = OFlag::from_bits_truncate(current_flags) | OFlag::O_NONBLOCK;
         fcntl(&file, FcntlArg::F_SETFL(flags)).context("fcntl F_SETFL failed")?;
 
-        let inner = AsyncFd::new(file).context("AsyncFd creation failed")?;
+        // SAFETY: AsyncFd owns the File, keeping its descriptor open and
+        // unchanged until deregistration; no code replaces the inner File.
+        let inner = unsafe { AsyncFd::register(file) }
+            .map_err(std::io::Error::from)
+            .context("AsyncFd creation failed")?;
 
         Ok(PtyMonitor {
             inner,

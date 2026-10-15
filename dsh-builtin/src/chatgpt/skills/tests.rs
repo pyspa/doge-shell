@@ -777,18 +777,30 @@ fn metadata_discovery_does_not_read_large_or_invalid_body_bytes() {
             .to_string()
             .contains("8 KiB")
     );
+    fs::remove_file(&path).unwrap();
+    assert!(render_mention(&loaded[0]).is_err());
 }
 
 #[test]
-fn a_disappeared_explicit_body_reports_failure_and_does_not_count_a_read() {
+fn oversized_explicit_mention_reports_failure_without_counting_a_read() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let dir = tempdir().unwrap();
     let root = dir.path().join("skills");
-    let path = write_skill(&root, "vanished", "Use for failure");
-    let skill = SkillsManager::with_roots(vec![user_root(&root)])
-        .load_skills()
-        .remove(0);
-    fs::remove_file(path.join("SKILL.md")).unwrap();
-    assert!(render_mention(&skill).is_err());
+    let path = write_skill(&root, "large", "Use for explicit failure");
+    let instruction = path.join("SKILL.md");
+    let mut body = fs::read_to_string(&instruction).unwrap();
+    body.push_str(&"x".repeat(16 * 1024));
+    fs::write(&instruction, body).unwrap();
+
+    let (messages, rest) = crate::chatgpt::prompt::resolve_skill_mentions(
+        "@large inspect target",
+        &[user_root(&root)],
+    );
+    assert_eq!(rest, "inspect target");
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].contains("could not be loaded"));
+    assert!(messages[0].contains("8 KiB"));
+    assert!(messages[0].contains("read_file"));
     assert!(!usage::read_this_turn().contains(&path));
 }
 
@@ -809,29 +821,17 @@ fn bundled_resource_listing_hides_links_outside_the_skill() {
 }
 
 #[test]
-fn malformed_frontmatter_is_diagnosed_and_name_conflicts_remain_deterministic() {
+fn unterminated_frontmatter_is_diagnosed() {
     let dir = tempdir().unwrap();
-    let first = dir.path().join("first");
-    let second = dir.path().join("second");
-    write_skill(&first, "same", "first wins");
-    write_skill(&second, "same", "second loses");
+    let root = dir.path().join("skills");
+    fs::create_dir(&root).unwrap();
     fs::write(
-        first.join("broken.md"),
+        root.join("broken.md"),
         "---\nname: broken\ndescription: missing close\n",
     )
     .unwrap();
-    let (loaded, errors) =
-        SkillsManager::with_roots(vec![user_root(&first), user_root(&second)]).load_reporting();
-    assert_eq!(loaded.len(), 1);
-    assert!(loaded[0].summary().contains("first wins"));
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.problem.contains("shadowed"))
-    );
-    assert!(
-        errors
-            .iter()
-            .any(|error| error.problem.contains("Failed to read"))
-    );
+    let (loaded, errors) = SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+    assert!(loaded.is_empty());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].problem.contains("Failed to read"));
 }

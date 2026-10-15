@@ -18,6 +18,8 @@ use std::process::ExitCode;
 pub mod agent_lifecycle;
 pub mod ai_features;
 pub mod argument_explainer;
+#[doc(hidden)]
+pub mod background_task;
 pub mod blocks_ui;
 mod bootstrap;
 mod cli;
@@ -153,13 +155,18 @@ impl std::fmt::Display for ShellExit {
 impl std::error::Error for ShellExit {}
 
 pub fn lib_main() -> ExitCode {
-    if let Err(err) = init_tracing() {
+    let background_worker = std::env::args_os().any(|arg| arg == "--__dsh-background-worker");
+    if !background_worker && let Err(err) = init_tracing() {
         eprintln!("Failed to initialize tracing: {err}");
         return ExitCode::FAILURE;
     }
 
     // Set up panic handler
-    setup_panic_handler();
+    if background_worker {
+        std::panic::set_hook(Box::new(|_| eprintln!("background worker failed")));
+    } else {
+        setup_panic_handler();
+    }
 
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,

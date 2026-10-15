@@ -7,6 +7,7 @@
 //! `EnvironmentSnapshot` must not carry it.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,6 +39,81 @@ struct StoredSession {
 }
 
 static SESSION: LazyLock<Mutex<Option<StoredSession>>> = LazyLock::new(|| Mutex::new(None));
+// A dedicated worker sets this once, before entering the chat runtime. It is
+// process-local: no mode or worker conversation is written back to the parent.
+static BACKGROUND_SESSION: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn is_background_session() -> bool {
+    BACKGROUND_SESSION.load(Ordering::SeqCst)
+}
+
+/// Clone the foreground conversation without claiming it or changing its TTL.
+/// The ordinary claim in the worker still checks identity, scope, and age.
+pub fn background_session_snapshot() -> Option<serde_json::Value> {
+    let guard = slot();
+    let persisted;
+    let stored = match guard.as_ref() {
+        Some(stored) => stored,
+        None => {
+            persisted = read_persisted()?;
+            &persisted
+        }
+    };
+    let manager = serde_json::to_value(&stored.manager).ok()?;
+    Some(serde_json::json!({
+        "version": PERSISTED_VERSION,
+        "manager": manager,
+        "id": stored.id,
+        "identity": stored.identity,
+        "scope": stored.scope,
+        "stored_at_unix_secs": now_unix_secs().saturating_sub(stored.stored_at.elapsed().as_secs())
+    }))
+}
+
+/// Initialize a dedicated background worker before any chat/session operations.
+/// This is process-wide and irreversible; never call it in the foreground host.
+/// Invalid snapshots fail explicitly and leave both mode and session unchanged.
+pub fn enter_background_session(
+    task_id: &str,
+    snapshot: Option<serde_json::Value>,
+) -> Result<(), String> {
+    if task_id.trim().is_empty() {
+        return Err("background session requires a task id".into());
+    }
+    let imported = snapshot
+        .map(|snapshot| -> Result<StoredSession, String> {
+            let stored: PersistedSession = serde_json::from_value(snapshot)
+                .map_err(|err| format!("invalid background session snapshot: {err}"))?;
+            if stored.version != PERSISTED_VERSION {
+                return Err("unsupported background session snapshot version".into());
+            }
+            let pinned = &stored.manager.pinned_messages;
+            if pinned.len() != 2 || pinned[0]["role"] != "system" || pinned[1]["role"] != "user" {
+                return Err("invalid background session pinned messages".into());
+            }
+            if stored
+                .manager
+                .turn_mark
+                .as_ref()
+                .is_some_and(|mark| mark.buffer_index > stored.manager.buffer.len())
+            {
+                return Err("invalid background session turn boundary".into());
+            }
+            Ok(StoredSession {
+                manager: stored.manager,
+                id: format!("background:{task_id}"),
+                identity: stored.identity,
+                scope: stored.scope,
+                stored_at: instant_from_unix_secs(stored.stored_at_unix_secs),
+            })
+        })
+        .transpose()?;
+    BACKGROUND_SESSION
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .map_err(|_| "background session is already initialized".to_string())?;
+    *slot() = imported;
+    Ok(())
+}
 
 /// Version of the on-disk session file. A file with any other version is
 /// ignored, never migrated: a conversation is easy to rebuild, and guessing
@@ -76,6 +152,9 @@ fn instant_from_unix_secs(stored_at_unix_secs: u64) -> Instant {
 }
 
 fn read_persisted() -> Option<StoredSession> {
+    if BACKGROUND_SESSION.load(Ordering::SeqCst) {
+        return None;
+    }
     let text = std::fs::read_to_string(crate::config_paths::chat_session_file()).ok()?;
     let persisted: PersistedSession = serde_json::from_str(&text).ok()?;
     if persisted.version != PERSISTED_VERSION {
@@ -93,6 +172,9 @@ fn read_persisted() -> Option<StoredSession> {
 /// Best effort: a turn that finished must never fail because the disk did.
 /// Callers ignore the return value.
 fn write_persisted(persisted: &PersistedSession) -> bool {
+    if BACKGROUND_SESSION.load(Ordering::SeqCst) {
+        return false;
+    }
     let path = crate::config_paths::chat_session_file();
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
@@ -106,6 +188,9 @@ fn write_persisted(persisted: &PersistedSession) -> bool {
 
 /// True when a session file was removed.
 fn remove_persisted() -> bool {
+    if BACKGROUND_SESSION.load(Ordering::SeqCst) {
+        return false;
+    }
     std::fs::remove_file(crate::config_paths::chat_session_file()).is_ok()
 }
 
@@ -208,7 +293,9 @@ pub enum Continuity {
 pub fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
     let Some(ttl) = ttl else {
         return Continuity::Fresh {
-            stored: slot().is_some() || crate::config_paths::chat_session_file().is_file(),
+            stored: slot().is_some()
+                || (!BACKGROUND_SESSION.load(Ordering::SeqCst)
+                    && crate::config_paths::chat_session_file().is_file()),
             reasons: Vec::new(),
         };
     };

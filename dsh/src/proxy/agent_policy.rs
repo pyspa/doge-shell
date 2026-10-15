@@ -2,6 +2,25 @@
 use super::*;
 
 impl Shell {
+    pub(super) fn confirm_shell_action(&mut self, message: &str) -> Result<bool> {
+        if let Some(context) = &self.background_context {
+            return Ok(matches!(context.confirm(message)?, ApprovalDecision::Allow));
+        }
+        debug!("Safety confirmation requested: {}", message);
+
+        // Use eprint! instead of println! or print! to ensure the prompt goes to stderr.
+        // This is critical if the shell output is being piped.
+        eprint!("{} [y/N]: ", message);
+        std::io::stderr().flush()?;
+
+        let mut input = String::new();
+        read_confirmation_line(&mut input)?;
+
+        let confirmed = confirmation_is_yes(&input);
+        debug!("Confirmation result: {}", confirmed);
+        Ok(confirmed)
+    }
+
     /// The commands the chat agent may run without asking.
     ///
     /// Only the operator's configured list. Deliberately *not* the list the
@@ -48,6 +67,11 @@ impl Shell {
 }
 
 impl AgentCommandPolicy for Shell {
+    fn background_task_context(
+        &self,
+    ) -> Option<std::sync::Arc<dyn dsh_builtin::shell_capabilities::BackgroundTaskContext>> {
+        self.background_context.clone()
+    }
     fn agent_runtime(
         &self,
     ) -> Option<std::sync::Arc<parking_lot::Mutex<dsh_builtin::agent::AgentRuntime>>> {
@@ -121,6 +145,9 @@ impl AgentCommandPolicy for Shell {
     }
 
     fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
+        if let Some(context) = &self.background_context {
+            return context.confirm(message);
+        }
         if self.agent_runtime.is_some() {
             // An unattended task has nobody to ask: deny without stopping.
             // The caller turns the denial into a tool-result error the turn

@@ -40,17 +40,23 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     let path_value = parsed.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
     let normalized_abs_path = super::resolve_tool_path(path_value, _proxy)?;
+    if let Some(background) = _proxy.background_task_context()
+        && !background.read_authorized(&normalized_abs_path)
+    {
+        return Err("chat: resolved listing target differs from the admitted operation".into());
+    }
     let current_dir = _proxy
         .get_current_dir()
         .map_err(|err| format!("chat: failed to get current working directory: {err}"))?;
     let normalized_current_dir =
         std::fs::canonicalize(&current_dir).unwrap_or_else(|_| super::normalize_path(&current_dir));
+    let restricted_io = _proxy.background_task_context().is_some();
 
-    if !normalized_abs_path.exists() {
+    if !restricted_io && !normalized_abs_path.exists() {
         return Err(format!("chat: path `{path_value}` does not exist"));
     }
 
-    if !normalized_abs_path.is_dir() {
+    if !restricted_io && !normalized_abs_path.is_dir() {
         return Err(format!("chat: path `{path_value}` is not a directory"));
     }
 
@@ -68,17 +74,39 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("ls cancelled by user.".to_string());
     }
 
+    let directory_entries = if restricted_io {
+        crate::agent::files::read_directory(&normalized_abs_path)
+    } else {
+        fs::read_dir(&normalized_abs_path).map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| {
+                    let metadata = entry.metadata().ok().map(|metadata| {
+                        crate::agent::files::DirectoryMetadata {
+                            is_dir: metadata.is_dir(),
+                            size: metadata.len(),
+                        }
+                    });
+                    crate::agent::files::DirectoryEntry {
+                        name: entry.file_name(),
+                        metadata,
+                    }
+                })
+                .collect()
+        })
+    }
+    .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?;
     let mut hidden_sensitive = 0usize;
-    let mut entries = fs::read_dir(&normalized_abs_path)
-        .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?
-        .filter_map(|res| res.ok())
+    let mut entries = directory_entries
+        .into_iter()
         .filter_map(|entry| {
+            let path = normalized_abs_path.join(&entry.name);
             match super::reject_gitignored_read_path(
-                &entry.path(),
+                &path,
                 &normalized_current_dir,
-                &entry.file_name().to_string_lossy(),
+                &entry.name.to_string_lossy(),
             ) {
-                Ok(()) if safety_policy::is_sensitive_path(&entry.path()) => {
+                Ok(()) if safety_policy::is_sensitive_path(&path) => {
                     hidden_sensitive += 1;
                     None
                 }
@@ -88,7 +116,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         })
         .collect::<Vec<_>>();
 
-    entries.sort_by_key(|entry| entry.file_name());
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
 
     let mut output = String::new();
     output.push_str(&format!("Directory listing for `{}`:\n", path_value));
@@ -98,21 +126,20 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     } else {
         let total = entries.len();
         for entry in entries.into_iter().take(MAX_ENTRIES) {
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-            let metadata = entry.metadata().ok();
+            let name = entry.name.to_string_lossy();
+            let metadata = entry.metadata;
 
             let type_char = if let Some(meta) = &metadata {
-                if meta.is_dir() { "d" } else { "-" }
+                if meta.is_dir { "d" } else { "-" }
             } else {
                 "?"
             };
 
             let size = if let Some(meta) = &metadata {
-                if meta.is_dir() {
+                if meta.is_dir {
                     "-".to_string()
                 } else {
-                    format!("{}", meta.len())
+                    format!("{}", meta.size)
                 }
             } else {
                 "?".to_string()

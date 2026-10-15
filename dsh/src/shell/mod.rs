@@ -48,6 +48,9 @@ pub const APP_NAME: &str = "dogesh";
 pub const SHELL_TERMINAL: c_int = STDIN_FILENO;
 
 pub struct Shell {
+    pub(crate) background_context:
+        Option<Arc<dyn dsh_builtin::shell_capabilities::BackgroundTaskContext>>,
+    pub(crate) background_task: Option<crate::background_task::supervisor::TaskHandle>,
     pub agent_runtime: Option<Arc<ParkingMutex<dsh_builtin::agent::AgentRuntime>>>,
     pub environment: Arc<RwLock<Environment>>,
     pub exited: Option<ExitStatus>,
@@ -132,6 +135,8 @@ impl Shell {
         let lisp_engine = lisp::LispEngine::new(Arc::clone(&environment));
 
         Shell {
+            background_context: None,
+            background_task: None,
             agent_runtime: None,
             environment,
             exited: None,

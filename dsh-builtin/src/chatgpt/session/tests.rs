@@ -652,3 +652,95 @@ fn summary_keeps_account_binding_after_all_original_output_is_removed() {
     assert!(restored.check_provider("account-B-model").is_err());
     assert!(restored.check_provider("account-A-model").is_ok());
 }
+
+/// Restore the process-wide foreground mode even if a worker test panics.
+struct BackgroundModeGuard;
+impl Drop for BackgroundModeGuard {
+    fn drop(&mut self) {
+        *slot() = None;
+        BACKGROUND_SESSION.store(false, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn background_snapshot_is_non_destructive_and_rejects_invalid_imports() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let _state = isolated_state_home();
+    session_reset();
+    store(ttl(), manager(), "foreground", "sys", None, None);
+    let path = crate::config_paths::chat_session_file();
+    let original = std::fs::read(&path).unwrap();
+    let snapshot = background_session_snapshot().unwrap();
+    assert_eq!(peek_id(ttl(), "sys", None).as_deref(), Some("foreground"));
+    *slot() = None; // Restart fallback must also clone without consuming disk.
+    let disk_snapshot = background_session_snapshot().unwrap();
+    assert_eq!(disk_snapshot["manager"], snapshot["manager"]);
+    assert!(slot().is_none());
+    for invalid in [
+        json!({}),
+        {
+            let mut value = snapshot.clone();
+            value["version"] = json!(99);
+            value
+        },
+        {
+            let mut value = snapshot.clone();
+            value["manager"]["pinned_messages"] = json!([]);
+            value
+        },
+    ] {
+        assert!(enter_background_session("task", Some(invalid)).is_err());
+        assert!(!BACKGROUND_SESSION.load(Ordering::SeqCst));
+    }
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    assert!(matches!(take(ttl(), "sys", None), Claim::Continued(_)));
+    session_reset();
+}
+
+#[test]
+fn background_import_and_all_session_operations_leave_foreground_file_untouched() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let _state = isolated_state_home();
+    session_reset();
+    store(ttl(), manager(), "foreground", "sys", None, None);
+    let snapshot = background_session_snapshot().unwrap();
+    let path = crate::config_paths::chat_session_file();
+    let original = std::fs::read(&path).unwrap();
+    let _mode = BackgroundModeGuard;
+    enter_background_session("task-1", Some(snapshot)).unwrap();
+    assert_eq!(
+        peek_id(ttl(), "sys", None).as_deref(),
+        Some("background:task-1")
+    );
+    assert!(enter_background_session("task-2", None).is_err());
+    let Claim::Continued(carried) = take(ttl(), "sys", None) else {
+        panic!("imported conversation must continue")
+    };
+    store(ttl(), carried.manager, &carried.id, "sys", None, None);
+    assert!(session_reset());
+    assert!(matches!(take(ttl(), "sys", None), Claim::Fresh(None)));
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn empty_background_snapshot_never_resumes_foreground_disk_and_preserves_claim_checks() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let _state = isolated_state_home();
+    session_reset();
+    store(ttl(), manager(), "foreground", "sys", None, None);
+    let path = crate::config_paths::chat_session_file();
+    let original = std::fs::read(&path).unwrap();
+    let mut expired = background_session_snapshot().unwrap();
+    expired["stored_at_unix_secs"] = json!(now_unix_secs().saturating_sub(60));
+    let _mode = BackgroundModeGuard;
+    enter_background_session("fresh", None).unwrap();
+    assert!(matches!(take(ttl(), "sys", None), Claim::Fresh(None)));
+    // Import age is not refreshed: ordinary claims still enforce TTL.
+    BACKGROUND_SESSION.store(false, Ordering::SeqCst);
+    enter_background_session("expired", Some(expired)).unwrap();
+    assert!(matches!(
+        take(Some(Duration::from_secs(1)), "sys", None),
+        Claim::Fresh(Some(_))
+    ));
+    assert_eq!(std::fs::read(path).unwrap(), original);
+}

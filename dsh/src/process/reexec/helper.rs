@@ -59,7 +59,11 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
     // unrelated inherited descriptor.
     setup_helper_status_fd(fds.status)?;
 
-    let env_arc = crate::environment::Environment::new();
+    let env_arc = if matches!(request.kind, InternalExecKind::ChatTask(_)) {
+        crate::environment::Environment::new_isolated()
+    } else {
+        crate::environment::Environment::new()
+    };
     {
         let mut env = env_arc.write();
         request.snapshot.apply_to(&mut env);
@@ -77,6 +81,12 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
     let mut shell = Shell::new(env_arc);
 
     match &request.kind {
+        InternalExecKind::ChatTask(task) => crate::background_task::run_worker(
+            &mut shell,
+            task,
+            fds.status
+                .ok_or_else(|| anyhow::anyhow!("background broker fd required"))?,
+        ),
         InternalExecKind::Builtin(builtin) => run_helper_builtin(&mut shell, builtin).await,
         InternalExecKind::Plan(plan_request) => {
             run_helper_plan(&mut shell, plan_request, fds.status).await

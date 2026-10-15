@@ -30,6 +30,7 @@ mod bg;
 mod blocks;
 pub mod cd;
 mod chat_auth;
+mod chat_task;
 mod chatgpt;
 pub mod config_paths;
 pub mod cron;
@@ -47,9 +48,11 @@ mod safe_run;
 mod safety_policy;
 mod skill;
 pub use background::{BackgroundBuiltinMode, background_builtin_mode};
-pub use chatgpt::chat_jobs_shutdown;
+pub use chatgpt::background::{BackgroundToolRunner, validate_background_configuration};
 pub use chatgpt::chat_status_detailed;
 pub use chatgpt::execute_chat_message;
+pub use chatgpt::jobs::shutdown as chat_jobs_shutdown;
+pub use chatgpt::session::{background_session_snapshot, enter_background_session};
 pub use chatgpt::{
     LEGACY_SSE_UNSUPPORTED_MESSAGE, McpCatalogFootprint, McpConnectionStatus, McpManager,
     McpRuntimeStateSnapshot, McpServerStatus, McpToolExposure, McpToolFacts, McpToolGroup,
@@ -118,6 +121,7 @@ mod z;
 /// the shell core is exhaustive and typed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreShellAction {
+    ChatTask,
     ChatStatus,
     Cron,
     Exit,
@@ -138,6 +142,7 @@ pub enum CoreShellAction {
 impl CoreShellAction {
     pub const fn command_name(self) -> &'static str {
         match self {
+            Self::ChatTask => "chat_task",
             Self::ChatStatus => "chat_status",
             Self::Cron => "cron",
             Self::Exit => "exit",
@@ -158,6 +163,7 @@ impl CoreShellAction {
 
     pub fn from_command_name(command: &str) -> Option<Self> {
         Some(match command {
+            "chat_task" => Self::ChatTask,
             "chat_status" => Self::ChatStatus,
             "cron" => Self::Cron,
             "exit" => Self::Exit,

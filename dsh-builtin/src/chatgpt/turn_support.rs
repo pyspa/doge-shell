@@ -159,6 +159,9 @@ pub(super) fn split_turn_tool_bases(
     is_agent: bool,
     mcp_tool_mode: McpToolMode,
 ) -> (Option<Vec<Value>>, Vec<Value>) {
+    if session::is_background_session() {
+        return (None, background::tool_definitions());
+    }
     if is_agent {
         let mut tools = tool::build_tools();
         {

@@ -33,7 +33,8 @@ use std::os::unix::io::RawFd;
 /// expansion (`WordPart::ArithmeticExpansion` with
 /// `PlannedArithmeticExpansion`).
 /// Bumped to 10: ExecutionPlan/WordPart and ChildShellSnapshot carry invocation parameters.
-pub const PROTOCOL_VERSION: u32 = 10;
+/// Bumped to 11 for the private background-chat worker request.
+pub const PROTOCOL_VERSION: u32 = 11;
 /// Upper bound for one request; the child never does an unbounded
 /// `read_to_end`. Oversized input is rejected with a non-zero exit.
 pub const MAX_INTERNAL_EXEC_REQUEST: usize = 8 * 1024 * 1024;
@@ -50,6 +51,7 @@ pub struct InternalExecRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InternalExecKind {
+    ChatTask(Box<crate::background_task::BackgroundWorkerRequest>),
     Builtin(BuiltinExecRequest),
     Plan(PlanExecRequest),
     PipelineSource(PipelineSourceExecRequest),

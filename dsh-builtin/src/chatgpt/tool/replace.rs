@@ -1,3 +1,6 @@
+//! Typed text replacement and safe file preview/approval.
+//! Foreground I/O keeps ordinary shell behavior; background I/O validates
+//! actual source and replacement bytes against host-admitted operations.
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
@@ -100,13 +103,20 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         ));
     }
 
-    let contents = if proxy.agent_runtime().is_some() {
+    let restricted_io =
+        proxy.agent_runtime().is_some() || proxy.background_task_context().is_some();
+    let contents = if restricted_io {
         crate::agent::files::read(&normalized_abs_path)
     } else {
         fs::read_to_string(&normalized_abs_path)
     }
     .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
+    if let Some(background) = proxy.background_task_context()
+        && !background.read_result_authorized(&normalized_abs_path, &contents)
+    {
+        return Err("chat: file contents changed after background replacement admission".into());
+    }
     // Report the mismatch back to the model instead of guessing: the loop feeds
     // tool errors to the assistant so it can retry with a corrected match.
     let matches = contents.matches(old_string).count();
@@ -160,7 +170,12 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Ok("File modification cancelled by user.".to_string());
     }
 
-    if proxy.agent_runtime().is_some() {
+    if let Some(background) = proxy.background_task_context()
+        && !background.write_contents_authorized(&normalized_abs_path, &updated)
+    {
+        return Err("chat: admitted replacement target or preimage changed before writing".into());
+    }
+    if restricted_io {
         crate::agent::files::write(&normalized_abs_path, &updated)
     } else {
         fs::write(&normalized_abs_path, &updated)

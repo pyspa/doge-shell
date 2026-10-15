@@ -125,6 +125,7 @@ fn denied_guidance_body_is_not_sent_and_not_reasked_each_iteration() {
 
 #[test]
 fn actual_chat_request_gets_scoped_text_before_edit_and_retains_confirmation() {
+    let _registry_guard = crate::chatgpt::tool::execute::tests::env_lock();
     use std::sync::Mutex;
     struct Client {
         messages: Mutex<Vec<Vec<Value>>>,
@@ -247,6 +248,7 @@ fn deletion_is_reflected_and_nested_repository_scope_is_explicit() {
 
 #[test]
 fn execute_cwd_uses_the_same_expansion_as_file_tools() {
+    let _env_guard = crate::chatgpt::tool::execute::tests::env_lock();
     let dir = fixture();
     fs::create_dir(dir.path().join("sub")).unwrap();
     fs::write(dir.path().join("sub/AGENTS.md"), "expanded cwd rules").unwrap();
@@ -263,4 +265,27 @@ fn execute_cwd_uses_the_same_expansion_as_file_tools() {
     assert!(context.preflight(&operation, &mut proxy).is_some());
     assert!(context.refresh(&mut proxy).contains("expanded cwd rules"));
     assert!(context.preflight(&operation, &mut proxy).is_none());
+}
+
+#[test]
+fn skill_relative_reads_inspect_the_resource_scope() {
+    let dir = fixture();
+    let skill = dir.path().join(".dogesh/skills/demo");
+    fs::create_dir_all(skill.join("references")).unwrap();
+    fs::write(
+        skill.join("references/AGENTS.md"),
+        "reference scope guidance",
+    )
+    .unwrap();
+    let mut proxy = proxy(dir.path());
+    let mut context = InstructionContext::default();
+    context.refresh(&mut proxy);
+    let read = json!({"function":{"name":"read_file","arguments":json!({"path":"references/detail.md","skill_path":skill.join("SKILL.md")}).to_string()}});
+    assert!(context.preflight(&read, &mut proxy).is_some());
+    assert!(
+        context
+            .refresh(&mut proxy)
+            .contains("reference scope guidance")
+    );
+    assert!(context.preflight(&read, &mut proxy).is_none());
 }

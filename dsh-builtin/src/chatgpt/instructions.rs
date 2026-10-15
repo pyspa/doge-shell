@@ -229,7 +229,17 @@ impl InstructionContext {
         let args: Value = serde_json::from_str(call["function"]["arguments"].as_str()?).ok()?;
         let dir = match name {
             "read_file" | "edit" | "str_replace" => {
-                tool::resolve_tool_path(args["path"].as_str()?, proxy)
+                let mut target = args["path"].as_str()?.to_string();
+                // Compatible clients can supply a skill-relative read base.
+                // Inspect that concrete target, never cwd/path by mistake.
+                if name == "read_file"
+                    && let Some(base) = args["skill_path"].as_str()
+                {
+                    let expanded = shellexpand::full(base).ok()?;
+                    let base = proxy.get_current_dir().ok()?.join(expanded.as_ref());
+                    target = base.parent()?.join(&target).to_string_lossy().into_owned();
+                }
+                tool::resolve_tool_path(&target, proxy)
                     .ok()?
                     .parent()?
                     .to_path_buf()

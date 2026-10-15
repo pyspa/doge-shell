@@ -169,6 +169,18 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         repl.terminal_ui.prompt.read().trigger_git_check();
     }
 
+    if task_shortcut && let Ok((columns, rows)) = crossterm::terminal::size() {
+        // The menu's sole reader may have consumed Resize events while the
+        // EventStream and status line were paused. Resync before rendering the
+        // next prompt and before StatusLinePause re-arms its scroll region.
+        repl.terminal_ui.columns = columns as usize;
+        repl.terminal_ui.lines = rows as usize;
+        repl.terminal_ui
+            .status_line
+            .borrow_mut()
+            .set_size(columns, rows);
+    }
+
     // After command execution, show new prompt
     let mut renderer = TerminalRenderer::new();
     repl.print_prompt(&mut renderer);

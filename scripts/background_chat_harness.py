@@ -26,7 +26,7 @@ class Stub(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         active['requests'] += 1
-        active['prompt'] = next(m['content'] for m in reversed(req['messages']) if m['role'] == 'user')
+        active['user_prompts'] = [m['content'] for m in req['messages'] if m['role'] == 'user']
         system = req['messages'][0]['content']
         assert 'Use only the tools provided' in system
         assert not any(f'- `{name}`:' in system for name in ['search', 'shell_context', 'shell_history', 'skill_manage'])
@@ -153,4 +153,3 @@ class Shell:
         os.kill(self.pid, signal.SIGKILL)
         os.waitpid(self.pid, 0)
         os.close(self.fd)
-

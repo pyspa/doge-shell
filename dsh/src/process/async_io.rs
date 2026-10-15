@@ -30,9 +30,10 @@ impl AsyncStdin {
             .read(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
             .open(path)?;
-        Ok(Self {
-            inner: AsyncFd::with_interest(file, Interest::READABLE)?,
-        })
+        // SAFETY: AsyncFd owns this File; its descriptor remains open and
+        // unchanged until deregistration. We never replace the inner File.
+        let inner = unsafe { AsyncFd::register_with_interest(file, Interest::READABLE) }?;
+        Ok(Self { inner })
     }
 }
 
@@ -82,9 +83,10 @@ pub struct AsyncPtyMasterWriter {
 
 impl AsyncPtyMasterWriter {
     pub fn new(file: File) -> std::io::Result<Self> {
-        Ok(Self {
-            inner: AsyncFd::with_interest(file, Interest::WRITABLE)?,
-        })
+        // SAFETY: AsyncFd owns this File; its descriptor remains open and
+        // unchanged until deregistration. We never replace the inner File.
+        let inner = unsafe { AsyncFd::register_with_interest(file, Interest::WRITABLE) }?;
+        Ok(Self { inner })
     }
 }
 
@@ -129,7 +131,7 @@ impl AsyncWrite for AsyncPtyMasterWriter {
 
 #[cfg(test)]
 mod tests {
-    use super::AsyncStdin;
+    use super::{AsyncPtyMasterWriter, AsyncStdin};
     use crate::process::Pty;
     use nix::fcntl::{FcntlArg, OFlag, fcntl};
     use std::os::fd::AsFd;
@@ -152,5 +154,53 @@ mod tests {
         assert_eq!(unchanged_flags, original_flags);
         assert!(!original_flags.contains(OFlag::O_NONBLOCK));
         assert!(reader_flags.contains(OFlag::O_NONBLOCK));
+    }
+
+    #[tokio::test]
+    async fn registered_writer_delivers_bytes_and_closes_its_owned_pipe() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+
+        let (read_fd, write_fd) = nix::unistd::pipe2(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC)
+            .expect("create nonblocking pipe");
+        let mut writer = AsyncPtyMasterWriter::new(std::fs::File::from(write_fd))
+            .expect("register owned writer");
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            writer.write_all(b"registered bytes"),
+        )
+        .await
+        .expect("write readiness timeout")
+        .expect("write bytes");
+        let mut bytes = [0; 32];
+        let count = nix::unistd::read(&read_fd, &mut bytes).expect("read written bytes");
+        assert_eq!(&bytes[..count], b"registered bytes");
+        drop(writer);
+        assert_eq!(
+            nix::unistd::read(&read_fd, &mut bytes).expect("read EOF"),
+            0
+        );
+    }
+
+    #[test]
+    fn registration_failure_returns_io_error_and_closes_owned_writer() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .build()
+            .expect("create reactor");
+        let handle = runtime.handle().clone();
+        drop(runtime);
+        let _entered = handle.enter();
+        let (read_fd, write_fd) =
+            nix::unistd::pipe2(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC).expect("create pipe");
+        let error: std::io::Error = AsyncPtyMasterWriter::new(std::fs::File::from(write_fd))
+            .err()
+            .expect("closed reactor must reject registration");
+        assert!(!error.to_string().is_empty());
+        let mut bytes = [0];
+        assert_eq!(
+            nix::unistd::read(&read_fd, &mut bytes).expect("writer closed on error"),
+            0
+        );
     }
 }

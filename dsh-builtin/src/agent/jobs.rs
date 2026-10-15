@@ -14,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Maximum server-side wait requested by a job status/output poll.
+pub const MAX_JOB_WAIT_MS: u64 = 60_000;
+
 const OUTPUT_LIMIT: usize = 1_048_576;
 #[derive(Default)]
 struct Output {

@@ -36,7 +36,9 @@ use std::{
 const OUTPUT_LIMIT: usize = 256 * 1024;
 mod lifecycle;
 mod output;
+mod owned_job;
 use output::{drain, safe_output};
+use owned_job::owned_job;
 
 struct Admitted {
     name: String,
@@ -708,24 +710,6 @@ fn tool(
     let result = runner.execute(name, &normalized_arguments, shell);
     shared.inner.lock().admitted = None;
     result
-}
-
-fn owned_job(name: &str, arguments: &str, shared: &Shared) -> Result<String, String> {
-    let args: Value = serde_json::from_str(arguments).map_err(|_| "invalid owned-job arguments")?;
-    let id = args["job_id"].as_str().ok_or("owned job_id required")?;
-    let mut jobs = shared.jobs.lock();
-    // Lookup precedes cancellation too; no access to the global chat registry.
-    jobs.snapshot(id, 0, 0).map_err(|error| error.to_string())?;
-    if name == "job_cancel" {
-        jobs.cancel(id).map_err(|error| error.to_string())?;
-    }
-    jobs.snapshot(
-        id,
-        args["offset"].as_u64().unwrap_or(0).min(usize::MAX as u64) as usize,
-        args["limit"].as_u64().unwrap_or(4096).min(65536) as usize,
-    )
-    .map(|value| value.to_string())
-    .map_err(|error| error.to_string())
 }
 
 struct WorkerGuard(Arc<Shared>);

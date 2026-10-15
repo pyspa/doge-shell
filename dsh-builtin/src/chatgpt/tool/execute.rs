@@ -281,67 +281,16 @@ struct CommandStage {
     args: Vec<String>,
 }
 
-/// Token sequences that end one stage and begin the next.
-const STAGE_SEPARATORS: &[&str] = &["|", "||", "&&", ";", "&", "|&"];
-
-/// Split on newlines that are outside quotes.
-///
-/// `shell_words` treats a newline as ordinary whitespace, so `ls\nbash -c ...`
-/// tokenised to a single stage whose program was `ls` - which hid the `bash -c`
-/// from the string-eval check and let a bare `ls` allowlist entry wave the
-/// whole thing through. A newline *inside* quotes is data, though: splitting
-/// `printf 'a\nb\n'` on it leaves two fragments with unbalanced quotes.
-fn unquoted_lines(command: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-
-    for (index, ch) in command.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if !in_single => escaped = true,
-            '\'' if !in_double => in_single = !in_single,
-            '"' if !in_single => in_double = !in_double,
-            '\n' | '\r' if !in_single && !in_double => {
-                lines.push(&command[start..index]);
-                start = index + ch.len_utf8();
-            }
-            _ => {}
-        }
-    }
-
-    lines.push(&command[start..]);
-    lines
-}
-
-/// Split a command line into its stages.
-///
-/// `shell_words` is a tokenizer, not a parser, so operators arrive as ordinary
-/// words. That is enough to answer the two questions asked here - which
-/// programs run, and with which arguments - without reimplementing the grammar.
-/// The shell's own parser makes the real judgement in `evaluate_agent_command`.
+/// Inspect the same unquoted operator boundaries as the shared safety policy.
+/// Tokenizing first loses both adjacent operators (`ok;touch`) and the fact
+/// that a quoted `"|"` is data. Split syntax before removing quotes instead.
 fn command_stages(command: &str) -> Result<Vec<CommandStage>, String> {
     let mut stages = Vec::new();
-
-    for line in unquoted_lines(command) {
-        let tokens = split(line).map_err(|err| format!("chat: failed to parse command: {err}"))?;
-
-        let mut current: Vec<String> = Vec::new();
-        for token in tokens {
-            if STAGE_SEPARATORS.contains(&token.as_str()) {
-                push_stage(&mut stages, std::mem::take(&mut current));
-            } else {
-                current.push(token);
-            }
-        }
-        push_stage(&mut stages, current);
+    for segment in dsh_types::safety_policy::split_command_segments(command) {
+        let tokens =
+            split(&segment).map_err(|err| format!("chat: failed to parse command: {err}"))?;
+        push_stage(&mut stages, tokens);
     }
-
     if stages.is_empty() {
         return Err("chat: execute tool command must specify a program".to_string());
     }

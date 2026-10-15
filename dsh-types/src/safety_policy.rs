@@ -121,6 +121,7 @@ pub fn split_command_segments(command: &str) -> Vec<String> {
     let mut in_single = false;
     let mut in_double = false;
     let mut chars = command.chars().peekable();
+    let mut after_redirection = false;
 
     while let Some(ch) = chars.next() {
         match ch {
@@ -138,7 +139,20 @@ pub fn split_command_segments(command: &str) -> Vec<String> {
                 in_double = !in_double;
                 current.push(ch);
             }
-            '|' | '&' | ';' if !in_single && !in_double => {
+            // The ampersand in an fd duplication or `&>` is redirection,
+            // not a command boundary. Keep it with the containing stage.
+            '<' | '>' if !in_single && !in_double => {
+                current.push(ch);
+                after_redirection = true;
+                continue;
+            }
+            '&' if !in_single
+                && !in_double
+                && (after_redirection || chars.peek() == Some(&'>')) =>
+            {
+                current.push(ch);
+            }
+            '|' | '&' | ';' | '\n' | '\r' if !in_single && !in_double => {
                 if !current.trim().is_empty() {
                     segments.push(current.trim().to_string());
                 }
@@ -146,6 +160,7 @@ pub fn split_command_segments(command: &str) -> Vec<String> {
             }
             _ => current.push(ch),
         }
+        after_redirection = false;
     }
 
     if !current.trim().is_empty() {
@@ -437,6 +452,12 @@ mod tests {
         );
         assert_eq!(split_command_segments("a && b || c"), vec!["a", "b", "c"]);
         assert_eq!(split_command_segments("sleep 1 &"), vec!["sleep 1"]);
+        assert_eq!(
+            split_command_segments("a 2>&1|b 0<&3"),
+            vec!["a 2>&1", "b 0<&3"]
+        );
+        assert_eq!(split_command_segments("a\nb"), vec!["a", "b"]);
+        assert_eq!(split_command_segments(r"a \>&b"), vec![r"a \>", "b"]);
         // A quoted operator belongs to the argument.
         assert_eq!(
             split_command_segments("git commit -m 'a; b'"),

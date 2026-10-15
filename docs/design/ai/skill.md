@@ -32,7 +32,7 @@
   知らないディレクトリの description が全プロンプトに無言で入る。`skills_dir()` は `is_dir()` =
   symlink 追従なので `ln -s ~/.agents/skills ~/.config/dogesh/skills` が今日そのまま動く。
 - **プロンプトに載るのは name / path / `description` の 1 行だけ**。本文はモデルが `read_file` で読む。
-  frontmatter は自前パーサで、読むのは `description` のみ。YAML crate は入れない
+  一覧探索は先頭最大8 KiBのmetadataだけを読み、本文全体は読まない。frontmatter は自前パーサで、読むのは `name` / `description`。YAML crate は入れない
   — 書き手（`skill_manage`）が読み手の分かる平坦な部分集合だけを出すことで整合を保証している。
   プロンプトの表示予算は `MAX_SKILL_SUMMARY_CHARS`(240) で、`skill_manage` が書き込める上限
   `MAX_DESCRIPTION_CHARS`(300) より狭い。両者は別の役割の別の値で、混同しない。
@@ -92,6 +92,11 @@
   ありうる、という既知の制約。
 - **書き込みは `skill_manage` ツール 1 本**（`create` / `write_file` / `patch` / `delete`）。
   読み取り専用ツールは作らない — `read_file` / `ls` が既に両 root に届く。
+  `read_file(path="references/detail.md", skill_path="/root/skill/SKILL.md")` は
+  相対参照をそのskill bundle内で解決する。既存のroot/grant検証を両パスへ適用し、
+  `..`やsymlinkでbundle外へ出る参照・絶対path・展開変数は拒否する。
+  ページ継続案内にはcanonical absolute pathを出す。裸の`foo.md`にはbundleがない。
+  SKILL.mdのbundle内symlinkは許すが、別bundleへのリンクは参照baseにできない。
   承認キーは書き込みが `write:`（`edit` と同じ箱）、削除だけ `delete:`。
   `skill_manage` の schema に action や引数は増やさない（1400 バイト上限のテストが強制）。
 - **書き込みは即時 or ステージの 2 択**（`AI_CHAT_SKILL_STAGING`、既定 `task`）。
@@ -147,14 +152,18 @@
 - **`@name` で明示起動できる**（`skills::split_leading_mentions` / `render_mention`）。
   シェルの対話は 1〜2 ターンで終わるので、description マッチだけに任せると Level 0 の列挙が
   死蔵する。先頭から最大 5 個、**最初の非 skill トークンで解析を止める**（メールアドレスを
-  食わない）。解決した skill は本文と `references/` / `scripts/` / `assets/` の**ファイル名**を
-  system メッセージとして入れる（読みはしない）。gate 後の root だけを対象にするので、
+  食わない）。解決した skill は最大8 KiBの本文と `references/` / `scripts/` / `assets/` の**ファイル名**を
+  system メッセージとして入れる（読みはしない）。inline上限超過や取得失敗はモデルと画面に明示し、
+  `read_file`による必要部分の取得へ案内する。本文取得に成功した場合だけ使用数を加算する。
+  gate 後の root だけを対象にするので、
   拒否したリポジトリの skill は `@` でも呼べない。
 - **ロード時の問題は捨てず `SkillDiagnostic` に集める**（`load_reporting`）。`doctor skills` が
   出す。壊れた skill が `debug!` で消えると「書いたのに prompt に出ない」の原因が辿れない。
   対象は SKILL.md が読めない / root がディレクトリでない / frontmatter の `name` 不一致 /
   `description` 欠落 / symlink が root を出た / 同名衝突。
-- **symlink が root を出る skill は読み込まない**。`resolve_tool_path` は対象を canonicalize
+- **symlink が root を出る skill は読み込まない**。ディレクトリだけでなく
+  `SKILL.md`自体のcanonical先も検査する。壊れたfrontmatterの閉じ区切り、
+  metadata上限、非通常ファイルは診断し、未知のscriptを自動実行しない。`resolve_tool_path` は対象を canonicalize
   するので、載せてもツールが全部拒否する。プロンプトが読めない先を指すのが一番悪い。
 - **`foo/` は `foo.md` に勝つ**。以前は `read_dir` 順だった。`skill_manage create` は
   `<name>.md` が既にあれば拒否する。

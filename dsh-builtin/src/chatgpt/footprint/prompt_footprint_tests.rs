@@ -444,6 +444,7 @@ fn prompt_footprint_compaction_shrinks_tool_results() {
 /// attaches the provider's usage: 1200 prompt, 900 cached, 300 uncached.
 #[test]
 fn prompt_footprint_live_request_records_provider_usage() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let _snapshot = snapshot_test_guard();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_proxy(cwd.path().to_path_buf());

@@ -1,3 +1,4 @@
+//! Paged file reads, optional skill-relative references, and existing safety gates.
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
@@ -17,18 +18,22 @@ pub(crate) fn definition() -> Value {
         "type": "function",
         "function": {
             "name": NAME,
-            "description": "Read a file in the workspace. Output is line-numbered. Large files are returned one window at a time: pass `offset` to continue reading from where the previous call stopped.",
+            "description": "Read a line-numbered file window. Continue with `offset`. Use `skill_path` to resolve a relative resource inside one skill.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to the file to read (relative to current directory or absolute for skills)"
+                        "description": "File path; relative to cwd, or to skill_path when supplied."
+                    },
+                    "skill_path": {
+                        "type": "string",
+                        "description": "SKILL.md base for a relative bundled resource."
                     },
                     "offset": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "First line to read, 1-based. Defaults to 1."
+                        "description": "First line (1-based; default 1)."
                     },
                     "limit": {
                         "type": "integer",
@@ -102,6 +107,52 @@ fn render_window(path_label: &str, contents: &str, offset: usize, limit: usize) 
     out
 }
 
+/// An optional skill base never expands file-tool authority. Resolve both
+/// paths through the normal gate, then confine the result to one skill bundle.
+pub(super) fn resolve_read_path(
+    parsed: &Value,
+    proxy: &mut dyn ChatToolHost,
+) -> Result<std::path::PathBuf, String> {
+    let path = parsed["path"].as_str().ok_or("read_file requires path")?;
+    let Some(base) = parsed.get("skill_path") else {
+        return super::resolve_tool_path(path, proxy);
+    };
+    let base = base.as_str().ok_or("skill_path must be a string")?;
+    let cwd = proxy.get_current_dir().map_err(|err| err.to_string())?;
+    let expanded = shellexpand::full(base).map_err(|err| err.to_string())?;
+    let lexical = cwd.join(expanded.as_ref());
+    if lexical.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
+        return Err(
+            "skill_path must name SKILL.md (bare .md skills have no resource bundle)".into(),
+        );
+    }
+    let bundle = super::resolve_tool_path(
+        &lexical
+            .parent()
+            .ok_or("skill_path has no parent")?
+            .to_string_lossy(),
+        proxy,
+    )?;
+    let (owner, _) = crate::chatgpt::skills::containing_skill(&bundle, &cwd)
+        .ok_or("skill_path must name an instruction file under a configured skill root")?;
+    if !bundle.is_dir() || bundle != owner {
+        return Err("skill_path must name a skill's top-level SKILL.md".into());
+    }
+    let instruction = super::resolve_tool_path(base, proxy)?;
+    if !instruction.is_file() || !instruction.starts_with(&bundle) {
+        return Err("skill instruction escapes its bundle or is not a regular file".into());
+    }
+    if std::path::Path::new(path).is_absolute() || path.starts_with('~') || path.contains('$') {
+        return Err("a skill resource path must be relative and contain no expansions".into());
+    }
+    let resolved = super::resolve_tool_path(&bundle.join(path).to_string_lossy(), proxy)?;
+    let bundle = std::fs::canonicalize(bundle).map_err(|err| err.to_string())?;
+    if !resolved.starts_with(bundle) {
+        return Err("skill resource escapes its bundle".into());
+    }
+    Ok(resolved)
+}
+
 pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<String, String> {
     let parsed: Value = serde_json::from_str(arguments)
         .map_err(|err| format!("chat: invalid JSON arguments for read_file tool: {err}"))?;
@@ -115,7 +166,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Err("chat: read_file tool path must not be empty".to_string());
     }
 
-    let normalized_abs_path = super::resolve_tool_path(path_value, _proxy)?;
+    let normalized_abs_path = resolve_read_path(&parsed, _proxy)?;
 
     // Get CWD for gitignore check
     let current_dir = _proxy
@@ -173,7 +224,12 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     // written. A no-op for every path outside a skill root.
     crate::chatgpt::skills::note_skill_read(&normalized_abs_path, &normalized_current_dir);
 
-    Ok(render_window(path_value, &contents, offset, limit))
+    let label = if parsed.get("skill_path").is_some() {
+        normalized_abs_path.to_string_lossy().into_owned()
+    } else {
+        path_value.to_string()
+    };
+    Ok(render_window(&label, &contents, offset, limit))
 }
 
 #[cfg(test)]
@@ -344,3 +400,7 @@ mod tests {
         assert_eq!(result, "empty.txt: (empty file)");
     }
 }
+
+#[cfg(test)]
+#[path = "read/skills_tests.rs"]
+mod skills_tests;

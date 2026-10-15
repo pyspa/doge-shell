@@ -136,6 +136,14 @@ mod tests {
     use nix::fcntl::{FcntlArg, OFlag, fcntl};
     use std::os::fd::AsFd;
 
+    fn nonblocking_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+        let (read, write) = crate::process::io::cloexec_pipe().expect("create close-on-exec pipe");
+        for fd in [&read, &write] {
+            fcntl(fd, FcntlArg::F_SETFL(OFlag::O_NONBLOCK)).expect("set nonblocking");
+        }
+        (read, write)
+    }
+
     #[tokio::test]
     async fn nonblocking_tty_reader_does_not_change_existing_handle_flags() {
         let pty = Pty::new().expect("create pty");
@@ -161,8 +169,7 @@ mod tests {
         use std::time::Duration;
         use tokio::io::AsyncWriteExt;
 
-        let (read_fd, write_fd) = nix::unistd::pipe2(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC)
-            .expect("create nonblocking pipe");
+        let (read_fd, write_fd) = nonblocking_pipe();
         let mut writer = AsyncPtyMasterWriter::new(std::fs::File::from(write_fd))
             .expect("register owned writer");
         tokio::time::timeout(
@@ -191,8 +198,7 @@ mod tests {
         let handle = runtime.handle().clone();
         drop(runtime);
         let _entered = handle.enter();
-        let (read_fd, write_fd) =
-            nix::unistd::pipe2(OFlag::O_NONBLOCK | OFlag::O_CLOEXEC).expect("create pipe");
+        let (read_fd, write_fd) = nonblocking_pipe();
         let error: std::io::Error = AsyncPtyMasterWriter::new(std::fs::File::from(write_fd))
             .err()
             .expect("closed reactor must reject registration");

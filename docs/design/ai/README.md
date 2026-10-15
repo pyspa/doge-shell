@@ -12,6 +12,7 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
 |---|---|
 | 安全ゲート（`SafetyGuard`） | [safety.md](safety.md) |
 | 環境変数の正典 | [env-vars.md](env-vars.md) |
+| AGENTS.md project guidance | [project-instructions.md](project-instructions.md) |
 | Skill | [skill.md](skill.md) |
 | AI chat hooks | [hooks.md](hooks.md) |
 | 対話ジョブ・Tool Search | [interactive-jobs.md](interactive-jobs.md) |

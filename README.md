@@ -1711,7 +1711,17 @@ started, and these belong to the assistant.
     export AI_MESSAGE_LANG="Japanese"
     ```
 
-13. **Skills**:
+13. **Project instructions and Skills**:
+
+    `!` loads scoped `AGENTS.md` guidance after session trust. It walks from the
+    repository boundary to the working/target directory, applies parent before
+    child, and refreshes before requests and file operations. Source paths and
+    failures are diagnostic; `doctor ai` lists candidates without prompting.
+    Set `AI_CHAT_PROJECT_INSTRUCTIONS=off` to disable. Limits, symlink handling,
+    nested repositories, and command/MCP limitations are documented in
+    [project instructions](docs/design/ai/project-instructions.md).
+
+    **Skills**:
     A skill is a short `SKILL.md` the assistant reads when it is relevant - and can
     write for itself, so a procedure worked out once is not worked out again.
 

@@ -43,9 +43,8 @@ pub(crate) fn split_leading_mentions<'a>(
 /// Listing `references/`, `scripts/` and `assets/` is the difference between
 /// the model knowing they exist and having to guess that an `ls` might be worth
 /// a turn. They are named, never loaded: that is the whole point of the tier.
-pub(crate) fn render_mention(skill: &Skill) -> Option<String> {
-    let path = skill.instruction_file();
-    let body = std::fs::read_to_string(&path).ok()?;
+pub(crate) fn render_mention(skill: &Skill) -> Result<String> {
+    let body = super::content::body(skill)?;
 
     let mut rendered = format!(
         "Skill `{}` ({}), loaded because the user asked for it by name:
@@ -73,7 +72,7 @@ Files bundled with this skill, relative to `{}` - read one with `read_file` only
         }
     }
 
-    Some(rendered)
+    Ok(rendered)
 }
 fn bundled_resources(dir: &Path) -> Vec<String> {
     if !dir.is_dir() {
@@ -86,6 +85,15 @@ fn bundled_resources(dir: &Path) -> Vec<String> {
             continue;
         };
         for entry in entries.flatten() {
+            let Ok(resolved) = std::fs::canonicalize(entry.path()) else {
+                continue;
+            };
+            let Ok(base) = std::fs::canonicalize(dir) else {
+                continue;
+            };
+            if !resolved.starts_with(base) {
+                continue;
+            }
             if !entry.path().is_file() {
                 continue;
             }

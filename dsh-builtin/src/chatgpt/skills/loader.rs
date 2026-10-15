@@ -60,7 +60,11 @@ impl SkillsManager {
         (skills.into_values().collect(), problems)
     }
 
-    pub(super) fn render_snapshot_fragment(roots: &[SkillRoot], all_skills: Vec<Skill>) -> String {
+    pub(super) fn render_snapshot_fragment(
+        roots: &[SkillRoot],
+        all_skills: Vec<Skill>,
+        allow_writes: bool,
+    ) -> String {
         // Filtered here, and only here: `load_skills`/`load_reporting` must
         // keep returning every skill, because the trust digest, `doctor` and
         // `skill_manage`'s own `refresh_project_trust` all read through
@@ -98,15 +102,19 @@ impl SkillsManager {
                     "{archived_count} skill(s) are archived and not listed here; `skill unarchive` brings one back.\n"
                 ));
             }
-            fragment.push_str(
+            if allow_writes {
+                fragment.push_str(
                 "Record a durable lesson with `skill_manage`; the user is asked before anything is written.\n",
             );
+            }
             return fragment;
         }
 
-        fragment.push_str(
-            "A skill is a short, reusable instruction file. Read one when it is relevant, and write new ones.\n",
-        );
+        fragment.push_str(if allow_writes {
+            "A skill is a short, reusable instruction file. Read one when it is relevant, and write new ones.\n"
+        } else {
+            "A skill is a short, reusable instruction file. Read one when relevant and within the task roots; skill updates are unavailable in this task.\n"
+        });
 
         for root in roots {
             // By root path, not by scope: two roots can share a scope, and a
@@ -156,9 +164,11 @@ impl SkillsManager {
                 "{archived_count} more skill(s) are archived and not listed here; `skill unarchive` brings one back.\n"
             ));
         }
-        fragment.push_str(
+        if allow_writes {
+            fragment.push_str(
             "Record a durable lesson with `skill_manage`; the user is asked before anything is written.\n",
         );
+        }
         fragment
     }
 }

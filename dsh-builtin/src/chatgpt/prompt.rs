@@ -62,9 +62,36 @@ pub(super) fn build_system_prompt(
     skills: &SkillsSnapshot,
     mcp_tool_mode: McpToolMode,
 ) -> SystemPrompt {
-    let skills_fragment = skills.render_fragment();
+    build_system_prompt_for_mode(
+        operator_prompt,
+        language,
+        mcp_manager,
+        skills,
+        mcp_tool_mode,
+        false,
+    )
+}
 
-    let (text, footprint) = assemble_system_prompt_traced(
+pub(super) fn build_system_prompt_for_mode(
+    operator_prompt: Option<String>,
+    language: Option<String>,
+    mcp_manager: &McpManager,
+    skills: &SkillsSnapshot,
+    mcp_tool_mode: McpToolMode,
+    background: bool,
+) -> SystemPrompt {
+    let skills_fragment = if background {
+        skills.render_fragment_with_writes(false)
+    } else {
+        skills.render_fragment()
+    };
+
+    let (text, footprint) = assemble_with_base(
+        if background {
+            background::SYSTEM_PROMPT
+        } else {
+            TOOL_SYSTEM_PROMPT
+        },
         &skills_fragment,
         operator_prompt.as_deref(),
         language.as_deref(),
@@ -94,7 +121,27 @@ pub(super) fn assemble_system_prompt_traced(
     mcp_manager: &McpManager,
     mcp_tool_mode: McpToolMode,
 ) -> (String, SystemPromptFootprint) {
-    let mut base = TOOL_SYSTEM_PROMPT.to_string();
+    assemble_with_base(
+        TOOL_SYSTEM_PROMPT,
+        skills_fragment,
+        operator_prompt,
+        language,
+        mcp_manager,
+        mcp_tool_mode,
+    )
+}
+
+// Keep continuity identity independent of the foreground/background tool adapter.
+// Only rendered text uses the restricted adapter's instructions.
+fn assemble_with_base(
+    base_prompt: &str,
+    skills_fragment: &str,
+    operator_prompt: Option<&str>,
+    language: Option<&str>,
+    mcp_manager: &McpManager,
+    mcp_tool_mode: McpToolMode,
+) -> (String, SystemPromptFootprint) {
+    let mut base = base_prompt.to_string();
     let base_end = base.len();
 
     if !skills_fragment.is_empty() {

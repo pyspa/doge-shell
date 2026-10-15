@@ -26,6 +26,9 @@ class Stub(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         active['requests'] += 1
+        system = req['messages'][0]['content']
+        assert 'Use only the tools provided' in system
+        assert not any(f'- `{name}`:' in system for name in ['search', 'shell_context', 'shell_history', 'skill_manage'])
         names = [tool['function']['name'] for tool in req['tools']]
         assert len(names) == len(set(names)), 'duplicate tool schemas'
         assert set(names) <= {'read_file', 'ls', 'edit', 'str_replace', 'execute', 'observation_read', 'job_status', 'job_output', 'job_cancel'}
@@ -50,7 +53,7 @@ class Stub(http.server.BaseHTTPRequestHandler):
                 if result['status'] == 'running' or not result['stdout_complete']:
                     time.sleep(0.05)
                     assert active['requests'] < 20, 'bounded job polling exceeded'
-                    msg = {'role': 'assistant', 'content': None, 'tool_calls': [{'id': f"poll{active['requests']}", 'type': 'function', 'function': {'name': 'job_status', 'arguments': json.dumps({'job_id': result['job_id']})}}]}
+                    msg = {'role': 'assistant', 'content': None, 'tool_calls': [{'id': f"poll{active['requests']}", 'type': 'function', 'function': {'name': 'job_status', 'arguments': json.dumps({'job_id': result['job_id'], 'wait_ms': 1000})}}]}
                     finish = 'tool_calls'
         body = json.dumps({'id': 'stub', 'object': 'chat.completion', 'created': 0, 'model': 'local-stub', 'choices': [{'index': 0, 'message': msg, 'finish_reason': finish}], 'usage': {'prompt_tokens': 1, 'completion_tokens': 1, 'total_tokens': 2}}).encode()
         try:
@@ -167,11 +170,13 @@ def scenario(kind):
                 assert active['requests'] == 0, 'failed submission contacted provider'
                 hook_path.unlink()
                 active['first_gate'] = threading.Event()
-            if kind in ['approval_stale', 'edit_auto', 'deny']:
+            if kind in ['approval_stale', 'edit_auto', 'edit_empty', 'deny']:
                 active.update(tool='edit', args={'path': 'file', 'contents': 'updated'})
             if kind == 'unsupported':
                 active.update(tool='mcp_unknown', args={})
-            profile = 'workspace-edit' if kind == 'edit_auto' else 'read-only'
+            if kind == 'edit_empty':
+                active['args']['contents'] = ''
+            profile = 'workspace-edit' if kind in ['edit_auto', 'edit_empty'] else 'read-only'
             shell.command(f'chat_task start --profile {profile} -- local check')
             if kind == 'input_read':
                 shell.until(lambda: active['requests'] == 1)
@@ -201,6 +206,8 @@ def scenario(kind):
                 assert 'unsupported background tool' in active['result'], active
             if kind == 'edit_auto':
                 assert (root / 'file').read_text() == 'updated', active
+            if kind == 'edit_empty':
+                assert (root / 'file').read_text() == '', active
             if kind == 'deny':
                 assert (root / 'file').read_text() == 'original', active
             if kind == 'approval_stale':
@@ -210,7 +217,7 @@ def scenario(kind):
             if active.get('first_gate'):
                 active['first_gate'].set()
             shell.close()
-for kind in ['input_read', 'edit_auto', 'deny', 'approval_stale', 'unsupported']:
+for kind in ['input_read', 'edit_auto', 'edit_empty', 'deny', 'approval_stale', 'unsupported']:
     scenario(kind)
 
 def process_gone(pid):

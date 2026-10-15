@@ -128,17 +128,15 @@ fn models_requires_explicit_provider_without_switching_it() {
 
 #[test]
 fn cancelling_a_waiting_opener_reaps_it_without_manual_fallback() {
-    use std::{cell::Cell, os::unix::fs::PermissionsExt};
+    use std::cell::Cell;
     let dir = tempfile::tempdir().unwrap();
     let program = dir.path().join("mock-open");
     std::fs::write(&program, "#!/bin/sh\nexec sleep 5\n").unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let mut proxy = TestShellProxy {
-        command_search_paths: vec![dir.path().into()],
-        ..Default::default()
-    };
-    let mut child = crate::runtime_spawn::runtime_command(&mut proxy, "mock-open")
-        .unwrap()
+    // Only cancellation/reaping is under test. Executing a freshly written
+    // script races another test's fork inheriting its writer (ETXTBSY).
+    let mut child = std::process::Command::new("/bin/sh")
+        .arg(&program)
+        .env("PATH", "/usr/bin:/bin")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

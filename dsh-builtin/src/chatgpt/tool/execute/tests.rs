@@ -275,25 +275,21 @@ fn quoting_rules_match_the_shells() {
     assert!(detected("echo \\$(date)"));
 }
 
-/// A newline is ordinary whitespace to the tokenizer, so a second command
-/// hid behind the first: only `ls` was inspected, and a bare `ls` entry
-/// then waved the whole line through without a prompt.
+/// Boundaries are recognized before quote removal; redirection stays in its stage.
 #[test]
-fn a_newline_starts_a_new_stage() {
-    let stages = command_stages("ls\nbash -c 'rm -rf ~'").unwrap();
-    let seen: Vec<&str> = stages.iter().map(|stage| stage.program.as_str()).collect();
-
-    assert_eq!(seen, vec!["ls", "bash"]);
-}
-
-/// A newline inside quotes is data. Splitting on it left two fragments
-/// with unbalanced quotes and failed to parse a legitimate `printf`.
-#[test]
-fn a_quoted_newline_does_not_start_a_new_stage() {
-    let stages = command_stages("printf 'a\nb\n' | tail -1").unwrap();
-    let seen: Vec<&str> = stages.iter().map(|stage| stage.program.as_str()).collect();
-
-    assert_eq!(seen, vec!["printf", "tail"]);
+fn stage_boundaries_preserve_quoted_operators_and_redirection() {
+    for (command, expected) in [
+        ("ls\nbash -c 'echo hi'", vec!["ls", "bash"]),
+        ("printf 'a\nb\n'|tail -1", vec!["printf", "tail"]),
+        (r#"printf '%s' '|' ';' '&' \|"#, vec!["printf"]),
+        (r"printf ok\\|touch marker", vec!["printf", "touch"]),
+        ("printf ok 2>&1|tail -1", vec!["printf", "tail"]),
+        ("cat 0<&3;printf ok", vec!["cat", "printf"]),
+    ] {
+        let stages = command_stages(command).unwrap();
+        let seen: Vec<&str> = stages.iter().map(|stage| stage.program.as_str()).collect();
+        assert_eq!(seen, expected, "{command}");
+    }
 }
 
 #[test]
@@ -306,10 +302,42 @@ fn a_hidden_second_command_still_reaches_the_string_eval_refusal() {
         ..TestProxy::default()
     };
 
-    let arguments = json!({ "command": "ls\nbash -c 'echo hi'" }).to_string();
-    let err = run(&arguments, &mut proxy).expect_err("the bash -c must be seen");
+    for command in [
+        "ls\nbash -c 'echo hi'",
+        "ls;bash -c 'echo hi'",
+        "ls&&bash -c 'echo hi'",
+        "ls|bash -c 'echo hi'",
+        "ls;eval 'echo hi'",
+        "printf 'echo hi'|sh",
+    ] {
+        let err = run(&json!({ "command": command }).to_string(), &mut proxy)
+            .expect_err("the hidden interpreter must be seen");
+        assert!(err.contains("execute tool blocked"), "{command}: {err}");
+    }
+}
 
-    assert!(err.contains("hands it a string to execute"), "{err}");
+#[test]
+fn an_allowlisted_first_stage_cannot_approve_the_rest() {
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+    let dir = tempdir().unwrap();
+    for operator in [";", "; ", "&&", "||", "|", "&", "\n", r"\>&"] {
+        let mut proxy = TestProxy {
+            current_dir: dir.path().to_path_buf(),
+            execute_allowlist: vec!["printf".into()],
+            agent_verdict: AgentCommandVerdict::Confirm("needs approval".into()),
+            ..TestProxy::default()
+        };
+        let command = format!("printf ok{operator}touch marker");
+        let result = run(
+            &json!({"command": command, "cwd": dir.path()}).to_string(),
+            &mut proxy,
+        )
+        .unwrap();
+        assert!(result.contains("cancelled by user"), "{command}: {result}");
+        assert_eq!(proxy.confirm_calls, 1, "{command}");
+        assert!(!dir.path().join("marker").exists(), "{command}");
+    }
 }
 
 /// `SafetyGuard` classifies by program name, so `sudo` used to hide the

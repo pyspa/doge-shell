@@ -24,9 +24,15 @@ an explicit `y`; its default is No. Alt+Enter on `!&` opens the same menu.
 The approval screen shows the operation, targets and available before/after or
 command preview. Press `y` to approve once, `n` to deny, or `q` to leave it
 pending; no IDs need to be typed. A changed request, permission scope or target
-invalidates the displayed approval. A clipped preview cannot be approved from
-the menu; deny or close it and request a smaller operation. Credentials remain
-masked. Ordinary command execution still has the isolation limits described below.
+invalidates the displayed approval. A clipped, secret-masked or otherwise
+incomplete preview cannot be approved from the menu or `chat_task approve`;
+denial remains available. Deny or close it
+and request a smaller operation with reviewable contents. `status` exposes
+`preview_complete`, `preview_truncated` and `preview_redacted`. Control and Unicode
+format characters are shown as explicit escapes; literal backslashes are escaped
+separately, so a special filename cannot impersonate its visible spelling.
+Credentials remain masked, while approval always binds the original operation.
+Ordinary command execution still has the isolation limits described below.
 
 A space must follow `!&` before task text. Only a leading `--edit` selects
 workspace editing; `--` ends option parsing (`!& -- --some literal text`).

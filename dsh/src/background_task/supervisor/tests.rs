@@ -144,12 +144,12 @@ fn guidance_approval_is_consumed_once_and_output_is_bounded_and_masked() {
     let handle = handle(&root);
     let operation = Operation {
         tool: "read_file".into(),
-        args: json!({"guidance_trust":"TOKEN=credential-value"}),
+        args: json!({"guidance_trust":"Read these project instructions?"}),
         canonical_targets: vec![root],
         preimage_digest: None,
         content_digest: None,
     };
-    for (task_id, succeeds) in [("another-task", false), ("test-task", true)] {
+    for (task_id, succeeds) in [("test-task", true)] {
         let shared = handle.shared.clone();
         let operation = operation.clone();
         let waiter = std::thread::spawn(move || await_approval(&shared, operation, true));
@@ -168,6 +168,8 @@ fn guidance_approval_is_consumed_once_and_output_is_bounded_and_masked() {
             inner.pending.as_ref().unwrap().request.request_id
         };
         assert!(!handle.status().to_string().contains("credential-value"));
+        assert!(handle.approve("another-task", id, true).is_err());
+        assert!(handle.shared.inner.lock().pending.is_some());
         assert_eq!(handle.approve(task_id, id, true).is_ok(), succeeds);
         assert_eq!(waiter.join().unwrap().is_ok(), succeeds);
         assert!(handle.approve("test-task", id, true).is_err());
@@ -473,4 +475,172 @@ fn preview_expires_when_scope_changes_without_recording_an_answer() {
     handle.restrict_read_only().unwrap();
     assert!(handle.respond_preview(&preview, true).is_err());
     assert!(handle.shared.inner.lock().pending.is_none());
+}
+
+#[test]
+fn hidden_preview_cannot_be_approved_through_cli_or_menu() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut handle = handle(&root);
+    Arc::get_mut(&mut handle.shared).unwrap().secrets = vec!["TOKEN".into()];
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (op, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":"file", "contents":"TOKEN=private-dummy-value"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    pending_preview(&handle, op, false);
+    let preview = handle.approval_preview().unwrap();
+    assert!(!preview.display.to_string().contains("private-dummy-value"));
+    assert!(!preview.complete);
+    let id = preview.display["request_id"].as_u64().unwrap();
+    assert!(handle.respond_preview(&preview, true).is_err());
+    assert!(handle.approve("test-task", id, true).is_err());
+    assert!(
+        handle
+            .shared
+            .inner
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .decision
+            .is_none()
+    );
+    handle.approve("test-task", id, false).unwrap();
+}
+
+#[test]
+fn escaped_target_remains_distinct_and_bound_to_the_real_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    for name in [
+        "safe\u{8}.txt",
+        "safe\u{202e}.txt",
+        "safe\\u{8}.txt",
+        "safe\n.txt",
+        "safe\u{85}.txt",
+    ] {
+        let (op, _) = super::super::normalize_operation(
+            "edit",
+            &json!({"path":name, "contents":"new"}).to_string(),
+            &scope,
+        )
+        .unwrap();
+        pending_preview(&handle, op, false);
+        let preview = handle.approval_preview().unwrap();
+        let shown = preview.display["targets"][0].as_str().unwrap();
+        assert!(!shown.chars().any(|ch| ch.is_control() || ch == '\u{202e}'));
+        assert!(shown.contains('\\'), "{shown}");
+        assert!(preview.complete, "lossless escaping permits review");
+        handle.respond_preview(&preview, true).unwrap();
+        assert_eq!(
+            handle
+                .shared
+                .inner
+                .lock()
+                .pending
+                .as_ref()
+                .unwrap()
+                .decision,
+            Some(true)
+        );
+    }
+}
+
+#[test]
+fn wrong_cli_answer_never_changes_current_request_or_recorded_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (op, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":"file", "contents":"new"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    pending_preview(&handle, op, false);
+    let original = handle
+        .shared
+        .inner
+        .lock()
+        .pending
+        .as_ref()
+        .unwrap()
+        .request
+        .clone();
+    for (task, id) in [
+        ("wrong-task", original.request_id),
+        ("test-task", original.request_id + 1),
+    ] {
+        assert!(handle.approve(task, id, true).is_err());
+        let inner = handle.shared.inner.lock();
+        assert_eq!(inner.task.pending(), Some(&original));
+        assert!(inner.pending.as_ref().unwrap().decision.is_none());
+    }
+    handle
+        .approve("test-task", original.request_id, true)
+        .unwrap();
+    assert!(
+        handle
+            .approve("test-task", original.request_id, false)
+            .is_err()
+    );
+    assert_eq!(
+        handle
+            .shared
+            .inner
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .decision,
+        Some(true)
+    );
+}
+
+#[test]
+fn approval_limits_apply_after_lossless_escape_and_identical_masks_still_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut handle = handle(&root);
+    Arc::get_mut(&mut handle.shared).unwrap().secrets = vec!["***".into()];
+    for (text, complete) in [
+        ("x".repeat(2047), true),
+        ("x".repeat(2048), true),
+        ("x".repeat(2049), false),
+        (format!("{}\u{202e}", "x".repeat(2040)), true),
+        (format!("{}\u{202e}", "x".repeat(2041)), false),
+        ("***".into(), false),
+    ] {
+        let op = Operation {
+            tool: "execute".into(),
+            args: json!({"command":text}),
+            canonical_targets: vec![root.clone()],
+            preimage_digest: None,
+            content_digest: None,
+        };
+        pending_preview(&handle, op, false);
+        let preview = handle.approval_preview().unwrap();
+        assert_eq!(preview.complete, complete);
+        if !complete {
+            let id = preview.display["request_id"].as_u64().unwrap();
+            assert!(handle.approve("test-task", id, true).is_err());
+            assert!(
+                handle
+                    .shared
+                    .inner
+                    .lock()
+                    .pending
+                    .as_ref()
+                    .unwrap()
+                    .decision
+                    .is_none()
+            );
+        }
+    }
 }

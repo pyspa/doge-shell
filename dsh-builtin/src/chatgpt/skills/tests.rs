@@ -731,3 +731,107 @@ fn an_unknown_frontmatter_key_does_not_stop_a_skill_loading() {
     assert_eq!(skills[0].summary(), "Use when reviewing.");
     assert!(problems.is_empty(), "{problems:?}");
 }
+
+#[test]
+fn an_escaping_instruction_file_is_diagnosed_before_its_description_is_read() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("skills");
+    let skill = root.join("escape");
+    fs::create_dir_all(&skill).unwrap();
+    let outside = dir.path().join("outside.md");
+    fs::write(
+        &outside,
+        "---\nname: escape\ndescription: MUST NOT REACH PROMPT\n---\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, skill.join("SKILL.md")).unwrap();
+    let manager = SkillsManager::with_roots(vec![user_root(&root)]);
+    let (loaded, errors) = manager.load_reporting();
+    assert!(loaded.is_empty());
+    assert_eq!(errors.len(), 1);
+    assert!(format!("{errors:?}").contains("Failed to read"));
+    assert!(
+        !manager
+            .get_system_prompt_fragment()
+            .contains("MUST NOT REACH PROMPT")
+    );
+}
+
+#[test]
+fn metadata_discovery_does_not_read_large_or_invalid_body_bytes() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("skills");
+    let skill = write_skill(&root, "large", "Use this description");
+    let path = skill.join("SKILL.md");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.extend(vec![b'a'; 32 * 1024]);
+    bytes.push(255);
+    fs::write(&path, bytes).unwrap();
+    let manager = SkillsManager::with_roots(vec![user_root(&root)]);
+    let loaded = manager.load_skills();
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded[0].summary().contains("Use this description"));
+    assert!(
+        render_mention(&loaded[0])
+            .unwrap_err()
+            .to_string()
+            .contains("8 KiB")
+    );
+    fs::remove_file(&path).unwrap();
+    assert!(render_mention(&loaded[0]).is_err());
+}
+
+#[test]
+fn oversized_explicit_mention_reports_failure_without_counting_a_read() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("skills");
+    let path = write_skill(&root, "large", "Use for explicit failure");
+    let instruction = path.join("SKILL.md");
+    let mut body = fs::read_to_string(&instruction).unwrap();
+    body.push_str(&"x".repeat(16 * 1024));
+    fs::write(&instruction, body).unwrap();
+
+    let (messages, rest) = crate::chatgpt::prompt::resolve_skill_mentions(
+        "@large inspect target",
+        &[user_root(&root)],
+    );
+    assert_eq!(rest, "inspect target");
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].contains("could not be loaded"));
+    assert!(messages[0].contains("8 KiB"));
+    assert!(messages[0].contains("read_file"));
+    assert!(!usage::read_this_turn().contains(&path));
+}
+
+#[test]
+fn bundled_resource_listing_hides_links_outside_the_skill() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("skills");
+    let skill = write_skill(&root, "links", "Use for links");
+    fs::create_dir(skill.join("references")).unwrap();
+    fs::write(dir.path().join("outside.md"), "outside").unwrap();
+    std::os::unix::fs::symlink(
+        dir.path().join("outside.md"),
+        skill.join("references/escape.md"),
+    )
+    .unwrap();
+    let loaded = SkillsManager::with_roots(vec![user_root(&root)]).load_skills();
+    assert!(!render_mention(&loaded[0]).unwrap().contains("escape.md"));
+}
+
+#[test]
+fn unterminated_frontmatter_is_diagnosed() {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("skills");
+    fs::create_dir(&root).unwrap();
+    fs::write(
+        root.join("broken.md"),
+        "---\nname: broken\ndescription: missing close\n",
+    )
+    .unwrap();
+    let (loaded, errors) = SkillsManager::with_roots(vec![user_root(&root)]).load_reporting();
+    assert!(loaded.is_empty());
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].problem.contains("Failed to read"));
+}

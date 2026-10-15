@@ -378,11 +378,18 @@ impl Drop for AgentJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These process-lifecycle tests are independent of command lookup. Other
+    // tests replace process PATH, so pin both the shell and its child utilities.
+    fn shell_command(script: &str) -> Command {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]).env("PATH", "/usr/bin:/bin");
+        command
+    }
     #[test]
     fn jobs_can_be_polled_and_cancelled_without_relaunch() {
         let mut jobs = AgentJobs::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "printf ready; sleep 10"]);
+        let command = shell_command("printf ready; sleep 10");
         let id = jobs.start(command, Duration::from_secs(20), None).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -399,8 +406,7 @@ mod tests {
     #[test]
     fn timeouts_and_exit_codes_are_distinct() {
         let mut jobs = AgentJobs::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 5"]);
+        let command = shell_command("sleep 5");
         let id = jobs
             .start(command, Duration::from_millis(50), None)
             .unwrap();
@@ -427,8 +433,7 @@ mod tests {
     }
 
     fn run_to_completion(jobs: &mut AgentJobs, script: &str) -> String {
-        let mut command = Command::new("sh");
-        command.args(["-c", script]);
+        let command = shell_command(script);
         let id = jobs.start(command, Duration::from_secs(20), None).unwrap();
         settle(jobs, &id);
         id
@@ -478,8 +483,7 @@ mod tests {
         // never takes a live process down with the finished ones. It has to
         // come first: `start` enforces the 32-job ceiling while the fixture
         // inserts below bypass it on purpose.
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 10"]);
+        let command = shell_command("sleep 10");
         let running = jobs.start(command, Duration::from_secs(20), None).unwrap();
         for seq in 1..=40 {
             insert_finished_job(&mut jobs, format!("out-{seq}").into_bytes(), vec![], seq);
@@ -506,8 +510,7 @@ mod tests {
         for seq in 0..32 {
             insert_finished_job(&mut jobs, format!("out-{seq}").into_bytes(), vec![], seq);
         }
-        let mut probe = Command::new("sh");
-        probe.args(["-c", "true"]);
+        let probe = shell_command("true");
         assert!(
             jobs.start(probe, Duration::from_secs(20), None).is_err(),
             "the 32-job ceiling should hold with no reap"
@@ -540,8 +543,7 @@ mod tests {
     #[test]
     fn a_running_job_survives_a_reap() {
         let mut jobs = AgentJobs::default();
-        let mut command = Command::new("sh");
-        command.args(["-c", "sleep 10"]);
+        let command = shell_command("sleep 10");
         let running = jobs.start(command, Duration::from_secs(20), None).unwrap();
         run_to_completion(&mut jobs, "true");
 

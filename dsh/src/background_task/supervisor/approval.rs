@@ -11,12 +11,13 @@ pub(in crate::background_task) struct ApprovalPreview {
 
 pub(super) fn display(shared: &Shared, inner: &Inner, pending: &Pending) -> (Value, bool) {
     let operation = &pending.request.operation;
-    let mut complete = true;
+    let mut redacted = false;
+    let mut truncated = false;
     let mut preview = |text: &str, limit| {
-        let full = shared.mask(text, usize::MAX);
-        if full.len() > limit {
-            complete = false;
-        }
+        let masked = shared.redact(text);
+        redacted |= masked.redacted;
+        let full = super::output::escape_display(&masked.text, false);
+        truncated |= full.len() > limit;
         full[..full.floor_char_boundary(limit)].to_string()
     };
     let targets: Vec<_> = operation
@@ -43,10 +44,12 @@ pub(super) fn display(shared: &Shared, inner: &Inner, pending: &Pending) -> (Val
         .content_digest
         .as_ref()
         .map(|text| preview(text, 2048));
-    complete &= operation
-        .canonical_targets
-        .iter()
-        .all(|path| path.to_str().is_some());
+    let complete = !redacted
+        && !truncated
+        && operation
+            .canonical_targets
+            .iter()
+            .all(|path| path.to_str().is_some());
     (
         json!({
             "task_id": pending.request.task_id,
@@ -56,7 +59,7 @@ pub(super) fn display(shared: &Shared, inner: &Inner, pending: &Pending) -> (Val
             "guidance": guidance, "command_preview": command,
             "execution_warning": if operation.tool == "execute" && !inner.task.scope().sandbox_verified { Some("This command will run without OS sandbox isolation.") } else { None },
             "write_bytes": operation.content_digest.as_ref().map(String::len),
-            "before_preview": before, "after_preview": after, "preview_truncated": !complete,
+            "before_preview": before, "after_preview": after, "preview_truncated": truncated, "preview_redacted": redacted, "preview_complete": complete,
         }),
         complete,
     )
@@ -121,7 +124,7 @@ impl TaskHandle {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());
         // The comparison and decision mutation share this lock. Never delegate
-        // to approve() after releasing it: its legacy stale path clears pending.
+        // through a separately locked ID-only decision path.
         if self.shared.canceled.load(Ordering::Acquire) || !matches(&inner, preview) {
             bail!("background approval is stale or unknown");
         }
@@ -141,25 +144,12 @@ impl TaskHandle {
         request_id: u64,
         allow: bool,
     ) -> Result<()> {
-        self.shared.cancel_disconnected();
-        let mut inner = self.shared.inner.lock();
-        inner.task.check_deadline(self.shared.elapsed());
-        let valid = inner.task.task_id() == expected_task_id
-            && active(inner.task.status())
-            && inner.pending.as_ref().is_some_and(|pending| {
-                pending.request.request_id == request_id
-                    && pending.request.epoch == inner.task.generation()
-                    && pending.decision.is_none()
-                    && inner.task.pending() == Some(&pending.request)
-            });
-        if !valid {
-            inner.task.deny_approval();
-            inner.pending = None;
-            self.shared.changed.notify_all();
+        let preview = self
+            .approval_preview()
+            .ok_or_else(|| anyhow!("background approval is stale or unknown"))?;
+        if preview.request.task_id != expected_task_id || preview.request.request_id != request_id {
             bail!("background approval is stale or unknown");
         }
-        inner.pending.as_mut().expect("validated pending").decision = Some(allow);
-        self.shared.changed.notify_all();
-        Ok(())
+        self.respond_preview(&preview, allow)
     }
 }

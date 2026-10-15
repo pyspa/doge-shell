@@ -9,73 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) struct StreamMask<'a> {
-    secrets: &'a [String],
-    pending: Vec<u8>,
-    withheld: bool,
-}
-
-impl<'a> StreamMask<'a> {
-    pub(super) fn new(secrets: &'a [String]) -> Self {
-        Self {
-            secrets,
-            pending: Vec::new(),
-            withheld: false,
-        }
-    }
-    pub(super) fn push(&mut self, bytes: &[u8]) -> Vec<u8> {
-        // Pathological credential sizes must not turn masking into an
-        // unbounded buffer or expensive repeated prefix comparisons.
-        if self.secrets.iter().any(|secret| secret.len() > 4096) {
-            if self.withheld {
-                return Vec::new();
-            }
-            self.withheld = true;
-            return b"[output withheld: oversized credential]\n".to_vec();
-        }
-        self.pending.extend_from_slice(bytes);
-        let mut output = Vec::new();
-        let mut consumed = 0;
-        while consumed < self.pending.len() {
-            let tail = &self.pending[consumed..];
-            // Prefer waiting for a possible longer credential over emitting
-            // an overlapping short match. Each stream owns its own suffix.
-            if self
-                .secrets
-                .iter()
-                .any(|secret| secret.len() > tail.len() && secret.as_bytes().starts_with(tail))
-            {
-                break;
-            }
-            if let Some(secret) = self
-                .secrets
-                .iter()
-                .find(|secret| !secret.is_empty() && tail.starts_with(secret.as_bytes()))
-            {
-                output.extend_from_slice(b"[REDACTED]");
-                consumed += secret.len();
-            } else {
-                output.push(self.pending[consumed]);
-                consumed += 1;
-            }
-        }
-        self.pending.drain(..consumed);
-        output
-    }
-    pub(super) fn finish(&mut self) -> Vec<u8> {
-        if self.pending.is_empty() {
-            Vec::new()
-        } else {
-            self.pending.clear();
-            b"[REDACTED]".to_vec()
-        }
-    }
-}
-
-// Ordinary complete lines can be redacted immediately. Options and bearer
-// headers can span newlines, so defer their remainder until EOF. A bounded
-// conservative fallback sacrifices output rather than releasing an uncertain
-// credential suffix. Each stdout/stderr reader owns its own state.
+// Buffer only complete, independently redactable pieces. Cross-line patterns
+// remain bounded until EOF; overflow withholds the remainder instead of leaking.
 const GENERIC_PENDING_LIMIT: usize = 256 * 1024;
 const WITHHELD: &[u8] = b"[output withheld: redaction limit or uncertain content]\n";
 
@@ -136,53 +71,31 @@ impl<'a> GenericStreamMask<'a> {
         output
     }
     fn masked_pending(&self, eof: bool) -> Option<Vec<u8>> {
-        // Both redactors inspect the original bytes. Running either on the
-        // other's transformed text could destroy a recognition prefix or a
-        // piece of a known credential. If both change the same bounded piece,
-        // conservatively withhold it instead of composing their replacements.
-        let mut known = StreamMask::new(self.secrets);
-        let mut known_output = known.push(&self.pending);
-        if !eof && !known.pending.is_empty() {
-            return None;
+        // Even a partial known credential at EOF is withheld. Inspect original
+        // bytes, including overlapping starts that a greedy match would skip.
+        let partial = self.secrets.iter().any(|secret| {
+            (1..secret.len().min(self.pending.len() + 1)).any(|len| {
+                secret
+                    .as_bytes()
+                    .starts_with(&self.pending[self.pending.len() - len..])
+            })
+        });
+        if partial {
+            return if eof { Some(WITHHELD.to_vec()) } else { None };
         }
-        known_output.extend(known.finish());
         let text = String::from_utf8_lossy(&self.pending);
-        let masked = dsh_types::safety_policy::redact_sensitive_text(&text);
-        if eof {
-            // An unfinished quoted option does not match the canonical regex.
-            // Newline-prefixed closing probes detect that uncertainty without
-            // extending complete unquoted values at EOF.
-            for suffix in ["\nDSHSTREAMPROBE\"", "\nDSHSTREAMPROBE'"] {
-                let extended =
-                    dsh_types::safety_policy::redact_sensitive_text(&format!("{text}{suffix}"));
-                if extended != format!("{masked}{suffix}") {
-                    return Some(WITHHELD.to_vec());
-                }
-            }
-        }
-        let generic_changed = masked.as_bytes() != self.pending;
-        let known_changed = known_output != self.pending;
-        Some(if generic_changed && known_changed {
-            WITHHELD.to_vec()
-        } else if generic_changed {
-            masked.into_bytes()
-        } else {
-            known_output
-        })
+        Some(
+            dsh_types::safety_policy::redact_sensitive_text_with_known(&text, self.secrets)
+                .text
+                .into_bytes(),
+        )
     }
 }
 
 pub(super) fn safe_output(text: &str, limit: usize) -> String {
     let masked = dsh_types::safety_policy::redact_sensitive_text(text);
-    let clean: String = masked
-        .chars()
-        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
-        .collect();
-    if clean.len() <= limit {
-        clean
-    } else {
-        clean[..clean.floor_char_boundary(limit)].to_string()
-    }
+    let clean = escape_display(&masked, true);
+    clean[..clean.floor_char_boundary(limit)].to_string()
 }
 
 pub(super) fn drain(mut file: File, shared: &Shared) {
@@ -239,24 +152,20 @@ mod tests {
     fn credentials_split_across_reads_are_masked_before_tail_truncation() {
         let secrets = vec!["credential-value".into(), "credential".into()];
         for split in 1.."credential-value".len() {
-            let mut mask = StreamMask::new(&secrets);
+            let mut mask = GenericStreamMask::new(&secrets);
             let mut bytes = mask.push(b"before ");
             bytes.extend(mask.push(&b"credential-value"[..split]));
             bytes.extend(mask.push(&b"credential-value"[split..]));
             bytes.extend(mask.push(b" after"));
             bytes.extend(mask.finish());
-            assert_eq!(bytes, b"before [REDACTED] after", "split {split}");
+            assert_eq!(bytes, b"before *** after", "split {split}");
         }
-        let mut mask = StreamMask::new(&secrets);
+        let mut mask = GenericStreamMask::new(&secrets);
         assert!(mask.push(b"cred").is_empty());
-        assert_eq!(mask.finish(), b"[REDACTED]");
+        assert_eq!(mask.finish(), WITHHELD);
         let oversized = vec!["x".repeat(4097)];
-        let mut mask = StreamMask::new(&oversized);
-        assert!(
-            String::from_utf8(mask.push(b"raw secret fragment"))
-                .unwrap()
-                .contains("withheld")
-        );
+        let mut mask = GenericStreamMask::new(&oversized);
+        assert_eq!(mask.push(b"raw secret fragment"), WITHHELD);
         assert!(mask.push(b"more raw bytes").is_empty());
     }
 
@@ -298,7 +207,7 @@ mod tests {
             assert_eq!(generic_chunks(text.as_bytes(), 1), expected.as_bytes());
         }
         for text in ["--password \"unfinished", "--password 'unfinished\nvalue"] {
-            assert_eq!(generic_chunks(text.as_bytes(), 1), WITHHELD);
+            assert_eq!(generic_chunks(text.as_bytes(), 1), b"--password ***");
         }
     }
 
@@ -366,7 +275,7 @@ mod tests {
             "known-value\nAPI_KEY=SYNTHETIC_SECRET_42\n\n{}",
             "z".repeat(262120)
         );
-        for part in input.as_bytes().chunks(7) {
+        for part in [&input.as_bytes()[..17], &input.as_bytes()[17..]] {
             shared.append_output(&generic.push(part));
         }
         shared.append_output(&generic.finish());
@@ -413,5 +322,53 @@ mod tests {
         assert_eq!(mask.push(b"raw suffix\n"), WITHHELD);
         assert!(mask.push(b"still withheld").is_empty());
         assert!(mask.finish().is_empty());
+    }
+}
+
+/// Escape invisible/control characters losslessly. Approval fields also escape
+/// backslashes, so a literal escape spelling cannot impersonate a real control.
+pub(super) fn escape_display(text: &str, multiline: bool) -> String {
+    static FORMAT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\p{Cf}").expect("Unicode format class"));
+    let mut output = String::new();
+    for ch in text.chars() {
+        let mut bytes = [0; 4];
+        if !multiline && ch == '\\' {
+            output.push_str("\\\\");
+        } else if (ch.is_control() && !(multiline && matches!(ch, '\n' | '\t')))
+            || FORMAT.is_match(ch.encode_utf8(&mut bytes))
+        {
+            output.extend(ch.escape_unicode());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
+#[cfg(test)]
+mod union_stream_tests {
+    use super::*;
+    #[test]
+    fn original_spans_survive_every_stream_split_including_overlapping_credentials() {
+        for (known, input, expected) in [
+            ("TOKEN", "TOKEN=private-dummy-value\n", "***=***\n"),
+            ("aba", "ababa\n", "***\n"),
+            ("unused-key", "TOKEN=private\\\nsecond\n", "TOKEN=***\n"),
+            (
+                "unused-key",
+                "PUBLIC=\"hello TOKEN='private\nsecond'\"\n",
+                "PUBLIC=\"hello TOKEN=***",
+            ),
+        ] {
+            let secrets = vec![known.into()];
+            for split in 0..=input.len() {
+                let mut mask = GenericStreamMask::new(&secrets);
+                let mut output = mask.push(&input.as_bytes()[..split]);
+                output.extend(mask.push(&input.as_bytes()[split..]));
+                output.extend(mask.finish());
+                assert_eq!(output, expected.as_bytes(), "split {split}");
+            }
+        }
     }
 }

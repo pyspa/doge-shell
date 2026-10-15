@@ -151,12 +151,11 @@ impl Shared {
             }
         }
     }
+    fn redact(&self, text: &str) -> dsh_types::safety_policy::RedactedText {
+        dsh_types::safety_policy::redact_sensitive_text_with_known(text, &self.secrets)
+    }
     fn mask(&self, text: &str, limit: usize) -> String {
-        let mut text = text.to_string();
-        for secret in &self.secrets {
-            text = text.replace(secret, "[REDACTED]");
-        }
-        safe_output(&text, limit)
+        safe_output(&self.redact(text).text, limit)
     }
     fn reap(&self) {
         if let Some(pid) = self.process.lock().take() {

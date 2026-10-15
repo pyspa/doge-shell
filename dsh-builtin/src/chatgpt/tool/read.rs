@@ -3,6 +3,8 @@ use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
 use std::fs;
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 
 pub(crate) const NAME: &str = "read_file";
 
@@ -12,6 +14,22 @@ pub(crate) const DEFAULT_LINE_LIMIT: usize = 400;
 const MAX_LINE_LIMIT: usize = 2000;
 /// Byte budget for the rendered window, checked before the global tool cap.
 const MAX_READ_BYTES: usize = 6144;
+
+/// Opening a FIFO must never consume the chat thread waiting for a writer.
+/// Check the opened descriptor, rather than a path metadata check that can
+/// race with replacement of the file. Path and sensitive-access gates run first.
+fn read_regular_file(path: &std::path::Path) -> std::io::Result<String> {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other("read_file requires a regular file"));
+    }
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    Ok(contents)
+}
 
 pub(crate) fn definition() -> Value {
     json!({
@@ -192,7 +210,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     let contents = if _proxy.agent_runtime().is_some() {
         crate::agent::files::read(&normalized_abs_path)
     } else {
-        fs::read_to_string(&normalized_abs_path)
+        read_regular_file(&normalized_abs_path)
     }
     .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
@@ -253,6 +271,44 @@ mod tests {
         assert!(result.contains("     1\tHello, world!"));
     }
 
+    /// Keep a regression from hanging the test runner: only an isolated child
+    /// opens the writer-less FIFO, and the parent always kills/reaps on timeout.
+    #[test]
+    fn read_file_rejects_non_regular_files_without_blocking() {
+        const CHILD: &str = "DOGESH_READ_FIFO_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let dir = tempdir().unwrap();
+            let fifo = dir.path().join("input.fifo");
+            nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRUSR).unwrap();
+            let error = run(r#"{"path":"input.fifo"}"#, &mut proxy(dir.path())).unwrap_err();
+            assert!(error.contains("regular file"), "{error}");
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "chatgpt::tool::read::tests::read_file_rejects_non_regular_files_without_blocking",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "FIFO read child failed: {status}");
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                child.wait().unwrap();
+                panic!("read_file blocked on a FIFO");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn test_read_file_not_found() {
         let dir = tempdir().unwrap();
@@ -303,6 +359,9 @@ mod tests {
     }
 
     fn proxy(path: &std::path::Path) -> NoopProxy {
+        // Declare the fixture's boundary explicitly even when the runner's
+        // temporary directory is itself inside another project.
+        fs::create_dir_all(path.join(".git")).unwrap();
         NoopProxy {
             current_dir: path.to_path_buf(),
             confirm_result: true,

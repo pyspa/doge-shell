@@ -402,7 +402,6 @@ fn delete(request: &Request, proxy: &mut dyn ChatToolHost) -> Result<String, Str
 
         std::fs::remove_file(&request.target)
             .map_err(|err| format!("chat: failed to delete `{}`: {err}", request.relative_file))?;
-        skills::clear_skills_fragment_cache();
         return Ok(report(request, "delete", 0, &[]));
     }
 
@@ -429,7 +428,6 @@ fn delete(request: &Request, proxy: &mut dyn ChatToolHost) -> Result<String, Str
     std::fs::remove_dir_all(&request.skill_dir)
         .map_err(|err| format!("chat: failed to delete `{}`: {err}", request.name))?;
     skills::usage::forget(&request.skill_dir);
-    skills::clear_skills_fragment_cache();
 
     Ok(report(request, "delete", 0, &[]))
 }
@@ -618,9 +616,6 @@ pub(crate) fn apply_skill_write(w: &SkillWrite<'_>, contents: &str) -> Result<Ve
 
     skills::usage::note_write(w.skill_dir, w.scope, w.created);
     refresh_project_trust(w.scope, w.skill_dir);
-    // The directory signature is coarse; a same-size rewrite in the same second
-    // would otherwise keep serving the previous list.
-    skills::clear_skills_fragment_cache();
 
     Ok(warnings)
 }

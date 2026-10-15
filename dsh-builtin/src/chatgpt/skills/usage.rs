@@ -275,25 +275,6 @@ pub(crate) fn archived_keys() -> std::collections::BTreeSet<String> {
         .collect()
 }
 
-/// A fingerprint of the archived/pinned flags, for the prompt fragment
-/// cache's signature.
-///
-/// Not the directory mtime the rest of the signature uses: `usage::flush()`
-/// rewrites the state file on nearly every turn (read/write counters), and
-/// keying the cache on that file's mtime would invalidate the fragment on
-/// every turn regardless of whether anything archived actually changed -
-/// defeating the point of caching it at all. This only moves when
-/// `archived_ms` or `pinned` themselves change.
-pub(crate) fn lifecycle_digest() -> String {
-    let mut parts: Vec<String> = load()
-        .into_iter()
-        .filter(|(_, record)| record.archived_ms > 0 || record.pinned)
-        .map(|(key, record)| format!("{key}\u{1f}{}\u{1f}{}", record.archived_ms, record.pinned))
-        .collect();
-    parts.sort();
-    super::fnv1a_hex(parts.join("\u{1e}").as_bytes())
-}
-
 /// Archive every agent-written, unpinned skill unread for `unused_after_days`.
 /// Opt-in: the caller only invokes this when `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS`
 /// says to, and passes the threshold it read from that variable.

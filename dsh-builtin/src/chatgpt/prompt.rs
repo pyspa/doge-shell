@@ -59,14 +59,10 @@ pub(super) fn build_system_prompt(
     operator_prompt: Option<String>,
     language: Option<String>,
     mcp_manager: &McpManager,
-    skill_roots: &[SkillRoot],
+    skills: &SkillsSnapshot,
     mcp_tool_mode: McpToolMode,
 ) -> SystemPrompt {
-    let skills_fragment = if skill_roots.is_empty() {
-        String::new()
-    } else {
-        SkillsManager::with_roots(skill_roots.to_vec()).get_system_prompt_fragment()
-    };
+    let skills_fragment = skills.render_fragment();
 
     let (text, footprint) = assemble_system_prompt_traced(
         &skills_fragment,
@@ -177,17 +173,17 @@ pub(super) fn set_system_prompt(manager: &mut ConversationManager, text: &str) {
 
 /// Load any skills the user named with `@`, and hand back the rest of the line.
 ///
-/// The directories are only scanned when the message actually starts with `@`,
-/// so an ordinary turn pays nothing for this.
+/// Names and selected paths come from the turn's admitted metadata snapshot.
+/// Only an explicit mention reads a skill body; ordinary turns keep it lazy.
 pub(super) fn resolve_skill_mentions<'a>(
     user_input: &'a str,
-    skill_roots: &[SkillRoot],
+    skills: &SkillsSnapshot,
 ) -> (Vec<String>, &'a str) {
-    if !user_input.trim_start().starts_with('@') || skill_roots.is_empty() {
+    if !user_input.trim_start().starts_with('@') {
         return (Vec::new(), user_input);
     }
 
-    let skills = SkillsManager::with_roots(skill_roots.to_vec()).load_skills();
+    let skills = skills.skills();
     let known: std::collections::BTreeSet<&str> =
         skills.iter().map(|skill| skill.name.as_str()).collect();
     let (names, rest) = skills::split_leading_mentions(user_input, &|name| known.contains(name));
@@ -226,16 +222,13 @@ pub(super) fn resolve_skill_mentions<'a>(
 /// on a question, and the entry point that runs without a person watching is
 /// the one that should be *more* careful, not equally trusting. An untrusted
 /// project is simply not read there.
-pub(super) fn gate_project_skills(
-    roots: &mut Vec<skills::SkillRoot>,
-    proxy: &mut dyn ChatToolHost,
-) {
+pub(super) fn gate_project_skills(skills: &mut SkillsSnapshot, proxy: &mut dyn ChatToolHost) {
     // Asked per root and dropped per root. Trust is recorded against a root
     // path, so declining one shared directory must not also throw away a
     // directory the user has already agreed to.
-    for decision in skills::describe_project_roots(roots) {
+    for decision in skills.project_decisions() {
         if !trusts_project_root(&decision, proxy) {
-            roots.retain(|root| root.path != decision.root);
+            skills.retain_roots(|root| root.path != decision.root);
         }
     }
 }

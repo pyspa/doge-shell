@@ -479,10 +479,12 @@ pub(crate) fn mcp_footprint_status_from(
 /// maintain.
 pub(crate) fn fixed_prompt_footprint(proxy: &mut dyn ShellProxy) -> FixedPromptFootprint {
     let cwd = proxy.get_current_dir().ok();
-    let mut skill_roots =
-        skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
+    let mut skill_snapshot = SkillsSnapshot::capture(skills::skill_roots(
+        cwd.as_deref(),
+        resolve_project_skills_enabled(proxy),
+    ));
 
-    let decisions = skills::describe_project_roots(&skill_roots);
+    let decisions = skill_snapshot.project_decisions();
     let mut untrusted: Vec<std::path::PathBuf> = Vec::new();
     for decision in &decisions {
         if !project_skill_root_already_trusted(decision, &mut *proxy as &mut dyn AgentCommandPolicy)
@@ -491,7 +493,7 @@ pub(crate) fn fixed_prompt_footprint(proxy: &mut dyn ShellProxy) -> FixedPromptF
         }
     }
     let project_skill_roots_pending_trust = untrusted.len();
-    skill_roots.retain(|root| !untrusted.contains(&root.path));
+    skill_snapshot.retain_roots(|root| !untrusted.contains(&root.path));
 
     let mcp_handle = proxy.agent_mcp_manager();
     let mcp = mcp_handle.read();
@@ -506,7 +508,7 @@ pub(crate) fn fixed_prompt_footprint(proxy: &mut dyn ShellProxy) -> FixedPromptF
         proxy.get_var(PROMPT_KEY).as_deref().map(str::to_string),
         response_language(proxy),
         &mcp,
-        &skill_roots,
+        &skill_snapshot,
         mcp_mode,
     );
 

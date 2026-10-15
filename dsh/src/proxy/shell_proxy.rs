@@ -144,6 +144,7 @@ impl ShellProxy for Shell {
         argv: Vec<String>,
     ) -> Result<()> {
         match action {
+            CoreShellAction::ChatTask => crate::background_task::command(self, ctx, argv),
             CoreShellAction::ChatStatus => builtin::chat_status::execute(self, ctx, argv),
             CoreShellAction::Cron => crate::cron::command(self, ctx, argv),
             CoreShellAction::Exit => builtin::exit::execute(self, ctx, argv),
@@ -375,6 +376,9 @@ impl ShellProxy for Shell {
     }
 
     fn get_current_dir(&self) -> Result<std::path::PathBuf> {
+        if let Some(context) = &self.background_context {
+            return Ok(context.cwd());
+        }
         std::env::current_dir().context("failed to get current directory")
     }
 
@@ -429,22 +433,13 @@ impl ShellProxy for Shell {
     }
 
     fn confirm_action(&mut self, message: &str) -> Result<bool> {
-        debug!("Safety confirmation requested: {}", message);
-
-        // Use eprint! instead of println! or print! to ensure the prompt goes to stderr.
-        // This is critical if the shell output is being piped.
-        eprint!("{} [y/N]: ", message);
-        std::io::stderr().flush()?;
-
-        let mut input = String::new();
-        read_confirmation_line(&mut input)?;
-
-        let confirmed = confirmation_is_yes(&input);
-        debug!("Confirmation result: {}", confirmed);
-        Ok(confirmed)
+        self.confirm_shell_action(message)
     }
 
     fn is_canceled(&self) -> bool {
+        if let Some(context) = &self.background_context {
+            return context.is_canceled();
+        }
         crate::process::signal::check_and_clear_sigint()
     }
 

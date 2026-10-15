@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+pub(crate) mod background;
 mod commands;
 mod context;
 mod conversation;
@@ -51,10 +52,9 @@ pub(crate) mod tool;
 
 use tool::execute_tool_call;
 
-mod jobs;
-pub use jobs::shutdown as chat_jobs_shutdown;
+pub(crate) mod jobs;
 
-mod session;
+pub(crate) mod session;
 
 pub(crate) mod hooks;
 mod reflect;

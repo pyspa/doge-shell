@@ -194,6 +194,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     }
 
     let normalized_abs_path = resolve_read_path(&parsed, _proxy)?;
+    if let Some(background) = _proxy.background_task_context()
+        && !background.read_authorized(&normalized_abs_path)
+    {
+        return Err("chat: resolved read target differs from the admitted operation".into());
+    }
 
     // Get CWD for gitignore check
     let current_dir = _proxy
@@ -216,13 +221,19 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("read_file cancelled by user.".to_string());
     }
 
-    let contents = if _proxy.agent_runtime().is_some() {
-        crate::agent::files::read(&normalized_abs_path)
-    } else {
-        read_regular_file(&normalized_abs_path)
-    }
-    .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
+    let contents =
+        if _proxy.agent_runtime().is_some() || _proxy.background_task_context().is_some() {
+            crate::agent::files::read(&normalized_abs_path)
+        } else {
+            read_regular_file(&normalized_abs_path)
+        }
+        .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
+    if let Some(background) = _proxy.background_task_context()
+        && !background.read_result_authorized(&normalized_abs_path, &contents)
+    {
+        return Err("chat: file contents changed after background read admission".into());
+    }
     if safety_policy::contains_sensitive_text(&contents)
         && !super::confirm_sensitive_access(
             _proxy,

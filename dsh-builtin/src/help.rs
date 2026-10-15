@@ -205,6 +205,18 @@ const HELP_TOPICS: &[HelpTopic] = &[
         related: &["chat_reset", "chat_model"],
     },
     HelpTopic {
+        name: "chat_task",
+        category: "ai",
+        summary: "Run one background AI task while continuing shell work.",
+        usage: "chat_task start --profile <read-only|workspace-edit> [--env NAME] -- <prompt> | status | output | cancel | approve <task-id> <request-id> | deny <task-id> <request-id> | restrict read-only",
+        examples: &[
+            "chat_task start --profile read-only -- explain this project",
+            "chat_task status",
+            "chat_task output",
+        ],
+        related: &["chat_status", "chat_reset"],
+    },
+    HelpTopic {
         name: "chat_prompt",
         category: "ai",
         summary: "Set the AI assistant system prompt for the current shell session.",

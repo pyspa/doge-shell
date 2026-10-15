@@ -181,3 +181,76 @@ fn guidance_approval_is_consumed_once_and_output_is_bounded_and_masked() {
     assert!(!output.contains("credential-value"));
     assert!(!output.contains('\x1b'));
 }
+
+#[test]
+fn disconnected_approval_revokes_authority_and_stops_only_owned_children() {
+    use std::process::Command;
+    for guidance in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut handle = handle(&root);
+        let (socket, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        // The task owns this PID's wait; the test never calls Child::wait on it.
+        #[expect(
+            clippy::zombie_processes,
+            reason = "Shared::reap owns the sole wait for this worker PID"
+        )]
+        let worker = Command::new("sleep").arg("60").spawn().unwrap();
+        let shared = Arc::get_mut(&mut handle.shared).unwrap();
+        shared.shutdown = socket;
+        *shared.process.lock() = Some(nix::unistd::Pid::from_raw(worker.id() as i32));
+        let mut unrelated = Command::new("sleep").arg("60").spawn().unwrap();
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        handle
+            .shared
+            .jobs
+            .lock()
+            .start(command, Duration::from_secs(60), None)
+            .unwrap();
+        let operation = admit(&handle, "edit", &root.join("file"), None);
+        let shared = handle.shared.clone();
+        let (finished, receive) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            finished
+                .send(await_approval(&shared, operation, guidance))
+                .unwrap();
+        });
+        let id = {
+            let mut inner = handle.shared.inner.lock();
+            while inner.pending.is_none() {
+                assert!(
+                    !handle
+                        .shared
+                        .changed
+                        .wait_for(&mut inner, Duration::from_secs(2))
+                        .timed_out()
+                );
+            }
+            inner.pending.as_ref().unwrap().request.request_id
+        };
+        let mut peer = Some(peer);
+        if guidance {
+            peer.as_ref().unwrap().shutdown(Shutdown::Write).unwrap();
+        } else {
+            drop(peer.take());
+        }
+        assert!(
+            receive
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .is_err()
+        );
+        waiter.join().unwrap();
+        assert!(handle.approve("test-task", id, true).is_err());
+        let inner = handle.shared.inner.lock();
+        assert_eq!(inner.task.status(), TaskStatus::Cancelled);
+        assert!(inner.pending.is_none() && inner.admitted.is_none());
+        drop(inner);
+        assert!(!handle.shared.jobs.lock().has_running());
+        assert!(unrelated.try_wait().unwrap().is_none());
+        unrelated.kill().unwrap();
+        unrelated.wait().unwrap();
+        handle.shared.reap();
+    }
+}

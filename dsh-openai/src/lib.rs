@@ -2,6 +2,7 @@ pub mod auth;
 mod chat_client;
 mod client;
 mod config;
+pub mod opencode;
 mod response;
 mod responses;
 mod stream;

@@ -86,6 +86,7 @@ struct OpenedSkill {
 /// Everything about this turn a reflection call might need.
 struct Snapshot {
     provider_scope: Option<String>,
+    transport_session_id: Option<String>,
     transcript: String,
     index: Vec<(String, String)>,
     opened: Vec<OpenedSkill>,
@@ -239,6 +240,7 @@ fn snapshot(proxy: &mut dyn ChatToolHost, manager: &ConversationManager) -> Snap
 
     Snapshot {
         provider_scope: manager.provider_scope.clone(),
+        transport_session_id: manager.transport_session_id.clone(),
         transcript,
         index,
         opened,
@@ -294,6 +296,7 @@ fn propose(
     ];
 
     let options = ChatRequestOptions::new()
+        .with_session_id(snap.transport_session_id.clone())
         .with_temperature(Some(0.2))
         .with_model(model)
         .with_response_format(Some(json_object_format()));
@@ -476,6 +479,7 @@ mod tests {
     fn a_replace_naming_a_skill_the_turn_never_read_is_refused() {
         let snap = Snapshot {
             provider_scope: None,
+            transport_session_id: None,
             transcript: String::new(),
             index: Vec::new(),
             opened: vec![OpenedSkill {
@@ -505,6 +509,7 @@ mod tests {
     fn a_missing_name_on_create_is_refused() {
         let snap = Snapshot {
             provider_scope: None,
+            transport_session_id: None,
             transcript: String::new(),
             index: Vec::new(),
             opened: Vec::new(),
@@ -551,6 +556,7 @@ mod tests {
         with_state_home(state.path(), || {
             let snap = Snapshot {
                 provider_scope: None,
+                transport_session_id: None,
                 transcript: String::new(),
                 index: Vec::new(),
                 opened: vec![OpenedSkill {
@@ -588,5 +594,37 @@ mod tests {
                 proposal.project_root
             );
         });
+    }
+    #[test]
+    fn reflection_preserves_the_main_conversation_session() {
+        struct Capture;
+        impl ChatClient for Capture {
+            fn send_chat_request(
+                &self,
+                _messages: &[serde_json::Value],
+                options: &ChatRequestOptions,
+            ) -> anyhow::Result<serde_json::Value> {
+                assert_eq!(options.session_id.as_deref(), Some("main-conversation"));
+                Ok(
+                    json!({"choices":[{"message":{"role":"assistant","content":"{\"save\":false}"},"finish_reason":"stop"}]}),
+                )
+            }
+        }
+        let _state = super::super::session::tests::isolated_state_home();
+        let dir = tempfile::tempdir().unwrap();
+        let mut proxy = crate::test_support::TestShellProxy {
+            current_dir: dir.path().into(),
+            ..Default::default()
+        };
+        let mut manager = ConversationManager::new(
+            json!({"role":"system","content":"sys"}),
+            json!({"role":"user","content":"goal"}),
+        );
+        manager.transport_session_id = Some("main-conversation".into());
+        assert!(
+            propose(&Capture, &mut proxy, &mut manager, None)
+                .unwrap()
+                .is_none()
+        );
     }
 }

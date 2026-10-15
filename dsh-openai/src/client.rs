@@ -23,6 +23,7 @@ const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(8);
 
 mod body;
+mod opencode;
 mod provider;
 mod streaming;
 
@@ -98,69 +99,8 @@ pub fn is_ctrl_c_cancelled(err: &Error) -> bool {
     err.downcast_ref::<RequestCancelled>().is_some()
 }
 
-/// Per-request knobs. Kept separate from the legacy positional helpers so that
-/// adding a field does not ripple through every call site.
-#[derive(Debug, Clone, Default)]
-pub struct ChatRequestOptions {
-    pub temperature: Option<f64>,
-    pub model: Option<String>,
-    pub tools: Option<Vec<Value>>,
-    /// Cap on generated tokens, sent as `max_completion_tokens`.
-    ///
-    /// Beware: on a reasoning model (the `gpt-5` family, o-series) this budget
-    /// also covers hidden reasoning tokens, so a tight cap comes back as
-    /// `finish_reason: "length"` with no content at all. Leave it unset unless
-    /// the endpoint is known not to reason.
-    pub max_tokens: Option<u64>,
-    /// Structured-output request, e.g. `{"type": "json_object"}`.
-    pub response_format: Option<Value>,
-    /// Cache-routing hint for providers that support it.
-    pub prompt_cache_key: Option<String>,
-    /// Ask the provider to deliver the reply as SSE chunks instead of one
-    /// JSON object. See [`ChatGptClient::send_chat_streaming`].
-    pub stream: bool,
-}
-
-impl ChatRequestOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_temperature(mut self, temperature: Option<f64>) -> Self {
-        self.temperature = temperature;
-        self
-    }
-
-    pub fn with_model(mut self, model: Option<String>) -> Self {
-        self.model = model;
-        self
-    }
-
-    pub fn with_tools(mut self, tools: Option<Vec<Value>>) -> Self {
-        self.tools = tools;
-        self
-    }
-
-    pub fn with_max_tokens(mut self, max_tokens: Option<u64>) -> Self {
-        self.max_tokens = max_tokens;
-        self
-    }
-
-    pub fn with_response_format(mut self, response_format: Option<Value>) -> Self {
-        self.response_format = response_format;
-        self
-    }
-
-    pub fn with_prompt_cache_key(mut self, key: Option<String>) -> Self {
-        self.prompt_cache_key = key;
-        self
-    }
-
-    pub fn with_stream(mut self, stream: bool) -> Self {
-        self.stream = stream;
-        self
-    }
-}
+mod options;
+pub use options::ChatRequestOptions;
 
 /// One runtime for every blocking OpenAI call.
 ///
@@ -183,6 +123,8 @@ pub(crate) fn shared_runtime() -> Result<&'static tokio::runtime::Runtime> {
 #[derive(Clone)]
 pub struct ChatGptClient {
     subscription: Option<crate::responses::SubscriptionTransport>,
+    provider: crate::AiProvider,
+    opencode_session: Option<String>,
     api_key: String,
     default_model: String,
     chat_endpoint: String,
@@ -256,7 +198,10 @@ impl ChatGptClient {
         }
         Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
-        self.block_on(self.send_with_retry(body, cancel_check))?
+        let request = self.for_request(options)?;
+        request
+            .block_on(request.send_with_retry(body, cancel_check))?
+            .map_err(|e| request.provider_error(e))
     }
 
     /// Send a chat completion request with the reply delivered incrementally.
@@ -287,7 +232,10 @@ impl ChatGptClient {
         }
         Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
-        self.block_on(self.send_streaming_with_retry(body, cancel_check, on_delta))?
+        let request = self.for_request(options)?;
+        request
+            .block_on(request.send_streaming_with_retry(body, cancel_check, on_delta))?
+            .map_err(|e| request.provider_error(e))
     }
 
     pub(super) fn known_unsupported(&self) -> Vec<&'static str> {
@@ -412,11 +360,7 @@ impl ChatGptClient {
         body: &Value,
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
-        let builder = self
-            .client
-            .post(&self.chat_endpoint)
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(body);
+        let builder = self.request_builder(body);
 
         let response = Self::await_with_cancel(builder.send(), cancel_check).await?;
         let status = response.status();
@@ -427,7 +371,7 @@ impl ChatGptClient {
             return Err(ApiError {
                 status: Some(status.as_u16()),
                 retry_after,
-                message: error_message_from_body(&text, status),
+                message: self.server_error_body(&text, status),
             }
             .into());
         }
@@ -435,11 +379,11 @@ impl ChatGptClient {
         let data: Value = serde_json::from_str(&text)
             .map_err(|err| anyhow!("failed to parse the OpenAI response: {err}"))?;
 
-        if let Some(message) = error_message_from_value(&data) {
+        if let Some(message) = self.server_error_value(&data) {
             return Err(ApiError {
                 status: None,
                 retry_after,
-                message,
+                message: self.safe_server_message(message),
             }
             .into());
         }
@@ -787,3 +731,6 @@ fn truncate_for_display(text: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod opencode_tests;

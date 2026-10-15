@@ -97,3 +97,26 @@ API-key用の `AI_CHAT_MODEL` / `OPENAI_MODEL` はこのproviderの既定モデ�
 `AI_CHAT_PROVIDER` をunsetすると既定 `api_key` に戻る。runtimeの明示unsetをprocess environmentで補わない。
 認証記録はshellの `XDG_CONFIG_HOME` または `HOME/.config` 下の `dogesh/subscription-auth/`。
 このディレクトリはmodel-visible read/list/searchから除外する。
+
+### OpenCode Go / Zen
+
+| 変数 | 意味 |
+|---|---|
+| `AI_CHAT_PROVIDER=opencode_go` | Go/Go Plus契約枠。固定 `https://opencode.ai/inference/go/v1/chat/completions` |
+| `AI_CHAT_PROVIDER=opencode_zen` | Zen/Console残高・従量。固定 `https://opencode.ai/inference/v1/chat/completions` |
+| `OPENCODE_GO_API_KEY` | Go専用キー参照 |
+| `OPENCODE_ZEN_API_KEY` | Zen専用キー参照 |
+| `OPENCODE_API_KEY` | 選択providerの専用キーが未設定/空の場合のOpenCode共通参照 |
+| `AI_CHAT_OPENCODE_GO_MODEL` | Go用offline catalog内のモデルID。既定なし |
+| `AI_CHAT_OPENCODE_ZEN_MODEL` | Zen用offline catalog内のモデルID。既定なし |
+
+`chat_provider opencode_go glm-5.3` / `chat_provider opencode_zen glm-5.3` で選択する。
+`chat_model <id>` は現在providerの専用変数を更新する。不正モデルは変更前に拒否する。
+`chat_provider models opencode_go` / `chat_provider models opencode_zen` で対応一覧を通信なしで表示する。
+通常のAPIキー・custom base・汎用モデル設定は保持し、専用経路では使用しない。
+モデルの解除は専用変数のunsetで行う（次回送信は再設定が必要）。provider/model/key変更後は `chat_reset` を実行する。
+`chat_provider`、`chat_status`、`doctor ai` はroute・課金区分・キー参照名と設定有無を診断する。キー本体は表示しない。
+
+GoのConsole **Use balance** が有効なら利用枠超過後に残高を消費し得るため、Go endpointは絶対的な支出上限を意味しない。
+Zenへの自動fallback、credential保存/import、モデルの自動取得は行わない。
+公式APIの実利用資格、課金、live model availabilityはローカルスタブ検証の対象外。

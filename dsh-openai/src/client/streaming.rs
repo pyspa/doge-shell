@@ -57,14 +57,11 @@ impl ChatGptClient {
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Value, StreamError> {
         let builder = self
-            .client
-            .post(&self.chat_endpoint)
+            .request_builder(body)
             // The client's default timeout is a non-streaming turn's budget;
             // a stream can legitimately run longer. `consume_event_stream`
             // enforces its own no-data timeout instead.
-            .timeout(Duration::from_secs(config::MAX_TIMEOUT_SECS))
-            .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(body);
+            .timeout(Duration::from_secs(config::MAX_TIMEOUT_SECS));
 
         let response = Self::await_with_cancel(builder.send(), cancel_check)
             .await
@@ -86,7 +83,7 @@ impl ChatGptClient {
                 ApiError {
                     status: Some(status.as_u16()),
                     retry_after,
-                    message: error_message_from_body(&text, status),
+                    message: self.server_error_body(&text, status),
                 }
                 .into(),
             ));
@@ -115,7 +112,7 @@ impl ChatGptClient {
             let data: Value = serde_json::from_str(&text).map_err(|err| {
                 StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
             })?;
-            if let Some(message) = error_message_from_value(&data) {
+            if let Some(message) = self.server_error_value(&data) {
                 return Err(StreamError::BeforeFirstDelta(
                     ApiError {
                         status: None,
@@ -205,7 +202,7 @@ impl ChatGptClient {
                     // The connection closed without a trailing blank line
                     // after the last event - flush whatever is pending.
                     for payload in splitter.finish() {
-                        Self::apply_stream_payload(
+                        self.apply_stream_payload(
                             &payload,
                             &mut aggregator,
                             &mut delta_sent,
@@ -239,7 +236,7 @@ impl ChatGptClient {
                     usage::record_response(&value);
                     return Ok(value);
                 }
-                Self::apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
+                self.apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
             }
         }
     }
@@ -259,6 +256,7 @@ impl ChatGptClient {
     /// with a debug log, the way a client tolerates one corrupted keep-alive
     /// rather than losing an otherwise complete answer.
     pub(super) fn apply_stream_payload(
+        &self,
         payload: &str,
         aggregator: &mut DeltaAggregator,
         delta_sent: &mut bool,
@@ -283,11 +281,11 @@ impl ChatGptClient {
         // check `DeltaAggregator::apply`'s early return would treat it as
         // an empty heartbeat, and the caller would see a stall or a
         // truncated answer instead of the real failure.
-        if let Some(message) = error_message_from_value(&chunk) {
+        if let Some(message) = self.server_error_value(&chunk) {
             let err = ApiError {
                 status: None,
                 retry_after: None,
-                message,
+                message: self.safe_server_message(message),
             };
             return Err(Self::wrap_stream_error(err.into(), *delta_sent));
         }

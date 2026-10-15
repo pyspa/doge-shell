@@ -3,11 +3,35 @@ use super::{Context, ExitStatus, OpenAiConfig, ShellProxy, load_openai_config};
 use dsh_openai::{AiProvider, PROVIDER_ENV};
 
 pub fn chat_provider(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
+    if argv.get(1).is_some_and(|v| v == "models") {
+        let selected = argv
+            .get(2)
+            .map(|v| AiProvider::parse(v))
+            .unwrap_or_else(|| Ok(load_openai_config(proxy).provider()));
+        return match selected {
+            Ok(provider) if argv.len() <= 3 && provider.is_opencode() => {
+                ctx.write_stdout(&format!("{} verified Chat Completions catalog (2026-10-15; availability depends on Console):", provider.name())).ok();
+                for model in provider.opencode_models() {
+                    ctx.write_stdout(model).ok();
+                }
+                ExitStatus::ExitedWith(0)
+            }
+            _ => {
+                ctx.write_stderr("Usage: chat_provider models opencode_go|opencode_zen")
+                    .ok();
+                ExitStatus::ExitedWith(1)
+            }
+        };
+    }
     match select(&argv, proxy) {
         Ok(provider) => {
             ctx.write_stdout(&format!("AI provider: {}", provider.name()))
                 .ok();
-            if argv.len() == 2 {
+            if provider.is_opencode() {
+                ctx.write_stdout(&route_report(&load_openai_config(proxy)))
+                    .ok();
+            }
+            if argv.len() >= 2 {
                 ctx.write_stdout(
                     "Run chat_reset before continuing a conversation from another provider.",
                 )
@@ -32,23 +56,52 @@ fn select(argv: &[String], proxy: &mut dyn ShellProxy) -> anyhow::Result<AiProvi
             config.validate()?;
             Ok(config.provider())
         }
-        [_, name] if !name.trim().is_empty() => {
+        [_, name] | [_, name, _] if !name.trim().is_empty() => {
             let provider = AiProvider::parse(name)?;
-            // Validate before mutation; never silently remove a custom API URL.
+            let model = argv.get(2).map(|v| v.trim());
+            if model.is_some() && !provider.is_opencode() {
+                anyhow::bail!("An optional model is supported only for opencode_go/opencode_zen.");
+            }
+            let model_key = provider.opencode_model_env();
             let candidate = OpenAiConfig::from_getter(|key| {
                 if key == PROVIDER_ENV {
                     Some(provider.name().into())
+                } else if Some(key) == model_key && model.is_some() {
+                    model.map(str::to_owned)
                 } else {
                     proxy.get_var(key)
                 }
             });
             candidate.validate()?;
-            // set_var republishes provider/model to all shell AI consumers.
+            if let (Some(key), Some(model)) = (model_key, model) {
+                proxy.set_var(key.into(), model.into());
+            }
             proxy.set_var(PROVIDER_ENV.into(), provider.name().into());
             Ok(provider)
         }
-        _ => anyhow::bail!("Usage: chat_provider [api_key|chatgpt_subscription|chatgpt]"),
+        _ => anyhow::bail!(
+            "Usage: chat_provider [api_key|chatgpt_subscription|chatgpt|opencode_go [model]|opencode_zen [model]]"
+        ),
     }
+}
+
+/// Routing diagnostics contain key reference names and presence only.
+pub(super) fn route_report(config: &OpenAiConfig) -> String {
+    let provider = config.provider();
+    let key = provider.opencode_key_env().unwrap_or("AI_CHAT_API_KEY");
+    format!(
+        "{}: {} (chat/completions), model={}\nKey references: {} or OPENCODE_API_KEY ({})\n{}",
+        provider.name(),
+        config.base_url(),
+        config.default_model(),
+        key,
+        if config.api_key().is_some() {
+            "configured"
+        } else {
+            "missing"
+        },
+        provider.opencode_billing().unwrap_or("")
+    )
 }
 
 #[cfg(test)]
@@ -142,5 +195,75 @@ mod tests {
             proxy.vars[dsh_openai::SUBSCRIPTION_MODEL_ENV],
             "catalog-model"
         );
+    }
+    #[test]
+    fn opencode_selection_validates_before_mutation_and_remembers_each_model() {
+        let mut proxy = TestShellProxy::default();
+        proxy
+            .vars
+            .insert("AI_CHAT_API_KEY".into(), "generic-key".into());
+        proxy
+            .vars
+            .insert("AI_CHAT_BASE_URL".into(), "https://generic.example".into());
+        let before = proxy.vars.clone();
+        for model in ["", "qwen3.8-max", "unknown"] {
+            assert!(
+                select(
+                    &["chat_provider".into(), "opencode_go".into(), model.into()],
+                    &mut proxy
+                )
+                .is_err()
+            );
+            assert_eq!(proxy.vars, before);
+        }
+        select(
+            &[
+                "chat_provider".into(),
+                "opencode_go".into(),
+                "glm-5.3".into(),
+            ],
+            &mut proxy,
+        )
+        .unwrap();
+        select(
+            &[
+                "chat_provider".into(),
+                "opencode_zen".into(),
+                "qwen3.8-max".into(),
+            ],
+            &mut proxy,
+        )
+        .unwrap();
+        select(&["chat_provider".into(), "opencode_go".into()], &mut proxy).unwrap();
+        assert_eq!(load_openai_config(&mut proxy).default_model(), "glm-5.3");
+        let pid = nix::unistd::getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+        let before = proxy.vars.clone();
+        assert_eq!(
+            super::super::chat_model(
+                &ctx,
+                vec!["chat_model".into(), "qwen3.8-max".into()],
+                &mut proxy
+            ),
+            ExitStatus::ExitedWith(1)
+        );
+        assert_eq!(proxy.vars, before);
+        assert_eq!(
+            super::super::chat_model(
+                &ctx,
+                vec!["chat_model".into(), "glm-5.2".into()],
+                &mut proxy
+            ),
+            ExitStatus::ExitedWith(0)
+        );
+        assert_eq!(load_openai_config(&mut proxy).default_model(), "glm-5.2");
+        assert_eq!(proxy.vars["AI_CHAT_BASE_URL"], "https://generic.example");
+        assert_eq!(proxy.vars["AI_CHAT_API_KEY"], "generic-key");
+        proxy
+            .vars
+            .insert("OPENCODE_GO_API_KEY".into(), "full-secret-key".into());
+        let report = route_report(&load_openai_config(&mut proxy));
+        assert!(!report.contains("full-secret-key"));
+        assert!(report.contains("Go subscription quota"));
     }
 }

@@ -14,6 +14,8 @@ pub(super) struct ConversationManager {
     /// Persistent provider/model/account binding, including after summarization removes old output.
     #[serde(default)]
     pub(super) provider_scope: Option<String>,
+    #[serde(skip)]
+    pub(super) transport_session_id: Option<String>,
     pub(super) summary: Option<String>,
     pub(super) buffer: Vec<Value>,
     pub(super) buffer_chars: usize,
@@ -75,6 +77,7 @@ impl ConversationManager {
         Self {
             instructions: instructions::InstructionContext::default(),
             provider_scope: None,
+            transport_session_id: None,
             summary: None,
             buffer: Vec::new(),
             buffer_chars: 0,
@@ -300,6 +303,7 @@ impl ConversationManager {
         // covers hidden reasoning, so a tight cap returns finish_reason=length
         // with no summary at all.
         let options = ChatRequestOptions::new()
+            .with_session_id(self.transport_session_id.clone())
             .with_temperature(Some(0.3)) // Lower temperature for consistent summarization
             .with_model(summary_model);
         let response = client

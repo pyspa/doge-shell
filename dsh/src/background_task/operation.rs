@@ -195,18 +195,6 @@ mod tests {
         }
     }
     #[test]
-    fn approval_identity_detects_changed_preimage() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
-        std::fs::write(root.join("file"), "before").unwrap();
-        let scope = scope(&root);
-        let (operation, _) =
-            normalize_operation("edit", r#"{"path":"file","contents":"after"}"#, &scope).unwrap();
-        assert_eq!(operation.preimage_digest.as_deref(), Some("before"));
-        std::fs::write(root.join("file"), "changed").unwrap();
-        assert_ne!(operation, revalidate_operation(&operation, &scope).unwrap());
-    }
-    #[test]
     fn rejects_scope_escape_and_unknown_tool() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();

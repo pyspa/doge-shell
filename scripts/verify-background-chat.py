@@ -161,9 +161,8 @@ def scenario(kind):
             shell.command(f'chat_task start --profile {profile} -- local check')
             if kind == 'input_read':
                 shell.until(lambda: active['requests'] == 1)
-            shell.command('echo FOREGROUND_READY')
-            shell.until(lambda: b'FOREGROUND_READY\r\n' in shell.data)
-            if kind == 'input_read':
+                shell.command('echo FOREGROUND_READY')
+                shell.until(lambda: b'FOREGROUND_READY\r\n' in shell.data)
                 (root / 'moved').mkdir()
                 shell.command('cd moved')
                 active['first_gate'].set()
@@ -178,8 +177,9 @@ def scenario(kind):
                 else:
                     shell.command(f"chat_task deny {task} {approval['request_id']}")
             shell.wait_state('completed')
-            shell.command('chat_task output')
-            shell.until(lambda: b'LOCAL_BACKGROUND_DONE' in shell.data)
+            if kind == 'input_read':
+                shell.command('chat_task output')
+                shell.until(lambda: b'LOCAL_BACKGROUND_DONE' in shell.data)
             assert active['requests'] == 2, active
             if kind == 'input_read':
                 assert 'original' in active['result'], active

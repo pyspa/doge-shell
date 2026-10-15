@@ -34,15 +34,18 @@ fn admit(handle: &TaskHandle, tool: &str, path: &Path, preimage: Option<&str>) -
         preimage_digest: preimage.map(String::from),
         content_digest: Some("new".into()),
     };
+    admit_operation(handle, operation.clone());
+    operation
+}
+fn admit_operation(handle: &TaskHandle, operation: Operation) {
     let mut inner = handle.shared.inner.lock();
     inner.admitted = Some(Admitted {
-        name: tool.into(),
+        name: operation.tool.clone(),
         arguments: operation.args.to_string(),
         operation: operation.clone(),
         epoch: inner.task.generation(),
         approved: false,
     });
-    operation
 }
 
 #[test]
@@ -75,12 +78,25 @@ fn write_admission_rechecks_preimage_and_continued_absence() {
     let handle = handle(&root);
     let path = root.join("file");
     std::fs::write(&path, "before").unwrap();
-    admit(&handle, "edit", &path, Some("before"));
+    // Exercise real normalization as part of the admission boundary instead
+    // of maintaining a second preimage-only helper test.
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (operation, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":path,"contents":"new"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    admit_operation(&handle, operation.clone());
     let context = LocalContext {
         shared: handle.shared.clone(),
     };
     assert!(context.write_authorized(&path));
     std::fs::write(&path, "external edit").unwrap();
+    assert_ne!(
+        super::super::revalidate_operation(&operation, &scope).unwrap(),
+        operation
+    );
     assert!(!context.write_authorized(&path));
     std::fs::remove_file(&path).unwrap();
     admit(&handle, "edit", &path, None);

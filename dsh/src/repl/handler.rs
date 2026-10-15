@@ -423,6 +423,9 @@ pub(crate) async fn handle_key_event(
             return Ok(ReplControlFlow::ExecuteCurrentInput);
         }
         KeyAction::ExecuteBackground => {
+            if crate::ai_task_input::classify(repl.input.as_str()).is_some() {
+                return Ok(ReplControlFlow::ExecuteCurrentInput);
+            }
             execution::handle_execute_background(repl).await?;
             return Ok(ReplControlFlow::Continue);
         }

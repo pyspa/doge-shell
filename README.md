@@ -622,12 +622,11 @@ Configure an [AI provider](docs/ai-integration.md), then try `! explain this pro
 For an AI task that runs while you keep using the shell:
 
 ```sh
-chat_task start --profile read-only -- "Read README.md and summarize the project; do not run commands."
-chat_task status
-chat_task output
+!& Read README.md and summarize the project; do not run commands.
+!&
 ```
 
-Use the **same interactive shell** for all three commands. Review an approval
+Use the **same interactive shell**; bare `!&` opens its task menu. Review an approval
 request before replying; `read-only` does not automatically approve commands.
 See the [AI task walkthrough](docs/ai-tasks.md) for approval, denial,
 cancellation and session limits.

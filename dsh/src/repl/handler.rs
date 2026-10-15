@@ -326,7 +326,9 @@ pub(crate) async fn handle_key_event(
             return navigation::handle_cursor_word_right(repl, 0).await;
         }
         KeyAction::ExpandAbbreviationAndInsertSpace => {
-            if let Some(word) = repl.input.get_current_word_for_abbr() {
+            if crate::ai_task_input::classify(repl.input.as_str()).is_none()
+                && let Some(word) = repl.input.get_current_word_for_abbr()
+            {
                 let expansion = {
                     let environment = repl.shell.environment.read();
                     super::abbreviation::resolve(
@@ -423,6 +425,9 @@ pub(crate) async fn handle_key_event(
             return Ok(ReplControlFlow::ExecuteCurrentInput);
         }
         KeyAction::ExecuteBackground => {
+            if crate::ai_task_input::classify(repl.input.as_str()).is_some() {
+                return Ok(ReplControlFlow::ExecuteCurrentInput);
+            }
             execution::handle_execute_background(repl).await?;
             return Ok(ReplControlFlow::Continue);
         }

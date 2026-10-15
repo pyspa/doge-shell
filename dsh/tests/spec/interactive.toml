@@ -42,3 +42,13 @@ script = "FOO=interactive-bar\necho VAL:$FOO"
 [case.expect]
 status = 0
 stdout_contains = ["VAL:interactive-bar"]
+
+[[case]]
+id = "interactive.ai-task-shortcut-needs-tty"
+class = "dogesh"
+mode = "command"
+script = "!& literal 'broken $(echo unexpected) |! text &"
+
+[case.expect]
+status = 1
+stderr_contains = ["!& requires an interactive input/output TTY"]

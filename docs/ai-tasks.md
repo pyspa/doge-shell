@@ -6,6 +6,38 @@
 `dogesh` shell**. Start with a small read-only task. The model still uses your
 configured provider and may incur its usual inference charges.
 
+## Interactive shortcut
+
+In an interactive terminal, use `!&` to start a read-only task and keep typing:
+
+```text
+!& Read README.md and summarize the project. Do not run commands.
+!& --edit Fix the typo in docs/example.md.
+!&
+```
+
+Bare `!&` opens the current task menu: `o` shows retained output, `a` shows a
+pending approval, `s` asks before stopping, and `q` closes the menu. Enter,
+Escape and Ctrl-C also close it. **Closing keeps the task running.** Stop needs
+an explicit `y`; its default is No. Alt+Enter on `!&` opens the same menu.
+
+The approval screen shows the operation, targets and available before/after or
+command preview. Press `y` to approve once, `n` to deny, or `q` to leave it
+pending; no IDs need to be typed. A changed request, permission scope or target
+invalidates the displayed approval. A clipped preview cannot be approved from
+the menu; deny or close it and request a smaller operation. Credentials remain
+masked. Ordinary command execution still has the isolation limits described below.
+
+A space must follow `!&` before task text. Only a leading `--edit` selects
+workspace editing; `--` ends option parsing (`!& -- --some literal text`).
+Quotes, `$variables`, `$(commands)`, pipes and trailing `&` in task text are
+literal text sent to the model; they do not run as shell syntax. Unknown leading
+options or options without task text fail locally. `!&` requires terminal input
+and output and cannot be used in `dogesh -c`, scripts or captured output.
+Use the explicit `chat_task` commands below for those command interfaces.
+The existing `!`, normal shell `&` and Alt+Enter on ordinary commands keep their
+current behavior. Task profiles, budgets and lifetime are shared with `chat_task`.
+
 ## First task: read a project summary
 
 First [configure an AI provider](ai-integration.md), start `dogesh`, and `cd` to

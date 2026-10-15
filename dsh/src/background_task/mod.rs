@@ -2,6 +2,7 @@
 //! No daemon, persistent queue, extra model loop or implicit permission grant.
 mod operation;
 pub(crate) mod protocol;
+pub(crate) mod shortcut;
 pub(crate) mod supervisor;
 mod worker;
 use crate::{environment::child_snapshot::ChildShellSnapshot, shell::Shell};

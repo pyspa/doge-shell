@@ -345,3 +345,132 @@ fn owned_job_wait_is_interrupted_by_cancellation_and_task_deadline() {
         }
     }
 }
+
+// Publish real pending state, without mocking the task permission engine.
+fn pending_preview(handle: &TaskHandle, operation: Operation, guidance: bool) {
+    let mut inner = handle.shared.inner.lock();
+    inner.task.deny_approval();
+    inner.pending = None;
+    let request = inner.task.request_manual_approval(operation, 0).unwrap();
+    inner.pending = Some(Pending {
+        request,
+        guidance,
+        decision: None,
+    });
+}
+
+#[test]
+fn preview_response_is_one_shot_and_stale_ui_does_not_change_new_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (op, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":"file", "contents":"new"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    pending_preview(&handle, op.clone(), false);
+    let old = handle.approval_preview().unwrap();
+    pending_preview(&handle, op.clone(), false);
+    assert!(handle.respond_preview(&old, true).is_err());
+    assert!(
+        handle
+            .shared
+            .inner
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .decision
+            .is_none()
+    );
+    let current = handle.approval_preview().unwrap();
+    handle.respond_preview(&current, true).unwrap();
+    assert_eq!(
+        handle
+            .shared
+            .inner
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .decision,
+        Some(true)
+    );
+    assert!(handle.respond_preview(&current, true).is_err());
+    pending_preview(&handle, op, false);
+    let changed = handle.approval_preview().unwrap();
+    std::fs::write(root.join("file"), "created externally").unwrap();
+    assert!(handle.respond_preview(&changed, true).is_err());
+    assert!(handle.shared.inner.lock().pending.is_none());
+    assert_eq!(
+        std::fs::read_to_string(root.join("file")).unwrap(),
+        "created externally"
+    );
+}
+
+#[test]
+fn incomplete_preview_cannot_approve_but_can_deny() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut handle = handle(&root);
+    Arc::get_mut(&mut handle.shared)
+        .unwrap()
+        .secrets
+        .push("xy".into());
+    for (guidance, path, content) in [
+        (true, root.clone(), "g".repeat(2049)),
+        (true, root.join("p".repeat(513)), "short".into()),
+        (false, root.join("file"), "xy".repeat(300)),
+    ] {
+        let operation = Operation {
+            tool: if guidance { "read_file" } else { "edit" }.into(),
+            args: if guidance {
+                json!({"guidance_trust":content})
+            } else {
+                json!({"path":path,"contents":content})
+            },
+            canonical_targets: vec![path],
+            preimage_digest: None,
+            content_digest: if guidance { None } else { Some(content) },
+        };
+        pending_preview(&handle, operation, guidance);
+        let preview = handle.approval_preview().unwrap();
+        assert!(!preview.complete);
+        assert!(!preview.display.to_string().contains("credential-value"));
+        assert!(handle.respond_preview(&preview, true).is_err());
+        handle.respond_preview(&preview, false).unwrap();
+        assert_eq!(
+            handle
+                .shared
+                .inner
+                .lock()
+                .pending
+                .as_ref()
+                .unwrap()
+                .decision,
+            Some(false)
+        );
+    }
+}
+
+#[test]
+fn preview_expires_when_scope_changes_without_recording_an_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (op, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":"file", "contents":"new"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    pending_preview(&handle, op, false);
+    let preview = handle.approval_preview().unwrap();
+    handle.restrict_read_only().unwrap();
+    assert!(handle.respond_preview(&preview, true).is_err());
+    assert!(handle.shared.inner.lock().pending.is_none());
+}

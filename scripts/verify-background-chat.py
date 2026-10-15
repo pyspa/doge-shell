@@ -41,6 +41,10 @@ class Stub(http.server.BaseHTTPRequestHandler):
                 active['gate'].wait(10)
             msg = {'role': 'assistant', 'content': 'LOCAL_BACKGROUND_DONE'}
             finish = 'stop'
+            if active.get('next_tool'):
+                tool, args = active['next_tool']
+                msg = {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'next_call', 'type': 'function', 'function': {'name': tool, 'arguments': json.dumps(args)}}]}
+                finish = 'tool_calls'
             if active.get('poll'):
                 result = json.loads(active['result'])
                 if result['status'] == 'running' or not result['stdout_complete']:
@@ -62,7 +66,7 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 
 class Shell:
 
-    def __init__(self, root):
+    def __init__(self, root, env_overrides=None):
         self.root = root
         self.data = bytearray()
         for d in ['config/dogesh', 'state', 'cache', 'data', 'bin']:
@@ -71,6 +75,7 @@ class Shell:
         (root / 'file').write_text('original')
         env = {'PATH': str(root / 'bin') + ':/usr/bin:/bin', 'TERM': 'xterm-256color', 'HOME': str(root), 'XDG_CONFIG_HOME': str(root / 'config'), 'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'), 'XDG_DATA_HOME': str(root / 'data'), 'AI_CHAT_API_KEY': 'local-stub-key', 'AI_CHAT_PROVIDER': 'api_key', 'AI_CHAT_MODEL': 'local-stub', 'AI_CHAT_BASE_URL': f'http://127.0.0.1:{server.server_port}/v1', 'AI_CHAT_ALLOW_INSECURE_HTTP': '1', 'AI_CHAT_STREAM': '0', 'AI_CHAT_PROJECT_INSTRUCTIONS': 'off', 'AI_CHAT_PROJECT_SKILLS': '0', 'AI_CHAT_SESSION_TTL_SECS': '0'}
         env.update(TASK_TEST_ENV='frozen', UNSELECTED_TEST_ENV='ambient-value')
+        env.update(env_overrides or {})
         self.env = env
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
@@ -123,6 +128,15 @@ class Shell:
             self.pump(0.05)
         raise AssertionError(bytes(self.data[-6000:]).decode(errors='replace'))
 
+    def wait_terminal(self, seconds=3):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            status = self.status()
+            if status and status['state'] not in ['running', 'input_required']:
+                assert status['approval'] is None, status
+                return status
+        raise AssertionError('worker loss did not promptly terminate task: ' + bytes(self.data[-6000:]).decode(errors='replace'))
+
     def close(self):
         self.command('exit')
         self.pump(0.3)
@@ -161,7 +175,7 @@ def scenario(kind):
             shell.command(f'chat_task start --profile {profile} -- local check')
             if kind == 'input_read':
                 shell.until(lambda: active['requests'] == 1)
-                shell.command('echo FOREGROUND_READY')
+                shell.command("echo FOREGROUND_'READY'")
                 shell.until(lambda: b'FOREGROUND_READY\r\n' in shell.data)
                 (root / 'moved').mkdir()
                 shell.command('cd moved')
@@ -205,6 +219,64 @@ def process_gone(pid):
         return False
     except ProcessLookupError:
         return True
+
+def background_worker_pid(shell):
+    workers = []
+    for line in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True).splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) == 3 and parts[1] == str(shell.pid) and '--__dsh-background-worker' in parts[2]:
+            workers.append(int(parts[0]))
+    assert len(workers) == 1, workers
+    return workers[0]
+
+for pending_kind in ['native_write', 'guidance', 'owned_job']:
+    active.clear()
+    active.update(requests=0, tool='edit', args={'path': 'file', 'contents': 'must not be written'})
+    if pending_kind == 'owned_job':
+        active.update(tool='execute', args={'command': 'sleep 30'}, next_tool=('edit', {'path': 'file', 'contents': 'must not be written'}))
+    with tempfile.TemporaryDirectory(prefix='background-pending-crash-', dir=os.environ.get('TMPDIR', '/var/tmp')) as tmp:
+        root = pathlib.Path(tmp)
+        if pending_kind == 'guidance':
+            (root / 'AGENTS.md').write_text('Use the fixture file for this local test.\n')
+        shell = Shell(root, {'AI_CHAT_PROJECT_INSTRUCTIONS': '1'} if pending_kind == 'guidance' else None)
+        job_pid = None
+        try:
+            shell.command('chat_task start --profile read-only -- pending worker loss check')
+            status = shell.wait_state('input_required')
+            if pending_kind == 'owned_job':
+                assert status['approval']['tool'] == 'execute', status
+                shell.command(f"chat_task approve {status['task_id']} {status['approval']['request_id']}")
+                shell.until(lambda: 'result' in active)
+                job_pid = json.loads(active['result'])['pid']
+                status = shell.wait_state('input_required')
+                assert status['approval']['tool'] == 'edit', status
+                assert not process_gone(job_pid), 'managed job should be live before worker loss'
+            elif pending_kind == 'guidance':
+                assert status['approval']['tool'] == 'project_guidance', status
+                assert active['requests'] == 0, 'guidance must be approved before contacting provider'
+            else:
+                assert status['approval']['tool'] == 'edit', status
+            old_task, old_request = status['task_id'], status['approval']['request_id']
+            worker_pid = background_worker_pid(shell)
+            os.kill(worker_pid, signal.SIGKILL)
+            shell.wait_terminal()
+            if job_pid is not None:
+                shell.until(lambda: process_gone(job_pid), seconds=3)
+            shell.until(lambda: process_gone(worker_pid), seconds=3)
+            before = len(shell.data)
+            shell.command(f'chat_task approve {old_task} {old_request}')
+            shell.until(lambda: b'background approval is stale or unknown' in shell.data[before:])
+            assert (root / 'file').read_text() == 'original'
+            if pending_kind == 'guidance':
+                assert active['requests'] == 0, 'dead worker must not resume after stale approval'
+            before = len(shell.data)
+            shell.command("echo FOREGROUND_'AFTER_WORKER_LOSS'")
+            shell.until(lambda: b'FOREGROUND_AFTER_WORKER_LOSS\r\n' in shell.data[before:])
+            print('worker_crash_pending_' + pending_kind, 'PASS', flush=True)
+        finally:
+            # Always exercise parent cleanup, including when an assertion fails.
+            shell.close()
+
 for action in ['cancel', 'worker_crash', 'parent_exit']:
     active.clear()
     active.update(requests=0, tool='execute', args={'command': 'sleep 30'}, hold=True, gate=threading.Event())
@@ -220,20 +292,15 @@ for action in ['cancel', 'worker_crash', 'parent_exit']:
             shell.until(lambda: 'result' in active)
             result = json.loads(active['result'])
             job_pid = result['pid']
-            worker_pids = []
-            for line in subprocess.check_output(['ps', '-axo', 'pid=,ppid=,command='], text=True).splitlines():
-                parts = line.strip().split(None, 2)
-                if len(parts) == 3 and parts[1] == str(shell.pid) and ('--__dsh-background-worker' in parts[2]):
-                    worker_pids.append(int(parts[0]))
-            assert len(worker_pids) == 1, worker_pids
+            worker_pid = background_worker_pid(shell)
             if action == 'cancel':
                 shell.command('chat_task cancel')
             elif action == 'worker_crash':
-                os.kill(worker_pids[0], signal.SIGKILL)
+                os.kill(worker_pid, signal.SIGKILL)
             else:
                 shell.command('exit')
             shell.until(lambda: process_gone(job_pid))
-            shell.until(lambda: process_gone(worker_pids[0]))
+            shell.until(lambda: process_gone(worker_pid))
             print(action, 'PASS', flush=True)
         finally:
             active['gate'].set()

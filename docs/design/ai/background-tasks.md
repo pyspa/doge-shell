@@ -1,8 +1,7 @@
 # Background chat tasks — implementation plan
 
-Status: implemented locally on `improve/background-chat-task`, based on develop
-7518986. Not published. PRs #47–#49 are separate fixes and are not duplicated
-here. The ordered plan below records the design and its acceptance gates.
+Status: initial implementation, based on develop 41d5ffc5 (including the
+merged fixes from PRs #47–#49). The ordered plan below records the design and its acceptance gates.
 
 ## User contract
 
@@ -133,4 +132,18 @@ including workspace Clippy with warnings denied and workspace tests (4500 passed
 including selected environment values remaining frozen after foreground export
 changes. Independent reviews covered lifecycle/protocol and admission/native I/O;
 reported issues were fixed before this verification. No real-model inference or
-macOS runner was used. No remote branch, PR or merge is part of this local step.
+macOS runner was used. This validation used local code before publication.
+
+## Regression test ownership
+
+The supervisor preimage test exercises real normalization/revalidation and actual
+file changes; the separate preimage-only helper test was removed. Session tests
+assert the public claim and unchanged foreground file rather than repeating
+private-helper/description checks. Exact stream-mask bytes already establish
+that no secret suffix survives, so a second assertion on a manually sliced tail
+was removed. Budget tests keep every real limit and approval expiry, omitting an
+unreachable u64-overflow arithmetic check. The framing test uses independent raw
+wire data to avoid a matching encoder/decoder bug passing a round-trip test.
+PTY cases retain all nine distinct behaviors; repeated foreground echo/output
+checks run only in the provider-wait case. Existing regression cases for command
+boundaries, FIFO reads and long first lines come from develop unchanged.

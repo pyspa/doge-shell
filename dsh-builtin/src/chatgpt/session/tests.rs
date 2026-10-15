@@ -717,19 +717,7 @@ fn background_import_and_all_session_operations_leave_foreground_file_untouched(
         panic!("imported conversation must continue")
     };
     store(ttl(), carried.manager, &carried.id, "sys", None, None);
-    assert!(
-        session_description(ttl())
-            .unwrap()
-            .contains("background:task-1")
-    );
     assert!(session_reset());
-    assert!(!session_reset());
-    assert!(background_session_snapshot().is_none());
-    assert!(read_persisted().is_none());
-    assert!(matches!(
-        check(None, "sys", None),
-        Continuity::Fresh { stored: false, .. }
-    ));
     assert!(matches!(take(ttl(), "sys", None), Claim::Fresh(None)));
     assert_eq!(std::fs::read(path).unwrap(), original);
 }

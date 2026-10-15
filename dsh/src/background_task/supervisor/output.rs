@@ -146,8 +146,6 @@ mod tests {
             bytes.extend(mask.push(b" after"));
             bytes.extend(mask.finish());
             assert_eq!(bytes, b"before [REDACTED] after", "split {split}");
-            let tail = &bytes[bytes.len() - 10..];
-            assert!(!String::from_utf8_lossy(tail).contains("value"));
         }
         let mut mask = StreamMask::new(&secrets);
         assert!(mask.push(b"cred").is_empty());

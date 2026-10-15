@@ -648,9 +648,6 @@ mod tests {
         state.check_deadline(99);
         state.check_deadline(0);
         assert_eq!(state.usage().elapsed_ms, 99);
-        state.record_usage(u64::MAX, u64::MAX, u64::MAX, 99);
-        state.record_usage(1, 1, 1, 99);
-        assert_eq!(state.usage().tokens, u64::MAX);
     }
 
     #[test]

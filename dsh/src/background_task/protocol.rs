@@ -253,25 +253,11 @@ mod tests {
         let (left, right) = UnixStream::pair().unwrap();
         let mut worker = Channel::new(left).unwrap();
         let mut parent = Channel::new(right).unwrap();
-        worker
-            .send(
-                &WorkerMessage::Tool {
-                    serial: 7,
-                    name: "read_file".into(),
-                    arguments: "line1\nline2".into(),
-                },
-                TIMEOUT,
-            )
-            .unwrap();
-        worker
-            .send(
-                &WorkerMessage::Complete {
-                    ok: true,
-                    tokens_used: 12,
-                },
-                TIMEOUT,
-            )
-            .unwrap();
+        // A wire fixture independent of send() catches symmetric encoder /
+        // decoder framing mistakes as well as escaped and adjacent frames.
+        worker.stream.write_all(
+            b"{\"type\":\"tool\",\"serial\":7,\"name\":\"read_file\",\"arguments\":\"line1\\nline2\"}\n{\"type\":\"complete\",\"ok\":true,\"tokens_used\":12}\n"
+        ).unwrap();
         assert!(
             matches!(parent.receive::<WorkerMessage>(TIMEOUT).unwrap(), WorkerMessage::Tool { serial: 7, arguments, .. } if arguments == "line1\nline2")
         );

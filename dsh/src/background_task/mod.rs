@@ -264,7 +264,9 @@ pub(crate) fn command(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Re
             ctx.write_stdout("task restricted to read-only\n")?;
         }
         _ => {
-            bail!("chat_task: start/status/output/cancel/approve <id>/deny <id>/restrict read-only")
+            bail!(
+                "chat_task: start/status/output/cancel/approve <task-id> <request-id>/deny <task-id> <request-id>/restrict read-only"
+            )
         }
     }
     Ok(())

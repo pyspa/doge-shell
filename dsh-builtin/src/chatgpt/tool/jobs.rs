@@ -10,7 +10,7 @@ use serde_json::json;
 use std::time::{Duration, Instant};
 
 /// Ceiling on the server-side wait one poll may ask for.
-const MAX_WAIT_MS: u64 = 60_000;
+use crate::agent::jobs::MAX_JOB_WAIT_MS;
 /// How often a wait re-checks the job.
 const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -25,7 +25,7 @@ pub(crate) fn dispatch(
         .to_string();
     let offset = args["offset"].as_u64().unwrap_or(0) as usize;
     let limit = args["limit"].as_u64().unwrap_or(4096) as usize;
-    let wait = Duration::from_millis(args["wait_ms"].as_u64().unwrap_or(0).min(MAX_WAIT_MS));
+    let wait = Duration::from_millis(args["wait_ms"].as_u64().unwrap_or(0).min(MAX_JOB_WAIT_MS));
 
     if name == "job_cancel" {
         cancel(&id, proxy)?;

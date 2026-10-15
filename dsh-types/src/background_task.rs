@@ -293,11 +293,7 @@ impl TaskState {
         let auto = match operation.tool.as_str() {
             "read_file" | "ls" => readable,
             "edit" | "str_replace" => {
-                if operation
-                    .content_digest
-                    .as_ref()
-                    .is_none_or(|value| value.is_empty())
-                {
+                if operation.content_digest.is_none() {
                     return PermissionDecision::Denied(
                         "write operation requires a content identity",
                     );
@@ -572,6 +568,25 @@ mod tests {
                 PermissionDecision::Denied(_)
             ));
             assert!(state.request_approval(op, 0).is_err());
+        }
+    }
+
+    #[test]
+    fn empty_write_is_valid_content_but_missing_identity_is_denied() {
+        for tool in ["edit", "str_replace"] {
+            let mut op = operation(tool, "/workspace/file");
+            op.content_digest = Some(String::new());
+            let mut writable = task(Profile::WorkspaceEdit);
+            assert_eq!(writable.evaluate(&op, 0), PermissionDecision::AutoAllow);
+            let mut readonly = task(Profile::ReadOnly);
+            assert_eq!(readonly.evaluate(&op, 0), PermissionDecision::InputRequired);
+            let approval = readonly.request_approval(op.clone(), 0).unwrap();
+            readonly.consume_approval(&approval, &op, 1).unwrap();
+            op.content_digest = None;
+            assert!(matches!(
+                writable.evaluate(&op, 0),
+                PermissionDecision::Denied(_)
+            ));
         }
     }
 

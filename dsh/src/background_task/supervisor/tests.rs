@@ -254,3 +254,94 @@ fn disconnected_approval_revokes_authority_and_stops_only_owned_children() {
         handle.shared.reap();
     }
 }
+
+#[test]
+fn owned_job_wait_honors_exit_and_does_not_hold_the_jobs_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    let mut command = std::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("while [ ! -e release ]; do sleep 0.01; done")
+        .current_dir(&root)
+        .env("PATH", "/usr/bin:/bin");
+    let id = handle
+        .shared
+        .jobs
+        .lock()
+        .start(command, Duration::from_secs(5), None)
+        .unwrap();
+    let shared = handle.shared.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        tx.send(owned_job(
+            "job_status",
+            &json!({"job_id":id,"wait_ms":60000}).to_string(),
+            &shared,
+        ))
+        .unwrap()
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_millis(80)).is_err(),
+        "wait must not immediately return running"
+    );
+    assert!(handle.shared.jobs.lock().has_running());
+    std::fs::write(root.join("release"), "").unwrap();
+    let result: Value =
+        serde_json::from_str(&rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap()).unwrap();
+    assert_eq!(result["status"], "exited");
+    waiter.join().unwrap();
+}
+
+#[test]
+fn owned_job_wait_is_interrupted_by_cancellation_and_task_deadline() {
+    for timeout in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut handle = handle(&root);
+        if timeout {
+            let mut scope = handle.shared.inner.lock().task.scope().clone();
+            scope.budget.time_ms = 30;
+            handle
+                .shared
+                .inner
+                .lock()
+                .task
+                .restrict_scope(scope, 0)
+                .unwrap();
+        }
+        let mut command = std::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("exec sleep 30")
+            .env("PATH", "/usr/bin:/bin");
+        let id = handle
+            .shared
+            .jobs
+            .lock()
+            .start(command, Duration::from_secs(30), None)
+            .unwrap();
+        let shared = handle.shared.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            tx.send(owned_job(
+                "job_status",
+                &json!({"job_id":id,"wait_ms":60000}).to_string(),
+                &shared,
+            ))
+            .unwrap()
+        });
+        if !timeout {
+            handle.cancel();
+        }
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap().is_err());
+        waiter.join().unwrap();
+        if timeout {
+            assert_eq!(
+                handle.shared.inner.lock().task.status(),
+                TaskStatus::TimedOut
+            );
+        }
+    }
+}

@@ -3481,3 +3481,39 @@ fn main_requests_keep_the_carried_session_until_reset() {
     assert_eq!(ids[0], ids[1]);
     assert_ne!(ids[1], ids[2]);
 }
+
+#[test]
+fn background_prompt_uses_available_tools_without_losing_conversation_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("skills");
+    std::fs::create_dir_all(root.join("demo")).unwrap();
+    std::fs::write(
+        root.join("demo/SKILL.md"),
+        "---\ndescription: a lesson\n---\n",
+    )
+    .unwrap();
+    let snapshot = SkillsSnapshot::capture(vec![skills::SkillRoot {
+        scope: skills::SkillScope::User,
+        origin: skills::SkillOrigin::Dsh,
+        path: root,
+    }]);
+    let mcp = McpManager::load_blocking(vec![]);
+    let foreground = build_system_prompt(None, None, &mcp, &snapshot, McpToolMode::Eager);
+    for skills in [&SkillsSnapshot::default(), &snapshot] {
+        let background =
+            build_system_prompt_for_mode(None, None, &mcp, skills, McpToolMode::Eager, true);
+        assert_eq!(
+            background.identity, foreground.identity,
+            "the foreground branch must remain claimable"
+        );
+        assert!(background.text.contains("`wait_ms`"));
+        for unavailable in [
+            "`search`",
+            "`shell_context`",
+            "`shell_history`",
+            "`skill_manage`",
+        ] {
+            assert!(!background.text.contains(unavailable), "{unavailable}");
+        }
+    }
+}

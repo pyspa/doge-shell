@@ -1,39 +1,5 @@
-//! Loading the skills under each root and rendering them into the system
-//! prompt fragment, plus the directory signature that decides when the cached
-//! fragment is still valid -- deliberately coarse everywhere except the usage
-//! lifecycle digest, which changes on nearly every turn.
+//! Loading root metadata for CLI diagnostics and rendering captured skill metadata.
 use super::*;
-
-static SKILLS_FRAGMENT_CACHE: LazyLock<Mutex<Option<CachedSkillsFragment>>> =
-    LazyLock::new(|| Mutex::new(None));
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SkillsDirSignature {
-    scope: SkillScope,
-    root: PathBuf,
-    exists: bool,
-    entries: usize,
-    readable: usize,
-    newest_modified_ms: u128,
-}
-
-/// `lifecycle` is `usage::lifecycle_digest()`, not a directory mtime: the
-/// rest of this signature is coarse on purpose (entries and modification
-/// times), but `usage::flush()` rewrites the state file on nearly every turn
-/// for its read/write counters, and keying archive/pin on that file's mtime
-/// would invalidate the fragment cache every turn regardless of whether
-/// anything archived actually changed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SkillsSignature {
-    dirs: Vec<SkillsDirSignature>,
-    lifecycle: String,
-}
-
-#[derive(Debug, Clone)]
-struct CachedSkillsFragment {
-    signature: SkillsSignature,
-    fragment: String,
-}
 
 pub(crate) struct SkillsManager {
     roots: Vec<SkillRoot>,
@@ -94,37 +60,7 @@ impl SkillsManager {
         (skills.into_values().collect(), problems)
     }
 
-    pub(crate) fn get_system_prompt_fragment(&self) -> String {
-        if self.roots.is_empty() {
-            return String::new();
-        }
-
-        let signature = self.signature();
-        if let Some(fragment) = SKILLS_FRAGMENT_CACHE
-            .lock()
-            .ok()
-            .and_then(|cache| cache.as_ref().cloned())
-            .filter(|cached| cached.signature == signature)
-            .map(|cached| cached.fragment)
-        {
-            debug!("Using cached runtime skills fragment");
-            return fragment;
-        }
-
-        let fragment = self.render_fragment();
-
-        if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
-            *cache = Some(CachedSkillsFragment {
-                signature,
-                fragment: fragment.clone(),
-            });
-        }
-
-        fragment
-    }
-
-    fn render_fragment(&self) -> String {
-        let all_skills = self.load_skills();
+    pub(super) fn render_snapshot_fragment(roots: &[SkillRoot], all_skills: Vec<Skill>) -> String {
         // Filtered here, and only here: `load_skills`/`load_reporting` must
         // keep returning every skill, because the trust digest, `doctor` and
         // `skill_manage`'s own `refresh_project_trust` all read through
@@ -147,8 +83,7 @@ impl SkillsManager {
             // Emitted even with nothing installed. A model that is never told
             // skills exist will never write the first one, and that first one is
             // the whole point of the feature.
-            let user_root = self
-                .roots
+            let user_root = roots
                 .iter()
                 .find(|root| root.scope == SkillScope::User)
                 .map(|root| crate::config_paths::display_path(&root.path));
@@ -173,7 +108,7 @@ impl SkillsManager {
             "A skill is a short, reusable instruction file. Read one when it is relevant, and write new ones.\n",
         );
 
-        for root in &self.roots {
+        for root in roots {
             // By root path, not by scope: two roots can share a scope, and a
             // scope-keyed filter renders each of their skills under both.
             let in_root: Vec<&Skill> = skills
@@ -225,13 +160,6 @@ impl SkillsManager {
             "Record a durable lesson with `skill_manage`; the user is asked before anything is written.\n",
         );
         fragment
-    }
-
-    fn signature(&self) -> SkillsSignature {
-        SkillsSignature {
-            dirs: self.roots.iter().map(dir_signature).collect(),
-            lifecycle: usage::lifecycle_digest(),
-        }
     }
 }
 
@@ -349,66 +277,4 @@ fn load_root_reporting(root: &SkillRoot) -> (Vec<Skill>, Vec<SkillDiagnostic>) {
     }
 
     (found.into_values().collect(), problems)
-}
-
-fn dir_signature(root: &SkillRoot) -> SkillsDirSignature {
-    if !root.path.exists() {
-        return SkillsDirSignature {
-            scope: root.scope,
-            root: root.path.clone(),
-            exists: false,
-            entries: 0,
-            readable: 0,
-            newest_modified_ms: 0,
-        };
-    }
-
-    let mut entries = 0usize;
-    let mut newest_modified_ms = 0u128;
-    // Counted separately from `entries`: deleting a `SKILL.md` and leaving the
-    // directory changes neither the entry count nor, usually, the newest mtime,
-    // so the stale fragment kept being served.
-    let mut readable = 0usize;
-
-    if let Ok(dir_entries) = std::fs::read_dir(&root.path) {
-        for entry in dir_entries.flatten() {
-            entries += 1;
-            let path = entry.path();
-            let metadata_paths = if path.is_dir() {
-                vec![path.join("SKILL.md")]
-            } else {
-                vec![path]
-            };
-
-            for metadata_path in metadata_paths {
-                if let Ok(metadata) = std::fs::metadata(&metadata_path) {
-                    readable += 1;
-                    if let Ok(modified) = metadata.modified()
-                        && let Ok(duration) = modified.duration_since(UNIX_EPOCH)
-                    {
-                        newest_modified_ms = newest_modified_ms.max(duration.as_millis());
-                    }
-                }
-            }
-        }
-    }
-
-    SkillsDirSignature {
-        scope: root.scope,
-        root: root.path.clone(),
-        exists: true,
-        entries,
-        readable,
-        newest_modified_ms,
-    }
-}
-
-/// Forget the rendered fragment.
-///
-/// Called after `skill_manage` writes, so the next turn sees the change even
-/// when the coarse directory signature would not have noticed it.
-pub(crate) fn clear_skills_fragment_cache() {
-    if let Ok(mut cache) = SKILLS_FRAGMENT_CACHE.lock() {
-        *cache = None;
-    }
 }

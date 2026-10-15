@@ -3,6 +3,7 @@ use super::*;
 use crate::chatgpt::{ChatClient, ChatRequestOptions, chat_with_tools};
 use crate::test_support::TestShellProxy;
 use serde_json::{Value, json};
+use std::sync::Mutex;
 
 #[test]
 fn model_discovers_then_reads_only_the_needed_skill_and_resource() {

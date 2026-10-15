@@ -163,13 +163,12 @@ fn frontmatter_ignores_a_nested_description_key() {
 
 #[test]
 fn system_prompt_fragment_uses_compact_summary() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let skills_dir = dir.path().join("skills");
     write_skill(&skills_dir, "demo-skill", "compact summary");
 
     let manager = SkillsManager::with_roots(vec![user_root(&skills_dir)]);
-    let fragment = manager.get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
 
     assert!(fragment.contains("- `demo-skill`"));
     assert!(fragment.contains("compact summary"));
@@ -183,7 +182,6 @@ fn system_prompt_fragment_uses_compact_summary() {
 /// `<name>/SKILL.md` sent it after a file that does not exist.
 #[test]
 fn system_prompt_fragment_points_a_file_skill_at_the_file() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let skills_dir = dir.path().join("skills");
     fs::create_dir_all(&skills_dir).unwrap();
@@ -194,35 +192,16 @@ fn system_prompt_fragment_points_a_file_skill_at_the_file() {
     .unwrap();
 
     let manager = SkillsManager::with_roots(vec![user_root(&skills_dir)]);
-    let fragment = manager.get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
 
     assert!(fragment.contains(&skills_dir.join("loose-note.md").display().to_string()));
     assert!(!fragment.contains("loose-note/SKILL.md"));
-}
-
-#[test]
-fn system_prompt_fragment_cache_invalidates_when_skills_change() {
-    clear_skills_fragment_cache();
-    let dir = tempdir().unwrap();
-    let skills_dir = dir.path().join("skills");
-    write_skill(&skills_dir, "demo-skill", "first summary");
-
-    let manager = SkillsManager::with_roots(vec![user_root(&skills_dir)]);
-    let first = manager.get_system_prompt_fragment();
-    assert!(first.contains("first summary"));
-
-    write_skill(&skills_dir, "second-skill", "second summary");
-
-    let second = manager.get_system_prompt_fragment();
-    assert!(second.contains("first summary"));
-    assert!(second.contains("second summary"));
 }
 
 /// The project block comes first because that is the order the roots are
 /// searched in, and the model reads the list top-down.
 #[test]
 fn project_skills_are_listed_before_user_skills() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
@@ -230,7 +209,7 @@ fn project_skills_are_listed_before_user_skills() {
     write_skill(&user, "bisect", "personal bisect notes");
 
     let manager = SkillsManager::with_roots(vec![project_root(&project), user_root(&user)]);
-    let fragment = manager.get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
 
     let project_at = fragment.find("Project skills").expect("project block");
     let user_at = fragment.find("Personal skills").expect("user block");
@@ -244,7 +223,6 @@ fn project_skills_are_listed_before_user_skills() {
 /// open. The more specific root wins.
 #[test]
 fn a_project_skill_shadows_a_user_skill_with_the_same_name() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
@@ -256,7 +234,7 @@ fn a_project_skill_shadows_a_user_skill_with_the_same_name() {
 
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].scope, SkillScope::Project);
-    let fragment = manager.get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
     assert!(fragment.contains("repo version"));
     assert!(!fragment.contains("personal version"));
 }
@@ -265,12 +243,11 @@ fn a_project_skill_shadows_a_user_skill_with_the_same_name() {
 /// never seen a skill was never told it could write one.
 #[test]
 fn the_fragment_is_emitted_with_no_skills_so_creating_one_is_discoverable() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let skills_dir = dir.path().join("skills");
 
     let manager = SkillsManager::with_roots(vec![user_root(&skills_dir)]);
-    let fragment = manager.get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
 
     assert!(fragment.contains("## Agent Skills"));
     assert!(fragment.contains("skill_manage"));
@@ -281,16 +258,17 @@ fn the_fragment_is_emitted_with_no_skills_so_creating_one_is_discoverable() {
 /// skills; that has to stay a no-op on the prompt.
 #[test]
 fn no_roots_renders_nothing() {
-    clear_skills_fragment_cache();
     let manager = SkillsManager::with_roots(Vec::new());
-    assert!(manager.get_system_prompt_fragment().is_empty());
+    assert!(
+        SkillsSnapshot::capture(manager.roots().to_vec())
+            .render_fragment()
+            .is_empty()
+    );
 }
 
-/// The cache key covers every root, so entering a project with its own
-/// skills does not keep serving the previous project's list.
+/// Separate turn snapshots retain their own project and personal roots.
 #[test]
-fn the_cache_invalidates_when_only_the_project_root_changes() {
-    clear_skills_fragment_cache();
+fn skill_snapshots_keep_project_roots_separate() {
     let dir = tempdir().unwrap();
     let user = dir.path().join("home/skills");
     write_skill(&user, "shared", "always here");
@@ -299,10 +277,10 @@ fn the_cache_invalidates_when_only_the_project_root_changes() {
     let second_project = dir.path().join("b/.dogesh/skills");
     write_skill(&second_project, "beta", "project b");
 
-    let first = SkillsManager::with_roots(vec![project_root(&first_project), user_root(&user)])
-        .get_system_prompt_fragment();
-    let second = SkillsManager::with_roots(vec![project_root(&second_project), user_root(&user)])
-        .get_system_prompt_fragment();
+    let first = SkillsSnapshot::capture(vec![project_root(&first_project), user_root(&user)])
+        .render_fragment();
+    let second = SkillsSnapshot::capture(vec![project_root(&second_project), user_root(&user)])
+        .render_fragment();
 
     assert!(first.contains("project a") && !first.contains("project b"));
     assert!(second.contains("project b") && !second.contains("project a"));
@@ -315,7 +293,6 @@ fn the_cache_invalidates_when_only_the_project_root_changes() {
 fn a_symlinked_skill_that_escapes_its_root_is_reported_not_listed() {
     use std::os::unix::fs::symlink;
 
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let outside = tempdir().unwrap();
     let root = dir.path().join("skills");
@@ -334,22 +311,24 @@ fn a_symlinked_skill_that_escapes_its_root_is_reported_not_listed() {
     );
 }
 
-/// Deleting a `SKILL.md` and leaving the directory changed neither the
-/// entry count nor the newest mtime, so the old fragment kept being served.
+/// A new turn omits deleted instructions even when their directory survives.
 #[test]
-fn the_cache_notices_a_deleted_skill_md() {
-    clear_skills_fragment_cache();
+fn a_new_skill_snapshot_omits_a_deleted_instruction() {
     let dir = tempdir().unwrap();
     let root = dir.path().join("skills");
     let doomed = write_skill(&root, "doomed", "about to go");
     write_skill(&root, "keeper", "stays put");
 
     let manager = SkillsManager::with_roots(vec![user_root(&root)]);
-    assert!(manager.get_system_prompt_fragment().contains("about to go"));
+    assert!(
+        SkillsSnapshot::capture(manager.roots().to_vec())
+            .render_fragment()
+            .contains("about to go")
+    );
 
     fs::remove_file(doomed.join("SKILL.md")).unwrap();
 
-    let after = manager.get_system_prompt_fragment();
+    let after = SkillsSnapshot::capture(manager.roots().to_vec()).render_fragment();
     assert!(!after.contains("about to go"), "{after}");
     assert!(after.contains("stays put"));
 }
@@ -358,7 +337,6 @@ fn the_cache_notices_a_deleted_skill_md() {
 /// won used to be `read_dir` order.
 #[test]
 fn a_directory_skill_beats_a_file_skill_of_the_same_name() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let root = dir.path().join("skills");
     write_skill(&root, "deploy", "the directory one");
@@ -382,7 +360,6 @@ fn a_directory_skill_beats_a_file_skill_of_the_same_name() {
 /// every one of these went to `debug!`.
 #[test]
 fn load_problems_are_reported_rather_than_swallowed() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let root = dir.path().join("skills");
     fs::create_dir_all(root.join("no-skill-md")).unwrap();
@@ -413,7 +390,6 @@ fn load_problems_are_reported_rather_than_swallowed() {
 /// wrong place.
 #[test]
 fn a_skills_path_that_is_a_file_is_reported_as_such() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let root = dir.path().join("skills");
     fs::write(&root, "not a directory\n").unwrap();
@@ -432,7 +408,6 @@ fn a_skills_path_that_is_a_file_is_reported_as_such() {
 /// The precedence is intended; going quiet about it is not.
 #[test]
 fn a_shadowed_personal_skill_is_reported() {
-    clear_skills_fragment_cache();
     let dir = tempdir().unwrap();
     let project = dir.path().join("proj/.dogesh/skills");
     let user = dir.path().join("home/skills");
@@ -653,10 +628,8 @@ fn an_agents_skill_is_listed_in_its_own_block() {
     write_skill(&dsh, "deploy", "the dsh one");
     write_skill(&agents, "review", "the shared one");
 
-    clear_skills_fragment_cache();
-    let fragment =
-        SkillsManager::with_roots(vec![project_root(&dsh), project_agents_root(&agents)])
-            .get_system_prompt_fragment();
+    let fragment = SkillsSnapshot::capture(vec![project_root(&dsh), project_agents_root(&agents)])
+        .render_fragment();
 
     assert_eq!(fragment.matches("the dsh one").count(), 1, "{fragment}");
     assert_eq!(fragment.matches("the shared one").count(), 1, "{fragment}");
@@ -751,8 +724,8 @@ fn an_escaping_instruction_file_is_diagnosed_before_its_description_is_read() {
     assert_eq!(errors.len(), 1);
     assert!(format!("{errors:?}").contains("Failed to read"));
     assert!(
-        !manager
-            .get_system_prompt_fragment()
+        !SkillsSnapshot::capture(manager.roots().to_vec())
+            .render_fragment()
             .contains("MUST NOT REACH PROMPT")
     );
 }
@@ -794,7 +767,7 @@ fn oversized_explicit_mention_reports_failure_without_counting_a_read() {
 
     let (messages, rest) = crate::chatgpt::prompt::resolve_skill_mentions(
         "@large inspect target",
-        &[user_root(&root)],
+        &SkillsSnapshot::capture(vec![user_root(&root)]),
     );
     assert_eq!(rest, "inspect target");
     assert_eq!(messages.len(), 1);

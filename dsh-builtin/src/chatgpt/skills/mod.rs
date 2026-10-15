@@ -22,9 +22,6 @@
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::sync::Mutex;
-use std::time::UNIX_EPOCH;
 use tracing::{debug, warn};
 
 mod content;
@@ -33,22 +30,24 @@ pub(crate) mod lint;
 mod loader;
 mod mentions;
 pub(crate) mod pending;
+mod snapshot;
 pub(crate) mod trust;
 pub(crate) mod usage;
 
 pub(crate) use frontmatter::truncate_chars;
 use frontmatter::{extract_skill_summary, frontmatter_field, is_indented, split_frontmatter};
+pub(crate) use loader::SkillsManager;
 use loader::load_root;
-pub(crate) use loader::{SkillsManager, clear_skills_fragment_cache};
 pub(crate) use mentions::{note_skill_read, render_mention, split_leading_mentions};
+pub(crate) use snapshot::SkillsSnapshot;
 
 /// FNV-1a over raw bytes, formatted as lowercase hex.
 ///
 /// Deterministic across builds and processes, unlike `DefaultHasher`, whose
 /// output is explicitly not stable between Rust releases - a toolchain
 /// upgrade would otherwise re-ask about every trusted project. Shared by
-/// `trust::digest`, `pending::content_digest` and `usage::lifecycle_digest`
-/// so there is exactly one place that formula lives; none of the three may
+/// `trust::digest` and `pending::content_digest`, so there is exactly one
+/// place that formula lives; neither may
 /// change this output for one input without invalidating the others' stored
 /// records.
 pub(crate) fn fnv1a_hex(data: &[u8]) -> String {

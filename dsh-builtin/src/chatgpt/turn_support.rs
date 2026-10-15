@@ -19,7 +19,7 @@ pub(super) use super::tool::tool_search::ToolSearchExposure;
 /// reads as "resolve the turn, then run it" instead of nine separate locals
 /// threaded through a 600-line function.
 pub(super) struct TurnSetup {
-    pub(super) skill_roots: Vec<skills::SkillRoot>,
+    pub(super) skills: SkillsSnapshot,
     pub(super) prompt: SystemPrompt,
     /// The MCP model surface for this turn, resolved once here and immutable
     /// for the rest of the turn: recomputing it per request would let the
@@ -61,9 +61,11 @@ impl TurnSetup {
         clear_turn_cancelled();
 
         let cwd = proxy.get_current_dir().ok();
-        let mut skill_roots =
-            skills::skill_roots(cwd.as_deref(), resolve_project_skills_enabled(proxy));
-        gate_project_skills(&mut skill_roots, proxy);
+        let mut skills = SkillsSnapshot::capture(skills::skill_roots(
+            cwd.as_deref(),
+            resolve_project_skills_enabled(proxy),
+        ));
+        gate_project_skills(&mut skills, proxy);
 
         // Build System Prompt (fixed for the session)
         let mcp_tool_mode = resolve_mcp_mode(proxy, &mcp_manager.read());
@@ -89,7 +91,7 @@ impl TurnSetup {
             operator_prompt,
             language,
             &mcp_manager.read(),
-            &skill_roots,
+            &skills,
             mcp_tool_mode,
         );
 
@@ -124,7 +126,7 @@ impl TurnSetup {
         let staged_before_turn = skills::pending::staged_this_process();
 
         Ok(Self {
-            skill_roots,
+            skills,
             prompt,
             mcp_tool_mode,
             runtime,
@@ -629,10 +631,7 @@ pub(super) fn maybe_auto_archive_skills(proxy: &mut dyn ChatToolHost) {
     else {
         return;
     };
-    let archived = skills::usage::sweep(skills::usage::now_ms(), days);
-    if archived > 0 {
-        skills::clear_skills_fragment_cache();
-    }
+    skills::usage::sweep(skills::usage::now_ms(), days);
 }
 
 /// Set for the rest of a turn once anything observes a Ctrl-C.

@@ -215,7 +215,7 @@ fn prompt_footprint_rendering_matches_the_legacy_contract() {
         Some("Be polite.".to_string()),
         None,
         &mcp,
-        &[],
+        &SkillsSnapshot::default(),
         McpToolMode::Eager,
     );
     assert_eq!(prompt.footprint.total_text_bytes, prompt.text.len());
@@ -616,9 +616,15 @@ struct FootprintBudget {
 
 fn canonical_footprint() -> (usize, usize, usize, usize) {
     let mcp = McpManager::default();
-    let base = build_system_prompt(None, None, &mcp, &[], McpToolMode::Eager)
-        .text
-        .len();
+    let base = build_system_prompt(
+        None,
+        None,
+        &mcp,
+        &SkillsSnapshot::default(),
+        McpToolMode::Eager,
+    )
+    .text
+    .len();
     let handle = Arc::new(RwLock::new(mcp));
     let exposure = ToolSearchExposure::default();
     let (interactive_base, _) = split_turn_tool_bases(&handle, false, McpToolMode::Eager);

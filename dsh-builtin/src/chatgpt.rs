@@ -59,7 +59,7 @@ pub(crate) mod session;
 pub(crate) mod hooks;
 mod reflect;
 pub(crate) mod skills;
-use skills::{SkillRoot, SkillsManager};
+use skills::SkillsSnapshot;
 
 #[allow(clippy::too_many_arguments)]
 fn chat_with_tools(
@@ -118,7 +118,7 @@ fn chat_with_tools(
         // `@name` is the user naming a skill outright. Resolved against the
         // gated roots, so a repository whose skills were declined cannot be
         // reached this way either.
-        let (mentioned, user_input) = resolve_skill_mentions(user_input, &setup.skill_roots);
+        let (mentioned, user_input) = resolve_skill_mentions(user_input, &setup.skills);
 
         // Continue the previous conversation when it still applies, so a follow-up
         // question does not re-explore the repository from scratch.

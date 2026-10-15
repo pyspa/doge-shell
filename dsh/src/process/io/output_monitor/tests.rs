@@ -605,3 +605,19 @@ async fn interactive_monitor_uses_stdout_terminal_destination() {
     assert_eq!(displayed, expected);
     assert_eq!(monitor.captured_output, b"firstlast");
 }
+
+#[test]
+fn registration_failure_keeps_io_error_and_monitor_context() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_io()
+        .build()
+        .expect("create reactor");
+    let handle = runtime.handle().clone();
+    drop(runtime);
+    let _entered = handle.enter();
+    let (read, _writer) = unnamed_pipe();
+    let error = OutputMonitor::new(read, None, ObservedStream::Stdout)
+        .expect_err("closed reactor must reject registration");
+    assert_eq!(error.to_string(), "OutputMonitor AsyncFd failed");
+    assert!(error.downcast_ref::<std::io::Error>().is_some());
+}

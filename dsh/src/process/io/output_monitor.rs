@@ -108,7 +108,11 @@ impl OutputMonitor {
         let current = fcntl(&file, FcntlArg::F_GETFL).context("fcntl F_GETFL failed")?;
         let flags = OFlag::from_bits_truncate(current) | OFlag::O_NONBLOCK;
         fcntl(&file, FcntlArg::F_SETFL(flags)).context("fcntl F_SETFL failed")?;
-        let inner = tokio::io::unix::AsyncFd::new(file).context("OutputMonitor AsyncFd failed")?;
+        // SAFETY: AsyncFd owns the File, keeping its descriptor open and
+        // unchanged until deregistration; no code replaces the inner File.
+        let inner = unsafe { tokio::io::unix::AsyncFd::register(file) }
+            .map_err(std::io::Error::from)
+            .context("OutputMonitor AsyncFd failed")?;
         Ok(OutputMonitor {
             inner,
             pending_line: Vec::new(),

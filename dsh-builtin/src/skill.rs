@@ -288,7 +288,6 @@ fn remove(ctx: &Context, proxy: &mut dyn ShellProxy, name: &str) -> ExitStatus {
     match removed {
         Ok(()) => {
             usage::forget(&target);
-            skills::clear_skills_fragment_cache();
             let _ = ctx.write_stdout(&format!("Removed {}", display_path(&target)));
             ExitStatus::ExitedWith(0)
         }
@@ -524,7 +523,6 @@ fn archive(ctx: &Context, proxy: &mut dyn ShellProxy, name: &str) -> ExitStatus 
     }
     match usage::set_archived(skill.dir(), true) {
         Ok(true) => {
-            skills::clear_skills_fragment_cache();
             let _ = ctx.write_stdout(&format!(
                 "Archived `{name}`; it stays out of the prompt until `skill unarchive {name}`."
             ));
@@ -541,7 +539,6 @@ fn unarchive(ctx: &Context, proxy: &mut dyn ShellProxy, name: &str) -> ExitStatu
     };
     match usage::set_archived(skill.dir(), false) {
         Ok(true) => {
-            skills::clear_skills_fragment_cache();
             let _ = ctx.write_stdout(&format!("Unarchived `{name}`."));
             ExitStatus::ExitedWith(0)
         }

@@ -72,10 +72,13 @@ The Safety Guard protects against unintended execution of potentially destructiv
     sensitive files. `mv` and package-manager installs are not questioned;
     use `Strict` if you want to be asked about everything.
   - `Strict`: Requires confirmation for **all** commands.
-- **File writes always confirm**: the chat agent's `edit` and `str_replace`, and
+- **Foreground `!` file writes always confirm**: the chat agent's `edit` and `str_replace`, and
   running a skill script, ask at every safety level, `loose` included. Answering
   "always" remembers that file for the session.
-- **AI Tool Integration**: Automatically intercepts AI-generated commands and file modifications, requiring explicit user approval. Commands the chat agent wants to run go through the same `SafetyGuard` as commands you type, including pipeline checks such as `curl | sh`, with wrappers like `sudo` looked through so the real command is the one judged. Chat tools keep workspace-root and path-traversal protections even in loose mode: `read_file`, `ls`, `search`, `edit` and `str_replace` reach the project root and the runtime skills directory, and nowhere else. `execute` runs a real shell command, so it is bounded by the safety guard and your confirmation rather than by that path sandbox.
+- **Foreground AI Tool Integration**: Intercepts the `!` chat agent's commands and file modifications through its safety policy. Commands the chat agent wants to run go through the same `SafetyGuard` as commands you type, including pipeline checks such as `curl | sh`, with wrappers like `sudo` looked through so the real command is the one judged. Chat tools keep workspace-root and path-traversal protections even in loose mode: `read_file`, `ls`, `search`, `edit` and `str_replace` reach the project root and the runtime skills directory, and nowhere else. `execute` runs a real shell command, so it is bounded by the safety guard and your confirmation rather than by that path sandbox.
+- **Background AI tasks**: `chat_task` uses a separate explicit profile. Native
+  writes within a `workspace-edit` task can run automatically; `read-only`
+  cannot write automatically. See [task profiles and approvals](docs/ai-tasks.md#profiles-and-command-execution).
 - **Sensitive File Policy**: Chat `read_file`, `search`, `ls`, and `edit` respect `.gitignore` (nested files, `.git/info/exclude` and global excludes included), fail closed when ignore policy cannot be evaluated, hide common secret paths, and redact secret-like content in search results.
 - **Lisp Configuration**: Dynamically change the safety level at any time.
   ```lisp
@@ -313,12 +316,13 @@ The shell includes many built-in commands:
 | `project`           | Project management (see also `pm`, `pj`)                                                                                   |
 | `snippet`           | Snippet management command                                                                                                 |
 | `bookmark`          | Bookmark management command                                                                                                |
-| `chat_provider`     | Show or select the AI provider (`api_key`, `chatgpt_subscription`, alias `chatgpt`); effective immediately                    |
+| `chat_provider`     | Show or select the AI provider (`api_key`, `chatgpt_subscription`, `opencode_go`, `opencode_zen`); effective immediately                    |
 | `chat_auth`         | Manage ChatGPT subscription sign-in, accounts, model catalog and logout                                                     |
 | `chat_prompt`       | Set AI assistant system prompt                                                                                             |
 | `chat_model`        | Show or set the AI model (`chat_model ""` clears the override); takes effect immediately, everywhere                      |
 | `chat_reset`        | Forget the carried AI chat conversation                                                                                    |
 | `chat_status`       | Show the carried AI chat conversation                                                                                      |
+| `chat_task`         | Start, inspect, approve, deny or cancel one background AI task; see [the walkthrough](docs/ai-tasks.md)                       |
 | `skill`             | List, review and manage the skills the AI chat runtime reads (see "Skills" above)                                          |
 | `gh-notify`         | View GitHub notifications interactively                                                                                    |
 | `glog`              | Git log with interactive selection                                                                                         |
@@ -356,985 +360,208 @@ The shell includes many built-in commands:
 
 ## 🧠 Lisp Functions
 
-The embedded Lisp interpreter includes many built-in functions:
+See [🧠 Lisp Functions](docs/lisp-functions.md#-lisp-functions).
 
 ### Core Functions
 
-- `print` - Print a value
-- `is_null`, `is_number`, `is_symbol`, `is_boolean`, `is_procedure`, `is_pair`, `is_table` - Type checking
-- `car`, `cdr`, `cons`, `list`, `nth`, `sort`, `reverse` - List operations
-- `map`, `filter` - Higher-order functions
-- `length`, `range` - List utilities
-- `hash`, `hash_get`, `hash_set` - Hash map functions
-- `+`, `-`, `*`, `/`, `truncate` - Arithmetic operations
-- `not`, `==`, `!=`, `<`, `<=`, `>`, `>=` - Comparison operations
-- `eval`, `apply` - Meta functions
+See [Core Functions](docs/lisp-functions.md#core-functions).
 
 ### Shell Integration Functions
 
-- `alias` - Set command aliases from Lisp
-- `abbr` - Set abbreviations from Lisp
-- `command` - Execute external commands and capture output
-- `command-result` - Execute literal argv and return separate status/stdout/stderr data
-- `sh` - Execute shell commands in the current shell context
-- `sh!` - Execute shell commands with output capture
-- `setenv` - Set environment variables
-- `vset` - Set shell variables
-- `add_path` - Add paths to PATH
-- `pref-auto-pair` - Configure automatic pairing of quotes/brackets
-- `pref-auto-notify` - Configure automatic notification
-- `pref-ai-explanation` - Configure AI-powered command explanations
-- `pref-status-line` - Enable the bottom-row [status line](#status-line) (off by default)
-- `pref-failure-hint` - Show a one-line proactive hint after a failed command (on by default; off also disables automatic AI fixes)
-- `pref-diagnose-hint` - When a failed command has no deterministic quick fix, point at `Alt-f`/`Alt-d` (off by default; costs no AI request, and only shown when AI is configured)
-- `set-auto-fix-enabled` - Enable or disable AI auto-fix
-- `safety-level` - Configure safety level (`loose`, `normal`, `strict`)
-- `set-notify-config` - Configure notification behavior
-- `allow-direnv` - Configure direnv roots
-- `edit` - Open a file in the external editor
+See [Shell Integration Functions](docs/lisp-functions.md#shell-integration-functions).
 
 ### Structured Command Results
 
-`command-result` takes an executable string followed by literal argument strings;
-it does not parse shell source, expand globs, or apply aliases. It returns a hash
-with string keys: `exit-code` (integer, or `nil` on signal termination), `signal`
-(integer signal number, or `nil` on normal exit), `stdout`, and `stderr`.
-Both output strings retain trailing whitespace; invalid UTF-8 bytes become the
-replacement character. Child stdin is closed, just as with `command`.
-
-```lisp
-(let ((result (command-result "grep" "needle" "input.txt")))
-  (print (hash_get result "exit-code"))
-  (print (hash_get result "stdout"))
-  (print (hash_get result "stderr")))
-```
-
-Nonzero child exits and signal termination are result data. Invalid arguments,
-SafetyGuard confirmation requirements, executable lookup failures, and spawn
-errors remain Lisp errors. Execution uses the logical PATH, exported child
-environment and current working directory through the same runtime snapshot as
-`command`, and shares its synchronous capture/wait owner. This adds no timeout,
-background-job API or separate cancellation controller. `command` still returns
-trimmed stdout (or stderr when stdout is empty); `sh` and `sh!` retain their
-existing shell-source contracts.
+See [Structured Command Results](docs/lisp-functions.md#structured-command-results).
 
 ### Table / Structured Data Functions
 
-`json-parse`, `json-stringify`, `csv-parse`, `csv-stringify`, `output-parse`, and the full `table-*` family (`table-select`, `table-head`, `table-tail`, `table-count`, `table-distinct`, `table-rename`, `table-where-eq`, `table-where-ne`, `table-where-contains`, `table-where-cmp`, `table-order-by`, `table-group-by`, `table-count-by`, `table-sum`, `table-avg`, `table-min`, `table-max`, `table-display`, `table-to-ai-context`) are the Lisp side of the `|:` structured pipe — see [Structured Data Pipeline](#-structured-data-pipeline) for usage, the DSL shorthand, and `output-gen`.
+See [Table / Structured Data Functions](docs/lisp-functions.md#table--structured-data-functions).
 
 ### Interactive UI Functions
 
-- `selector` - Open an interactive fuzzy selection menu with custom prompt and items.
-  - Usage: `(selector "Prompt" '("Item1" "Item2") [multi])`
-  - If `multi` is true, returns a list of selected items. Default is false (single selection).
+See [Interactive UI Functions](docs/lisp-functions.md#interactive-ui-functions).
 
 ### Command Palette Integration
 
-- `register-action` - Register a custom action in the Command Palette.
-  - Usage: `(register-action "Name" "Description" "function-name")`
+See [Command Palette Integration](docs/lisp-functions.md#command-palette-integration).
 
 ### Cron Functions
 
-- `cron-add` - Register (or replace) a cron job by name
-  - Usage: `(cron-add "<name>" "<schedule>" "<command>" ["<notify-policy>"])`
-  - `<schedule>` accepts an interval (`5m`), a five-field cron expression, or an `@daily`-style macro.
-  - Calling this again with the same name **replaces** the job rather than erroring or duplicating it — safe to leave in `config.lisp`, which runs on every launch.
-- `cron-remove` / `cron-pause` / `cron-resume` - Manage a job by name or id
-- `cron-list` - List the registered jobs (the `cron list` command is easier from the prompt)
-- `sched-add` / `sched-remove` / `sched-pause` / `sched-resume` / `sched-list` - **Deprecated**, kept for one release as aliases for the `cron-*` functions above (same arguments and behavior). Each prints a warning to stderr only when stderr is a TTY; migrate to `cron-*`.
-
-See [Cron Jobs](#cron-jobs) for schedule syntax and notify policies.
+See [Cron Functions](docs/lisp-functions.md#cron-functions).
 
 ### Key Binding Functions
 
-- `bind` - Bind a key or chord to an action or Lisp function
-  - Usage: `(bind "ctrl-g" "cancel-completion")`, `(bind "ctrl-x s" "insert-snippet")`
-- `unbind` - Remove a binding so the key falls back to its built-in meaning
-- `list-bindings` - List the configured bindings
-- `list-bind-actions` - List every action name `bind` accepts
-
-See [Custom Key Bindings](#custom-key-bindings) for the key syntax and precedence rules.
+See [Key Binding Functions](docs/lisp-functions.md#key-binding-functions).
 
 ### Hook System Functions
 
-These are the shell's Lisp hooks, which fire around ordinary command execution. The AI
-assistant has a separate mechanism - see [AI chat hooks](#-ai-integration).
-
-- `add-hook` - Add a function to a hook list
-- `bound?` - Check if a symbol is bound
-- `*pre-prompt-hooks*` - Hook list for functions to run before prompt is displayed
-- `*pre-exec-hooks*` - Hook list for functions to run before command execution
-- `*post-exec-hooks*` - Hook list for functions to run after command execution
-- `*on-chdir-hooks*` - Hook list for functions to run after changing directory
-- `*command-not-found-hooks*` - Hook list for functions to run when a command is not found (receives command name)
-- `*completion-hooks*` - Hook list for functions to run when TAB completion is triggered (receives input and cursor position)
-- `*input-timeout-hooks*` - Hook list for functions to run periodically when idle (every 1 second)
+See [Hook System Functions](docs/lisp-functions.md#hook-system-functions).
 
 ### MCP Management Functions
 
-- `mcp-clear` - Clear all MCP servers
-- `mcp-add-stdio` - Add an MCP server with stdio transport
-- `mcp-add-http` - Add an MCP server with Streamable HTTP transport
-- `mcp-add-sse` - Add a legacy SSE MCP server config (deprecated/configuration-only; use `mcp-add-http` for Streamable HTTP)
-- `mcp-list` - List registered MCP servers
-- `mcp-status` - Show connection status of all MCP servers
-- `mcp-connect` - Connect to a specific MCP server
-- `mcp-disconnect` - Disconnect from a specific MCP server
-- `mcp-disconnect-all` - Disconnect from all MCP servers
-- `mcp-list-tools` - List all available MCP tools
-- `chat-execute-clear` - Clear execute tool allowlist
-- `chat-execute-add` - Add command(s) to execute tool allowlist (accepts multiple commands)
+See [MCP Management Functions](docs/lisp-functions.md#mcp-management-functions).
 
 ### Suggestion Settings Functions
 
-- `set-suggestion-mode` - Set suggestion mode (`ghost` or `off`)
-- `set-suggestion-ai-enabled` - Enable/disable AI-powered suggestions
+See [Suggestion Settings Functions](docs/lisp-functions.md#suggestion-settings-functions).
 
 ### Secret Management Functions
 
-- `secret-add-pattern` - Add a regex pattern for secret detection
-- `secret-add-keyword` - Add a keyword for secret detection
-- `secret-list-patterns` - List registered secret patterns
-- `secret-history-mode` - Set or get history filtering mode (`skip`, `redact`, `none`)
-- `secret-set` - Set a session-only secret
-- `secret-get` - Get a session-only secret
-- `secret-clear` - Clear all session secrets
+See [Secret Management Functions](docs/lisp-functions.md#secret-management-functions).
 
 ### PTY Control
 
-Some interactive commands may require disabling the built-in PTY. You have two options:
-
-- **`nopty` prefix**: Use `nopty <command>` to run a single command without PTY.
-  ```bash
-  nopty trizen -S google-chrome
-  ```
-- **`DOGESH_NO_PTY` environment variable**: Set `DOGESH_NO_PTY=1` to globally disable PTY.
+See [PTY Control](docs/lisp-functions.md#pty-control).
 
 ## 📁 Configuration
 
+See [📁 Configuration](docs/configuration.md#-configuration).
+
 ### config.lisp
 
-Create a `~/.config/dogesh/config.lisp` file to configure your shell:
-
-> **Note**: the whole file is evaluated as a single `(begin ...)` form. If any expression fails,
-> the shell rolls the environment back and **none** of the configuration takes effect, so keep an
-> eye on the error printed at startup.
-
-```lisp
-;; Example configuration
-(alias "ls" "ls --color=auto")
-(alias "ll" "ls -alF")
-(alias "la" "ls -A")
-(alias "l" "ls -CF")
-
-;; Set environment variables
-(setenv "EDITOR" "vim")
-(setenv "PAGER" "less")
-
-;; Set shell variables
-(vset "MY_VAR" "my_value")
-
-;; Set abbreviations
-(abbr "g" "git")
-(abbr "ga" "git add")
-(abbr "gc" "git commit")
-(abbr "gs" "git status")
-(abbr-command "git" "co" "checkout") ; only expands `co` after `git`
-
-;; Add paths to PATH
-(add_path "~/bin")
-(add_path "~/.cargo/bin")
-
-;; MCP server configuration using Lisp functions
-(mcp-clear)  ; Clear any existing servers before adding new ones
-
-;; Trust: every MCP server is `untrusted` unless you explicitly pass
-;; `"trusted"` as the last argument. An untrusted server's tools always ask
-;; before running at the default `normal` safety level (unless you allowlisted
-;; that exact call); a trusted server's tools may run unasked when the server
-;; explicitly annotates them read-only, and its command-execution tools are
-;; still judged as the command they carry.
-
-;; Add MCP server with stdio transport (for local executable servers)
-;; Parameters: label, command path, arguments list, environment variables list, working directory (optional), description (optional), trust (optional: "trusted" or "untrusted", default "untrusted")
-(mcp-add-stdio 
-  "local-dev-tools"                    ; label
-  "/path/to/your/mcp-server"          ; command
-  '("arg1" "arg2")                    ; arguments list
-  '(("ENV_VAR1" "value1") ("ENV_VAR2" "value2"))  ; environment variables list
-  '()                                 ; working directory (NIL = current directory)
-  "Local development tools via stdio"  ; description
-  "trusted"                           ; trust (omit or "untrusted" for the default)
-)
-
-;; Add MCP server with Streamable HTTP transport
-;; Parameters: label, URL, authentication header (optional), allow stateless (optional), description (optional), trust (optional: "trusted" or "untrusted", default "untrusted")
-(mcp-add-http 
-  "remote-http-service"               ; label
-  "https://example.com/mcp"           ; URL
-  '()                                 ; authentication header (NIL = no auth)
-  '()                                 ; allow stateless (NIL = false)
-  "Remote HTTP MCP service"           ; description
-  "untrusted"                         ; trust (default when omitted)
-)
-
-;; Add legacy MCP server with SSE transport
-;; NOTE: legacy SSE is configuration-only/deprecated because rmcp removed the legacy SSE client transport.
-;; Use mcp-add-http for Streamable HTTP MCP servers.
-;; Parameters: label, URL, description (optional)
-(mcp-add-sse 
-  "streaming-service"                 ; label
-  "https://example.com/sse"           ; URL
-  "SSE-based MCP service"             ; description
-)
-
-;; Chat execute allowlist - commands the AI assistant may run WITHOUT asking.
-;; Anything not listed here is not refused: it is judged by the same safety
-;; guard that covers commands you type, so at the default `normal` safety level
-;; an ordinary command runs after one confirmation (answer `a` to stop being
-;; asked about it for the rest of the session) and a risky one is refused.
-;; An entry matches by prefix, so "cargo test" also covers "cargo test -p foo".
-;;
-;; This list is separate from the commands you approve with `a` at your own
-;; safety prompts: approving a command for yourself does not approve it for
-;; the AI.
-(chat-execute-clear)
-;; You can add multiple commands in a single call:
-(chat-execute-add "ls" "cat" "echo" "grep" "find")
-;; Or add them one by one as before:
-;(chat-execute-add "ls")
-;(chat-execute-add "cat")
-;(chat-execute-add "echo")
-;(chat-execute-add "grep")
-;(chat-execute-add "find")
-
-;; Hook System - Functions that run at specific shell events
-;; Define a function to use as a hook
-(defun my-pre-prompt-func ()
-  (print "Pre-prompt hook executed")
-  ;; You can update variables, check status, etc.
-)
-
-(defun my-pre-exec-func (command)
-  (print "About to execute:")
-  (print command)
-)
-
-(defun my-post-exec-func (command exit-code)
-  (print "Executed:")
-  (print command)
-  (print "Exit code:")
-  (print exit-code)
-)
-
-(defun my-chdir-func ()
-  (print "Changed directory")
-)
-
-;; Add functions to the appropriate hook lists
-;; Note: add-hook expects the base name without asterisks - it adds them internally
-(add-hook 'pre-prompt-hooks 'my-pre-prompt-func)
-(add-hook 'pre-exec-hooks 'my-pre-exec-func)
-(add-hook 'post-exec-hooks 'my-post-exec-func)
-(add-hook 'on-chdir-hooks 'my-chdir-func)
-```
+See [config.lisp](docs/configuration.md#configlisp).
 
 ### tmux title integration
 
-`dogesh` updates the terminal title while a foreground command is running. To let tmux reflect that in the window name, add this to `~/.tmux.conf`:
-
-```tmux
-set -g allow-rename on
-set -g automatic-rename off
-```
-
-If you also want the outer terminal emulator title to follow tmux, enable:
-
-```tmux
-set -g set-titles on
-```
+See [tmux title integration](docs/configuration.md#tmux-title-integration).
 
 ### MCP Configuration Details
 
-MCP (Model Context Protocol) allows the shell to connect to external services that provide tools for AI assistants. You can configure MCP servers in your `config.lisp` file using these functions:
+See [MCP Configuration Details](docs/configuration.md#mcp-configuration-details).
 
 #### `(mcp-clear)`
 
-Removes all currently configured MCP servers.
+See [`(mcp-clear)`](docs/configuration.md#mcp-clear).
 
 #### `(mcp-list-tools)`
 
-Lists all available tools from registered MCP servers. Returns a list of tool names.
+See [`(mcp-list-tools)`](docs/configuration.md#mcp-list-tools).
 
 #### `(mcp-add-stdio label command args env-vars cwd description [trust])`
 
-Adds an MCP server that communicates via standard input/output streams.
-
-- `label`: A unique identifier for the server
-- `command`: Path to the server executable
-- `args`: List of command-line arguments to pass to the server
-- `env-vars`: List of (key value) pairs for environment variables
-- `cwd`: Working directory for the server (or NIL for current directory)
-- `description`: Optional description of the server
-- `trust`: Optional `"trusted"` or `"untrusted"` (default `"untrusted"`).
-  Only a trusted server's explicit read-only annotations may auto-run at the
-  `normal` safety level; anything else is a configuration error.
-
-Example:
-
-```lisp
-(mcp-add-stdio 
-  "git-tools" 
-  "/usr/local/bin/git-mcp-server" 
-  '("--verbose") 
-  '(("GIT_AUTHOR_NAME" "Your Name")) 
-  '() 
-  "Git utility tools"
-  "trusted"
-)
-```
+See [`(mcp-add-stdio label command args env-vars cwd description [trust])`](docs/configuration.md#mcp-add-stdio-label-command-args-env-vars-cwd-description-trust).
 
 #### `(mcp-add-http label url auth-header allow-stateless description [trust])`
 
-Adds an MCP server that communicates via HTTP requests.
-
-- `label`: A unique identifier for the server
-- `url`: The HTTP endpoint for the server
-- `auth-header`: Authentication header value (or NIL)
-- `allow-stateless`: Whether to allow stateless operations (or NIL)
-- `description`: Optional description of the server
-- `trust`: Optional `"trusted"` or `"untrusted"` (default `"untrusted"`).
-  Only a trusted server's explicit read-only annotations may auto-run at the
-  `normal` safety level; anything else is a configuration error.
-
-Example:
-
-```lisp
-(mcp-add-http 
-  "remote-api" 
-  "https://api.example.com/mcp" 
-  '("Bearer your-token-here") 
-  '() 
-  "Remote API server"
-  "untrusted"
-)
-```
+See [`(mcp-add-http label url auth-header allow-stateless description [trust])`](docs/configuration.md#mcp-add-http-label-url-auth-header-allow-stateless-description-trust).
 
 #### `(mcp-add-sse label url description [trust])`
 
-Adds a legacy MCP Server-Sent Events config entry.
-This function is deprecated/configuration-only: runtime connection attempts return an error because rmcp removed the legacy SSE client transport. Use `(mcp-add-http ...)` for Streamable HTTP MCP servers.
-
-- `label`: A unique identifier for the server
-- `url`: The SSE endpoint URL
-- `description`: Optional description of the server
-
-Example:
-
-```lisp
-(mcp-add-sse 
-  "events-service" 
-  "https://events.example.com/stream" 
-  "Real-time events service"
-)
-```
-
-```
+See [`(mcp-add-sse label url description [trust])`](docs/configuration.md#mcp-add-sse-label-url-description-trust).
 
 ### Security & Safety
 
-- **Execution Confirmation**: MCP tool calls are judged by the same `SafetyGuard` as everything else, whether they come from `!` chat or from a shell-side AI action, and both share one set of approvals. At `loose` they run unasked; at `strict` every MCP call asks. At `normal`, MCP servers are untrusted by default and every call asks unless you allowlisted that exact call - the tool's name and its `readOnlyHint` are both server-controlled, so neither opens the gate on its own. Pass `"trusted"` as the last `mcp-add-*` argument only for servers you run yourself: a trusted server's tools may run unasked when explicitly annotated read-only, while its command-execution tools (`bash`, `run_command`, ...) are still judged as the command they carry. Answering "always" remembers that exact call for the session.
-- **Disconnecting takes effect**: `mcp disconnect <label>` removes that server's tools from what the agent is offered and refuses a call to them until `mcp connect <label>`.
+See [Security & Safety](docs/configuration.md#security--safety).
 
 ### MCP CLI Management
 
-You can also manage MCP servers interactively using the `mcp` command:
-
-- `mcp status`, `mcp s`: Show connection status of all servers.
-- `mcp connect <label>`, `mcp c`: Connect to a specific server.
-- `mcp disconnect [label]`, `mcp d`: Disconnect from a server (or all).
-- `mcp list`, `mcp l`: List registered servers.
-- `mcp tools`, `mcp t`: List available tools.
+See [MCP CLI Management](docs/configuration.md#mcp-cli-management).
 
 ### MCP Tool Groups
 
-Each MCP server's tools form a tool group named for the server. A connected
-server is not the same as AI exposure: `mcp group disable <group>` hides that
-group's schemas from AI while keeping the connection up, and the model can
-load a hidden group on demand when the task needs it.
-
-- `mcp group list`, `mcp groups`: List groups and their exposure state.
-- `mcp group show <group>`: Show one group's tools and state.
-- `mcp group enable <group>`: Offer a group's tools to AI again.
-- `mcp group disable <group>`: Hide a group's tools from AI (keeps connection).
-- `mcp tools --active`: List only the tools currently exposed to AI.
-- `mcp tools --group <name>`: List one group's tools.
-
-Hiding idle groups keeps every AI request small: `doctor mcp` reports active
-versus registered tool counts and warns while the active footprint is high.
+See [MCP Tool Groups](docs/configuration.md#mcp-tool-groups).
 
 ## 🔧 Usage
 
-### Basic Usage
-
-```bash
-# Start the shell interactively
-dogesh
-
-# Execute a single command
-dogesh -c "echo 'Hello, World!'"
-
-# Execute an inline Lisp program
-dogesh -l "(print \"Hello from Lisp!\")"
-
-# Execute a Lisp script file
-dogesh lisp ./script.lisp
-dogesh lisp ./script.lisp -- first second
+```sh
+dogesh                      # interactive shell
+dogesh -c 'echo hello'       # one command
 ```
 
-Both inline (`-l`) and file (`dogesh lisp FILE`) modes evaluate every
-top-level form in order as one program. Inside a program, `*argv0*` is the
-script path (`"dogesh"` for `-l`) and `*argv*` is the list of remaining
-arguments — `(length *argv*)` gives the argument count, and option-looking
-arguments are kept verbatim (use `--` to separate them from the file path).
-The file path resolves against the current working directory, `config.lisp`
-loads before the program as usual, and the final value prints unless it is
-NIL. A successful evaluation exits 0; read, parse, or runtime failures exit
-non-zero with the script path in the diagnostic.
+See [🔧 Usage](docs/usage.md#-usage).
 
-> **Renamed from `dsh`:** the binary is now `dogesh`, the config directory is
-> `~/.config/dogesh`, project skills live in `<project>/.dogesh/skills`, and
-> `DSH_*` environment variables are now `DOGESH_*` (old names are not read).
-> Migrating from an older checkout:
-> `mv ~/.config/dsh ~/.config/dogesh`, rename each project's `.dsh` to
-> `.dogesh`, and replace `DSH_` with `DOGESH_` in your hook scripts and settings.
+### Basic Usage
+
+See [Basic Usage](docs/usage.md#basic-usage).
 
 ### Smart Pipe
 
-Use `|` at the start of a command to pipe the output of the immediately preceding command.
-
-```bash
-# First command
-echo "Hello, World!"
-
-# Pipe the output to the next command
-| tr '[:upper:]' '[:lower:]'
-# Output: hello, world!
-```
-
-This works with any command (external or built-in) as the shell automatically captures the standard output.
+See [Smart Pipe](docs/usage.md#smart-pipe).
 
 ### Command Output History
 
-Use `out` for direct access to captured output and `tm` for interactive fuzzy search with preview.
-
-```bash
-# Show the most recent captured stdout
-out
-
-# List captured outputs with previews
-out --list --limit 25
-
-# Clear captured output history
-out --clear
-```
+See [Command Output History](docs/usage.md#command-output-history).
 
 ### Command Blocks
 
-Every foreground interactive command is recorded as a session-local command block, including commands that produce no output. Blocks keep command text, cwd, exit code, duration, captured output references, and optional `ai-watch` summaries.
-
-```bash
-# List recent blocks
-blocks
-
-# Inspect a failed command
-blocks list --failed
-blocks show 1 --stderr
-
-# Reuse or explain a block
-blocks command 1
-blocks fix 1             # deterministic, inserts/runs nothing
-blocks fix 1 --ai        # explicit AI fallback
-blocks explain 1
-
-# Machine-readable session or opt-in persistent metadata
-blocks list --json
-blocks --scope persistent --json
-
-# Browse them full-screen (same as Ctrl+O)
-blocks tui
-
-# Export blocks as an executable Markdown runbook
-blocks export --range 1..5 -o runbook.md
-blocks export --ids 3,7 --title "Deploy" --ai   # AI adds one-line step notes
-notebook-play runbook.md                        # replay it step by step
-```
+See [Command Blocks](docs/usage.md#command-blocks).
 
 #### Runbooks
 
-`blocks export` turns recorded blocks into a Markdown runbook: each command is
-a ```` ```sh ```` block, output excerpts are quoted (never re-executed), and
-metadata such as exit codes rides in HTML comments. The result plays back with
-`notebook-play`, which confirms each step before running it — record a
-procedure once, then replay or share it.
-
-Runbooks can be parameterized with the same `{{name}}` / `{{name:default}}`
-markers snippets use: `notebook-play` prompts for each placeholder once (or
-takes `--var name=value` for non-interactive use). Only identifier-shaped
-names count as placeholders, so Go-template syntax in recorded commands
-(`docker ps --format '{{json .}}'`) replays verbatim. Select blocks by display
-index (`--range 1..5`, `--last 3`) or by stable id (`--ids`); steps are always
-written oldest-first. `--ai` asks the configured model for a one-line
-description per step, and the export still succeeds without them if the
-request fails.
+See [Runbooks](docs/usage.md#runbooks).
 
 #### Block Browser
 
-`Ctrl+O` opens a two-pane browser over this session's blocks: the list on one
-side, the selected block's captured output on the other. Escape sequences are
-stripped and `\r` progress bars are collapsed to their final state, so a
-`cargo build` block reads as a handful of lines rather than thousands. Output
-from full-screen programs such as `vim` is almost entirely cursor positioning,
-so those blocks start folded.
-
-- `j` / `k` / `↑` / `↓` - move in the list, or scroll when the output pane has focus
-- `Tab` - switch pane · `g` / `G` - top / bottom · `Ctrl+D` / `Ctrl+U` - page the output
-- `Space` - fold / unfold · `s` - cycle stdout / stderr / both · `W` - toggle wrapping
-- `/` - filter by command **or output text** · `f` - failed only · `w` - `ai-watch` blocks only
-- `c` / `y` - copy the command / the output
-- `Enter` - put the command in the input buffer · `r` - re-run it · `d` - `cd` to where it ran
-- `e` - explain it with AI · `?` - key help · `q` / `Esc` - close
-- `m` - mark for export · `x` - export marked (or selected) blocks as a runbook
-
-Copying uses the system clipboard, falling back to OSC 52 so it still works over
-SSH. Blocks remain session-local by default. `blocks --scope persistent` reads
-the opt-in command ledger described below; it contains metadata only unless
-output storage was explicitly enabled. Filters such as `--failed` are applied
-to the complete persistent ledger before `--limit` selects the newest results.
+See [Block Browser](docs/usage.md#block-browser).
 
 ### Machine-readable output
 
-`task --json`, `pm status --json`, `doctor --json`, `history --json`,
-`blocks list --json`, `timing --json`, and `cron list`/`cron status`/`cron history`
-(each with `--json`) write exactly one JSON value to
-stdout. JSON mode and non-TTY output omit ANSI decoration and interactive
-prompts; diagnostics go to stderr and failures return a non-zero status. Field
-names use `snake_case`, and optional collections are emitted as empty arrays
-rather than presentation text.
-
-Focused doctor calls keep the same envelope and add section-specific `details`;
-for example, `doctor safety --json` reports safety configuration while
-`doctor validate --json` reports the selected validation commands.
-
-Run as `blocks tui` there is no input buffer to fill, so `Enter` prints the
-command and `r` runs it. From `Ctrl+O` and the command palette, both put it in
-the buffer for you to confirm.
-
-Many blocks legitimately have no output: it is only captured for a foreground
-external command that is not redirected, not part of a pipeline, and not
-PTY-proxied. The browser says so rather than showing an empty pane.
+See [Machine-readable output](docs/usage.md#machine-readable-output).
 
 ### Status Line
 
-An optional line pinned to the bottom row, showing scheduled tasks,
-background jobs, git state and GitHub notifications:
-
-```
-⏱ 3 failing 1   ⚙ 2 jobs    main ●4 ↑1   🐙 5
-```
-
-**Off by default.** Enable it in `config.lisp`:
-
-```lisp
-(pref-status-line t)
-```
-
-`DOGESH_STATUS_LINE=0` forces it off regardless, and it stays off on a non-terminal or a
-terminal shorter than three rows.
-
-It works by reserving a scroll region (DECSTBM) so the bottom row sits outside the
-scrolling area — the prompt, command output and job notices are unaffected. The region
-is released whenever something else needs the whole screen (`Ctrl+R`, `Ctrl+O`, `Alt+x`,
-tab completion, `$EDITOR`, and any foreground command) and restored afterwards, and it
-is always released on exit.
-
-Everything shown is read from caches the shell already maintains, so the status line
-never adds work to the prompt. It is off by default because DECSTBM support varies
-between terminals.
+See [Status Line](docs/usage.md#status-line).
 
 ### Cron Jobs
 
-`cron` runs a shell command on a schedule:
-
-```bash
-cron add --name fetch 5m git fetch --all
-cron add --name prs --on change '0 9-17 * * mon-fri' gh pr list
-cron add --quiet 30s 'df -h /'
-cron list                               # id, schedule, state, next run, last result
-cron history fetch                      # recent runs
-cron logs fetch                         # a run's recorded stdout/stderr (each stream clamped to 8 KiB)
-cron rm prs
-cron pause                              # stop every job, keeping the definitions
-cron resume
-```
-
-Unlike the old `sched` builtin it replaced, jobs persist across restarts (a SQLite store
-under `$XDG_STATE_HOME/dogesh/cron`, not `config.lisp`) and understand real wall-clock
-schedules, not just intervals:
-
-| Form | Example | Meaning |
-| --- | --- | --- |
-| Interval | `30s` / `5m` / `1h` | Every N seconds/minutes/hours, from the previous run. 5s-24h. |
-| Cron expression | `0 9 * * mon-fri` | Five fields (minute hour day-of-month month day-of-week), on the local wall clock. |
-| Macro | `@hourly` / `@daily` / `@weekly` / `@monthly` / `@yearly` | Shorthand for a fixed cron expression. |
-| `@reboot` | `@reboot` | Once per interactive session runner start; never fires from an external tick. |
-| `@manual` | `@manual` | Only an explicit `cron run` / `cron run --now`; never fires on its own. |
-
-**Always quote a cron expression** — `cron add */5 * * * * git fetch` is glob-expanded by
-the shell before dogesh ever sees it. `cron add` detects the common shapes of this mistake
-and names the fix.
-
-**Two ways a job fires**, and either is enough on its own:
-
-- **A dogesh session is open.** Each interactive session runs its own scan for due jobs and
-  starts them — nothing to install, works the moment you `cron add`. Closing every
-  session pauses that clock until one opens again, unless:
-- **An external tick is installed.** `cron setup` prints a crontab line, a systemd user
-  timer, or a launchd agent (auto-detected, or pick with `--crontab`/`--systemd`/`--launchd`)
-  that calls `dogesh -c "cron tick"` on a schedule — this is what makes a job fire while
-  logged out. `cron setup` only prints; it never installs anything itself.
-
-Whether a run is worth reporting is set by `--on`, same meanings as before:
-
-| `--on`      | Reports                                              |
-| ----------- | ---------------------------------------------------- |
-| `never`     | Nothing (`--quiet` is a shorthand)                   |
-| `failure`   | The command started failing, and again when it recovers |
-| `change`    | The output differs from the previous run              |
-| `both`      | Either of the above — **default**                    |
-| `always`    | Every run                                            |
-
-Outcomes are recorded either way — `cron history <name>` and `cron status` are the source
-of truth. (A live above-prompt notice and desktop notification, as `sched` had, are not
-yet wired for cron: a run finishes in its own separate process, which the open session is
-not directly watching.)
-
-**Commands run under `sh -c`**, in the directory registered with the job, with stdin on
-`/dev/null` and in their own process group — shell aliases, abbreviations, builtins and
-Lisp functions are **not** available inside them. Write out the full command, or wrap it
-in a script.
-
-A run that overruns its own interval is skipped rather than stacked, and each run is
-killed after its `--timeout` (60s by default, capped to the interval for an interval
-schedule). A job that was due while nothing was running to run it does **not** fire once
-per missed slot on catch-up — everything older than `--catchup` (one hour by default)
-collapses into a single run.
-
-Two sessions (or a session and an external tick) racing to run the same job is resolved
-by the store itself, not by hoping only one thing is ever watching: whichever claims the
-row first runs it, and the other finds nothing left to do.
+See [Cron Jobs](docs/usage.md#cron-jobs).
 
 #### Chat can manage cron jobs
 
-The `!` chat agent has a `cron_manage` tool for the job lifecycle
-(`list`/`show`/`history`/`logs`/`incidents`/`status`/`doctor` for reading;
-`create`/`update`/`pause`/`resume`/`remove`/`run`/`ack` for writing) through a
-tool call instead of the CLI — `execute` cannot reach `cron` itself, since it is
-a builtin, not a shell command. It does not cover `setup`, `notepad`, or `tick`.
-A job it creates always starts paused.
-Every write (`create`/`update`/`pause`/`resume`/`remove`/`run`/`ack`) still
-asks a person first, the same as any other tool that changes something.
-
-Full CLI reference, schedule grammar, external-tick setup for each OS, and a
-symptom-to-cause debugging table live in the `dsh-cron` skill
-(`docs/ai/skills/dsh-cron/`) — install it for the `!` chat agent with
-`scripts/install-runtime-skills.sh --target dogesh --profile dogesh-user`.
+See [Chat can manage cron jobs](docs/usage.md#chat-can-manage-cron-jobs).
 
 ### Snippets
 
-`Alt+;` opens the snippet list (managed with the `snippet` command) and inserts the
-chosen command at the cursor. Typing a character dismisses the list instead of
-selecting — this inserts a whole command, so an accidental keystroke should not
-commit to one.
-
-A snippet body can carry `{{name}}` or `{{name:default}}` markers. On insertion each
-marker is replaced by its default (nothing, when there is no default) and the cursor
-lands on the first one. `Alt+n` and `Alt+p` cycle through the remaining stops.
-
-```bash
-snippet add deploy 'kubectl rollout restart deploy/{{name}} -n {{ns:default}}'
-```
-
-Inserting that gives `kubectl rollout restart deploy/ -n default` with the cursor
-after `deploy/`; type the deployment name, then `Alt+n` moves onto `default`. The stops
-follow your edits, so filling one in does not throw the others off.
-
-They are dropped once you leave the line — running the command, recalling history,
-undo/redo, or opening the editor or a picker.
-
-Note that `Tab` is left alone — it stays completion, so paths can still be completed
-while filling in a placeholder.
+See [Snippets](docs/usage.md#snippets).
 
 ### Insert Last Argument
 
-`Alt+.` inserts the last argument of the previous command, and each repeat replaces
-it with the argument from the command before that. Quoting is preserved, so
-`"hello world"` comes back as one argument.
-
-Because history stores one row per distinct command string, the walk is over
-*distinct commands*, not over individual executions — the same caveat that applies to
-[History Search](#history-search). Adjacent duplicates are skipped so repeated
-presses always show something new.
+See [Insert Last Argument](docs/usage.md#insert-last-argument).
 
 ### Directory Stack
 
-`pushd` / `popd` / `dirs` work the way they do in bash: slot 0 of the stack is always
-the current directory, so a plain `cd` replaces the top without disturbing what is
-underneath.
-
-```bash
-dirs -v          # 0  ~/src/doge-shell
-pushd /tmp       # /tmp ~/src/doge-shell
-pushd ~/notes    # ~/notes /tmp ~/src/doge-shell
-pushd            # swap the top two: /tmp ~/notes ~/src/doge-shell
-popd             # back to ~/notes
-dirs -c          # clear everything but the current directory
-```
-
-`dirs` takes `-v` (numbered, one per line), `-p` (one per line), `-l` (full paths
-instead of `~`), and `-c` (clear).
-
-Any entry can be addressed by its `dirs -v` number:
-
-```bash
-cd -2            # jump to entry 2, rotating it to the top
-pushd +2         # same thing
-popd +1          # drop entry 1 without moving
-```
-
-**One difference from bash**: `+N` and `-N` mean the same thing here — "entry N as
-printed by `dirs -v`". bash counts `-N` from the other end, which is a daily papercut
-for no real gain. A bare `cd -` still means `$OLDPWD`, unchanged.
-
-`pushd` and `popd` go through the same code path as `cd`, so directory frecency (`z`),
-`$OLDPWD` and `*on-chdir-hooks*` all keep working.
+See [Directory Stack](docs/usage.md#directory-stack).
 
 ### Import History
 
-Import command history from another shell (currently fish only):
-
-```bash
-# Import from fish shell
-dogesh import fish
-
-# Import from a non-default fish history path
-dogesh import fish --path /path/to/fish_history
-```
+See [Import History](docs/usage.md#import-history).
 
 ### `history` Command
 
-Search command history with text and metadata filters.
-
-```bash
-# Search by text
-history cargo
-
-# Show recent failures
-history --status failure
-
-# Show slow commands in the current project with metadata
-history --scope project --slow 1000 --verbose
-
-# Query append-only ledger events by provenance
-history --author human --json
-```
-
-`--scope` accepts `global`, `session`, `cwd`, and `project`. Use `--limit` to control result count, or `--query` if you prefer an explicit flag instead of the positional search text.
-
-The aggregate history remains the default. To opt in to the append-only command
-ledger, add `(pref-command-ledger "metadata")` to `config.lisp`; use `"output"`
-only when captured output should be inspected, redacted, and retained (64 KiB
-per event, at most 10,000 events, 90-day retention). The default `"off"` and
-`"metadata"` modes do not inspect or store command output. External agents can
-record provenance with `history record --json '<event>'`. Optional Atuin
-dual-write is enabled with `DOGESH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
-path and never block a command.
+See [`history` Command](docs/usage.md#history-command).
 
 ### `doctor` Command
 
-Inspect the current shell setup and project context.
-
-```bash
-# Run all diagnostics
-doctor
-
-# Focus on one area
-doctor ai
-doctor hooks
-doctor project
-doctor skills
-doctor setup
-doctor fix
-doctor validate
-
-# Show command help
-doctor --help
-```
-
-`doctor` reports on configuration files, AI settings, AI chat hook configuration, MCP connection counters, project marker files, common developer runtimes found in `PATH`, performance/cache state, the skills this shell would load (and anything wrong with them), runtime Skill drift, setup readiness, and focused validation commands for changed files. `doctor fix` creates safe missing setup files and directories such as `config.lisp`, runtime skills, and completion directories.
+See [`doctor` Command](docs/usage.md#doctor-command).
 
 ### `help` Command
 
-Search built-in commands and show command-specific usage.
-
-```bash
-help
-help doctor
-help project
-help --search ai
-```
+See [`help` Command](docs/usage.md#help-command).
 
 ### Project Onboarding
 
-Register the current project and inspect what dogesh can activate or run.
-
-```bash
-pm init
-pm status
-pm status --json
-pm activate --provider auto --dry-run
-pm activate --provider auto
-task --json
-task cargo:test -- --nocapture
-```
+See [Project Onboarding](docs/usage.md#project-onboarding).
 
 ### `include` Command
 
-Source a bash script and import its environment variables into the current shell session.
-Useful for loading `.env` files or setup scripts.
-
-```bash
-include setup.sh
-```
+See [`include` Command](docs/usage.md#include-command).
 
 ### Key Bindings
 
-- `Tab` - Context-aware completion
-- `Ctrl+R` - Interactive history search using the current input as the query (see [History Search](#history-search))
-- `Ctrl+C` - Cancel current command (press twice to exit shell)
-- `Ctrl+D` - End of input (exit) on an empty line, delete the character under the cursor otherwise
-- `Ctrl+Z` - Suspend the running command; on an empty prompt, resume the most recently stopped job
-- `Ctrl+O` - Open the [Block Browser](#block-browser) over this session's commands and their output
-- `Ctrl+L` - Clear screen
-- `Home` / `End` - Move to the beginning / end of the line (same as `Ctrl+A` / `Ctrl+E`)
-- `Delete` - Delete the character under the cursor
-- `Ctrl+K` - Delete from cursor to end of line
-- `Ctrl+U` - Delete from cursor to beginning of line
-- `Ctrl+W` - Delete word backward
-- `Ctrl+Y` - Yank back the text removed by the last `Ctrl+K` / `Ctrl+U` / `Ctrl+W`
-- `Ctrl+_` - Undo the last edit (undo steps break at word boundaries)
-- `Alt+/` - Redo
-- `Alt+.` (or `Alt+_`) - Insert the last argument of the previous command; press again to walk further back
-- `Alt+;` - Pick a snippet and insert it at the cursor
-- `Alt+n` / `Alt+p` - Jump to the next / previous `{{placeholder}}` of an inserted snippet
-- `Alt+x` - Open Command Palette
-- `Esc` (double press) - Toggle `sudo` prefix for the current command
-- `Ctrl+x Ctrl+e` - Edit current input in external editor (`$VISUAL` or `$EDITOR`)
-
-All of the above are defaults and can be changed — see [Custom Key Bindings](#custom-key-bindings).
-
-- `Alt+Enter` - Execute command in background
-- `Alt+s` - Force AI suggestion
-- `Alt+e` - Explain the current command with AI
-- `Alt+[` / `Alt+]` - Rotate through suggestions
-- `Alt+w` - Wrap the current input with `ai-watch --`
-- `Alt+m` - Open Macro Recorder
+See [Key Bindings](docs/usage.md#key-bindings).
 
 ### Custom Key Bindings
 
-Keys can be rebound from `config.lisp`:
-
-```lisp
-(bind "ctrl-g" "cancel-completion")
-(bind "alt-." "insert-last-argument")
-(bind "ctrl-x s" "insert-snippet")   ; multi-key chords work
-(bind "f5" "trigger-completion")
-(unbind "ctrl-x ctrl-e")             ; back to the built-in meaning
-```
-
-`list-bindings` shows what is configured and `list-bind-actions` every name `bind`
-accepts. Both are Lisp functions, so from the prompt they go through `lisp`:
-
-```bash
-lisp "(print (list-bindings))"
-lisp "(print (list-bind-actions))"
-```
-
-Key syntax is `[modifier-]*key`, with `-` or `+` as the separator. Modifiers are
-`ctrl`/`c`, `alt`/`m`/`meta`, `shift`/`s` and `super`. Key names are a single character
-(`a`, `.`, `/`) or one of `enter`, `tab`, `shift-tab`, `space`, `esc`, `backspace`,
-`delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`,
-`f1`–`f12`. Chords are strokes separated by spaces.
-
-**A bound key wins unconditionally.** Several built-in bindings are context-sensitive —
-`Right` accepts a suggestion when one is showing, `Esc` toggles `sudo` only when no
-completion is open, `Ctrl+D` is EOF only on an empty line. Rebinding such a key replaces
-all of that with the single action you named. This is the same rule as zsh's `bindkey`
-and fish's `bind`.
-
-If the name is not a built-in action it is taken as a Lisp function, called with the
-current input and cursor position. Returning a string inserts it at the cursor;
-returning anything else leaves the buffer alone:
-
-```lisp
-(fn insert-date (input cursor)
-  (sh! "date +%Y-%m-%d"))
-(bind "ctrl-t" "insert-date")
-```
-
-The call is synchronous, so a slow function blocks the prompt — the same caveat as
-Command Palette Lisp actions.
-
-`Ctrl+x Ctrl+e` (edit in `$EDITOR`) is itself a default binding and can be unbound or
-moved. A chord that goes nowhere (`Ctrl+x q`) drops the prefix and lets the second key
-do its normal job, so a stray `Ctrl+x` never costs you a keystroke.
+See [Custom Key Bindings](docs/usage.md#custom-key-bindings).
 
 ### History Search
 
-`Ctrl+R` opens a full-screen history picker, seeded with whatever you have already typed.
-Each row shows the exit status, duration, age and directory of the command, so a failed or
-slow run is recognisable at a glance. Narrower terminals drop the optional columns, keeping
-the status glyph and the command itself.
-
-The filters that the `history` command exposes as flags are available as live toggles:
-
-- `Ctrl+R` - cycle scope: `global` → `session` → `cwd` → `project`
-- `Ctrl+S` - cycle status: `any` → `failure` → `success`
-- `Ctrl+T` - show only commands that took a second or more
-- `Up` / `Down`, `Ctrl+P` / `Ctrl+N`, `PageUp` / `PageDown`, `Home` / `End` - move the selection
-- `Ctrl+U` - clear the query
-- `Enter` - put the command in the input buffer (it is never executed for you)
-- `Esc`, `Ctrl+C`, `Ctrl+G` - cancel and leave the input untouched
-
-The status line reports the active filters and how many entries match, e.g.
-`scope:cwd  status:failure  slow:off  (12/5000, last run)`.
-
-**`last run`**: history is stored one row per distinct command string, carrying only the
-metadata of its most recent execution. `scope:cwd` therefore means "commands whose *last*
-run was in this directory", not "every command ever run here", and the exit status and
-duration shown are those of that last run.
-
-Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
+See [History Search](docs/usage.md#history-search).
 
 ### Fish Completion Fallback
 
-TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
-
-Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents. Additional providers cover 1Password (`op item get/edit/delete`), Vagrant installed boxes (`vagrant box remove/repackage`, `vagrant init`), and `.envrc` files plus their containing directories discovered from the working directory chain for `direnv allow/deny/edit`.
-
-Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, SELinux modules and booleans, wireless devices, device subsystems, and the login shells listed in `/etc/shells`. Arch Linux definitions cover `yay`, `paru`, `paccache`, `pacdiff`, `pactree`, `pacman-conf`, `pacman-key`, `pkgctl`, repository database tools, devtools chroot commands, `namcap`, and `snapper`. `yay` and `paru` deliberately reuse only the local pacman databases: sync operations complete repository packages, removal operations complete installed packages, and completion never performs an AUR network search. Snapper configurations and snapshots, pacman repositories, and mkinitcpio presets are discovered with read-only local probes. A `systemctl.unit` provider scope narrows candidates to a single unit type, so `systemd-run --slice` offers slices rather than every unit. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
-
-Developer toolchains are covered as well: `rustup` components and targets, crates installed with `cargo install`, `cargo` test and bench targets, `cargo nextest`, `cargo watch`, `sccache`, `bacon`, Jujutsu (`jj`), PDM, Pipenv, Pyright, Biome, golangci-lint, GoReleaser, Delve, Meson, watchexec, and ghq, in addition to the existing language and editor tools. Dynamic candidates include Jujutsu bookmarks, revisions, and workspaces; Meson targets; golangci-lint linters; ghq repositories; and scripts or jobs declared by bacon, PDM, and Pipenv. Definitions that live in project files — `bacon.toml` jobs, `pyproject.toml` PDM scripts, `Pipfile` scripts, `noxfile.py` sessions, `tox` environments, `hatch` environments, `pre-commit` hook ids, and `just` recipes and `make` targets through the shared project task provider — are parsed directly, so completion never imports or evaluates project code. Local CLI probes use a one-second cache and two-second error backoff; missing tools, permission failures, timeouts, and malformed output safely produce no dynamic candidates.
+See [Fish Completion Fallback](docs/usage.md#fish-completion-fallback).
 
 ## 💻 Command Palette
 
@@ -1391,7 +618,21 @@ Easily record and replay sequences of shell commands without writing code manual
 
 ## 🤖 AI Integration
 
-The shell supports an OpenAI API key (default) or official Sign in with ChatGPT subscription usage.
+Configure an [AI provider](docs/ai-integration.md), then try `! explain this project`.
+For an AI task that runs while you keep using the shell:
+
+```sh
+chat_task start --profile read-only -- "Read README.md and summarize the project; do not run commands."
+chat_task status
+chat_task output
+```
+
+Use the **same interactive shell** for all three commands. Review an approval
+request before replying; `read-only` does not automatically approve commands.
+See the [AI task walkthrough](docs/ai-tasks.md) for approval, denial,
+cancellation and session limits.
+
+See [🤖 AI Integration](docs/ai-integration.md#-ai-integration).
 
 ### ChatGPT subscription
 
@@ -1450,592 +691,11 @@ models are preserved and never used by these dedicated routes. See
 
 ### API key
 
-To use the API-key provider:
-
-1. Set your OpenAI API key in the environment:
-
-   ```bash
-   export AI_CHAT_API_KEY="your-api-key-here"
-   ```
-
-   Optional settings:
-
-   `OPENAI_API_KEY` and `OPEN_AI_API_KEY` are accepted as fallbacks, as are
-   `OPENAI_BASE_URL` and `OPENAI_MODEL`. Every setting below is read as a shell
-   variable first and from the process environment second, so `config.lisp` can
-   set any of them without an `export`.
-
-   | Variable | Default | Purpose |
-   | --- | --- | --- |
-   | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions. Also settable at runtime with `chat_model <model>` (or `chat_model ""` to clear it); the change reaches every AI path immediately - `!` chat, command palette actions, ghost text, `ai-watch`, `blocks explain\|fix`, `output-gen` - no restart needed |
-   | `AI_SUMMARY_MODEL` | chat model | Model used to summarize a long conversation |
-   | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible endpoint |
-   | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
-   | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
-   | `AI_CHAT_REASONING_EFFORT` | unset (`none` on `tools` requests to a `gpt-5`/`o1`/`o3`/`o4` model, provider default otherwise) | `reasoning_effort` sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
-   | `AI_CHAT_SESSION_TTL_SECS` | `1800` | Idle timeout for the carried conversation; the clock restarts on each turn that finishes (a rewound failed turn does not restart it). `0` disables carrying it forward |
-   | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
-   | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
-   | `AI_CHAT_STREAM` | on | Stream `!` chat's answer as it is generated; `0`/`false`/`off`/`no` prints it once at the end instead |
-   | `AI_CHAT_EXECUTE_ALLOWLIST` | unset | Extra entries for the `execute` tool allowlist, merged with `config.lisp` and `~/.config/dogesh/openai-execute-tool.json` |
-   | `AI_CHAT_EXECUTE_YIELD_MS` | `10000` | How long a `!` chat waits for a command before handing the model a job handle to poll instead of a result. `0` yields immediately; 60000 is the ceiling |
-   | `AI_CHAT_EXECUTE_TIMEOUT_MS` | `600000` | Default `timeout_ms` for a `!` chat command. An unattended task keeps its own default |
-   | `DOGESH_EXECUTE_TOOL_CONFIG` | `~/.config/dogesh/openai-execute-tool.json` | Path of that JSON allowlist file |
-   | `AI_MESSAGE_LANG` | unset | Language for AI answers - `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run`, `ai-watch`, `blocks explain`. Requests whose answer is parsed as JSON are left alone |
-   | `CHAT_PROMPT` | unset | Extra operator instructions appended to the `!` system prompt (`chat_prompt`) |
-   | `AI_CHAT_PROJECT_SKILLS` | on | Read `<project>/.dogesh/skills` at all; `0`/`false`/`off`/`no` keeps a repository's skills out of the prompt |
-   | `AI_CHAT_SKILL_STAGING` | `task` | Whether `skill_manage` writes land immediately or wait in `skill pending`: `task` (only when an unattended task has no `--write` grant for the target) / `always` / `off` |
-   | `AI_CHAT_SKILL_REFLECT` | off | Send one tool-free request after a long turn proposing a skill from what it did; never writes directly |
-   | `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` | `5` | Tool calls a turn needs before the reflection reviewer considers it |
-   | `AI_CHAT_SKILL_REFLECT_MODEL` | `AI_SUMMARY_MODEL`, then the chat model | Model used for the reflection request |
-   | `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` | off | Archive an agent-written, unpinned personal skill once unread this many days; unset or `0` disables it |
-   | `AI_CHAT_HOOKS` | on | Run AI chat hooks; `0`/`false`/`off`/`no` stops `ai-hooks.json` from being read |
-   | `AI_CHAT_HOOK_TURN_BUDGET_MS` | unset | Ceiling on the wall time one `!` turn waits for hooks; `0` removes it |
-   | `AI_CHAT_MCP_TOOL_MODE` | `auto` | MCP model surface for `!` chat: `auto` bridges large catalogs (discoverable schemas over 12 KiB) behind `tool_search`/`tool_describe`/`tool_call` and keeps small ones eager; `eager`/`bridge` force either side |
-   | `DOGESH_AI_HOOKS_CONFIG` | `~/.config/dogesh/ai-hooks.json` | Path of the hook configuration |
-
-   Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
-   `Retry-After`. An optional request field the endpoint rejects outright is
-   dropped once and the request retried.
-
-   The entire current OpenAI reasoning lineup (any `gpt-5*` point release -
-   including `gpt-5.6-luna` and its siblings - plus `o1`, `o3`, `o4`) rejects
-   `tools` requests unless `reasoning_effort` is `"none"`, so a `tools`
-   request to one of those models sends `reasoning_effort: none` from the
-   first attempt with no configuration needed - this also covers the shell's
-   own default model, `gpt-5-mini`. Requests without `tools`
-   (summarization, `safe-run`'s JSON generation) are untouched, so they keep
-   whichever reasoning quality is configured or the model's own default. Set
-   `AI_CHAT_REASONING_EFFORT` explicitly to override this for every request
-   (including `tools` ones); if that value still conflicts with `tools` on
-   the endpoint, it gets corrected to `none` after one extra round-trip, the
-   same way an unrecognised model outside the known lineup would be.
-
-2. **The AI features are off by default.** An API key on its own sends no
-   requests: inline suggestions, automatic fixes and inline explanations each
-   need enabling in `config.lisp`.
-
-   ```lisp
-   (set-suggestion-ai-enabled t) ; AI inline suggestions (ghost text)
-   (set-auto-fix-enabled t)      ; let Alt+f fall back to AI
-   (pref-ai-explanation t)       ; inline AI explanation of the current command
-   (vset "AI_MESSAGE_LANG" "Japanese") ; answer in this language
-   ```
-
-   `!` chat, `Alt+d`, `Alt+e`, `aic`, `safe-run` and `ai-watch` are explicit
-   actions and work without any of these.
-
-3. Use `!` prefix to chat with the AI directly:
-
-   ```bash
-   !explain how to use the grep command
-   ```
-
-4. **Auto-Fix (Error Recovery) (`Alt+f`)**:
-   If a command fails, press `Alt+f` to have AI suggest a fix for the last failed command.
-
-   ```bash
-   # Type a wrong command:
-   git stats
-   # Command fails...
-   
-   # Press Alt+f, command input becomes:
-   git status
-   ```
-
-   **Proactive failure hints** (on by default): when a command fails, dogesh
-   automatically shows the deterministic quick-fix as ghost text with a short
-   reason next to the prompt — accept it with `Tab` or `Alt+f`. No AI request
-   is sent unless `set-auto-fix-enabled` is on. Interrupted commands
-   (`Ctrl-C`), "no match" exits from `grep`/`diff`-style commands, and the
-   same failure repeating stay quiet; for a pipeline the exit status belongs
-   to its last segment, so `cat f | grep x` finding nothing stays quiet too.
-   `(pref-failure-hint nil)` in `config.lisp` turns off the whole automatic
-   path, automatic AI fixes included — `Alt+f` and `Alt+d` keep working on
-   demand. When nothing deterministic applies the shell says nothing, unless
-   `(pref-diagnose-hint t)` asks it to point at `Alt+f`/`Alt+d` instead; that
-   hint is a line of text, not an AI request.
-
-5. **Smart Git Commit (`Alt+c`)**:
-   Stage your changes, then press `Alt+c` to invoke the `aic` command, which analyzes the diff and generates a conventional commit message.
-
-   ```bash
-   git add .
-   # Press Alt+c, command input becomes:
-   aic
-   # Press Enter to generate message
-   ```
-
-6. **Error Diagnosis (`Alt+d`)**:
-    When a command fails, press `Alt+d` to have AI diagnose the error and suggest fixes.
-
-    ```bash
-    gti status  # Typo - command fails
-    # Press Alt+d, AI analyzes the error and suggests:
-    # "The command 'gti' was not found. Did you mean 'git'?"
-    ```
-
-    While it is waiting you see how long it has been going, and `Esc` (or `Ctrl+C`) gives up
-    on it. The same is true of the AI actions in the command palette, `Alt+s`, and
-    `ai-watch`'s summary: the shell stays responsive instead of going quiet until the
-    provider answers.
-
-7. **Safe Run (`safe-run`)**:
-    Execute commands with deterministic prechecks and AI-powered safety analysis. Useful for auditing potential risky commands or inspecting output before piping.
-
-    ```bash
-    # Analyze and execute a command
-    safe-run rm -rf tmp/
-
-    # Inspect content before piping (e.g., curl | sh)
-    safe-run -- 'curl https://example.com/install.sh | sh'
-    ```
-
-    - **Static Precheck**: Obvious dangerous patterns such as remote-script execution are flagged before AI analysis.
-    - **Analysis**: AI checks for destructive operations or malicious patterns.
-    - **Content Inspection**: For pipe operations, you can inspect the captured output (preview shown on stderr) before allowing it to pass to the next command.
-    - **Confirmation**: Required for execution.
-
-8. **AI Watch (`ai-watch`)**:
-    Explicitly run a command through the normal shell execution path, then ask AI to summarize the result and save it to `blocks`.
-
-    ```bash
-    ai-watch -- cargo test -p doge-shell
-    ai-watch --goal "server ready を検出" -- npm run dev
-    ```
-
-    Press `Alt+w` to wrap the current input as `ai-watch -- <current input>` without executing it.
-
-9. **Agent tools**:
-    Inside `!` chat the assistant can call `shell_history`, `shell_context`, `search`,
-    `ls`, `read_file`, `str_replace`, `edit`, `execute` and `skill_manage`.
-
-    - `shell_history` shows what you recently ran, with the working directory, the exit
-      code and both output streams. Ask "why did that fail" and the assistant reads the
-      failure instead of running the command again to reproduce it.
-    - `shell_context` reports the project root, its runtimes, the build/test tasks it
-      defines, and your aliases - so the assistant looks the test command up rather than
-      guessing it.
-    - `read_file` returns a line-numbered window and is paged: the assistant continues
-      with `offset` instead of losing everything past the first few KB.
-    - `search` matches a substring by default, or a regular expression with
-      `regex: true`; `ignore_case` and a `glob` file filter are available, and binary
-      files are skipped.
-    - `str_replace` changes part of a file by exact match. `edit` still exists for
-      creating a file or replacing one in full.
-    - `execute` runs a shell command - pipes, redirection and `&&` included - and kills
-      it after `timeout_ms` (120s by default), so a build or a dev server cannot wedge
-      the shell. What the guard cannot read before it runs is refused rather than
-      approved: command substitution (`$(...)`, backticks, `<(...)`, `>(...)`) and subshells,
-      because evaluating them is what a safety check must not do; compound
-      statements (`{ ...; }`, `for`, `if`, `while`), because the commands inside one
-      cannot be classified; a line the parser cannot finish; and any way of handing
-      an interpreter code it cannot see (`sh -c`, `eval`, a shell reading stdin).
-      Write those as separate commands.
-    - The command is checked by the same `SafetyGuard` that covers what you type, and
-      every stage of a pipeline is judged, and wrappers are looked through, so both
-      `true | rm -rf ...` and `sudo rm -rf ...` are judged as `rm`. At the
-      default `normal` safety level that means the destructive commands the guard knows
-      about ask first and everything else runs; set `(safety-level 'strict)` to be asked
-      about every command the allowlist does not already cover. Anything that writes to
-      a file by redirection asks as well.
-    - An allowlisted command skips the question entirely - that is what putting it on
-      the list means - so keep `(chat-execute-add ...)` to commands you are content for
-      the AI to run unattended. Entries match by token prefix (`cargo test` covers
-      `cargo test -p foo`); an "always" answer given at a prompt matches only that exact
-      command line.
-    - Tools can read and write within the project root and the skills directories.
-      `.gitignore` is honoured the way git honours it, nested files included. Reading a
-      skill is the one exception, so a repository that ignores `.dogesh/` can still carry
-      project skills the assistant reads; writing one still goes through `skill_manage`.
-    - Long tool output is truncated in the middle, so the end of a build or test log -
-      where the error is - still reaches the model.
-    - `edit`, `str_replace`, `skill_manage` and skill scripts always ask for
-      confirmation, at every safety level. That includes scripts under a project's
-      `.dogesh/skills/`. Answering "always" applies to that file for the rest of the
-      session, so a long editing run is one question per file rather than one per
-      edit. Deleting a skill is asked separately: an "always" given for writing a
-      file does not authorise removing it.
-    - With `AI_CHAT_SKILL_STAGING` (default `task`), a `skill_manage` write that
-      would otherwise stall an unattended task with no `--write` grant for the
-      target is queued instead of asked about, so the task keeps running. Review it
-      with `skill pending`/`skill diff`/`skill approve`/`skill reject` - see
-      "Skills" below.
-
-10. **Conversation continuity**:
-    Consecutive `!` turns continue the same conversation, so follow-up questions work and
-    the assistant does not re-explore the project every time. Each turn that continues one
-    prints a dim `session: continuing ...` line, and one that starts a new conversation
-    prints why - except the very first `!` in a shell, and every turn while
-    `AI_CHAT_SESSION_TTL_SECS=0`, which print nothing (there is no previous conversation to
-    explain away). It restarts when you move to a different project (it follows you within
-    one project root, so `cd src` keeps it), when the operator prompt or language changes
-    (`chat_model` does not restart it - the history is model-independent), when an MCP
-    server is connected or disconnected, after `AI_CHAT_SESSION_TTL_SECS` of idle time
-    (default 1800), or on `chat_reset`. Installing a skill - or having the assistant write
-    one - does not restart it. `chat_status` shows what is currently carried without
-    discarding it, based on idle time - it does not re-check whether the prompt, language,
-    MCP connections or project changed since the conversation was stored.
-
-    A turn that does not finish - Ctrl-C, an API error, the tool-iteration cap, or
-    `AI_CHAT_TURN_TOKEN_BUDGET` - is removed from the conversation, but everything before it
-    is kept: only that one turn is lost, not the whole conversation. The carried conversation
-    lives in memory only, so it does not survive the shell exiting.
+See [API key](docs/ai-integration.md#api-key).
 
 ### Long-running commands in `!` chat
 
-A command the assistant runs is a managed job. If it finishes within
-`AI_CHAT_EXECUTE_YIELD_MS` (10 seconds by default) you get what you always got: the exit
-code, stdout and stderr, in one round trip. If it does not - a cold `cargo build`, a long
-test run - the assistant gets a job handle instead and follows it with `job_status` /
-`job_output` / `job_cancel`, while the command's output keeps appearing on your screen as
-it is produced.
-
-```sh
-! build this in release mode and tell me what breaks
-#  [1/100] 0s
-#  🔧 [Tool] execute ({"command":"cargo build --release"})
-#     Compiling dsh-builtin v0.1.0
-#  job 8f3a2c1d still running (cargo build --release); the assistant can follow it with job_status
-#  [2/100] 11s · 1 job(s) running
-```
-
-Jobs outlive the turn that started them, so the assistant can start a build, answer you,
-and check on it next turn. They do not outlive the conversation: `chat_reset`, a change of
-project, or a turn the shell cannot carry forward all stop them, as does leaving the shell.
-
-```sh
-chat_status    # lists running jobs with their pid and elapsed time
-chat_reset     # forgets the conversation and stops its jobs
-kill -- -12345 # stop one job by the process group `chat_status` shows
-```
-
-The shell's own `jobs` and `kill` builtins do not list these - those manage the jobs *you*
-started, and these belong to the assistant.
-
-11. **Token usage**:
-    Each `!` turn prints what it cost (`tokens: N req / in X (cached Y) / out Z`), and
-    `doctor ai` shows the session total.
-
-12. **AI Response Language**:
-    Configure the language for AI chat responses.
-
-    ```lisp
-    (vset "AI_MESSAGE_LANG" "Japanese")
-    ```
-
-    Or via environment variable:
-    ```bash
-    export AI_MESSAGE_LANG="Japanese"
-    ```
-
-13. **Project instructions and Skills**:
-
-    `!` loads scoped `AGENTS.md` guidance after session trust. It walks from the
-    repository boundary to the working/target directory, applies parent before
-    child, and refreshes before requests and file operations. Source paths and
-    failures are diagnostic; `doctor ai` lists candidates without prompting.
-    Set `AI_CHAT_PROJECT_INSTRUCTIONS=off` to disable. Limits, symlink handling,
-    nested repositories, and command/MCP limitations are documented in
-    [project instructions](docs/design/ai/project-instructions.md).
-
-    **Skills**:
-    A skill is a short `SKILL.md` the assistant reads when it is relevant - and can
-    write for itself, so a procedure worked out once is not worked out again.
-
-    The chat runtime reads them from three places, most specific first:
-
-    | Scope | Directory | What belongs there |
-    |---|---|---|
-    | Project | `<project>/.dogesh/skills/` | procedures tied to this repository |
-    | Project, shared | `<project>/.agents/skills/` | the same, kept where every agent working in the checkout can find them |
-    | Personal | `~/.config/dogesh/skills/` (`$XDG_CONFIG_HOME/dogesh/skills` when set) | anything portable |
-
-    A more specific root shadows a less specific one of the same name, so
-    `.dogesh/skills` wins over `.agents/skills`, which wins over your personal root.
-    Only the name, the path and the frontmatter `description` reach the system
-    prompt; the body is read on demand, so keep the description a trigger
-    ("Use when …") and move long detail into `references/`. Frontmatter keys dogesh
-    does not use - `allowed-tools`, `license` and the rest - are ignored rather
-    than rejected, so a skill written for another agent loads as it is; dogesh does
-    not enforce `allowed-tools`, and a skill cannot narrow what the assistant may
-    do any more than it can widen it.
-
-    **`.agents/skills/` is read, never written.** It is shared with other tools,
-    and a directory this shell does not own is not a place for it to leave files,
-    so `skill_manage` with `scope: "project"` always writes to `.dogesh/skills/`.
-    There is no personal equivalent: if you keep portable skills in
-    `~/.agents/skills`, point the personal root at them
-    (`ln -s ~/.agents/skills ~/.config/dogesh/skills`) and they load with one trust
-    story rather than two.
-
-    ```bash
-    skill list                 # scope, read count, last use
-    skill show rust-bisect     # render its SKILL.md
-    $EDITOR $(skill path rust-bisect)
-    skill remove old-notes
-    ```
-
-    **The assistant writes them too.** After a task that took many steps, or after you
-    correct it, it may offer to record the lesson with its `skill_manage` tool. Every
-    write asks first, and the answer is remembered per file for the rest of the session.
-    A write that would leave the skill without a usable `name` or `description` - the
-    two things the prompt actually shows - is refused before you are asked about it,
-    rather than silently dropping out of the prompt on the next turn.
-    `skill list` shows which skills are actually being read, so the ones that are not
-    can be removed - every summary costs tokens on every turn, and `doctor skills`
-    warns once there are more than eight.
-
-    **Reviewing a write before it lands.** `AI_CHAT_SKILL_STAGING` controls whether a
-    `skill_manage` write goes to disk right away or waits for you: `task` (default)
-    only queues one when an unattended task has no `--write` grant covering the target -
-    the one case that used to stall the task on a question nobody could answer -
-    `always` queues every write, interactive included, and `off` restores today's
-    behaviour. A queued write is never counted as a read or a write, and it never
-    touches trust or the prompt fragment until it is applied.
-
-    ```bash
-    skill pending               # what is waiting, and why
-    skill diff rust-bisect      # what it would change
-    skill approve rust-bisect   # apply it - asks first, then writes through
-                                 # the same path skill_manage itself uses
-    skill reject rust-bisect    # discard it
-    ```
-
-    `delete` is never queued - there is nothing to review, and it is the one change
-    here with no undo. `skill approve` refuses a proposal whose target has moved
-    since it was staged (edited by hand, or by an approval that landed first) rather
-    than overwrite it; reject it and ask again.
-
-    **An optional reviewer at the end of a long turn.** `AI_CHAT_SKILL_REFLECT` (off
-    by default) sends one extra, tool-free request after a turn that used at least
-    `AI_CHAT_SKILL_REFLECT_MIN_TOOLS` (default 5) tool calls, asking whether anything
-    from it is worth saving. It never writes directly - a proposal it makes is queued
-    exactly like one `skill_manage` would stage, and it never rewrites a skill it did
-    not see the body of during that turn. A failed or empty reviewer call never
-    changes the turn's own answer.
-
-    **Archiving what nobody reads any more.** `skill archive <name>` drops a personal
-    skill out of the prompt without deleting it - `skill unarchive` brings it back,
-    and `skill pin` exempts one from ever being swept automatically. Only personal
-    (`user`-scope) skills can be archived: archiving is what keeps a repository's own
-    trust decision (the digest of what it advertises) from changing whenever a
-    *personal* skill's status changes, so it deliberately stops at the door of
-    anything a project ships. `AI_CHAT_SKILL_AUTO_ARCHIVE_DAYS` (off unless set to a
-    positive number) archives an agent-written, unpinned personal skill once it has
-    gone unread that many days - the same staleness `skill list` and `doctor skills`
-    already report, just acted on instead of only mentioned.
-
-    **The first time you use `!` in a repository that ships skills, dogesh asks.** Their
-    descriptions would otherwise be in every prompt before you had decided anything,
-    and the assistant on the other side of that prompt can run commands. Answer `y`
-    for this shell session or `a` to remember the repository; adding a skill, or
-    rewording one, asks again - as does dogesh itself widening how much of a
-    description it keeps, which happens rarely and re-asks every trusted
-    repository once. You are asked once per directory, so a checkout
-    carrying both `.dogesh/skills/` and `.agents/skills/` asks twice and refusing one
-    leaves the other alone. `skill trust` shows the current answers and
-    `skill untrust` takes them back. Under an unattended task nothing is asked and an
-    untrusted repository is simply not read - an unattended run should be the more
-    careful one, not the more trusting one.
-
-    **Naming a skill outright.** Start the message with `@name` to load it whether or
-    not the assistant would have picked it:
-
-    ```
-    ! @deploy-staging ship the current branch
-    ```
-
-    Up to five, and parsing stops at the first word that is not a skill - so an email
-    address at the start of a message is left alone. An invoked skill arrives with its
-    bundled `references/`, `scripts/` and `assets/` files *named* (not read), so the
-    assistant knows what is there without spending a turn looking.
-
-    A project's skills arrive with a `git clone`, so treat them as you would any other
-    file in that repository. They are notes, never permission: a skill cannot authorise
-    skipping a confirmation, and a script bundled with one always asks before it runs -
-    including under an unattended task, where `--allow-command` does not cover it, and
-    including one under `.agents/skills/`. `AI_CHAT_PROJECT_SKILLS=0` turns both
-    project roots off entirely.
-
-    This repository keeps canonical sample skills under `docs/ai/skills/`; install the
-    ones you want with `scripts/install-runtime-skills.sh --target dogesh --profile dogesh-common`.
-    One of them, `dsh-cron`, teaches the `!` agent to add, edit and debug your own
-    [cron jobs](#cron-jobs) — install it on its own with `--profile dogesh-user`.
-
-14. **AI chat hooks**:
-    Your own checks, run around the `!` agent loop. Distinct from the Lisp
-    [hook system](#hook-system-functions), which fires around ordinary command execution.
-
-    Put them in `~/.config/dogesh/ai-hooks.json` (`DOGESH_AI_HOOKS_CONFIG` points elsewhere):
-
-    ```json
-    {
-      "version": 1,
-      "hooks": [
-        {
-          "id": "block-etc-writes",
-          "events": ["pre-tool-use"],
-          "match": {
-            "tools": ["edit", "str_replace", "execute"],
-            "paths": ["/etc/**"]
-          },
-          "command": ["python3", "/home/me/.config/dogesh/hooks/block-etc.py"],
-          "timeout_ms": 3000
-        }
-      ]
-    }
-    ```
-
-    | Event | When | Can it stop anything? |
-    |---|---|---|
-    | `session-start` | a new conversation begins | no |
-    | `user-prompt-submit` | before your message is sent | yes |
-    | `pre-tool-use` | before any tool runs, MCP included | yes |
-    | `post-tool-use` | after a tool returns | it can mark the result failed |
-    | `pre-compact` | before the conversation is shortened | no |
-    | `response-complete` | after the answer | no |
-
-    `pre-compact` fires when the conversation has grown past
-    `AI_CHAT_CONTEXT_TOKEN_BUDGET` (or the internal buffer limit), after the free
-    rule-based pass and before dogesh pays a model to summarize - its
-    `will_summarize` says which. It cannot refuse: without the shortening the
-    request would simply be too large to send.
-
-    **Which calls a hook wants** is the `match` clause. dogesh puts every command
-    through the one `execute` tool, so `{"tools": ["execute"]}` means *every
-    command* and a hook watching `rm` would pay its timeout on every `ls`. The
-    other three kinds narrow that. Kinds are ANDed; entries within a kind are ORed.
-
-    | Key | Matches |
-    |---|---|
-    | `tools` | tool names; `*` allowed only as the last character (`mcp__*`) |
-    | `programs` | programs the command runs, written the way `AI_CHAT_EXECUTE_ALLOWLIST` is - `execute` only |
-    | `paths` | globs against the paths the call names |
-    | `arguments` | exact values for top-level argument fields |
-
-    `programs` looks through wrappers and judges every stage, so `rm` matches
-    `sudo rm -rf x`, `timeout 5 rm x` and `echo hi \| rm -rf x` alike, and
-    `git push` matches `git push --force` but not `git pushx`. `paths` sees the
-    `path` argument of `edit`/`read_file`/`str_replace`/`ls`/`search`, every
-    non-option token and the `cwd` of an `execute` command, and any path-shaped
-    string anywhere in an MCP tool's arguments (nested objects and lists
-    included) - each both as written and resolved against the directory the call
-    will run in, so `/etc/**` matches `sub/../../etc/shadow` and matches
-    `{"command": "cat sub/x", "cwd": "/etc"}`. Inside a command line a bare word
-    could be a file or a program and the two cannot be told apart, so both are
-    offered: `rm .env` reaches a hook watching `**/*.env`, and the price is that
-    a deliberately broad pattern like `<cwd>/**` is true of a program name too.
-    `skill_manage` contributes no paths - its `file` is relative to the skill,
-    not to your working directory - so watch skill writes with
-    `"tools": ["skill_manage"]` instead. Resolution is textual, never `realpath`, so a symlink
-    can dodge a `paths` matcher; that costs you a check that did not run, never a
-    permission, because a hook cannot grant anything.
-
-    A `match` that could never be true is a load error - `programs` without an
-    `execute` entry in `tools`, an unparseable program, a bad glob, a non-scalar
-    `arguments` value - because a hook that loads cleanly and never fires is the
-    worst outcome available. Where a matcher is merely *pointless* rather than
-    impossible, `doctor hooks` says so and the hook still loads: an empty
-    `match` runs on every call, as it always has, and a matcher that cannot be
-    satisfied on only *some* of a hook's events still works on the rest.
-
-    The match is made against the arguments as the model sent them, while the
-    payload the hook receives is masked. They differ on purpose: masking rewrites
-    `-p <value>` unconditionally, so `mkdir -p /etc/myapp` reaches a hook as
-    `mkdir -p ***`, and a `/etc/**` matcher reading that would not fire. An
-    argument list that is present but cannot be read - a mismatched quote -
-    counts as a match, so a broken command line is never a way past a check; a
-    call with no arguments at all simply does not satisfy a matcher about them.
-
-    The event arrives as JSON on the hook's **stdin**; the hook answers with JSON on
-    stdout, or just exits:
-
-    ```json
-    { "decision": "deny", "reason": "writes outside the repo are not allowed here",
-      "message": "shown to you, not to the model",
-      "additional_context": "added to what the model reads" }
-    ```
-
-    Every event carries where the agent loop is, so a hook can govern the run and
-    not just the call - stop a tool once the loop has gone round forty times, or
-    once the turn has spent more than you meant to:
-
-    ```json
-    { "hook_version": 1, "event": "pre-tool-use", "session_id": "...", "turn_id": "...",
-      "cwd": "/repo", "safety_level": "normal", "agent_task_id": null,
-      "tool_name": "execute", "tool_arguments": { "command": "cargo test" },
-      "loop": { "iteration": 12, "max_iterations": 100,
-                "tokens": { "prompt": 88000, "completion": 4200, "total": 92200 },
-                "turn_token_budget": null },
-      "hook_budget": { "turn_budget_ms": null, "spent_ms": 40 } }
-    ```
-
-    Fields are only ever added to the payload, so `hook_version` stays `1`; it
-    moves only if a key changes meaning or goes away.
-
-    A short hook should not need a JSON parser, so the same facts arrive as
-    environment variables: `DOGESH_HOOK_EVENT`, `DOGESH_HOOK_ID`, `DOGESH_HOOK_SESSION_ID`,
-    `DOGESH_HOOK_TURN_ID`, `DOGESH_HOOK_CWD`, `DOGESH_HOOK_TOOL`, `DOGESH_HOOK_ITERATION`,
-    `DOGESH_HOOK_MAX_ITERATIONS`, `DOGESH_HOOK_TURN_TOKENS` and `DOGESH_HOOK_TIMEOUT_MS`
-    (the timeout that actually applies). `DOGESH_HOOK_DEPTH` is set too, and is what
-    stops a hook that starts `dogesh` from running hooks of its own.
-
-    `additional_context` lands next to the thing it is about, on the three events
-    that have somewhere to put it: `user-prompt-submit` (beside your message),
-    `pre-tool-use` (before the tool result) and `post-tool-use` (after it). The other
-    two say so in a warning rather than dropping it silently.
-
-    `decision` is `"deny"`, `"ask"` or absent. **There is no `"allow"`**: a hook can stop
-    something or insist you are asked about it, never permit it - the safety guard stays
-    the only thing that grants anything. Exiting `2` is shorthand for `deny` with the
-    first line of stderr as the reason; exiting `0` with no JSON means "carry on".
-
-    `command` is an argument vector, not a shell line: the hook is executed directly, so
-    put any pipeline in a script file. The first element must be an **absolute path** or
-    a bare name found on `PATH` - a relative one like `./hook.sh` is refused, because it
-    would resolve against whatever directory the chat happens to be in when the hook
-    runs, which is the very thing that keeps `.dogesh/hooks.json` unread. A bare name is
-    looked up once, at load time.
-
-    The configuration file (and its directory) must not be world-writable; it is a list
-    of commands the shell will run for you. Group-writable is fine, so a `umask` of 002
-    needs no special handling. Hooks run as you, with your environment - read one
-    before installing it, the way you would read a `config.lisp`. A hook that fails or
-    times out on `user-prompt-submit` or `pre-tool-use` **blocks**, because a check that
-    can be got past by crashing is not a check; failures on the other three events are
-    reported once and ignored. `AI_CHAT_HOOKS=off` disables the lot - budget included, so a
-    typo there cannot outlive the switch - and `doctor hooks` shows what was
-    loaded without running anything.
-
-    Each hook has its own `timeout_ms` (5000 by default, clamped to 100-60000), and at
-    most eight hooks run for one event. `AI_CHAT_HOOK_TURN_BUDGET_MS`
-    puts a ceiling on the wall time one turn spends waiting for all of them. It is off
-    by default, because a default would mean hooks quietly stopping partway through a
-    long turn. When the budget runs out, `post-tool-use`, `pre-compact`,
-    `session-start` and `response-complete` are **skipped** with one warning per
-    turn, while
-    `user-prompt-submit` and `pre-tool-use` still run on whatever is left (at least
-    100ms) - a check that could be got past by being slow would not be a check, and a
-    gate that times out already refuses. Eight hooks each need their 100ms, so the
-    budget bounds the wait rather than guaranteeing it. Time spent answering a hook's
-    own question is not charged to it.
-
-    Hooks are synchronous, but an observer need not be. Print your line, exit `0`, and
-    leave the slow part to a child of your own: only a timeout or a `Ctrl-C` kills the
-    process group, so a hook that has already exited leaves its background work alone.
-
-    An unknown event name, an unknown `match` field or an unknown key anywhere in the
-    file is a load error, and a load error refuses the chat rather than running without
-    the checks. That also means a configuration using the newer `match` kinds will not
-    load on an older `dogesh` - deliberately, and for the same reason: a typo must not be
-    a way for a gate to disappear quietly.
-
-    Project-local `.dogesh/hooks.json` is deliberately **not** read: cloning a repository
-    should not be enough to run its commands.
-
-For maintainers, concise AI/Skill authoring notes live in `docs/ai/README.md`.
-
+See [Long-running commands in `!` chat](docs/ai-integration.md#long-running-commands-in--chat).
 
 ## 📁 Project Structure
 

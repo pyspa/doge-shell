@@ -130,6 +130,7 @@ fn bridge_chat_proxy(cwd: std::path::PathBuf) -> crate::test_support::TestShellP
 
 #[test]
 fn chat_with_tools_returns_the_final_answer_without_any_tool_calls() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![final_answer("42")]);
@@ -170,6 +171,7 @@ fn tool_call_response(id: &str, name: &str, arguments: &str) -> Value {
 
 #[test]
 fn chat_with_tools_runs_a_tool_call_then_returns_the_next_final_answer() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -197,6 +199,7 @@ fn chat_with_tools_runs_a_tool_call_then_returns_the_next_final_answer() {
 /// the toggle flips without approval, and the turn itself just continues.
 #[test]
 fn chat_with_tools_runs_mcp_load_group_without_approval() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -230,6 +233,7 @@ fn chat_with_tools_runs_mcp_load_group_without_approval() {
 /// group that stays inactive reaches neither request.
 #[test]
 fn loaded_group_tools_reach_the_next_request_same_turn() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -287,6 +291,7 @@ fn with_usage(mut response: Value) -> Value {
 /// stays off and the other inactive group stays hidden.
 #[test]
 fn tool_search_discovery_reaches_the_next_request_same_turn() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     // An agent turn only accepts an answer once criteria verify; seed one
@@ -465,6 +470,7 @@ fn is_mutating_tool_call_classifies_state_changing_tools() {
 /// the scripted second answer is what comes out.
 #[test]
 fn chat_with_tools_bounces_the_first_answer_after_a_mutation_when_opted_in() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     use crate::shell_capabilities::AgentCommandVerdict;
 
     let cwd = tempfile::tempdir().unwrap();
@@ -499,6 +505,7 @@ fn chat_with_tools_bounces_the_first_answer_after_a_mutation_when_opted_in() {
 /// so one scripted answer is enough.
 #[test]
 fn chat_with_tools_accepts_the_first_answer_after_a_mutation_by_default() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     use crate::shell_capabilities::AgentCommandVerdict;
 
     let cwd = tempfile::tempdir().unwrap();
@@ -1734,6 +1741,7 @@ fn interactive_tool_search_does_not_persist_across_turns() {
 /// and the undiscovered sibling stays hidden.
 #[test]
 fn interactive_tool_search_discovery_reaches_the_next_request_same_turn() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -2318,6 +2326,7 @@ fn mcp_load_group_stays_outside_the_tool_search_budget() {
 /// tool definitions - through search, describe, and call alike.
 #[test]
 fn bridge_mode_keeps_an_identical_tools_payload_across_search_describe_and_call() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = bridge_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -2368,6 +2377,7 @@ fn bridge_mode_keeps_an_identical_tools_payload_across_search_describe_and_call(
 /// ordinary builtin/job tools.
 #[test]
 fn bridge_mode_never_offers_direct_mcp_schemas() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = bridge_chat_proxy(cwd.path().to_path_buf());
     let client = ScriptedClient::new(vec![
@@ -2794,6 +2804,7 @@ for line in sys.stdin:
 /// the whole group - all within one turn.
 #[test]
 fn explicit_eager_mode_preserves_direct_schemas_on_a_large_catalog() {
+    let _state = crate::chatgpt::session::tests::isolated_state_home();
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
     proxy

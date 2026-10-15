@@ -12,6 +12,9 @@ impl ChatGptClient {
         } else {
             None
         };
+        if config.provider().is_opencode() {
+            config.readiness()?;
+        }
         let api_key = if subscription.is_some() {
             ""
         } else {
@@ -25,10 +28,20 @@ impl ChatGptClient {
 
         let client = Self {
             subscription,
+            provider: config.provider(),
+            opencode_session: None,
             api_key: api_key.to_string(),
             default_model: config.default_model().to_string(),
             chat_endpoint: config.chat_endpoint(),
-            client: Self::build_client(config.timeout())?,
+            client: if config.provider().is_opencode() {
+                Client::builder()
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(config.timeout())
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()?
+            } else {
+                Self::build_client(config.timeout())?
+            },
             request_timeout: config.timeout(),
             unsupported: Arc::new(Mutex::new(Vec::new())),
             default_reasoning_effort: config.reasoning_effort().map(str::to_string),
@@ -51,7 +64,7 @@ impl ChatGptClient {
                 "unavailable".hash(&mut hash);
             }
         } else {
-            "api_key".hash(&mut hash);
+            self.provider.name().hash(&mut hash);
             self.api_key.hash(&mut hash);
             self.chat_endpoint.hash(&mut hash);
         }
@@ -79,6 +92,7 @@ impl ChatGptClient {
 impl fmt::Debug for ChatGptClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ChatGptClient")
+            .field("provider", &self.provider)
             .field("default_model", &self.default_model)
             .field("subscription", &self.subscription.is_some())
             .finish_non_exhaustive()

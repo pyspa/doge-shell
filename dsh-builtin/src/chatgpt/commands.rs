@@ -146,9 +146,14 @@ pub fn chat_model(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) 
             // never ends up holding stray whitespace that every reader has
             // to trim around again.
             let new_model = argv[1].trim();
-            let key = if load_openai_config(proxy).provider()
-                == dsh_openai::AiProvider::ChatGptSubscription
-            {
+            let provider = load_openai_config(proxy).provider();
+            let key = if let Some(key) = provider.opencode_model_env() {
+                if let Err(error) = provider.validate_opencode_model(new_model) {
+                    ctx.write_stderr(&format!("chat_model: {error}")).ok();
+                    return ExitStatus::ExitedWith(1);
+                }
+                key
+            } else if provider == dsh_openai::AiProvider::ChatGptSubscription {
                 dsh_openai::SUBSCRIPTION_MODEL_ENV
             } else {
                 MODEL_KEY
@@ -247,6 +252,13 @@ pub fn chat_status_detailed(
 
     let report = status_report(proxy);
     ctx.write_stdout(&report.status)?;
+    let config = load_openai_config(proxy);
+    if config.provider().is_opencode() {
+        ctx.write_stdout(&provider::route_report(&config))?;
+        if let Err(error) = config.readiness() {
+            ctx.write_stdout(&format!("readiness: {error}"))?;
+        }
+    }
 
     // Jobs are reported whether or not a conversation is carried: a running
     // process group is worth naming even when the turn that started it is

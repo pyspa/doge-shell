@@ -1713,3 +1713,81 @@ fn cd_minus_hook_failure_keeps_successful_navigation_state_without_auto_output()
     assert_eq!(env.get_var("PWD"), Some(b.clone()));
     assert_eq!(env.dir_stack, vec![b]);
 }
+
+#[test]
+fn opencode_model_and_key_changes_refresh_the_shared_ai_client() {
+    init();
+    let env = Environment::new();
+    let scope = || {
+        env.read()
+            .integration_state
+            .ai_client
+            .read()
+            .as_ref()
+            .map(|c| c.cache_scope())
+    };
+    for (key, value) in [
+        ("AI_CHAT_API_KEY", "generic-key"),
+        ("AI_CHAT_MODEL", "generic-model"),
+        ("OPENCODE_API_KEY", ""),
+        ("OPENCODE_GO_API_KEY", "go-key"),
+        ("OPENCODE_ZEN_API_KEY", "zen-key"),
+        ("AI_CHAT_OPENCODE_GO_MODEL", "glm-5.3"),
+        ("AI_CHAT_OPENCODE_ZEN_MODEL", "qwen3.8-max"),
+        ("AI_CHAT_PROVIDER", "opencode_go"),
+    ] {
+        env.write().set_shell_var(key.into(), value.into());
+    }
+    let go = scope().unwrap();
+    assert_eq!(
+        env.read().integration_state.chat_model.read().as_deref(),
+        Some("glm-5.3")
+    );
+    env.write()
+        .set_shell_var("OPENCODE_GO_API_KEY".into(), "rotated-go".into());
+    assert_ne!(scope().unwrap(), go);
+    env.write().unset_shell_var("OPENCODE_GO_API_KEY");
+    assert!(scope().is_none());
+    env.write()
+        .set_shell_var("OPENCODE_API_KEY".into(), "shared".into());
+    let shared = scope().unwrap();
+    env.write()
+        .set_shell_var("OPENCODE_API_KEY".into(), "rotated-shared".into());
+    assert_ne!(scope().unwrap(), shared);
+    env.write()
+        .set_shell_var("AI_CHAT_OPENCODE_GO_MODEL".into(), "glm-5.2".into());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().as_deref(),
+        Some("glm-5.2")
+    );
+    env.write()
+        .set_shell_var("AI_CHAT_PROVIDER".into(), "opencode_zen".into());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().as_deref(),
+        Some("qwen3.8-max")
+    );
+    let zen = scope().unwrap();
+    env.write()
+        .set_shell_var("OPENCODE_ZEN_API_KEY".into(), "rotated-zen".into());
+    assert_ne!(scope().unwrap(), zen);
+    env.write()
+        .set_shell_var("AI_CHAT_OPENCODE_ZEN_MODEL".into(), "glm-5.3".into());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().as_deref(),
+        Some("glm-5.3")
+    );
+    env.write()
+        .set_shell_var("OPENCODE_ZEN_API_KEY".into(), "".into());
+    env.write()
+        .set_shell_var("OPENCODE_API_KEY".into(), "".into());
+    assert!(scope().is_none());
+    env.write().unset_shell_var("AI_CHAT_OPENCODE_ZEN_MODEL");
+    assert!(env.read().integration_state.chat_model.read().is_none());
+    env.write()
+        .set_shell_var("AI_CHAT_PROVIDER".into(), "api_key".into());
+    assert!(scope().is_some());
+    assert_eq!(
+        env.read().integration_state.chat_model.read().as_deref(),
+        Some("generic-model")
+    );
+}

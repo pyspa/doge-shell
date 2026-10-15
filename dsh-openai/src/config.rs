@@ -9,6 +9,8 @@ pub const SUBSCRIPTION_MODEL_ENV: &str = "AI_CHAT_SUBSCRIPTION_MODEL";
 pub enum AiProvider {
     ApiKey,
     ChatGptSubscription,
+    OpencodeGo,
+    OpencodeZen,
 }
 
 impl AiProvider {
@@ -21,8 +23,10 @@ impl AiProvider {
             | "chatgpt-subscription"
             | "openai_subscription"
             | "openai-subscription" => Ok(Self::ChatGptSubscription),
+            "opencode_go" => Ok(Self::OpencodeGo),
+            "opencode_zen" => Ok(Self::OpencodeZen),
             _ => anyhow::bail!(
-                "AI_CHAT_PROVIDER must be api_key or chatgpt_subscription (alias: chatgpt)."
+                "AI_CHAT_PROVIDER must be api_key, chatgpt_subscription (alias: chatgpt), opencode_go or opencode_zen."
             ),
         }
     }
@@ -31,6 +35,8 @@ impl AiProvider {
         match self {
             Self::ApiKey => "api_key",
             Self::ChatGptSubscription => "chatgpt_subscription",
+            Self::OpencodeGo => "opencode_go",
+            Self::OpencodeZen => "opencode_zen",
         }
     }
 }
@@ -163,7 +169,7 @@ impl OpenAiConfig {
             api_key,
             if resolved_provider
                 .as_ref()
-                .is_ok_and(|p| *p == AiProvider::ChatGptSubscription)
+                .is_ok_and(|p| *p != AiProvider::ApiKey)
             {
                 None
             } else {
@@ -190,6 +196,20 @@ impl OpenAiConfig {
                     config.configuration_error = Some("ChatGPT subscription does not support custom base URLs. Unset AI_CHAT_BASE_URL and OPENAI_BASE_URL.".into());
                 }
             }
+            Ok(provider) => {
+                config.provider = provider;
+                config.base_url = provider.opencode_base().unwrap().into();
+                config.api_key = [
+                    provider.opencode_key_env().unwrap(),
+                    crate::opencode::SHARED_KEY_ENV,
+                ]
+                .iter()
+                .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
+                config.default_model = getter(provider.opencode_model_env().unwrap())
+                    .unwrap_or_default()
+                    .trim()
+                    .into();
+            }
             Err(error) => config.configuration_error = Some(error.to_string()),
         }
         config
@@ -208,6 +228,7 @@ impl OpenAiConfig {
         if let Some(error) = &self.configuration_error {
             anyhow::bail!("{error}");
         }
+        self.provider.validate_opencode_model(&self.default_model)?;
         Ok(())
     }
     pub fn readiness(&self) -> anyhow::Result<()> {
@@ -218,6 +239,15 @@ impl OpenAiConfig {
                     anyhow::bail!(
                         "OpenAI-compatible API key is not configured. {}",
                         API_KEY_SETUP_HINT
+                    );
+                }
+            }
+            AiProvider::OpencodeGo | AiProvider::OpencodeZen => {
+                if self.api_key.is_none() {
+                    anyhow::bail!(
+                        "Set {} or OPENCODE_API_KEY for {}. Generic OpenAI keys are not used.",
+                        self.provider.opencode_key_env().unwrap(),
+                        self.provider_name()
                     );
                 }
             }

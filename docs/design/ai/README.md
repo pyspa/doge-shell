@@ -56,6 +56,21 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
   - `AI_CHAT_ALLOW_INSECURE_HTTP`: `http://` の base URL を許可する。既定では https へ差し替え、
     stderr に 1 回警告する。
 
+### OpenCode Go / Zen
+
+明示provider `opencode_go` / `opencode_zen` は固定HTTPS endpointのChat Completionsを使用する。
+GoはGo/Go Plus契約枠、Zen/Consoleは残高・従量課金として区別し、自動切替しない。
+GoでもConsoleの **Use balance** が有効なら枠超過後に残高を消費し得る。doge-shellは契約やこの設定を変更・照会しない。
+キー・モデル・URLを汎用APIやChatGPT subscriptionから流用しない。詳細な設定は [env-vars.md](env-vars.md#opencode-go--zen)。
+
+公式表（[Go](https://opencode.ai/v2/docs/console/go/#endpoints)、[Zen](https://opencode.ai/v2/docs/console/models/#endpoints)、2026-10-15確認）からChat Completions対応の一部だけをoffline catalogに収録する。
+同じIDでもprovider毎にprotocolが違うため、catalogを共用しない。未知ID・Responses/Anthropic Messages/Google形式は送信前に拒否する。
+全モデル対応や利用資格・live availabilityを保証しない。`chat_provider models opencode_go|opencode_zen` は通信しない。
+
+自前User-Agent `doge-shell/<version>` と、会話IDをSHA-256でopaqueにした `x-opencode-session` を送る。
+`!` main/summary/reflectionは最終session claim後の同じ会話ID、単発シェルAI操作は公開sendごとの新IDを使用し、retry/stream fallback中は固定する。
+キー/モデル/provider変更時は既存の履歴保護を維持し、続行前に `chat_reset` が必要。redirectを追わず、Go→Zenや他のAPI課金経路へfallbackしない。
+
 ## 2. エージェントループは 2 つだけ
 
 | | A: `!` チャット | B: シェル側 AI |

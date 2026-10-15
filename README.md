@@ -1413,6 +1413,7 @@ alone does not switch providers. Use `chat_reset` before continuing a conversati
 from another provider/account/model. To persist selection, set
 `AI_CHAT_PROVIDER` and `AI_CHAT_SUBSCRIPTION_MODEL` in `config.lisp`.
 
+
 If the system browser cannot open, login keeps waiting and shows a one-time
 manual URL with the private identity hint removed. Open it on the same host;
 a browser on another host needs forwarding for the exact loopback callback port.
@@ -1429,6 +1430,23 @@ does not guarantee entitlement. See [subscription details](docs/design/ai/subscr
 For a noninteractive request, set `AI_CHAT_PROVIDER=chatgpt_subscription` and
 `AI_CHAT_SUBSCRIPTION_MODEL=<catalog-slug>` in the invoking environment (or
 `config.lisp`), then run `dogesh -c '! hello'` after user-operated sign-in.
+
+### OpenCode Go / Zen
+
+OpenCode Go / Zen are also available as dedicated providers. Set
+`OPENCODE_GO_API_KEY` or `OPENCODE_ZEN_API_KEY` (or the explicit shared
+`OPENCODE_API_KEY`), then run `chat_provider opencode_go glm-5.3` or
+`chat_provider opencode_zen glm-5.3`. Run `chat_reset` before continuing an
+existing conversation after switching. `chat_model` changes the selected
+provider's separate model; `chat_provider models opencode_go` (or
+`opencode_zen`) lists the verified offline Chat Completions subset. There is
+no default model. Responses, Messages and Google model routes are currently
+unsupported. `chat_provider`, `chat_status` and `doctor ai` show the route.
+Go uses subscription quotas; if Console **Use balance** is enabled, requests
+may spend balance after quota. Zen / Console uses prepaid, pay-as-you-go billing.
+There is no automatic switch between them. Generic OpenAI keys, URLs and
+models are preserved and never used by these dedicated routes. See
+[provider configuration](docs/design/ai/env-vars.md#opencode-go--zen).
 
 ### API key
 

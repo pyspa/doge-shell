@@ -38,6 +38,7 @@ struct ScriptedClient {
     /// Tool names offered on each request, in order. Proves a mid-turn
     /// activation reaches the *next* model request of the same turn.
     seen_tools: std::sync::Mutex<Vec<Vec<String>>>,
+    seen_sessions: std::sync::Mutex<Vec<Option<String>>>,
     /// Full serialized `tools` payloads, in order. Names alone cannot prove
     /// cache stability: bridge mode must carry byte-identical definitions.
     seen_payloads: std::sync::Mutex<Vec<String>>,
@@ -48,6 +49,7 @@ impl ScriptedClient {
         Self {
             responses: std::sync::Mutex::new(responses.into_iter().collect()),
             seen_tools: std::sync::Mutex::new(Vec::new()),
+            seen_sessions: std::sync::Mutex::new(Vec::new()),
             seen_payloads: std::sync::Mutex::new(Vec::new()),
         }
     }
@@ -67,6 +69,10 @@ impl ChatClient for ScriptedClient {
         _messages: &[Value],
         options: &ChatRequestOptions,
     ) -> anyhow::Result<Value> {
+        self.seen_sessions
+            .lock()
+            .unwrap()
+            .push(options.session_id.clone());
         let tools = options.tools.as_deref().unwrap_or_default();
         let names = tools
             .iter()
@@ -149,6 +155,11 @@ fn chat_with_tools_returns_the_final_answer_without_any_tool_calls() {
     );
 
     assert_eq!(result, Ok("42".to_string()));
+    assert!(
+        client.seen_sessions.lock().unwrap()[0]
+            .as_ref()
+            .is_some_and(|v| !v.is_empty())
+    );
 }
 
 /// An assistant message carrying one `tool_calls` entry - `finish_reason`
@@ -713,7 +724,12 @@ fn perform_summary_lets_a_later_rewind_keep_pre_turn_history_it_folded_in() {
     let client = ScriptedClient::new(vec![final_answer("earlier work, now including q1-q4")]);
     let cwd = tempfile::tempdir().unwrap();
     let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    manager.transport_session_id = Some("summary-conversation".into());
     manager.perform_summary(&client, &mut proxy, None).unwrap();
+    assert_eq!(
+        client.seen_sessions.lock().unwrap()[0].as_deref(),
+        Some("summary-conversation")
+    );
 
     assert!(manager.rewind_to_turn_start());
     assert_eq!(
@@ -3435,4 +3451,33 @@ fn empty_skill_root_cannot_add_prompt_or_mention_metadata_after_capture() {
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     });
+}
+
+#[test]
+fn main_requests_keep_the_carried_session_until_reset() {
+    let _state = session::tests::isolated_state_home();
+    let dir = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(dir.path().into());
+    proxy
+        .vars
+        .insert(session::SESSION_TTL_KEY.into(), "3600".into());
+    let client = ScriptedClient::new(vec![
+        final_answer("one"),
+        final_answer("two"),
+        final_answer("three"),
+    ]);
+    let mcp = Arc::new(RwLock::new(McpManager::load_blocking(vec![])));
+    for index in 0..3 {
+        if index == 2 {
+            session::session_reset();
+        }
+        chat_with_tools(
+            &client, "hello", None, None, None, None, &mcp, None, &mut proxy,
+        )
+        .unwrap();
+    }
+    let ids = client.seen_sessions.lock().unwrap();
+    assert!(ids[0].is_some());
+    assert_eq!(ids[0], ids[1]);
+    assert_ne!(ids[1], ids[2]);
 }

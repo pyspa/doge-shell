@@ -248,6 +248,7 @@ fn chat_with_tools(
             }
         }
         manager.bind_provider(client.cache_scope())?;
+        manager.transport_session_id = Some(setup.hook_ctx.session_id().to_owned());
         manager.instructions = instructions::InstructionContext::default();
         // The interactive registry belongs to `!` alone. A task polls
         // `runtime.jobs`, so naming its session here - or telling it about jobs
@@ -436,6 +437,7 @@ fn chat_with_tools(
             );
 
             let options = ChatRequestOptions::new()
+                .with_session_id(manager.transport_session_id.clone())
                 .with_temperature(temperature)
                 .with_model(model_override.clone())
                 .with_tools(Some(request_tools))
@@ -765,8 +767,6 @@ fn chat_with_tools(
     // Observation only. "Keep going" is a request to spend more of the user's
     // money and touch more of their machine, which is the one thing a hook is
     // not allowed to ask for.
-    // Keeps the envelope's `loop` in step with the `iterations` and `tokens`
-    // this event has carried in its own detail since it was added.
     setup.hook_ctx.note_loop(loop_state(
         iterations,
         turn_tokens.0,

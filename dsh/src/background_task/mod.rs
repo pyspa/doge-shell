@@ -51,6 +51,9 @@ fn filtered_snapshot(shell: &Shell, env_names: &[String]) -> ChildShellSnapshot 
                     | "OPENAI_MODEL"
                     | "OPENAI_API_KEY"
                     | "OPEN_AI_API_KEY"
+                    | "OPENCODE_GO_API_KEY"
+                    | "OPENCODE_ZEN_API_KEY"
+                    | "OPENCODE_API_KEY"
                     | "DOGESH_AI_HOOKS_CONFIG"
                     | "XDG_CONFIG_HOME"
                     | "XDG_STATE_HOME"
@@ -270,4 +273,33 @@ pub(crate) fn command(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn opencode_credentials_are_available_to_ai_without_expanding_execute_exports() {
+        let env = crate::environment::Environment::new();
+        for key in [
+            "OPENCODE_GO_API_KEY",
+            "OPENCODE_ZEN_API_KEY",
+            "OPENCODE_API_KEY",
+        ] {
+            env.write().set_shell_var(key.into(), "fake-key".into());
+        }
+        let shell = Shell::new(env);
+        let snapshot = filtered_snapshot(&shell, &[]);
+        for key in [
+            "OPENCODE_GO_API_KEY",
+            "OPENCODE_ZEN_API_KEY",
+            "OPENCODE_API_KEY",
+        ] {
+            assert_eq!(
+                snapshot.variables.get(key).map(String::as_str),
+                Some("fake-key")
+            );
+            assert!(!snapshot.exported_vars.contains(key));
+        }
+    }
 }

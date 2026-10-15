@@ -250,6 +250,8 @@ impl Environment {
             "AI_CHAT_MODEL"
             | "OPENAI_MODEL"
             | "AI_CHAT_SUBSCRIPTION_MODEL"
+            | "AI_CHAT_OPENCODE_GO_MODEL"
+            | "AI_CHAT_OPENCODE_ZEN_MODEL"
             | "AI_CHAT_PROVIDER" => {
                 self.reload_chat_model();
                 self.reload_ai_client();
@@ -261,6 +263,9 @@ impl Environment {
             "AI_CHAT_API_KEY"
             | "OPENAI_API_KEY"
             | "OPEN_AI_API_KEY"
+            | "OPENCODE_GO_API_KEY"
+            | "OPENCODE_ZEN_API_KEY"
+            | "OPENCODE_API_KEY"
             | "AI_CHAT_BASE_URL"
             | "OPENAI_BASE_URL"
             | "AI_CHAT_TIMEOUT_SECS"
@@ -303,7 +308,7 @@ impl Environment {
     /// absent/blank value.
     pub fn reload_chat_model(&mut self) {
         let config = dsh_openai::OpenAiConfig::from_getter(|key| self.lookup_variable(key));
-        let value = if config.provider() == dsh_openai::AiProvider::ChatGptSubscription {
+        let value = if config.provider() != dsh_openai::AiProvider::ApiKey {
             (!config.default_model().is_empty()).then(|| config.default_model().to_string())
         } else {
             self.lookup_variable("AI_CHAT_MODEL")

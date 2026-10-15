@@ -30,6 +30,19 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     // URL and their defaults here meant `doctor` drifted from `OpenAiConfig`
     // and, because it skipped `sanitize_base_url`, called an `http://` endpoint
     // "ok" while every request went to api.openai.com instead.
+    if let Ok(cwd) = proxy.get_current_dir() {
+        let (docs, problems) = crate::chatgpt::instructions::discover(&cwd);
+        for doc in docs {
+            let _ = ctx.write_stdout(&format!(
+                "ok project-guidance candidate {} bytes={} (loading requires session trust)",
+                doc.path.display(),
+                doc.body.len()
+            ));
+        }
+        for problem in problems {
+            let _ = ctx.write_stdout(&format!("warn project-guidance {problem}"));
+        }
+    }
     let config = crate::chatgpt::load_openai_config(proxy);
     let configured_base_url = proxy
         .get_var("AI_CHAT_BASE_URL")

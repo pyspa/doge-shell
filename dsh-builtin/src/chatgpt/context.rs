@@ -11,6 +11,7 @@ use super::*;
 pub(super) struct DynamicContext {
     signature: Option<EnvironmentSignature>,
     rendered: String,
+    pub(super) guidance: String,
 }
 
 /// What the snapshot depends on.
@@ -32,7 +33,7 @@ impl DynamicContext {
             self.signature = Some(signature);
         }
 
-        json!({ "role": "user", "content": self.rendered.clone() })
+        json!({ "role": "user", "content": format!("{}\n{}", self.rendered, self.guidance) })
     }
 }
 

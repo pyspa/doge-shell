@@ -24,6 +24,7 @@ mod commands;
 mod context;
 mod conversation;
 pub(crate) mod footprint;
+pub(crate) mod instructions;
 pub(crate) mod observation;
 mod prompt;
 mod provider;
@@ -250,6 +251,7 @@ fn chat_with_tools(
             }
         }
         manager.bind_provider(client.cache_scope())?;
+        manager.instructions = instructions::InstructionContext::default();
         // The interactive registry belongs to `!` alone. A task polls
         // `runtime.jobs`, so naming its session here - or telling it about jobs
         // whose ids resolve to nothing in its own runtime - would only send it
@@ -426,6 +428,7 @@ fn chat_with_tools(
 
             // Assembled and measured in one helper (`footprint`), so the
             // recorded sizes are exactly what is sent below.
+            dynamic_context.guidance = manager.instructions.refresh(proxy);
             let current_messages = footprint::build_and_record_request(
                 &setup,
                 &manager,

@@ -187,6 +187,9 @@ impl HookContext {
         proxy: &mut dyn crate::shell_capabilities::ChatToolHost,
     ) -> Result<Self, String> {
         let hooks = config::load(proxy as &mut dyn ShellProxy)?;
+        if proxy.background_task_context().is_some() && !hooks.is_empty() {
+            return Err("background chat cannot run with active AI hooks".into());
+        }
         let agent_task_id = proxy
             .agent_runtime()
             .map(|runtime| runtime.lock().task.id.clone());

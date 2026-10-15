@@ -137,6 +137,14 @@ pub static BUILTIN_COMMAND: LazyLock<HashMap<&'static str, BuiltinSpec>> = LazyL
     let new = BuiltinSpec::new;
     let new_async = BuiltinSpec::new_async;
     let entries: &[(&str, BuiltinSpec)] = &[
+        (
+            "chat_task",
+            new(
+                crate::chat_task::command,
+                crate::chat_task::description(),
+                ParentSessionRequired,
+            ),
+        ),
         // Core shell commands
         ("exit", new(exit, exit_description(), ParentSessionRequired)),
         ("cd", new(cd::command, cd::description(), Reexec)),

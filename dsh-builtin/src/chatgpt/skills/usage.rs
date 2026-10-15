@@ -151,6 +151,10 @@ pub(crate) fn read_this_turn() -> Vec<PathBuf> {
 
 /// Merge the buffered counters into the state file. Called once per turn.
 pub(crate) fn flush() {
+    if super::super::session::is_background_session() {
+        let _ = with_pending(std::mem::take);
+        return;
+    }
     flush_to(&crate::config_paths::skills_state_file());
 }
 

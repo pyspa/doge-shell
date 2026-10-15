@@ -246,6 +246,16 @@ impl Environment {
     /// `variables` with its inherited value, and every inherited name is
     /// marked exported. After this, `Environment` is authoritative.
     pub fn new() -> Arc<RwLock<Self>> {
+        Self::new_with_projection(false)
+    }
+
+    /// A private host may rebuild frozen projections without activating the
+    /// foreground shell's process-wide completion or read-only AI caches.
+    pub(crate) fn new_isolated() -> Arc<RwLock<Self>> {
+        Self::new_with_projection(true)
+    }
+
+    fn new_with_projection(isolated_projection: bool) -> Arc<RwLock<Self>> {
         let variables: HashMap<String, String> = env::vars().collect();
         let exported_vars: HashSet<String> = variables.keys().cloned().collect();
         let z_exclude = parse_z_exclude_from_vars(&variables);
@@ -261,7 +271,7 @@ impl Environment {
         debug!("default path {:?}", &paths);
 
         let env_arc = Arc::new(RwLock::new(Environment {
-            isolated_projection: false,
+            isolated_projection,
             expansion_output: None,
             invocation: InvocationParameters::default(),
             last_exit_status: 0,

@@ -181,13 +181,33 @@ pub fn execute_tool_call(
         .and_then(|v| v.as_str())
         .unwrap_or_default();
 
-    // Log tool execution
-    let logged_arguments = redact_tool_arguments(arguments);
-    eprintln!(
-        "\x1b[36m🔧 [Tool] {} ({})\x1b[0m",
-        name,
-        truncate_args(&logged_arguments)
-    );
+    // A worker forwards before hooks, logs, or MCP lookups. A supervisor
+    // host may dispatch only the exact operation admitted by its context.
+    let background = proxy.background_task_context();
+    if let Some(context) = &background {
+        if let Some(result) = context.remote_tool(name, arguments) {
+            let content = truncate_output(result?);
+            let outcome = if result_failed(&content) {
+                ToolOutcome::Failure
+            } else {
+                ToolOutcome::Success
+            };
+            return Ok(ToolExecution { content, outcome });
+        }
+        if !context.permits_tool(name, arguments) {
+            return Err("background tool operation was not admitted by the supervisor".into());
+        }
+    }
+
+    // Background diagnostics belong to task output, never the live REPL.
+    if background.is_none() {
+        let logged_arguments = redact_tool_arguments(arguments);
+        eprintln!(
+            "\x1b[36m🔧 [Tool] {} ({})\x1b[0m",
+            name,
+            truncate_args(&logged_arguments)
+        );
+    }
 
     // Take the lock for each short call rather than holding it across the
     // confirmation prompt: the user can sit on that question for a long time,

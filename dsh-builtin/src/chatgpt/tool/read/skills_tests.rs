@@ -39,7 +39,11 @@ fn setup() -> (
 
 #[test]
 fn model_can_read_the_listed_body_and_relative_resource_with_existing_tool() {
-    let (_dir, mut proxy, skill, _state) = setup();
+    let (dir, mut proxy, target, _state) = setup();
+    // Exercise canonical usage identity even when the caller uses an alias,
+    // as macOS does for temporary directories below /var.
+    let skill = dir.path().join("skill-alias");
+    std::os::unix::fs::symlink(&target, &skill).unwrap();
     let instruction = skill.join("SKILL.md");
     let body = run(&json!({"path":instruction}).to_string(), &mut proxy).unwrap();
     assert!(body.contains("Read references/detail.md"));
@@ -49,7 +53,9 @@ fn model_can_read_the_listed_body_and_relative_resource_with_existing_tool() {
     )
     .unwrap();
     assert!(resource.contains("needed detail"));
-    assert!(crate::chatgpt::skills::usage::read_this_turn().contains(&skill));
+    let owner = fs::canonicalize(&target).unwrap();
+    let reads = crate::chatgpt::skills::usage::read_this_turn();
+    assert!(reads.contains(&owner), "missing canonical owner {owner:?}: {reads:?}");
 }
 
 #[test]

@@ -7,12 +7,31 @@ use super::*;
 static SECRET_ASSIGNMENT: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"(?i)\b([A-Z_][A-Z0-9_]*)=([^\s]+)").ok());
 
+const SECRET_OPTION_NAMES: &str =
+    r"password|passwd|passphrase|token|secret|api[-_]?key|access[-_]?token";
+
 static SECRET_OPTION: LazyLock<Option<Regex>> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)(--?(?:password|passwd|passphrase|token|secret|api[-_]?key|access[-_]?token)(?:\s+|=)|-p\s+)([^\s"']+|"[^"]*"|'[^']*')"#,
-    )
+    Regex::new(&format!(
+        r#"(?i)(--?(?:{SECRET_OPTION_NAMES})(?:\s+|=)|-p\s+)([^\s"']+|"[^"]*"|'[^']*')"#,
+    ))
     .ok()
 });
+
+static MULTILINE_SECRET_PREFIX: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(&format!(
+        r"(?i)authorization|--?(?:{SECRET_OPTION_NAMES})|-p"
+    ))
+    .ok()
+});
+
+/// A conservative streaming boundary check, using the same option names and
+/// Unicode case folding as the canonical redactor. False positives are safe:
+/// option whitespace/quoted values and Authorization whitespace may span lines.
+pub fn may_redact_across_lines(text: &str) -> bool {
+    MULTILINE_SECRET_PREFIX
+        .as_ref()
+        .is_none_or(|pattern| pattern.is_match(text))
+}
 
 static AUTH_BEARER: LazyLock<Option<Regex>> = LazyLock::new(|| {
     Regex::new(r#"(?i)(authorization\s*:\s*bearer\s+)([A-Za-z0-9._~+/=-]+)"#).ok()

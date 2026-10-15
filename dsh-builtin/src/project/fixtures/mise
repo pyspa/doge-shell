@@ -1,0 +1,20 @@
+#!/bin/sh
+# Immutable test executable: tests configure only its explicit child environment.
+empty_json='{}'
+if [ -n "${DOGESH_TEST_MISE_LOG-}" ]; then
+    printf '%s\n' "$*" >> "$DOGESH_TEST_MISE_LOG"
+    printf 'SHELL_ONLY=%s\n' "${DOGESH_SHELL_ONLY-unset}" >> "$DOGESH_TEST_MISE_LOG"
+fi
+if [ "$1" = "trust" ] && [ "$2" = "--show" ]; then
+    printf '%s\n' "${DOGESH_TEST_MISE_TRUST-trusted}"
+    exit "${DOGESH_TEST_MISE_TRUST_EXIT-0}"
+fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "ls" ]; then
+    printf '%s\n' "${DOGESH_TEST_MISE_MISSING-$empty_json}"
+    exit 0
+fi
+if [ "$1" = "--no-hooks" ] && [ "$2" = "env" ]; then
+    printf '%s\n' "${DOGESH_TEST_MISE_ENV-$empty_json}"
+    exit 0
+fi
+exit 1

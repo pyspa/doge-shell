@@ -981,7 +981,13 @@ fn test_build_system_prompt_with_language() {
     let mcp_manager = McpManager::load_blocking(vec![]);
 
     // Case 1: No language
-    let prompt_no_lang = build_system_prompt(None, None, &mcp_manager, &[], McpToolMode::Eager);
+    let prompt_no_lang = build_system_prompt(
+        None,
+        None,
+        &mcp_manager,
+        &SkillsSnapshot::default(),
+        McpToolMode::Eager,
+    );
     assert!(!prompt_no_lang.text.contains("MUST respond in"));
 
     // Case 2: With language
@@ -989,7 +995,7 @@ fn test_build_system_prompt_with_language() {
         None,
         Some("Japanese".to_string()),
         &mcp_manager,
-        &[],
+        &SkillsSnapshot::default(),
         McpToolMode::Eager,
     );
     assert!(
@@ -1003,7 +1009,7 @@ fn test_build_system_prompt_with_language() {
         Some("Be polite".to_string()),
         Some("French".to_string()),
         &mcp_manager,
-        &[],
+        &SkillsSnapshot::default(),
         McpToolMode::Eager,
     );
     assert!(
@@ -1049,8 +1055,8 @@ fn write_project_skill(root: &std::path::Path, name: &str, description: &str) {
     .unwrap();
 }
 
-fn project_roots(root: &std::path::Path) -> Vec<SkillRoot> {
-    skills::skill_roots(Some(root), true)
+fn project_roots(root: &std::path::Path) -> SkillsSnapshot {
+    SkillsSnapshot::capture(skills::skill_roots(Some(root), true))
 }
 
 /// Is the named project root still in the list?
@@ -1058,8 +1064,8 @@ fn project_roots(root: &std::path::Path) -> Vec<SkillRoot> {
 /// By path, not by scope. A project now has two candidate roots and
 /// `skill_roots` lists both whether or not they exist on disk, so "any
 /// project-scoped root remains" no longer answers "was this one dropped".
-fn has_root(roots: &[SkillRoot], path: &std::path::Path) -> bool {
-    roots.iter().any(|root| root.path == path)
+fn has_root(roots: &SkillsSnapshot, path: &std::path::Path) -> bool {
+    roots.roots().any(|root| root.path == path)
 }
 
 fn dsh_root(project: &std::path::Path) -> std::path::PathBuf {
@@ -1165,7 +1171,8 @@ fn an_untrusted_agents_root_is_dropped_while_a_trusted_dsh_root_stays() {
     with_state_home(state.path(), || {
         // `.dogesh` was agreed to on disk; `.agents` has never been seen.
         let mut roots = project_roots(&root);
-        let dsh = skills::describe_project_roots(&roots)
+        let dsh = roots
+            .project_decisions()
             .into_iter()
             .find(|decision| decision.root == dsh_root(&root))
             .expect("the dsh root has a skill");
@@ -1270,10 +1277,20 @@ fn system_prompt_identity_ignores_the_skills_list() {
         path: root,
     }];
 
-    skills::clear_skills_fragment_cache();
-    let without = build_system_prompt(None, None, &mcp_manager, &[], McpToolMode::Eager);
-    skills::clear_skills_fragment_cache();
-    let with = build_system_prompt(None, None, &mcp_manager, &roots, McpToolMode::Eager);
+    let without = build_system_prompt(
+        None,
+        None,
+        &mcp_manager,
+        &SkillsSnapshot::default(),
+        McpToolMode::Eager,
+    );
+    let with = build_system_prompt(
+        None,
+        None,
+        &mcp_manager,
+        &SkillsSnapshot::capture(roots),
+        McpToolMode::Eager,
+    );
 
     assert_eq!(without.identity, with.identity);
     assert!(with.text.contains("a fresh lesson"));
@@ -3340,4 +3357,82 @@ fn observation_tool_definitions_are_stable_and_appended() {
 #[test]
 fn observation_system_prompt_mentions_retrieval() {
     assert!(TOOL_SYSTEM_PROMPT.contains("observation_read"));
+}
+
+/// The exact metadata admitted by the gate must survive filesystem changes
+/// during approval or between approval and prompt construction.
+#[test]
+fn skill_approval_and_prompt_use_one_metadata_snapshot() {
+    let state = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let root = project_with_a_skill(project.path());
+    with_state_home(state.path(), || {
+        let mut snapshot = project_roots(&root);
+        let mut proxy = crate::test_support::TestShellProxy {
+            current_dir: root.clone(),
+            confirm_result: true,
+            ..crate::test_support::TestShellProxy::default()
+        };
+        // Simulate a change while the original metadata is awaiting approval.
+        write_project_skill(&dsh_root(&root), "deploy", "unapproved changed description");
+        write_project_skill(&dsh_root(&root), "added", "unapproved added description");
+        gate_project_skills(&mut snapshot, &mut proxy);
+        let prompt = build_system_prompt(
+            None,
+            None,
+            &McpManager::default(),
+            &snapshot,
+            McpToolMode::Eager,
+        );
+        assert!(prompt.text.contains("repo deploy steps"));
+        assert!(!prompt.text.contains("unapproved"));
+        let (_, rest) = resolve_skill_mentions("@added inspect target", &snapshot);
+        assert_eq!(
+            rest, "@added inspect target",
+            "a new skill must not enter through mention discovery"
+        );
+
+        // Explicitly reading a known skill still fetches its current body lazily.
+        let (mentioned, rest) = resolve_skill_mentions("@deploy inspect target", &snapshot);
+        assert_eq!(rest, "inspect target");
+        assert!(mentioned[0].contains("unapproved changed description"));
+
+        // A new turn sees the changed collection and asks again.
+        proxy.confirm_result = false;
+        let mut next = project_roots(&root);
+        gate_project_skills(&mut next, &mut proxy);
+        assert!(!has_root(&next, &dsh_root(&root)));
+    });
+}
+
+#[test]
+fn empty_skill_root_cannot_add_prompt_or_mention_metadata_after_capture() {
+    let state = tempfile::tempdir().unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let root = project.path().canonicalize().unwrap();
+    std::fs::create_dir(root.join(".git")).unwrap();
+    with_state_home(state.path(), || {
+        let mut snapshot = project_roots(&root);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut proxy = crate::test_support::TestShellProxy {
+            current_dir: root.clone(),
+            confirm_counter: Some(calls.clone()),
+            ..crate::test_support::TestShellProxy::default()
+        };
+        gate_project_skills(&mut snapshot, &mut proxy);
+        write_project_skill(&dsh_root(&root), "added", "unapproved empty root addition");
+        let prompt = build_system_prompt(
+            None,
+            None,
+            &McpManager::default(),
+            &snapshot,
+            McpToolMode::Eager,
+        );
+        assert!(!prompt.text.contains("unapproved empty root addition"));
+        assert_eq!(
+            resolve_skill_mentions("@added inspect target", &snapshot).1,
+            "@added inspect target"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    });
 }

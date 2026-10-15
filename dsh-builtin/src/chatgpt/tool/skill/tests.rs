@@ -178,11 +178,10 @@ fn a_lint_rejection_is_refused_before_it_can_be_staged() {
     });
 }
 
-/// Staging must not touch the counters or the cache a real write
-/// updates - nothing was written yet, so nothing about it should look
-/// used or fresh.
+/// Staging must not touch the counters a real write updates: nothing
+/// was written yet, so it must not count as a usage event.
 #[test]
-fn staging_does_not_bump_the_usage_counters_or_clear_the_cache() {
+fn staging_does_not_bump_the_usage_counters() {
     let dir = tempdir().unwrap();
     let root = project(dir.path());
     let state = tempdir().unwrap();

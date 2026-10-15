@@ -555,7 +555,6 @@ fn doctor_skills_labels_each_root_separately() {
 
     let (ctx, observer) = observed_context();
     let mut proxy = hooks_proxy(&root, &[]);
-    crate::chatgpt::skills::clear_skills_fragment_cache();
     report_runtime_skills(&ctx, &mut proxy, &root);
     let output = observed_stdout(&observer);
 
@@ -583,7 +582,6 @@ fn doctor_skills_reports_a_lint_rejection_as_an_error() {
 
     let (ctx, observer) = observed_context();
     let mut proxy = hooks_proxy(&root, &[]);
-    crate::chatgpt::skills::clear_skills_fragment_cache();
     report_runtime_skills(&ctx, &mut proxy, &root);
     let output = observed_stdout(&observer);
 
@@ -634,7 +632,6 @@ fn doctor_skills_reports_archived_and_pending_separately() {
 
     let (ctx, observer) = observed_context();
     let mut proxy = hooks_proxy(&root, &[]);
-    crate::chatgpt::skills::clear_skills_fragment_cache();
     report_runtime_skills(&ctx, &mut proxy, &root);
     let output = observed_stdout(&observer);
 

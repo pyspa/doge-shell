@@ -19,3 +19,5 @@
 - `mcp disconnect` は bindings に効く（`tool_definitions` / `system_prompt_fragment` / `execute_tool` が disabled サーバを外す）。`session_meta` は明示 `mcp connect` でしか埋まらないので、そこをゲートに使うと起動時ロードだけのサーバが全滅する。
 - `turn::truncate_middle` の予算は**バイト数**（引数名は `max_chars`）。日本語では実効が約 1/3。AI へ渡す文字列を自前で `&s[..n]` しない（`safe_run` がそれで panic していた）。
 - `Path::join` は空パスを与えると区切りを足す。`PathBuf::new()` から接尾辞を積むと `notes.txt/` になり、`fs::write` が ENOENT で落ちる（`resolve_with_existing_ancestor`、`edit` が新規ファイルを作れなかった）。
+
+- Background承認表示は原文上の既知秘密値と汎用秘密検出の範囲を統合してからマスクする。先に片方を置換するともう片方の検出用ラベルを壊す。制御/Cf文字とliteral backslashはlossless escapeで区別し、mask・切詰・lossy表示はCLI/shortcut双方でapprove不可（deny可）。加工済み表示をOperation/tokenへ戻さず、ID不一致の応答で別pendingを変更しない。

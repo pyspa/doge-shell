@@ -235,11 +235,32 @@ pub fn spawn_internal_helper(
         );
     }
 
-    // Inherit the process environment for the helper's fresh
-    // `Environment::new()`; the snapshot then overwrites everything
-    // authoritative. Entries with interior NUL cannot cross `execve` and are
+    let background_snapshot = serde_json::from_slice::<InternalExecRequest>(request_bytes)
+        .ok()
+        .filter(|request| matches!(request.kind, InternalExecKind::ChatTask(_)))
+        .map(|request| request.snapshot);
+    if background_snapshot.is_some() {
+        argv.push(CString::new("--__dsh-background-worker").expect("static flag"));
+    }
+
+    // Ordinary helpers inherit ambient state. Background chat workers receive
+    // only their filtered snapshot, including provider-only credentials. Entries with interior NUL cannot cross `execve` and are
     // skipped rather than failing the spawn.
-    let envp: Vec<CString> = std::env::vars_os()
+    let helper_environment: Vec<_> = match background_snapshot {
+        Some(snapshot) => snapshot
+            .variables
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    std::ffi::OsString::from(key),
+                    std::ffi::OsString::from(value),
+                )
+            })
+            .collect(),
+        None => std::env::vars_os().collect(),
+    };
+    let envp: Vec<CString> = helper_environment
+        .into_iter()
         .filter_map(|(key, value)| {
             let mut bytes = key.as_encoded_bytes().to_vec();
             bytes.push(b'=');

@@ -38,6 +38,14 @@ pub struct Cli {
     #[arg(long = "__dsh-internal-status-fd", hide = true)]
     pub internal_status_fd: Option<i32>,
 
+    /// Internal log-free worker bootstrap; payload still requires the FD protocol.
+    #[arg(
+        long = "__dsh-background-worker",
+        hide = true,
+        requires = "internal_exec_fd"
+    )]
+    pub background_worker: bool,
+
     #[command(subcommand)]
     pub subcommand: Option<SubCommand>,
 }
@@ -146,6 +154,7 @@ mod tests {
         let base = Cli {
             command: None,
             command_args: Vec::new(),
+            background_worker: false,
             lisp: None,
             notebook: None,
             internal_exec_fd: None,

@@ -76,10 +76,20 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     // Read back before writing, so the question can say what changes rather
     // than only which file. A file that is not there yet is a new file, not a
     // diff against nothing.
-    let change = crate::diff::preview(
-        fs::read_to_string(&normalized_abs_path).ok().as_deref(),
-        contents,
-    );
+    let restricted_io =
+        proxy.agent_runtime().is_some() || proxy.background_task_context().is_some();
+    let previous = if restricted_io {
+        crate::agent::files::read(&normalized_abs_path)
+    } else {
+        fs::read_to_string(&normalized_abs_path)
+    };
+    if let Some(background) = proxy.background_task_context()
+        && let Ok(previous_contents) = &previous
+        && !background.read_result_authorized(&normalized_abs_path, previous_contents)
+    {
+        return Err("chat: file contents changed before background edit preview".into());
+    }
+    let change = crate::diff::preview(previous.ok().as_deref(), contents);
     let confirm_msg = format!(
         "AI wants to write to file: `{}` ({}).{}",
         path_value,
@@ -95,7 +105,12 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         return Ok("File modification cancelled by user.".to_string());
     }
 
-    if proxy.agent_runtime().is_some() {
+    if let Some(background) = proxy.background_task_context()
+        && !background.write_contents_authorized(&normalized_abs_path, contents)
+    {
+        return Err("chat: admitted write target or preimage changed before writing".into());
+    }
+    if restricted_io {
         crate::agent::files::write(&normalized_abs_path, contents)
     } else {
         if let Some(parent) = normalized_abs_path.parent() {

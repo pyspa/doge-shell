@@ -44,9 +44,13 @@ pub(super) fn environment_signature(proxy: &mut dyn ShellProxy) -> EnvironmentSi
         .unwrap_or_default();
 
     EnvironmentSignature {
-        git_head_modified_ms: git_head_path(&cwd)
-            .map(|head| modified_ms(&head))
-            .unwrap_or(0),
+        git_head_modified_ms: if session::is_background_session() {
+            0
+        } else {
+            git_head_path(&cwd)
+                .map(|head| modified_ms(&head))
+                .unwrap_or(0)
+        },
         cwd,
     }
 }
@@ -122,6 +126,9 @@ pub(super) fn environment_snapshot(proxy: &mut dyn ShellProxy) -> String {
 }
 
 pub(super) fn describe_git_state(proxy: &mut dyn ShellProxy) -> String {
+    if session::is_background_session() {
+        return "unavailable in background tasks".to_string();
+    }
     // Resolved through the logical runtime, spawned with exactly the
     // exported child environment: the model sees the same git the shell
     // would run.

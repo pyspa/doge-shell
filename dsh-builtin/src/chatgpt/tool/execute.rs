@@ -188,6 +188,28 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         .unwrap_or(default_timeout_ms)
         .clamp(MIN_TIMEOUT_MS, max_timeout_ms);
 
+    if let Some(context) = proxy.background_task_context()
+        && let Some(jobs) = context.jobs()
+    {
+        // The supervisor owns command groups independently of the AI worker.
+        // Always yield immediately: tool polling must never occupy the REPL.
+        let environment = proxy.child_process_environment();
+        let directory = cwd.unwrap_or_else(|| context.cwd());
+        let builder = capture::shell_command(command, Some(&directory), &environment);
+        let mut jobs = jobs.lock();
+        jobs.reap_finished(8);
+        if context.is_canceled() || !context.permits_tool("execute", arguments) {
+            return Err("background execution permission was revoked".into());
+        }
+        let id = jobs
+            .start(builder, Duration::from_millis(timeout_ms), None)
+            .map_err(|error| error.to_string())?;
+        return jobs
+            .snapshot(&id, 0, 4096)
+            .map(|value| value.to_string())
+            .map_err(|error| error.to_string());
+    }
+
     if let Some(runtime) = proxy.agent_runtime() {
         // Clone task inputs under a short lock, then release before touching
         // the proxy or spawning: a persistent task receives only the minimum

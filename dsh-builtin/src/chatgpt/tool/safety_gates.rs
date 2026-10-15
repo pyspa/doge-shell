@@ -176,6 +176,24 @@ pub(crate) fn confirm_agent_action_with_preview(
     message: &str,
     preview: Option<&str>,
 ) -> Result<bool, String> {
+    if let Some(background) = proxy.background_task_context() {
+        if let Some(path) = approval_key.strip_prefix("write:")
+            && background.write_authorized(Path::new(path))
+        {
+            return Ok(true);
+        }
+        // Background admission is operation-specific. Never consume or store
+        // the interactive session's broader per-path "always" approvals here.
+        return background
+            .confirm(message)
+            .map(|decision| {
+                matches!(
+                    decision,
+                    ApprovalDecision::Allow | ApprovalDecision::AllowAlways
+                )
+            })
+            .map_err(|err| format!("chat: confirmation failed: {err}"));
+    }
     if let Some(runtime) = proxy.agent_runtime() {
         if let Some(path) = approval_key.strip_prefix("write:")
             && agent_write_granted(proxy, Path::new(path))
@@ -226,6 +244,9 @@ pub(crate) fn confirm_agent_action_with_preview(
 /// task at all - callers that only make sense under one check that
 /// themselves.
 pub(crate) fn agent_write_granted(proxy: &mut dyn ChatToolHost, path: &Path) -> bool {
+    if let Some(background) = proxy.background_task_context() {
+        return background.write_authorized(path);
+    }
     proxy.evaluate_agent_file(path, true) == crate::shell_capabilities::AgentCommandVerdict::Allowed
 }
 /// What "always" remembers for a file the agent wants to change.

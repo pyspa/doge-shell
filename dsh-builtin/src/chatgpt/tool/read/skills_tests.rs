@@ -55,7 +55,10 @@ fn model_can_read_the_listed_body_and_relative_resource_with_existing_tool() {
     assert!(resource.contains("needed detail"));
     let owner = fs::canonicalize(&target).unwrap();
     let reads = crate::chatgpt::skills::usage::read_this_turn();
-    assert!(reads.contains(&owner), "missing canonical owner {owner:?}: {reads:?}");
+    assert!(
+        reads.contains(&owner),
+        "missing canonical owner {owner:?}: {reads:?}"
+    );
 }
 
 #[test]

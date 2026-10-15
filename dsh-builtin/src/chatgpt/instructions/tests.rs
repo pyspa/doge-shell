@@ -125,7 +125,7 @@ fn denied_guidance_body_is_not_sent_and_not_reasked_each_iteration() {
 
 #[test]
 fn actual_chat_request_gets_scoped_text_before_edit_and_retains_confirmation() {
-    let _registry_guard = crate::chatgpt::tool::execute::tests::env_lock();
+    let _state_guard = crate::chatgpt::session::tests::isolated_state_home();
     use std::sync::Mutex;
     struct Client {
         messages: Mutex<Vec<Vec<Value>>>,

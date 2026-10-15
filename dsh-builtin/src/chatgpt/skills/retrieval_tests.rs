@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 #[test]
 fn model_discovers_then_reads_only_the_needed_skill_and_resource() {
-    let _registry_guard = crate::chatgpt::tool::execute::tests::env_lock();
+    let _state_guard = crate::chatgpt::session::tests::isolated_state_home();
     struct Client {
         step: Mutex<usize>,
         instruction: PathBuf,

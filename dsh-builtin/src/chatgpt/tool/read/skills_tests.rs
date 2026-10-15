@@ -2,7 +2,24 @@ use super::*;
 use crate::test_support::TestShellProxy;
 use tempfile::tempdir;
 
-fn setup() -> (tempfile::TempDir, TestShellProxy, std::path::PathBuf) {
+struct IsolatedUsage {
+    _state: crate::chatgpt::session::tests::StateHomeGuard,
+}
+impl Drop for IsolatedUsage {
+    fn drop(&mut self) {
+        crate::chatgpt::skills::usage::flush();
+    }
+}
+
+fn setup() -> (
+    tempfile::TempDir,
+    TestShellProxy,
+    std::path::PathBuf,
+    IsolatedUsage,
+) {
+    let state = IsolatedUsage {
+        _state: crate::chatgpt::session::tests::isolated_state_home(),
+    };
     let dir = tempdir().unwrap();
     fs::create_dir(dir.path().join(".git")).unwrap();
     let skill = dir.path().join(".dogesh/skills/demo");
@@ -17,12 +34,12 @@ fn setup() -> (tempfile::TempDir, TestShellProxy, std::path::PathBuf) {
         current_dir: dir.path().to_path_buf(),
         ..Default::default()
     };
-    (dir, proxy, skill)
+    (dir, proxy, skill, state)
 }
 
 #[test]
 fn model_can_read_the_listed_body_and_relative_resource_with_existing_tool() {
-    let (_dir, mut proxy, skill) = setup();
+    let (_dir, mut proxy, skill, _state) = setup();
     let instruction = skill.join("SKILL.md");
     let body = run(&json!({"path":instruction}).to_string(), &mut proxy).unwrap();
     assert!(body.contains("Read references/detail.md"));
@@ -37,7 +54,7 @@ fn model_can_read_the_listed_body_and_relative_resource_with_existing_tool() {
 
 #[test]
 fn relative_resource_never_escapes_its_bundle_or_expands_shell_variables() {
-    let (dir, mut proxy, skill) = setup();
+    let (dir, mut proxy, skill, _state) = setup();
     fs::write(dir.path().join("outside.md"), "must not escape").unwrap();
     for path in ["../../../outside.md", "/etc/hosts", "~/file", "$HOME/file"] {
         let result = run(
@@ -60,7 +77,7 @@ fn relative_resource_never_escapes_its_bundle_or_expands_shell_variables() {
 
 #[test]
 fn missing_resource_and_invalid_bases_are_explicit_errors() {
-    let (dir, mut proxy, skill) = setup();
+    let (dir, mut proxy, skill, _state) = setup();
     let missing = run(
         &json!({"path":"references/missing.md","skill_path":skill.join("SKILL.md")}).to_string(),
         &mut proxy,
@@ -83,7 +100,7 @@ fn missing_resource_and_invalid_bases_are_explicit_errors() {
 
 #[test]
 fn paged_relative_resource_continues_with_an_absolute_path() {
-    let (_dir, mut proxy, skill) = setup();
+    let (_dir, mut proxy, skill, _state) = setup();
     fs::write(skill.join("references/detail.md"), "x\n".repeat(500)).unwrap();
     let first = run(
         &json!({"path":"references/detail.md","skill_path":skill.join("SKILL.md")}).to_string(),
@@ -105,7 +122,7 @@ fn paged_relative_resource_continues_with_an_absolute_path() {
 
 #[test]
 fn in_bundle_instruction_symlinks_work_but_cross_bundle_links_do_not() {
-    let (_dir, mut proxy, skill) = setup();
+    let (_dir, mut proxy, skill, _state) = setup();
     fs::rename(skill.join("SKILL.md"), skill.join("instructions.md")).unwrap();
     std::os::unix::fs::symlink("instructions.md", skill.join("SKILL.md")).unwrap();
     let result = run(

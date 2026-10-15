@@ -652,22 +652,26 @@ fn an_empty_file_is_not_an_error() {
     assert!(parse("   \n").unwrap().is_empty());
 }
 
-/// The file is read once per turn at most, so an edit has to invalidate the
-/// cache rather than wait for a new shell.
 #[test]
-fn cache_reloads_when_the_file_changes() {
+fn relative_config_uses_logical_cwd_and_reports_the_resolved_file() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ai-hooks.json");
-
     std::fs::write(&path, r#"{"version":1,"hooks":[]}"#).unwrap();
-    clear_cache();
-    assert!(read(&path).unwrap().is_empty());
+    let mut proxy = crate::test_support::TestShellProxy {
+        current_dir: dir.path().into(),
+        ..Default::default()
+    };
+    proxy
+        .vars
+        .insert(HOOKS_CONFIG_KEY.into(), "ai-hooks.json".into());
 
-    std::fs::write(
-            &path,
-            r#"{"version":1,"hooks":[{"id":"a","events":["post-tool-use"],"command":["/opt/dsh-hooks/hook.sh"]}]}"#,
-        )
-        .unwrap();
-    let reloaded = read(&path).unwrap();
-    assert_eq!(reloaded.all().len(), 1);
+    assert!(load(&mut proxy).unwrap().is_empty());
+    // A fresh read of this same logical file must fail closed, with its full
+    // resolved path, even though the process cwd is elsewhere.
+    std::fs::write(&path, "invalid hook configuration").unwrap();
+    let error = load(&mut proxy).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    std::fs::remove_file(&path).unwrap();
+    let error = load(&mut proxy).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
 }

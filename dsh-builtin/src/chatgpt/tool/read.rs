@@ -67,10 +67,11 @@ fn render_window(path_label: &str, contents: &str, offset: usize, limit: usize) 
     let mut rendered = String::new();
     let mut last_line = start;
     let mut byte_budget_hit = false;
+    let mut truncated_line = false;
 
     for (index, line) in lines.iter().enumerate().skip(start).take(limit) {
         let entry = format!("{:>6}\t{}\n", index + 1, line);
-        if !rendered.is_empty() && rendered.len() + entry.len() > MAX_READ_BYTES {
+        if rendered.len() + entry.len() > MAX_READ_BYTES {
             byte_budget_hit = true;
             break;
         }
@@ -78,13 +79,16 @@ fn render_window(path_label: &str, contents: &str, offset: usize, limit: usize) 
         last_line = index + 1;
     }
 
-    // A single line longer than the whole budget still has to be returned.
+    // A long first line gets a bounded UTF-8 prefix and an explicit warning:
+    // line offsets cannot retrieve the omitted part of that same line.
     if rendered.is_empty() {
         let line = lines[start];
-        let end = line.floor_char_boundary(MAX_READ_BYTES);
-        rendered = format!("{:>6}\t{}\n", start + 1, &line[..end]);
+        let prefix = format!("{:>6}\t", start + 1);
+        let end = line.floor_char_boundary(MAX_READ_BYTES.saturating_sub(prefix.len() + 1));
+        rendered = format!("{prefix}{}\n", &line[..end]);
         last_line = start + 1;
         byte_budget_hit = end < line.len();
+        truncated_line = byte_budget_hit;
     }
 
     let mut header = format!("{path_label}: lines {offset}-{last_line} of {total}");
@@ -95,6 +99,11 @@ fn render_window(path_label: &str, contents: &str, offset: usize, limit: usize) 
 
     let mut out = header;
     out.push_str(&rendered);
+    if truncated_line {
+        out.push_str(&format!(
+            "\n[truncated: remainder of line {last_line} is not available through line offsets.]\n"
+        ));
+    }
 
     if last_line < total {
         let next = last_line + 1;
@@ -378,16 +387,30 @@ mod tests {
     #[test]
     fn read_file_stops_at_byte_budget_and_points_at_the_next_line() {
         let dir = tempdir().unwrap();
-        let body: String = (0..500)
+        let multiline: String = (0..500)
             .map(|i| format!("{i}{}\n", "x".repeat(60)))
             .collect();
-        fs::write(dir.path().join("wide.txt"), &body).unwrap();
         let mut proxy = proxy(dir.path());
-
-        let result = run(r#"{"path": "wide.txt"}"#, &mut proxy).unwrap();
-        assert!(result.contains("stopped early: byte budget reached"));
-        assert!(result.contains("offset="));
-        assert!(result.len() < MAX_READ_BYTES * 2);
+        for (body, truncated_line, has_next_line) in [
+            (multiline, false, true),
+            ("x".repeat(20_000), true, false),
+            (format!("{}\nnext line\n", "界".repeat(7_000)), true, true),
+        ] {
+            fs::write(dir.path().join("wide.txt"), body).unwrap();
+            let result = run(r#"{"path": "wide.txt"}"#, &mut proxy).unwrap();
+            assert!(result.contains("stopped early: byte budget reached"));
+            assert!(
+                result.len() < MAX_READ_BYTES + 512,
+                "{} bytes",
+                result.len()
+            );
+            assert_eq!(result.contains("offset="), has_next_line);
+            assert_eq!(result.contains("remainder of line 1"), truncated_line);
+            if truncated_line && has_next_line {
+                let next = run(r#"{"path":"wide.txt","offset":2}"#, &mut proxy).unwrap();
+                assert!(next.contains("next line"));
+            }
+        }
     }
 
     #[test]

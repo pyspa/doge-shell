@@ -66,10 +66,14 @@ impl SkillsSnapshot {
     }
 
     pub(crate) fn render_fragment(&self) -> String {
+        self.render_fragment_with_writes(true)
+    }
+
+    pub(crate) fn render_fragment_with_writes(&self, allow_writes: bool) -> String {
         if self.roots.is_empty() {
             return String::new();
         }
         let roots: Vec<_> = self.roots().cloned().collect();
-        SkillsManager::render_snapshot_fragment(&roots, self.skills())
+        SkillsManager::render_snapshot_fragment(&roots, self.skills(), allow_writes)
     }
 }

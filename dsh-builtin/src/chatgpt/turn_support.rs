@@ -87,12 +87,13 @@ impl TurnSetup {
                 DEFAULT_MCP_BRIDGE_SCHEMA_BYTES,
             );
         }
-        let prompt = build_system_prompt(
+        let prompt = build_system_prompt_for_mode(
             operator_prompt,
             language,
             &mcp_manager.read(),
             &skills,
             mcp_tool_mode,
+            session::is_background_session(),
         );
 
         let runtime = proxy.agent_runtime();

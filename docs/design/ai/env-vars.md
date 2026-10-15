@@ -29,6 +29,7 @@
 | `CHAT_PROMPT` | なし | 同上 |
 | `SAFETY_LEVEL` | `normal` | `dsh-types/src/safety_policy.rs` |
 | `DOGESH_EXECUTE_TOOL_CONFIG` | XDG の `openai-execute-tool.json` | `execute.rs` |
+| `AI_CHAT_PROJECT_INSTRUCTIONS` | on（`0`/`false`/`off`/`no` で off） | `!` の AGENTS.md 読込。詳細は [project-instructions.md](project-instructions.md) |
 | `AI_CHAT_PROJECT_SKILLS` | on（`0`/`false`/`off`/`no` で off） | `dsh-builtin/src/chatgpt/settings.rs` |
 | `AI_CHAT_SKILL_STAGING` | `task`（`always`/`off` も可） | `dsh-builtin/src/chatgpt/settings.rs`（`resolve_skill_staging`）。`always` は常時ステージ。`off` と既定の `task` は通常の書き込み確認へ進む（`task` がステージするのは本番では到達しないタスク経路だけ。README §2） |
 | `AI_CHAT_SKILL_REFLECT` | off | `dsh-builtin/src/chatgpt/reflect.rs`。ターン末の tools 無し単発リクエストで skill 提案を試みる |

@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct ConversationManager {
+    #[serde(skip)]
+    pub(super) instructions: instructions::InstructionContext,
     /// Persistent provider/model/account binding, including after summarization removes old output.
     #[serde(default)]
     pub(super) provider_scope: Option<String>,
@@ -71,6 +73,7 @@ pub(super) struct TurnStart {
 impl ConversationManager {
     pub(super) fn new(system_prompt: Value, first_user_message: Value) -> Self {
         Self {
+            instructions: instructions::InstructionContext::default(),
             provider_scope: None,
             summary: None,
             buffer: Vec::new(),

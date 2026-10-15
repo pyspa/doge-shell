@@ -1,10 +1,7 @@
-//! `!` chat: the synchronous agent loop `dsh/src/shell/eval.rs` calls into,
-//! and the `chat_*` builtins that configure it. `chat_with_tools` (the
-//! tool-calling loop itself, ~550 lines) stays in this file - its meaning
-//! (iteration limits, where reflection runs, hook firing order) is the
-//! contract `docs/design/ai/README.md` §2 documents and must not drift; everything
-//! decided once before the loop, or read only after it, moved out into the
-//! modules below.
+//! Synchronous `!` chat loop, called from `dsh/src/shell/eval.rs`.
+//! Turn setup, request assembly and bookkeeping live in the modules below.
+//! Loop limits, hook ordering and the two-loop contract are documented in
+//! `docs/design/ai/README.md` §2.
 use super::ShellProxy;
 use crate::shell_capabilities::ChatToolHost;
 use dsh_openai::turn::{self, TurnOutcome, extract_message_content, interpret_response};
@@ -24,6 +21,7 @@ mod commands;
 mod context;
 mod conversation;
 pub(crate) mod footprint;
+pub(crate) mod instructions;
 pub(crate) mod observation;
 mod prompt;
 mod provider;
@@ -250,6 +248,7 @@ fn chat_with_tools(
             }
         }
         manager.bind_provider(client.cache_scope())?;
+        manager.instructions = instructions::InstructionContext::default();
         // The interactive registry belongs to `!` alone. A task polls
         // `runtime.jobs`, so naming its session here - or telling it about jobs
         // whose ids resolve to nothing in its own runtime - would only send it
@@ -426,6 +425,7 @@ fn chat_with_tools(
 
             // Assembled and measured in one helper (`footprint`), so the
             // recorded sizes are exactly what is sent below.
+            dynamic_context.guidance = manager.instructions.refresh(proxy);
             let current_messages = footprint::build_and_record_request(
                 &setup,
                 &manager,

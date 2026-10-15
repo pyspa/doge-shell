@@ -80,6 +80,13 @@ pub async fn eval_str(
         }
     }
 
+    if let Some(task_input) = crate::ai_task_input::classify(&input) {
+        let result = crate::background_task::shortcut::execute(shell, ctx, task_input);
+        publish_exit_status(shell, if result.is_ok() { 0 } else { 1 });
+        result?;
+        return Ok(0);
+    }
+
     if let Some(rest) = input.trim_start().strip_prefix('!') {
         if let Err(e) = disable_raw_mode() {
             tracing::error!("Failed to disable raw mode: {}", e);
@@ -645,6 +652,21 @@ mod tests {
     use super::*;
     use crate::environment::Environment;
     use crate::shell::Shell;
+
+    #[tokio::test]
+    async fn task_shortcut_rejects_redirected_context_without_starting_a_task() {
+        let env = Environment::new();
+        let mut shell = Shell::new(env);
+        let file = std::fs::File::open("/dev/null").unwrap();
+        let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
+        ctx.interactive = true;
+        ctx.outfile = file.as_raw_fd();
+        let error = eval_str(&mut shell, &mut ctx, "!& literal text".into(), false)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("interactive input/output TTY"));
+        assert!(shell.background_task.is_none());
+    }
 
     #[test]
     fn test_get_jobs_simple() {

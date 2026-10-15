@@ -34,6 +34,7 @@ use std::{
 };
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
+mod approval;
 mod lifecycle;
 mod output;
 mod owned_job;
@@ -413,19 +414,10 @@ impl TaskHandle {
         {
             inner.pending = None;
         }
-        let pending = inner.pending.as_ref().map(|pending| json!({
-            "request_id": pending.request.request_id, "epoch": pending.request.epoch,
-            "tool": if pending.guidance { "project_guidance" } else { &pending.request.operation.tool },
-            "targets": pending.request.operation.canonical_targets.iter().map(|path| self.shared.mask(&path.to_string_lossy(), 512)).collect::<Vec<_>>(),
-            "target_count": pending.request.operation.canonical_targets.len(),
-            "guidance": if pending.guidance { pending.request.operation.args["guidance_trust"].as_str().map(|message| self.shared.mask(message, 2048)) } else { None },
-            "command_preview": pending.request.operation.args["command"].as_str().map(|command| self.shared.mask(command, 2048)),
-            "execution_warning": if pending.request.operation.tool == "execute" && !inner.task.scope().sandbox_verified { Some("This command will run without OS sandbox isolation.") } else { None },
-            "write_bytes": pending.request.operation.content_digest.as_ref().map(String::len),
-            "before_preview": pending.request.operation.content_digest.as_ref().and(pending.request.operation.preimage_digest.as_ref()).map(|text| self.shared.mask(text, 2048)),
-            "after_preview": pending.request.operation.content_digest.as_ref().map(|text| self.shared.mask(text, 2048)),
-            "preview_truncated": pending.request.operation.content_digest.as_ref().is_some_and(|text| text.len() > 2048) || pending.request.operation.preimage_digest.as_ref().is_some_and(|text| text.len() > 2048) || pending.request.operation.args["command"].as_str().is_some_and(|text| text.len() > 2048),
-        }));
+        let pending = inner
+            .pending
+            .as_ref()
+            .map(|pending| approval::display(&self.shared, &inner, pending).0);
         json!({"task_id": inner.task.task_id(), "state": inner.task.status(), "epoch": inner.task.generation(),
             "profile": inner.task.scope().profile, "usage": inner.task.usage(), "tokens_reported": inner.tokens_reported,
             "approval": pending, "ok": inner.completed_ok})
@@ -435,33 +427,6 @@ impl TaskHandle {
             &String::from_utf8_lossy(&self.shared.output.lock()),
             OUTPUT_LIMIT,
         )
-    }
-    pub(super) fn approve(
-        &self,
-        expected_task_id: &str,
-        request_id: u64,
-        allow: bool,
-    ) -> Result<()> {
-        self.shared.cancel_disconnected();
-        let mut inner = self.shared.inner.lock();
-        inner.task.check_deadline(self.shared.elapsed());
-        let valid = inner.task.task_id() == expected_task_id
-            && active(inner.task.status())
-            && inner.pending.as_ref().is_some_and(|pending| {
-                pending.request.request_id == request_id
-                    && pending.request.epoch == inner.task.generation()
-                    && pending.decision.is_none()
-                    && inner.task.pending() == Some(&pending.request)
-            });
-        if !valid {
-            inner.task.deny_approval();
-            inner.pending = None;
-            self.shared.changed.notify_all();
-            bail!("background approval is stale or unknown");
-        }
-        inner.pending.as_mut().expect("validated pending").decision = Some(allow);
-        self.shared.changed.notify_all();
-        Ok(())
     }
     pub(super) fn restrict_read_only(&self) -> Result<()> {
         {

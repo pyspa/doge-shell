@@ -34,7 +34,7 @@ pub(crate) fn analyze_input(
     mut completion: Option<String>,
 ) -> InputAnalysis {
     // Skip syntax highlighting for AI commands (starting with !)
-    if input.starts_with('!') {
+    if input.starts_with('!') || crate::ai_task_input::classify(input).is_some() {
         return InputAnalysis {
             completion_full: None,
             completion: None,

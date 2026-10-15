@@ -44,7 +44,9 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             current_input.clone()
         };
 
-        if crate::parser::is_incomplete_input(&combined_input) {
+        if crate::ai_task_input::classify(&combined_input).is_none()
+            && crate::parser::is_incomplete_input(&combined_input)
+        {
             repl.state.multiline_buffer.push_str(&current_input);
             repl.state.multiline_buffer.push('\n');
             repl.input.clear();
@@ -63,22 +65,28 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
         }
     }
 
+    let task_shortcut = crate::ai_task_input::classify(repl.input.as_str()).is_some();
+
     // AI Output Pipe (|!)
-    if let Some((command, query)) = repl.detect_ai_pipe() {
+    if !task_shortcut && let Some((command, query)) = repl.detect_ai_pipe() {
         repl.input.clear();
         repl.run_ai_pipe(command, query).await?;
         return Ok(());
     }
 
-    let ai_watch_request = match crate::repl::ai_watch::parse_ai_watch(repl.input.as_str()) {
-        Ok(request) => request,
-        Err(err) => {
-            let mut renderer = TerminalRenderer::new();
-            queue!(renderer, Print(format!("\r\nai-watch: {err}\r\n"))).ok();
-            repl.print_prompt(&mut renderer);
-            repl.print_input(&mut renderer, true, true);
-            renderer.flush().ok();
-            return Ok(());
+    let ai_watch_request = if task_shortcut {
+        None
+    } else {
+        match crate::repl::ai_watch::parse_ai_watch(repl.input.as_str()) {
+            Ok(request) => request,
+            Err(err) => {
+                let mut renderer = TerminalRenderer::new();
+                queue!(renderer, Print(format!("\r\nai-watch: {err}\r\n"))).ok();
+                repl.print_prompt(&mut renderer);
+                repl.print_input(&mut renderer, true, true);
+                renderer.flush().ok();
+                return Ok(());
+            }
         }
     };
 
@@ -99,7 +107,8 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
     }
 
     // Handle abbreviation expansion on Enter if cursor is at end of a word
-    if ai_watch_request.is_none()
+    if !task_shortcut
+        && ai_watch_request.is_none()
         && let Some(word) = repl.input.get_current_word_for_abbr()
     {
         let expansion = {
@@ -158,6 +167,18 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
 
     if repl.terminal_ui.prompt.read().has_git_root() {
         repl.terminal_ui.prompt.read().trigger_git_check();
+    }
+
+    if task_shortcut && let Ok((columns, rows)) = crossterm::terminal::size() {
+        // The menu's sole reader may have consumed Resize events while the
+        // EventStream and status line were paused. Resync before rendering the
+        // next prompt and before StatusLinePause re-arms its scroll region.
+        repl.terminal_ui.columns = columns as usize;
+        repl.terminal_ui.lines = rows as usize;
+        repl.terminal_ui
+            .status_line
+            .borrow_mut()
+            .set_size(columns, rows);
     }
 
     // After command execution, show new prompt

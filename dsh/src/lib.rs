@@ -17,6 +17,7 @@ use std::process::ExitCode;
 
 pub mod agent_lifecycle;
 pub mod ai_features;
+mod ai_task_input;
 pub mod argument_explainer;
 #[doc(hidden)]
 pub mod background_task;

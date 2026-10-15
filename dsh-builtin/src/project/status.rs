@@ -29,6 +29,8 @@ pub(super) struct ProjectStatusJson {
     markers: Vec<String>,
     provider: String,
     trust: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trust_probe_error: Option<String>,
     lockfile: Option<String>,
     missing_tools: Vec<String>,
     dev_container: Option<String>,
@@ -63,6 +65,7 @@ pub(super) fn build_project_status(
             "native".to_string()
         },
         trust: mise.trust,
+        trust_probe_error: mise.trust_probe_error,
         lockfile: mise.lockfile,
         missing_tools: mise.missing_tools,
         dev_container: detect_dev_container(&context.project_root),
@@ -96,6 +99,9 @@ pub(super) fn print_provider_status(ctx: &Context, root: &Path, runtime: &Projec
             mise.missing_tools.join(",")
         }
     ));
+    if let Some(error) = &mise.trust_probe_error {
+        let _ = ctx.write_stdout(&format!("mise trust probe failed: {error}"));
+    }
     if let Some(path) = detect_dev_container(root) {
         let _ = ctx.write_stdout(&format!(
             "dev-container {path} (open it explicitly with your editor/container tool)"
@@ -107,6 +113,7 @@ pub(super) fn print_provider_status(ctx: &Context, root: &Path, runtime: &Projec
 pub(super) struct MiseStatus {
     pub(super) executable: Option<PathBuf>,
     pub(super) trust: String,
+    pub(super) trust_probe_error: Option<String>,
     pub(super) lockfile: Option<String>,
     pub(super) missing_tools: Vec<String>,
 }
@@ -122,13 +129,30 @@ impl MiseStatus {
         runtime: &ProjectProviderRuntime,
     ) -> Self {
         let configured = root.join("mise.toml").exists() || root.join(".mise.toml").exists();
+        let mut trust_probe_error = None;
         let trust = if !configured {
             "not-configured".to_string()
         } else if let Some(mise) = executable.as_deref() {
-            match mise_output(mise, root, &["trust", "--show"], runtime) {
-                Ok(output) if trust_output_is_trusted(&output) => "trusted".to_string(),
-                _ if mise_config_is_safe(root) => "safe".to_string(),
-                _ => "untrusted".to_string(),
+            let trusted = match mise_output(mise, root, &["trust", "--show"], runtime) {
+                Ok(output) => {
+                    let trusted = trust_output_is_trusted(&output);
+                    if !trusted && !output.status.success() {
+                        trust_probe_error =
+                            Some(format!("mise trust probe exited with {}", output.status));
+                    }
+                    trusted
+                }
+                Err(error) => {
+                    trust_probe_error = Some(format!("{error:#}"));
+                    false
+                }
+            };
+            if trusted {
+                "trusted".to_string()
+            } else if mise_config_is_safe(root) {
+                "safe".to_string()
+            } else {
+                "untrusted".to_string()
             }
         } else {
             "unavailable".to_string()
@@ -149,6 +173,7 @@ impl MiseStatus {
         Self {
             executable,
             trust,
+            trust_probe_error,
             lockfile,
             missing_tools,
         }
@@ -190,13 +215,22 @@ pub(super) fn mise_output(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = runtime.configure_command(&mut command).spawn()?;
-    if child.wait_timeout(Duration::from_millis(1500))?.is_none() {
+    let mut child = runtime
+        .configure_command(&mut command)
+        .spawn()
+        .with_context(|| format!("failed to spawn mise provider {}", mise.display()))?;
+    if child
+        .wait_timeout(Duration::from_millis(1500))
+        .context("failed to wait for mise provider")?
+        .is_none()
+    {
         let _ = child.kill();
         let _ = child.wait();
         return Err(anyhow::anyhow!("mise provider timed out"));
     }
-    Ok(child.wait_with_output()?)
+    child
+        .wait_with_output()
+        .context("failed to capture mise provider output")
 }
 
 pub(super) fn trust_output_is_trusted(output: &std::process::Output) -> bool {

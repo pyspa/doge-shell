@@ -14,7 +14,7 @@ pub(super) fn detect_tasks_in_dir(
     let current_dir = project.project_root.as_path();
     let cwd = current_dir.display().to_string();
     let project_tasks = if any_source_enabled(source_filter, &["mise", "taskfile", "turbo", "nx"]) {
-        discover_provider_tasks(current_dir, runtime)?
+        discover_provider_tasks(current_dir, runtime, mode, source_filter)?
             .into_iter()
             .filter(|task| source_enabled(source_filter, &task.source))
             .map(|task| TaskInfo::new(task.source, task.name, task.command, cwd.clone()))
@@ -212,7 +212,7 @@ pub(super) fn detect_tasks_in_dir(
         deferred_sources: dedup_strings(deferred_sources),
     })
 }
-fn source_enabled(source_filter: Option<&[&str]>, source: &str) -> bool {
+pub(super) fn source_enabled(source_filter: Option<&[&str]>, source: &str) -> bool {
     source_filter.is_none_or(|sources| sources.contains(&source))
 }
 fn any_source_enabled(source_filter: Option<&[&str]>, sources: &[&str]) -> bool {

@@ -152,7 +152,7 @@ impl DynamicCompletionProvider {
         self.cache.write().tasks.insert(
             cache_key,
             TaskCacheEntry {
-                signature,
+                signature: signature.after_discovery(),
                 tasks: tasks.clone(),
             },
         );
@@ -192,7 +192,7 @@ impl DynamicCompletionProvider {
         self.cache.write().tasks.insert(
             cache_key,
             TaskCacheEntry {
-                signature,
+                signature: signature.after_discovery(),
                 tasks: tasks.clone(),
             },
         );

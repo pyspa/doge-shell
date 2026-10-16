@@ -9,16 +9,6 @@ trait TaskProvider {
         runtime: &TaskDiscoveryRuntime,
     ) -> Result<Vec<project_context::TaskDefinition>>;
 }
-struct StaticTaskProvider;
-impl TaskProvider for StaticTaskProvider {
-    fn discover(
-        &self,
-        root: &Path,
-        _runtime: &TaskDiscoveryRuntime,
-    ) -> Result<Vec<project_context::TaskDefinition>> {
-        project_context::detect_task_names_in_dir(root)
-    }
-}
 struct MiseTaskProvider {
     executable: std::path::PathBuf,
 }
@@ -98,8 +88,7 @@ impl TaskProvider for TurboTaskProvider {
         root: &Path,
         runtime: &TaskDiscoveryRuntime,
     ) -> Result<Vec<project_context::TaskDefinition>> {
-        let names = StaticTaskProvider
-            .discover(root, runtime)?
+        let names = project_context::detect_task_names_in_dir_for_sources(root, Some(&["turbo"]))?
             .into_iter()
             .filter(|task| task.source == "turbo")
             .map(|task| task.name)
@@ -129,9 +118,16 @@ impl TaskProvider for TurboTaskProvider {
 pub(super) fn discover_provider_tasks(
     root: &Path,
     runtime: &TaskDiscoveryRuntime,
+    mode: TaskDetectionMode,
+    sources: Option<&[&str]>,
 ) -> Result<Vec<project_context::TaskDefinition>> {
-    let mut tasks = StaticTaskProvider.discover(root, runtime)?;
-    if (root.join("mise.toml").exists() || root.join(".mise.toml").exists())
+    let mut tasks = project_context::detect_task_names_in_dir_for_sources(root, sources)?;
+    if matches!(mode, TaskDetectionMode::MetadataOnly) {
+        return Ok(tasks);
+    }
+    let enabled = |source| super::detect::source_enabled(sources, source);
+    if enabled("mise")
+        && (root.join("mise.toml").exists() || root.join(".mise.toml").exists())
         && let Some(executable) = runtime.resolve_program("mise")
     {
         let provider = MiseTaskProvider { executable };
@@ -142,9 +138,11 @@ pub(super) fn discover_provider_tasks(
             tasks.extend(machine_tasks);
         }
     }
-    if (root.join("nx.json").exists()
-        || root.join("workspace.json").exists()
-        || root.join("project.json").exists())
+    if enabled("nx")
+        && (root.join("nx.json").exists()
+            || root.join("workspace.json").exists()
+            || root.join("project.json").exists()
+            || root.join("angular.json").exists())
         && let Some(executable) = runtime.resolve_project_program(root, "nx")
     {
         let provider = NxTaskProvider { executable };
@@ -155,7 +153,8 @@ pub(super) fn discover_provider_tasks(
             tasks.extend(machine_tasks);
         }
     }
-    if root.join("turbo.json").exists()
+    if enabled("turbo")
+        && root.join("turbo.json").exists()
         && let Some(executable) = runtime.resolve_project_program(root, "turbo")
     {
         let provider = TurboTaskProvider { executable };

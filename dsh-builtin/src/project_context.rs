@@ -7,6 +7,7 @@ use toml::Value as TomlValue;
 
 mod runtime;
 mod tasks;
+mod traversal;
 #[cfg(test)]
 use runtime::parse_tool_versions;
 use runtime::{
@@ -17,6 +18,7 @@ use runtime::{
 use tasks::detect_nx_tasks;
 pub(crate) use tasks::has_nx_marker;
 pub use tasks::{TaskDefinition, detect_task_names_in_dir};
+pub(crate) use traversal::find_task_files;
 
 const PROJECT_MARKERS: &[&str] = &[
     "mise.toml",

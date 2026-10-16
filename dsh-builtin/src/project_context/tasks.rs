@@ -141,14 +141,9 @@ pub(super) fn detect_nx_tasks(root: &Path) -> Result<Vec<TaskDefinition>> {
         tasks.extend(detect_nx_workspace_tasks(&path)?);
     }
 
-    if root.join("project.json").exists() {
-        tasks.extend(detect_nx_project_tasks(&root.join("project.json"), root)?);
-    }
-    for path in find_descendant_project_json_files(root, 4) {
-        if path != root.join("project.json") {
-            let fallback_root = path.parent().unwrap_or(root);
-            tasks.extend(detect_nx_project_tasks(&path, fallback_root)?);
-        }
+    for path in find_task_files(root, &["project.json"]) {
+        let fallback_root = path.parent().unwrap_or(root);
+        tasks.extend(detect_nx_project_tasks(&path, fallback_root)?);
     }
     Ok(tasks)
 }
@@ -208,40 +203,6 @@ fn nx_tasks_from_project_value(project_name: &str, value: &JsonValue) -> Vec<Tas
             command: format!("nx run {}:{}", project_name, name),
         })
         .collect()
-}
-
-fn find_descendant_project_json_files(root: &Path, max_depth: usize) -> Vec<PathBuf> {
-    let mut values = Vec::new();
-    collect_descendant_project_json_files(root, 0, max_depth, &mut values);
-    values
-}
-
-fn collect_descendant_project_json_files(
-    dir: &Path,
-    depth: usize,
-    max_depth: usize,
-    values: &mut Vec<PathBuf>,
-) {
-    if depth > max_depth {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build") {
-            continue;
-        }
-        if path.is_file() && name == "project.json" {
-            values.push(path);
-        } else if path.is_dir() {
-            collect_descendant_project_json_files(&path, depth + 1, max_depth, values);
-        }
-    }
 }
 
 fn dedup_tasks(tasks: Vec<TaskDefinition>) -> Vec<TaskDefinition> {

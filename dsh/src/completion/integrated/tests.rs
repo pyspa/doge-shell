@@ -431,7 +431,14 @@ fn test_deduplicate_and_sort_keeps_unrelated_types_with_same_trimmed_text() {
 
 #[tokio::test]
 async fn chat_task_ids_follow_current_snapshot_and_argument_position() {
-    let mut engine = IntegratedCompletionEngine::new(Environment::new());
+    let environment = Environment::new_isolated();
+    environment
+        .write()
+        .set_shell_var("DOGESH_EXTERNAL_COMPLETER".into(), String::new());
+    environment
+        .write()
+        .set_shell_var("DOGESH_COMPLETION_FISH_FALLBACK".into(), "off".into());
+    let mut engine = IntegratedCompletionEngine::new(environment);
     engine.initialize_command_completion().unwrap();
     let dir = tempdir().unwrap();
     // Files must not impersonate IDs, including when no task is pending.

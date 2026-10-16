@@ -159,6 +159,7 @@ fn family_for(provider: &str) -> ProviderFamily {
             | "man.page"
             | "shell.abbr"
             | "shell.alias"
+            | "shell.chat_task"
             | "shell.env_var"
             | "shell.job"
             | "ssh.host"

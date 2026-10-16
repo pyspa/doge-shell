@@ -52,11 +52,14 @@ pub(super) fn completion_cache_allowed(parsed_command_line: &ParsedCommandLine) 
     // A wrapper (`sudo pacman -R`) parses as the wrapper's own command line, so
     // checking only `command` would let dynamic results be cached under the
     // wrapper. Scanning the arguments is cheap and errs toward not caching.
-    let dynamic_command = is_dynamic_completion_command(&parsed_command_line.command)
+    // Shell-owned task IDs use a declared provider rather than the direct
+    // dispatch table. Never reuse a prefix entry across its argument boundary.
+    let dynamic_command = parsed_command_line.command == "chat_task"
+        || is_dynamic_completion_command(&parsed_command_line.command)
         || parsed_command_line
             .specified_arguments
             .iter()
-            .any(|argument| is_dynamic_completion_command(argument));
+            .any(|argument| argument == "chat_task" || is_dynamic_completion_command(argument));
 
     if !dynamic_command {
         return true;

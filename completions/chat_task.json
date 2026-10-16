@@ -1,0 +1,113 @@
+{
+  "command": "chat_task",
+  "description": "Manage the shell-owned background AI task",
+  "subcommands": [
+    {
+      "name": "start",
+      "description": "Start a background AI task",
+      "options": [
+        {
+          "long": "--profile",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "read-only",
+              "workspace-edit"
+            ]
+          }
+        },
+        {
+          "long": "--env",
+          "takes_value": true,
+          "value_type": {
+            "type": "Environment"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "prompt",
+          "type": {
+            "type": "String"
+          },
+          "multiple": true
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "description": "Status current background AI task"
+    },
+    {
+      "name": "output",
+      "description": "Output current background AI task"
+    },
+    {
+      "name": "cancel",
+      "description": "Cancel current background AI task"
+    },
+    {
+      "name": "approve",
+      "description": "Approve one pending operation",
+      "arguments": [
+        {
+          "name": "task_id",
+          "required": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "shell.chat_task"
+            }
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "type": {
+            "type": "Number"
+          }
+        }
+      ]
+    },
+    {
+      "name": "deny",
+      "description": "Deny one pending operation",
+      "arguments": [
+        {
+          "name": "task_id",
+          "required": true,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "shell.chat_task"
+            }
+          }
+        },
+        {
+          "name": "request_id",
+          "required": true,
+          "type": {
+            "type": "Number"
+          }
+        }
+      ]
+    },
+    {
+      "name": "restrict",
+      "description": "Restrict current task",
+      "arguments": [
+        {
+          "name": "profile",
+          "required": true,
+          "type": {
+            "type": "Choice",
+            "data": [
+              "read-only"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

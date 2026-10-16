@@ -16,8 +16,8 @@ use runtime::{
 };
 #[cfg(test)]
 use tasks::detect_nx_tasks;
-pub(crate) use tasks::has_nx_marker;
 pub use tasks::{TaskDefinition, detect_task_names_in_dir};
+pub(crate) use tasks::{detect_task_names_in_dir_for_sources, has_nx_marker};
 pub(crate) use traversal::find_task_files;
 
 const PROJECT_MARKERS: &[&str] = &[

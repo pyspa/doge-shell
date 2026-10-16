@@ -7,13 +7,14 @@ use serde::Serialize;
 use skim::prelude::*;
 use std::borrow::Cow;
 use std::collections::BTreeSet;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tabled::{Table, Tabled};
-use wait_timeout::ChildExt;
 
+mod capture;
 mod detect;
 mod providers;
 pub mod runtime;
@@ -145,7 +146,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         return ExitStatus::ExitedWith(0);
     }
 
-    let tasks = match detect_tasks(proxy) {
+    let tasks = match detect_tasks(proxy, opts.source.as_deref()) {
         Ok(t) => t,
         Err(e) => {
             let _ = ctx.write_stderr(&format!("Failed to detect tasks: {}", e));
@@ -480,7 +481,7 @@ fn shell_quote(value: &str) -> String {
     }
 }
 
-fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
+fn detect_tasks(proxy: &dyn ShellProxy, source: Option<&str>) -> Result<Vec<Task>> {
     // One snapshot per invocation: cwd, logical PATH, and exported child
     // environment. The lock is released here; later scans and subprocesses
     // use only the owned snapshot.
@@ -489,7 +490,10 @@ fn detect_tasks(proxy: &dyn ShellProxy) -> Result<Vec<Task>> {
         proxy.command_search_paths(),
         proxy.child_process_environment(),
     );
-    let tasks = list_tasks_in_dir(&current_dir, &runtime)?;
+    let tasks = match source {
+        Some(source) => list_tasks_in_dir_for_sources(&current_dir, &[source], &runtime)?,
+        None => list_tasks_in_dir(&current_dir, &runtime)?,
+    };
     Ok(tasks.into_iter().map(Task::from).collect())
 }
 
@@ -512,7 +516,7 @@ pub fn list_tasks_in_dir(
     TASK_CACHE.lock().expect("task cache poisoned").insert(
         project.project_root,
         TaskCacheEntry {
-            signature,
+            signature: signature.after_discovery(),
             tasks: tasks.clone(),
         },
     );
@@ -528,8 +532,8 @@ pub fn list_tasks_in_dir_for_sources(
 }
 
 pub fn summarize_tasks_in_dir_metadata_only(current_dir: &Path) -> Result<TaskDiscoverySummary> {
-    // No external commands by contract: an empty runtime resolves no
-    // provider executables, so only static file parsers contribute. This is
+    // No external commands by contract: MetadataOnly admits only static
+    // parsers, including when node_modules/.bin contains providers. This is
     // deliberately narrower than full discovery, where installed mise/nx/
     // turbo CLIs are preferred: passive diagnostics (doctor) must not
     // execute project code, the same reason gradle/make/just defer above.
@@ -591,7 +595,7 @@ fn command_output_worker(
     // Shell child environment only: `env_clear` keeps a logically unset
     // process-startup variable from being rediscovered, and an exported
     // shell variable visible to the provider.
-    let mut child = Command::new(executable)
+    let child = Command::new(executable)
         .env_clear()
         .envs(child_env.iter())
         .current_dir(cwd)
@@ -599,13 +603,9 @@ fn command_output_worker(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()?;
-    if child.wait_timeout(timeout)?.is_none() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(anyhow::anyhow!("task provider timed out"));
-    }
-    Ok(child.wait_with_output()?)
+    capture::collect(child, timeout)
 }
 
 static JSONC_COMMENT_RE: LazyLock<Regex> =
@@ -616,3 +616,6 @@ mod tests;
 
 #[cfg(test)]
 mod nx_tests;
+
+#[cfg(test)]
+mod provider_tests;

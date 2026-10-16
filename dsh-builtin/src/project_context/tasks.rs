@@ -124,7 +124,18 @@ fn detect_turbo_tasks(root: &Path) -> Result<Vec<TaskDefinition>> {
     Ok(tasks)
 }
 
+pub(crate) fn has_nx_marker(root: &Path) -> bool {
+    ["nx.json", "workspace.json", "angular.json", "project.json"]
+        .iter()
+        .any(|name| root.join(name).is_file())
+}
+
 pub(super) fn detect_nx_tasks(root: &Path) -> Result<Vec<TaskDefinition>> {
+    // Command-not-found suggestions also call this on arbitrary directories,
+    // including HOME. A depth limit alone still walks huge/cloud-backed trees.
+    if !has_nx_marker(root) {
+        return Ok(Vec::new());
+    }
     let mut tasks = Vec::new();
     for path in [root.join("workspace.json"), root.join("angular.json")] {
         tasks.extend(detect_nx_workspace_tasks(&path)?);

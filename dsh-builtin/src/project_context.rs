@@ -15,6 +15,7 @@ use runtime::{
 };
 #[cfg(test)]
 use tasks::detect_nx_tasks;
+pub(crate) use tasks::has_nx_marker;
 pub use tasks::{TaskDefinition, detect_task_names_in_dir};
 
 const PROJECT_MARKERS: &[&str] = &[
@@ -25,6 +26,7 @@ const PROJECT_MARKERS: &[&str] = &[
     "rust-toolchain.toml",
     "rust-toolchain",
     "package.json",
+    "nx.json",
     "workspace.json",
     "angular.json",
     "turbo.json",
@@ -264,6 +266,36 @@ mod tests {
                 .iter()
                 .any(|task| task.source == "nx" && task.name.ends_with(":test"))
         );
+    }
+
+    #[test]
+    fn nx_discovery_does_not_search_unrelated_descendants() {
+        let dir = tempdir().unwrap();
+        let unrelated = dir.path().join("Library/CloudStorage/project");
+        fs::create_dir_all(&unrelated).unwrap();
+        fs::write(unrelated.join("project.json"), "invalid unrelated JSON").unwrap();
+        assert!(detect_task_names_in_dir(dir.path()).unwrap().is_empty());
+
+        // A different ecosystem's marker does not authorize an Nx tree walk.
+        fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        assert!(detect_task_names_in_dir(dir.path()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn nx_json_workspace_is_discovered_from_a_nested_directory() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("nx.json"), "{}").unwrap();
+        let app = dir.path().join("apps/api");
+        let nested = dir.path().join("tools");
+        fs::create_dir_all(&app).unwrap();
+        fs::create_dir(&nested).unwrap();
+        fs::write(
+            app.join("project.json"),
+            r#"{"name":"api","targets":{"test":{}}}"#,
+        )
+        .unwrap();
+        let tasks = detect_task_names_in_dir(&nested).unwrap();
+        assert!(tasks.iter().any(|task| task.command == "nx run api:test"));
     }
 
     #[test]

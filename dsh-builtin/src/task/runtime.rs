@@ -11,7 +11,7 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Snapshot of what task discovery may observe: where to look for provider
 /// executables and what environment to hand to provider subprocesses.
@@ -124,7 +124,31 @@ fn fingerprint_runtime(paths: &[PathBuf], env: &BTreeMap<String, String>) -> u64
 /// Canonical task discovery signature: project input metadata plus the
 /// runtime discovery identity. Completion and builtin caches share this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TaskDiscoverySignature(u64);
+pub struct TaskDiscoverySignature {
+    inputs_hash: u64,
+    nx_epoch: Option<u64>,
+}
+
+impl TaskDiscoverySignature {
+    /// Stamp a completed discovery with the current shared provider epoch.
+    /// Input metadata remains the pre-discovery snapshot, so concurrent edits
+    /// still invalidate the result on the next lookup.
+    pub fn after_discovery(self) -> Self {
+        self.refresh_provider_epoch_at(SystemTime::now())
+    }
+
+    pub(super) fn refresh_provider_epoch_at(mut self, now: SystemTime) -> Self {
+        if self.nx_epoch.is_some() {
+            self.nx_epoch = Some(nx_cache_epoch(now));
+        }
+        self
+    }
+}
+
+fn nx_cache_epoch(now: SystemTime) -> u64 {
+    const NX_CACHE_TTL: Duration = Duration::from_secs(5);
+    now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() / NX_CACHE_TTL.as_secs()
+}
 
 /// Top-level project files that can change task discovery results.
 const TOP_LEVEL_MARKERS: &[&str] = &[
@@ -165,6 +189,17 @@ pub fn discovery_signature(
     sources: Option<&[&str]>,
     runtime: &TaskDiscoveryRuntime,
 ) -> TaskDiscoverySignature {
+    discovery_signature_at(project_root, sources, runtime, SystemTime::now())
+}
+
+// A shared time bucket expires both builtin and completion caches together,
+// without extending stale provider results as they pass through cache layers.
+pub(super) fn discovery_signature_at(
+    project_root: &Path,
+    sources: Option<&[&str]>,
+    runtime: &TaskDiscoveryRuntime,
+    now: SystemTime,
+) -> TaskDiscoverySignature {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     "dogesh-task-discovery-v1".hash(&mut hasher);
     runtime.cache_scope.hash(&mut hasher);
@@ -190,7 +225,19 @@ pub fn discovery_signature(
         hash_descendant_markers(project_root, &mut hasher);
     }
     hash_provider_identities(project_root, sources, runtime, &mut hasher);
-    TaskDiscoverySignature(hasher.finish())
+    // Nx plugins and machine-discovered projects can depend on files outside
+    // the bounded static scan. Never retain their results indefinitely. All
+    // cache consumers share this epoch, so nested caches expire together.
+    let nx_epoch = (source_enabled(sources, "nx")
+        && has_nx_marker(project_root)
+        && runtime
+            .resolve_project_program(project_root, "nx")
+            .is_some())
+    .then(|| nx_cache_epoch(now));
+    TaskDiscoverySignature {
+        inputs_hash: hasher.finish(),
+        nx_epoch,
+    }
 }
 
 fn hash_marker_metadata(path: &Path, hasher: &mut impl Hasher) {

@@ -2237,3 +2237,57 @@ fn external_completion_cache_prunes_oldest_entries() {
     assert_eq!(cache.external.len(), EXTERNAL_COMPLETION_CACHE_LIMIT);
     assert_eq!(cache.external_pruned_total, 3);
 }
+
+#[test]
+fn nx_completion_refreshes_deep_projects_after_provider_epoch_changes() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("nx.json"), "{}").unwrap();
+    let project = dir.path().join("a/b/c/d/e/project.json");
+    fs::create_dir_all(project.parent().unwrap()).unwrap();
+    fs::write(&project, r#"{"targets":{"build":{}}}"#).unwrap();
+    let bin = dir.path().join("node_modules/.bin");
+    fs::create_dir_all(&bin).unwrap();
+    write_executable_script(
+        &bin.join("nx"),
+        "#!/bin/sh\ncase \"$2\" in projects) printf '[\"api\"]';; project) /bin/cat a/b/c/d/e/project.json;; esac\n",
+    );
+    let environment = Environment::new();
+    environment.write().variable_state.paths.clear();
+    let provider = DynamicCompletionProvider::new(environment);
+    let runtime = task::TaskDiscoveryRuntime::new(
+        Vec::new(),
+        provider.environment.read().child_process_env(),
+    );
+    let loaded = provider
+        .load_project_tasks_for_sources(dir.path(), &["nx"])
+        .unwrap();
+    assert_eq!(loaded[0].name, "api:build");
+    let before = provider
+        .cache
+        .read()
+        .tasks
+        .values()
+        .next()
+        .unwrap()
+        .signature;
+    fs::write(&project, r#"{"targets":{"newtask":{}}}"#).unwrap();
+    // Observe the real clock-driven epoch transition, with a bounded wait.
+    // Exact bucket boundaries are tested with an injected clock in dsh-builtin.
+    let deadline = Instant::now() + Duration::from_secs(7);
+    while task::discovery_signature(dir.path(), Some(&["nx"]), &runtime) == before {
+        assert!(
+            Instant::now() < deadline,
+            "provider cache epoch did not advance"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        provider
+            .lookup_project_tasks_for_sources(dir.path(), &["nx"])
+            .is_empty()
+    );
+    let refreshed = provider
+        .load_project_tasks_for_sources(dir.path(), &["nx"])
+        .unwrap();
+    assert_eq!(refreshed[0].name, "api:newtask");
+}

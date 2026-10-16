@@ -2241,6 +2241,9 @@ fn external_completion_cache_prunes_oldest_entries() {
 #[test]
 fn nx_completion_refreshes_deep_projects_after_provider_epoch_changes() {
     let dir = tempdir().unwrap();
+    let input_dir = dir.path().join("via-link");
+    std::os::unix::fs::symlink(dir.path(), &input_dir).unwrap();
+    let project_root = input_dir.canonicalize().unwrap();
     fs::write(dir.path().join("nx.json"), "{}").unwrap();
     let project = dir.path().join("a/b/c/d/e/project.json");
     fs::create_dir_all(project.parent().unwrap()).unwrap();
@@ -2259,7 +2262,7 @@ fn nx_completion_refreshes_deep_projects_after_provider_epoch_changes() {
         provider.environment.read().child_process_env(),
     );
     let loaded = provider
-        .load_project_tasks_for_sources(dir.path(), &["nx"])
+        .load_project_tasks_for_sources(&input_dir, &["nx"])
         .unwrap();
     assert_eq!(loaded[0].name, "api:build");
     let before = provider
@@ -2274,7 +2277,9 @@ fn nx_completion_refreshes_deep_projects_after_provider_epoch_changes() {
     // Observe the real clock-driven epoch transition, with a bounded wait.
     // Exact bucket boundaries are tested with an injected clock in dsh-builtin.
     let deadline = Instant::now() + Duration::from_secs(7);
-    while task::discovery_signature(dir.path(), Some(&["nx"]), &runtime) == before {
+    // Match the cache's canonical root: /var vs /private/var on macOS (or
+    // this symlink on either OS) must not masquerade as an epoch change.
+    while task::discovery_signature(&project_root, Some(&["nx"]), &runtime) == before {
         assert!(
             Instant::now() < deadline,
             "provider cache epoch did not advance"
@@ -2283,11 +2288,11 @@ fn nx_completion_refreshes_deep_projects_after_provider_epoch_changes() {
     }
     assert!(
         provider
-            .lookup_project_tasks_for_sources(dir.path(), &["nx"])
+            .lookup_project_tasks_for_sources(&input_dir, &["nx"])
             .is_empty()
     );
     let refreshed = provider
-        .load_project_tasks_for_sources(dir.path(), &["nx"])
+        .load_project_tasks_for_sources(&input_dir, &["nx"])
         .unwrap();
     assert_eq!(refreshed[0].name, "api:newtask");
 }

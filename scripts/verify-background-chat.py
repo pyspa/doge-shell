@@ -156,6 +156,16 @@ for action in ['cancel', 'worker_crash', 'parent_exit']:
                 shell.command('chat_task cancel')
             elif action == 'worker_crash':
                 os.kill(worker_pid, signal.SIGKILL)
+                shell.wait_terminal()
+                # Disconnect can revoke authority before the supervisor has
+                # published its final result. Wait for that result as well.
+                shell.until(lambda: (shell.status() or {}).get('ok') is False, seconds=3)
+                failed = shell.status()
+                assert failed['ok'] is False, failed
+                assert failed.get('error'), 'supervisor failure reason was discarded'
+                before = len(shell.data)
+                shell.command('chat_task output')
+                shell.until(lambda: b'background task failed:' in shell.data[before:])
             else:
                 shell.command('exit')
             shell.until(lambda: process_gone(job_pid))
@@ -168,11 +178,13 @@ active.clear()
 active.update(requests=0, tool='execute', args={'command': 'printf "%s|%s\\n" "$TASK_TEST_ENV" "$UNSELECTED_TEST_ENV"; pwd'}, poll=True, first_gate=threading.Event())
 with tempfile.TemporaryDirectory(prefix='background-env-', dir=os.environ.get('TMPDIR', '/var/tmp')) as tmp:
     root = pathlib.Path(tmp).resolve()
-    shell = Shell(root)
+    (root / 'ai-hooks.json').write_text('{"version":1,"hooks":[]}')
+    (root / 'moved').mkdir()
+    (root / 'moved' / 'ai-hooks.json').write_text('not the task configuration')
+    shell = Shell(root, {'DOGESH_AI_HOOKS_CONFIG': 'ai-hooks.json'})
     try:
         shell.command('chat_task start --profile read-only --env TASK_TEST_ENV -- environment check')
         shell.until(lambda: active['requests'] == 1)
-        (root / 'moved').mkdir()
         shell.command('cd moved')
         shell.command('export TASK_TEST_ENV=changed')
         active['first_gate'].set()

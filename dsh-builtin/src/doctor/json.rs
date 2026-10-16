@@ -298,7 +298,11 @@ pub(super) fn json_hooks_details(proxy: &mut dyn ShellProxy) -> serde_json::Valu
         Ok(value) => json!(value),
         Err(err) => json!(err),
     };
-    let Some(path) = config::config_path(proxy) else {
+    let path = match config::config_path(proxy) {
+        Ok(path) => path,
+        Err(error) => return json!({"config": null, "hooks": [], "error": error}),
+    };
+    let Some(path) = path else {
         return json!({"config": null, "hooks": [], "turn_budget_ms": turn_budget});
     };
     match config::read(&path) {

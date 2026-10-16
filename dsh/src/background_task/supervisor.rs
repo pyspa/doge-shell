@@ -58,6 +58,7 @@ struct Inner {
     pending: Option<Pending>,
     admitted: Option<Admitted>,
     completed_ok: Option<bool>,
+    failure_reason: Option<String>,
     tokens_reported: bool,
 }
 struct Shared {
@@ -89,6 +90,7 @@ impl Shared {
                 pending: None,
                 admitted: None,
                 completed_ok: None,
+                failure_reason: None,
                 tokens_reported: false,
             }),
             changed: Condvar::new(),
@@ -382,11 +384,20 @@ impl TaskHandle {
                     })
                     .collect();
                 let outcome = run(channel, snapshot, &run_shared);
+                let failure_reason = outcome
+                    .as_ref()
+                    .err()
+                    .map(|error| run_shared.mask(&format!("{error:#}"), 2048));
+                if let Some(reason) = &failure_reason {
+                    run_shared
+                        .append_output(format!("background task failed: {reason}\n").as_bytes());
+                }
                 {
                     let mut inner = run_shared.inner.lock();
                     inner.admitted = None;
                     inner.pending = None;
                     inner.completed_ok = Some(outcome.unwrap_or(false));
+                    inner.failure_reason = failure_reason;
                     inner.task.complete(run_shared.elapsed());
                 }
                 run_shared.changed.notify_all();
@@ -419,7 +430,7 @@ impl TaskHandle {
             .map(|pending| approval::display(&self.shared, &inner, pending).0);
         json!({"task_id": inner.task.task_id(), "state": inner.task.status(), "epoch": inner.task.generation(),
             "profile": inner.task.scope().profile, "usage": inner.task.usage(), "tokens_reported": inner.tokens_reported,
-            "approval": pending, "ok": inner.completed_ok})
+            "approval": pending, "ok": inner.completed_ok, "error": inner.failure_reason})
     }
     pub(super) fn output(&self) -> String {
         self.shared.mask(

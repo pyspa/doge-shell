@@ -488,6 +488,18 @@ fn task_cache_invalidates_when_project_marker_changes() {
 }
 
 #[test]
+fn task_signature_ignores_descendants_outside_nx_projects() {
+    let dir = tempdir().unwrap();
+    let runtime = empty_runtime();
+    let project = dir.path().join("Library/CloudStorage/project.json");
+    fs::create_dir_all(project.parent().unwrap()).unwrap();
+    let before = discovery_signature(dir.path(), None, &runtime);
+    fs::write(&project, r#"{"name":"unrelated","targets":{"test":{}}}"#).unwrap();
+    assert_eq!(before, discovery_signature(dir.path(), None, &runtime));
+    assert!(list_tasks_in_dir(dir.path(), &runtime).unwrap().is_empty());
+}
+
+#[test]
 fn task_cache_invalidates_when_descendant_nx_marker_changes() {
     let dir = tempdir().unwrap();
     let runtime = empty_runtime();

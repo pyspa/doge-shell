@@ -403,6 +403,17 @@ impl TaskHandle {
         })
     }
 
+    /// Read-only completion snapshot; never expire, approve or cancel a task.
+    pub(crate) fn completion_task_id(&self) -> Option<String> {
+        let inner = self.shared.inner.lock();
+        let pending = inner.pending.as_ref()?;
+        (!self.shared.canceled.load(Ordering::Acquire)
+            && inner.task.status() == TaskStatus::InputRequired
+            && pending.decision.is_none()
+            && inner.task.pending() == Some(&pending.request))
+        .then(|| inner.task.task_id().to_string())
+    }
+
     pub(super) fn status(&self) -> Value {
         let mut inner = self.shared.inner.lock();
         inner.task.check_deadline(self.shared.elapsed());

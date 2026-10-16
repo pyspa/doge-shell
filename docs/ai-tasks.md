@@ -109,6 +109,11 @@ preview before granting access. That request can appear before the first model
 call. Previews mask recognized secrets; a masked or truncated preview may still
 be insufficient for you to approve the operation.
 
+At the task ID argument of `chat_task approve` or `chat_task deny`, TAB completes
+the current unanswered task ID. Prefixes narrow the candidate; completed,
+answered or replaced tasks are not offered. Completion itself does not approve
+or deny anything.
+
 Copy **both IDs from your own current status**, replacing the sample task ID
 and request number below. Choose one response:
 

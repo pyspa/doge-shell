@@ -69,7 +69,11 @@ impl IntegratedCompletionEngine {
             candidates.extend(self.file_candidates_for_token(&target.current_token));
         }
 
-        if dynamic_candidates_are_exclusive(&target) {
+        let task_id_argument = matches!(
+            self.argument_type_for_completion_context(&target),
+            Some(ArgumentType::Dynamic { provider, .. }) if provider == "shell.chat_task"
+        );
+        if task_id_argument || dynamic_candidates_are_exclusive(&target) {
             CandidateBatch::exclusive_with_framework(candidates, CompletionFrameworkKind::Skim)
         } else if candidates.is_empty() {
             CandidateBatch::empty()
@@ -105,6 +109,35 @@ impl IntegratedCompletionEngine {
 
         if provider == "shell.job" {
             return self.collect_shell_job_candidates(&parsed_command_line.current_token);
+        }
+        if provider == "shell.chat_task" {
+            // approve/deny take positional IDs; they do not accept options or
+            // an option terminator that would shift the actual task argument.
+            if parsed_command_line.command == "chat_task"
+                && parsed_command_line
+                    .raw_args
+                    .first()
+                    .is_some_and(|arg| arg.starts_with('-'))
+            {
+                return Vec::new();
+            }
+            let prefix = crate::completion::shell_path::normalize_path_token(
+                &parsed_command_line.current_token,
+            );
+            return self
+                .chat_task_id
+                .read()
+                .as_ref()
+                .filter(|id| id.starts_with(&prefix))
+                .map(|id| {
+                    vec![EnhancedCandidate {
+                        text: id.clone(),
+                        description: Some("pending background AI task".into()),
+                        candidate_type: CandidateType::Argument,
+                        priority: 150,
+                    }]
+                })
+                .unwrap_or_default();
         }
 
         self.dynamic.collect_declared_dynamic_candidates(

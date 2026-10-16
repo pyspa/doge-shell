@@ -430,6 +430,81 @@ fn test_deduplicate_and_sort_keeps_unrelated_types_with_same_trimmed_text() {
 }
 
 #[tokio::test]
+async fn chat_task_ids_follow_current_snapshot_and_argument_position() {
+    let mut engine = IntegratedCompletionEngine::new(Environment::new());
+    engine.initialize_command_completion().unwrap();
+    let dir = tempdir().unwrap();
+    // Files must not impersonate IDs, including when no task is pending.
+    fs::write(dir.path().join("chat-stale"), "").unwrap();
+    engine.set_chat_task_id(Some("chat-current".into()));
+    for input in [
+        "chat_task approve ",
+        "chat_task deny chat-cur",
+        "chat_task approve \"chat-cur",
+    ] {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert_eq!(
+            result
+                .candidates
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["chat-current"],
+            "{input}"
+        );
+    }
+    for input in [
+        "chat_task approve chat-current ",
+        "chat_task start -- chat-cur",
+        "chat_task status chat-cur",
+        "chat_task deny current",
+        "chat_task approve -- chat-cur",
+    ] {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            !result.candidates.iter().any(|c| c.text == "chat-current"),
+            "{input}"
+        );
+    }
+    let input = "chat_task approve chat-cur 42";
+    let result = engine
+        .complete(
+            input,
+            "chat_task approve chat-cur".len(),
+            dir.path(),
+            50,
+            None,
+        )
+        .await;
+    assert!(result.candidates.iter().any(|c| c.text == "chat-current"));
+    engine.set_chat_task_id(Some("chat-new".into()));
+    let input = "chat_task approve ";
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    assert_eq!(
+        result
+            .candidates
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["chat-new"]
+    );
+    engine.set_chat_task_id(None);
+    assert!(
+        engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await
+            .candidates
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn shell_job_completion_tracks_live_job_snapshot() {
     let mut engine = IntegratedCompletionEngine::new(Environment::new());
     engine.initialize_command_completion().unwrap();

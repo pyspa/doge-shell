@@ -613,3 +613,6 @@ static JSONC_COMMENT_RE: LazyLock<Regex> =
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod nx_tests;

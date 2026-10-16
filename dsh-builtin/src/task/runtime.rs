@@ -159,8 +159,6 @@ const TOP_LEVEL_MARKERS: &[&str] = &[
 
 const DESCENDANT_MARKERS: &[&str] = &["project.json", "package.json", "mise.toml", ".mise.toml"];
 
-const SKIPPED_DIRS: &[&str] = &[".git", "node_modules", "target", "dist", "build"];
-
 /// Compute the canonical signature without running any provider.
 pub fn discovery_signature(
     project_root: &Path,
@@ -214,39 +212,9 @@ fn hash_marker_metadata(path: &Path, hasher: &mut impl Hasher) {
 }
 
 fn hash_descendant_markers(root: &Path, hasher: &mut impl Hasher) {
-    hash_descendant_dir(root, root, 0, 4, hasher);
-}
-
-fn hash_descendant_dir(
-    root: &Path,
-    directory: &Path,
-    depth: usize,
-    max_depth: usize,
-    hasher: &mut impl Hasher,
-) {
-    if depth >= max_depth {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let skip = entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| SKIPPED_DIRS.contains(&name));
-            if skip {
-                continue;
-            }
-            hash_descendant_dir(root, &path, depth + 1, max_depth, hasher);
-        } else if depth > 0
-            && entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| DESCENDANT_MARKERS.contains(&name))
-        {
+    for path in crate::project_context::find_task_files(root, DESCENDANT_MARKERS) {
+        // Root markers have already been hashed by TOP_LEVEL_MARKERS.
+        if path.parent() != Some(root) {
             path.strip_prefix(root).unwrap_or(&path).hash(hasher);
             hash_marker_metadata(&path, hasher);
         }

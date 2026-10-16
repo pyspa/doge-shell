@@ -4,14 +4,30 @@
 use super::*;
 
 pub fn detect_task_names_in_dir(current_dir: &Path) -> Result<Vec<TaskDefinition>> {
+    detect_task_names_in_dir_for_sources(current_dir, None)
+}
+
+pub(crate) fn detect_task_names_in_dir_for_sources(
+    current_dir: &Path,
+    sources: Option<&[&str]>,
+) -> Result<Vec<TaskDefinition>> {
     let project = resolve_project_context(current_dir);
     let root = &project.project_root;
     let mut tasks = Vec::new();
 
-    tasks.extend(detect_mise_tasks(root)?);
-    tasks.extend(detect_taskfile_tasks(root)?);
-    tasks.extend(detect_turbo_tasks(root)?);
-    tasks.extend(detect_nx_tasks(root)?);
+    let enabled = |source| sources.is_none_or(|sources| sources.contains(&source));
+    if enabled("mise") {
+        tasks.extend(detect_mise_tasks(root)?);
+    }
+    if enabled("taskfile") {
+        tasks.extend(detect_taskfile_tasks(root)?);
+    }
+    if enabled("turbo") {
+        tasks.extend(detect_turbo_tasks(root)?);
+    }
+    if enabled("nx") {
+        tasks.extend(detect_nx_tasks(root)?);
+    }
 
     Ok(dedup_tasks(tasks))
 }

@@ -96,6 +96,7 @@ routerが使えない・`repo-general` のときに該当節を検索する索�
   - Read: `dsh/src/lisp/`, `dsh/src/lib.rs`, `dsh/src/main.rs`, `dsh-builtin/src/lisp.rs`, `dsh-builtin/src/include.rs`, `dsh-builtin/src/reload.rs`
   - Validate: `cargo test -p doge-shell`; add `cargo test -p dsh-builtin` when builtin include/reload/lisp changes
 - environment / project context / direnv / path activation
+  - Regression: task discovery must admit mode/source before static parsing or provider startup; drain provider stdout/stderr concurrently with byte/deadline limits; expire Nx CLI results through the shared signature epoch without expanding the bounded static walker.
   - Skill: `docs/ai/skills/doge-shell-env-startup/SKILL.md`
   - Read: `dsh/src/environment/`, `dsh/src/direnv.rs`, `dsh-builtin/src/project.rs`, `dsh-builtin/src/project_context.rs`, `dsh-builtin/src/task.rs`
   - Validate: package for touched files; use `cargo test -p doge-shell` for `dsh/` and `cargo test -p dsh-builtin` for builtin project context

@@ -188,7 +188,7 @@ pub fn discovery_signature(
     // Descendant markers feed the static nx scan, which only runs for
     // unfiltered or nx-scoped discovery. Other scopes skip the walk so a
     // nested `project.json` change does not invalidate JS-only completions.
-    if sources.is_none_or(|sources| sources.contains(&"nx")) {
+    if sources.is_none_or(|sources| sources.contains(&"nx")) && has_nx_marker(project_root) {
         hash_descendant_markers(project_root, &mut hasher);
     }
     hash_provider_identities(project_root, sources, runtime, &mut hasher);
@@ -258,9 +258,7 @@ fn has_mise_marker(root: &Path) -> bool {
 }
 
 fn has_nx_marker(root: &Path) -> bool {
-    ["nx.json", "workspace.json", "angular.json", "project.json"]
-        .iter()
-        .any(|name| root.join(name).exists())
+    crate::project_context::has_nx_marker(root)
 }
 
 fn has_gradle_project(root: &Path) -> bool {

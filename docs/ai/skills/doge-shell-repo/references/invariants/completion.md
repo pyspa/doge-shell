@@ -2,6 +2,8 @@
 
 [../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。
 
+- subcommand補正後の引数位置は既存の `positional_arguments_after_raw_index` で数える。`specified_arguments.len()` はcursor後方の引数も含むため、task_idの後にrequest_idがあると別引数の補完になる。
+
 - 埋め込み元は `completions/` ただ 1 つ（`dsh/src/completion/json_loader.rs` の `#[folder = "../completions/"]`）。ディレクトリを増やさない。以前は `dsh/completions/` との二重管理で、root にだけ足した 4 ファイルが出荷バイナリに載っていなかった。
 - provider 名のタイポは**どのテストも落ちない**。loader は `provider` をただの `String` として通し、`DynamicProviderId::parse` が `None` を返して候補が静かに 0 件になるだけ。`json_loader.rs` の `embedded_completion_definitions_are_valid` が唯一の防波堤なので、ここを弱めない。
 - `ArgumentType` は `#[serde(tag = "type", content = "data")]`。`Choice` は newtype なので `data` は**文字列の配列**（`{"type":"Choice","data":["a","b"]}`）。`{"choices": [...]}` のようなオブジェクトで包むと deserialize が `invalid type: map, expected a sequence` で落ち、その定義だけ丸ごと無効になる。

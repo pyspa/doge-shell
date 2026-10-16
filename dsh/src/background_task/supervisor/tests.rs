@@ -552,6 +552,52 @@ fn escaped_target_remains_distinct_and_bound_to_the_real_operation() {
 }
 
 #[test]
+fn completion_snapshot_is_read_only_and_omits_answered_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let handle = handle(&root);
+    assert!(handle.completion_task_id().is_none());
+    let scope = handle.shared.inner.lock().task.scope().clone();
+    let (operation, _) = super::super::normalize_operation(
+        "edit",
+        &json!({"path":"file","contents":"new"}).to_string(),
+        &scope,
+    )
+    .unwrap();
+    pending_preview(&handle, operation, false);
+    let request = handle
+        .shared
+        .inner
+        .lock()
+        .pending
+        .as_ref()
+        .unwrap()
+        .request
+        .clone();
+    for _ in 0..2 {
+        assert_eq!(handle.completion_task_id().as_deref(), Some("test-task"));
+        let inner = handle.shared.inner.lock();
+        assert_eq!(inner.task.pending(), Some(&request));
+        assert!(inner.pending.as_ref().unwrap().decision.is_none());
+    }
+    handle
+        .approve("test-task", request.request_id, false)
+        .unwrap();
+    assert!(handle.completion_task_id().is_none());
+    assert_eq!(
+        handle
+            .shared
+            .inner
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .decision,
+        Some(false)
+    );
+}
+
+#[test]
 fn wrong_cli_answer_never_changes_current_request_or_recorded_decision() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();

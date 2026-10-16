@@ -78,7 +78,8 @@ pub(super) fn collect(
         "shell.abbr" => collector.collect_shell_abbr_candidates(current_token),
         "shell.alias" => collector.collect_shell_alias_candidates(current_token),
         "shell.env_var" => collector.collect_shell_env_var_candidates(current_token),
-        "shell.job" => Vec::new(),
+        // Live shell-owned state is supplied by the integrated engine.
+        "shell.job" | "shell.chat_task" => Vec::new(),
         _ => {
             return platform::collect(
                 collector,

@@ -73,13 +73,6 @@ struct FileSignature {
 static CACHE: LazyLock<Mutex<Option<(FileSignature, LoadedHooks)>>> =
     LazyLock::new(|| Mutex::new(None));
 
-#[cfg(test)]
-pub(crate) fn clear_cache() {
-    if let Ok(mut cache) = CACHE.lock() {
-        *cache = None;
-    }
-}
-
 /// Are hooks switched on for this shell?
 pub(crate) fn enabled(proxy: &mut dyn ShellProxy) -> bool {
     match crate::chatgpt::resolve_setting(proxy, HOOKS_ENABLED_KEY) {
@@ -128,11 +121,21 @@ pub(crate) fn turn_budget_ms(proxy: &mut dyn ShellProxy) -> Result<Option<u64>, 
     Ok(Some(value))
 }
 
-pub(crate) fn config_path(proxy: &mut dyn ShellProxy) -> Option<PathBuf> {
+pub(crate) fn config_path(proxy: &mut dyn ShellProxy) -> Result<Option<PathBuf>, String> {
     if let Some(path) = crate::chatgpt::resolve_setting(proxy, HOOKS_CONFIG_KEY) {
-        return Some(PathBuf::from(path));
+        let path = PathBuf::from(path);
+        // Background tools share the parent's process but keep their own cwd.
+        // Resolve before any filesystem access, never against ambient chdir.
+        return if path.is_absolute() {
+            Ok(Some(path))
+        } else {
+            proxy
+                .get_current_dir()
+                .map(|cwd| Some(cwd.join(path)))
+                .map_err(|err| format!("chat: cannot resolve {HOOKS_CONFIG_KEY}: {err:#}"))
+        };
     }
-    crate::config_paths::find_config_file(HOOKS_CONFIG_FILE)
+    Ok(crate::config_paths::find_config_file(HOOKS_CONFIG_FILE))
 }
 
 /// The hooks this shell should run, or an error that must stop the turn.
@@ -141,7 +144,7 @@ pub(crate) fn load(proxy: &mut dyn ShellProxy) -> Result<LoadedHooks, String> {
         return Ok(LoadedHooks::default());
     }
 
-    let Some(path) = config_path(proxy) else {
+    let Some(path) = config_path(proxy)? else {
         return Ok(LoadedHooks::default());
     };
     if !path.is_file() {

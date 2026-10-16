@@ -18,11 +18,11 @@ use crate::ShellProxy;
 
 mod load;
 use load::deserialize_command;
+#[cfg(test)]
+pub(crate) use load::parse;
 pub(crate) use load::{
     LoadedHooks, config_path, enabled, load, nested_in_a_hook, read, turn_budget_ms,
 };
-#[cfg(test)]
-pub(crate) use load::{clear_cache, parse};
 
 /// The configuration file, looked up like every other `dogesh` config file.
 pub(crate) const HOOKS_CONFIG_FILE: &str = "ai-hooks.json";

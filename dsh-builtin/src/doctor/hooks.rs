@@ -20,7 +20,14 @@ pub(super) fn check_hooks(ctx: &Context, proxy: &mut dyn ShellProxy) {
         return;
     }
 
-    let Some(path) = config::config_path(proxy) else {
+    let path = match config::config_path(proxy) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = ctx.write_stdout(&format!("error config: {error}"));
+            return;
+        }
+    };
+    let Some(path) = path else {
         let _ = ctx.write_stdout(&format!(
             "skip config none at {}",
             crate::config_paths::config_home()

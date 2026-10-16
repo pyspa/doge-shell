@@ -78,6 +78,7 @@ existing task's roots.
 | `profile` | `read_only` or `workspace_edit` (JSON uses underscores) |
 | `approval` | Pending request details, or `null` |
 | `ok` | Worker result when available; inspect this as well as `state` and output |
+| `error` | Masked supervisor failure reason when available, otherwise `null`; also retained in `output` |
 | `usage` | Elapsed time, parent tool requests, tokens and transferred output |
 | `tokens_reported` | Whether the worker reported token usage; `false` is not a measured zero |
 
@@ -176,6 +177,9 @@ submission to fail rather than silently skipping those checks.
   submission. Foreground setting changes are not imported mid-task. Skill
   metadata is captured when the worker starts, and instruction/resource bodies
   are read when needed; files can still change after submission.
+- A relative `DOGESH_AI_HOOKS_CONFIG` is resolved from the task's starting cwd,
+  even after foreground `cd`. Configuration files can still change; active or
+  invalid hooks remain a submission/initialization error.
 - Command children receive selected **exported** environment variables. The
   defaults are `PATH`, `LANG`, `LC_ALL`, `TMPDIR`. Add a required name explicitly
   with `--env NAME` before `--`; this does not export an otherwise unexported

@@ -325,6 +325,12 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn sync_completion_jobs(&self) {
+        self.completion_ui.integrated_completion.set_chat_task_id(
+            self.shell
+                .background_task
+                .as_ref()
+                .and_then(|task| task.completion_task_id()),
+        );
         self.completion_ui.integrated_completion.set_shell_jobs(
             self.shell
                 .wait_jobs

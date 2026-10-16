@@ -145,16 +145,10 @@ impl<'a> ContextCorrector<'a> {
             ) {
                 new_parsed.completion_context = parsed.completion_context.clone();
             } else {
-                let arg_index = new_parsed.specified_arguments.len().saturating_sub(
-                    if new_parsed
-                        .specified_arguments
-                        .contains(&new_parsed.current_token)
-                    {
-                        1
-                    } else {
-                        0
-                    },
-                );
+                let options =
+                    self.collect_available_options(command_completion, &new_parsed.subcommand_path);
+                let (_, arg_index) =
+                    Self::positional_arguments_after_raw_index(&new_parsed, 0, &options);
                 new_parsed.completion_context = CompletionContext::Argument {
                     arg_index,
                     arg_type: None,

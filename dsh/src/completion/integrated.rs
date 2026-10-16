@@ -236,6 +236,7 @@ pub struct IntegratedCompletionEngine {
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<(u64, String), CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
+    chat_task_id: RwLock<Option<String>>,
     dynamic: DynamicCompletionProvider,
     runtime: Arc<CompletionRuntime>,
 
@@ -257,6 +258,7 @@ impl IntegratedCompletionEngine {
             cache: CompletionCache::new(Duration::from_millis(DEFAULT_CACHE_TTL_MS)),
             framework_cache: RwLock::new(HashMap::new()),
             shell_jobs: RwLock::new(Vec::new()),
+            chat_task_id: RwLock::new(None),
             dynamic: DynamicCompletionProvider::with_runtime(environment.clone(), runtime.clone()),
             runtime,
             environment,
@@ -279,6 +281,15 @@ impl IntegratedCompletionEngine {
         *current = jobs;
         self.cache.clear();
         self.framework_cache.write().clear();
+    }
+
+    pub(crate) fn set_chat_task_id(&self, task_id: Option<String>) {
+        let mut current = self.chat_task_id.write();
+        if *current != task_id {
+            *current = task_id;
+            self.cache.clear();
+            self.framework_cache.write().clear();
+        }
     }
 
     /// Initialize the command completion database

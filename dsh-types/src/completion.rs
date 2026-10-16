@@ -165,6 +165,7 @@ pub const DYNAMIC_COMPLETION_PROVIDERS: &[&str] = &[
     "selinux.module",
     "shell.abbr",
     "shell.alias",
+    "shell.chat_task",
     "shell.env_var",
     "shell.job",
     "snap.package",

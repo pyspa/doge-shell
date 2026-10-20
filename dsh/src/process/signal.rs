@@ -109,3 +109,108 @@ pub(crate) fn signal_process_tree(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// Both tests below install handlers into one process-global SIGINT
+    /// disposition and deliver a real SIGINT to this process, so concurrent
+    /// execution would race each other's installs. Serialize them: the
+    /// handler that intercepts a delivery must be the one the test just
+    /// installed.
+    static HANDLER_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Poll the latch until it reports the delivered SIGINT (or run out of
+    /// retries): the SIGINT → handler → latch hop is asynchronous and the
+    /// condition, not a fixed sleep, defines the wait.
+    fn latch_reports_interrupt() -> bool {
+        for _ in 0..100 {
+            if check_and_clear_sigint() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    fn deliver_process_sigint() {
+        let pid = Pid::from_raw(std::process::id() as i32);
+        send_signal_allow_gone(pid, Signal::SIGINT).expect("self SIGINT");
+    }
+
+    /// Creating any tokio signal future (ghost text, `doctor ai`, the OAuth
+    /// wait, ...) hands SIGINT to tokio, whose driver registers the signal
+    /// through signal-hook-registry. That crate's handler takes over the
+    /// disposition and, on every delivery, re-runs the slot's previously
+    /// installed handler before tokio's own actions - so the shell's C
+    /// handler keeps setting the cancel latch even under the takeover. This
+    /// works only while signal-hook-registry chains the previous handler;
+    /// if this test ever fails after a tokio/signal-hook-registry upgrade,
+    /// product code needs a real tokio→latch bridge instead.
+    #[test]
+    fn tokio_signal_registration_still_reaches_the_cancel_latch() {
+        let _guard = HANDLER_TEST_LOCK.lock().expect("lock poisoned");
+
+        // The shell installs the C handler first (bootstrap, `set_signals`).
+        install_sigint_handler().expect("C handler installation");
+
+        // Creating the tokio signal future here is what swaps in tokio's
+        // handler; `dsh_openai::auth::run` only block_on's it on the shared
+        // runtime. Hold the future for the registration and let the swap
+        // settle before the delivery.
+        let banner = dsh_openai::auth::run(async {
+            let _signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("tokio registration");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(())
+        });
+        banner.expect("openai shared runtime");
+
+        assert!(
+            !check_and_clear_sigint(),
+            "latch must be clean before the delivery"
+        );
+
+        deliver_process_sigint();
+        assert!(
+            latch_reports_interrupt(),
+            "SIGINT did not reach the cancel latch after tokio registered its own handler"
+        );
+    }
+
+    /// `set_signals` re-installs the C handler at every `!` turn start, on
+    /// top of whatever tokio registered earlier: `sigaction` replaces the
+    /// registry's handler, so a delivery now runs `handle_sigint` directly.
+    /// The flip back around must keep feeding the same latch.
+    #[test]
+    fn reinstalled_c_handler_remains_the_interrupt_source() {
+        let _guard = HANDLER_TEST_LOCK.lock().expect("lock poisoned");
+
+        // Tokio registers first: some earlier AI feature created a signal
+        // future before this turn started.
+        let banner = dsh_openai::auth::run(async {
+            let _signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .expect("tokio registration");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            Ok(())
+        });
+        banner.expect("openai shared runtime");
+
+        // The per-turn reinstall that `eval` runs before the chat.
+        install_sigint_handler().expect("C handler reinstallation");
+
+        assert!(
+            !check_and_clear_sigint(),
+            "latch must be clean before the delivery"
+        );
+
+        deliver_process_sigint();
+        assert!(
+            latch_reports_interrupt(),
+            "SIGINT did not reach the cancel latch through the reinstalled C handler"
+        );
+    }
+}

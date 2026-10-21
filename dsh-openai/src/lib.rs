@@ -15,9 +15,9 @@ pub use crate::client::{
     is_openai_reasoning_model,
 };
 pub use crate::config::{
-    API_KEY_ENV_VARS, API_KEY_SETUP_HINT, AiProvider, DEFAULT_BASE_URL, DEFAULT_MODEL,
-    DEFAULT_TIMEOUT_SECS, OpenAiConfig, PROVIDER_ENV, REASONING_EFFORT_ENV, SUBSCRIPTION_MODEL_ENV,
-    TIMEOUT_ENV,
+    API_KEY_ENV_VARS, API_KEY_SETUP_HINT, API_PROTOCOL_ENV, AiProvider, ApiProtocol,
+    DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_SECS, OpenAiConfig, PROVIDER_ENV,
+    REASONING_EFFORT_ENV, SUBSCRIPTION_MODEL_ENV, TIMEOUT_ENV,
 };
 pub use crate::response::{
     apply_language, apply_language_to_field, json_object_format, strip_code_fence,

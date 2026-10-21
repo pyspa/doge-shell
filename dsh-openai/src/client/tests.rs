@@ -7,13 +7,16 @@ use tokio::time::{Duration, sleep};
 const TEST_API_KEY: &str = "test-key";
 const TEST_BASE_URL: &str = "https://example.invalid";
 
+/// A chat/completions client: these tests pin the compatibility path, which
+/// is opt-in since Responses became the default.
 fn client() -> ChatGptClient {
-    ChatGptClient::new_with_settings(
-        TEST_API_KEY.to_string(),
-        Some("gpt-5-mini".to_string()),
+    let config = OpenAiConfig::new(
+        Some(TEST_API_KEY.to_string()),
         Some(TEST_BASE_URL.to_string()),
+        Some("gpt-5-mini".to_string()),
     )
-    .expect("client should initialize")
+    .with_api_protocol(crate::ApiProtocol::ChatCompletions);
+    ChatGptClient::try_from_config(&config).expect("client should initialize")
 }
 
 /// Like [`client`], but with `AI_CHAT_REASONING_EFFORT` set. Goes through
@@ -31,6 +34,7 @@ fn client_with_reasoning_effort(effort: &str) -> ChatGptClient {
         "AI_CHAT_MODEL" => Some("gpt-5.6-luna".to_string()),
         "AI_CHAT_BASE_URL" => Some(TEST_BASE_URL.to_string()),
         "AI_CHAT_REASONING_EFFORT" => Some(effort.clone()),
+        "AI_CHAT_API" => Some("chat_completions".to_string()),
         _ => None,
     });
     ChatGptClient::try_from_config(&config).expect("client should initialize")
@@ -885,6 +889,7 @@ fn a_reasoning_effort_conflict_is_corrected_over_the_wire() {
         "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
         "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
         "AI_CHAT_TIMEOUT_SECS" => Some("5".to_string()),
+        "AI_CHAT_API" => Some("chat_completions".to_string()),
         _ => None,
     });
     let client = ChatGptClient::try_from_config(&config).expect("client should initialize");
@@ -992,4 +997,24 @@ fn parse_retry_after_reads_seconds() {
 
     let empty = reqwest::header::HeaderMap::new();
     assert_eq!(parse_retry_after(&empty), None);
+}
+
+#[test]
+fn api_key_provider_defaults_to_responses_and_chat_completions_is_opt_in() {
+    let config = |api: Option<&'static str>| {
+        OpenAiConfig::from_getter(move |key| match key {
+            "AI_CHAT_API_KEY" => Some(TEST_API_KEY.to_string()),
+            "AI_CHAT_API" => api.map(str::to_string),
+            _ => None,
+        })
+    };
+    let default = ChatGptClient::try_from_config(&config(None)).unwrap();
+    assert_eq!(
+        default.responses.as_ref().map(|r| r.endpoint()),
+        Some("https://api.openai.com/v1/responses")
+    );
+    let compat = ChatGptClient::try_from_config(&config(Some("chat_completions"))).unwrap();
+    assert!(compat.responses.is_none());
+    assert_ne!(default.cache_scope(), compat.cache_scope());
+    assert!(ChatGptClient::try_from_config(&config(Some("typo"))).is_err());
 }

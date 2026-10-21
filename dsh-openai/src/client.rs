@@ -122,7 +122,10 @@ pub(crate) fn shared_runtime() -> Result<&'static tokio::runtime::Runtime> {
 
 #[derive(Clone)]
 pub struct ChatGptClient {
-    subscription: Option<crate::responses::SubscriptionTransport>,
+    /// Set for every Responses route: ChatGPT subscription, and the `api_key`
+    /// provider unless `AI_CHAT_API=chat_completions`. `None` means the
+    /// chat/completions path below.
+    responses: Option<crate::responses::ResponsesTransport>,
     provider: crate::AiProvider,
     opencode_session: Option<String>,
     api_key: String,
@@ -188,13 +191,8 @@ impl ChatGptClient {
         options: &ChatRequestOptions,
         cancel_check: Option<&dyn Fn() -> bool>,
     ) -> Result<Value> {
-        if let Some(subscription) = &self.subscription {
-            return self.block_on(subscription.send(
-                messages,
-                options,
-                cancel_check,
-                &mut |_| {},
-            ))?;
+        if let Some(responses) = &self.responses {
+            return self.block_on(responses.send(messages, options, cancel_check, &mut |_| {}))?;
         }
         Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
@@ -227,8 +225,8 @@ impl ChatGptClient {
         cancel_check: Option<&dyn Fn() -> bool>,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<Value> {
-        if let Some(subscription) = &self.subscription {
-            return self.block_on(subscription.send(messages, options, cancel_check, on_delta))?;
+        if let Some(responses) = &self.responses {
+            return self.block_on(responses.send(messages, options, cancel_check, on_delta))?;
         }
         Self::check_api_history(messages)?;
         let body = self.build_body(messages, options);
@@ -590,7 +588,7 @@ impl RecoveryState {
 /// (a different status, or an error `downcast_ref` can't identify as one).
 /// Shared by `reasoning_effort_conflict` and `unsupported_field` so the two
 /// 400-sniffing checks can't drift on how a bad request is recognised.
-fn bad_request_message(err: &Error) -> Option<String> {
+pub(crate) fn bad_request_message(err: &Error) -> Option<String> {
     let api_error = err.downcast_ref::<ApiError>()?;
     (api_error.status == Some(StatusCode::BAD_REQUEST.as_u16()))
         .then(|| api_error.message.to_ascii_lowercase())
@@ -607,7 +605,7 @@ fn bad_request_message(err: &Error) -> Option<String> {
 /// misdiagnosis here costs at most one wasted round-trip before
 /// `reasoning_effort_conflict`'s own `already_dropped` / `already_none`
 /// guards stop it from repeating, so perfect precision is not worth chasing.
-fn contains_word(haystack: &str, word: &str) -> bool {
+pub(crate) fn contains_word(haystack: &str, word: &str) -> bool {
     haystack
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .any(|token| token == word)
@@ -703,7 +701,7 @@ fn error_message_from_value(data: &Value) -> Option<String> {
     Some(truncate_for_display(&message))
 }
 
-fn error_message_from_body(text: &str, status: StatusCode) -> String {
+pub(crate) fn error_message_from_body(text: &str, status: StatusCode) -> String {
     if let Ok(value) = serde_json::from_str::<Value>(text)
         && let Some(message) = error_message_from_value(&value)
     {
@@ -720,7 +718,7 @@ fn error_message_from_body(text: &str, status: StatusCode) -> String {
     truncate_for_display(trimmed)
 }
 
-fn truncate_for_display(text: &str) -> String {
+pub(crate) fn truncate_for_display(text: &str) -> String {
     const MAX: usize = 400;
     if text.len() <= MAX {
         return text.to_string();

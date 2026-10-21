@@ -84,6 +84,14 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     ));
     let _ = ctx.write_stdout(&format!("ok model {}", config.default_model()));
     let _ = ctx.write_stdout(&format!("ok base-url {}", config.base_url()));
+    if config.provider() == dsh_openai::AiProvider::ApiKey {
+        let protocol = config.api_protocol();
+        let endpoint = match protocol {
+            dsh_openai::ApiProtocol::Responses => config.responses_endpoint(),
+            dsh_openai::ApiProtocol::ChatCompletions => config.chat_endpoint(),
+        };
+        let _ = ctx.write_stdout(&format!("ok api {} {endpoint}", protocol.name()));
+    }
     if config.provider() == dsh_openai::AiProvider::ApiKey
         && let Some(configured) = configured_base_url.as_deref()
         && configured.trim_end_matches('/') != config.base_url()
@@ -95,15 +103,17 @@ pub(super) fn check_ai(ctx: &Context, proxy: &mut dyn ShellProxy) {
     let _ = ctx.write_stdout(&format!("ok message-lang {lang}"));
 
     let _ = ctx.write_stdout(&format!("ok request-timeout {}s", ai_timeout_secs(proxy)));
-    // Unset does not mean "nothing is ever sent": `build_body` still defaults
-    // `tools` requests to `reasoning_effort: none` for a known OpenAI
-    // reasoning model, including the shell's own default `gpt-5-mini`. Ask
-    // `is_openai_reasoning_model` rather than naming the family here, so this
+    // Unset does not mean "nothing is ever sent": on chat/completions,
+    // `build_body` still defaults `tools` requests to `reasoning_effort: none`
+    // for a known OpenAI reasoning model, including the shell's own default
+    // `gpt-5-mini`. Ask `is_openai_reasoning_model` rather than naming the family here, so this
     // (a) only shows the caveat for a model it actually applies to and
     // (b) can't drift from the prefix list `dsh-openai` matches against.
     let reasoning_effort_line = match config.reasoning_effort() {
         Some(value) => value.to_string(),
-        None if dsh_openai::is_openai_reasoning_model(config.default_model()) => {
+        None if config.api_protocol() == dsh_openai::ApiProtocol::ChatCompletions
+            && dsh_openai::is_openai_reasoning_model(config.default_model()) =>
+        {
             "default (auto \"none\" on tools requests to this model)".to_string()
         }
         None => "default".to_string(),

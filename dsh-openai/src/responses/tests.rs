@@ -34,7 +34,7 @@ async fn subscription_alias_catalog_selection_and_inference_use_oauth() {
     });
     config.validate().unwrap();
     let mut transport =
-        SubscriptionTransport::new(store, config.default_model().into(), Duration::from_secs(2))
+        ResponsesTransport::new(store, config.default_model().into(), Duration::from_secs(2))
             .unwrap();
     let models = transport.models_at(&endpoint, None).await.unwrap();
     assert_eq!(
@@ -102,7 +102,12 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         json!({"type":"function_call","namespace":"doge_shell","name":"search","call_id":"exact-call-id","arguments":"{\"query\":\"x\"}"}),
         message("interim"),
     ];
-    let response = normalize(&completed(output.clone()), &opts, "model", &account).unwrap();
+    let response = normalize(
+        &completed(output.clone()),
+        &opts,
+        &Wire::subscription("model", &account),
+    )
+    .unwrap();
     let assistant = crate::turn::interpret_response(&response)
         .unwrap()
         .assistant_message
@@ -117,8 +122,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
             json!({"role":"tool","tool_call_id":"exact-call-id","content":"{\"matches\":1}"}),
         ],
         &opts,
-        "model",
-        &account,
+        &Wire::subscription("model", &account),
     )
     .unwrap();
     assert_eq!(body["input"][0]["role"], "developer");
@@ -141,8 +145,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[response["choices"][0]["message"].clone()],
             &opts,
-            "other-model",
-            &account
+            &Wire::subscription("other-model", &account)
         )
         .is_err()
     );
@@ -152,8 +155,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[response["choices"][0]["message"].clone()],
             &opts,
-            "model",
-            &other
+            &Wire::subscription("model", &other)
         )
         .is_err()
     );
@@ -161,8 +163,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[json!({"role":"assistant","content":"legacy"})],
             &opts,
-            "model",
-            &account
+            &Wire::subscription("model", &account)
         )
         .is_err()
     );
@@ -173,7 +174,14 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
     for arguments in ["{\"query\":\"x\"}", "{\"query\":\"x\",\"limit\":5}"] {
         let mut valid = call.clone();
         valid["arguments"] = json!(arguments);
-        assert!(normalize(&completed(vec![valid]), &options(), "model", &account()).is_ok());
+        assert!(
+            normalize(
+                &completed(vec![valid]),
+                &options(),
+                &Wire::subscription("model", &account())
+            )
+            .is_ok()
+        );
     }
     for (key, value) in [
         ("namespace", json!("other")),
@@ -188,14 +196,20 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
     ] {
         let mut invalid = call.clone();
         invalid[key] = value;
-        assert!(normalize(&completed(vec![invalid]), &options(), "model", &account()).is_err());
+        assert!(
+            normalize(
+                &completed(vec![invalid]),
+                &options(),
+                &Wire::subscription("model", &account())
+            )
+            .is_err()
+        );
     }
     assert!(
         normalize(
             &completed(vec![call.clone(), call]),
             &options(),
-            "model",
-            &account()
+            &Wire::subscription("model", &account())
         )
         .is_err()
     );
@@ -203,8 +217,7 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
         normalize(
             &completed(vec![json!({"type":"tool_search_call"})]),
             &options(),
-            "model",
-            &account()
+            &Wire::subscription("model", &account())
         )
         .is_err()
     );
@@ -215,8 +228,7 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
     let body = build_body(
         &[json!({"role":"user","content":"JSON please"})],
         &opts,
-        "model",
-        &account(),
+        &Wire::subscription("model", &account()),
     )
     .unwrap();
     for field in [
@@ -242,8 +254,7 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
         normalize(
             &completed(vec![message("{\"ok\":true}")]),
             &opts,
-            "model",
-            &account()
+            &Wire::subscription("model", &account())
         )
         .is_ok()
     );
@@ -251,20 +262,23 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
         normalize(
             &completed(vec![message("partial JSON")]),
             &opts,
-            "model",
-            &account()
+            &Wire::subscription("model", &account())
         )
         .is_err()
     );
     let refusal = json!({"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"reason"}]});
     assert!(
-        normalize(&completed(vec![refusal]), &opts, "model", &account())
-            .unwrap_err()
-            .to_string()
-            .contains("refused")
+        normalize(
+            &completed(vec![refusal]),
+            &opts,
+            &Wire::subscription("model", &account())
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("refused")
     );
     let json_object = opts.with_response_format(Some(json!({"type":"json_object"})));
-    let body = build_body(&[], &json_object, "model", &account()).unwrap();
+    let body = build_body(&[], &json_object, &Wire::subscription("model", &account())).unwrap();
     assert_eq!(body["text"]["format"]["type"], "json_object");
     assert!(
         body["input"][0]["content"]
@@ -273,14 +287,19 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
             .contains("JSON")
     );
     let unsupported = json_object.with_response_format(Some(json!({"type":"unknown"})));
-    assert!(build_body(&[], &unsupported, "model", &account()).is_err());
+    assert!(build_body(&[], &unsupported, &Wire::subscription("model", &account())).is_err());
 }
 #[test]
 fn usage_maps_cached_tokens_and_missing_usage_remains_unknown() {
     let mut native = completed(vec![message("ok")]);
     native["usage"] =
         json!({"input_tokens":12,"output_tokens":3,"input_tokens_details":{"cached_tokens":5}});
-    let mapped = normalize(&native, &ChatRequestOptions::new(), "model", &account()).unwrap();
+    let mapped = normalize(
+        &native,
+        &ChatRequestOptions::new(),
+        &Wire::subscription("model", &account()),
+    )
+    .unwrap();
     let usage = crate::usage::TokenUsage::from_response(&mapped).unwrap();
     assert_eq!(usage.prompt_tokens, 12);
     assert_eq!(usage.completion_tokens, 3);
@@ -288,7 +307,12 @@ fn usage_maps_cached_tokens_and_missing_usage_remains_unknown() {
     native.as_object_mut().unwrap().remove("usage");
     assert!(
         crate::usage::TokenUsage::from_response(
-            &normalize(&native, &ChatRequestOptions::new(), "model", &account()).unwrap()
+            &normalize(
+                &native,
+                &ChatRequestOptions::new(),
+                &Wire::subscription("model", &account())
+            )
+            .unwrap()
         )
         .is_none()
     );
@@ -306,7 +330,7 @@ async fn sse_multiple_deltas_complete_and_wire_contract() {
         );
     let (endpoint, requests, task) = mock_http(vec![(200, "text/event-stream", sse)]).await;
     let mut transport =
-        SubscriptionTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
+        ResponsesTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
     transport.endpoint = endpoint;
     let mut visible = String::new();
     let result = transport
@@ -351,7 +375,7 @@ async fn partial_failure_eof_incomplete_and_quota_never_retry() {
         )])
         .await;
         let mut transport =
-            SubscriptionTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
+            ResponsesTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
         transport.endpoint = endpoint;
         let before = crate::usage::session_total();
         let mut visible = String::new();
@@ -381,7 +405,7 @@ async fn partial_failure_eof_incomplete_and_quota_never_retry() {
     )])
     .await;
     let mut transport =
-        SubscriptionTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
+        ResponsesTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
     transport.endpoint = endpoint;
     let error = transport
         .send(&[], &ChatRequestOptions::new(), None, &mut |_| {})
@@ -415,7 +439,7 @@ async fn transient_before_visible_retries_and_cancellation_is_typed() {
     ])
     .await;
     let mut transport =
-        SubscriptionTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
+        ResponsesTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
     transport.endpoint = endpoint;
     assert!(
         transport
@@ -430,4 +454,245 @@ async fn transient_before_visible_retries_and_cancellation_is_typed() {
         .await
         .unwrap_err();
     assert!(crate::is_ctrl_c_cancelled(&error));
+}
+fn api_key_wire(model: &str) -> Wire {
+    Wire::api_key(
+        model,
+        "https://example.invalid/v1/responses",
+        "fingerprint",
+        None,
+    )
+}
+#[test]
+fn api_key_wire_sends_flat_tools_and_optional_fields() {
+    let opts = options()
+        .with_temperature(Some(0.2))
+        .with_max_tokens(Some(1))
+        .with_prompt_cache_key(Some("cache".into()));
+    let wire = Wire::api_key(
+        "gpt-5-mini",
+        "https://example.invalid/v1/responses",
+        "fingerprint",
+        Some("low".into()),
+    );
+    let body = build_body(&[json!({"role":"user","content":"hi"})], &opts, &wire).unwrap();
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["name"], "search");
+    assert_eq!(body["tools"][0]["strict"], false);
+    assert_eq!(body["max_output_tokens"], 16);
+    assert_eq!(body["prompt_cache_key"], "cache");
+    assert_eq!(body["reasoning"]["effort"], "low");
+    assert_eq!(body["include"][0], "reasoning.encrypted_content");
+    assert!(body.get("temperature").is_none());
+    assert_eq!(body["store"], false);
+
+    let body = build_body(&[], &opts, &api_key_wire("gpt-4.1")).unwrap();
+    assert_eq!(body["temperature"], 0.2);
+    // Deployment names do not reveal a reasoning model, so it is always asked for.
+    assert_eq!(body["include"][0], "reasoning.encrypted_content");
+    assert!(body.get("reasoning").is_none());
+}
+#[test]
+fn api_key_history_is_flat_bound_to_its_identity_and_skips_unresolvable_reasoning() {
+    let opts = options();
+    let wire = api_key_wire("gpt-4.1");
+    let call = json!({"type":"function_call","id":"fc1","name":"search","call_id":"c1","arguments":"{\"query\":\"x\"}"});
+    let mut namespaced = call.clone();
+    namespaced["namespace"] = json!("doge_shell");
+    assert!(normalize(&completed(vec![namespaced]), &opts, &wire).is_err());
+    let bare = call.as_object().unwrap().clone();
+    let mut bare = Value::Object(bare);
+    bare.as_object_mut().unwrap().remove("id");
+
+    // A reasoning item without encrypted content cannot be resolved by a
+    // stateless request: it is dropped and the paired call loses its id.
+    let response = normalize(
+        &completed(vec![json!({"type":"reasoning","id":"r1"}), call.clone()]),
+        &opts,
+        &wire,
+    )
+    .unwrap();
+    let assistant = response["choices"][0]["message"].clone();
+    assert_eq!(assistant["tool_calls"][0]["id"], "c1");
+    let body = build_body(std::slice::from_ref(&assistant), &opts, &wire).unwrap();
+    assert_eq!(body["input"], json!([bare]));
+
+    // Encrypted reasoning replays verbatim for the same model, and is dropped
+    // (with the ids) after a `chat_model` switch instead of failing the turn.
+    let reasoning = json!({"type":"reasoning","id":"r1","encrypted_content":"opaque"});
+    let response = normalize(
+        &completed(vec![reasoning.clone(), call.clone()]),
+        &opts,
+        &wire,
+    )
+    .unwrap();
+    let assistant = response["choices"][0]["message"].clone();
+    let body = build_body(std::slice::from_ref(&assistant), &opts, &wire).unwrap();
+    assert_eq!(body["input"], json!([reasoning, call]));
+    let body = build_body(
+        std::slice::from_ref(&assistant),
+        &opts,
+        &api_key_wire("gpt-5-mini"),
+    )
+    .unwrap();
+    assert_eq!(body["input"], json!([bare]));
+
+    for other in [
+        Wire::api_key(
+            "gpt-4.1",
+            "https://other.invalid/v1/responses",
+            "fingerprint",
+            None,
+        ),
+        Wire::api_key(
+            "gpt-4.1",
+            "https://example.invalid/v1/responses",
+            "other",
+            None,
+        ),
+        Wire::subscription("gpt-4.1", &account()),
+    ] {
+        assert!(build_body(std::slice::from_ref(&assistant), &opts, &other).is_err());
+    }
+    assert!(
+        build_body(
+            &[json!({"role":"assistant","content":"legacy"})],
+            &opts,
+            &wire
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("chat_reset")
+    );
+}
+#[test]
+fn api_key_incomplete_is_a_named_cut_and_never_runs_a_partial_call() {
+    let mut native = completed(vec![
+        message("half an ans"),
+        json!({"type":"function_call","name":"search","call_id":"c1","arguments":"{\"que"}),
+    ]);
+    native["status"] = json!("incomplete");
+    native["incomplete_details"] = json!({"reason":"max_output_tokens"});
+    let response = normalize(&native, &options(), &api_key_wire("gpt-5-mini")).unwrap();
+    assert_eq!(response["choices"][0]["finish_reason"], "length");
+    assert!(
+        response["choices"][0]["message"]
+            .get("tool_calls")
+            .is_none()
+    );
+    let error = crate::turn::answer_text(&response).unwrap_err().to_string();
+    assert!(error.contains("half an ans"), "{error}");
+    native["incomplete_details"] = json!({"reason":"content_filter"});
+    let response = normalize(&native, &options(), &api_key_wire("gpt-5-mini")).unwrap();
+    assert_eq!(response["choices"][0]["finish_reason"], "content_filter");
+    assert!(normalize(&native, &options(), &Wire::subscription("m", &account())).is_err());
+}
+#[tokio::test]
+async fn api_key_rejected_field_is_dropped_once_and_json_replies_are_accepted() {
+    let rejected = r#"{"error":{"message":"Unsupported parameter: 'reasoning.effort' is not supported with this model.","param":"reasoning.effort"}}"#;
+    let (endpoint, requests, task) = mock_http(vec![
+        (400, "application/json", rejected.into()),
+        (
+            200,
+            "application/json",
+            completed(vec![message("plain json")]).to_string(),
+        ),
+        (
+            200,
+            "application/json",
+            completed(vec![message("again")]).to_string(),
+        ),
+    ])
+    .await;
+    let transport = ResponsesTransport::api_key(
+        "mock-api-key".into(),
+        endpoint,
+        "recovery-model".into(),
+        Duration::from_secs(3),
+        Some("low".into()),
+    )
+    .unwrap();
+    for expected in ["plain json", "again"] {
+        let result = transport
+            .send(&[], &ChatRequestOptions::new(), None, &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(crate::turn::answer_text(&result).unwrap(), expected);
+    }
+    task.await.unwrap();
+    let requests = requests.lock().unwrap();
+    let bodies: Vec<Value> = requests
+        .iter()
+        .map(|r| serde_json::from_str(r.split("\r\n\r\n").nth(1).unwrap()).unwrap())
+        .collect();
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(bodies[0]["reasoning"]["effort"], "low");
+    // Retried without it, and remembered for the next request.
+    assert!(bodies[1].get("reasoning").is_none());
+    assert!(bodies[2].get("reasoning").is_none());
+    assert!(bodies[2].get("include").is_some());
+}
+#[tokio::test]
+async fn api_key_transport_uses_the_key_and_reports_the_endpoint_error() {
+    let (endpoint, requests, task) = mock_http(vec![
+        (
+            200,
+            "text/event-stream",
+            event("response.output_text.delta", "delta", json!("Hi"))
+                + &event(
+                    "response.completed",
+                    "response",
+                    completed(vec![message("Hi")]),
+                ),
+        ),
+        (
+            400,
+            "application/json",
+            r#"{"error":{"message":"The model `nope` does not exist."}}"#.into(),
+        ),
+    ])
+    .await;
+    let transport = ResponsesTransport::api_key(
+        "mock-api-key".into(),
+        endpoint,
+        "gpt-4.1".into(),
+        Duration::from_secs(3),
+        None,
+    )
+    .unwrap();
+    let mut visible = String::new();
+    let result = transport
+        .send(
+            &[json!({"role":"user","content":"hello"})],
+            &ChatRequestOptions::new(),
+            None,
+            &mut |delta| visible.push_str(delta),
+        )
+        .await
+        .unwrap();
+    assert_eq!(visible, "Hi");
+    assert_eq!(crate::turn::answer_text(&result).unwrap(), "Hi");
+    let error = transport
+        .send(
+            &[],
+            &ChatRequestOptions::new().with_model(Some("nope".into())),
+            None,
+            &mut |_| {},
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("does not exist"), "{error}");
+    task.await.unwrap();
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[0]
+            .to_lowercase()
+            .contains("authorization: bearer mock-api-key")
+    );
+    let body: Value = serde_json::from_str(requests[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(body["model"], "gpt-4.1");
+    assert!(!body.to_string().contains("mock-api-key"));
+    assert!(transport.subscription_store().is_none());
 }

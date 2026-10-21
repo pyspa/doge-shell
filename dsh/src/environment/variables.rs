@@ -270,6 +270,7 @@ impl Environment {
             | "OPENAI_BASE_URL"
             | "AI_CHAT_TIMEOUT_SECS"
             | "AI_CHAT_REASONING_EFFORT"
+            | "AI_CHAT_API"
             | "AI_CHAT_ALLOW_INSECURE_HTTP"
             | "HOME"
             | "XDG_CONFIG_HOME" => self.reload_ai_client(),

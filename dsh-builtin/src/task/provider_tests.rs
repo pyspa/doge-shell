@@ -223,38 +223,29 @@ fn large_mise_json_remains_machine_discovered() {
 }
 
 fn wait_for_fifo_reader_disconnect(
-    fd: &impl std::os::fd::AsRawFd,
+    gate: &Path,
+    _writer_guard: &std::os::fd::OwnedFd,
     timeout: Duration,
-) -> (bool, nix::libc::c_short) {
-    use nix::libc;
+) -> bool {
+    use nix::{
+        errno::Errno,
+        fcntl::{OFlag, open},
+        sys::stat::Mode,
+    };
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        let mut event = libc::pollfd {
-            fd: fd.as_raw_fd(),
-            // Darwin only registers the write filter when an output event is
-            // requested. Writable readiness alone is not a disconnect.
-            events: libc::POLLOUT,
-            revents: 0,
-        };
-        // SAFETY: the borrowed fd remains owned throughout this poll.
-        let polled = unsafe { libc::poll(&mut event, 1, 10) };
-        if polled < 0 {
-            let error = std::io::Error::last_os_error();
-            assert_eq!(
-                error.kind(),
-                std::io::ErrorKind::Interrupted,
-                "polling FIFO writer: {error}"
-            );
-        }
-        assert_eq!(event.revents & libc::POLLNVAL, 0, "invalid FIFO writer fd");
-        if event.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
-            return (true, event.revents);
+        // Darwin's FIFO poll reports writability even after its reader closes.
+        // ENXIO on a new nonblocking writer directly proves no reader remains.
+        // Keep the original writer borrowed throughout: dropping these probes
+        // must not cause EOF and accidentally release a leaked reader.
+        match open(gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()) {
+            Err(Errno::ENXIO) => return true,
+            Ok(probe) => drop(probe),
+            Err(error) => panic!("probing FIFO reader: {error}"),
         }
         if std::time::Instant::now() >= deadline {
-            return (false, event.revents);
+            return false;
         }
-        // A live reader makes POLLOUT immediately ready. Keep observing it
-        // without feeding the FIFO or spinning while waiting for it to close.
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -272,14 +263,13 @@ fn fifo_disconnect_observer_requires_reader_to_close() {
     let reader = open(&gate, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
     let writer = open(&gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
     assert!(
-        !wait_for_fifo_reader_disconnect(&writer, Duration::from_millis(30)).0,
+        !wait_for_fifo_reader_disconnect(&gate, &writer, Duration::from_millis(30)),
         "a live FIFO reader must not be reported as disconnected"
     );
     drop(reader);
-    let (disconnected, revents) = wait_for_fifo_reader_disconnect(&writer, Duration::from_secs(1));
     assert!(
-        disconnected,
-        "closed FIFO reader was not observed (last_poll_revents={revents:#x})"
+        wait_for_fifo_reader_disconnect(&gate, &writer, Duration::from_secs(1)),
+        "closed FIFO reader was not observed"
     );
 }
 
@@ -317,13 +307,11 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
         assert!(result.unwrap_err().to_string().contains("timed out"));
         assert!(start.elapsed() < Duration::from_secs(2));
         assert!(dir.path().join("ready").exists());
-        let mut last_revents = 0;
         let writer = open(&gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty());
         let disconnected = match writer {
             Err(Errno::ENXIO) => true,
             Ok(fd) => {
-                let (gone, revents) = wait_for_fifo_reader_disconnect(&fd, Duration::from_secs(1));
-                last_revents = revents;
+                let gone = wait_for_fifo_reader_disconnect(&gate, &fd, Duration::from_secs(1));
                 if !gone {
                     let mut file = std::fs::File::from(fd);
                     let _ = file.write_all(b"release\n");
@@ -334,7 +322,7 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
         };
         assert!(
             disconnected,
-            "a descendant still owns a FIFO reader (parent_exits={parent_exits}, last_poll_revents={last_revents:#x})"
+            "a descendant still owns a FIFO reader (parent_exits={parent_exits})"
         );
     }
 }

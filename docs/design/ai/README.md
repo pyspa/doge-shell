@@ -21,13 +21,34 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
 
 ## 1. Provider別のtransport契約
 
-- 既定 `AI_CHAT_PROVIDER=api_key` は `{base_url}/chat/completions`（`dsh-openai/src/config.rs`）。
+- 既定 `AI_CHAT_PROVIDER=api_key` は **`{base_url}/responses`（Responses API）**。
+  `AI_CHAT_API=chat_completions`（alias `compat`）を明示したときだけ `{base_url}/chat/completions`
+  （`ApiProtocol`、`dsh-openai/src/config.rs`）。custom base URL でも暗黙に互換 API へ落とさない。
+  `.../chat/completions` で終わる base URL を Responses で使うのは設定エラー。
+- API-key Responses は subscription と同じ `ResponsesTransport`（`dsh-openai/src/responses/`）を使う。
+  違いは `wire::Wire` と `recovery` だけ:
+  - Bearer API key、tools は namespace 無しの flat function。
+  - `max_output_tokens`（最小16）/`reasoning.effort`/`prompt_cache_key`/`temperature`
+    （`is_openai_reasoning_model` 以外）を送る。`include: reasoning.encrypted_content` は全モデルに送る
+    （deployment名からreasoning modelかを判定できないため）。
+  - 400 が `param`/メッセージでこれらの optional field を名指ししたら 1 回落として再送し、
+    endpoint+model 単位でプロセス内に記憶する（`responses/recovery.rs`）。chat の `DROPPABLE_FIELDS` とは別リスト。
+  - `stream:true` を無視して JSON を返すゲートウェイは、その response object をそのまま受理する。
+  - `incomplete`（`max_output_tokens`/`content_filter`）は失敗ではなく `finish_reason` の
+    `length`/`content_filter` として返し、途中の function_call は実行も replay もしない。
+  - 履歴 identity は provider/endpoint/キーの SHA-256 先頭16桁（キー本体・model は持たない）。
+    model は continuation に別途持ち、`chat_model` で変わったら旧モデルの reasoning item を落とし、
+    そのターンの残り item から `id` を外して replay する（function_call と reasoning の対応検査を避ける）。
+    encrypted content の無い reasoning item も同様に落とす。
+  - endpoint/キー/provider が変わった履歴、Chat Completions 形式の履歴とは相互に流用せず `chat_reset` を案内する。
+  - redirect は chat/completions 経路と同じく reqwest 既定に従う（subscription は追わない）。
 - 認証は `Authorization: Bearer` 固定。
 - したがって **Anthropic Messages API（`x-api-key` + `anthropic-version`）はそのままでは使えない**。
   API-key経路ではOpenAI互換ゲートウェイ経由で使う。
 - 明示 `chatgpt_subscription` は公式SIWC OAuthと固定公開 `/v1/responses` を使う。
   APIキー・custom base URL・API課金へのfallbackは使わない。詳細は [subscription.md](subscription.md)。
-  以下のreasoning判定・400フィールドdropはAPI-key経路のみの契約で、Responsesに適用しない。
+  以下のreasoning判定・400フィールドdropは **Chat Completions 経路のみ**の契約で、Responsesに適用しない
+  （Responses は tools と reasoning を併用できる）。
 - **`is_openai_reasoning_model`（`OPENAI_REASONING_MODEL_PREFIXES` = `gpt-5` / `o1` / `o3` / `o4`、
   大文字小文字を無視、`client.rs`。`pub` で `dsh-openai` から公開）に該当するモデルへの `tools` 付き
   リクエストは、`AI_CHAT_REASONING_EFFORT` 未設定でも `reasoning_effort: "none"` を最初から送る**

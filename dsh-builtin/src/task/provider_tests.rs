@@ -222,9 +222,59 @@ fn large_mise_json_remains_machine_discovered() {
     assert!(!tasks.iter().any(|t| t.name == "static"));
 }
 
+fn wait_for_fifo_reader_disconnect(
+    gate: &Path,
+    _writer_guard: &std::os::fd::OwnedFd,
+    timeout: Duration,
+) -> bool {
+    use nix::{
+        errno::Errno,
+        fcntl::{OFlag, open},
+        sys::stat::Mode,
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        // Darwin's FIFO poll reports writability even after its reader closes.
+        // ENXIO on a new nonblocking writer directly proves no reader remains.
+        // Keep the original writer borrowed throughout: dropping these probes
+        // must not cause EOF and accidentally release a leaked reader.
+        match open(gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()) {
+            Err(Errno::ENXIO) => return true,
+            Ok(probe) => drop(probe),
+            Err(error) => panic!("probing FIFO reader: {error}"),
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn fifo_disconnect_observer_requires_reader_to_close() {
+    use nix::{
+        fcntl::{OFlag, open},
+        sys::stat::Mode,
+        unistd::mkfifo,
+    };
+    let dir = tempdir().unwrap();
+    let gate = dir.path().join("gate");
+    mkfifo(&gate, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    let reader = open(&gate, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
+    let writer = open(&gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
+    assert!(
+        !wait_for_fifo_reader_disconnect(&gate, &writer, Duration::from_millis(30)),
+        "a live FIFO reader must not be reported as disconnected"
+    );
+    drop(reader);
+    assert!(
+        wait_for_fifo_reader_disconnect(&gate, &writer, Duration::from_secs(1)),
+        "closed FIFO reader was not observed"
+    );
+}
+
 #[test]
 fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
-    use nix::libc;
     use nix::{
         errno::Errno,
         fcntl::{OFlag, open},
@@ -261,27 +311,7 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
         let disconnected = match writer {
             Err(Errno::ENXIO) => true,
             Ok(fd) => {
-                use std::os::fd::AsRawFd;
-                let deadline = std::time::Instant::now() + Duration::from_secs(1);
-                let gone = loop {
-                    let mut event = libc::pollfd {
-                        fd: fd.as_raw_fd(),
-                        events: 0,
-                        revents: 0,
-                    };
-                    // SAFETY: fd remains owned for the entire poll. POLLERR
-                    // observes the FIFO losing all readers without feeding or
-                    // closing the writer and accidentally releasing a leak.
-                    unsafe {
-                        libc::poll(&mut event, 1, 10);
-                    }
-                    if event.revents & libc::POLLERR != 0 {
-                        break true;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        break false;
-                    }
-                };
+                let gone = wait_for_fifo_reader_disconnect(&gate, &fd, Duration::from_secs(1));
                 if !gone {
                     let mut file = std::fs::File::from(fd);
                     let _ = file.write_all(b"release\n");
@@ -290,7 +320,10 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
             }
             Err(error) => panic!("opening FIFO writer: {error}"),
         };
-        assert!(disconnected, "a descendant still owns a FIFO reader");
+        assert!(
+            disconnected,
+            "a descendant still owns a FIFO reader (parent_exits={parent_exits})"
+        );
     }
 }
 

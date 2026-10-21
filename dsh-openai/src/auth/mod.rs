@@ -47,7 +47,7 @@ pub(crate) async fn wait<T>(
                 return Err(crate::client::RequestCancelled.into());
             },
             _ = tokio::time::sleep(Duration::from_millis(50)) => {
-                if tokio::time::Instant::now() >= deadline { bail!("ChatGPT request timed out."); }
+                if tokio::time::Instant::now() >= deadline { bail!("AI request timed out."); }
             }
         }
     }

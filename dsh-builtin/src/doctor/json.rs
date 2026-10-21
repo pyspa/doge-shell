@@ -93,7 +93,8 @@ pub(super) fn json_section_details(
             let mut details = json!({
             "configured": config.readiness().is_ok(),
             "provider": config.provider_name(),
-            "protocol": if config.provider().is_opencode() { Some("chat/completions") } else { None },
+            "protocol": config.api_protocol().path(),
+            "api": config.api_protocol().name(),
             "billing": config.provider().opencode_billing(),
             "key_reference": config.provider().opencode_key_env(),
             "readiness_error": config.readiness().err().map(|e| e.to_string()),
@@ -103,6 +104,7 @@ pub(super) fn json_section_details(
             "timeout_secs": config.timeout().as_secs(),
             "reasoning_effort": config.reasoning_effort().unwrap_or("default"),
             "reasoning_effort_auto_none_for_tools": config.reasoning_effort().is_none()
+                && config.api_protocol() == dsh_openai::ApiProtocol::ChatCompletions
                 && dsh_openai::is_openai_reasoning_model(config.default_model()),
             "usage": {
                 "requests": usage.requests,

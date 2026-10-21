@@ -90,9 +90,10 @@ pub(super) fn route_report(config: &OpenAiConfig) -> String {
     let provider = config.provider();
     let key = provider.opencode_key_env().unwrap_or("AI_CHAT_API_KEY");
     format!(
-        "{}: {} (chat/completions), model={}\nKey references: {} or OPENCODE_API_KEY ({})\n{}",
+        "{}: {} ({}), model={}\nKey references: {} or OPENCODE_API_KEY ({})\n{}",
         provider.name(),
         config.base_url(),
+        config.api_protocol().path(),
         config.default_model(),
         key,
         if config.api_key().is_some() {

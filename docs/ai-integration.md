@@ -83,10 +83,11 @@ To use the API-key provider:
    | --- | --- | --- |
    | `AI_CHAT_MODEL` | `gpt-5-mini` | Model used for chat and AI actions. Also settable at runtime with `chat_model <model>` (or `chat_model ""` to clear it); the change reaches every AI path immediately - `!` chat, command palette actions, ghost text, `ai-watch`, `blocks explain\|fix`, `output-gen` - no restart needed |
    | `AI_SUMMARY_MODEL` | chat model | Model used to summarize a long conversation |
-   | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | OpenAI-compatible endpoint |
+   | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | Base URL; requests go to `{base}/responses` (or `{base}/chat/completions` with `AI_CHAT_API=chat_completions`) |
+   | `AI_CHAT_API` | `responses` | Wire API. The OpenAI Responses API is the default; set `chat_completions` (alias `compat`) to use the older Chat Completions-compatible API, e.g. for a local or gateway server that has no `/responses` |
    | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
-   | `AI_CHAT_REASONING_EFFORT` | unset (`none` on `tools` requests to a `gpt-5`/`o1`/`o3`/`o4` model, provider default otherwise) | `reasoning_effort` sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
+   | `AI_CHAT_REASONING_EFFORT` | unset (provider default; on `chat_completions`, `none` on `tools` requests to a `gpt-5`/`o1`/`o3`/`o4` model) | Reasoning effort (`reasoning.effort` on Responses, `reasoning_effort` on Chat Completions) sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | Idle timeout for the carried conversation; the clock restarts on each turn that finishes (a rewound failed turn does not restart it). `0` disables carrying it forward |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
@@ -108,11 +109,28 @@ To use the API-key provider:
    | `AI_CHAT_MCP_TOOL_MODE` | `auto` | MCP model surface for `!` chat: `auto` bridges large catalogs (discoverable schemas over 12 KiB) behind `tool_search`/`tool_describe`/`tool_call` and keeps small ones eager; `eager`/`bridge` force either side |
    | `DOGESH_AI_HOOKS_CONFIG` | `~/.config/dogesh/ai-hooks.json` | Path of the hook configuration |
 
-   Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
-   `Retry-After`. An optional request field the endpoint rejects outright is
-   dropped once and the request retried.
+   Responses requests are stateless (`store: false`); the conversation is
+   resent each turn. A Chat Completions-only server (many local model servers)
+   needs the compatibility API set explicitly in `config.lisp`:
 
-   The entire current OpenAI reasoning lineup (any `gpt-5*` point release -
+   ```lisp
+   (vset "AI_CHAT_API" "chat_completions")
+   ```
+
+   Switching `AI_CHAT_API` mid-conversation needs `chat_reset`, and so does the
+   first `!` after upgrading from a release that used Chat Completions by
+   default (a carried conversation from it cannot be replayed). `chat_model`
+   keeps working mid-conversation. A base URL that already ends in
+   `/chat/completions` is rejected unless `AI_CHAT_API` is set. An optional
+   field the endpoint rejects with a 400 (`reasoning`, `temperature`,
+   `max_output_tokens`, `prompt_cache_key`, `include`) is dropped once and
+   the request retried.
+
+   Transient failures (429, 5xx, timeouts) are retried with backoff, honouring
+   `Retry-After`. On Chat Completions, an optional request field the endpoint
+   rejects outright is dropped once and the request retried.
+
+   On Chat Completions, the entire current OpenAI reasoning lineup (any `gpt-5*` point release -
    including `gpt-5.6-luna` and its siblings - plus `o1`, `o3`, `o4`) rejects
    `tools` requests unless `reasoning_effort` is `"none"`, so a `tools`
    request to one of those models sends `reasoning_effort: none` from the

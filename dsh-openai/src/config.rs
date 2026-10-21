@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const PROVIDER_ENV: &str = "AI_CHAT_PROVIDER";
+/// Wire protocol for the `api_key` provider. Unset means Responses.
+pub const API_PROTOCOL_ENV: &str = "AI_CHAT_API";
 pub const SUBSCRIPTION_MODEL_ENV: &str = "AI_CHAT_SUBSCRIPTION_MODEL";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,45 @@ impl AiProvider {
     }
 }
 
+/// Wire protocol spoken to the inference endpoint.
+///
+/// Only the `api_key` provider is configurable: ChatGPT subscription always
+/// speaks Responses and OpenCode routes are fixed Chat Completions endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApiProtocol {
+    Responses,
+    /// The older OpenAI-compatible `chat/completions` API, used only when the
+    /// operator sets `AI_CHAT_API` explicitly.
+    ChatCompletions,
+}
+
+impl ApiProtocol {
+    pub fn parse(value: &str) -> anyhow::Result<Self> {
+        match value.trim() {
+            "" | "responses" => Ok(Self::Responses),
+            "chat_completions" | "chat-completions" | "compat" => Ok(Self::ChatCompletions),
+            _ => {
+                anyhow::bail!("AI_CHAT_API must be responses or chat_completions (alias: compat).")
+            }
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Responses => "responses",
+            Self::ChatCompletions => "chat_completions",
+        }
+    }
+
+    /// The endpoint path segment, as `doctor` and route reports print it.
+    pub fn path(self) -> &'static str {
+        match self {
+            Self::Responses => RESPONSES_PATH,
+            Self::ChatCompletions => CHAT_COMPLETIONS_PATH,
+        }
+    }
+}
+
 /// Environment key overriding the total per-request timeout, in seconds.
 pub const TIMEOUT_ENV: &str = "AI_CHAT_TIMEOUT_SECS";
 
@@ -61,6 +102,7 @@ pub const API_KEY_SETUP_HINT: &str =
 
 /// Primary key for the chat endpoint path segment.
 const CHAT_COMPLETIONS_PATH: &str = "chat/completions";
+const RESPONSES_PATH: &str = "responses";
 
 /// Default base URL for OpenAI-compatible APIs.
 pub const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1/";
@@ -89,6 +131,7 @@ pub struct OpenAiConfig {
     default_model: String,
     timeout: Duration,
     reasoning_effort: Option<String>,
+    api_protocol: ApiProtocol,
 }
 
 impl OpenAiConfig {
@@ -136,6 +179,7 @@ impl OpenAiConfig {
             // security-relevant transform this constructor can't defer to a
             // caller who might not call `with_reasoning_effort` at all.
             reasoning_effort: None,
+            api_protocol: ApiProtocol::Responses,
         }
     }
 
@@ -164,6 +208,8 @@ impl OpenAiConfig {
             (!trimmed.is_empty()).then_some(trimmed)
         });
 
+        let api_protocol = ApiProtocol::parse(&getter(API_PROTOCOL_ENV).unwrap_or_default());
+
         let has_custom_base = base_url.as_ref().is_some_and(|v| !v.trim().is_empty());
         let mut config = OpenAiConfig::new_with_http_policy(
             api_key,
@@ -186,7 +232,10 @@ impl OpenAiConfig {
         }
         config.auth_dir = auth_dir;
         match resolved_provider {
-            Ok(AiProvider::ApiKey) => {}
+            Ok(AiProvider::ApiKey) => match api_protocol {
+                Ok(protocol) => config.api_protocol = protocol,
+                Err(error) => config.configuration_error = Some(error.to_string()),
+            },
             Ok(AiProvider::ChatGptSubscription) => {
                 config.provider = AiProvider::ChatGptSubscription;
                 config.api_key = None;
@@ -227,6 +276,18 @@ impl OpenAiConfig {
     pub fn validate(&self) -> anyhow::Result<()> {
         if let Some(error) = &self.configuration_error {
             anyhow::bail!("{error}");
+        }
+        // Checked here rather than in `from_getter` so every constructor gets
+        // it: appending `/responses` to a chat endpoint can only 404, and
+        // silently switching protocol would undo the rule that Chat
+        // Completions is opt-in.
+        if self.api_protocol() == ApiProtocol::Responses
+            && self.base_url.ends_with(CHAT_COMPLETIONS_PATH)
+        {
+            anyhow::bail!(
+                "AI base URL `{}` is a chat/completions endpoint. Set {API_PROTOCOL_ENV}=chat_completions to use it, or set the base URL without the endpoint path.",
+                self.base_url
+            );
         }
         self.provider.validate_opencode_model(&self.default_model)?;
         Ok(())
@@ -275,6 +336,25 @@ impl OpenAiConfig {
 
     pub fn chat_endpoint(&self) -> String {
         build_chat_endpoint(&self.base_url)
+    }
+
+    pub fn responses_endpoint(&self) -> String {
+        build_endpoint(&self.base_url, RESPONSES_PATH)
+    }
+
+    /// The protocol requests actually use: `AI_CHAT_API` applies to the
+    /// `api_key` provider only.
+    pub fn api_protocol(&self) -> ApiProtocol {
+        match self.provider {
+            AiProvider::ApiKey => self.api_protocol,
+            AiProvider::ChatGptSubscription => ApiProtocol::Responses,
+            AiProvider::OpencodeGo | AiProvider::OpencodeZen => ApiProtocol::ChatCompletions,
+        }
+    }
+
+    pub fn with_api_protocol(mut self, api_protocol: ApiProtocol) -> Self {
+        self.api_protocol = api_protocol;
+        self
     }
 
     pub fn with_api_key(mut self, api_key: Option<String>) -> Self {
@@ -359,11 +439,15 @@ fn warn_insecure_base_url_replaced(configured: &str) {
 }
 
 fn build_chat_endpoint(base_url: &str) -> String {
+    build_endpoint(base_url, CHAT_COMPLETIONS_PATH)
+}
+
+fn build_endpoint(base_url: &str, path: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with(CHAT_COMPLETIONS_PATH) {
+    if trimmed.ends_with(path) {
         trimmed.to_string()
     } else {
-        format!("{trimmed}/{CHAT_COMPLETIONS_PATH}")
+        format!("{trimmed}/{path}")
     }
 }
 
@@ -644,3 +728,6 @@ mod subscription_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod protocol_tests;

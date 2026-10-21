@@ -3,19 +3,11 @@ use super::*;
 impl ChatGptClient {
     pub fn try_from_config(config: &OpenAiConfig) -> Result<Self> {
         config.validate()?;
-        let subscription = if config.provider() == crate::AiProvider::ChatGptSubscription {
-            Some(crate::responses::SubscriptionTransport::new(
-                crate::auth::AuthStore::new(config.auth_dir()?.to_path_buf()),
-                config.default_model().into(),
-                config.timeout(),
-            )?)
-        } else {
-            None
-        };
+        let subscription = config.provider() == crate::AiProvider::ChatGptSubscription;
         if config.provider().is_opencode() {
             config.readiness()?;
         }
-        let api_key = if subscription.is_some() {
+        let api_key = if subscription {
             ""
         } else {
             config.api_key().ok_or_else(|| {
@@ -25,9 +17,26 @@ impl ChatGptClient {
                 )
             })?
         };
+        let responses = if subscription {
+            Some(crate::responses::ResponsesTransport::new(
+                crate::auth::AuthStore::new(config.auth_dir()?.to_path_buf()),
+                config.default_model().into(),
+                config.timeout(),
+            )?)
+        } else if config.api_protocol() == crate::ApiProtocol::Responses {
+            Some(crate::responses::ResponsesTransport::api_key(
+                api_key.into(),
+                config.responses_endpoint(),
+                config.default_model().into(),
+                config.timeout(),
+                config.reasoning_effort().map(str::to_string),
+            )?)
+        } else {
+            None
+        };
 
         let client = Self {
-            subscription,
+            responses,
             provider: config.provider(),
             opencode_session: None,
             api_key: api_key.to_string(),
@@ -54,9 +63,13 @@ impl ChatGptClient {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         self.default_model.hash(&mut hash);
-        if let Some(subscription) = &self.subscription {
+        if let Some(store) = self
+            .responses
+            .as_ref()
+            .and_then(|responses| responses.subscription_store())
+        {
             "chatgpt_subscription".hash(&mut hash);
-            if let Ok(account) = subscription.store.status() {
+            if let Ok(account) = store.status() {
                 account.label.hash(&mut hash);
                 account.client_id.hash(&mut hash);
                 account.subject.hash(&mut hash);
@@ -66,7 +79,10 @@ impl ChatGptClient {
         } else {
             self.provider.name().hash(&mut hash);
             self.api_key.hash(&mut hash);
-            self.chat_endpoint.hash(&mut hash);
+            match &self.responses {
+                Some(responses) => responses.endpoint().hash(&mut hash),
+                None => self.chat_endpoint.hash(&mut hash),
+            }
         }
         format!("{:016x}", hash.finish())
     }
@@ -76,15 +92,19 @@ impl ChatGptClient {
             .any(|m| m.get(crate::responses::CONTINUATION).is_some())
         {
             anyhow::bail!(
-                "This history uses ChatGPT subscription. Run chat_reset before changing provider."
+                "This history uses the Responses API. Run chat_reset before switching to chat/completions."
             );
         }
         Ok(())
     }
     pub fn subscription_models(&self, cancel: Option<&dyn Fn() -> bool>) -> Result<Vec<Value>> {
-        let transport = self.subscription.as_ref().ok_or_else(|| {
-            anyhow!("Select AI_CHAT_PROVIDER=chatgpt_subscription to list subscription models.")
-        })?;
+        let transport = self
+            .responses
+            .as_ref()
+            .filter(|r| r.subscription_store().is_some())
+            .ok_or_else(|| {
+                anyhow!("Select AI_CHAT_PROVIDER=chatgpt_subscription to list subscription models.")
+            })?;
         self.block_on(transport.models(cancel))?
     }
 }
@@ -94,7 +114,7 @@ impl fmt::Debug for ChatGptClient {
         f.debug_struct("ChatGptClient")
             .field("provider", &self.provider)
             .field("default_model", &self.default_model)
-            .field("subscription", &self.subscription.is_some())
+            .field("responses", &self.responses.is_some())
             .finish_non_exhaustive()
     }
 }

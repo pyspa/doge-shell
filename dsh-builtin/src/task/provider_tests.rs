@@ -257,6 +257,7 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
         assert!(result.unwrap_err().to_string().contains("timed out"));
         assert!(start.elapsed() < Duration::from_secs(2));
         assert!(dir.path().join("ready").exists());
+        let mut last_revents = 0;
         let writer = open(&gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty());
         let disconnected = match writer {
             Err(Errno::ENXIO) => true,
@@ -270,12 +271,13 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
                         revents: 0,
                     };
                     // SAFETY: fd remains owned for the entire poll. POLLERR
-                    // observes the FIFO losing all readers without feeding or
-                    // closing the writer and accidentally releasing a leak.
+                    // and POLLHUP observe the FIFO losing all readers without
+                    // feeding or closing the writer and accidentally releasing a leak.
                     unsafe {
                         libc::poll(&mut event, 1, 10);
                     }
-                    if event.revents & libc::POLLERR != 0 {
+                    last_revents = event.revents;
+                    if event.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
                         break true;
                     }
                     if std::time::Instant::now() >= deadline {
@@ -290,7 +292,10 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
             }
             Err(error) => panic!("opening FIFO writer: {error}"),
         };
-        assert!(disconnected, "a descendant still owns a FIFO reader");
+        assert!(
+            disconnected,
+            "a descendant still owns a FIFO reader (parent_exits={parent_exits}, last_poll_revents={last_revents:#x})"
+        );
     }
 }
 

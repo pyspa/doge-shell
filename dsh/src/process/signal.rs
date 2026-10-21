@@ -113,15 +113,59 @@ pub(crate) fn signal_process_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use std::time::Duration;
 
-    /// Both tests below install handlers into one process-global SIGINT
-    /// disposition and deliver a real SIGINT to this process, so concurrent
-    /// execution would race each other's installs. Serialize them: the
-    /// handler that intercepts a delivery must be the one the test just
-    /// installed.
-    static HANDLER_TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// A mutex between these tests cannot exclude other foreground waiters:
+    /// they consume the same latch and may forward our test SIGINT to their
+    /// own child groups. Run each real-signal probe in a fresh test process.
+    fn isolated_signal_probe(name: &str) -> bool {
+        let module = module_path!().split_once("::").unwrap().1;
+        let test_name = format!("{module}::{name}");
+        const CHILD_ENV: &str = "DSH_SIGINT_PROBE_CHILD";
+        if std::env::var(CHILD_ENV).as_deref() == Ok(test_name.as_str()) {
+            return false;
+        }
+        let proof_dir = tempfile::tempdir().expect("signal probe proof directory");
+        let proof = proof_dir.path().join("completed");
+        struct Worker(std::process::Child);
+        impl Drop for Worker {
+            fn drop(&mut self) {
+                if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+        }
+        let mut worker = Worker(
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .args(["--exact", &test_name, "--nocapture"])
+                .env(CHILD_ENV, &test_name)
+                .env("DSH_SIGINT_PROBE_DONE", &proof)
+                .stdin(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn isolated signal probe"),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = worker.0.try_wait().expect("wait signal probe") {
+                assert!(status.success(), "{test_name} failed: {status}");
+                // libtest also exits zero for an unmatched --exact filter.
+                // Only the probe writes this after its real assertions.
+                assert_eq!(std::fs::read(&proof).expect("probe actually ran"), b"ok");
+                return true;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{test_name} timed out"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn complete_signal_probe() {
+        let proof = std::env::var_os("DSH_SIGINT_PROBE_DONE").expect("signal probe proof path");
+        std::fs::write(proof, b"ok").expect("record completed signal probe");
+    }
 
     /// Poll the latch until it reports the delivered SIGINT (or run out of
     /// retries): the SIGINT → handler → latch hop is asynchronous and the
@@ -152,7 +196,9 @@ mod tests {
     /// product code needs a real tokio→latch bridge instead.
     #[test]
     fn tokio_signal_registration_still_reaches_the_cancel_latch() {
-        let _guard = HANDLER_TEST_LOCK.lock().expect("lock poisoned");
+        if isolated_signal_probe("tokio_signal_registration_still_reaches_the_cancel_latch") {
+            return;
+        }
 
         // The shell installs the C handler first (bootstrap, `set_signals`).
         install_sigint_handler().expect("C handler installation");
@@ -179,6 +225,7 @@ mod tests {
             latch_reports_interrupt(),
             "SIGINT did not reach the cancel latch after tokio registered its own handler"
         );
+        complete_signal_probe();
     }
 
     /// `set_signals` re-installs the C handler at every `!` turn start, on
@@ -187,7 +234,9 @@ mod tests {
     /// The flip back around must keep feeding the same latch.
     #[test]
     fn reinstalled_c_handler_remains_the_interrupt_source() {
-        let _guard = HANDLER_TEST_LOCK.lock().expect("lock poisoned");
+        if isolated_signal_probe("reinstalled_c_handler_remains_the_interrupt_source") {
+            return;
+        }
 
         // Tokio registers first: some earlier AI feature created a signal
         // future before this turn started.
@@ -212,5 +261,6 @@ mod tests {
             latch_reports_interrupt(),
             "SIGINT did not reach the cancel latch through the reinstalled C handler"
         );
+        complete_signal_probe();
     }
 }

@@ -307,6 +307,31 @@ async fn setup_pty_uses_full_proxy_with_input_proxy_for_terminal_output() {
 }
 
 #[tokio::test]
+async fn setup_pty_keeps_external_pipeline_in_one_process_group() {
+    let mut ctx = test_context(true, true);
+    let mut head = Process::new("head".into(), vec!["head".into()]);
+    head.next = Some(Box::new(JobProcess::Command(Process::new(
+        "tail".into(),
+        vec!["tail".into()],
+    ))));
+    let mut job = test_job_with_process(JobProcess::Command(head), false);
+    let called = Arc::new(AtomicBool::new(false));
+    let config = setup_pty_with(&mut job, &mut ctx, recording_opener(called.clone()))
+        .await
+        .expect("setup pipeline pty")
+        .expect("output monitor config");
+    // Clean up before asserting, including on the buggy FullProxy path.
+    let mode = config.mode;
+    let committed_mode = job.pty_mode;
+    let has_input = job.pty_input_task.is_some();
+    cleanup_pty_tasks(&mut job).await;
+    assert_eq!(mode, PtyMode::OutputOnly);
+    assert_eq!(committed_mode, Some(mode));
+    assert!(!has_input);
+    assert!(!called.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
 async fn setup_pty_falls_back_to_output_only_when_redirected() {
     let mut ctx = test_context(true, true);
     // Output is redirected away from the terminal, so no full proxy.

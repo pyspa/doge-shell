@@ -153,6 +153,17 @@ async fn foreground_resume_without_terminal_continues_owned_group() {
     // wait_job owns waitpid and may already have reaped this child. Never
     // send cleanup SIGKILL to a completed PID that could now be recycled.
     child.1 = !job.is_process_tree_completed();
-    result.unwrap().unwrap();
+    result
+        .unwrap_or_else(|error| {
+            panic!(
+                "foreground resume timed out after SIGSTOP {observed:?}: {error}; \
+                 pid={pid}, pgid={:?}, os_pgid={:?}, state={:?}, tree={:?}",
+                job.pgid,
+                nix::unistd::getpgid(Some(pid)),
+                job.state,
+                job.process,
+            )
+        })
+        .unwrap();
     assert_eq!(job.last_process_state(), ProcessState::Completed(7, None));
 }

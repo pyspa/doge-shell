@@ -77,6 +77,10 @@ pub struct RawChildPlan {
     pub pty_slave: RawFd,
     /// Write end of the exec-error pipe (`CLOEXEC`); `-1` disables reporting.
     pub exec_error_fd: RawFd,
+    /// Parent-owned next-stage reader. Only the child copy is discarded on
+    /// the diagnostic-only path (there is no exec to enforce CLOEXEC).
+    /// `-1` means this stage has no downstream pipe.
+    pub pipeline_read_fd: RawFd,
     /// Prebuilt `command not found` message; null pointer means "resolved".
     pub not_found_msg: *const u8,
     pub not_found_len: usize,
@@ -151,6 +155,17 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
         // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
         // other shell.
         if !plan.not_found_msg.is_null() {
+            // Do not retain a reader for our own diagnostic pipe: if the
+            // consumer exits early, its close must make write return EPIPE.
+            if plan.pipeline_read_fd >= 0 {
+                libc::close(plan.pipeline_read_fd);
+            }
+            // The parent already knows resolution failed. Release its
+            // launch handshake before a potentially pipe-sized diagnostic:
+            // otherwise it cannot spawn the downstream reader while this
+            // child blocks writing to that reader's pipe. EOF here is not
+            // completion; the canonical waiter still reaps our exit 127.
+            libc::close(plan.exec_error_fd);
             write_all(plan.not_found_fd, plan.not_found_msg, plan.not_found_len);
             libc::_exit(127);
         }

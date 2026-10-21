@@ -222,9 +222,69 @@ fn large_mise_json_remains_machine_discovered() {
     assert!(!tasks.iter().any(|t| t.name == "static"));
 }
 
+fn wait_for_fifo_reader_disconnect(
+    fd: &impl std::os::fd::AsRawFd,
+    timeout: Duration,
+) -> (bool, nix::libc::c_short) {
+    use nix::libc;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let mut event = libc::pollfd {
+            fd: fd.as_raw_fd(),
+            // Darwin only registers the write filter when an output event is
+            // requested. Writable readiness alone is not a disconnect.
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: the borrowed fd remains owned throughout this poll.
+        let polled = unsafe { libc::poll(&mut event, 1, 10) };
+        if polled < 0 {
+            let error = std::io::Error::last_os_error();
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::Interrupted,
+                "polling FIFO writer: {error}"
+            );
+        }
+        assert_eq!(event.revents & libc::POLLNVAL, 0, "invalid FIFO writer fd");
+        if event.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+            return (true, event.revents);
+        }
+        if std::time::Instant::now() >= deadline {
+            return (false, event.revents);
+        }
+        // A live reader makes POLLOUT immediately ready. Keep observing it
+        // without feeding the FIFO or spinning while waiting for it to close.
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn fifo_disconnect_observer_requires_reader_to_close() {
+    use nix::{
+        fcntl::{OFlag, open},
+        sys::stat::Mode,
+        unistd::mkfifo,
+    };
+    let dir = tempdir().unwrap();
+    let gate = dir.path().join("gate");
+    mkfifo(&gate, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
+    let reader = open(&gate, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
+    let writer = open(&gate, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()).unwrap();
+    assert!(
+        !wait_for_fifo_reader_disconnect(&writer, Duration::from_millis(30)).0,
+        "a live FIFO reader must not be reported as disconnected"
+    );
+    drop(reader);
+    let (disconnected, revents) = wait_for_fifo_reader_disconnect(&writer, Duration::from_secs(1));
+    assert!(
+        disconnected,
+        "closed FIFO reader was not observed (last_poll_revents={revents:#x})"
+    );
+}
+
 #[test]
 fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
-    use nix::libc;
     use nix::{
         errno::Errno,
         fcntl::{OFlag, open},
@@ -262,28 +322,8 @@ fn provider_timeout_closes_descendant_pipes_and_fifo_readers() {
         let disconnected = match writer {
             Err(Errno::ENXIO) => true,
             Ok(fd) => {
-                use std::os::fd::AsRawFd;
-                let deadline = std::time::Instant::now() + Duration::from_secs(1);
-                let gone = loop {
-                    let mut event = libc::pollfd {
-                        fd: fd.as_raw_fd(),
-                        events: 0,
-                        revents: 0,
-                    };
-                    // SAFETY: fd remains owned for the entire poll. POLLERR
-                    // and POLLHUP observe the FIFO losing all readers without
-                    // feeding or closing the writer and accidentally releasing a leak.
-                    unsafe {
-                        libc::poll(&mut event, 1, 10);
-                    }
-                    last_revents = event.revents;
-                    if event.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
-                        break true;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        break false;
-                    }
-                };
+                let (gone, revents) = wait_for_fifo_reader_disconnect(&fd, Duration::from_secs(1));
+                last_revents = revents;
                 if !gone {
                     let mut file = std::fs::File::from(fd);
                     let _ = file.write_all(b"release\n");

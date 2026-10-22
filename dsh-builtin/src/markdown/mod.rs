@@ -31,6 +31,16 @@ pub enum MarkdownRenderError {
 
 /// Convert Markdown text to ANSI-colored terminal output.
 pub fn render_markdown(input: &str) -> Result<String, MarkdownRenderError> {
+    render_markdown_with_spacing(input, false)
+}
+
+/// Convert Markdown text to ANSI-colored terminal output without blank lines
+/// between top-level blocks. Blank lines inside fenced code blocks are kept.
+pub fn render_markdown_compact(input: &str) -> Result<String, MarkdownRenderError> {
+    render_markdown_with_spacing(input, true)
+}
+
+fn render_markdown_with_spacing(input: &str, compact: bool) -> Result<String, MarkdownRenderError> {
     if input.contains('\0') {
         return Err(MarkdownRenderError::ContainsNull);
     }
@@ -47,7 +57,7 @@ pub fn render_markdown(input: &str) -> Result<String, MarkdownRenderError> {
     options.insert(Options::ENABLE_SMART_PUNCTUATION);
 
     let parser = Parser::new_ext(input, options);
-    let mut renderer = TerminalRenderer::default();
+    let mut renderer = TerminalRenderer::new(compact);
 
     for event in parser {
         renderer.handle_event(event);
@@ -58,7 +68,16 @@ pub fn render_markdown(input: &str) -> Result<String, MarkdownRenderError> {
 
 /// Render Markdown and fall back to the original text when rendering fails.
 pub fn render_markdown_with_fallback(input: &str) -> String {
-    match render_markdown(input) {
+    fallback_on_render_error(render_markdown(input), input)
+}
+
+/// Compact variant of [`render_markdown_with_fallback`].
+pub fn render_markdown_with_fallback_compact(input: &str) -> String {
+    fallback_on_render_error(render_markdown_compact(input), input)
+}
+
+fn fallback_on_render_error(result: Result<String, MarkdownRenderError>, input: &str) -> String {
+    match result {
         Ok(rendered) if !rendered.is_empty() => rendered,
         _ => input.to_string(),
     }
@@ -71,6 +90,7 @@ struct TerminalRenderer {
     pending_newlines: usize,
     start_of_line: bool,
     wrote_anything: bool,
+    compact: bool,
 }
 
 impl Default for TerminalRenderer {
@@ -88,11 +108,19 @@ impl Default for TerminalRenderer {
             // block for streaming, a block) that begins with a list.
             start_of_line: true,
             wrote_anything: false,
+            compact: false,
         }
     }
 }
 
 impl TerminalRenderer {
+    fn new(compact: bool) -> Self {
+        Self {
+            compact,
+            ..Self::default()
+        }
+    }
+
     fn handle_event(&mut self, event: Event<'_>) {
         match event {
             Event::Start(tag) => self.start_tag(tag),
@@ -262,7 +290,16 @@ impl TerminalRenderer {
             "  ".repeat(self.list_stack.len())
         };
 
-        for (index, line) in text.split('\n').enumerate() {
+        // In compact mode a trailing newline only terminates the last code
+        // line. Rendering it as another empty code line would make a
+        // whole-document render disagree with block-by-block streaming,
+        // because the splitter does not include the separating blank line.
+        let lines: Vec<&str> = if self.compact {
+            text.split_terminator('\n').collect()
+        } else {
+            text.split('\n').collect()
+        };
+        for (index, line) in lines.into_iter().enumerate() {
             if index > 0 {
                 self.buffer.push('\n');
             }
@@ -381,7 +418,10 @@ impl TerminalRenderer {
                 self.buffer.push('\n');
             } else if self.buffer.is_empty() {
                 // skip leading blank lines
-            } else {
+            } else if !self.compact {
+                // Preserve the normal renderer's blank-line spacing. Compact
+                // output already ends this line, so a second newline would
+                // re-create the blank line it is meant to remove.
                 self.buffer.push('\n');
             }
         }
@@ -397,7 +437,13 @@ impl TerminalRenderer {
 
     fn ensure_blank_line(&mut self) {
         if self.wrote_anything {
-            self.pending_newlines = self.pending_newlines.max(2);
+            // Normal rendering separates top-level blocks with a blank line.
+            // The compact chat renderer keeps only the newline that ends the
+            // previous block, so paragraphs and headings sit on adjacent
+            // lines. Code-block content is copied verbatim elsewhere, so its
+            // own blank lines survive either mode.
+            let newlines = if self.compact { 1 } else { 2 };
+            self.pending_newlines = self.pending_newlines.max(newlines);
         }
     }
 
@@ -612,5 +658,42 @@ mod tests {
 
         let ordered = render_markdown_with_fallback("1. item one\n2. item two");
         assert!(!ordered.starts_with('\n'), "ordered: {ordered:?}");
+    }
+
+    #[test]
+    fn compact_rendering_separates_top_level_blocks_with_one_newline() {
+        let input = "First paragraph.\n\nSecond paragraph.\n\n# Heading\n\n- one\n- two";
+        let output = render_markdown_with_fallback_compact(input);
+        assert!(!output.contains("\n\n"), "compact output: {output:?}");
+        assert!(
+            output.contains("First paragraph.\nSecond paragraph."),
+            "compact output: {output:?}"
+        );
+    }
+
+    #[test]
+    fn compact_rendering_preserves_blank_lines_inside_code_blocks() {
+        let input = "Before.\n\n```\nfirst\n\nsecond\n```\n\nAfter.";
+        let output = render_markdown_with_fallback_compact(input);
+        let first = output.find("first").expect("first code line");
+        let second = output.find("second").expect("second code line");
+        assert_eq!(
+            output[first..second].matches('\n').count(),
+            2,
+            "code block blank line must survive: {output:?}"
+        );
+        assert!(
+            !output.contains("Before.\n\n"),
+            "compact output: {output:?}"
+        );
+        assert!(!output.contains("\n\nAfter"), "compact output: {output:?}");
+    }
+
+    #[test]
+    fn normal_rendering_keeps_a_blank_line_between_paragraphs() {
+        assert_eq!(
+            render_markdown_with_fallback("First.\n\nSecond."),
+            "First.\n\nSecond."
+        );
     }
 }

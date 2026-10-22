@@ -249,6 +249,13 @@ impl Environment {
         Self::new_with_projection(false)
     }
 
+    /// Create an environment fixture without importing the test runner's
+    /// process environment.
+    #[cfg(test)]
+    pub(crate) fn new_synthetic() -> Arc<RwLock<Self>> {
+        Self::new_with_variables(true, HashMap::new())
+    }
+
     /// A private host may rebuild frozen projections without activating the
     /// foreground shell's process-wide completion or read-only AI caches.
     pub(crate) fn new_isolated() -> Arc<RwLock<Self>> {
@@ -257,6 +264,13 @@ impl Environment {
 
     fn new_with_projection(isolated_projection: bool) -> Arc<RwLock<Self>> {
         let variables: HashMap<String, String> = env::vars().collect();
+        Self::new_with_variables(isolated_projection, variables)
+    }
+
+    fn new_with_variables(
+        isolated_projection: bool,
+        variables: HashMap<String, String>,
+    ) -> Arc<RwLock<Self>> {
         let exported_vars: HashSet<String> = variables.keys().cloned().collect();
         let z_exclude = parse_z_exclude_from_vars(&variables);
         let mut paths = ["/bin", "/usr/bin", "/sbin", "/usr/sbin"]

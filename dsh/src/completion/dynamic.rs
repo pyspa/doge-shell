@@ -37,6 +37,7 @@ mod runner;
 mod runtime;
 mod specs;
 mod system;
+mod task_refresh;
 mod value_collectors;
 mod worker;
 
@@ -55,7 +56,7 @@ use cache::{
     CommandValueCacheEntry, CommandValueErrorEntry, ComposeCacheEntry, DynamicCommandCacheKey,
     DynamicCommandCacheKind, ExternalCompletionCacheEntry, ExternalCompletionCacheKey,
     FileMetadataSignature, ProjectDynamicCache, ProjectRootCacheEntry, TaskCacheEntry,
-    TaskCacheKey,
+    TaskCacheKey, TaskRefreshErrorEntry, TaskRefreshPending,
 };
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
@@ -197,6 +198,7 @@ pub(crate) struct DynamicCompletionProvider {
     environment: Arc<RwLock<Environment>>,
     cache: Arc<RwLock<ProjectDynamicCache>>,
     refresh_generation: AtomicU64,
+    task_refresh_ticket: AtomicU64,
     runtime: Arc<CompletionRuntime>,
 }
 
@@ -286,6 +288,7 @@ impl DynamicCompletionProvider {
             environment,
             cache: Arc::new(RwLock::new(ProjectDynamicCache::default())),
             refresh_generation: AtomicU64::new(0),
+            task_refresh_ticket: AtomicU64::new(0),
             runtime,
         }
     }
@@ -296,7 +299,9 @@ impl DynamicCompletionProvider {
 
     pub(crate) fn has_pending_refresh(&self) -> bool {
         let cache = self.cache.read();
-        !cache.command_pending.is_empty() || !cache.external_pending.is_empty()
+        !cache.command_pending.is_empty()
+            || !cache.external_pending.is_empty()
+            || !cache.task_pending.is_empty()
     }
 
     fn mark_refresh_scheduled(&self) {

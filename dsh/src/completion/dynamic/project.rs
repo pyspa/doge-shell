@@ -93,6 +93,15 @@ pub(super) fn collect(
 }
 
 impl DynamicCompletionProvider {
+    pub(crate) fn uses_nx_project_task_source(
+        &self,
+        scope: Option<&str>,
+        parsed_command_line: &ParsedCommandLine,
+    ) -> bool {
+        completion_config(scope, parsed_command_line)
+            .is_some_and(|config| config.sources.contains(&"nx"))
+    }
+
     pub(crate) fn collect_project_task_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
@@ -126,6 +135,15 @@ impl DynamicCompletionProvider {
 
         let tasks = if cached_only {
             self.lookup_project_tasks_for_sources(current_dir, sources)
+        } else if sources.contains(&"nx") {
+            match self.load_or_schedule_project_tasks_for_sources(current_dir, sources) {
+                Ok(Some(tasks)) => tasks,
+                Ok(None) => return Vec::new(),
+                Err(err) => {
+                    warn!("Failed to load project task completions: {}", err);
+                    return Vec::new();
+                }
+            }
         } else {
             match self.load_project_tasks_for_sources(current_dir, sources) {
                 Ok(tasks) => tasks,

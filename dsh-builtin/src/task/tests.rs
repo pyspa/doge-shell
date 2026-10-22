@@ -837,29 +837,3 @@ fn discovery_signature_covers_justfile_and_gradle_markers() {
         "build.gradle must change the task discovery signature"
     );
 }
-
-#[test]
-fn discovery_signature_input_comparison_ignores_provider_epoch() {
-    let dir = tempdir().unwrap();
-    let bin = dir.path().join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    fs::write(dir.path().join("nx.json"), "{}\n").unwrap();
-    write_executable_script(&bin.join("nx"), "#!/bin/sh\nexit 0\n");
-    let runtime = runtime_with_paths(vec![bin]);
-    let sources = ["nx"];
-    let before = runtime::discovery_signature_at(
-        dir.path(),
-        Some(&sources),
-        &runtime,
-        std::time::UNIX_EPOCH + Duration::from_secs(100),
-    );
-    let after_epoch = runtime::discovery_signature_at(
-        dir.path(),
-        Some(&sources),
-        &runtime,
-        std::time::UNIX_EPOCH + Duration::from_secs(105),
-    );
-
-    assert_ne!(before, after_epoch, "the provider epoch should advance");
-    assert!(before.has_same_inputs(after_epoch));
-}

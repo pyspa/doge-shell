@@ -424,6 +424,7 @@ impl IntegratedCompletionEngine {
         // later "pending became false" is not proof that this request built a
         // stable snapshot. A later request may publish the settled result.
         let mut cache_allowed = completion_cache_allowed(&parsed_command_line)
+            && !is_nx_project_task_completion(self, &parsed_command_line)
             && !self.dynamic.has_async_fallback()
             && !self.dynamic.has_pending_refresh();
         timing.mark("parse");

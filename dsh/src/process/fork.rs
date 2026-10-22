@@ -38,6 +38,7 @@ pub(crate) fn fork_process(
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
     diagnostic_fallback: Option<RawFd>,
+    pipeline_read: Option<RawFd>,
 ) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
@@ -125,8 +126,9 @@ pub(crate) fn fork_process(
         }
     };
 
-    // Exec-error pipe: CLOEXEC write end closes on `execve` success (parent
-    // sees EOF); the child writes one `ChildExecError` record on failure.
+    // Exec-error pipe: CLOEXEC closes on exec success; unresolved commands
+    // close it before writing their diagnostic (failure is already known
+    // here). Other failures write one bounded ChildExecError record.
     let (err_read, err_write) = cloexec_pipe().context("failed exec-error pipe")?;
     let err_read_fd = err_read.into_raw_fd();
     let err_write_fd = err_write.into_raw_fd();
@@ -152,7 +154,7 @@ pub(crate) fn fork_process(
     match pid {
         ForkResult::Parent { child } => {
             debug!("FORK: Parent process - child pid: {}", child);
-            // The write end must close here so EOF reliably means "exec'd".
+            // Drop the parent's writer before reading the launch handshake.
             unsafe { libc::close(err_write_fd) };
             let reported_failure = drain_exec_error(
                 err_read_fd,
@@ -184,6 +186,7 @@ pub(crate) fn fork_process(
                 full_proxy_pty,
                 pty_slave,
                 exec_error_fd: err_write_fd,
+                pipeline_read_fd: pipeline_read.unwrap_or(-1),
                 not_found_msg,
                 not_found_len,
                 not_found_fd,
@@ -193,9 +196,9 @@ pub(crate) fn fork_process(
     }
 }
 
-/// Read the exec-error pipe to EOF. Success closes the write end via
-/// `CLOEXEC` and yields no bytes; failure yields one `ChildExecError` whose
-/// diagnostic the parent formats and writes to the process's stderr target.
+/// Read the bounded exec-error handshake. Exec success closes via CLOEXEC;
+/// an already-known unresolved command closes before its diagnostic write.
+/// Other failures yield one ChildExecError for the parent to format.
 fn drain_exec_error(
     err_read_fd: i32,
     cmd: &str,
@@ -249,7 +252,9 @@ fn drain_exec_error_with_reader(
         }
     }
     if filled == 0 {
-        // EOF: the child exec'd and the write end closed.
+        // EOF: exec succeeded, or an already-known unresolved command
+        // released the handshake before writing its diagnostic. Neither
+        // case is a wait/completion observation.
         return false;
     }
     if filled != size {
@@ -619,7 +624,7 @@ mod tests {
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
         let (child, monitors, terminal_launch_failure) =
-            fork_process(&ctx, None, &mut process, &mut shell, None, None)
+            fork_process(&ctx, None, &mut process, &mut shell, None, None, None)
                 .expect("fork_process failed");
         assert!(monitors.is_empty());
         assert!(!terminal_launch_failure);

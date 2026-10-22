@@ -71,6 +71,8 @@ impl ResponsesTransport {
             model,
             timeout,
             "https://api.openai.com/v1/responses".into(),
+            false,
+            &|builder| builder,
         )
     }
     /// `api_key` provider transport on the configured `{base_url}/responses`.
@@ -80,6 +82,8 @@ impl ResponsesTransport {
         model: String,
         timeout: Duration,
         reasoning_effort: Option<String>,
+        allow_insecure_http: bool,
+        configure: &dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
         use sha2::{Digest, Sha256};
         let fingerprint = format!("{:x}", Sha256::digest(key.as_bytes()))[..16].to_string();
@@ -92,6 +96,8 @@ impl ResponsesTransport {
             model,
             timeout,
             endpoint,
+            allow_insecure_http,
+            configure,
         )
     }
     fn build(
@@ -99,19 +105,30 @@ impl ResponsesTransport {
         model: String,
         timeout: Duration,
         endpoint: String,
+        allow_insecure_http: bool,
+        configure: &dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
     ) -> Result<Self> {
         // Subscription never follows a redirect with its OAuth token. The
         // API-key route behaves like the chat/completions client, which
-        // follows them (reqwest drops `Authorization` across hosts).
+        // follows them within the resolved HTTP policy (reqwest removes
+        // `Authorization` on a scheme or authority change).
         let redirect = match auth {
             ResponsesAuth::Subscription(_) => reqwest::redirect::Policy::none(),
             ResponsesAuth::ApiKey { .. } => reqwest::redirect::Policy::default(),
         };
-        let client = reqwest::Client::builder()
-            .redirect(redirect)
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(timeout)
-            .build()?;
+        let builder = reqwest::Client::builder();
+        let builder = if matches!(auth, ResponsesAuth::ApiKey { .. }) {
+            builder.https_only(!allow_insecure_http)
+        } else {
+            builder
+        };
+        let client = configure(
+            builder
+                .redirect(redirect)
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(timeout),
+        )
+        .build()?;
         Ok(Self {
             auth,
             model,

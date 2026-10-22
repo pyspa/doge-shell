@@ -1,14 +1,16 @@
-//! Building the outgoing request: the HTTP client itself (`build_client`) and the JSON body (`build_body`), including the per-model `reasoning_effort` default and any fields this client has
+//! Building the outgoing request: the HTTP client itself (`client_builder`) and the JSON body (`build_body`), including the per-model `reasoning_effort` default and any fields this client has
 //! already learned the endpoint rejects.
 use super::*;
 
 impl ChatGptClient {
-    pub(super) fn build_client(total_timeout: Duration) -> Result<Client> {
-        let client = Client::builder()
+    pub(super) fn client_builder(
+        total_timeout: Duration,
+        allow_insecure_http: bool,
+    ) -> reqwest::ClientBuilder {
+        Client::builder()
+            .https_only(!allow_insecure_http)
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(total_timeout)
-            .build()?;
-        Ok(client)
     }
 
     /// The `reasoning_effort` value `build_body` should send, or `None` to

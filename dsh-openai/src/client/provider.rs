@@ -2,6 +2,13 @@
 use super::*;
 impl ChatGptClient {
     pub fn try_from_config(config: &OpenAiConfig) -> Result<Self> {
+        Self::try_from_config_with_builder(config, &|builder| builder)
+    }
+
+    pub(super) fn try_from_config_with_builder(
+        config: &OpenAiConfig,
+        configure: &dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
+    ) -> Result<Self> {
         config.validate()?;
         let subscription = config.provider() == crate::AiProvider::ChatGptSubscription;
         if config.provider().is_opencode() {
@@ -30,6 +37,8 @@ impl ChatGptClient {
                 config.default_model().into(),
                 config.timeout(),
                 config.reasoning_effort().map(str::to_string),
+                config.allow_insecure_http(),
+                configure,
             )?)
         } else {
             None
@@ -49,7 +58,11 @@ impl ChatGptClient {
                     .redirect(reqwest::redirect::Policy::none())
                     .build()?
             } else {
-                Self::build_client(config.timeout())?
+                configure(Self::client_builder(
+                    config.timeout(),
+                    config.allow_insecure_http(),
+                ))
+                .build()?
             },
             request_timeout: config.timeout(),
             unsupported: Arc::new(Mutex::new(Vec::new())),

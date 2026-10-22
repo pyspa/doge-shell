@@ -137,15 +137,6 @@ impl TaskDiscoverySignature {
         self.refresh_provider_epoch_at(SystemTime::now())
     }
 
-    /// Whether two signatures describe the same project inputs and runtime.
-    ///
-    /// The Nx epoch is intentionally excluded: it expires cached results as
-    /// time passes, but does not mean the inputs changed while discovery was
-    /// running.
-    pub fn has_same_inputs(self, other: Self) -> bool {
-        self.inputs_hash == other.inputs_hash
-    }
-
     pub(super) fn refresh_provider_epoch_at(mut self, now: SystemTime) -> Self {
         if self.nx_epoch.is_some() {
             self.nx_epoch = Some(nx_cache_epoch(now));

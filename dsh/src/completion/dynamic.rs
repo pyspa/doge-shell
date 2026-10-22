@@ -55,14 +55,12 @@ use cache::{
     CommandValueCacheEntry, CommandValueErrorEntry, ComposeCacheEntry, DynamicCommandCacheKey,
     DynamicCommandCacheKind, ExternalCompletionCacheEntry, ExternalCompletionCacheKey,
     FileMetadataSignature, ProjectDynamicCache, ProjectRootCacheEntry, TaskCacheEntry,
-    TaskCacheKey, TaskRefreshErrorEntry, TaskRefreshKey,
+    TaskCacheKey,
 };
 
 const DYNAMIC_COMMAND_CACHE_TTL_MS: u64 = 1000;
 const DYNAMIC_COMMAND_CACHE_LIMIT: usize = 256;
 const DYNAMIC_COMMAND_ERROR_BACKOFF_MS: u64 = 2000;
-const TASK_DISCOVERY_ERROR_BACKOFF: Duration = Duration::from_secs(2);
-const TASK_DISCOVERY_ERROR_CACHE_LIMIT: usize = 128;
 const REMOTE_COMMAND_CACHE_TTL: Duration = Duration::from_secs(30);
 const REMOTE_COMMAND_ERROR_BACKOFF: Duration = Duration::from_secs(15);
 /// Project roots do not move while the shell sits at a prompt, and finding one
@@ -298,9 +296,7 @@ impl DynamicCompletionProvider {
 
     pub(crate) fn has_pending_refresh(&self) -> bool {
         let cache = self.cache.read();
-        !cache.command_pending.is_empty()
-            || !cache.external_pending.is_empty()
-            || !cache.task_pending.is_empty()
+        !cache.command_pending.is_empty() || !cache.external_pending.is_empty()
     }
 
     fn mark_refresh_scheduled(&self) {

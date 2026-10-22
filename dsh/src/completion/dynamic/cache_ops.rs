@@ -6,7 +6,6 @@
 //! Task discovery signatures are canonical in `dsh_builtin::task`
 //! (`TaskDiscoverySignature`): this module keeps only the compose-service
 //! file signature and the task-source normalization for cache keys.
-use super::engine::prune_task_errors;
 use super::*;
 
 pub(super) fn canonicalize_path(path: &Path) -> PathBuf {
@@ -138,94 +137,6 @@ pub(super) fn spawn_external_refresh<F>(
             &cache,
             Some("external refresh dropped: queue full".to_string()),
         );
-    }
-}
-
-pub(super) fn spawn_task_refresh(
-    runtime: Arc<CompletionRuntime>,
-    cache: Arc<RwLock<ProjectDynamicCache>>,
-    environment: Arc<RwLock<Environment>>,
-    refresh_key: TaskRefreshKey,
-    discovery_runtime: task::TaskDiscoveryRuntime,
-) {
-    let rejected_cache = cache.clone();
-    let rejected_key = refresh_key.clone();
-    let job_runtime = runtime.clone();
-    if !runtime.submit_command(Box::new(move || {
-        let project_root = refresh_key.cache_key.project_root.clone();
-        let source_names = refresh_key.cache_key.sources.clone();
-        let sources = source_names.iter().map(String::as_str).collect::<Vec<_>>();
-        let result = if source_names.is_empty() {
-            task::list_tasks_in_dir(&project_root, &discovery_runtime)
-        } else {
-            task::list_tasks_in_dir_for_sources(&project_root, &sources, &discovery_runtime)
-        };
-
-        // A project file, logical PATH, or exported shell variable can change
-        // while a provider is running. Keep the result only if it still
-        // describes the current inputs; the Nx time bucket alone is allowed
-        // to roll over during a slow discovery.
-        let current_runtime = super::engine::task_discovery_runtime_for_environment(&environment);
-        let current_signature = task::discovery_signature(
-            &project_root,
-            (!source_names.is_empty()).then_some(sources.as_slice()),
-            &current_runtime,
-        );
-        let inputs_are_current = refresh_key.signature.has_same_inputs(current_signature);
-
-        // Close the environment check/commit race without holding the shell
-        // environment lock across the project metadata scan above.
-        let environment = environment.read();
-        let commit_runtime = task::TaskDiscoveryRuntime::new(
-            environment
-                .variable_state
-                .paths
-                .iter()
-                .map(PathBuf::from)
-                .collect(),
-            environment.child_process_env(),
-        );
-        let environment_is_current = commit_runtime.cache_scope() == current_runtime.cache_scope();
-
-        let mut cache = cache.write();
-        cache.task_pending.remove(&refresh_key);
-        if !inputs_are_current || !environment_is_current {
-            return;
-        }
-
-        match result {
-            Ok(tasks) => {
-                cache.task_errors.remove(&refresh_key);
-                cache.tasks.insert(
-                    refresh_key.cache_key,
-                    TaskCacheEntry {
-                        signature: current_signature.after_discovery(),
-                        tasks,
-                    },
-                );
-            }
-            Err(error) => {
-                warn!("Project task completion refresh failed: {}", error);
-                let error_key = TaskRefreshKey {
-                    cache_key: refresh_key.cache_key.clone(),
-                    signature: current_signature,
-                };
-                cache.task_errors.insert(
-                    error_key,
-                    TaskRefreshErrorEntry {
-                        recorded_at: Instant::now(),
-                    },
-                );
-                prune_task_errors(&mut cache);
-            }
-        }
-        drop(cache);
-        drop(environment);
-        job_runtime.notify();
-    })) {
-        let mut cache = rejected_cache.write();
-        cache.task_pending.remove(&rejected_key);
-        runtime.record_queue_drop("project task");
     }
 }
 

@@ -219,7 +219,6 @@ impl IntegratedCompletionEngine {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         if !leading_completion_words_match(parsed_command_line, &["run"]) {
             return Vec::new();
@@ -228,7 +227,6 @@ impl IntegratedCompletionEngine {
             parsed_command_line,
             current_dir,
             JS_TASK_SOURCES,
-            cache_policy,
         )
     }
 
@@ -236,7 +234,6 @@ impl IntegratedCompletionEngine {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         let leading_words = leading_completion_words(parsed_command_line);
         if !(leading_words.is_empty() || leading_words.as_slice() == ["run"]) {
@@ -246,7 +243,6 @@ impl IntegratedCompletionEngine {
             parsed_command_line,
             current_dir,
             JS_TASK_SOURCES,
-            cache_policy,
         )
     }
 
@@ -254,7 +250,6 @@ impl IntegratedCompletionEngine {
         &self,
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
-        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         if !leading_completion_words_match(parsed_command_line, &["task"]) {
             return Vec::new();
@@ -263,7 +258,6 @@ impl IntegratedCompletionEngine {
             parsed_command_line,
             current_dir,
             DENO_TASK_SOURCES,
-            cache_policy,
         )
     }
 
@@ -272,17 +266,12 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
         sources: &[&str],
-        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         if !leading_completion_words(parsed_command_line).is_empty() {
             return Vec::new();
         }
-        self.dynamic.collect_project_task_candidates(
-            parsed_command_line,
-            current_dir,
-            sources,
-            cache_policy,
-        )
+        self.dynamic
+            .collect_project_task_candidates(parsed_command_line, current_dir, sources)
     }
 
     pub(super) fn collect_external_candidates(

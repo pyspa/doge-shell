@@ -24,6 +24,18 @@ pub(super) struct TaskCacheKey {
 }
 
 #[derive(Debug, Clone)]
+pub(super) struct TaskRefreshPending {
+    pub signature: task::TaskDiscoverySignature,
+    pub ticket: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TaskRefreshErrorEntry {
+    pub signature: task::TaskDiscoverySignature,
+    pub recorded_at: Instant,
+}
+
+#[derive(Debug, Clone)]
 pub(super) struct ComposeCacheEntry {
     pub signature: FileMetadataSignature,
     pub services: Vec<String>,
@@ -86,6 +98,8 @@ pub(super) struct ExternalCompletionCacheKey {
 #[derive(Debug, Default)]
 pub(super) struct ProjectDynamicCache {
     pub tasks: HashMap<TaskCacheKey, TaskCacheEntry>,
+    pub task_pending: HashMap<TaskCacheKey, TaskRefreshPending>,
+    pub task_errors: HashMap<TaskCacheKey, TaskRefreshErrorEntry>,
     pub compose_services: HashMap<PathBuf, ComposeCacheEntry>,
     pub commands: HashMap<DynamicCommandCacheKey, CommandValueCacheEntry>,
     pub command_errors: HashMap<DynamicCommandCacheKey, CommandValueErrorEntry>,

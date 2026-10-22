@@ -171,34 +171,6 @@ impl DynamicCompletionProvider {
             .unwrap_or_default()
     }
 
-    pub(super) fn load_project_tasks_for_sources(
-        &self,
-        current_dir: &Path,
-        sources: &[&str],
-    ) -> Result<Vec<task::TaskInfo>> {
-        let project_root = self.cached_project_root(current_dir);
-        let runtime = self.task_discovery_runtime();
-        let cache_key = TaskCacheKey {
-            project_root: project_root.clone(),
-            sources: normalized_task_sources(sources),
-        };
-        let signature = task::discovery_signature(&project_root, Some(sources), &runtime);
-
-        if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
-            return Ok(tasks);
-        }
-
-        let tasks = task::list_tasks_in_dir_for_sources(&project_root, sources, &runtime)?;
-        self.cache.write().tasks.insert(
-            cache_key,
-            TaskCacheEntry {
-                signature: signature.after_discovery(),
-                tasks: tasks.clone(),
-            },
-        );
-        Ok(tasks)
-    }
-
     pub(super) fn lookup_project_tasks_for_sources(
         &self,
         current_dir: &Path,
@@ -229,7 +201,7 @@ impl DynamicCompletionProvider {
         }
     }
 
-    fn task_discovery_runtime(&self) -> task::TaskDiscoveryRuntime {
+    pub(super) fn task_discovery_runtime(&self) -> task::TaskDiscoveryRuntime {
         // One read-lock section for both halves; released before any
         // filesystem scan or provider subprocess runs.
         let env = self.environment.read();

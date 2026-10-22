@@ -1,3 +1,4 @@
+use super::detect::parse_make_target_names;
 use super::*;
 use crate::test_support::TestShellProxy;
 use std::collections::HashMap;
@@ -177,6 +178,103 @@ fn metadata_summary_does_not_execute_makefile() {
         !marker.exists(),
         "metadata-only task summary must not invoke make"
     );
+}
+
+#[test]
+fn parse_make_targets_reads_targets_with_and_without_prerequisites() {
+    // `make -pRrq` prints prerequisite-carrying rules as one line:
+    // `dev: build`. Dropping them made every such target uncompletable.
+    let dump = "dev: build\nci: build\nbuild:\n\t@true\n";
+
+    assert_eq!(
+        parse_make_target_names(dump),
+        vec!["dev".to_string(), "ci".to_string(), "build".to_string()]
+    );
+}
+
+#[test]
+fn parse_make_targets_skips_assignments_comments_builtin_colon_rules_and_makefiles() {
+    // Comments, variable assignments, the built-in `:`/`::` rules, pattern
+    // rules, recipes, and the makefiles themselves never name a runnable
+    // target; completing them offered `:` and `Makefile` as bogus tasks.
+    let dump = concat!(
+        "SHELL := /bin/sh\n",
+        "FLAGS ::= -O3\n",
+        "# パターン指定 変数 値\n",
+        "# ターゲットではありません:\n",
+        "MAKECMDGOALS := :\n",
+        "::\n",
+        ":\n",
+        "Makefile:\n",
+        "makefile:\n",
+        "GNUmakefile:\n",
+        ".PHONY: build ci dev\n",
+        "%.o: %.c\n",
+        "\techo 'a: b'\n",
+    );
+
+    assert_eq!(parse_make_target_names(dump), Vec::<String>::new());
+}
+
+#[test]
+fn parse_make_targets_collects_multi_target_and_double_colon_rules() {
+    let dump = concat!(
+        "alpha beta: deps\n",
+        "all::\n",
+        "distclean:: clean\n",
+        "foo: BIN := /usr/bin\n",
+    );
+
+    assert_eq!(
+        parse_make_target_names(dump),
+        vec![
+            "alpha".to_string(),
+            "beta".to_string(),
+            "all".to_string(),
+            "distclean".to_string(),
+            "foo".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn parse_make_targets_keeps_plain_recipe_targets() {
+    let dump = "test-target:\n\t@true\n";
+
+    assert_eq!(parse_make_target_names(dump), vec!["test-target"]);
+}
+
+#[test]
+fn parse_make_targets_skips_variable_values_that_contain_a_colon() {
+    // Variable dumps are verbatim (`PATH = /bin:/usr/bin`,
+    // `DISPLAY = :w3`), and their values often carry `:`. In these lines the
+    // `=` sits before the colon, which never happens in a rule line.
+    let dump = concat!(
+        "PATH = /home/ma2/.local/bin:/usr/bin:/bin\n",
+        "DISPLAY = :w3\n",
+        "DBUS_SESSION_BUS_ADDRESS = unix:path=/run/user/1000/bus\n",
+        "XDG_DATA_DIRS = /home/ma2/.local/share/flatpak/exports/share:\n",
+        "all:\n",
+        "\t@true\n",
+    );
+
+    assert_eq!(parse_make_target_names(dump), vec!["all"]);
+}
+
+#[test]
+fn parse_make_targets_skips_recipe_prefix_lines() {
+    // With `.RECIPEPREFIX = >`, GNU make prints recipe lines with the
+    // prefix instead of a tab; a recipe carrying `:` (a URL here) must not
+    // become a target.
+    let dump = concat!(
+        ".RECIPEPREFIX = >\n",
+        "# 変数の値 (ファイル 'Makefile', 1 行目)\n",
+        "build:\n",
+        "#  コマンドを実行する (ファイル 'Makefile', 3 行目)\n",
+        ">curl -s https://example.com:8080\n",
+    );
+
+    assert_eq!(parse_make_target_names(dump), vec!["build"]);
 }
 
 /// Machine providers never run in metadata-only mode: with a mise marker

@@ -2058,7 +2058,15 @@ async fn make_completes_project_targets() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("Makefile"),
-        "test-target:\n\t@true\nbuild-target:\n\t@true\n",
+        concat!(
+            "test-target:\n",
+            "\t@true\n",
+            "build-target:\n",
+            "\t@true\n",
+            "dev: build-target\n",
+            "ci: build-target\n",
+            "VARIANT = foo:bar\n",
+        ),
     )
     .unwrap();
 
@@ -2066,19 +2074,33 @@ async fn make_completes_project_targets() {
     let mut engine = IntegratedCompletionEngine::new(environment);
     engine.initialize_command_completion().unwrap();
 
-    let input = "make te";
+    // An empty token keeps every provider candidate in the result (prefix
+    // filtering would hide the junk we assert again), and the first pass is
+    // synchronous (fish fallback stays pending), so the provider alone must
+    // already offer every target shape: no-prerequisite rules, targets
+    // written with their prerequisites, and no variable dumping.
+    let input = "make ";
     let result = engine
         .complete(input, input.len(), dir.path(), 50, None)
         .await;
 
-    assert!(
-        result
-            .candidates
-            .iter()
-            .any(|candidate| candidate.text == "test-target"),
-        "expected make target completion in {:?}",
-        result.candidates
-    );
+    let texts: Vec<String> = result
+        .candidates
+        .iter()
+        .map(|candidate| candidate.text.clone())
+        .collect();
+    for expected in ["test-target", "build-target", "dev", "ci"] {
+        assert!(
+            texts.iter().any(|text| text == expected),
+            "expected make target {expected} on the first completion pass: {texts:?}"
+        );
+    }
+    for junk in ["=", ":", "Makefile", "VARIANT", "foo"] {
+        assert!(
+            !texts.iter().any(|text| text == junk),
+            "unexpected make candidate {junk} on the first completion pass: {texts:?}"
+        );
+    }
 }
 
 #[tokio::test]

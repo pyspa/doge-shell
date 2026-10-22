@@ -134,6 +134,10 @@ fn openai_reasoning_models_are_matched_by_family() {
         "gpt-5-mini",
         "gpt-5.1-codex",
         "gpt-5.6-luna",
+        "gpt-6",
+        "gpt-6-luna",
+        "openai/gpt-6-luna",
+        "GPT-6-Luna",
         "o1-preview",
         "o3",
         "o3-mini",
@@ -147,7 +151,14 @@ fn openai_reasoning_models_are_matched_by_family() {
         );
     }
 
-    for model in ["gpt-4.1-mini", "gpt-4o", "o1x-turbo", "gpt-51", "llama3"] {
+    for model in [
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "o1x-turbo",
+        "gpt-51",
+        "gpt-60",
+        "llama3",
+    ] {
         assert!(
             !is_openai_reasoning_model(model),
             "{model} should not be recognised as a member of the reasoning lineup"
@@ -459,6 +470,29 @@ fn build_body_defaults_reasoning_effort_to_none_for_tools_on_a_known_reasoning_m
     );
 
     assert_eq!(body["reasoning_effort"], "none");
+}
+
+/// `gpt-6-luna` is not yet covered by the shell's own default model name, so
+/// pin it explicitly: the same first-attempt `"none"` must reach a `gpt-6*`
+/// model, exactly as it does for `gpt-5*` - without it, every fresh `!`
+/// client pays the same reactive 400 round-trip the prefix list exists to
+/// skip.
+#[test]
+fn build_body_defaults_reasoning_effort_to_none_for_tools_on_gpt_6_luna() {
+    let client = client(); // no reasoning_effort configured
+
+    let tools = vec![json!({ "type": "function", "function": { "name": "execute" } })];
+    let body = client.build_body(
+        &[json!({ "role": "user", "content": "hi" })],
+        &ChatRequestOptions::new()
+            .with_model(Some("gpt-6-luna".to_string()))
+            .with_tools(Some(tools)),
+    );
+
+    assert_eq!(body["reasoning_effort"], "none");
+    // The temperature constraint rides on the same judgement; a reasoning
+    // model must not carry the operator's sampled temperature either.
+    assert_eq!(body["temperature"], 1.0);
 }
 
 /// The same default must not reach a model outside the known reasoning

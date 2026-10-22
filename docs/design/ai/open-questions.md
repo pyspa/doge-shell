@@ -35,7 +35,7 @@
 ## プロバイダ API
 
 - **既定モデルでは temperature が効かない**。`client.rs` の
-  `OPENAI_REASONING_MODEL_PREFIXES`（`gpt-5` / `o1` / `o3` / `o4`）に当たると 1.0 を強制する。
+  `OPENAI_REASONING_MODEL_PREFIXES`（`gpt-5` / `gpt-6` / `o1` / `o3` / `o4`）に当たると 1.0 を強制する。
   既定は `gpt-5-mini` なので、ゴーストテキストの 0.0 も JSON 生成の 0.1 も**すべて 1.0**。
   `reasoning_effort` を送る口（`AI_CHAT_REASONING_EFFORT`）は入ったが、temperature の代わりには
   ならない（両方ともプロバイダ側の解釈次第で、決定性を保証しない）。同じ判定関数

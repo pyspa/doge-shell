@@ -1830,7 +1830,9 @@ async fn npm_run_completes_package_scripts() {
     engine.initialize_command_completion().unwrap();
 
     let input = "npm run bu";
-    let result = wait_for_candidate(&engine, input, dir.path(), "build").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -1865,7 +1867,9 @@ async fn pnpm_run_completes_package_scripts() {
     engine.initialize_command_completion().unwrap();
 
     let input = "pnpm run bun";
-    let result = wait_for_candidate(&engine, input, dir.path(), "bundle").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -1896,7 +1900,9 @@ async fn npm_run_completes_package_scripts_even_when_lockfile_selects_another_ma
     engine.initialize_command_completion().unwrap();
 
     let input = "npm run bu";
-    let result = wait_for_candidate(&engine, input, dir.path(), "build").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -1923,7 +1929,9 @@ async fn yarn_completes_package_scripts_without_run_subcommand() {
     engine.initialize_command_completion().unwrap();
 
     let input = "yarn bun";
-    let result = wait_for_candidate(&engine, input, dir.path(), "bundle").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -1955,7 +1963,9 @@ async fn ghost_completion_uses_cached_json_declared_project_tasks() {
         None
     );
 
-    let result = wait_for_candidate(&engine, input, dir.path(), "build").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
     assert!(
         result
             .candidates
@@ -1985,7 +1995,9 @@ async fn deno_task_completes_deno_tasks() {
     engine.initialize_command_completion().unwrap();
 
     let input = "deno task bu";
-    let result = wait_for_candidate(&engine, input, dir.path(), "build").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -2019,7 +2031,9 @@ async fn just_completes_project_recipes() {
     engine.initialize_command_completion().unwrap();
 
     let input = "just bu";
-    let result = wait_for_candidate(&engine, input, dir.path(), "build-recipe").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     assert!(
         result
@@ -2061,10 +2075,14 @@ async fn make_completes_project_targets() {
     engine.initialize_command_completion().unwrap();
 
     // An empty token keeps every provider candidate in the result (prefix
-    // filtering would hide the junk we assert again). Wait for the background
-    // task refresh, then check target parsing and noise filtering together.
+    // filtering would hide the junk we assert again), and the first pass is
+    // synchronous (fish fallback stays pending), so the provider alone must
+    // already offer every target shape: no-prerequisite rules, targets
+    // written with their prerequisites, and no variable dumping.
     let input = "make ";
-    let result = wait_for_candidate(&engine, input, dir.path(), "test-target").await;
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
 
     let texts: Vec<String> = result
         .candidates

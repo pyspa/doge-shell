@@ -8,7 +8,7 @@ use nix::unistd::isatty;
 use std::io::Read;
 use std::os::fd::BorrowedFd;
 use std::os::fd::OwnedFd;
-use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::time::Duration;
 use tokio::io::unix::AsyncFd;
 
@@ -317,12 +317,6 @@ impl PtyMonitor {
 pub(crate) fn cloexec_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (reader, writer) = std::io::pipe()?;
     Ok((reader.into(), writer.into()))
-}
-
-pub(crate) fn create_pipe(ctx: &mut Context) -> Result<Option<RawFd>> {
-    let (pout, pin) = cloexec_pipe().context("failed pipe")?;
-    ctx.outfile = pin.into_raw_fd();
-    Ok(Some(pout.into_raw_fd()))
 }
 
 /// Wire up stdout when nothing redirects it.

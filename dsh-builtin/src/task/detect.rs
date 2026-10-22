@@ -124,19 +124,13 @@ pub(super) fn detect_tasks_in_dir(
                     )
                 {
                     let content = String::from_utf8_lossy(&output.stdout);
-                    for line in content.lines() {
-                        if let Some(target) = line.strip_suffix(':')
-                            && !target.starts_with(['.', '#', '%'])
-                            && !target.contains('%')
-                            && !target.contains(' ')
-                        {
-                            tasks.push(TaskInfo::new(
-                                "make",
-                                target,
-                                format!("make {target}"),
-                                cwd.clone(),
-                            ));
-                        }
+                    for target in parse_make_target_names(&content) {
+                        tasks.push(TaskInfo::new(
+                            "make",
+                            target.clone(),
+                            format!("make {target}"),
+                            cwd.clone(),
+                        ));
                     }
                 }
             }
@@ -255,6 +249,62 @@ pub(super) fn parse_gradle_task_names(output: &str) -> Vec<String> {
     }
     dedup_strings(names)
 }
+
+/// Parse the target names out of `make -pRrq :` database output.
+///
+/// GNU make prints every rule on one line as `targets: prerequisites`
+/// (`::` for double-colon rules), so one line may name several targets and
+/// any of them may carry prerequisites. The database also routes through
+/// variable assignments (`SHELL := /bin/sh`, `FLAGS ::= -O3`, and
+/// `PATH = /bin:/usr/bin` whose value carries the `:` itself) whose text
+/// before the first `:` must not become a target, through comment lines
+/// (sometimes ending in a colon) and through recipe lines, which carry a
+/// tab, a `.RECIPEPREFIX` prefix, or a `@`/`-`/`+` command modifier —
+/// none of which can start a rule line. The built-in empty `:` / `::`
+/// rules name nothing, and the makefiles themselves only rebuild their
+/// own file, so neither belongs in a task list. Names come back
+/// deduplicated in rule order.
+pub(super) fn parse_make_target_names(content: &str) -> Vec<String> {
+    const MAKEFILE_FILE_TARGETS: [&str; 3] = ["Makefile", "makefile", "GNUmakefile"];
+
+    let mut names = Vec::new();
+    for line in content.lines() {
+        // Recipes carry the tab prefix or — with `.RECIPEPREFIX` — the
+        // configured prefix, possibly followed by a `@`/`-`/`+` command
+        // modifier; rule lines never start with those characters.
+        if line.is_empty() || line.starts_with(['#', '\t', '>', '@', '-', '+']) {
+            continue;
+        }
+        let Some(colon) = line.find(':') else {
+            continue;
+        };
+        let (targets, rest) = line.split_at(colon);
+        // `NAME ::= value` and `NAME := value` assignments collapse to `=`
+        // after the colons, and `NAME = a:b` value colons (`PATH`) put the
+        // `=` before them; rules never do. The built-in `:` / `::` rules
+        // have no left side.
+        if rest.trim_start_matches(':').trim_start().starts_with('=')
+            || targets.contains('=')
+            || targets.split_whitespace().next().is_none()
+        {
+            continue;
+        }
+        // Unexpanded `$(...)` never shows up in an expanded dump target, so a
+        // left side containing `$` is a directive, not a rule.
+        if targets.contains('$') {
+            continue;
+        }
+        names.extend(
+            targets
+                .split_whitespace()
+                .filter(|target| !target.starts_with(['.', '#', '%']) && !target.contains('%'))
+                .filter(|target| !MAKEFILE_FILE_TARGETS.contains(target))
+                .map(str::to_string),
+        );
+    }
+    dedup_strings(names)
+}
+
 fn is_gradle_task_name(name: &str) -> bool {
     !name.is_empty()
         && name

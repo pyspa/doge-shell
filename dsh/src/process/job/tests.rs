@@ -29,17 +29,99 @@ fn test_find_job() {
     job3.pgid = Some(pgid3);
 }
 
-fn argv(parts: &[&str]) -> Vec<String> {
+pub(super) fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| part.to_string()).collect()
 }
 
-fn pipeline_of(commands: &[Vec<String>]) -> Job {
+pub(super) fn pipeline_of(commands: &[Vec<String>]) -> Job {
     let mut job = Job::new("test".to_string(), Pid::from_raw(1));
     for command in commands {
         let process = Process::new(command[0].clone(), command.clone());
         job.set_process(JobProcess::Command(process));
     }
     job
+}
+
+pub(super) struct OwnedChildCleanup(pub(super) Pid);
+
+impl Drop for OwnedChildCleanup {
+    fn drop(&mut self) {
+        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+        if matches!(
+            waitpid(self.0, Some(WaitPidFlag::WNOHANG)),
+            Ok(WaitStatus::StillAlive)
+        ) {
+            let _ = nix::sys::signal::kill(self.0, Signal::SIGKILL);
+            let _ = waitpid(self.0, None);
+        }
+    }
+}
+
+#[tokio::test]
+async fn fatal_pipeline_launch_reaps_owned_head_and_restores_context() {
+    use crate::{environment::Environment, shell::Shell};
+    use nix::{
+        errno::Errno,
+        sys::wait::{WaitPidFlag, waitpid},
+    };
+    let mut sibling = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let _sibling_cleanup = OwnedChildCleanup(Pid::from_raw(sibling.id() as i32));
+    let mut shell = Shell::new(Environment::new());
+    let mut ctx = Context::new_safe(shell.pid, shell.pgid, false);
+    ctx.process_count = 7;
+    let entry = (
+        ctx.infile,
+        ctx.outfile,
+        ctx.errfile,
+        ctx.pgid,
+        ctx.foreground,
+    );
+    let mut job = pipeline_of(&[argv(&["sleep", "30"]), argv(&["true", "bad\0arg"])]);
+    job.disable_pty = true;
+    // fork_process's exec-error EOF handshake confirms the head exec'd
+    // before the downstream CString conversion can fail.
+    let result = job.launch(&mut ctx, &mut shell).await;
+    let head = job
+        .pid
+        .expect("head spawned before tail preparation failed");
+    let _cleanup = OwnedChildCleanup(head);
+    assert!(result.unwrap_err().to_string().contains("CString"));
+    assert!(
+        job.is_process_tree_completed(),
+        "owned head must be observed completed"
+    );
+    assert!(matches!(
+        job.process.as_ref().unwrap().get_state(),
+        ProcessState::Completed(..)
+    ));
+    assert!(
+        sibling.try_wait().unwrap().is_none(),
+        "rollback must preserve unrelated children"
+    );
+    assert_eq!(
+        waitpid(head, Some(WaitPidFlag::WNOHANG)),
+        Err(Errno::ECHILD)
+    );
+    assert_eq!(
+        (
+            ctx.infile,
+            ctx.outfile,
+            ctx.errfile,
+            ctx.pgid,
+            ctx.foreground
+        ),
+        entry
+    );
+    assert_eq!(ctx.process_count, 7);
+    let mut next = pipeline_of(&[argv(&["true"])]);
+    next.disable_pty = true;
+    assert!(matches!(
+        next.launch(&mut ctx, &mut shell).await.unwrap(),
+        JobLaunchOutcome::Process(ProcessState::Completed(0, _))
+    ));
 }
 
 #[test]

@@ -18,8 +18,8 @@ use crate::process::child_exec::{
 };
 use crate::process::io::{OutputMonitor, cloexec_pipe};
 use anyhow::{Context as _, Result};
-use nix::unistd::{ForkResult, Pid, close, fork};
-use std::os::fd::{BorrowedFd, IntoRawFd, RawFd};
+use nix::unistd::{ForkResult, Pid, fork};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
 use tracing::debug;
 
 use super::process::Process;
@@ -58,14 +58,14 @@ pub(crate) fn fork_process(
     let mut monitors = Vec::new();
     // Write ends installed on `process` below; closed here when a pre-fork
     // step fails after their creation.
-    let mut created_writes: Vec<RawFd> = Vec::new();
+    let mut created_writes = Vec::new();
     if ctx.outfile == STDOUT_FILENO && !ctx.foreground && pty.is_none() {
         debug!("FORK: Creating capture pipe for stdout (background process)");
         let (read, write) = cloexec_pipe().context("failed pipe")?;
         let monitor = OutputMonitor::new_for_context(read, ctx, ObservedStream::Stdout)?;
-        let write_fd = write.into_raw_fd();
+        let write_fd = write.as_raw_fd();
         process.stdout = write_fd;
-        created_writes.push(write_fd);
+        created_writes.push(write);
         monitors.push(monitor);
         debug!(
             "FORK: Created capture pipe for stdout: write={}",
@@ -82,9 +82,9 @@ pub(crate) fn fork_process(
         debug!("FORK: Creating capture pipe for stderr (background process)");
         let (read, write) = cloexec_pipe().context("failed pipe")?;
         let monitor = OutputMonitor::new_for_context(read, ctx, ObservedStream::Stderr)?;
-        let write_fd = write.into_raw_fd();
+        let write_fd = write.as_raw_fd();
         process.stderr = write_fd;
-        created_writes.push(write_fd);
+        created_writes.push(write);
         monitors.push(monitor);
         debug!(
             "FORK: Created capture pipe for stderr: write={}",
@@ -114,17 +114,9 @@ pub(crate) fn fork_process(
 
     // Prepare execution data BEFORE forking, including the null-terminated
     // pointer arrays: the child only reads, never allocates.
-    let bundle = match process
-        .prepare_execution(process.stage_environment.environment(&shell.environment))
-    {
-        Ok(prepared) => prepared.into_bundle(),
-        Err(err) => {
-            for fd in created_writes {
-                let _ = close(fd);
-            }
-            return Err(err);
-        }
-    };
+    let bundle = process
+        .prepare_execution(process.stage_environment.environment(&shell.environment))?
+        .into_bundle();
 
     // Exec-error pipe: CLOEXEC closes on exec success; unresolved commands
     // close it before writing their diagnostic (failure is already known
@@ -144,9 +136,6 @@ pub(crate) fn fork_process(
         Err(err) => {
             unsafe { libc::close(err_read_fd) };
             unsafe { libc::close(err_write_fd) };
-            for fd in created_writes {
-                let _ = close(fd);
-            }
             return Err(err);
         }
     };
@@ -164,6 +153,10 @@ pub(crate) fn fork_process(
                 diagnostic_fallback,
             );
             unsafe { libc::close(err_read_fd) };
+            // The successful spawn hands parent writers to Job finalization.
+            for writer in created_writes {
+                let _ = writer.into_raw_fd();
+            }
             Ok((child, monitors, reported_failure || not_found.is_some()))
         }
         ForkResult::Child => {

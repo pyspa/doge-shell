@@ -4,15 +4,15 @@
 
 use anyhow::{Context as _, Result};
 use libc::STDERR_FILENO;
-use nix::unistd::{Pid, close, getpid};
-use std::os::fd::IntoRawFd;
+use nix::unistd::{Pid, getpid};
+use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
 use tracing::debug;
 
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::builtin_execution_placement;
 use super::fork::fork_process;
-use super::io::{OutputMonitor, cloexec_pipe, create_pipe, default_output_wiring};
+use super::io::{OutputMonitor, cloexec_pipe, default_output_wiring};
 use super::job_process::{JobProcess, ProcessLaunchOutcome, apply_pty_stdio};
 use super::launch_outcome::CommandFailure;
 use super::pty::PtyChildConfig;
@@ -24,6 +24,24 @@ use dsh_types::observed_output::ObservedStream;
 
 impl JobProcess {
     pub(crate) async fn launch(
+        &mut self,
+        ctx: &mut Context,
+        shell: &mut Shell,
+        stdout: RawFd,
+        pty: Option<PtyChildConfig>,
+        pipeline_context: bool,
+    ) -> Result<ProcessLaunchOutcome> {
+        let entry = (ctx.infile, ctx.outfile, ctx.errfile);
+        let result = self
+            .launch_stage(ctx, shell, stdout, pty, pipeline_context)
+            .await;
+        if result.is_err() {
+            (ctx.infile, ctx.outfile, ctx.errfile) = entry;
+        }
+        result
+    }
+
+    async fn launch_stage(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
@@ -63,8 +81,8 @@ impl JobProcess {
         let entry_outfile = ctx.outfile;
         let entry_errfile = ctx.errfile;
         // Write ends created by this call and now living in `ctx`, if any.
-        let mut created_out: Option<RawFd> = None;
-        let mut created_err: Option<RawFd> = None;
+        let mut created_out: Option<OwnedFd> = None;
+        let mut created_err: Option<OwnedFd> = None;
         // Capture monitors built before the spawn below. They stay local
         // until the child exists; only then does the outcome move them to
         // the job. Any earlier return drops them (closing the read ends)
@@ -73,9 +91,10 @@ impl JobProcess {
 
         let pipe_out = match next_process {
             Some(_) => {
-                let pipe = create_pipe(ctx)?; // create pipe
-                created_out = Some(ctx.outfile);
-                pipe
+                let (read, write) = cloexec_pipe().context("failed pipeline pipe")?;
+                ctx.outfile = write.as_raw_fd();
+                created_out = Some(write);
+                Some(read)
             }
             None => {
                 // Automatic capture for non-interactive mode (e.g. smart pipe tests)
@@ -95,8 +114,8 @@ impl JobProcess {
                     // with `ctx` untouched and no child spawned.
                     let monitor =
                         OutputMonitor::new_for_context(read, ctx, ObservedStream::Stdout)?;
-                    ctx.outfile = write.into_raw_fd();
-                    created_out = Some(ctx.outfile);
+                    ctx.outfile = write.as_raw_fd();
+                    created_out = Some(write);
                     monitors.push(monitor);
                     None
                 } else {
@@ -110,8 +129,8 @@ impl JobProcess {
             let (read, write) = cloexec_pipe().context("failed stderr pipe")?;
             match OutputMonitor::new_for_context(read, ctx, ObservedStream::Stderr) {
                 Ok(monitor) => {
-                    ctx.errfile = write.into_raw_fd();
-                    created_err = Some(ctx.errfile);
+                    ctx.errfile = write.as_raw_fd();
+                    created_err = Some(write);
                     monitors.push(monitor);
                 }
                 Err(err) => {
@@ -121,7 +140,7 @@ impl JobProcess {
                     // entry slots so nothing leaks and `ctx` names nothing
                     // closed.
                     if let Some(write_end) = created_out.take() {
-                        let _ = close(write_end);
+                        drop(write_end);
                     }
                     ctx.outfile = entry_outfile;
                     ctx.errfile = entry_errfile;
@@ -222,7 +241,7 @@ impl JobProcess {
                         shell,
                         pty,
                         diagnostic_fallback,
-                        pipe_out,
+                        pipe_out.as_ref().map(AsRawFd::as_raw_fd),
                     )?;
                     terminal_launch_failure = reported_failure;
                     monitors.extend(fork_monitors);
@@ -256,13 +275,13 @@ impl JobProcess {
                 // copies the child never inherited) and the unread next-stage
                 // pipe end before restoring the slots.
                 if let Some(write_end) = created_out.take() {
-                    let _ = close(write_end);
+                    drop(write_end);
                 }
                 if let Some(write_end) = created_err.take() {
-                    let _ = close(write_end);
+                    drop(write_end);
                 }
                 if let Some(read_end) = pipe_out {
-                    let _ = close(read_end);
+                    drop(read_end);
                 }
                 applied.restore(ctx);
                 return Err(err);
@@ -281,22 +300,24 @@ impl JobProcess {
         // forever for an EOF that cannot arrive.
         if let Some(write_fd) = pipe_write {
             let (_, stdout_fd, stderr_fd) = self.get_io();
-            if stdout_fd != write_fd
-                && stderr_fd != write_fd
-                && let Err(err) = close(write_fd)
-            {
-                debug!("failed to close superseded pipe write end: {}", err);
+            if stdout_fd != write_fd && stderr_fd != write_fd {
+                drop(created_out.take());
             }
         }
 
         // set pipe inout
         if let Some(pipe_out) = pipe_out {
-            ctx.infile = pipe_out;
+            ctx.infile = pipe_out.into_raw_fd();
         }
         // return launched process pid, pipeline process, the descriptors
         // the redirections own (the caller must not close those itself),
         // and the pre-spawn capture monitors (moved once into the job by
         // the caller now that the child exists)
+        // Successful spawn transfers parent-copy closure to Job. Until this
+        // point every early return closes these writers through RAII.
+        for writer in [created_out, created_err].into_iter().flatten() {
+            let _ = writer.into_raw_fd();
+        }
         Ok(ProcessLaunchOutcome::Launched {
             pid,
             terminal_launch_failure,
@@ -323,19 +344,11 @@ impl JobProcess {
         &mut self,
         ctx: &mut Context,
         entry: (RawFd, RawFd, RawFd),
-        pipe_out: Option<RawFd>,
-        created_out: Option<RawFd>,
-        created_err: Option<RawFd>,
+        pipe_out: Option<OwnedFd>,
+        created_out: Option<OwnedFd>,
+        created_err: Option<OwnedFd>,
     ) {
-        if let Some(read_end) = pipe_out {
-            let _ = close(read_end);
-        }
-        if let Some(write_end) = created_out {
-            let _ = close(write_end);
-        }
-        if let Some(write_end) = created_err {
-            let _ = close(write_end);
-        }
+        drop((pipe_out, created_out, created_err));
         // `redirect::apply` already rolled its own partial changes back, so
         // the slots now hold the post-wiring values; put back exactly what
         // the caller handed us.

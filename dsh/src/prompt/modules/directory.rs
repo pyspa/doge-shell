@@ -30,12 +30,27 @@ impl PromptModule for DirectoryModule {
             dirs::home_dir().as_deref(),
         );
 
+        // Escape only the external path text, before adding trusted styling.
+        let path_str = escape_directory_controls(&path_str);
         if is_git_context {
             Some(path_str.cyan().to_string())
         } else {
             Some(path_str)
         }
     }
+}
+
+/// Keep ordinary Unicode readable while showing terminal controls as literals.
+fn escape_directory_controls(path: &str) -> String {
+    let mut visible = String::with_capacity(path.len());
+    for ch in path.chars() {
+        if ch.is_control() {
+            visible.extend(ch.escape_default());
+        } else {
+            visible.push(ch);
+        }
+    }
+    visible
 }
 
 /// Helper function to format the path for the prompt
@@ -80,3 +95,7 @@ fn format_prompt_path(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "directory_tests.rs"]
+mod tests;

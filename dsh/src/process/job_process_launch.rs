@@ -215,8 +215,15 @@ impl JobProcess {
                                 && process.stderr == pty.slave
                         })
                         .map(|_| entry_errfile);
-                    let (child, fork_monitors, reported_failure) =
-                        fork_process(ctx, ctx.pgid, process, shell, pty, diagnostic_fallback)?;
+                    let (child, fork_monitors, reported_failure) = fork_process(
+                        ctx,
+                        ctx.pgid,
+                        process,
+                        shell,
+                        pty,
+                        diagnostic_fallback,
+                        pipe_out,
+                    )?;
                     terminal_launch_failure = reported_failure;
                     monitors.extend(fork_monitors);
                     child

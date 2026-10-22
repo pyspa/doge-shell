@@ -78,6 +78,41 @@ fn command_not_found_is_127_with_redirectable_stderr() {
 }
 
 #[test]
+fn large_command_not_found_diagnostic_does_not_block_pipeline_launch() {
+    let name = "doge_missing_".to_owned() + &"z".repeat(100_000);
+    // `tr` is a portable external consumer. pipefail preserves the actual
+    // missing-command status even though the consumer itself succeeds.
+    let script = format!(
+        "set -o pipefail; {name} 2>&1 | {} a-z a-z",
+        common::tr_path()
+    );
+    let output = common::run_dsh(["-c", &script], std::time::Duration::from_secs(5));
+    assert_eq!(output.status.code(), Some(127));
+    let diagnostic = String::from_utf8_lossy(&output.stdout);
+    assert!(diagnostic.contains(&name), "diagnostic was truncated");
+    assert!(diagnostic.contains("command not found"));
+    assert!(
+        output.stderr.is_empty(),
+        "stderr redirect was not preserved"
+    );
+
+    let quiet = common::run_command(&format!("{name} 2>/dev/null"));
+    assert_eq!(quiet.status.code(), Some(127));
+    assert!(quiet.stdout.is_empty() && quiet.stderr.is_empty());
+}
+
+#[test]
+fn large_missing_diagnostic_releases_reader_when_consumer_exits_early() {
+    let name = "doge_missing_".to_owned() + &"z".repeat(100_000);
+    // A diagnostic-only child never execs, so CLOEXEC alone cannot release
+    // its inherited downstream reader. It must not keep its own pipe alive.
+    let script = format!("set -o pipefail; {name} 2>&1 | {}", common::true_path());
+    let output = common::run_dsh(["-c", &script], std::time::Duration::from_secs(5));
+    assert_eq!(output.status.code(), Some(127));
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+}
+
+#[test]
 fn redirect_order_stdout_stderr_aliasing_preserved() {
     // `cmd > file 2>&1`: both streams land in the file.
     let out = tempfile::NamedTempFile::new().expect("temp output");

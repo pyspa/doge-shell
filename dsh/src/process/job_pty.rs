@@ -114,6 +114,9 @@ fn should_use_full_proxy(job: &Job, ctx: &Context) -> bool {
     ctx.foreground
         && ctx.interactive
         && !is_builtin_job(job)
+        // FullProxy creates a new session in the child. A pipeline must
+        // instead keep every stage in the job's shared process group.
+        && job.process.as_deref().is_some_and(|process| process.stage_count() == 1)
         && ctx.infile == STDIN_FILENO
         && ctx.outfile == STDOUT_FILENO
         && !job_has_redirects(job)

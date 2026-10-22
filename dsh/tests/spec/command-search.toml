@@ -1,5 +1,16 @@
 version = 1
 
+[[case]]
+id = "command-search.missing-diagnostic-pipeline"
+class = "bash"
+mode = "command"
+script = "set -o pipefail; doge-shell-missing-pipeline-xyz 2>&1 | {{TR}} a-z a-z"
+
+[case.expect]
+status = 127
+stdout_contains = ["doge-shell-missing-pipeline-xyz", "command not found"]
+stderr_exact = ""
+
 # External command search: slash bypass, executable candidate priority,
 # and command-scoped PATH overrides.
 

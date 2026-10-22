@@ -1,6 +1,53 @@
 use super::*;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use tempfile::tempdir;
+
+struct BackgroundExecuteContext {
+    cwd: PathBuf,
+    jobs: Arc<parking_lot::Mutex<crate::agent::jobs::AgentJobs>>,
+}
+
+impl crate::shell_capabilities::BackgroundTaskContext for BackgroundExecuteContext {
+    fn remote_tool(&self, _name: &str, _args: &str) -> Option<Result<String, String>> {
+        None
+    }
+
+    fn permits_tool(&self, name: &str, _args: &str) -> bool {
+        name == "execute"
+    }
+
+    fn confirm(&self, _message: &str) -> anyhow::Result<ApprovalDecision> {
+        Ok(ApprovalDecision::Deny)
+    }
+
+    fn is_canceled(&self) -> bool {
+        false
+    }
+
+    fn cwd(&self) -> PathBuf {
+        self.cwd.clone()
+    }
+
+    fn jobs(&self) -> Option<Arc<parking_lot::Mutex<crate::agent::jobs::AgentJobs>>> {
+        Some(Arc::clone(&self.jobs))
+    }
+
+    fn read_authorized(&self, _path: &Path) -> bool {
+        false
+    }
+
+    fn read_result_authorized(&self, _path: &Path, _contents: &str) -> bool {
+        false
+    }
+
+    fn write_authorized(&self, _path: &Path) -> bool {
+        false
+    }
+
+    fn write_contents_authorized(&self, _path: &Path, _contents: &str) -> bool {
+        false
+    }
+}
 
 /// Serializes every test that touches `EXECUTE_TOOL_ENV_ALLOWLIST`: the env
 /// var is process-global and overrides the proxy's allowlist, so a test that
@@ -1172,25 +1219,32 @@ fn a_large_stdout_does_not_evict_stderr() {
 
 #[test]
 fn interactive_execute_uses_proxy_child_environment() {
-    let _lock = env_lock();
-    let _allow = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
-    let _process_only =
-        crate::test_support::ProcessEnvGuard::set("DOGESH_EXEC_PROCESS_ONLY", "stale");
-    let _stale_visible =
-        crate::test_support::ProcessEnvGuard::set("DOGESH_EXEC_VISIBLE", "stale-process");
     let mut proxy = TestProxy {
         execute_allowlist: vec![],
         current_dir: std::env::current_dir().unwrap(),
         agent_verdict: AgentCommandVerdict::Allowed,
         confirm_result: true,
-        exported: [("DOGESH_EXEC_VISIBLE".to_string(), "logical".to_string())]
+        vars: [(EXECUTE_TOOL_ENV_ALLOWLIST.to_string(), String::new())]
             .into_iter()
             .collect(),
+        exported: [
+            (
+                "DOGESH_EXEC_VISIBLE".to_string(),
+                "synthetic-logical-secret".to_string(),
+            ),
+            ("PATH".to_string(), "/logical/bin".to_string()),
+            ("HOME".to_string(), "/logical/home".to_string()),
+            ("LANG".to_string(), "C".to_string()),
+            ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+            ("TMPDIR".to_string(), "/logical/tmp".to_string()),
+        ]
+        .into_iter()
+        .collect(),
         ..TestProxy::default()
     };
 
     let result = run(
-        r#"{"command":"printf '%s|%s' \"$DOGESH_EXEC_VISIBLE\" \"${DOGESH_EXEC_PROCESS_ONLY-unset}\""}"#,
+        r#"{"command":"printf '%s|%s' \"${DOGESH_EXEC_VISIBLE-unset}\" \"$PATH\""}"#,
         &mut proxy,
     )
     .unwrap();
@@ -1198,7 +1252,7 @@ fn interactive_execute_uses_proxy_child_environment() {
     assert_eq!(parsed["exit_code"], 0);
     assert_eq!(
         parsed["stdout"].as_str().unwrap(),
-        "logical|unset",
+        "unset|/logical/bin",
         "{result}"
     );
     let program = capture::shell_command("true", None, &std::collections::HashMap::new())
@@ -1231,6 +1285,63 @@ fn interactive_execute_does_not_expose_unexported_variables() {
     let parsed: Value = serde_json::from_str(&result).unwrap();
     assert_eq!(parsed["exit_code"], 0);
     assert_eq!(parsed["stdout"].as_str().unwrap(), "unset", "{result}");
+}
+
+#[test]
+fn background_execute_preserves_explicit_export_and_omits_worker_only_provider_key() {
+    let dir = tempdir().unwrap();
+    let jobs = Arc::new(parking_lot::Mutex::new(
+        crate::agent::jobs::AgentJobs::default(),
+    ));
+    let context = Arc::new(BackgroundExecuteContext {
+        cwd: dir.path().to_path_buf(),
+        jobs: Arc::clone(&jobs),
+    });
+    let mut proxy = TestProxy {
+        current_dir: dir.path().to_path_buf(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        background_context: Some(context),
+        vars: [
+            (EXECUTE_TOOL_ENV_ALLOWLIST.to_string(), String::new()),
+            (
+                "DOGESH_F1_WORKER_PROVIDER_ONLY".into(),
+                "synthetic-worker-provider-key".into(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+        exported: [(
+            "DOGESH_TASK_GRANTED".into(),
+            "synthetic-explicit-grant".into(),
+        )]
+        .into_iter()
+        .collect(),
+        ..TestProxy::default()
+    };
+
+    let result = run(
+        r#"{"command":"printf '%s|%s' \"$DOGESH_TASK_GRANTED\" \"${DOGESH_F1_WORKER_PROVIDER_ONLY-unset}\""}"#,
+        &mut proxy,
+    )
+    .unwrap();
+    let initial: Value = serde_json::from_str(&result).unwrap();
+    let job_id = initial["job_id"].as_str().expect("background job id");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let state = loop {
+        let state = jobs.lock().snapshot(job_id, 0, 4096).unwrap();
+        if state["status"] != "running" {
+            break state;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "job did not finish: {state}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+
+    assert_eq!(state["status"], "exited", "{state}");
+    assert_eq!(state["stdout"], "synthetic-explicit-grant|unset", "{state}");
 }
 
 pub(crate) struct EnvGuard {

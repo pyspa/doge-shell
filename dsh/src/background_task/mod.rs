@@ -282,6 +282,7 @@ mod tests {
     #[test]
     fn opencode_credentials_are_available_to_ai_without_expanding_execute_exports() {
         let env = crate::environment::Environment::new();
+        let explicit_grant = "DOGESH_F1_EXPLICIT_GRANT";
         for key in [
             "OPENCODE_GO_API_KEY",
             "OPENCODE_ZEN_API_KEY",
@@ -289,8 +290,23 @@ mod tests {
         ] {
             env.write().set_shell_var(key.into(), "fake-key".into());
         }
+        env.write()
+            .set_shell_var(explicit_grant.into(), "synthetic-user-grant".into());
+        env.write()
+            .variable_state
+            .exported_vars
+            .insert(explicit_grant.into());
         let shell = Shell::new(env);
-        let snapshot = filtered_snapshot(&shell, &[]);
+        let snapshot = filtered_snapshot(
+            &shell,
+            &[
+                "PATH".into(),
+                "LANG".into(),
+                "LC_ALL".into(),
+                "TMPDIR".into(),
+                explicit_grant.into(),
+            ],
+        );
         for key in [
             "OPENCODE_GO_API_KEY",
             "OPENCODE_ZEN_API_KEY",
@@ -302,5 +318,10 @@ mod tests {
             );
             assert!(!snapshot.exported_vars.contains(key));
         }
+        assert_eq!(
+            snapshot.variables.get(explicit_grant).map(String::as_str),
+            Some("synthetic-user-grant")
+        );
+        assert!(snapshot.exported_vars.contains(explicit_grant));
     }
 }

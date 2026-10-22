@@ -13,6 +13,7 @@
 use super::*;
 use crate::chatgpt::jobs as chat_jobs;
 use crate::chatgpt::ui::SpinnerGuard;
+use std::collections::HashMap;
 
 /// How often the wait loop re-checks the job.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -27,9 +28,9 @@ pub(super) fn run_as_job(
     cwd: Option<&Path>,
     timeout: Duration,
     yield_ms: u64,
+    child_env: HashMap<String, String>,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<String, String> {
-    let child_env = proxy.child_process_environment();
     let builder = capture::shell_command(command, cwd, &child_env);
     let id = chat_jobs::start(builder, command, cwd.map(Path::to_path_buf), timeout)
         .map_err(|err| format!("chat: failed to execute `{command}`: {err}"))?;

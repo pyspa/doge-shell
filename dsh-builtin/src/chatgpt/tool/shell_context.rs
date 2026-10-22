@@ -7,6 +7,7 @@
 //! command is one of the more expensive mistakes an agent makes, and this
 //! turns it into a lookup.
 
+use super::environment::filter_unscoped_ai_child_environment;
 use crate::ShellProxy;
 use crate::task::TaskDiscoveryRuntime;
 use crate::{project_context, task};
@@ -74,7 +75,7 @@ pub(crate) fn run(_arguments: &str, proxy: &mut dyn ShellProxy) -> Result<String
 fn snapshot_runtime(proxy: &dyn ShellProxy) -> TaskDiscoveryRuntime {
     TaskDiscoveryRuntime::new(
         proxy.command_search_paths(),
-        proxy.child_process_environment(),
+        filter_unscoped_ai_child_environment(proxy.child_process_environment()),
     )
 }
 
@@ -204,7 +205,11 @@ mod tests {
         let bin = dir.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let mise = bin.join("mise");
-        std::fs::write(&mise, "#!/bin/sh\nprintf '[{\"name\":\"ctx-task\"}]'\n").unwrap();
+        std::fs::write(
+            &mise,
+            "#!/bin/sh\nprintf '[{\"name\":\"ctx-%s\"}]' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        )
+        .unwrap();
         let mut permissions = std::fs::metadata(&mise).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(&mise, permissions).unwrap();
@@ -212,13 +217,188 @@ mod tests {
         let mut proxy = TestShellProxy {
             current_dir: dir.path().to_path_buf(),
             command_search_paths: vec![bin],
+            exported: [(
+                "DOGESH_F1_PROVIDER_ONLY".into(),
+                "synthetic-provider-value".into(),
+            )]
+            .into_iter()
+            .collect(),
             ..TestShellProxy::default()
         };
 
         let rendered = run("{}", &mut proxy).unwrap();
         assert!(
-            rendered.contains("ctx-task"),
+            rendered.contains("ctx-unset") && !rendered.contains("synthetic-provider-value"),
             "shell_context must surface provider tasks from proxy runtime: {rendered}"
         );
+    }
+
+    #[test]
+    fn shell_context_fingerprint_ignores_unallowlisted_exports() {
+        use std::collections::HashMap;
+
+        let runtime = |provider_value: &str, path: &str| {
+            let proxy = TestShellProxy {
+                exported: HashMap::from([
+                    ("PATH".to_string(), path.to_string()),
+                    (
+                        "DOGESH_F1_PROVIDER_ONLY".to_string(),
+                        provider_value.to_string(),
+                    ),
+                ]),
+                ..TestShellProxy::default()
+            };
+            snapshot_runtime(&proxy)
+        };
+
+        let first = runtime("synthetic-one", "/logical/bin");
+        let changed_secret = runtime("synthetic-two", "/logical/bin");
+        let changed_path = runtime("synthetic-two", "/other/logical/bin");
+
+        assert_eq!(first.cache_scope(), changed_secret.cache_scope());
+        assert_ne!(first.cache_scope(), changed_path.cache_scope());
+    }
+
+    #[test]
+    fn shell_context_keeps_only_exact_allowlisted_exports() {
+        use std::collections::{BTreeMap, HashMap};
+
+        let proxy = TestShellProxy {
+            exported: HashMap::from([
+                ("PATH".into(), "/logical/bin".into()),
+                ("HOME".into(), "/logical/home".into()),
+                ("LANG".into(), "C".into()),
+                ("LC_ALL".into(), "C.UTF-8".into()),
+                ("TMPDIR".into(), "/logical/tmp".into()),
+                ("TERM".into(), "xterm".into()),
+                ("LC_CTYPE".into(), "en_US.UTF-8".into()),
+                ("XDG_CONFIG_HOME".into(), "/logical/config".into()),
+                (
+                    "DOGESH_F1_PROVIDER_KEY".into(),
+                    "synthetic-provider-key".into(),
+                ),
+            ]),
+            ..TestShellProxy::default()
+        };
+
+        let runtime = snapshot_runtime(&proxy);
+
+        assert_eq!(
+            runtime.child_env(),
+            &BTreeMap::from([
+                ("PATH".into(), "/logical/bin".into()),
+                ("HOME".into(), "/logical/home".into()),
+                ("LANG".into(), "C".into()),
+                ("LC_ALL".into(), "C.UTF-8".into()),
+                ("TMPDIR".into(), "/logical/tmp".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn shell_context_discovery_routes_receive_only_the_filtered_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        fn executable(path: &std::path::Path, contents: &str) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("mise.toml"), "[tasks.static]\nrun = 'true'\n").unwrap();
+        std::fs::write(root.join("nx.json"), "{}").unwrap();
+        std::fs::write(root.join("turbo.json"), r#"{"tasks":{"build":{}}}"#).unwrap();
+        std::fs::write(root.join("Makefile"), "all:\n").unwrap();
+        std::fs::write(root.join("Justfile"), "all:\n  echo all\n").unwrap();
+        std::fs::write(root.join("build.gradle"), "").unwrap();
+        std::fs::write(root.join("gradlew"), "#!/bin/sh\n").unwrap();
+
+        let bin = root.join("bin");
+        executable(
+            &bin.join("mise"),
+            "#!/bin/sh\nprintf '[{\"name\":\"mise-%s\"}]' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        );
+        executable(
+            &bin.join("make"),
+            "#!/bin/sh\nprintf 'make-%s:\\n' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        );
+        executable(
+            &bin.join("just"),
+            "#!/bin/sh\nprintf 'just-%s\\n' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        );
+        executable(
+            &bin.join("gradle"),
+            "#!/bin/sh\nprintf 'gradle-%s - synthetic task\\n' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        );
+        executable(
+            &root.join("node_modules/.bin/nx"),
+            "#!/bin/sh\ncase \"$2\" in projects) printf '[\"nx-%s\"]' \"${DOGESH_F1_PROVIDER_ONLY-unset}\";; project) printf '{\"targets\":{\"build\":{}}}';; esac\n",
+        );
+        executable(
+            &root.join("node_modules/.bin/turbo"),
+            "#!/bin/sh\nprintf '{\"tasks\":[{\"task\":\"turbo-%s\"}]}' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        );
+
+        let mut proxy = TestShellProxy {
+            current_dir: root.to_path_buf(),
+            command_search_paths: vec![bin],
+            exported: [(
+                "DOGESH_F1_PROVIDER_ONLY".into(),
+                "synthetic-provider-value".into(),
+            )]
+            .into_iter()
+            .collect(),
+            ..TestShellProxy::default()
+        };
+
+        let rendered = run("{}", &mut proxy).unwrap();
+        for task in [
+            "mise-unset",
+            "nx-unset:build",
+            "turbo-unset",
+            "make-unset",
+            "just-unset",
+            "gradle-unset",
+        ] {
+            assert!(rendered.contains(task), "missing {task}: {rendered}");
+        }
+        assert!(!rendered.contains("synthetic-provider-value"), "{rendered}");
+    }
+
+    #[test]
+    fn shell_context_gradlew_wrapper_receives_the_filtered_environment() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"f1-wrapper\"\nversion = \"0.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("build.gradle"), "").unwrap();
+        let wrapper = dir.path().join("gradlew");
+        std::fs::write(
+            &wrapper,
+            "#!/bin/sh\nprintf 'wrapper-%s - synthetic task\\n' \"${DOGESH_F1_PROVIDER_ONLY-unset}\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut proxy = TestShellProxy {
+            current_dir: dir.path().to_path_buf(),
+            exported: [(
+                "DOGESH_F1_PROVIDER_ONLY".into(),
+                "synthetic-provider-value".into(),
+            )]
+            .into_iter()
+            .collect(),
+            ..TestShellProxy::default()
+        };
+
+        let rendered = run("{}", &mut proxy).unwrap();
+        assert!(rendered.contains("wrapper-unset"), "{rendered}");
+        assert!(!rendered.contains("synthetic-provider-value"), "{rendered}");
     }
 }

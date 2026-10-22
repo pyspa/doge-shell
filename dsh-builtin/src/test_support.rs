@@ -59,6 +59,8 @@ pub(crate) struct TestShellProxy {
     /// Present when the test is exercising the persistent-task path, where
     /// nothing may prompt and every refusal has to be an error.
     pub agent_runtime: Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
+    /// Optional background task authority for tool-routing tests.
+    pub background_context: Option<Arc<dyn crate::shell_capabilities::BackgroundTaskContext>>,
     pub vars: HashMap<String, String>,
     pub aliases: HashMap<String, String>,
     pub abbrs: HashMap<String, String>,
@@ -162,6 +164,7 @@ impl Default for TestShellProxy {
             mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
             agent_runtime: None,
+            background_context: None,
             vars: HashMap::new(),
             aliases: HashMap::new(),
             abbrs: HashMap::new(),
@@ -559,6 +562,12 @@ impl ShellProxy for TestShellProxy {
 }
 
 impl AgentCommandPolicy for TestShellProxy {
+    fn background_task_context(
+        &self,
+    ) -> Option<Arc<dyn crate::shell_capabilities::BackgroundTaskContext>> {
+        self.background_context.clone()
+    }
+
     fn agent_runtime(&self) -> Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>> {
         self.agent_runtime.clone()
     }

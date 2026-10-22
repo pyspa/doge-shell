@@ -12,6 +12,7 @@ use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolH
 
 pub(crate) mod cron;
 mod edit;
+mod environment;
 pub(crate) mod execute;
 mod gitignore;
 mod jobs;

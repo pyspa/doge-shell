@@ -2,10 +2,19 @@
 //! `chat_status`) and `execute_chat_message`, the synchronous entry point `!`
 //! itself calls.
 use super::*;
-use crate::markdown::render_markdown_with_fallback;
+use crate::markdown::render_markdown_with_fallback_compact;
 
 pub fn load_openai_config(proxy: &mut dyn ShellProxy) -> OpenAiConfig {
     OpenAiConfig::from_getter(|key| proxy.get_var(key))
+}
+
+/// Render a final `!` chat answer with compact block spacing. The streaming
+/// path in [`StreamSink`] uses the same compact renderer, so a turn looks the
+/// same whether the provider streamed it or not.
+fn render_chat_answer(answer: &str) -> String {
+    render_markdown_with_fallback_compact(answer.trim_end())
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 /// Execute a chat request using the configured OpenAI client
@@ -64,15 +73,14 @@ pub fn execute_chat_message(
                     // iteration's own flag, not "did any earlier iteration
                     // stream something" - a per-request fallback can leave
                     // an interim round streamed but the round that produced
-                    // `res` un-streamed, and `wrote_any` alone would then
-                    // skip printing the answer entirely.
+                    // `res` un-streamed, and a turn-wide flag alone would
+                    // then skip printing the answer entirely.
                     let already_shown = sink
                         .as_ref()
                         .is_some_and(StreamSink::streamed_this_iteration);
                     if !already_shown {
-                        let rendered = render_markdown_with_fallback(res.trim());
-                        let trimmed = rendered.trim_end_matches('\n');
-                        ctx.write_stdout(trimmed).ok();
+                        let rendered = render_chat_answer(&res);
+                        ctx.write_stdout(&rendered).ok();
                     }
                     ExitStatus::ExitedWith(0)
                 }
@@ -597,5 +605,22 @@ mod tests {
         let config = load_openai_config(&mut proxy);
         assert_eq!(config.base_url(), "https://shell.example/v1");
         assert_eq!(config.default_model(), "shell-model");
+    }
+
+    #[test]
+    fn chat_answer_rendering_uses_compact_spacing() {
+        assert_eq!(
+            render_chat_answer("First paragraph.\n\nSecond paragraph."),
+            "First paragraph.\nSecond paragraph."
+        );
+    }
+
+    #[test]
+    fn chat_answer_rendering_preserves_leading_indented_code() {
+        let rendered = render_chat_answer("    indented code\n\n    second");
+        assert!(
+            rendered.starts_with("\x1b[48;5;234m"),
+            "leading indented code must render as a code block: {rendered:?}"
+        );
     }
 }

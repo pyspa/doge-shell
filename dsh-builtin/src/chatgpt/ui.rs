@@ -2,7 +2,7 @@
 //! on the provider (`SpinnerGuard`), and incremental Markdown rendering of a
 //! streamed answer (`StreamSink`).
 use super::*;
-use crate::markdown::render_markdown_with_fallback;
+use crate::markdown::render_markdown_with_fallback_compact;
 use crate::markdown::stream::MarkdownBlockSplitter;
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -23,6 +23,14 @@ impl SpinnerGuard {
         progress.set_message(message.to_string());
         progress.enable_steady_tick(Duration::from_millis(80));
         SpinnerGuard { progress }
+    }
+
+    /// A spinner that never draws. Tests must not touch the real terminal.
+    #[cfg(test)]
+    pub(super) fn hidden() -> Self {
+        Self {
+            progress: ProgressBar::hidden(),
+        }
     }
 
     /// Hide the spinner line, run `f`, then let it resume drawing.
@@ -54,14 +62,11 @@ impl Drop for SpinnerGuard {
 /// written the moment they are safe to render (see that type's docs for why
 /// that moment is safe); the unconfirmed remainder is shown as a raw preview
 /// on the spinner's status line. This mirrors what `execute_chat_message`
-/// already does for a complete answer - `render_markdown_with_fallback`
-/// then `ctx.write_stdout` - just spread across many smaller calls instead
-/// of one, so the total bytes written for a turn are the same either way.
+/// already does for a complete answer - the same compact renderer, then
+/// `ctx.write_stdout` - just spread across many smaller calls instead of one.
 pub(super) struct StreamSink<'a> {
     ctx: &'a Context,
     splitter: MarkdownBlockSplitter,
-    /// Set once anything has been written this turn (any iteration).
-    wrote_any: bool,
     /// Reset at the start of each iteration by [`Self::begin_iteration`];
     /// tells the caller whether *this* iteration's response streamed
     /// anything, since a per-round fallback to a non-streaming response can
@@ -74,7 +79,6 @@ impl<'a> StreamSink<'a> {
         Self {
             ctx,
             splitter: MarkdownBlockSplitter::new(),
-            wrote_any: false,
             streamed_this_iteration: false,
         }
     }
@@ -111,23 +115,72 @@ impl<'a> StreamSink<'a> {
     }
 
     pub(super) fn write_block(&mut self, spinner: &SpinnerGuard, block: &str) {
-        let rendered = render_markdown_with_fallback(block.trim());
+        let rendered = render_markdown_with_fallback_compact(block.trim_end());
         if rendered.trim().is_empty() {
             return;
         }
-        // `Context::write_stdout` always appends exactly one `\n`, so
-        // prefixing every block but the first with one more reproduces the
-        // single blank line `TerminalRenderer` puts between any two
-        // top-level blocks when rendering the whole answer at once.
-        let text = if self.wrote_any {
-            format!("\n{rendered}")
-        } else {
-            rendered
-        };
+        // `Context::write_stdout` supplies exactly one newline after each
+        // block, so consecutive blocks stay on adjacent lines without the
+        // prefix newline the normal renderer's blank-line spacing needed.
         let ctx = self.ctx;
         spinner.suspend(|| {
-            ctx.write_stdout(&text).ok();
+            ctx.write_stdout(&rendered).ok();
         });
-        self.wrote_any = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsh_types::observed_output::{ObservedOutput, SharedOutputObserver};
+    use nix::unistd::getpid;
+    use std::os::fd::{IntoRawFd, RawFd};
+
+    fn observed_context() -> (Context, SharedOutputObserver, RawFd) {
+        let pid = getpid();
+        let mut ctx = Context::new_safe(pid, pid, false);
+        ctx.interactive = false;
+        let outfile = tempfile::tempfile()
+            .expect("temporary stdout file")
+            .into_raw_fd();
+        ctx.outfile = outfile;
+        let observer = ObservedOutput::shared(64 * 1024);
+        ctx.output_observer = Some(observer.clone());
+        (ctx, observer, outfile)
+    }
+
+    #[test]
+    fn streamed_blocks_are_not_separated_by_a_blank_line() {
+        let (ctx, observer, outfile) = observed_context();
+        let mut sink = StreamSink::new(&ctx);
+        let spinner = SpinnerGuard::hidden();
+        sink.write_block(&spinner, "First paragraph.");
+        sink.write_block(&spinner, "Second paragraph.");
+        drop(spinner);
+        nix::unistd::close(outfile).ok();
+
+        let snapshot = observer.lock().expect("observer lock").snapshot();
+        assert_eq!(snapshot.stdout, "First paragraph.\nSecond paragraph.\n");
+    }
+
+    #[test]
+    fn indented_code_blocks_stream_like_the_whole_answer() {
+        let (ctx, observer, outfile) = observed_context();
+        let mut sink = StreamSink::new(&ctx);
+        let spinner = SpinnerGuard::hidden();
+        let answer = "Before.\n\n    indented code\n\n    second\n\nAfter.";
+
+        sink.on_delta(&spinner, answer);
+        sink.finish_iteration(&spinner);
+        drop(spinner);
+        nix::unistd::close(outfile).ok();
+
+        let expected = render_markdown_with_fallback_compact(answer.trim_end());
+        let snapshot = observer.lock().expect("observer lock").snapshot();
+        assert_eq!(
+            snapshot.stdout.trim_end_matches('\n'),
+            expected.trim_end_matches('\n'),
+            "an indented code block must render the same when streamed"
+        );
     }
 }

@@ -738,3 +738,6 @@ mod tests;
 
 #[cfg(test)]
 mod opencode_tests;
+
+#[cfg(test)]
+mod redirect_tests;

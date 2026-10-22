@@ -41,7 +41,7 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
     そのターンの残り item から `id` を外して replay する（function_call と reasoning の対応検査を避ける）。
     encrypted content の無い reasoning item も同様に落とす。
   - endpoint/キー/provider が変わった履歴、Chat Completions 形式の履歴とは相互に流用せず `chat_reset` を案内する。
-  - redirect は chat/completions 経路と同じく reqwest 既定に従う（subscription は追わない）。
+  - redirect は chat/completions 経路と同じく HTTPS を維持する。`AI_CHAT_ALLOW_INSECURE_HTTP` の明示許可時のみ HTTP への redirect も許す（subscription は追わない）。
 - 認証は `Authorization: Bearer` 固定。
 - したがって **Anthropic Messages API（`x-api-key` + `anthropic-version`）はそのままでは使えない**。
   API-key経路ではOpenAI互換ゲートウェイ経由で使う。

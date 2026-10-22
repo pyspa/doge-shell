@@ -258,16 +258,21 @@ pub(super) fn parse_gradle_task_names(output: &str) -> Vec<String> {
 /// variable assignments (`SHELL := /bin/sh`, `FLAGS ::= -O3`, and
 /// `PATH = /bin:/usr/bin` whose value carries the `:` itself) whose text
 /// before the first `:` must not become a target, through comment lines
-/// (sometimes ending in a colon) and through tab-indented recipe lines.
-/// The built-in empty `:` / `::` rules name nothing, and the makefiles
-/// themselves only rebuild their own file, so neither belongs in a task
-/// list. Names come back deduplicated in rule order.
+/// (sometimes ending in a colon) and through recipe lines, which carry a
+/// tab, a `.RECIPEPREFIX` prefix, or a `@`/`-`/`+` command modifier —
+/// none of which can start a rule line. The built-in empty `:` / `::`
+/// rules name nothing, and the makefiles themselves only rebuild their
+/// own file, so neither belongs in a task list. Names come back
+/// deduplicated in rule order.
 pub(super) fn parse_make_target_names(content: &str) -> Vec<String> {
     const MAKEFILE_FILE_TARGETS: [&str; 3] = ["Makefile", "makefile", "GNUmakefile"];
 
     let mut names = Vec::new();
     for line in content.lines() {
-        if line.is_empty() || line.starts_with(['#', '\t']) {
+        // Recipes carry the tab prefix or — with `.RECIPEPREFIX` — the
+        // configured prefix, possibly followed by a `@`/`-`/`+` command
+        // modifier; rule lines never start with those characters.
+        if line.is_empty() || line.starts_with(['#', '\t', '>', '@', '-', '+']) {
             continue;
         }
         let Some(colon) = line.find(':') else {

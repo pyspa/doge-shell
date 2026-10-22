@@ -261,6 +261,22 @@ fn parse_make_targets_skips_variable_values_that_contain_a_colon() {
     assert_eq!(parse_make_target_names(dump), vec!["all"]);
 }
 
+#[test]
+fn parse_make_targets_skips_recipe_prefix_lines() {
+    // With `.RECIPEPREFIX = >`, GNU make prints recipe lines with the
+    // prefix instead of a tab; a recipe carrying `:` (a URL here) must not
+    // become a target.
+    let dump = concat!(
+        ".RECIPEPREFIX = >\n",
+        "# 変数の値 (ファイル 'Makefile', 1 行目)\n",
+        "build:\n",
+        "#  コマンドを実行する (ファイル 'Makefile', 3 行目)\n",
+        ">curl -s https://example.com:8080\n",
+    );
+
+    assert_eq!(parse_make_target_names(dump), vec!["build"]);
+}
+
 /// Machine providers never run in metadata-only mode: with a mise marker
 /// present, only the static file parser contributes. Full discovery would
 /// prefer the provider's machine-readable output when `mise` resolves.

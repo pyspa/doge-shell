@@ -135,42 +135,6 @@ impl DynamicCompletionProvider {
         )
     }
 
-    pub(super) fn load_project_tasks(&self, current_dir: &Path) -> Result<Vec<task::TaskInfo>> {
-        let project_root = self.cached_project_root(current_dir);
-        let runtime = self.task_discovery_runtime();
-        let cache_key = TaskCacheKey {
-            project_root: project_root.clone(),
-            sources: Vec::new(),
-        };
-        let signature = task::discovery_signature(&project_root, None, &runtime);
-
-        if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
-            return Ok(tasks);
-        }
-
-        let tasks = task::list_tasks_in_dir(&project_root, &runtime)?;
-        self.cache.write().tasks.insert(
-            cache_key,
-            TaskCacheEntry {
-                signature: signature.after_discovery(),
-                tasks: tasks.clone(),
-            },
-        );
-        Ok(tasks)
-    }
-
-    pub(super) fn lookup_project_tasks(&self, current_dir: &Path) -> Vec<task::TaskInfo> {
-        let project_root = self.cached_project_root(current_dir);
-        let runtime = self.task_discovery_runtime();
-        let cache_key = TaskCacheKey {
-            project_root: project_root.clone(),
-            sources: Vec::new(),
-        };
-        let signature = task::discovery_signature(&project_root, None, &runtime);
-        self.lookup_task_cache(&cache_key, &signature)
-            .unwrap_or_default()
-    }
-
     pub(super) fn load_project_tasks_for_sources(
         &self,
         current_dir: &Path,
@@ -215,6 +179,52 @@ impl DynamicCompletionProvider {
             .unwrap_or_default()
     }
 
+    pub(super) fn request_project_tasks(
+        &self,
+        current_dir: &Path,
+        sources: Option<&[&str]>,
+        cache_policy: CachePolicy,
+    ) -> Vec<task::TaskInfo> {
+        let project_root = self.cached_project_root(current_dir);
+        let runtime = self.task_discovery_runtime();
+        let cache_key = TaskCacheKey {
+            project_root: project_root.clone(),
+            sources: sources.map(normalized_task_sources).unwrap_or_default(),
+        };
+        let signature = task::discovery_signature(&project_root, sources, &runtime);
+
+        if let Some(tasks) = self.lookup_task_cache(&cache_key, &signature) {
+            return tasks;
+        }
+        if cache_policy.is_cached_only() {
+            return Vec::new();
+        }
+
+        let refresh_key = TaskRefreshKey {
+            cache_key,
+            signature,
+        };
+        {
+            let mut cache = self.cache.write();
+            prune_task_errors(&mut cache);
+            if cache.task_errors.contains_key(&refresh_key)
+                || !cache.task_pending.insert(refresh_key.clone())
+            {
+                return Vec::new();
+            }
+        }
+
+        self.mark_refresh_scheduled();
+        super::cache_ops::spawn_task_refresh(
+            self.runtime.clone(),
+            self.cache.clone(),
+            self.environment.clone(),
+            refresh_key,
+            runtime,
+        );
+        Vec::new()
+    }
+
     pub(super) fn lookup_task_cache(
         &self,
         cache_key: &TaskCacheKey,
@@ -230,13 +240,7 @@ impl DynamicCompletionProvider {
     }
 
     fn task_discovery_runtime(&self) -> task::TaskDiscoveryRuntime {
-        // One read-lock section for both halves; released before any
-        // filesystem scan or provider subprocess runs.
-        let env = self.environment.read();
-        task::TaskDiscoveryRuntime::new(
-            env.variable_state.paths.iter().map(PathBuf::from).collect(),
-            env.child_process_env(),
-        )
+        task_discovery_runtime_for_environment(&self.environment)
     }
 
     pub(super) fn load_compose_services(
@@ -421,5 +425,34 @@ impl DynamicCompletionProvider {
 
     pub(super) fn resolve_command_path(&self, command_name: &str) -> Option<String> {
         self.environment.read().lookup(command_name)
+    }
+}
+
+pub(super) fn task_discovery_runtime_for_environment(
+    environment: &Arc<RwLock<Environment>>,
+) -> task::TaskDiscoveryRuntime {
+    // One read-lock section for both halves; released before any filesystem
+    // scan or provider subprocess runs.
+    let env = environment.read();
+    task::TaskDiscoveryRuntime::new(
+        env.variable_state.paths.iter().map(PathBuf::from).collect(),
+        env.child_process_env(),
+    )
+}
+
+pub(super) fn prune_task_errors(cache: &mut ProjectDynamicCache) {
+    cache
+        .task_errors
+        .retain(|_, error| error.recorded_at.elapsed() < TASK_DISCOVERY_ERROR_BACKOFF);
+    while cache.task_errors.len() > TASK_DISCOVERY_ERROR_CACHE_LIMIT {
+        let oldest = cache
+            .task_errors
+            .iter()
+            .min_by_key(|(_, error)| error.recorded_at)
+            .map(|(key, _)| key.clone());
+        let Some(oldest) = oldest else {
+            break;
+        };
+        cache.task_errors.remove(&oldest);
     }
 }

@@ -85,3 +85,6 @@ fn handle_config_error(error: &ServeError, ctx: &Context) -> ExitStatus {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod router_tests;

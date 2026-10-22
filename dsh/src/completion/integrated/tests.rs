@@ -1,5 +1,7 @@
 use super::*;
 use std::fs;
+use std::io::{Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
 
@@ -113,6 +115,17 @@ fn write_executable_script(path: &Path, content: &str) {
     let mut permissions = fs::metadata(path).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+fn open_fifo(path: &Path) -> std::fs::File {
+    let path_c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let result = unsafe { libc::mkfifo(path_c.as_ptr(), 0o600) };
+    assert_eq!(result, 0, "failed to create FIFO at {}", path.display());
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap()
 }
 
 fn engine_with_path(bin_dir: &Path) -> IntegratedCompletionEngine {
@@ -2993,7 +3006,8 @@ async fn nx_run_completion_reads_workspace_and_descendant_projects() {
         "expected Nx task detection to include web:build: {tasks:?}"
     );
 
-    let environment = Environment::new();
+    let environment = Environment::new_synthetic();
+    environment.write().variable_state.paths.clear();
     let mut engine = IntegratedCompletionEngine::new(environment);
     engine.initialize_command_completion().unwrap();
 
@@ -3002,7 +3016,18 @@ async fn nx_run_completion_reads_workspace_and_descendant_projects() {
         ("nx run legacy:s", "legacy:serve"),
         ("nx run api:l", "api:lint"),
     ] {
-        let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == expected),
+            "static Nx candidate missing on first completion: {:?}",
+            result.candidates
+        );
+        assert!(!engine.dynamic.has_pending_refresh());
         assert!(
             !result
                 .candidates
@@ -3012,6 +3037,185 @@ async fn nx_run_completion_reads_workspace_and_descendant_projects() {
             result.candidates
         );
     }
+}
+
+#[test]
+fn nx_project_task_cache_bypass_resolves_aliases_and_wrappers() {
+    let environment = Environment::new_synthetic();
+    environment
+        .write()
+        .variable_state
+        .alias
+        .insert("nxalias".into(), "nx".into());
+    let mut engine = IntegratedCompletionEngine::new(environment);
+    engine.initialize_command_completion().unwrap();
+    for input in ["nx run app:b", "nxalias run app:b", "sudo nx run app:b"] {
+        let parsed = engine.convert_to_parsed_command_line(input, input.len());
+        assert!(is_nx_project_task_completion(&engine, &parsed), "{input}");
+    }
+    let input = "npm run bu";
+    let parsed = engine.convert_to_parsed_command_line(input, input.len());
+    assert!(!is_nx_project_task_completion(&engine, &parsed));
+}
+
+#[test]
+fn nx_cli_first_completion_returns_before_provider_release_and_reuses_result() {
+    let dir = tempfile::Builder::new()
+        .prefix("dogesh-nx-completion-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    fs::write(dir.path().join("nx.json"), "{}\n").unwrap();
+    let bin_dir = dir.path().join("node_modules/.bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let ready_fifo = dir.path().join("ready.fifo");
+    let release_fifo = dir.path().join("release.fifo");
+    let ready_pipe = open_fifo(&ready_fifo);
+    let mut release_pipe = open_fifo(&release_fifo);
+    let gate = dir.path().join("first-invocation");
+    let invocations = dir.path().join("invocations");
+    write_executable_script(
+        &bin_dir.join("nx"),
+        &format!(
+            "#!/bin/sh\nif (set -C; : > '{}') 2>/dev/null; then\n  printf 'x' > '{}'\n  IFS= read -r _ < '{}'\nfi\nprintf 'x\\n' >> '{}'\nif [ \"$1\" = show ] && [ \"$2\" = projects ]; then\n  printf '[\"api\"]'\nelse\n  printf '{{\"targets\":{{\"build\":{{}}}}}}'\nfi\n",
+            gate.display(),
+            ready_fifo.display(),
+            release_fifo.display(),
+            invocations.display(),
+        ),
+    );
+
+    let environment = Environment::new_synthetic();
+    {
+        let mut env = environment.write();
+        env.variable_state.paths.clear();
+        env.clear_command_cache();
+    }
+    let mut engine = IntegratedCompletionEngine::new(environment);
+    engine.initialize_command_completion().unwrap();
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.set_notifier(notify_tx);
+    let engine = Arc::new(engine);
+    assert!(
+        engine
+            .ghost_completion("nx run api:b", 12, dir.path(), None)
+            .is_none()
+    );
+    assert_eq!(engine.dynamic.refresh_generation(), 0);
+    assert!(!invocations.exists());
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let mut ready_reader = ready_pipe.try_clone().unwrap();
+    let ready_thread = std::thread::spawn(move || {
+        let mut byte = [0];
+        ready_reader.read_exact(&mut byte).unwrap();
+        ready_tx.send(()).unwrap();
+    });
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let request_engine = Arc::clone(&engine);
+    let current_dir = dir.path().to_path_buf();
+    let input = "nx run api:b".to_string();
+    let request_thread = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result =
+            runtime.block_on(request_engine.complete(&input, input.len(), &current_dir, 50, None));
+        result_tx.send(result).unwrap();
+    });
+
+    let loader_started = ready_rx.recv_timeout(Duration::from_secs(5)).is_ok();
+    let first_before_release = if loader_started {
+        result_rx.recv_timeout(Duration::from_millis(500)).ok()
+    } else {
+        result_rx.try_recv().ok()
+    };
+    let request_returned_before_release = first_before_release.is_some();
+    let pending_before_release = engine.dynamic.has_pending_refresh();
+    let generation = engine.dynamic.refresh_generation();
+    let pending_ghost = engine.ghost_completion("nx run api:b", 12, dir.path(), None);
+    let generation_after_ghost = engine.dynamic.refresh_generation();
+    let invocation_before_release = invocations.exists();
+    release_pipe.write_all(b"go\n").unwrap();
+    release_pipe.flush().unwrap();
+    let first = first_before_release.unwrap_or_else(|| {
+        result_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("completion request did not finish after provider release")
+    });
+    request_thread.join().unwrap();
+    if !loader_started {
+        ready_pipe.try_clone().unwrap().write_all(b"x").unwrap();
+    }
+    ready_thread.join().unwrap();
+
+    assert!(pending_ghost.is_none());
+    assert_eq!(generation_after_ghost, generation);
+    assert!(!invocation_before_release);
+    assert!(
+        loader_started,
+        "the controlled Nx loader did not reach its gate"
+    );
+    assert!(
+        request_returned_before_release,
+        "the first completion waited for the controlled Nx loader release"
+    );
+    assert!(
+        pending_before_release,
+        "the CLI-backed Nx request must remain pending while its loader is held"
+    );
+    assert!(
+        first
+            .candidates
+            .iter()
+            .all(|candidate| candidate.text != "api:build"),
+        "cold completion must not fabricate a result before the provider is released"
+    );
+
+    let waiter = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    waiter.block_on(async {
+        tokio::time::timeout(Duration::from_secs(5), notify_rx.recv())
+            .await
+            .expect("Nx cache settlement did not notify the completion engine")
+            .expect("completion notifier closed unexpectedly");
+    });
+
+    let settled = waiter.block_on(engine.complete("nx run api:b", 12, dir.path(), 50, None));
+    let candidate = settled
+        .candidates
+        .iter()
+        .find(|candidate| candidate.text == "api:build")
+        .expect("settled Nx results should include the project:target candidate");
+    assert_eq!(
+        candidate.description.as_deref(),
+        Some("nx: nx run api:build")
+    );
+    assert_eq!(candidate.priority, 125);
+    assert!(
+        settled
+            .candidates
+            .iter()
+            .all(|candidate| candidate.text != "build"),
+        "nx run must not offer a bare target"
+    );
+    assert_eq!(fs::read_to_string(&invocations).unwrap().lines().count(), 2);
+
+    let warm = waiter.block_on(engine.complete("nx run api:", 11, dir.path(), 50, None));
+    assert!(
+        warm.candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:build")
+    );
+    assert_eq!(fs::read_to_string(&invocations).unwrap().lines().count(), 2);
+    assert!(top_level_cache_lookup(&engine, "nx run api:").is_none());
+    assert!(
+        notify_rx.try_recv().is_err(),
+        "one settlement should emit one notification"
+    );
 }
 
 #[tokio::test]

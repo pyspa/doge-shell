@@ -598,6 +598,49 @@ fn task_signature_ignores_descendants_outside_nx_projects() {
 }
 
 #[test]
+fn nx_cli_signature_separates_provider_epoch_from_discovery_identity() {
+    let dir = tempdir().unwrap();
+    fs::write(dir.path().join("nx.json"), "{}\n").unwrap();
+    let local_bin = dir.path().join("node_modules/.bin");
+    fs::create_dir_all(&local_bin).unwrap();
+    write_executable_script(&local_bin.join("nx"), "#!/bin/sh\nexit 0\n");
+    let runtime = TaskDiscoveryRuntime::new(Vec::new(), HashMap::new());
+    let epoch_20 = super::runtime::discovery_signature_at(
+        dir.path(),
+        Some(&["nx"]),
+        &runtime,
+        std::time::UNIX_EPOCH + Duration::from_secs(100),
+    );
+    let epoch_21 = super::runtime::discovery_signature_at(
+        dir.path(),
+        Some(&["nx"]),
+        &runtime,
+        std::time::UNIX_EPOCH + Duration::from_secs(105),
+    );
+
+    assert!(epoch_20.is_nx_cli_backed());
+    assert_ne!(epoch_20, epoch_21, "full cache freshness includes Nx epoch");
+    assert!(epoch_20.has_same_inputs_as(&epoch_21));
+
+    let changed_runtime = TaskDiscoveryRuntime::new(
+        Vec::new(),
+        HashMap::from([("DOGESH_TASK_TEST".to_string(), "changed".to_string())]),
+    );
+    let changed_inputs = super::runtime::discovery_signature_at(
+        dir.path(),
+        Some(&["nx"]),
+        &changed_runtime,
+        std::time::UNIX_EPOCH + Duration::from_secs(105),
+    );
+    assert!(!epoch_20.has_same_inputs_as(&changed_inputs));
+
+    fs::remove_file(local_bin.join("nx")).unwrap();
+    let static_runtime = TaskDiscoveryRuntime::new(Vec::new(), HashMap::new());
+    let static_signature = discovery_signature(dir.path(), Some(&["nx"]), &static_runtime);
+    assert!(!static_signature.is_nx_cli_backed());
+}
+
+#[test]
 fn task_cache_invalidates_when_descendant_nx_marker_changes() {
     let dir = tempdir().unwrap();
     let runtime = empty_runtime();

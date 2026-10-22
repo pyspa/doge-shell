@@ -130,6 +130,19 @@ pub struct TaskDiscoverySignature {
 }
 
 impl TaskDiscoverySignature {
+    /// Whether this discovery uses a resolved Nx CLI and therefore expires
+    /// on the shared provider epoch.
+    pub fn is_nx_cli_backed(&self) -> bool {
+        self.nx_epoch.is_some()
+    }
+
+    /// Compare the logical discovery inputs while ignoring only the provider
+    /// epoch. A request still in flight for the same inputs remains reusable
+    /// across an epoch boundary.
+    pub fn has_same_inputs_as(&self, other: &Self) -> bool {
+        self.inputs_hash == other.inputs_hash
+    }
+
     /// Stamp a completed discovery with the current shared provider epoch.
     /// Input metadata remains the pre-discovery snapshot, so concurrent edits
     /// still invalidate the result on the next lookup.

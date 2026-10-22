@@ -74,6 +74,22 @@ pub(super) fn completion_cache_allowed(parsed_command_line: &ParsedCommandLine) 
     )
 }
 
+pub(super) fn is_nx_project_task_completion(
+    engine: &IntegratedCompletionEngine,
+    parsed_command_line: &ParsedCommandLine,
+) -> bool {
+    let target = engine.dynamic_provider_target(parsed_command_line);
+    let Some(ArgumentType::Dynamic { provider, scope }) =
+        engine.argument_type_for_completion_context(&target)
+    else {
+        return false;
+    };
+    provider == "project.task"
+        && engine
+            .dynamic
+            .uses_nx_project_task_source(scope.as_deref(), &target)
+}
+
 pub(super) fn dynamic_candidates_are_exclusive(parsed_command_line: &ParsedCommandLine) -> bool {
     if parsed_command_line.command != "git" {
         return false;

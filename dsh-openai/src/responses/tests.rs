@@ -610,6 +610,8 @@ async fn api_key_rejected_field_is_dropped_once_and_json_replies_are_accepted() 
         "recovery-model".into(),
         Duration::from_secs(3),
         Some("low".into()),
+        true, // Explicit HTTP opt-in for the loopback fixture.
+        &|builder| builder,
     )
     .unwrap();
     for expected in ["plain json", "again"] {
@@ -658,6 +660,8 @@ async fn api_key_transport_uses_the_key_and_reports_the_endpoint_error() {
         "gpt-4.1".into(),
         Duration::from_secs(3),
         None,
+        true, // Explicit HTTP opt-in for the loopback fixture.
+        &|builder| builder,
     )
     .unwrap();
     let mut visible = String::new();

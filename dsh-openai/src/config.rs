@@ -128,6 +128,7 @@ pub struct OpenAiConfig {
     configuration_error: Option<String>,
     api_key: Option<String>,
     base_url: String,
+    allow_insecure_http: bool,
     default_model: String,
     timeout: Duration,
     reasoning_effort: Option<String>,
@@ -154,7 +155,13 @@ impl OpenAiConfig {
         default_model: Option<String>,
         allow_http: Option<String>,
     ) -> Self {
-        let base_url = sanitize_base_url(base_url, allow_http);
+        let allow_insecure_http = allow_http.is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        });
+        let base_url = sanitize_base_url(base_url, allow_insecure_http);
         let default_model = default_model
             .filter(|model| !model.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
@@ -168,6 +175,7 @@ impl OpenAiConfig {
             // `AI_CHAT_API_KEY=""` counted as configured.
             api_key: api_key.filter(|key| !key.trim().is_empty()),
             base_url,
+            allow_insecure_http,
             default_model,
             timeout: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
             // Like `default_model` and `timeout` above: `new`/`new_with_http_policy`
@@ -362,6 +370,12 @@ impl OpenAiConfig {
         self
     }
 
+    /// Whether the resolved configuration explicitly allows plaintext HTTP,
+    /// including redirects from HTTPS. Transports must not reread process env.
+    pub fn allow_insecure_http(&self) -> bool {
+        self.allow_insecure_http
+    }
+
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -381,16 +395,7 @@ impl OpenAiConfig {
     }
 }
 
-fn sanitize_base_url(base_url: Option<String>, allow_http: Option<String>) -> String {
-    let allow_insecure_http = allow_http
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false);
-
+fn sanitize_base_url(base_url: Option<String>, allow_insecure_http: bool) -> String {
     let sanitized = base_url
         .and_then(|value| {
             let trimmed = value.trim();
@@ -457,6 +462,30 @@ mod tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn resolved_http_policy_preserves_parsing_clone_and_equality() {
+        let config = |policy: Option<&str>| {
+            OpenAiConfig::from_getter(|key| {
+                (key == ALLOW_INSECURE_HTTP_ENV)
+                    .then(|| policy.map(str::to_string))
+                    .flatten()
+            })
+        };
+        let secure = config(None);
+        assert!(!secure.allow_insecure_http());
+        for value in ["1", "true", "yes", "on", "  TrUe  "] {
+            let allowed = config(Some(value));
+            assert!(allowed.allow_insecure_http(), "{value}");
+            assert!(allowed.clone() == allowed);
+            assert!(allowed != secure); // Same HTTPS URL, different transport policy.
+        }
+        for value in ["0", "false", "no", "off", "", "invalid"] {
+            assert!(config(Some(value)) == secure, "{value}");
+        }
+        let allowed = OpenAiConfig::new_with_http_policy(None, None, None, Some("YES".into()));
+        assert!(allowed.allow_insecure_http());
+    }
 
     #[test]
     fn a_blank_api_key_is_no_key() {

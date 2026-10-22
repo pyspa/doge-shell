@@ -19,6 +19,9 @@ use dsh_types::Context;
 use crate::process::job_pty;
 use crate::process::job_wait;
 
+mod launch_cleanup;
+#[cfg(test)]
+mod launch_failure_tests;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_property_tests;
@@ -60,6 +63,10 @@ pub struct Job {
     pub pty_output_task: Option<tokio::task::JoinHandle<Result<String>>>,
     pub pty_input_task: Option<tokio::task::JoinHandle<()>>,
     pub disable_pty: bool,
+    #[cfg(test)]
+    fail_parent_group_setup: Option<usize>,
+    #[cfg(test)]
+    defer_abort_reap: bool,
     /// Lisp expressions to evaluate after command output (from |: operator)
     pub struct_pipe_exprs: Vec<String>,
     /// When the job was created, used to decide whether a finished background
@@ -117,6 +124,10 @@ impl Job {
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
+            #[cfg(test)]
+            fail_parent_group_setup: None,
+            #[cfg(test)]
+            defer_abort_reap: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
             resources: crate::shell::process_substitution::ExecutionResources::new(),
@@ -150,6 +161,10 @@ impl Job {
             pty_output_task: None,
             pty_input_task: None,
             disable_pty: false,
+            #[cfg(test)]
+            fail_parent_group_setup: None,
+            #[cfg(test)]
+            defer_abort_reap: false,
             struct_pipe_exprs: Vec::new(),
             started_at: std::time::Instant::now(),
             resources: crate::shell::process_substitution::ExecutionResources::new(),
@@ -250,6 +265,12 @@ impl Job {
 
         let caller_ctx = JobLaunchContext::capture(ctx);
         let result = self.launch_inner(ctx, shell).await;
+        // Roll back every fatal launch error at one boundary, including
+        // execution management and final settlement, before ownership leaves
+        // this call. A setup error has not admitted any child yet.
+        if result.is_err() && self.pid.is_some() && !self.is_process_tree_completed() {
+            self.abort_spawned_stages().await;
+        }
 
         // Every stage is spawned by now, so each outer command holds its own
         // copies: finalize completed foreground jobs direction-aware. Close parent
@@ -268,12 +289,17 @@ impl Job {
         // A stopped/running consumer still needs its helper and endpoints.
         // Preserve them on the job until a later foreground completion.
         // Failed launches keep the existing immediate cleanup policy.
-        let retains_live_resources = matches!(
-            &result,
-            Ok(JobLaunchOutcome::Process(
-                ProcessState::Running | ProcessState::Stopped(..)
-            ))
-        );
+        let failed_launch =
+            result.is_err() || matches!(&result, Ok(JobLaunchOutcome::CommandFailed(_)));
+        let retain_failed_owner =
+            failed_launch && self.pid.is_some() && !self.is_process_tree_completed();
+        let retains_live_resources = retain_failed_owner
+            || matches!(
+                &result,
+                Ok(JobLaunchOutcome::Process(
+                    ProcessState::Running | ProcessState::Stopped(..)
+                ))
+            );
         if self.foreground && !retains_live_resources {
             self.finish_foreground_resources();
         }
@@ -288,6 +314,9 @@ impl Job {
         // stays on the job itself.
         caller_ctx.restore(ctx);
 
+        if retain_failed_owner {
+            self.handoff_failed_launch(shell);
+        }
         result
     }
 
@@ -419,10 +448,12 @@ impl Job {
                 // stop upstream stages and
                 // report the command failure.
                 Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
-                    self.abort_spawned_stages(ctx, previous_infile).await;
+                    self.close_failed_stage_input(ctx, previous_infile);
+                    self.abort_spawned_stages().await;
                     return Ok(StageLaunchOutcome::CommandFailed(failure));
                 }
                 Err(err) => {
+                    self.close_failed_stage_input(ctx, previous_infile);
                     return Err(err);
                 }
             };
@@ -431,107 +462,10 @@ impl Job {
         }
         self.state = process.get_state();
 
-        if ctx.interactive {
-            if self.pgid.is_none() {
-                self.pgid = Some(pid);
-                // Temporary routing state for nested spawn grouping inside
-                // this launch. `Job::launch` restores `ctx.pgid` to the
-                // caller's entry value on every exit path.
-                ctx.pgid = Some(pid);
-                debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
-            }
-
-            // Full-proxy PTY jobs create a new session in the child, so the
-            // parent must not make them process-group leaders first.
-            //
-            // Background builtins are re-exec helpers, already placed in
-            // their group by `posix_spawn` (`SETPGROUP`): a post-exec
-            // `setpgid` here would fail with `EACCES`, so only external
-            // commands take this path. Foreground builtins run in-process
-            // and need no grouping at all.
-            let needs_parent_setpgid = matches!(process, JobProcess::Command(_))
-                && pty.is_none_or(|pty| pty.mode == PtyMode::OutputOnly);
-            if needs_parent_setpgid {
-                debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
-                debug!(
-                    "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
-                    process.get_cmd(),
-                    pid,
-                    self.pgid
-                );
-
-                let target_pgid = self.pgid.unwrap_or(pid);
-                debug!("🔧 PGID: Target pgid: {}", target_pgid);
-
-                match setpgid(pid, target_pgid) {
-                    Ok(_) => debug!(
-                        "🔧 PGID: Successfully set pgid {} for pid {}",
-                        target_pgid, pid
-                    ),
-                    Err(e) => {
-                        // One `getpgid` probe serves both tolerance checks below.
-                        // `Ok(target)` means the child already joined via its own
-                        // `setpgid(0, pgid)` before exec, so the parent call is
-                        // redundant. `Err` (usually ESRCH) means the child has
-                        // already exited and only the wait path still owns it.
-                        let pgid_probe = getpgid(Some(pid));
-                        let already_in_group =
-                            pgid_probe.as_ref().is_ok_and(|pgid| *pgid == target_pgid);
-                        let tolerated_output_only_race = if self.pty_mode
-                            == Some(PtyMode::OutputOnly)
-                        {
-                            debug!(
-                                "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
-                                pid, target_pgid, already_in_group, e
-                            );
-                            // The exec-error handshake can finish after the child
-                            // has exited. Retain its PID for the existing wait path;
-                            // ESRCH must not replace the real launch-failure status.
-                            already_in_group
-                                || (e == nix::errno::Errno::ESRCH && terminal_launch_failure)
-                        } else {
-                            // Outside output-only mode the parent call is still
-                            // redundant once the child is already in the group.
-                            already_in_group
-                        };
-                        // Fast-exiting pipeline stages (e.g. the `true` tail in
-                        // `denied | true`) can exit before the parent runs
-                        // `setpgid`. macOS returns ESRCH for such a zombie,
-                        // while Linux still succeeds. The child already
-                        // attempted its own `setpgid` before exec, so the
-                        // parent failure is benign in any PTY mode: the
-                        // existing wait path reaps the real exit status.
-                        let tolerated_fast_exit_race = e == nix::errno::Errno::ESRCH
-                            && (already_in_group || pgid_probe.is_err());
-                        if !(tolerated_output_only_race || tolerated_fast_exit_race) {
-                            error!(
-                                "🔧 PGID: Failed to set pgid {} for pid {}: {}",
-                                target_pgid, pid, e
-                            );
-                            return Err(e.into());
-                        }
-                        debug!(
-                            "🔧 PGID: Tolerated setpgid race for pid {} pgid {}: {} (already_in_group={}, child_gone={})",
-                            pid,
-                            target_pgid,
-                            e,
-                            already_in_group,
-                            pgid_probe.is_err()
-                        );
-                    }
-                }
-            } else {
-                debug!(
-                    "Skipping parent setpgid for {} (pid {}): full-proxy PTY jobs setsid in the child, re-exec builtins are grouped at spawn",
-                    process.get_cmd(),
-                    pid
-                );
-            }
-        }
-
         // The child exists now: move the pre-spawn capture monitors into
         // job ownership exactly once. No raw-fd reader stays on the process.
         self.monitors.extend(launched_monitors);
+        self.set_process(process.to_owned());
 
         let (stdin, stdout, stderr) = process.get_io();
         let pty_slave = pty.map(|pty| pty.slave);
@@ -581,7 +515,122 @@ impl Job {
         // command in the pipeline from ever seeing EOF.
         drop(applied_redirects);
 
-        self.set_process(process.to_owned());
+        // Parent copies have closed; only the next stage's input remains.
+        // If parent grouping fails, it has no downstream owner.
+        let grouping_result: Result<()> = (|| {
+            #[cfg(test)]
+            if self.fail_parent_group_setup
+                == self.process.as_ref().map(|process| process.stage_count())
+            {
+                anyhow::bail!("injected parent group setup failure");
+            }
+            if ctx.interactive {
+                if self.pgid.is_none() {
+                    self.pgid = Some(pid);
+                    // Temporary routing state for nested spawn grouping inside
+                    // this launch. `Job::launch` restores `ctx.pgid` to the
+                    // caller's entry value on every exit path.
+                    ctx.pgid = Some(pid);
+                    debug!("set job id: {} pgid: {:?}", self.id, self.pgid);
+                }
+
+                // Full-proxy PTY jobs create a new session in the child, so the
+                // parent must not make them process-group leaders first.
+                //
+                // Background builtins are re-exec helpers, already placed in
+                // their group by `posix_spawn` (`SETPGROUP`): a post-exec
+                // `setpgid` here would fail with `EACCES`, so only external
+                // commands take this path. Foreground builtins run in-process
+                // and need no grouping at all.
+                let needs_parent_setpgid = matches!(process, JobProcess::Command(_))
+                    && pty.is_none_or(|pty| pty.mode == PtyMode::OutputOnly);
+                if needs_parent_setpgid {
+                    debug!("🔧 PGID: Setting process group for {}", process.get_cmd());
+                    debug!(
+                        "🔧 PGID: setpgid {} pid:{} pgid:{:?}",
+                        process.get_cmd(),
+                        pid,
+                        self.pgid
+                    );
+
+                    let target_pgid = self.pgid.unwrap_or(pid);
+                    debug!("🔧 PGID: Target pgid: {}", target_pgid);
+
+                    match setpgid(pid, target_pgid) {
+                        Ok(_) => debug!(
+                            "🔧 PGID: Successfully set pgid {} for pid {}",
+                            target_pgid, pid
+                        ),
+                        Err(e) => {
+                            // One `getpgid` probe serves both tolerance checks below.
+                            // `Ok(target)` means the child already joined via its own
+                            // `setpgid(0, pgid)` before exec, so the parent call is
+                            // redundant. `Err` (usually ESRCH) means the child has
+                            // already exited and only the wait path still owns it.
+                            let pgid_probe = getpgid(Some(pid));
+                            let already_in_group =
+                                pgid_probe.as_ref().is_ok_and(|pgid| *pgid == target_pgid);
+                            let tolerated_output_only_race = if self.pty_mode
+                                == Some(PtyMode::OutputOnly)
+                            {
+                                debug!(
+                                    "🔧 PGID: setpgid failed for output-only PTY job (pid {}, pgid {}, already_in_group={}): {}",
+                                    pid, target_pgid, already_in_group, e
+                                );
+                                // The exec-error handshake can finish after the child
+                                // has exited. Retain its PID for the existing wait path;
+                                // ESRCH must not replace the real launch-failure status.
+                                already_in_group
+                                    || (e == nix::errno::Errno::ESRCH && terminal_launch_failure)
+                            } else {
+                                // Outside output-only mode the parent call is still
+                                // redundant once the child is already in the group.
+                                already_in_group
+                            };
+                            // Fast-exiting pipeline stages (e.g. the `true` tail in
+                            // `denied | true`) can exit before the parent runs
+                            // `setpgid`. macOS returns ESRCH for such a zombie,
+                            // while Linux still succeeds. The child already
+                            // attempted its own `setpgid` before exec, so the
+                            // parent failure is benign in any PTY mode: the
+                            // existing wait path reaps the real exit status.
+                            let tolerated_fast_exit_race = e == nix::errno::Errno::ESRCH
+                                && (already_in_group || pgid_probe.is_err());
+                            if !(tolerated_output_only_race || tolerated_fast_exit_race) {
+                                error!(
+                                    "🔧 PGID: Failed to set pgid {} for pid {}: {}",
+                                    target_pgid, pid, e
+                                );
+                                return Err(e.into());
+                            }
+                            debug!(
+                                "🔧 PGID: Tolerated setpgid race for pid {} pgid {}: {} (already_in_group={}, child_gone={})",
+                                pid,
+                                target_pgid,
+                                e,
+                                already_in_group,
+                                pgid_probe.is_err()
+                            );
+                        }
+                    }
+                } else {
+                    debug!(
+                        "Skipping parent setpgid for {} (pid {}): full-proxy PTY jobs setsid in the child, re-exec builtins are grouped at spawn",
+                        process.get_cmd(),
+                        pid
+                    );
+                }
+            }
+
+            Ok(())
+        })();
+        if let Err(err) = grouping_result {
+            if next_process.is_some() {
+                let _ = close(ctx.infile);
+                ctx.infile = self.stdin;
+            }
+            return Err(err);
+        }
         self.show_job_status();
 
         // run next pipeline process
@@ -612,44 +661,6 @@ impl Job {
         }
 
         Ok(StageLaunchOutcome::Launched)
-    }
-
-    /// Stop and reap pipeline stages spawned before a later stage's
-    /// redirection failure, and close the parent's copy of the failed
-    /// stage's pipe-fed stdin.
-    ///
-    /// A first-stage failure is a natural no-op: the tree is still empty and
-    /// `previous_infile` is the caller's stdin. Only the failing stage runs
-    /// this — unwinding frames propagate the outcome untouched — so the pipe
-    /// copy is closed exactly once and spawned children are never left
-    /// behind. Signalling reuses the canonical `signal` path, which never
-    /// targets the shell's own pid.
-    async fn abort_spawned_stages(&mut self, ctx: &mut Context, previous_infile: RawFd) {
-        if self.process.is_some() {
-            let _ = self.signal(Signal::SIGKILL);
-            // Bounded reap: the tree must already be dying, but a stuck
-            // child must never hang the shell.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                self.update_status();
-                if self.is_process_tree_completed() {
-                    break;
-                }
-                if std::time::Instant::now() >= deadline {
-                    debug!("abort_spawned_stages: reap timed out for '{}'", self.cmd);
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-            // The failed stage never spawned, so its stdin pipe has no other
-            // owner left in the parent: close our copy and point `ctx` back
-            // at the job's base stdio (the `launch` wrapper restores the same
-            // values on the way out).
-            if previous_infile != self.stdin {
-                let _ = close(previous_infile);
-                ctx.infile = self.stdin;
-            }
-        }
     }
 
     pub async fn put_in_foreground(&mut self, no_hang: bool, cont: bool) -> Result<()> {

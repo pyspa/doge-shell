@@ -87,7 +87,7 @@ To use the API-key provider:
    | `AI_CHAT_API` | `responses` | Wire API. The OpenAI Responses API is the default; set `chat_completions` (alias `compat`) to use the older Chat Completions-compatible API, e.g. for a local or gateway server that has no `/responses` |
    | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
-   | `AI_CHAT_REASONING_EFFORT` | unset (provider default; on `chat_completions`, `none` on `tools` requests to a `gpt-5`/`o1`/`o3`/`o4` model) | Reasoning effort (`reasoning.effort` on Responses, `reasoning_effort` on Chat Completions) sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
+   | `AI_CHAT_REASONING_EFFORT` | unset (provider default; on `chat_completions`, `none` on `tools` requests to a `gpt-5`/`gpt-6`/`o1`/`o3`/`o4` model) | Reasoning effort (`reasoning.effort` on Responses, `reasoning_effort` on Chat Completions) sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | Idle timeout for the carried conversation; the clock restarts on each turn that finishes (a rewound failed turn does not restart it). `0` disables carrying it forward |
    | `AI_CHAT_CONTEXT_TOKEN_BUDGET` | `100000` | Prompt tokens before the conversation is summarized |
    | `AI_CHAT_TURN_TOKEN_BUDGET` | unset | Stop one `!` turn once it has spent this many tokens |
@@ -130,8 +130,8 @@ To use the API-key provider:
    `Retry-After`. On Chat Completions, an optional request field the endpoint
    rejects outright is dropped once and the request retried.
 
-   On Chat Completions, the entire current OpenAI reasoning lineup (any `gpt-5*` point release -
-   including `gpt-5.6-luna` and its siblings - plus `o1`, `o3`, `o4`) rejects
+   On Chat Completions, the entire current OpenAI reasoning lineup (any `gpt-5*` or `gpt-6*` point release -
+   including `gpt-5.6-luna` and `gpt-6-luna` and their siblings - plus `o1`, `o3`, `o4`) rejects
    `tools` requests unless `reasoning_effort` is `"none"`, so a `tools`
    request to one of those models sends `reasoning_effort: none` from the
    first attempt with no configuration needed - this also covers the shell's

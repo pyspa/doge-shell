@@ -49,7 +49,7 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
   APIキー・custom base URL・API課金へのfallbackは使わない。詳細は [subscription.md](subscription.md)。
   以下のreasoning判定・400フィールドdropは **Chat Completions 経路のみ**の契約で、Responsesに適用しない
   （Responses は tools と reasoning を併用できる）。
-- **`is_openai_reasoning_model`（`OPENAI_REASONING_MODEL_PREFIXES` = `gpt-5` / `o1` / `o3` / `o4`、
+- **`is_openai_reasoning_model`（`OPENAI_REASONING_MODEL_PREFIXES` = `gpt-5` / `gpt-6` / `o1` / `o3` / `o4`、
   大文字小文字を無視、`client.rs`。`pub` で `dsh-openai` から公開）に該当するモデルへの `tools` 付き
   リクエストは、`AI_CHAT_REASONING_EFFORT` 未設定でも `reasoning_effort: "none"` を最初から送る**
   （`ChatGptClient::resolve_reasoning_effort`）。この lineup 全体が chat/completions で

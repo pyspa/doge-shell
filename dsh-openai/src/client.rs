@@ -470,10 +470,11 @@ impl ChatGptClient {
     }
 }
 
-/// Model families in OpenAI's current reasoning lineup (GPT-5.x and the
-/// o-series). Matching on a prefix rather than one exact id is what keeps a
-/// new point release - `gpt-5.1`, `gpt-5.6-luna`, `o3-mini` - from missing a
-/// fixup this whole family needs the moment it becomes the configured model.
+/// Model families in OpenAI's current reasoning lineup (GPT-5.x, GPT-6.x and
+/// the o-series). Matching on a prefix rather than one exact id is what keeps
+/// a new point release - `gpt-5.1`, `gpt-5.6-luna`, `gpt-6-luna`, `o3-mini` -
+/// from missing a fixup this whole family needs the moment it becomes the
+/// configured model.
 ///
 /// Two independent constraints happen to apply to the whole family today:
 /// it samples at a fixed temperature and 400s on any other value
@@ -484,7 +485,12 @@ impl ChatGptClient {
 /// release drops the restriction). Both read [`is_openai_reasoning_model`],
 /// so a future model picking up one constraint without the other needs a
 /// second prefix list, not just a second function.
-const OPENAI_REASONING_MODEL_PREFIXES: &[&str] = &["gpt-5", "o1", "o3", "o4"];
+///
+/// `gpt-6` earned its place the same way: `gpt-6-luna` 400s a `tools`
+/// request that names `reasoning_effort` (observed on chat/completions),
+/// and it ships in the same reasoning lineup whose sampling rules
+/// `build_body` already applies.
+const OPENAI_REASONING_MODEL_PREFIXES: &[&str] = &["gpt-5", "gpt-6", "o1", "o3", "o4"];
 
 /// Whether `model` is a known member of [`OPENAI_REASONING_MODEL_PREFIXES`].
 ///

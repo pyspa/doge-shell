@@ -15,18 +15,17 @@
 //! fenced code block is also held back in full, since a partial fence
 //! parses as nothing like the real thing.
 //!
-//! What this deliberately does *not* try to reproduce is the blank-line
-//! *spacing* between rendered blocks: `TerminalRenderer::ensure_blank_line`
-//! inserts exactly one blank line between any two top-level blocks
-//! regardless of their kind (the only exception is before the very first
-//! block, which gets none), so the caller can always join
-//! `render_markdown(confirmed_block)` outputs with a literal blank line and
-//! match a whole-document render byte for byte. See the `stream_matches_*`
-//! tests in this module, which check exactly that.
+//! What this deliberately does *not* try to reproduce is the block *spacing*:
+//! the normal renderer inserts exactly one blank line between any two
+//! top-level blocks regardless of their kind (the only exception is before
+//! the very first block, which gets none), while the compact chat renderer
+//! uses a single newline. The caller joins `render_markdown(confirmed_block)`
+//! outputs with the same separator its renderer uses; the tests in this
+//! module check both variants byte for byte.
 
 /// Above this many pending characters, a block is flushed even without a
 /// clean boundary, so one very long paragraph cannot hold up the whole
-/// display. This can introduce one extra blank line that a whole-document
+/// display. This can introduce an extra line break that a whole-document
 /// render would not have (the paragraph split in two looks like two
 /// paragraphs) - an accepted tradeoff for bounded memory and latency.
 const MAX_PENDING_BLOCK_CHARS: usize = 4000;
@@ -334,7 +333,7 @@ impl MarkdownBlockSplitter {
 
 #[cfg(test)]
 mod tests {
-    use super::super::render_markdown_with_fallback;
+    use super::super::{render_markdown_with_fallback, render_markdown_with_fallback_compact};
     use super::*;
 
     /// Feed `input` through the splitter one character at a time - the
@@ -367,6 +366,29 @@ mod tests {
             .map(|b| render_markdown_with_fallback(b))
             .collect();
         let reassembled = rendered.join("\n\n");
+
+        assert_eq!(
+            reassembled, whole,
+            "\n--- input ---\n{input}\n--- blocks ---\n{blocks:#?}"
+        );
+    }
+
+    /// The `!` chat renderer uses compact mode: one newline between blocks
+    /// instead of the blank line the normal renderer inserts. Streaming must
+    /// reassemble to exactly the same compact whole-document rendering.
+    fn assert_compact_split_matches_whole(input: &str) {
+        let whole = render_markdown_with_fallback_compact(input);
+
+        let blocks = split_char_by_char(input);
+        assert!(
+            !blocks.is_empty(),
+            "expected at least one block for {input:?}"
+        );
+        let rendered: Vec<String> = blocks
+            .iter()
+            .map(|b| render_markdown_with_fallback_compact(b))
+            .collect();
+        let reassembled = rendered.join("\n");
 
         assert_eq!(
             reassembled, whole,
@@ -547,6 +569,13 @@ mod tests {
     fn headings_and_paragraphs_mixed_round_trip() {
         assert_split_matches_whole(
             "# Title\n\nIntro paragraph.\n\n## Section\n\nMore text here.\n",
+        );
+    }
+
+    #[test]
+    fn compact_streamed_blocks_match_the_whole_document() {
+        assert_compact_split_matches_whole(
+            "First paragraph.\n\n## Heading\n\n- one\n- two\n\n```sh\nfirst\n\nsecond\n```\n\nLast paragraph.\n",
         );
     }
 }

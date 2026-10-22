@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use xdg::BaseDirectories;
 
+use super::environment::filter_unscoped_ai_child_environment;
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 use anyhow::Result;
 use dsh_types::safety_policy::{string_eval_flag, substitution_construct};
@@ -193,6 +194,9 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     {
         // The supervisor owns command groups independently of the AI worker.
         // Always yield immediately: tool polling must never occupy the REPL.
+        // This worker's exported map is already narrowed by its explicit
+        // TaskScope environment_names (`chat_task --env`); preserve that grant
+        // unchanged and keep worker-only provider values unexported.
         let environment = proxy.child_process_environment();
         let directory = cwd.unwrap_or_else(|| context.cwd());
         let builder = capture::shell_command(command, Some(&directory), &environment);
@@ -269,6 +273,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         cwd.as_deref(),
         Duration::from_millis(timeout_ms),
         yield_ms,
+        filter_unscoped_ai_child_environment(proxy.child_process_environment()),
         proxy,
     )
 }

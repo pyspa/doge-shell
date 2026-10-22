@@ -16,7 +16,6 @@ use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 use dsh_builtin::task;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::warn;
 
 /// This family's rows for `local::collect` - see `local` for what belongs
 /// here. Table only; routing is unaffected by which family's table a
@@ -58,7 +57,7 @@ pub(super) fn collect(
                     parsed_command_line,
                     current_dir,
                     config.sources,
-                    cached_only,
+                    request.cache_policy,
                     config.candidate_text,
                 )
             } else {
@@ -98,12 +97,13 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
         sources: &[&str],
+        cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
         self.collect_project_task_candidates_for_sources_with_mode(
             parsed_command_line,
             current_dir,
             sources,
-            false,
+            cache_policy,
             ProjectTaskCandidateText::Name,
         )
     }
@@ -113,7 +113,7 @@ impl DynamicCompletionProvider {
         parsed_command_line: &ParsedCommandLine,
         current_dir: &Path,
         sources: &[&str],
-        cached_only: bool,
+        cache_policy: CachePolicy,
         candidate_text: ProjectTaskCandidateText,
     ) -> Vec<EnhancedCandidate> {
         let current_token = parsed_command_line.current_token.as_str();
@@ -124,17 +124,7 @@ impl DynamicCompletionProvider {
             _ => return Vec::new(),
         }
 
-        let tasks = if cached_only {
-            self.lookup_project_tasks_for_sources(current_dir, sources)
-        } else {
-            match self.load_project_tasks_for_sources(current_dir, sources) {
-                Ok(tasks) => tasks,
-                Err(err) => {
-                    warn!("Failed to load project task completions: {}", err);
-                    return Vec::new();
-                }
-            }
-        };
+        let tasks = self.request_project_tasks(current_dir, Some(sources), cache_policy);
 
         tasks
             .into_iter()
@@ -158,19 +148,8 @@ impl DynamicCompletionProvider {
         current_dir: &Path,
         cache_policy: CachePolicy,
     ) -> Vec<EnhancedCandidate> {
-        let cached_only = cache_policy.is_cached_only();
         let current_token = parsed_command_line.current_token.as_str();
-        let tasks = if cached_only {
-            self.lookup_project_tasks(current_dir)
-        } else {
-            match self.load_project_tasks(current_dir) {
-                Ok(tasks) => tasks,
-                Err(e) => {
-                    warn!("Failed to load task completions: {}", e);
-                    return Vec::new();
-                }
-            }
-        };
+        let tasks = self.request_project_tasks(current_dir, None, cache_policy);
 
         tasks
             .into_iter()

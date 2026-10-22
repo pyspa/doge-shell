@@ -136,6 +136,536 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {
     false
 }
 
+fn slow_nx_fixture() -> (
+    tempfile::TempDir,
+    Arc<RwLock<Environment>>,
+    PathBuf,
+    PathBuf,
+) {
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("project");
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&root).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(root.join("nx.json"), "{}\n").unwrap();
+
+    let start_marker = dir.path().join("nx-started");
+    let release_marker = dir.path().join("nx-release");
+    write_executable_script(
+        &bin.join("nx"),
+        r#"#!/bin/sh
+if [ "$2" = projects ]; then printf '["api"]'; exit 0; fi
+if [ "$2" = project ]; then
+  printf 'project\n' >> "$NX_START_MARKER"
+  while [ ! -f "$NX_RELEASE_MARKER" ]; do /bin/sleep 0.01; done
+  printf '{"targets":{"build":{}}}'
+  exit 0
+fi
+exit 1
+"#,
+    );
+
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.variables.clear();
+        env.variable_state.exported_vars.clear();
+        env.variable_state.paths = vec![bin.display().to_string()];
+        for (name, value) in [
+            ("NX_START_MARKER", start_marker.display().to_string()),
+            ("NX_RELEASE_MARKER", release_marker.display().to_string()),
+        ] {
+            env.variable_state.variables.insert(name.to_string(), value);
+            env.variable_state.exported_vars.insert(name.to_string());
+        }
+        env.clear_command_cache();
+    }
+
+    (dir, environment, root, release_marker)
+}
+
+#[tokio::test]
+async fn project_task_completion_does_not_wait_for_a_cold_nx_discovery() {
+    let (_dir, environment, project_root, release_marker) = slow_nx_fixture();
+    let provider = Arc::new(DynamicCompletionProvider::new(environment));
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    provider.runtime.set_notifier(notify_tx);
+    let parsed_line = parsed("nx run api:bu");
+    assert!(
+        provider
+            .collect_project_task_candidates_for_sources_with_mode(
+                &parsed_line,
+                &project_root,
+                NX_PROJECT_TASK_SOURCES,
+                CachePolicy::CachedOnly,
+                ProjectTaskCandidateText::Name,
+            )
+            .is_empty()
+    );
+    assert!(provider.cache.read().task_pending.is_empty());
+    let completion_root = project_root.clone();
+    let worker_provider = Arc::clone(&provider);
+    let mut completion = tokio::task::spawn_blocking(move || {
+        worker_provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed_line,
+            &completion_root,
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        )
+    });
+
+    let completed_before_release =
+        tokio::time::timeout(Duration::from_millis(200), &mut completion)
+            .await
+            .ok()
+            .map(|result| result.expect("completion worker should join"));
+    let returned_before_release = completed_before_release.is_some();
+    for _ in 0..2 {
+        assert!(
+            provider
+                .collect_project_task_candidates_for_sources_with_mode(
+                    &parsed("nx run api:bu"),
+                    &project_root,
+                    NX_PROJECT_TASK_SOURCES,
+                    CachePolicy::RefreshInBackground,
+                    ProjectTaskCandidateText::Name,
+                )
+                .is_empty()
+        );
+    }
+    let discovery_started = wait_until(Duration::from_secs(2), || {
+        project_root.parent().unwrap().join("nx-started").exists()
+    });
+    fs::write(&release_marker, "release\n").unwrap();
+    let initial_candidates = match completed_before_release {
+        Some(candidates) => candidates,
+        None => completion
+            .await
+            .expect("completion worker should join after release"),
+    };
+
+    assert!(discovery_started, "the fake Nx CLI should reach its gate");
+    assert!(
+        returned_before_release,
+        "cold project task completion must return before the Nx CLI is released"
+    );
+    assert!(
+        initial_candidates.is_empty(),
+        "a cold background refresh may return no candidates immediately"
+    );
+    tokio::time::timeout(Duration::from_secs(3), notify_rx.recv())
+        .await
+        .expect("the completed discovery should notify the REPL")
+        .expect("completion notifier should remain connected");
+
+    let cached = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("nx run api:bu"),
+        &project_root,
+        NX_PROJECT_TASK_SOURCES,
+        CachePolicy::RefreshInBackground,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        cached.iter().any(|candidate| candidate.text == "api:build"),
+        "the background result should be available to the next completion"
+    );
+    assert_eq!(
+        fs::read_to_string(project_root.parent().unwrap().join("nx-started"))
+            .unwrap()
+            .lines()
+            .count(),
+        1,
+        "requests for one cold key should share one refresh"
+    );
+    assert!(
+        notify_rx.try_recv().is_err(),
+        "a warm hit should not notify"
+    );
+}
+
+#[test]
+fn failed_task_refresh_retries_after_the_discovery_signature_changes() {
+    let dir = tempdir().unwrap();
+    let project_root = dir.path().join("project");
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(project_root.join("nx.json"), "{}\n").unwrap();
+    fs::write(project_root.join("workspace.json"), "not-json\n").unwrap();
+    let fail_marker = dir.path().join("fail-first-discovery");
+    let call_log = dir.path().join("nx-calls");
+    fs::write(&fail_marker, "fail\n").unwrap();
+    write_executable_script(
+        &bin.join("nx"),
+        r#"#!/bin/sh
+if [ "$2" = projects ]; then
+  printf 'projects\n' >> "$NX_CALL_LOG"
+  if [ -f "$NX_FAIL_MARKER" ]; then printf 'invalid-json'; else printf '["api"]'; fi
+  exit 0
+fi
+if [ "$2" = project ]; then printf '{"targets":{"build":{}}}'; exit 0; fi
+exit 1
+"#,
+    );
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.variables.clear();
+        env.variable_state.exported_vars.clear();
+        env.variable_state.paths = vec![bin.display().to_string()];
+        for (name, value) in [
+            ("NX_FAIL_MARKER", fail_marker.display().to_string()),
+            ("NX_CALL_LOG", call_log.display().to_string()),
+        ] {
+            env.variable_state.variables.insert(name.to_string(), value);
+            env.variable_state.exported_vars.insert(name.to_string());
+        }
+        env.clear_command_cache();
+    }
+
+    let provider = DynamicCompletionProvider::new(environment);
+    assert!(
+        provider
+            .collect_project_task_candidates_for_sources_with_mode(
+                &parsed("nx run api:"),
+                &project_root,
+                NX_PROJECT_TASK_SOURCES,
+                CachePolicy::RefreshInBackground,
+                ProjectTaskCandidateText::Name,
+            )
+            .is_empty()
+    );
+    assert!(wait_until(Duration::from_secs(3), || {
+        provider.cache.read().task_pending.is_empty()
+            && !provider.cache.read().task_errors.is_empty()
+    }));
+    assert!(provider.cache.read().tasks.is_empty());
+
+    fs::remove_file(&fail_marker).unwrap();
+    fs::write(project_root.join("workspace.json"), "{\"projects\":{}}\n").unwrap();
+    let mut candidates = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:bu"),
+            &project_root,
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:build")
+    }));
+    assert_eq!(
+        fs::read_to_string(call_log).unwrap().lines().count(),
+        1,
+        "a changed signature should allow a new attempt after a failed refresh"
+    );
+}
+
+#[test]
+fn stale_task_refresh_is_discarded_after_logical_path_changes() {
+    let dir = tempdir().unwrap();
+    let project_root = dir.path().join("project");
+    let bin_a = dir.path().join("bin-a");
+    let bin_b = dir.path().join("bin-b");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::create_dir_all(&bin_a).unwrap();
+    fs::create_dir_all(&bin_b).unwrap();
+    fs::write(project_root.join("nx.json"), "{}\n").unwrap();
+    let start_marker = dir.path().join("old-path-started");
+    let release_marker = dir.path().join("old-path-release");
+    write_executable_script(
+        &bin_a.join("nx"),
+        r#"#!/bin/sh
+if [ "$2" = projects ]; then printf '["api"]'; exit 0; fi
+if [ "$2" = project ]; then
+  printf 'started\n' >> "$NX_START_MARKER"
+  while [ ! -f "$NX_RELEASE_MARKER" ]; do /bin/sleep 0.01; done
+  printf '{"targets":{"from_a":{}}}'
+  exit 0
+fi
+exit 1
+"#,
+    );
+    write_executable_script(
+        &bin_b.join("nx"),
+        "#!/bin/sh\nif [ \"$2\" = projects ]; then printf '[\"api\"]'; exit 0; fi\nif [ \"$2\" = project ]; then printf '{\"targets\":{\"from_b\":{}}}'; exit 0; fi\nexit 1\n",
+    );
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.variables.clear();
+        env.variable_state.exported_vars.clear();
+        env.variable_state.paths = vec![bin_a.display().to_string()];
+        for (name, value) in [
+            ("NX_START_MARKER", start_marker.display().to_string()),
+            ("NX_RELEASE_MARKER", release_marker.display().to_string()),
+        ] {
+            env.variable_state.variables.insert(name.to_string(), value);
+            env.variable_state.exported_vars.insert(name.to_string());
+        }
+        env.clear_command_cache();
+    }
+
+    let provider = DynamicCompletionProvider::new(environment.clone());
+    assert!(
+        provider
+            .collect_project_task_candidates_for_sources_with_mode(
+                &parsed("nx run api:"),
+                &project_root,
+                NX_PROJECT_TASK_SOURCES,
+                CachePolicy::RefreshInBackground,
+                ProjectTaskCandidateText::Name,
+            )
+            .is_empty()
+    );
+    assert!(wait_until(Duration::from_secs(3), || start_marker.exists()));
+
+    {
+        let mut env = environment.write();
+        env.variable_state.paths = vec![bin_b.display().to_string()];
+        env.clear_command_cache();
+    }
+    let mut current_candidates = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        current_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:"),
+            &project_root,
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        current_candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:from_b")
+    }));
+    fs::write(&release_marker, "release\n").unwrap();
+    assert!(wait_until(Duration::from_secs(3), || {
+        provider.cache.read().task_pending.is_empty()
+    }));
+
+    let after_old_worker = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("nx run api:"),
+        &project_root,
+        NX_PROJECT_TASK_SOURCES,
+        CachePolicy::RefreshInBackground,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        after_old_worker
+            .iter()
+            .any(|candidate| candidate.text == "api:from_b")
+    );
+    assert!(
+        !after_old_worker
+            .iter()
+            .any(|candidate| candidate.text == "api:from_a")
+    );
+}
+
+#[test]
+fn stale_task_refresh_is_discarded_after_exported_environment_changes() {
+    let dir = tempdir().unwrap();
+    let project_root = dir.path().join("project");
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    fs::write(project_root.join("nx.json"), "{}\n").unwrap();
+    let start_marker = dir.path().join("old-env-started");
+    let release_marker = dir.path().join("old-env-release");
+    write_executable_script(
+        &bin.join("nx"),
+        r#"#!/bin/sh
+if [ "$2" = projects ]; then printf '["api"]'; exit 0; fi
+if [ "$2" = project ]; then
+  if [ "$NX_TASK_VARIANT" = old ]; then
+    printf 'started\n' >> "$NX_START_MARKER"
+    while [ ! -f "$NX_RELEASE_MARKER" ]; do /bin/sleep 0.01; done
+  fi
+  printf '{"targets":{"%s":{}}}' "$NX_TASK_VARIANT"
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.variables.clear();
+        env.variable_state.exported_vars.clear();
+        env.variable_state.paths = vec![bin.display().to_string()];
+        for (name, value) in [
+            ("NX_TASK_VARIANT", "old".to_string()),
+            ("NX_START_MARKER", start_marker.display().to_string()),
+            ("NX_RELEASE_MARKER", release_marker.display().to_string()),
+        ] {
+            env.variable_state.variables.insert(name.to_string(), value);
+            env.variable_state.exported_vars.insert(name.to_string());
+        }
+        env.clear_command_cache();
+    }
+
+    let provider = DynamicCompletionProvider::new(environment.clone());
+    assert!(
+        provider
+            .collect_project_task_candidates_for_sources_with_mode(
+                &parsed("nx run api:"),
+                &project_root,
+                NX_PROJECT_TASK_SOURCES,
+                CachePolicy::RefreshInBackground,
+                ProjectTaskCandidateText::Name,
+            )
+            .is_empty()
+    );
+    assert!(wait_until(Duration::from_secs(3), || start_marker.exists()));
+
+    {
+        let mut env = environment.write();
+        env.variable_state
+            .variables
+            .insert("NX_TASK_VARIANT".to_string(), "new".to_string());
+        env.clear_command_cache();
+    }
+    let mut current_candidates = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        current_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:"),
+            &project_root,
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        current_candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:new")
+    }));
+    fs::write(&release_marker, "release\n").unwrap();
+    assert!(wait_until(Duration::from_secs(3), || {
+        provider.cache.read().task_pending.is_empty()
+    }));
+
+    let after_old_worker = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("nx run api:"),
+        &project_root,
+        NX_PROJECT_TASK_SOURCES,
+        CachePolicy::RefreshInBackground,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        after_old_worker
+            .iter()
+            .any(|candidate| candidate.text == "api:new")
+    );
+    assert!(
+        !after_old_worker
+            .iter()
+            .any(|candidate| candidate.text == "api:old")
+    );
+}
+
+#[test]
+fn task_cache_isolated_by_project_root_during_out_of_order_refreshes() {
+    let dir = tempdir().unwrap();
+    let root_a = dir.path().join("project-a");
+    let root_b = dir.path().join("project-b");
+    let bin = dir.path().join("bin");
+    fs::create_dir_all(&root_a).unwrap();
+    fs::create_dir_all(&root_b).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    for root in [&root_a, &root_b] {
+        fs::write(root.join("nx.json"), "{}\n").unwrap();
+    }
+    let start_marker = dir.path().join("root-a-started");
+    let release_marker = dir.path().join("root-a-release");
+    write_executable_script(
+        &bin.join("nx"),
+        r#"#!/bin/sh
+if [ "$2" = projects ]; then printf '["api"]'; exit 0; fi
+if [ "$2" = project ]; then
+  case "$PWD" in
+    */project-a)
+      printf 'started\n' >> "$NX_START_MARKER"
+      while [ ! -f "$NX_RELEASE_MARKER" ]; do /bin/sleep 0.01; done
+      printf '{"targets":{"from_a":{}}}'
+      ;;
+    *) printf '{"targets":{"from_b":{}}}' ;;
+  esac
+  exit 0
+fi
+exit 1
+"#,
+    );
+    let environment = Environment::new();
+    {
+        let mut env = environment.write();
+        env.variable_state.variables.clear();
+        env.variable_state.exported_vars.clear();
+        env.variable_state.paths = vec![bin.display().to_string()];
+        for (name, value) in [
+            ("NX_START_MARKER", start_marker.display().to_string()),
+            ("NX_RELEASE_MARKER", release_marker.display().to_string()),
+        ] {
+            env.variable_state.variables.insert(name.to_string(), value);
+            env.variable_state.exported_vars.insert(name.to_string());
+        }
+        env.clear_command_cache();
+    }
+
+    let provider = DynamicCompletionProvider::new(environment);
+    for root in [&root_a, &root_b] {
+        assert!(
+            provider
+                .collect_project_task_candidates_for_sources_with_mode(
+                    &parsed("nx run api:"),
+                    root,
+                    NX_PROJECT_TASK_SOURCES,
+                    CachePolicy::RefreshInBackground,
+                    ProjectTaskCandidateText::Name,
+                )
+                .is_empty()
+        );
+        if *root == root_a {
+            assert!(wait_until(Duration::from_secs(3), || start_marker.exists()));
+        }
+    }
+    let mut candidates_b = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        candidates_b = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:"),
+            &root_b,
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        candidates_b
+            .iter()
+            .any(|candidate| candidate.text == "api:from_b")
+    }));
+    fs::write(&release_marker, "release\n").unwrap();
+    assert!(wait_until(Duration::from_secs(3), || {
+        provider.cache.read().task_pending.is_empty()
+    }));
+    let candidates_b = provider.collect_project_task_candidates_for_sources_with_mode(
+        &parsed("nx run api:"),
+        &root_b,
+        NX_PROJECT_TASK_SOURCES,
+        CachePolicy::RefreshInBackground,
+        ProjectTaskCandidateText::Name,
+    );
+    assert!(
+        candidates_b
+            .iter()
+            .any(|candidate| candidate.text == "api:from_b")
+    );
+    assert!(
+        !candidates_b
+            .iter()
+            .any(|candidate| candidate.text == "api:from_a")
+    );
+}
+
 #[test]
 fn pacman_sync_mode_resolves_bundled_and_long_operations() {
     // Installed packages (the only list that contains AUR packages).
@@ -1270,18 +1800,17 @@ fn task_completion_cache_refreshes_when_taskfile_changes() {
     .unwrap();
 
     let provider = DynamicCompletionProvider::new(Environment::new());
-    let build_candidates = provider.collect_task_candidates(
-        &parsed("task bu"),
-        &nested,
-        CachePolicy::RefreshInBackground,
-    );
-
-    assert!(
+    let mut build_candidates = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        build_candidates = provider.collect_task_candidates(
+            &parsed("task bu"),
+            &nested,
+            CachePolicy::RefreshInBackground,
+        );
         build_candidates
             .iter()
-            .any(|candidate| candidate.text == "build"),
-        "expected task completion from project root"
-    );
+            .any(|candidate| candidate.text == "build")
+    }));
 
     std::thread::sleep(Duration::from_millis(20));
     fs::write(
@@ -1290,18 +1819,17 @@ fn task_completion_cache_refreshes_when_taskfile_changes() {
         )
         .unwrap();
 
-    let test_candidates = provider.collect_task_candidates(
-        &parsed("task te"),
-        &nested,
-        CachePolicy::RefreshInBackground,
-    );
-
-    assert!(
+    let mut test_candidates = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        test_candidates = provider.collect_task_candidates(
+            &parsed("task te"),
+            &nested,
+            CachePolicy::RefreshInBackground,
+        );
         test_candidates
             .iter()
-            .any(|candidate| candidate.text == "test"),
-        "expected task cache invalidation after Taskfile change"
-    );
+            .any(|candidate| candidate.text == "test")
+    }));
 }
 
 #[test]
@@ -1321,12 +1849,15 @@ fn project_task_cached_only_reuses_existing_cache_without_loading() {
         "cached-only task completion should not load on miss"
     );
 
-    let loaded = provider.collect_task_candidates(
-        &parsed("bun run bu"),
-        dir.path(),
-        CachePolicy::RefreshInBackground,
-    );
-    assert!(loaded.iter().any(|candidate| candidate.text == "build"));
+    let mut loaded = Vec::new();
+    assert!(wait_until(Duration::from_secs(3), || {
+        loaded = provider.collect_task_candidates(
+            &parsed("bun run bu"),
+            dir.path(),
+            CachePolicy::RefreshInBackground,
+        );
+        loaded.iter().any(|candidate| candidate.text == "build")
+    }));
 
     let cached = provider.collect_task_candidates(
         &parsed("bun run bu"),
@@ -1527,9 +2058,22 @@ fn nx_task_cache_refreshes_when_descendant_project_json_changes() {
         &parsed("nx run api:bu"),
         dir.path(),
         NX_PROJECT_TASK_SOURCES,
-        false,
+        CachePolicy::RefreshInBackground,
         ProjectTaskCandidateText::Name,
     );
+    let mut build_candidates = build_candidates;
+    assert!(wait_until(Duration::from_secs(3), || {
+        build_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:bu"),
+            dir.path(),
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        build_candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:build")
+    }));
     assert!(
         build_candidates
             .iter()
@@ -1548,9 +2092,22 @@ fn nx_task_cache_refreshes_when_descendant_project_json_changes() {
         &parsed("nx run api:te"),
         dir.path(),
         NX_PROJECT_TASK_SOURCES,
-        false,
+        CachePolicy::RefreshInBackground,
         ProjectTaskCandidateText::Name,
     );
+    let mut test_candidates = test_candidates;
+    assert!(wait_until(Duration::from_secs(3), || {
+        test_candidates = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("nx run api:te"),
+            dir.path(),
+            NX_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        test_candidates
+            .iter()
+            .any(|candidate| candidate.text == "api:test")
+    }));
     assert!(
         test_candidates
             .iter()
@@ -1591,9 +2148,20 @@ fn project_task_completion_follows_logical_path_changes() {
         &parsed("mise run from-"),
         dir.path(),
         MISE_PROJECT_TASK_SOURCES,
-        false,
+        CachePolicy::RefreshInBackground,
         ProjectTaskCandidateText::Name,
     );
+    let mut from_a = from_a;
+    assert!(wait_until(Duration::from_secs(3), || {
+        from_a = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("mise run from-"),
+            dir.path(),
+            MISE_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        from_a.iter().any(|candidate| candidate.text == "from-a")
+    }));
     assert!(
         from_a.iter().any(|candidate| candidate.text == "from-a"),
         "expected PATH A provider task in {from_a:?}"
@@ -1610,9 +2178,20 @@ fn project_task_completion_follows_logical_path_changes() {
         &parsed("mise run from-"),
         dir.path(),
         MISE_PROJECT_TASK_SOURCES,
-        false,
+        CachePolicy::RefreshInBackground,
         ProjectTaskCandidateText::Name,
     );
+    let mut from_b = from_b;
+    assert!(wait_until(Duration::from_secs(3), || {
+        from_b = provider.collect_project_task_candidates_for_sources_with_mode(
+            &parsed("mise run from-"),
+            dir.path(),
+            MISE_PROJECT_TASK_SOURCES,
+            CachePolicy::RefreshInBackground,
+            ProjectTaskCandidateText::Name,
+        );
+        from_b.iter().any(|candidate| candidate.text == "from-b")
+    }));
     assert!(
         from_b.iter().any(|candidate| candidate.text == "from-b"),
         "expected PATH B provider task in {from_b:?}"

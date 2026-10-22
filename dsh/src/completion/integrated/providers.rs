@@ -547,7 +547,7 @@ pub(super) fn collect_npm_dynamic_candidates(
     let mut candidates = if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_package_run_candidates(parsed, request.current_dir)
+        engine.collect_package_run_candidates(parsed, request.current_dir, cache_policy)
     };
     let completes_dependency = match parsed.command.as_str() {
         "pnpm" => {
@@ -580,7 +580,7 @@ pub(super) fn collect_yarn_dynamic_candidates(
     let mut candidates = if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_yarn_script_candidates(parsed, request.current_dir)
+        engine.collect_yarn_script_candidates(parsed, request.current_dir, cache_policy)
     };
     if leading_completion_words_match(parsed, &["remove"])
         || leading_completion_words_match(parsed, &["why"])
@@ -605,7 +605,7 @@ pub(super) fn collect_deno_dynamic_candidates(
     if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_deno_task_candidates(parsed, request.current_dir)
+        engine.collect_deno_task_candidates(parsed, request.current_dir, cache_policy)
     }
 }
 
@@ -618,7 +618,12 @@ pub(super) fn collect_just_dynamic_candidates(
     if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_top_level_task_candidates(parsed, request.current_dir, JUST_TASK_SOURCES)
+        engine.collect_top_level_task_candidates(
+            parsed,
+            request.current_dir,
+            JUST_TASK_SOURCES,
+            cache_policy,
+        )
     }
 }
 
@@ -631,7 +636,12 @@ pub(super) fn collect_make_dynamic_candidates(
     if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_top_level_task_candidates(parsed, request.current_dir, MAKE_TASK_SOURCES)
+        engine.collect_top_level_task_candidates(
+            parsed,
+            request.current_dir,
+            MAKE_TASK_SOURCES,
+            cache_policy,
+        )
     }
 }
 

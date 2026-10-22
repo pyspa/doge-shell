@@ -1,6 +1,6 @@
 use super::config::ServeConfig;
 use super::error::ServeError;
-use super::handlers::{serve_file_handler, serve_root_handler};
+use super::handlers::serve_file_handler;
 use axum::{Router, http::Uri, routing::get};
 use dsh_types::Context;
 use tracing::{debug, error, info};
@@ -26,32 +26,22 @@ impl HttpServer {
             .parse()
             .map_err(|e| ServeError::NetworkError(format!("Invalid address: {e}")))?;
 
-        let listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|e| ServeError::NetworkError(format!("Failed to bind to {addr}: {e}")))?;
+        let listener = TcpListener::bind(&addr).await.map_err(|source| {
+            if source.kind() == std::io::ErrorKind::AddrInUse {
+                ServeError::PortInUse {
+                    port: self.config.port,
+                }
+            } else {
+                ServeError::BindError {
+                    addr: addr.to_string(),
+                    source,
+                }
+            }
+        })?;
 
         info!("HTTP server listening on http://{}", addr);
 
-        // Create a router with proper file serving capabilities
-        let serve_dir = self.config.directory.clone();
-        let serve_index = self.config.serve_index;
-        let enable_cors = self.config.enable_cors;
-
-        let app = Router::new()
-            .route(
-                "/",
-                get({
-                    let serve_dir = serve_dir.clone();
-                    move || serve_root_handler(serve_dir, serve_index)
-                }),
-            )
-            .route(
-                "/*path",
-                get({
-                    let serve_dir = serve_dir.clone();
-                    move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
-                }),
-            );
+        let app = build_router(&self.config);
 
         axum::serve(listener, app)
             .await
@@ -59,6 +49,29 @@ impl HttpServer {
 
         Ok(())
     }
+}
+
+/// Construct the router used by the HTTP server.
+pub(super) fn build_router(config: &ServeConfig) -> Router {
+    let serve_dir = config.directory.clone();
+    let serve_index = config.serve_index;
+    let enable_cors = config.enable_cors;
+
+    Router::new()
+        .route(
+            "/",
+            get({
+                let serve_dir = serve_dir.clone();
+                move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
+            }),
+        )
+        .route(
+            "/{*path}",
+            get({
+                let serve_dir = serve_dir.clone();
+                move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
+            }),
+        )
 }
 
 /// Signal handler for graceful shutdown
@@ -162,35 +175,28 @@ async fn run_server_async(ctx: &Context, config: ServeConfig) -> Result<(), Serv
     ctx.write_stdout("").ok();
 
     // Start the server in a background task
-    let server_task = tokio::spawn(async move {
-        if let Err(e) = server.start().await {
-            error!("server error: {}", e);
-        }
-    });
+    let mut server_task = tokio::spawn(async move { server.start().await });
 
     // Wait for shutdown signal
-    let shutdown_task = tokio::spawn(async {
+    let mut shutdown_task = tokio::spawn(async {
         SignalHandler::wait_for_shutdown().await;
     });
 
-    // Wait for either server completion or shutdown signal
-    tokio::select! {
-        result = server_task => {
-            match result {
-                Ok(_) => {
-                    info!("server completed successfully");
-                }
-                Err(e) => {
-                    error!("server task failed: {}", e);
-                    return Err(ServeError::ServerError(Box::new(e)));
-                }
-            }
+    // Retain both task handles so the other task is cancelled and joined on exit.
+    let result = tokio::select! {
+        result = &mut server_task => {
+            shutdown_task.abort();
+            let _ = shutdown_task.await;
+            result.map_err(|e| ServeError::ServerError(Box::new(e)))?
         }
-        _ = shutdown_task => {
+        _ = &mut shutdown_task => {
             info!("shutdown signal received");
+            server_task.abort();
+            let _ = server_task.await;
+            Ok(())
         }
-    }
+    };
 
     info!("HTTP server stopped");
-    Ok(())
+    result
 }

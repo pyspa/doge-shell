@@ -478,22 +478,6 @@ fn format_http_date(timestamp: u64) -> String {
     }
 }
 
-/// Handle requests to the root path "/"
-pub async fn serve_root_handler(serve_dir: PathBuf, serve_index: bool) -> Response<Body> {
-    debug!("serving root directory: {:?}", serve_dir);
-
-    // Try to serve index.html if serve_index is enabled
-    if serve_index {
-        let index_path = serve_dir.join("index.html");
-        if index_path.exists() && index_path.is_file() {
-            return serve_file(&index_path).await;
-        }
-    }
-
-    // Otherwise, serve directory listing
-    serve_directory(&serve_dir).await
-}
-
 /// Handle requests to specific paths
 pub async fn serve_file_handler(
     uri: Uri,
@@ -513,18 +497,17 @@ pub async fn serve_file_handler(
     // Security check: ensure the path is within the serve directory
     match file_path.canonicalize() {
         Ok(canonical_path) => {
-            match serve_dir.canonicalize() {
-                Ok(canonical_serve_dir) => {
-                    if !canonical_path.starts_with(&canonical_serve_dir) {
-                        return create_error_response(StatusCode::FORBIDDEN, "Access denied");
-                    }
-                }
+            let canonical_serve_dir = match serve_dir.canonicalize() {
+                Ok(root) => root,
                 Err(_) => {
                     return create_error_response(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "Server error",
                     );
                 }
+            };
+            if !canonical_path.starts_with(&canonical_serve_dir) {
+                return create_error_response(StatusCode::FORBIDDEN, "Access denied");
             }
 
             // Serve the file or directory
@@ -538,12 +521,37 @@ pub async fn serve_file_handler(
                 // Try to serve index.html if serve_index is enabled
                 if serve_index {
                     let index_path = canonical_path.join("index.html");
-                    if index_path.exists() && index_path.is_file() {
-                        let mut response = serve_file(&index_path).await;
-                        if enable_cors {
-                            add_cors_headers(response.headers_mut());
+                    // symlink_metadata distinguishes an absent index from a dangling link.
+                    // Every present index must resolve inside the serving root before opening.
+                    match fs::symlink_metadata(&index_path) {
+                        Ok(_) => {
+                            let index_path = match index_path.canonicalize() {
+                                Ok(path) => path,
+                                Err(_) => {
+                                    return create_error_response(
+                                        StatusCode::NOT_FOUND,
+                                        "File not found",
+                                    );
+                                }
+                            };
+                            if !index_path.starts_with(&canonical_serve_dir) {
+                                return create_error_response(
+                                    StatusCode::FORBIDDEN,
+                                    "Access denied",
+                                );
+                            }
+                            if index_path.is_file() {
+                                let mut response = serve_file(&index_path).await;
+                                if enable_cors {
+                                    add_cors_headers(response.headers_mut());
+                                }
+                                return response;
+                            }
                         }
-                        return response;
+                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => {
+                            return create_error_response(StatusCode::NOT_FOUND, "File not found");
+                        }
                     }
                 }
 

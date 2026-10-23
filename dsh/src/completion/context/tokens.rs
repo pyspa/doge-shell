@@ -84,6 +84,9 @@ impl ContextCorrector<'_> {
         if parsed.raw_args.is_empty() {
             return None;
         }
+        if let Some(source) = &parsed.source {
+            return source.raw_index(parsed.raw_args.len());
+        }
 
         if parsed.current_token.is_empty()
             && let Some(index) = parsed.raw_args.iter().rposition(|token| {
@@ -185,12 +188,68 @@ impl ContextCorrector<'_> {
         None
     }
 
+    pub(crate) fn argument_raw_index(
+        &self,
+        parsed: &ParsedCommandLine,
+        wanted: usize,
+    ) -> Option<usize> {
+        let definition = self.database.get_command(&parsed.command)?;
+        let options = self.collect_available_options(definition, &parsed.subcommand_path);
+        let mut positional = 0;
+        let mut index = parsed
+            .source
+            .as_ref()
+            .map_or(0, |source| source.argument_start);
+        let mut end_options = false;
+        while let Some(token) = parsed.raw_args.get(index) {
+            if !end_options && token == "--" {
+                end_options = true;
+                index += 1;
+                continue;
+            }
+            if !end_options && Self::is_redirect_operator(token) {
+                index += 2;
+                continue;
+            }
+            if !end_options
+                && (is_separate_value_option(token, &options)
+                    || CommandLineParser::new().option_takes_value(token))
+            {
+                index += 2;
+                continue;
+            }
+            if !end_options
+                && (Self::looks_like_known_option(token, &options) || token.starts_with('-'))
+            {
+                index += 1;
+                continue;
+            }
+            if positional == wanted {
+                return Some(index);
+            }
+            positional += 1;
+            index += 1;
+        }
+        None
+    }
+
     pub fn reparse_inner_command(
         &self,
         parsed: &ParsedCommandLine,
         cmd_index: usize,
         cmd_name: String,
     ) -> ParsedCommandLine {
+        if let Some(source) = &parsed.source
+            && let Some(raw_index) = self.argument_raw_index(parsed, cmd_index)
+        {
+            let offset = source.words.len().saturating_sub(parsed.raw_args.len());
+            if let Some(word) = source.words.get(offset + raw_index) {
+                return CommandLineParser::new().parse(
+                    &source.input[word.byte_start..],
+                    source.cursor.saturating_sub(word.byte_start),
+                );
+            }
+        }
         let mut input_parts = Vec::new();
         input_parts.push(cmd_name);
 

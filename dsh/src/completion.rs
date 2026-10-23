@@ -14,6 +14,7 @@ pub mod path;
 pub mod selection;
 pub mod skim_adapter;
 
+pub(crate) mod command_segment;
 pub mod errors;
 pub mod framework;
 pub mod generator;

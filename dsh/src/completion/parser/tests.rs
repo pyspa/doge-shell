@@ -643,3 +643,17 @@ fn test_parse_option_value_chain() {
     assert!(result.specified_options.contains(&"-m".to_string()));
     assert!(result.specified_options.contains(&"--file".to_string()));
 }
+
+#[test]
+fn separators_select_only_the_cursor_command() {
+    let parser = CommandLineParser::new();
+    for separator in ["&&", "||", "|", ";", "\n", "&"] {
+        let input = format!("echo ok{separator}git checkout ma");
+        let parsed = parser.parse(&input, input.len());
+        assert_eq!(parsed.command, "git", "{input:?}");
+        assert_eq!(parsed.current_token, "ma");
+        let left = parser.parse(&input, 7);
+        assert_eq!(left.command, "echo");
+        assert!(!left.raw_args.iter().any(|s| s == "git"));
+    }
+}

@@ -232,3 +232,17 @@ scan_arithmetic = _{ "$((" ~ (scan_arithmetic | scan_parameter | scan_substituti
 scan_arithmetic_paren = _{ "(" ~ (scan_arithmetic | scan_parameter | scan_substitution
     | scan_single | scan_double | escape_sequence | scan_arithmetic_paren
     | (!("(" | ")") ~ ANY))* ~ (")" | EOI) }
+
+// Completion-only lexical view. Reuse tolerant quote/expansion scanning without
+// changing execution parsing; nested shell bodies remain a single word here.
+completion_scan = { completion_item* ~ EOI }
+completion_item = _{ completion_newline | sp | comment | completion_struct
+    | completion_capture | completion_unsupported | completion_redirect
+    | completion_word | completion_control }
+completion_newline = { NEWLINE }
+completion_word = { scan_part+ }
+completion_control = { "&&" | "||" | ";" | "&" | "|" }
+completion_redirect = { ((ASCII_DIGIT+ ~ (">&" | "<&" | ">>" | ">" | "<")) | "&>>" | "&>" | ">&" | "<&" | ">>" | ">" | "<") ~ !"(" }
+completion_capture = { "|>" }
+completion_struct = { "|:" ~ sp* ~ linebreak? ~ (scan_lisp | struct_pipe_dsl)? }
+completion_unsupported = { "|&" | ")" }

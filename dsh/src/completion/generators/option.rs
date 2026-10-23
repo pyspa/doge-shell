@@ -156,6 +156,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,
+            source: None,
         }
     }
 

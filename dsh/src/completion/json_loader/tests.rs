@@ -418,6 +418,7 @@ fn git_push_offers_lease_protected_force_options() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 1,
+        source: None,
     };
 
     let texts: Vec<String> = generator
@@ -755,6 +756,7 @@ fn test_completion_candidates_generation_from_json() {
             specified_arguments: vec![],
             raw_args: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         let candidates = generator.generate_candidates(&parsed_command).unwrap();
@@ -785,6 +787,7 @@ fn test_completion_candidates_generation_from_json() {
             specified_arguments: vec![],
             raw_args: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         let subcommand_candidates = generator.generate_candidates(&parsed_subcommand).unwrap();
@@ -827,6 +830,7 @@ fn test_completion_files_display_candidates_correctly() {
             specified_arguments: vec![],
             raw_args: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         let enhanced_candidates = generator.generate_candidates(&parsed_command).unwrap();

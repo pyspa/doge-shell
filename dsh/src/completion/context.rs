@@ -65,6 +65,30 @@ impl<'a> ContextCorrector<'a> {
 
     /// Correct the parsed command line if the parser incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
+        let mut corrected = self.correct_inner(parsed);
+        if corrected.source.is_some()
+            && matches!(
+                corrected.completion_context,
+                CompletionContext::Argument { .. }
+            )
+            && let Some(definition) = self.database.get_command(&corrected.command)
+        {
+            let options = self.collect_available_options(definition, &corrected.subcommand_path);
+            let start = corrected
+                .source
+                .as_ref()
+                .map_or(0, |source| source.argument_start);
+            let (_, index) =
+                Self::positional_arguments_after_raw_index(&corrected, start, &options);
+            if let CompletionContext::Argument { arg_index, .. } = &mut corrected.completion_context
+            {
+                *arg_index = index;
+            }
+        }
+        corrected
+    }
+
+    fn correct_inner(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
         let Some(command_completion) = self.database.get_command(&parsed.command) else {
             return parsed.clone();
         };
@@ -251,7 +275,8 @@ impl<'a> ContextCorrector<'a> {
             let token = &parsed.raw_args[tokens_consumed];
             // If this token is the current one being typed, don't consume it as a parent
             // But if it IS a valid subcommand, we should set context to SubCommand
-            let is_current = token == &new_parsed.current_token;
+            let is_current =
+                Self::current_raw_index(&new_parsed).is_some_and(|index| index == tokens_consumed);
 
             if let Some(sub) = Self::find_matching_subcommand(current_subcommands, token) {
                 if is_current {
@@ -307,6 +332,9 @@ impl<'a> ContextCorrector<'a> {
         }
 
         if subcommands_found {
+            if let Some(source) = &mut new_parsed.source {
+                source.argument_start = tokens_consumed;
+            }
             new_parsed.subcommand_path = valid_subcommands;
             let available_options =
                 self.collect_available_options(command_completion, &new_parsed.subcommand_path);

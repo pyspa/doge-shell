@@ -17,6 +17,13 @@ impl IntegratedCompletionEngine {
 
         let request = CompletionRequest::new(input, current_dir, 10, cursor_pos);
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        if parsed_command_line
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+        {
+            return None;
+        }
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
 

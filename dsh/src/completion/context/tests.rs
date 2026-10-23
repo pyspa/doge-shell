@@ -36,6 +36,7 @@ fn test_correct_flag_like_subcommand() {
         specified_options: vec!["-S".to_string()],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let corrected = corrector.correct_parsed_command_line(&parsed);
@@ -82,6 +83,7 @@ fn test_correct_alias_subcommand() {
         specified_options: vec!["--sync".to_string()],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let corrected = corrector.correct_parsed_command_line(&parsed);

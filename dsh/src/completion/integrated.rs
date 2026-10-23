@@ -310,7 +310,8 @@ impl IntegratedCompletionEngine {
             return cached.parsed.clone();
         }
 
-        let mut parsed = self.parser.parse(input, cursor_pos);
+        let cursor_byte = super::command_segment::char_to_byte(input, cursor_pos);
+        let mut parsed = self.parser.parse(input, cursor_byte);
         self.normalize_parsed_command_line(&mut parsed);
 
         *self.parsed_cache.write() = Some(ParsedCommandLineCache {
@@ -329,6 +330,13 @@ impl IntegratedCompletionEngine {
     /// command line (`pacman -R` inside `sudo pacman -R`) is normalized exactly
     /// like a line typed on its own.
     fn normalize_parsed_command_line(&self, parsed: &mut ParsedCommandLine) {
+        if parsed
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+        {
+            return;
+        }
         parsed.command = self.environment.read().resolve_alias(&parsed.command);
 
         self.ensure_command_completion_loaded(&parsed.command);
@@ -415,6 +423,17 @@ impl IntegratedCompletionEngine {
         let mut timing = CompletionTiming::start();
 
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        if parsed_command_line
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+        {
+            return CompletionResult {
+                candidates: Vec::new(),
+                framework: super::default_completion_framework(),
+                replacement_range: None,
+            };
+        }
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
         let dynamic_generation = self.dynamic.refresh_generation();
@@ -423,7 +442,12 @@ impl IntegratedCompletionEngine {
         // request has already observed only part of the old/new state, so a
         // later "pending became false" is not proof that this request built a
         // stable snapshot. A later request may publish the settled result.
-        let mut cache_allowed = completion_cache_allowed(&parsed_command_line)
+        let mut cache_allowed = cursor_pos == input.chars().count()
+            && !parsed_command_line
+                .source
+                .as_ref()
+                .is_some_and(|source| source.multiple)
+            && completion_cache_allowed(&parsed_command_line)
             && !is_nx_project_task_completion(self, &parsed_command_line)
             && !self.dynamic.has_async_fallback()
             && !self.dynamic.has_pending_refresh();
@@ -587,5 +611,7 @@ impl IntegratedCompletionEngine {
     }
 }
 
+#[cfg(test)]
+mod cursor_tests;
 #[cfg(test)]
 mod tests;

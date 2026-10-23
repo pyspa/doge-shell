@@ -36,7 +36,7 @@ async fn production_serve_router_constructs_and_serves_root_and_nested() {
     fs::create_dir(dir.path().join("nested")).unwrap();
     fs::write(dir.path().join("nested/index.html"), "nested index").unwrap();
     for cors in [false, true] {
-        for (path, expected) in [("/", "root index"), ("/nested", "nested index")] {
+        for (path, expected) in [("/", "root index"), ("/nested/", "nested index")] {
             let (status, headers, body) = request(dir.path(), path, true, cors).await;
             assert_eq!(status, StatusCode::OK);
             assert_eq!(body, expected);
@@ -57,7 +57,7 @@ async fn production_serve_router_rejects_outside_implicit_indexes() {
     fs::write(&outside, "OUTSIDE_SENTINEL").unwrap();
     for (url, directory, relative) in [
         ("/", root.clone(), "../outside.html"),
-        ("/nested", root.join("nested"), "../../outside.html"),
+        ("/nested/", root.join("nested"), "../../outside.html"),
     ] {
         for target in [outside.as_path(), Path::new(relative)] {
             let index = directory.join("index.html");
@@ -80,7 +80,7 @@ async fn production_serve_router_preserves_index_and_listing_contracts() {
     fs::write(dir.path().join("<tag>.txt"), "escaped name").unwrap();
     for (url, directory, target) in [
         ("/", dir.path().to_path_buf(), "a b.txt"),
-        ("/nested", dir.path().join("nested"), "../a b.txt"),
+        ("/nested/", dir.path().join("nested"), "../a b.txt"),
     ] {
         let index = directory.join("index.html");
         symlink(target, &index).unwrap();
@@ -116,7 +116,7 @@ async fn production_serve_router_preserves_index_and_listing_contracts() {
     );
     symlink(dir.path().join("nested"), dir.path().join("alias")).unwrap();
     assert_eq!(
-        request(dir.path(), "/alias", true, false).await.0,
+        request(dir.path(), "/alias/", true, false).await.0,
         StatusCode::OK
     );
 }
@@ -251,4 +251,99 @@ async fn production_serve_router_loopback_smoke() {
     assert_eq!(nested, "loopback nested");
     // A fresh bind proves the owned listener was released by cancellation.
     let _released = tokio::net::TcpListener::bind(address).await.unwrap();
+}
+
+#[tokio::test]
+async fn directory_redirect_preserves_encoded_path_and_query() {
+    let dir = TempDir::new().unwrap();
+    for name in ["nested", "a b%", "nested/deep"] {
+        fs::create_dir_all(dir.path().join(name)).unwrap();
+        fs::write(dir.path().join(name).join("child.txt"), "child").unwrap();
+        fs::write(
+            dir.path().join(name).join("index.html"),
+            "<script src=\"child.txt\"></script>",
+        )
+        .unwrap();
+    }
+    for index in [false, true] {
+        for cors in [false, true] {
+            for path in ["/nested", "/nested/deep", "/a%20b%25"] {
+                for query in ["", "?", "?q=a%20b&x=%25"] {
+                    let url = format!("{path}{query}");
+                    let (status, headers, _) = request(dir.path(), &url, index, cors).await;
+                    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT, "{url}");
+                    assert_eq!(headers["location"], format!("{path}/{query}"));
+                    assert_eq!(headers.contains_key("access-control-allow-origin"), cors);
+                    let base = reqwest::Url::parse("http://localhost")
+                        .unwrap()
+                        .join(headers["location"].to_str().unwrap())
+                        .unwrap();
+                    let (status, _, body) = request(dir.path(), base.path(), index, cors).await;
+                    assert_eq!(status, StatusCode::OK);
+                    if index {
+                        assert!(body.contains("src=\"child.txt\""));
+                    } else {
+                        assert!(body.contains("href=\"child.txt\""));
+                    }
+                    let asset = base.join("child.txt").unwrap();
+                    assert_eq!(
+                        request(dir.path(), asset.path(), index, cors).await.2,
+                        "child"
+                    );
+                }
+            }
+            assert_eq!(
+                request(dir.path(), "/", index, cors).await.0,
+                StatusCode::OK
+            );
+            let (status, headers, _) = request(dir.path(), "/nested/child.txt", index, cors).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(!headers.contains_key("location"));
+        }
+    }
+    let (_, _, listing) = request(dir.path(), "/", false, false).await;
+    assert!(listing.contains("href=\"nested/\""));
+    assert!(listing.contains("href=\"a%20b%25/\""));
+    let (_, _, listing) = request(dir.path(), "/nested/", false, false).await;
+    assert!(listing.contains("href=\"deep/\""));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn directory_redirect_never_exposes_outside_symlinks_or_traversal() {
+    use std::os::unix::fs::symlink;
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root");
+    let outside = dir.path().join("outside");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(&outside).unwrap();
+    symlink(&outside, root.join("escape")).unwrap();
+    for index in [false, true] {
+        for path in [
+            "/escape",
+            "/escape/",
+            "/%2e%2e/outside",
+            "/%2e%2e%2foutside",
+        ] {
+            let (status, headers, _) = request(&root, path, index, false).await;
+            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert!(!headers.contains_key("location"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn directory_redirect_cannot_become_a_network_path_reference() {
+    let dir = TempDir::new().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let path = format!("/{}", root.display());
+    let (status, headers, _) = request(&root, &path, false, false).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let base = reqwest::Url::parse("http://localhost/").unwrap();
+    let redirect = base.join(headers["location"].to_str().unwrap()).unwrap();
+    assert_eq!(redirect.host_str(), Some("localhost"));
+    assert_eq!(
+        request(&root, redirect.path(), false, false).await.0,
+        StatusCode::OK
+    );
 }

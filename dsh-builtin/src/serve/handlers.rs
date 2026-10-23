@@ -518,6 +518,33 @@ pub async fn serve_file_handler(
                 }
                 response
             } else if canonical_path.is_dir() {
+                if !path.ends_with('/') {
+                    // A leading // is a network-path reference in Location.
+                    // Prefix a dot segment to keep even that spelling on this origin.
+                    let mut location = if path.starts_with("//") {
+                        format!("/.{path}/")
+                    } else {
+                        format!("{path}/")
+                    };
+                    if let Some(query) = uri.query() {
+                        location.push('?');
+                        location.push_str(query);
+                    }
+                    let mut response = Response::builder()
+                        .status(StatusCode::TEMPORARY_REDIRECT)
+                        .header(header::LOCATION, location)
+                        .body(Body::empty())
+                        .unwrap_or_else(|_| {
+                            create_error_response(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                "Invalid directory URL",
+                            )
+                        });
+                    if enable_cors {
+                        add_cors_headers(response.headers_mut());
+                    }
+                    return response;
+                }
                 // Try to serve index.html if serve_index is enabled
                 if serve_index {
                     let index_path = canonical_path.join("index.html");
@@ -657,7 +684,7 @@ async fn serve_directory(dir_path: &Path) -> Response<Body> {
 
                 if path.is_dir() {
                     html.push_str(&format!(
-                        "<li><a href=\"{href}\" class=\"dir\">📁 {label}/</a></li>"
+                        "<li><a href=\"{href}/\" class=\"dir\">📁 {label}/</a></li>"
                     ));
                 } else {
                     html.push_str(&format!(

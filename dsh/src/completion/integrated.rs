@@ -498,7 +498,9 @@ impl IntegratedCompletionEngine {
                 request.input, hit.key, hit.exact
             );
 
-            if hit.exact || !hit.candidates.is_empty() {
+            // Prefixes may cross argument/subcommand boundaries (go -> go mod).
+            // Reuse only exact input snapshots; provider caches remain scoped separately.
+            if hit.exact {
                 self.cache.extend_ttl_scoped(cache_scope, &hit.key);
                 let framework = self
                     .lookup_cached_framework(cache_scope, &hit.key)
@@ -630,3 +632,6 @@ impl IntegratedCompletionEngine {
 mod cursor_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cursor_context_tests;

@@ -28,13 +28,13 @@ impl SubCommandGenerator {
             // Nested subcommand candidates
             candidates.extend(Self::match_subcommands(
                 &subcommand.subcommands,
-                &parsed.current_token,
+                &parsed.completion_query(),
             ));
         } else {
             // Match subcommands
             candidates.extend(Self::match_subcommands(
                 &command_completion.subcommands,
-                &parsed.current_token,
+                &parsed.completion_query(),
             ));
 
             // Check if we should suggest arguments

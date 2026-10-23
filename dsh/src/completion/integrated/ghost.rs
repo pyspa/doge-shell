@@ -36,7 +36,7 @@ impl IntegratedCompletionEngine {
                 input,
                 replacement_range.start,
                 replacement_range.end,
-                &candidate.text,
+                &ghost_insertion(candidate, input, replacement_range),
             );
             if full == input || !full.starts_with(input) {
                 return None;
@@ -61,7 +61,7 @@ impl IntegratedCompletionEngine {
             input,
             replacement_range.start,
             replacement_range.end,
-            &candidate.text,
+            &ghost_insertion(candidate, input, replacement_range),
         );
 
         if full == input || !full.starts_with(input) {
@@ -158,4 +158,19 @@ impl IntegratedCompletionEngine {
             })
             .unwrap_or_default()
     }
+}
+
+fn ghost_insertion(
+    candidate: &EnhancedCandidate,
+    input: &str,
+    range: CompletionReplacementRange,
+) -> String {
+    use skim::SkimItem;
+    let raw = slice_chars(input, range.start, range.end);
+    crate::completion::shell_path::format_candidates_for_token(
+        vec![candidate.to_candidate()],
+        Some(&raw),
+    )[0]
+    .output()
+    .to_string()
 }

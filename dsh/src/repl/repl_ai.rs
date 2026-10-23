@@ -368,7 +368,7 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
         let input = self.input.as_str();
-        if let Some(idx) = input.rfind("|?") {
+        if let Some(idx) = crate::completion::command_segment::smart_pipe_marker(input) {
             let query = input[idx + 2..].trim();
             if !query.is_empty() {
                 return Some(query.to_string());

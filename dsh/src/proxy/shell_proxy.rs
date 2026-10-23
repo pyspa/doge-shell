@@ -340,7 +340,8 @@ impl ShellProxy for Shell {
                 let query = query.unwrap_or_default();
                 Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
             }
-            crate::completion::CompletionSelection::None => Ok(None),
+            crate::completion::CompletionSelection::None
+            | crate::completion::CompletionSelection::Input(_) => Ok(None),
         }
     }
 

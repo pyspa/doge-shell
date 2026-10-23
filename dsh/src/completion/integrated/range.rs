@@ -55,10 +55,11 @@ pub(super) fn option_value_range_from_token(
     None
 }
 
-pub(super) fn token_range_at_cursor(
+pub(crate) fn token_range_at_cursor(
     input: &str,
     cursor_pos: usize,
 ) -> Option<CompletionReplacementRange> {
+    let cursor_pos = cursor_pos.min(input.chars().count());
     let cursor_byte = crate::completion::command_segment::char_to_byte(input, cursor_pos);
     let segment = crate::completion::command_segment::command_segment_at_cursor(input, cursor_byte);
     if segment.suppressed {
@@ -121,10 +122,17 @@ pub(super) fn tilde_user_candidates(prefix: &str) -> Vec<EnhancedCandidate> {
     match generator.generate_candidates(prefix) {
         Ok(users) => users
             .into_iter()
+            .filter(|user| {
+                !user.text.is_empty()
+                    && user
+                        .text
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+            })
             .map(|user| EnhancedCandidate {
                 text: format!("~{}", user.text),
                 description: user.description,
-                candidate_type: CandidateType::Generic,
+                candidate_type: CandidateType::HomeReference,
                 priority: 140,
             })
             .collect(),

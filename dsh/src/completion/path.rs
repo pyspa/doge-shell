@@ -183,8 +183,25 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     }
 
     let normalized = normalize_path_token(raw_token);
-    let Some(candidate) = path_completion_prefix_strict(&normalized, only_dirs)? else {
+    // Preserve source provenance before the listing cache expands an unquoted
+    // home prefix. A quoted/escaped tilde names a local directory instead.
+    let literal_home =
+        !raw_token.starts_with("~/") && (normalized == "~" || normalized.starts_with("~/"));
+    let lookup = if literal_home {
+        format!("./{normalized}")
+    } else {
+        normalized.clone()
+    };
+    let Some(candidate) = path_completion_prefix_strict(&lookup, only_dirs)? else {
         return Ok(None);
+    };
+    let candidate = if literal_home {
+        candidate
+            .strip_prefix("./")
+            .unwrap_or(&candidate)
+            .to_string()
+    } else {
+        candidate
     };
 
     if candidate.len() <= normalized.len() || !candidate.starts_with(&normalized) {

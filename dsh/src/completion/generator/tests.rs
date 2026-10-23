@@ -859,7 +859,7 @@ fn test_script_execution_variable_substitution() {
             description: None,
             multiple: false,
             arg_type: Some(ArgumentType::Script(
-                "echo $CURRENT_TOKEN_suffix".to_string(),
+                "echo $CURRENT_TOKEN'_suffix'".to_string(),
             )),
         }],
     };

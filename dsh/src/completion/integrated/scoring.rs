@@ -16,7 +16,10 @@ pub(super) fn history_boost_scores(
     for (index, candidate) in candidates.iter().enumerate() {
         if matches!(
             candidate.candidate_type,
-            CandidateType::File | CandidateType::Directory
+            CandidateType::File
+                | CandidateType::Directory
+                | CandidateType::HomeFile
+                | CandidateType::HomeDirectory
         ) {
             continue;
         }

@@ -49,6 +49,7 @@ pub(crate) use predicates::matches_prefix;
 use predicates::*;
 use providers::*;
 pub use range::CompletionReplacementRange;
+pub(crate) use range::token_range_at_cursor;
 use range::*;
 use scoring::*;
 use timing::*;
@@ -133,8 +134,15 @@ struct ParsedCommandLineCache {
     parsed: ParsedCommandLine,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionDisposition {
+    Allowed,
+    Suppressed,
+}
+
 #[derive(Debug)]
 pub struct CompletionResult {
+    pub disposition: CompletionDisposition,
     pub candidates: Vec<EnhancedCandidate>,
     pub framework: CompletionFrameworkKind,
     pub replacement_range: Option<CompletionReplacementRange>,
@@ -198,7 +206,10 @@ impl<'a> CandidateAggregator<'a> {
             && candidates.iter().all(|c| {
                 matches!(
                     c.candidate_type,
-                    CandidateType::File | CandidateType::Directory
+                    CandidateType::File
+                        | CandidateType::Directory
+                        | CandidateType::HomeFile
+                        | CandidateType::HomeDirectory
                 )
             });
 
@@ -210,6 +221,7 @@ impl<'a> CandidateAggregator<'a> {
         };
 
         CompletionResult {
+            disposition: CompletionDisposition::Allowed,
             candidates,
             framework,
             replacement_range: None,
@@ -429,6 +441,7 @@ impl IntegratedCompletionEngine {
             .is_some_and(|source| source.suppressed)
         {
             return CompletionResult {
+                disposition: CompletionDisposition::Suppressed,
                 candidates: Vec::new(),
                 framework: super::default_completion_framework(),
                 replacement_range: None,
@@ -462,6 +475,7 @@ impl IntegratedCompletionEngine {
         {
             timing.finish(request.input, "special_token");
             return CompletionResult {
+                disposition: CompletionDisposition::Allowed,
                 candidates,
                 framework: CompletionFrameworkKind::Skim,
                 replacement_range,
@@ -492,6 +506,7 @@ impl IntegratedCompletionEngine {
 
                 timing.finish(request.input, "cache_hit");
                 return CompletionResult {
+                    disposition: CompletionDisposition::Allowed,
                     candidates: hit.candidates,
                     framework,
                     replacement_range,

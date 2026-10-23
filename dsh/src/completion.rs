@@ -147,3 +147,6 @@ impl Completion {
         }
     }
 }
+
+#[cfg(test)]
+mod insertion_tests;

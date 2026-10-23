@@ -163,6 +163,7 @@ pub async fn input_completion(
     input: &Input,
     repl: &Repl<'_>,
     query: Option<&str>,
+    raw_token: Option<&str>,
     prompt_text: &str,
     input_text: &str,
 ) -> CompletionSelection {
@@ -177,33 +178,49 @@ pub async fn input_completion(
     // Try lisp-based completion first (custom completions defined by user)
     // Lisp logic is synchronous but fast (unless user func is slow).
     // We keep it synchronous for now or wrap it if needed.
-    let res =
+    let (res, preformatted) =
         completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text, framework);
-    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = res {
+    if let CompletionSelection::Selected(_)
+    | CompletionSelection::Interactive(..)
+    | CompletionSelection::Input(_) = res
+    {
         debug!("Lisp completion returned result: {:?}", res);
-        return res;
+        return if preformatted {
+            res
+        } else {
+            render_legacy_selection(res, raw_token)
+        };
     }
 
     // Try directory-stack index completion (`cd -N`, `pushd +N`, `popd +N`)
     let stack_res =
         completion_for_dir_stack(input, repl, query, prompt_text, input_text, framework);
-    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = stack_res {
-        return stack_res;
+    if let CompletionSelection::Selected(_)
+    | CompletionSelection::Interactive(..)
+    | CompletionSelection::Input(_) = stack_res
+    {
+        return render_legacy_selection(stack_res, raw_token);
     }
 
     // Try z completion
     let z_res = completion_for_z(input, repl, query, prompt_text, input_text, framework);
-    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = z_res {
-        return z_res;
+    if let CompletionSelection::Selected(_)
+    | CompletionSelection::Interactive(..)
+    | CompletionSelection::Input(_) = z_res
+    {
+        return render_legacy_selection(z_res, raw_token);
     }
 
     // Try current context completion (files, directories, commands in PATH)
     let res =
         completion_from_current_with_prompt(input, repl, query, prompt_text, input_text, framework)
             .await;
-    if let CompletionSelection::Selected(_) | CompletionSelection::Interactive(..) = res {
+    if let CompletionSelection::Selected(_)
+    | CompletionSelection::Interactive(..)
+    | CompletionSelection::Input(_) = res
+    {
         debug!("Context completion returned result: {:?}", res);
-        return res;
+        return render_legacy_selection(res, raw_token);
     }
 
     debug!("No completion candidates found from any source");
@@ -214,6 +231,28 @@ pub async fn input_completion(
     CompletionSelection::None
 }
 
+/// Legacy collectors/cache/UI carry raw words. Render selected output once;
+/// deferred selectors carry Prepared candidates so Inline and Skim agree.
+fn render_legacy_selection(
+    selection: CompletionSelection,
+    raw_token: Option<&str>,
+) -> CompletionSelection {
+    match selection {
+        CompletionSelection::Selected(text) => {
+            let candidates = crate::completion::shell_path::format_candidates_for_token(
+                vec![Candidate::Basic(text)],
+                raw_token,
+            );
+            CompletionSelection::Selected(candidates[0].output().to_string())
+        }
+        CompletionSelection::Interactive(items, query) => CompletionSelection::Interactive(
+            crate::completion::shell_path::format_candidates_for_token(items, raw_token),
+            query.map(|query| crate::completion::shell_path::normalize_path_token(&query)),
+        ),
+        other => other,
+    }
+}
+
 fn completion_from_lisp_with_prompt(
     input: &Input,
     repl: &Repl,
@@ -221,7 +260,7 @@ fn completion_from_lisp_with_prompt(
     prompt_text: &str,
     input_text: &str,
     framework: CompletionFrameworkKind,
-) -> CompletionSelection {
+) -> (CompletionSelection, bool) {
     // Pass current input as argument to lisp function
     let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
     let autocompletion = {
@@ -243,16 +282,22 @@ fn completion_from_lisp_with_prompt(
                         for val in list.into_iter() {
                             items.push(Candidate::Basic(val.to_string()));
                         }
-                        return select_completion_items(
-                            items,
-                            query,
-                            prompt_text,
-                            input_text,
-                            framework,
+                        return (
+                            select_completion_items(
+                                items,
+                                query,
+                                prompt_text,
+                                input_text,
+                                framework,
+                            ),
+                            false,
                         );
                     }
                     Ok(Value::String(str)) => {
-                        return CompletionSelection::Selected(str);
+                        // A direct Lisp String is a preformatted replacement (e.g.
+                        // `hello\ world`); lists such as ["hello world"] are raw
+                        // literal words. Never decode or infer syntax from values.
+                        return (CompletionSelection::Selected(str), true);
                     }
                     Err(err) => {
                         warn!("Lisp completion error: {err:?}");
@@ -263,21 +308,30 @@ fn completion_from_lisp_with_prompt(
                 // run command
                 let res = completion_from_cmd(cmd.to_string(), query, framework);
                 if let CompletionSelection::Selected(val) = res {
-                    return CompletionSelection::Selected(strip_selected_marker(val));
-                } else if let CompletionSelection::Interactive(..) = res {
-                    return res;
+                    return (
+                        CompletionSelection::Selected(strip_selected_marker(val)),
+                        false,
+                    );
+                } else if matches!(
+                    res,
+                    CompletionSelection::Interactive(..) | CompletionSelection::Input(_)
+                ) {
+                    return (res, false);
                 }
             } else if let Some(items) = &compl.candidates {
                 let items: Vec<Candidate> = items
                     .iter()
                     .map(|x| Candidate::Basic(x.trim().to_string()))
                     .collect();
-                return select_completion_items(items, query, prompt_text, input_text, framework);
+                return (
+                    select_completion_items(items, query, prompt_text, input_text, framework),
+                    false,
+                );
             }
-            return CompletionSelection::None;
+            return (CompletionSelection::None, false);
         }
     }
-    CompletionSelection::None
+    (CompletionSelection::None, false)
 }
 
 /// Completes `+N` / `-N` directory-stack indices for `cd`, `pushd` and `popd`.
@@ -595,128 +649,5 @@ pub(super) fn get_file_completions_with_filter_sync(
 use crate::completion::framework::CompletionSelection;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_framework_switches_to_skim_via_env() {
-        let _guard = crate::test_env_lock();
-        let original = std::env::var("DOGESH_COMPLETION_FRAMEWORK").ok();
-        unsafe {
-            std::env::set_var("DOGESH_COMPLETION_FRAMEWORK", "skim");
-        }
-        assert_eq!(
-            super::default_completion_framework(),
-            CompletionFrameworkKind::Skim
-        );
-        match original {
-            Some(value) => unsafe {
-                std::env::set_var("DOGESH_COMPLETION_FRAMEWORK", value);
-            },
-            None => unsafe {
-                std::env::remove_var("DOGESH_COMPLETION_FRAMEWORK");
-            },
-        }
-    }
-
-    #[test]
-    fn strip_selected_marker_only_removes_star_space_prefix() {
-        assert_eq!(super::strip_selected_marker("* main".to_string()), "main");
-        // A candidate that merely starts with '*' must keep its text.
-        assert_eq!(super::strip_selected_marker("*tar".to_string()), "*tar");
-        assert_eq!(super::strip_selected_marker("*".to_string()), "*");
-        assert_eq!(super::strip_selected_marker("plain".to_string()), "plain");
-    }
-
-    #[test]
-    fn test_fuzzy_file_completion_with_temp_dir() {
-        use std::fs::File;
-        use tempfile::tempdir;
-
-        let dir = tempdir().unwrap();
-        let dir_path = dir.path().to_str().unwrap();
-
-        // Create some files
-        File::create(dir.path().join("completion.rs")).unwrap();
-        File::create(dir.path().join("command.rs")).unwrap();
-        File::create(dir.path().join("cache.rs")).unwrap();
-        File::create(dir.path().join("notes.txt")).unwrap();
-
-        // Test fuzzy match "cmp" -> should find completion.rs
-        let results = super::get_file_completions_with_filter_sync(dir_path, "", Some("cmp"));
-        assert!(!results.is_empty());
-        assert!(
-            results
-                .iter()
-                .any(|c| matches!(c, Candidate::Item(name, _) if name.contains("completion.rs")))
-        );
-
-        // Test fuzzy match "cc" -> should find cache.rs (and maybe command.rs / completion.rs depending on score, but definitely cache.rs)
-        let results_cc = super::get_file_completions_with_filter_sync(dir_path, "", Some("cc"));
-        assert!(!results_cc.is_empty());
-        assert!(
-            results_cc
-                .iter()
-                .any(|c| matches!(c, Candidate::Item(name, _) if name.contains("cache.rs")))
-        );
-
-        // Test no match
-        let results_none = super::get_file_completions_with_filter_sync(dir_path, "", Some("xyz"));
-        assert!(results_none.is_empty());
-    }
-
-    #[test]
-    fn test_get_prompt_and_input_defaults() {
-        let (prompt, input) = get_prompt_and_input_for_completion();
-        assert_eq!(prompt, "$ ");
-        assert_eq!(input, "");
-    }
-
-    #[test]
-    fn test_select_completion_items_empty_returns_none() {
-        let result =
-            select_completion_items(vec![], None, "$ ", "", CompletionFrameworkKind::Inline);
-        assert!(matches!(result, CompletionSelection::None));
-    }
-
-    #[test]
-    fn test_select_completion_items_single_fast_path() {
-        let items = vec![Candidate::Basic("hello".to_string())];
-        let result =
-            select_completion_items(items, None, "$ ", "h", CompletionFrameworkKind::Inline);
-        // Single candidate → fast path returns Selected
-        assert!(matches!(result, CompletionSelection::Selected(ref s) if s == "hello"));
-    }
-
-    #[test]
-    fn test_get_file_completions_nonexistent_dir() {
-        let results = get_file_completions_with_filter_sync("/nonexistent/dir/12345", "", None);
-        assert!(results.is_empty());
-    }
-
-    #[test]
-    fn test_get_file_completions_directories_labeled() {
-        use tempfile::tempdir;
-
-        let dir = tempdir().unwrap();
-        let dir_path = dir.path().to_str().unwrap();
-
-        // Create a subdirectory
-        std::fs::create_dir(dir.path().join("subdir")).unwrap();
-        // Create a file
-        std::fs::File::create(dir.path().join("file.txt")).unwrap();
-
-        let results = get_file_completions_with_filter_sync(dir_path, "", None);
-        assert_eq!(results.len(), 2);
-
-        // Check labeling
-        let has_dir_label = results
-            .iter()
-            .any(|c| matches!(c, Candidate::Item(_, desc) if desc == "(directory)"));
-        let has_file_label = results
-            .iter()
-            .any(|c| matches!(c, Candidate::Item(_, desc) if desc == "(file)"));
-        assert!(has_dir_label, "Directory should be labeled (directory)");
-        assert!(has_file_label, "File should be labeled (file)");
-    }
-}
+#[path = "selection_tests.rs"]
+mod tests;

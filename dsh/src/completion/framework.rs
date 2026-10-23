@@ -1,5 +1,4 @@
 use super::display::{Candidate, CompletionConfig, CompletionDisplay};
-use super::shell_token::{SeparatorMode, token_at_char_cursor};
 use super::ui::{CompletionInteraction, CompletionOutcome, TerminalEventSource};
 use crossterm::{cursor, execute};
 use skim::prelude::*;
@@ -48,6 +47,9 @@ pub enum CompletionFrameworkKind {
 #[derive(Debug, PartialEq)]
 pub enum CompletionSelection {
     Selected(String),
+    /// Printable source typed while the Inline chooser is open. This is an
+    /// editor insertion at the current cursor, never a candidate replacement.
+    Input(String),
     None,
     Interactive(Vec<Candidate>, Option<String>),
 }
@@ -76,13 +78,7 @@ impl CompletionFramework for InlineCompletionFramework {
         let mut controller = CompletionInteraction::new(TerminalEventSource);
 
         match controller.run(&mut display) {
-            Ok(CompletionOutcome::Submitted(value)) => CompletionSelection::Selected(value),
-            Ok(CompletionOutcome::Input(value)) => {
-                CompletionSelection::Selected(continue_inline_input(input_text, &value))
-            }
-            Ok(CompletionOutcome::Cancelled) | Ok(CompletionOutcome::NoSelection) => {
-                CompletionSelection::None
-            }
+            Ok(outcome) => inline_selection(outcome),
             Err(error) => {
                 warn!("Completion interaction failed: {}", error);
                 let _ = display.clear_display();
@@ -93,18 +89,12 @@ impl CompletionFramework for InlineCompletionFramework {
     }
 }
 
-fn continue_inline_input(input_text: &str, value: &str) -> String {
-    let cursor = input_text.chars().count();
-    let Some(token) = token_at_char_cursor(input_text, cursor, SeparatorMode::CompletionRange)
-    else {
-        return value.to_string();
-    };
-
-    if cursor <= token.char_start {
-        return value.to_string();
+pub(crate) fn inline_selection(outcome: CompletionOutcome) -> CompletionSelection {
+    match outcome {
+        CompletionOutcome::Submitted(value) => CompletionSelection::Selected(value),
+        CompletionOutcome::Input(value) => CompletionSelection::Input(value),
+        CompletionOutcome::Cancelled | CompletionOutcome::NoSelection => CompletionSelection::None,
     }
-
-    token.raw + value
 }
 
 /// Fuzzy finder UI powered by the `skim` crate.
@@ -225,44 +215,5 @@ pub fn select_with_framework_kind(
     match kind {
         CompletionFrameworkKind::Inline => InlineCompletionFramework.select(request),
         CompletionFrameworkKind::Skim => SkimCompletionFramework.select(request),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn inline_input_continuation_preserves_escaped_token_prefix() {
-        assert_eq!(
-            continue_inline_input(r#"cat dir\ with\ space/fo"#, "x"),
-            r#"dir\ with\ space/fox"#
-        );
-    }
-
-    #[test]
-    fn inline_input_continuation_preserves_double_quoted_token_prefix() {
-        assert_eq!(
-            continue_inline_input(r#"cat "dir with space/fo"#, "x"),
-            r#""dir with space/fox"#
-        );
-    }
-
-    #[test]
-    fn inline_input_continuation_preserves_single_quoted_token_prefix() {
-        assert_eq!(
-            continue_inline_input(r#"cat 'dir with space/fo"#, "x"),
-            r#"'dir with space/fox"#
-        );
-    }
-
-    #[test]
-    fn inline_input_continuation_uses_token_after_operator_separator() {
-        assert_eq!(continue_inline_input("cmd | fo", "o"), "foo");
-    }
-
-    #[test]
-    fn inline_input_continuation_uses_value_when_no_token_is_active() {
-        assert_eq!(continue_inline_input("cmd | ", "x"), "x");
     }
 }

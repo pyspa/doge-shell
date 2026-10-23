@@ -103,6 +103,13 @@ pub fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
 
     for candidate in items {
         let (name, _description) = match &candidate {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => (
+                candidate.get_display_name().to_string(),
+                candidate.get_description().unwrap_or_default().to_string(),
+            ),
+            Candidate::ShellSyntax {
+                text, description, ..
+            } => (text.clone(), description.clone().unwrap_or_default()),
             Candidate::Item(name, desc) => (name.clone(), desc.clone()),
             Candidate::Path(name) => (name.clone(), "(path)".to_string()),
             Candidate::Basic(name) => (name.clone(), "(basic)".to_string()),

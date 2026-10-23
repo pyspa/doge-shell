@@ -56,6 +56,8 @@ pub enum InteractiveAction {
         text: String,
     },
     ReplaceRange {
+        expected_input: String,
+        expected_cursor: usize,
         start: usize,
         end: usize,
         text: String,
@@ -135,4 +137,21 @@ impl DoublePressState {
 pub enum SuggestionAcceptMode {
     Full,
     Word,
+}
+
+/// Both Inline and deferred Skim selection must belong to the original editor
+/// snapshot. A cancelled or stale result cannot patch a newer buffer.
+pub(crate) fn apply_completion_range(
+    input: &mut crate::input::Input,
+    expected_input: &str,
+    expected_cursor: usize,
+    start: usize,
+    end: usize,
+    text: &str,
+) -> bool {
+    if input.as_str() != expected_input || input.cursor() != expected_cursor {
+        return false;
+    }
+    input.replace_range_chars(start, end, text);
+    true
 }

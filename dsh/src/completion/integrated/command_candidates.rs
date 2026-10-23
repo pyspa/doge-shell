@@ -219,13 +219,28 @@ impl IntegratedCompletionEngine {
             let db_lock = self.command_completion.lock();
             let corrector = ContextCorrector::new(&db_lock);
             let (cmd_index, cmd_name) = corrector.find_command_with_args_arg(parsed)?;
-            if !cursor_follows_wrapped_command(parsed, &cmd_name) {
+            let follows = if let Some(source) = &parsed.source {
+                corrector
+                    .argument_raw_index(parsed, cmd_index)
+                    .is_some_and(|raw_index| {
+                        let offset = source.words.len().saturating_sub(parsed.raw_args.len());
+                        source.cursor_word > offset + raw_index
+                    })
+            } else {
+                cursor_follows_wrapped_command(parsed, &cmd_name)
+            };
+            if !follows {
                 return None;
             }
             corrector.reparse_inner_command(parsed, cmd_index, cmd_name)
         };
 
-        if inner.command.is_empty() || inner.command == parsed.command {
+        let source_progress = inner
+            .source
+            .as_ref()
+            .zip(parsed.source.as_ref())
+            .is_some_and(|(inner, outer)| inner.input.len() < outer.input.len());
+        if inner.command.is_empty() || (inner.command == parsed.command && !source_progress) {
             return None;
         }
 

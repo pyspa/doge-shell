@@ -432,3 +432,6 @@ impl DynamicCompletionProvider {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod query_tests;

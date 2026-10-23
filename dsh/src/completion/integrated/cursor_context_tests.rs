@@ -310,3 +310,58 @@ async fn job_queries_decode_source_without_spawning_providers() {
     }
     assert!(!e.dynamic.has_pending_refresh());
 }
+
+#[tokio::test]
+async fn cached_dynamic_queries_follow_cursor_and_ghost() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let git = dir.path().join("git");
+    std::fs::write(&git, "#!/bin/sh\nprintf 'feature/main\\nmain\\n'\n").unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = Environment::new_synthetic();
+    env.write().variable_state.paths = vec![dir.path().to_string_lossy().into_owned()];
+    let mut e = IntegratedCompletionEngine::new(env);
+    e.initialize_command_completion().unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    e.set_notifier(tx);
+    let warm = "git restore -s fe";
+    loop {
+        let result = e.complete(warm, warm.len(), dir.path(), 30, None).await;
+        if result.candidates.iter().any(|c| c.text == "feature/main") {
+            break;
+        }
+        tokio::time::timeout(Duration::from_secs(20), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    for marked in [
+        "git restore -s \"fe§ature/other\" tail",
+        "git restore -s 'fe§ature/other' tail",
+        "git restore --source=\"fe§ature/other\" tail",
+        "echo 日 && sudo -n git restore -s \"fe§ature/other\" tail",
+        "git restore -s f\"\"e§ature/other tail",
+    ] {
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let input = marked.replace('§', "");
+        let result = e.complete(&input, cursor, dir.path(), 30, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == "feature/main"),
+            "{marked}: {result:?}"
+        );
+        let range = result.replacement_range.unwrap();
+        assert!(slice_chars(&input, range.start, range.end).contains("ature/other"));
+    }
+    let generation = e.dynamic.refresh_generation();
+    let input = "git restore -s \"fe";
+    assert_eq!(
+        e.ghost_completion(input, input.len(), dir.path(), None)
+            .as_deref(),
+        Some("git restore -s \"feature/main")
+    );
+    assert_eq!(
+        e.dynamic.refresh_generation(),
+        generation,
+        "ghost must not schedule subprocess work"
+    );
+}

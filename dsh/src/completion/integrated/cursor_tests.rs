@@ -408,3 +408,112 @@ async fn structured_continuations_and_special_trailing_gaps_stay_suppressed() {
         );
     }
 }
+
+#[tokio::test]
+async fn variable_syntax_validates_names_and_preserves_quote_context() {
+    use skim::SkimItem;
+    let environment = Environment::new_synthetic();
+    {
+        let mut env = environment.write();
+        env.variable_state.paths.clear();
+        for name in ["SAFE_NAME", "SAFE_BAD;echo", "1POSITIONAL", "SAFE_界"] {
+            env.variable_state
+                .variables
+                .insert(name.into(), "value".into());
+        }
+    }
+    let engine = IntegratedCompletionEngine::new(environment);
+    for (raw, expected) in [
+        ("$SAFE_N", "$SAFE_NAME"),
+        ("\"$SAFE_N\"", "\"$SAFE_NAME\""),
+        ("'$SAFE_N'", "'$SAFE_NAME'"),
+    ] {
+        let input = format!("echo {raw}");
+        let result = engine
+            .complete(
+                &input,
+                input.chars().count(),
+                std::path::Path::new("."),
+                50,
+                None,
+            )
+            .await;
+        let candidates = engine.to_candidates(result.candidates);
+        let formatted =
+            crate::completion::shell_path::format_candidates_for_token(candidates, Some(raw));
+        assert!(
+            formatted
+                .iter()
+                .any(|candidate| candidate.output() == expected),
+            "{raw:?}: {formatted:?}"
+        );
+    }
+    let names = engine.variable_candidates("", |name| format!("${name}"));
+    assert!(names.iter().any(|candidate| candidate.text == "$SAFE_NAME"));
+    assert!(
+        names
+            .iter()
+            .all(|candidate| !["$SAFE_BAD;echo", "$1POSITIONAL", "$SAFE_界"]
+                .contains(&candidate.text.as_str())),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn real_home_file_candidates_preserve_expansion_and_literal_tail() {
+    let _guard = crate::test_env_lock();
+    use crate::completion::generators::filesystem::FileSystemGenerator;
+    use crate::completion::shell_path::format_candidates_for_token;
+    use skim::SkimItem;
+    let home = std::env::var("HOME").unwrap();
+    let fixture = tempfile::tempdir_in(&home).unwrap();
+    std::fs::write(fixture.path().join("probe a;*.txt"), "fixture").unwrap();
+    let prefix = format!(
+        "~/{}/probe",
+        fixture.path().file_name().unwrap().to_str().unwrap()
+    );
+    let candidates = FileSystemGenerator::generate_file_candidates(&prefix).unwrap();
+    let candidate = candidates
+        .iter()
+        .find(|candidate| candidate.text.ends_with("probe a;*.txt"))
+        .unwrap();
+    // Exercise the actual CompletionCandidate -> engine conversion.
+    let engine = IntegratedCompletionEngine::new(crate::environment::Environment::new_synthetic());
+    let enhanced = engine.convert_to_enhanced_candidate(candidate.clone());
+    let formatted = format_candidates_for_token(vec![enhanced.to_candidate()], Some(&prefix));
+    assert!(
+        formatted[0].output().starts_with("~/"),
+        "{:?}",
+        formatted[0]
+    );
+    assert!(formatted[0].output().ends_with(r"probe\ a\;\*.txt"));
+    assert_eq!(formatted[0].get_display_name(), candidate.text);
+    assert_eq!(enhanced.candidate_type, CandidateType::HomeFile);
+    assert_eq!(
+        enhanced.candidate_type.sort_order(),
+        CandidateType::File.sort_order()
+    );
+    assert_eq!(enhanced.candidate_type.icon(), CandidateType::File.icon());
+    for literal in [
+        format!("'{prefix}'"),
+        format!("\"{prefix}\""),
+        format!("\\{prefix}"),
+    ] {
+        let values = FileSystemGenerator::generate_file_candidates(&literal).unwrap();
+        assert!(
+            values.iter().all(|value| value.text != candidate.text),
+            "{literal}: {values:?}"
+        );
+        assert!(
+            // A missing literal directory can be uncached I/O failure or a
+            // cached empty listing; neither may offer the HOME-backed value.
+            crate::completion::path::path_completion_prefix_for_shell_token(&literal, false)
+                .ok()
+                .flatten()
+                .is_none(),
+            "literal ghost lookup: {literal}"
+        );
+    }
+    let ghost = crate::completion::shell_path::format_path_for_token(&candidate.text, &prefix);
+    assert_eq!(ghost, formatted[0].output());
+}

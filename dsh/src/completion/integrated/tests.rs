@@ -1,4 +1,5 @@
 use super::*;
+use skim::SkimItem;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -760,13 +761,8 @@ fn shell_token_range_supplies_raw_token_for_path_formatting() {
     let formatted =
         crate::completion::shell_path::format_candidates_for_token(candidates, Some(&raw_token));
 
-    assert_eq!(
-        formatted[0],
-        Candidate::File {
-            path: r#""dir with space/foo"#.to_string(),
-            is_dir: false,
-        }
-    );
+    assert_eq!(formatted[0].output(), r#""dir with space/foo"#);
+    assert_eq!(formatted[0].get_display_name(), "dir with space/foo");
 }
 
 #[tokio::test]
@@ -805,11 +801,8 @@ async fn quoted_path_completion_generates_and_formats_candidate() {
 
     assert!(
         formatted.iter().any(|candidate| {
-            matches!(
-                candidate,
-                Candidate::File { path, is_dir: false }
-                    if path == &format!("\"{expected}")
-            )
+            candidate.output() == format!("\"{expected}")
+                && candidate.get_display_name() == expected
         }),
         "expected quoted display candidate in {:?}",
         formatted
@@ -857,10 +850,7 @@ async fn escaped_path_completion_generates_and_formats_candidate() {
 
     assert!(
         formatted.iter().any(|candidate| {
-            matches!(
-                candidate,
-                Candidate::File { path, is_dir: false } if path == &escaped_expected
-            )
+            candidate.output() == escaped_expected && candidate.get_display_name() == expected
         }),
         "expected escaped display candidate in {:?}",
         formatted
@@ -1783,7 +1773,7 @@ async fn ghost_completion_uses_cached_json_declared_dynamic_values_only() {
 
     assert_eq!(
         engine.ghost_completion(input, input.len(), dir.path(), None),
-        Some("git stash pop stash@{0}".to_string())
+        Some(r"git stash pop stash@\{0\}".to_string())
     );
 }
 

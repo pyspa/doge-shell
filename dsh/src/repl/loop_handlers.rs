@@ -214,8 +214,21 @@ impl<'a> Repl<'a> {
                                 }
                                 self.input.insert_str(&text);
                             }
-                            InteractiveAction::ReplaceRange { start, end, text } => {
-                                self.input.replace_range_chars(start, end, &text);
+                            InteractiveAction::ReplaceRange {
+                                expected_input,
+                                expected_cursor,
+                                start,
+                                end,
+                                text,
+                            } => {
+                                crate::repl::state::apply_completion_range(
+                                    &mut self.input,
+                                    &expected_input,
+                                    expected_cursor,
+                                    start,
+                                    end,
+                                    &text,
+                                );
                             }
                             InteractiveAction::ReplaceAll { text } => self.input.reset(text),
                             InteractiveAction::ReplaceAllAndExecute { text } => {

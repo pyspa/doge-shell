@@ -279,6 +279,22 @@ mod tests {
     }
 
     #[test]
+    fn inline_printable_event_remains_an_editor_insertion() {
+        let mut ui = MockUi {
+            selected: Some("candidate value".into()),
+            ..MockUi::default()
+        };
+        let mut controller =
+            CompletionInteraction::new(TestEventSource::new(vec![key(KeyCode::Char('界'))]));
+        let outcome = controller.run(&mut ui).unwrap();
+        assert_eq!(
+            crate::completion::framework::inline_selection(outcome),
+            crate::completion::framework::CompletionSelection::Input("界".into())
+        );
+        assert_eq!(ui.clear_calls, 1);
+    }
+
+    #[test]
     fn submits_selection_and_clears_ui() {
         let mut ui = MockUi {
             selected: Some("ls".to_string()),

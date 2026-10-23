@@ -194,7 +194,8 @@ impl<'a> Repl<'a> {
                             }))
                         })));
                     }
-                    completion_lib::CompletionSelection::None => {
+                    completion_lib::CompletionSelection::None
+                    | crate::completion::CompletionSelection::Input(_) => {
                         return Ok(ReplControlFlow::Continue);
                     }
                 }

@@ -340,8 +340,27 @@ impl CompletionUi for CompletionDisplay {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
+pub enum ShellSyntaxKind {
+    Variable,
+    Home,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Eq, Ord)]
 pub enum Candidate {
+    /// Explicit expansion syntax, emitted only by validated built-in producers.
+    ShellSyntax {
+        kind: ShellSyntaxKind,
+        text: String,
+        description: Option<String>,
+    },
+    /// A filesystem producer's explicit unquoted home-prefix provenance.
+    HomePath(Box<Candidate>),
+    /// Raw display/preview metadata with a separately prepared insertion value.
+    Prepared {
+        candidate: Box<Candidate>,
+        insertion: String,
+    },
     Item(String, String), // output, description
     Path(String),
     Basic(String),
@@ -377,6 +396,16 @@ impl Candidate {
     /// Get the type character for display
     pub fn get_type_char(&self) -> char {
         match self {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+                candidate.get_type_char()
+            }
+            Candidate::ShellSyntax { description, .. } => {
+                if description.is_some() {
+                    ' '
+                } else {
+                    '🔹'
+                }
+            }
             Candidate::Item(_, desc) => {
                 if desc.contains("command") {
                     '⚡' // Command - lightning bolt
@@ -414,6 +443,12 @@ impl Candidate {
     /// Get the description of the candidate
     pub fn get_description(&self) -> Option<&str> {
         match self {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+                candidate.get_description()
+            }
+            Candidate::ShellSyntax { description, .. } => {
+                description.as_deref().filter(|s| !s.is_empty())
+            }
             Candidate::Item(_, desc) if !desc.is_empty() => Some(desc),
             Candidate::Command { description, .. } if !description.is_empty() => Some(description),
             Candidate::Option { description, .. } if !description.is_empty() => Some(description),
@@ -426,6 +461,10 @@ impl Candidate {
     /// Get the display name (without description)
     pub fn get_display_name(&self) -> &str {
         match self {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+                candidate.get_display_name()
+            }
+            Candidate::ShellSyntax { text, .. } => text,
             Candidate::Item(name, _) => name,
             Candidate::Path(path) => path,
             Candidate::Basic(basic) => basic,

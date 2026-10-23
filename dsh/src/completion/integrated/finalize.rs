@@ -42,6 +42,10 @@ impl IntegratedCompletionEngine {
                 crate::completion::command::CompletionType::LongOption => CandidateType::LongOption,
                 crate::completion::command::CompletionType::Argument => CandidateType::Argument,
                 crate::completion::command::CompletionType::File => CandidateType::File,
+                crate::completion::command::CompletionType::HomeFile => CandidateType::HomeFile,
+                crate::completion::command::CompletionType::HomeDirectory => {
+                    CandidateType::HomeDirectory
+                }
                 crate::completion::command::CompletionType::Directory => CandidateType::Directory,
                 crate::completion::command::CompletionType::Process => CandidateType::Process,
             },

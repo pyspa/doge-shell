@@ -1,7 +1,7 @@
 //! Completion candidate types shared across the whole completion subsystem:
 //! `EnhancedCandidate` (what a provider produces) and `CandidateType` (its
 //! sort order, icon, and mapping to the display-facing `Candidate` enum).
-use crate::completion::display::Candidate;
+use crate::completion::display::{Candidate, ShellSyntaxKind};
 
 /// Enhanced completion candidate
 #[derive(Debug, Clone)]
@@ -20,6 +20,17 @@ impl EnhancedCandidate {
     /// Convert to Candidate for skim display
     pub fn to_candidate(&self) -> Candidate {
         match self.candidate_type {
+            CandidateType::VariableReference | CandidateType::HomeReference => {
+                Candidate::ShellSyntax {
+                    kind: if self.candidate_type == CandidateType::VariableReference {
+                        ShellSyntaxKind::Variable
+                    } else {
+                        ShellSyntaxKind::Home
+                    },
+                    text: self.text.clone(),
+                    description: self.description.clone(),
+                }
+            }
             CandidateType::SubCommand => Candidate::Command {
                 name: self.text.clone(),
                 description: self.description.clone().unwrap_or_default(),
@@ -28,6 +39,12 @@ impl EnhancedCandidate {
                 name: self.text.clone(),
                 description: self.description.clone().unwrap_or_default(),
             },
+            CandidateType::HomeFile | CandidateType::HomeDirectory => {
+                Candidate::HomePath(Box::new(Candidate::File {
+                    path: self.text.clone(),
+                    is_dir: self.candidate_type == CandidateType::HomeDirectory,
+                }))
+            }
             CandidateType::File => Candidate::File {
                 path: self.text.clone(),
                 is_dir: false,
@@ -70,6 +87,11 @@ pub enum CandidateType {
     Process,
     /// Generic
     Generic,
+    /// Validated variable or home expansion emitted by a built-in producer.
+    VariableReference,
+    HomeReference,
+    HomeFile,
+    HomeDirectory,
 }
 
 impl CandidateType {
@@ -80,10 +102,12 @@ impl CandidateType {
             CandidateType::LongOption => 2,
             CandidateType::ShortOption => 3,
             CandidateType::Argument => 4,
-            CandidateType::Directory => 5,
-            CandidateType::File => 6,
+            CandidateType::Directory | CandidateType::HomeDirectory => 5,
+            CandidateType::File | CandidateType::HomeFile => 6,
             CandidateType::Process => 7,
-            CandidateType::Generic => 8,
+            CandidateType::Generic
+            | CandidateType::VariableReference
+            | CandidateType::HomeReference => 8,
         }
     }
 
@@ -94,10 +118,12 @@ impl CandidateType {
             CandidateType::LongOption => "🔧",
             CandidateType::ShortOption => "🔧",
             CandidateType::Argument => "📝",
-            CandidateType::File => "📄",
-            CandidateType::Directory => "📁",
+            CandidateType::File | CandidateType::HomeFile => "📄",
+            CandidateType::Directory | CandidateType::HomeDirectory => "📁",
             CandidateType::Process => "🔧",
-            CandidateType::Generic => "💡",
+            CandidateType::Generic
+            | CandidateType::VariableReference
+            | CandidateType::HomeReference => "💡",
         }
     }
 }

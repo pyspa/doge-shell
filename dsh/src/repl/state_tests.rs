@@ -33,12 +33,16 @@ mod tests {
         }
 
         let replace_range = InteractiveAction::ReplaceRange {
+            expected_input: String::new(),
+            expected_cursor: 0,
             start: 1,
             end: 4,
             text: "abc".to_string(),
         };
         match replace_range {
-            InteractiveAction::ReplaceRange { start, end, text } => {
+            InteractiveAction::ReplaceRange {
+                start, end, text, ..
+            } => {
                 assert_eq!(start, 1);
                 assert_eq!(end, 4);
                 assert_eq!(text, "abc");

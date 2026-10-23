@@ -209,6 +209,9 @@ pub enum CompletionType {
     File,
     /// Directory
     Directory,
+    /// Filesystem paths generated from an unquoted `~/` source prefix.
+    HomeFile,
+    HomeDirectory,
     /// Process
     Process,
 }

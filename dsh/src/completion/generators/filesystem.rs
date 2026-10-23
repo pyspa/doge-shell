@@ -1,4 +1,4 @@
-use crate::completion::command::CompletionCandidate;
+use crate::completion::command::{CompletionCandidate, CompletionType};
 use crate::completion::shell_path::normalize_path_token;
 use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync};
 use anyhow::Result;
@@ -25,7 +25,9 @@ impl FileSystemGenerator {
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
         // Reuse legacy path listing cache for better performance.
-        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
+        let home_expansion = current_token.starts_with("~/");
+        let lookup_dir = lookup_directory(&dir_path, home_expansion);
+        let listing = path_completion_path_sync(PathBuf::from(lookup_dir)).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {
@@ -65,6 +67,13 @@ impl FileSystemGenerator {
             } else {
                 CompletionCandidate::file(full_path)
             };
+            if home_expansion {
+                cand.completion_type = if is_dir {
+                    CompletionType::HomeDirectory
+                } else {
+                    CompletionType::HomeFile
+                };
+            }
             cand.priority = cand.priority.saturating_add(score_bonus);
             candidates.push(cand);
         }
@@ -79,7 +88,9 @@ impl FileSystemGenerator {
         let normalized_token = normalize_path_token(current_token);
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
-        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
+        let home_expansion = current_token.starts_with("~/");
+        let lookup_dir = lookup_directory(&dir_path, home_expansion);
+        let listing = path_completion_path_sync(PathBuf::from(lookup_dir)).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {
@@ -112,6 +123,9 @@ impl FileSystemGenerator {
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
             let mut cand = CompletionCandidate::directory(full_path);
+            if home_expansion {
+                cand.completion_type = CompletionType::HomeDirectory;
+            }
             cand.priority = cand.priority.saturating_add(score_bonus);
             candidates.push(cand);
         }
@@ -168,6 +182,15 @@ impl FileSystemGenerator {
             .join(file_name)
             .to_string_lossy()
             .to_string()
+    }
+}
+
+fn lookup_directory(dir: &str, home_expansion: bool) -> String {
+    // Quoted/escaped tilde is literal: keep the cache scanner from expanding it.
+    if !home_expansion && (dir == "~" || dir.starts_with("~/")) {
+        format!("./{dir}")
+    } else {
+        dir.to_string()
     }
 }
 

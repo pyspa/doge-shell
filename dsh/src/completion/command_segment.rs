@@ -140,5 +140,22 @@ pub(crate) fn command_segment_at_cursor(input: &str, cursor: usize) -> CommandSe
     result
 }
 
+pub(crate) fn smart_pipe_marker(input: &str) -> Option<usize> {
+    let pairs = ShellParser::parse(Rule::completion_scan, input)
+        .ok()?
+        .next()?;
+    for pair in pairs.into_inner() {
+        let start = pair.as_span().start();
+        if pair.as_rule() == Rule::completion_control
+            && pair.as_str() == "|"
+            && input[start..].starts_with("|?")
+            && !command_segment_at_cursor(&input[..start], start).suppressed
+        {
+            return Some(start);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests;

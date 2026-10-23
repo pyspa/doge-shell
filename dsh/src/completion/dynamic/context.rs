@@ -113,6 +113,8 @@ pub(super) fn archive_file_candidates(current_token: &str) -> Vec<EnhancedCandid
         .map(|candidate| {
             let candidate_type = match candidate.completion_type {
                 CompletionType::Directory => CandidateType::Directory,
+                CompletionType::HomeFile => CandidateType::HomeFile,
+                CompletionType::HomeDirectory => CandidateType::HomeDirectory,
                 _ => CandidateType::File,
             };
             EnhancedCandidate {

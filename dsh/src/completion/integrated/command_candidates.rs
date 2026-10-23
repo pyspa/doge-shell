@@ -34,6 +34,12 @@ impl IntegratedCompletionEngine {
         &self,
         current_token: &str,
     ) -> Option<Vec<EnhancedCandidate>> {
+        // Quote delimiters are source style, not part of an environment name.
+        let current_token = current_token
+            .strip_prefix('"')
+            .or_else(|| current_token.strip_prefix('\''))
+            .unwrap_or(current_token);
+        let current_token = current_token.trim_end_matches(['"', '\'']);
         if let Some(rest) = current_token.strip_prefix("${") {
             // Still typing the name inside `${...}` (no closing brace / path yet).
             if rest.contains('}') || rest.contains('/') {
@@ -76,11 +82,18 @@ impl IntegratedCompletionEngine {
 
         names
             .into_iter()
-            .filter(|name| prefix.is_empty() || name.starts_with(prefix))
+            .filter(|name| {
+                let mut chars = name.chars();
+                chars
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+                    && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                    && (prefix.is_empty() || name.starts_with(prefix))
+            })
             .map(|name| EnhancedCandidate {
                 text: format_value(&name),
                 description: Some("environment variable".to_string()),
-                candidate_type: CandidateType::Generic,
+                candidate_type: CandidateType::VariableReference,
                 priority: 140,
             })
             .collect()

@@ -22,6 +22,12 @@ pub(crate) enum PreviewSpec {
 /// so pathological candidate text cannot inject shell commands.
 pub(crate) fn candidate_preview(candidate: &Candidate) -> PreviewSpec {
     match candidate {
+        Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+            candidate_preview(candidate)
+        }
+        Candidate::ShellSyntax { description, .. } => description
+            .clone()
+            .map_or(PreviewSpec::None, PreviewSpec::Text),
         Candidate::File { path, is_dir } => file_preview(path, *is_dir),
         Candidate::Path(path) => {
             let is_dir = path.ends_with('/');
@@ -68,6 +74,9 @@ fn file_preview(path: &str, is_dir: bool) -> PreviewSpec {
 impl SkimItem for Candidate {
     fn output(&self) -> Cow<'_, str> {
         match self {
+            Candidate::HomePath(candidate) => candidate.output(),
+            Candidate::Prepared { insertion, .. } => Cow::Borrowed(insertion),
+            Candidate::ShellSyntax { text, .. } => Cow::Borrowed(text),
             Candidate::Item(text, _) => Cow::Borrowed(text),
             Candidate::Path(path) => Cow::Borrowed(path),
             Candidate::Basic(text) => Cow::Borrowed(text),
@@ -82,6 +91,15 @@ impl SkimItem for Candidate {
 
     fn text(&self) -> Cow<'_, str> {
         match self {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+                candidate.text()
+            }
+            Candidate::ShellSyntax {
+                text, description, ..
+            } => match description {
+                Some(description) => Cow::Owned(format!("{text:<30} {description}")),
+                None => Cow::Borrowed(text),
+            },
             Candidate::Item(x, y) => {
                 let desc = format!("{x:<30} {y}");
                 Cow::Owned(desc)

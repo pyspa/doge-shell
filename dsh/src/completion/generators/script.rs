@@ -33,28 +33,7 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
         command_template: &str,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
-        // Substitute template variables. Every value that originates from the
-        // command line is user-controlled, so it is shell-quoted before being
-        // spliced into the template that is later executed via `sh -c`. Without
-        // quoting, a token such as `"; rm -rf ~` would be executed as a command
-        // during completion (before the user even presses Enter).
-        let mut command = command_template.to_string();
-        command = command.replace("$COMMAND", &subprocess::shell_quote(&parsed.command));
-        if let Some(arg) = &parsed.current_arg {
-            command = command.replace("$CURRENT_TOKEN", &subprocess::shell_quote(arg));
-        } else {
-            command = command.replace("$CURRENT_TOKEN", "''");
-        }
-        if let Some(first_sub) = parsed.subcommand_path.first() {
-            command = command.replace("$SUBCOMMAND", &subprocess::shell_quote(first_sub));
-        } else {
-            command = command.replace("$SUBCOMMAND", "''");
-        }
-
-        for (i, arg) in parsed.specified_arguments.iter().enumerate() {
-            let key = format!("$ARG_{}", i);
-            command = command.replace(&key, &subprocess::shell_quote(arg));
-        }
+        let command = expand_script_template(command_template, parsed);
 
         // Execute command
         let stdout = self.runner.run(&command)?;
@@ -81,6 +60,60 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
         }
         Ok(candidates)
     }
+}
+
+/// Interpolate complete, unbraced placeholders in one pass over the template.
+/// Values are shell-quoted data and are never scanned again. Unknown identifiers,
+/// noncanonical/overflow/out-of-range ARG indexes remain verbatim for compatibility
+/// with ordinary shell variables. This is not a shell-template parser: existing
+/// textual substitution also applies inside template quotes and after backslashes.
+/// Suffix concatenation needs a boundary: `$CURRENT_TOKEN'_suffix'`, rather
+/// than `$CURRENT_TOKEN_suffix` (an unknown identifier, left unchanged).
+fn expand_script_template(template: &str, parsed: &ParsedCommandLine) -> String {
+    let mut result = String::with_capacity(template.len());
+    let mut chars = template.char_indices().peekable();
+    while let Some((start, ch)) = chars.next() {
+        if ch != '$' {
+            result.push(ch);
+            continue;
+        }
+        let mut end = start + 1;
+        while let Some(&(offset, next)) = chars.peek() {
+            if !next.is_alphanumeric() && next != '_' {
+                break;
+            }
+            end = offset + next.len_utf8();
+            chars.next();
+        }
+        let name = &template[start + 1..end];
+        let value = match name {
+            "COMMAND" => Some(parsed.command.as_str()),
+            "CURRENT_TOKEN" => Some(parsed.current_arg.as_deref().unwrap_or_default()),
+            "SUBCOMMAND" => Some(
+                parsed
+                    .subcommand_path
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            ),
+            _ => name
+                .strip_prefix("ARG_")
+                .filter(|index| {
+                    !index.is_empty()
+                        && index.bytes().all(|ch| ch.is_ascii_digit())
+                        && (*index == "0" || !index.starts_with('0'))
+                })
+                .and_then(|index| index.parse::<usize>().ok())
+                .and_then(|index| parsed.specified_arguments.get(index))
+                .map(String::as_str),
+        };
+        if let Some(value) = value {
+            result.push_str(&subprocess::shell_quote(value));
+        } else {
+            result.push_str(&template[start..end]);
+        }
+    }
+    result
 }
 
 impl Default for ScriptGenerator<DefaultScriptRunner> {
@@ -113,6 +146,47 @@ mod tests {
             assert_eq!(command, self.expected_command);
             Ok(self.output.clone())
         }
+    }
+
+    #[test]
+    fn script_placeholder_boundaries_and_unknown_values() {
+        let mut parsed = crate::completion::parser::CommandLineParser::new().parse("probe ", 6);
+        parsed.current_arg = None;
+        parsed.specified_arguments = (0..=10).map(|n| format!("value{n}")).collect();
+        let unknown = "$ARG_ $ARG_-1 $ARG_01 $ARG_999999999999999999999999999999 $ARG_11 $ARG_1suffix $CURRENT_TOKEN_suffix $COMMAND日本 ${COMMAND} $UNKNOWN";
+        assert_eq!(expand_script_template(unknown, &parsed), unknown);
+        assert_eq!(
+            expand_script_template(
+                "$ARG_1/$ARG_10/$ARG_1 $CURRENT_TOKEN $SUBCOMMAND $COMMAND",
+                &parsed
+            ),
+            "'value1'/'value10'/'value1' '' '' 'probe'"
+        );
+        parsed.command = "$CURRENT_TOKEN".into();
+        parsed.current_arg = Some("日本語 e\u{301} \\ ' \n$COMMAND".into());
+        assert_eq!(
+            expand_script_template("$COMMAND $CURRENT_TOKEN", &parsed),
+            format!(
+                "'$CURRENT_TOKEN' {}",
+                subprocess::shell_quote(parsed.current_arg.as_deref().unwrap())
+            )
+        );
+    }
+
+    #[test]
+    fn script_placeholders_are_complete_and_nonrecursive() {
+        let mut parsed =
+            crate::completion::parser::CommandLineParser::new().parse("probe value", 11);
+        parsed.current_arg = Some("$ARG_0".into());
+        parsed.specified_arguments = vec!["x; printf INJECTED; #".into()];
+        // Mock only: these strings must never reach DefaultScriptRunner.
+        ScriptGenerator::new(MockScriptRunner::new("printf %s '$ARG_0'", ""))
+            .generate_script_candidates("printf %s $CURRENT_TOKEN", &parsed)
+            .unwrap();
+        parsed.specified_arguments = (0..=10).map(|n| format!("value{n}")).collect();
+        ScriptGenerator::new(MockScriptRunner::new("printf %s 'value10'", ""))
+            .generate_script_candidates("printf %s $ARG_10", &parsed)
+            .unwrap();
     }
 
     #[test]

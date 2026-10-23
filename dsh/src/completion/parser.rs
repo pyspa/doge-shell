@@ -1,5 +1,9 @@
+//! Byte-coordinate completion parsing within the invocation selected by the
+//! tolerant lexical source view. Source identity survives context correction.
 use super::command::ArgumentType;
-use super::shell_token::{self, SeparatorMode, ShellTokenSpan};
+pub use super::command_segment::CommandSource;
+use super::command_segment::{self, floor_byte};
+use super::shell_token::ShellTokenSpan;
 use std::collections::VecDeque;
 
 #[inline]
@@ -28,6 +32,8 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
 /// Command line parsing result for dynamic completion
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommandLine {
+    /// Original invocation source and cursor identity, retained through correction.
+    pub source: Option<CommandSource>,
     /// Main command name
     pub command: String,
     /// Subcommand path (e.g., ["remote", "add"])
@@ -48,7 +54,7 @@ pub struct ParsedCommandLine {
     pub specified_options: Vec<String>,
     /// Already specified arguments
     pub specified_arguments: Vec<String>,
-    /// Cursor index
+    /// Byte cursor index in the original input.
     pub cursor_index: usize,
 }
 
@@ -98,18 +104,24 @@ impl CommandLineParser {
         Self
     }
 
-    /// Parse command line
+    /// Parse the command at a byte cursor; invalid UTF-8 boundaries round down.
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
-        let spans = self.tokenize_with_positions(input);
+        let cursor_pos = floor_byte(input, cursor_pos);
+        let segment = command_segment::command_segment_at_cursor(input, cursor_pos);
+        let source_input = &input[segment.range.clone()];
+        let local_cursor = cursor_pos
+            .saturating_sub(segment.range.start)
+            .min(source_input.len());
+        let mut spans = self.tokenize_with_positions(source_input);
         let mut tokens: Vec<String> = spans.iter().map(|s| s.raw.clone()).collect();
         let (cursor_token_index, is_inside_token) =
-            self.find_cursor_token_index(&spans, cursor_pos);
+            self.find_cursor_token_index(&spans, local_cursor);
 
         // Adjust tokens based on cursor position
         if is_inside_token {
             if cursor_token_index < tokens.len() {
                 let span = &spans[cursor_token_index];
-                let relative_pos = cursor_pos.saturating_sub(span.byte_start);
+                let relative_pos = local_cursor.saturating_sub(span.byte_start);
                 if relative_pos < span.raw.len() {
                     // Start from relative_pos and backtrack to find a valid char boundary
                     // This handles cases where cursor is in the middle of a multibyte char
@@ -124,10 +136,29 @@ impl CommandLineParser {
             // Insert empty token at cursor position (gap)
             if cursor_token_index <= tokens.len() {
                 tokens.insert(cursor_token_index, String::new());
+                spans.insert(
+                    cursor_token_index,
+                    command_segment::word_span(source_input, local_cursor..local_cursor),
+                );
             }
         }
 
-        self.analyze_tokens(tokens, cursor_token_index, input, cursor_pos)
+        let mut parsed =
+            self.analyze_tokens(tokens, cursor_token_index, source_input, local_cursor);
+        parsed.cursor_index = cursor_pos;
+        parsed.source = Some(CommandSource {
+            input: source_input.to_string(),
+            cursor: local_cursor,
+            words: spans,
+            cursor_word: cursor_token_index,
+            argument_start: 0,
+            multiple: segment.multiple,
+            suppressed: segment.suppressed,
+        });
+        if segment.suppressed {
+            parsed.completion_context = CompletionContext::Unknown;
+        }
+        parsed
     }
 
     /// Split input string into tokens
@@ -141,7 +172,7 @@ impl CommandLineParser {
             .collect()
     }
 
-    /// Return the complete token under the cursor and the cursor offset inside it.
+    /// Return the complete token at a byte cursor and its byte offset.
     pub(crate) fn token_at_cursor(
         &self,
         input: &str,
@@ -159,7 +190,7 @@ impl CommandLineParser {
 
     /// Split input string into tokens and keep their character spans.
     fn tokenize_with_positions(&self, input: &str) -> Vec<ShellTokenSpan> {
-        shell_token::tokenize(input, SeparatorMode::Parser)
+        command_segment::words(input)
     }
 
     /// Find token index corresponding to cursor position (byte index).
@@ -196,6 +227,7 @@ impl CommandLineParser {
     ) -> ParsedCommandLine {
         if tokens.is_empty() {
             return ParsedCommandLine {
+                source: None,
                 command: String::new(),
                 subcommand_path: Vec::new(),
                 raw_args: Vec::new(),
@@ -342,6 +374,7 @@ impl CommandLineParser {
         options.extend(specified_options.clone());
 
         ParsedCommandLine {
+            source: None,
             command: command.clone(),
             subcommand_path: subcommand_path.clone(),
             raw_args,
@@ -560,7 +593,7 @@ impl CommandLineParser {
     }
 
     /// Determine if option takes a value (simplified version)
-    fn option_takes_value(&self, option: &str) -> bool {
+    pub(crate) fn option_takes_value(&self, option: &str) -> bool {
         // Options that commonly take values
         matches!(
             option,

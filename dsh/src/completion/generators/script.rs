@@ -136,6 +136,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         let template = "echo $CURRENT_TOKEN";
@@ -168,6 +169,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         let result = generator
@@ -202,6 +204,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec!["foo".to_string()],
             cursor_index: 0,
+            source: None,
         };
 
         let template = "echo $ARG_0";
@@ -236,6 +239,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,
+            source: None,
         };
 
         // Assertion of the exact quoted command happens inside MockScriptRunner::run.

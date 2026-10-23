@@ -1272,6 +1272,7 @@ fn git_subcommand_accepts_paths_detects_checkout_and_restore() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
     assert!(git_subcommand_accepts_paths(&make("git", "checkout")));
     assert!(git_subcommand_accepts_paths(&make("git", "restore")));

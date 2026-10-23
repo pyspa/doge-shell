@@ -3,7 +3,6 @@
 //! `--opt=value`/`-ovalue` option value embedded in the same token.
 use super::*;
 use crate::completion::parser;
-use crate::completion::shell_token::{self, SeparatorMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompletionReplacementRange {
@@ -60,12 +59,29 @@ pub(super) fn token_range_at_cursor(
     input: &str,
     cursor_pos: usize,
 ) -> Option<CompletionReplacementRange> {
-    let token =
-        shell_token::token_at_char_cursor(input, cursor_pos, SeparatorMode::CompletionRange)?;
-    Some(CompletionReplacementRange {
-        start: token.char_start,
-        end: token.char_end,
-    })
+    let cursor_byte = crate::completion::command_segment::char_to_byte(input, cursor_pos);
+    let segment = crate::completion::command_segment::command_segment_at_cursor(input, cursor_byte);
+    if segment.suppressed {
+        return None;
+    }
+    let token_range = crate::completion::command_segment::words(&input[segment.range.clone()])
+        .into_iter()
+        .find(|word| {
+            let local = cursor_byte.saturating_sub(segment.range.start);
+            word.byte_start <= local && local <= word.byte_end
+        })
+        .map(|word| {
+            let offset = input[..segment.range.start].chars().count();
+            CompletionReplacementRange {
+                start: offset + word.char_start,
+                end: offset + word.char_end,
+            }
+        })
+        .unwrap_or(CompletionReplacementRange {
+            start: cursor_pos,
+            end: cursor_pos,
+        });
+    Some(token_range)
 }
 
 pub(super) fn slice_chars(input: &str, start: usize, end: usize) -> String {

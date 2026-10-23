@@ -1,29 +1,32 @@
 //! Bind a foreground replacement preview to one file and revalidate before writing.
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{self, Read, Seek, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::fs::MetadataExt,
     path::Path,
 };
 
 pub(super) struct Preimage {
     // Keep the original inode alive throughout approval, including after unlink.
     file: File,
+    target: crate::agent::files::WriteTarget,
     pub(super) contents: String,
 }
 
 impl Preimage {
     pub(super) fn read(path: &Path) -> io::Result<Self> {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(path)?;
+        let target = crate::agent::files::WriteTarget::prepare(path, false)?;
+        let mut file = target.open_read()?;
         if !file.metadata()?.is_file() {
             return Err(io::Error::other("replacement requires a regular file"));
         }
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        Ok(Self { file, contents })
+        Ok(Self {
+            file,
+            target,
+            contents,
+        })
     }
 
     pub(super) fn write(self, path: &Path, updated: &str) -> io::Result<()> {
@@ -40,11 +43,7 @@ impl Preimage {
     fn open_unchanged(&self, path: &Path) -> io::Result<File> {
         // Never create or truncate on open: deletion and replacement during the
         // prompt must be conflicts, even when a replacement has identical bytes.
-        let mut target = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
-            .open(path)?;
+        let mut target = self.target.open_checked(true)?;
         let original = self.file.metadata()?;
         let same_file = |metadata: &fs::Metadata| {
             metadata.is_file()

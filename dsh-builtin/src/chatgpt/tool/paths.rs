@@ -30,7 +30,17 @@ pub(crate) fn resolve_with_existing_ancestor(path: &Path) -> Result<PathBuf, Str
     let mut suffix = PathBuf::new();
 
     loop {
-        if current.exists() {
+        let present = match std::fs::symlink_metadata(&current) {
+            Ok(_) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => {
+                return Err(format!(
+                    "chat: failed to inspect path ancestor `{}`: {err}",
+                    current.display()
+                ));
+            }
+        };
+        if present {
             let canonical = std::fs::canonicalize(&current).map_err(|err| {
                 format!(
                     "chat: failed to canonicalize path ancestor `{}`: {err}",

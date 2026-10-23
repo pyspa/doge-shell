@@ -1,3 +1,5 @@
+//! Directory listings retain the request's lookup location and source spelling.
+//! Cache entries describe one exact directory, never a parent-prefix result.
 use crate::completion::cache::CompletionCache;
 use crate::completion::fuzzy::fuzzy_rank;
 #[cfg(not(test))]
@@ -12,6 +14,34 @@ use std::time::Duration;
 
 static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
+
+struct DirectoryRequest {
+    key: String,
+    lookup: PathBuf,
+    display: PathBuf,
+}
+
+impl DirectoryRequest {
+    fn new(path: PathBuf) -> Result<Self> {
+        let spelling = path.to_string_lossy();
+        let expanded = PathBuf::from(shellexpand::tilde(&spelling).as_ref());
+        // Resolve before background work is queued: a later cd must neither
+        // change the scan target nor reuse relative results from another cwd.
+        let lookup = if expanded.is_absolute() {
+            expanded
+        } else {
+            std::env::current_dir()?.join(expanded)
+        };
+        // The same directory can be requested as '.', './', an absolute path,
+        // or '~/...'. Keep display provenance separate from lookup identity.
+        let key = format!("{spelling}\0{}", lookup.display());
+        Ok(Self {
+            key,
+            lookup,
+            display: path,
+        })
+    }
+}
 
 pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
     let pbuf = PathBuf::from(input);
@@ -153,7 +183,13 @@ pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Opt
                 }
             }
 
-            candidates.push(path_str);
+            // The stripped spelling that matched is also the continuation.
+            // Returning './foo' for bare 'fo' loses the append-only ghost.
+            candidates.push(if !path_str.starts_with(&search) {
+                path_str.strip_prefix("./").unwrap_or(&path_str).to_string()
+            } else {
+                path_str
+            });
         }
     }
 
@@ -232,40 +268,38 @@ pub fn path_completion() -> Result<Vec<Candidate>> {
 }
 
 pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
+    let request = DirectoryRequest::new(path)?;
 
     // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        return Ok(candidates.as_ref().clone());
     }
 
     #[cfg(test)]
     {
         // For tests, run synchronously to avoid "no reactor" panic and ensure results are returned immediately
-        let candidates = scan_dir_candidates(path.clone())?;
-        PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
+        let key = request.key.clone();
+        let candidates = scan_dir_candidates(request)?;
+        PATH_COMPLETION_CACHE.set(key, candidates.clone());
         Ok(candidates)
     }
 
     #[cfg(not(test))]
     {
         // Check if pending to avoid duplicate loaded
-        if PATH_COMPLETION_CACHE.is_pending(&path_str) {
+        if !PATH_COMPLETION_CACHE.mark_pending(request.key.clone()) {
             // If pending, return empty for now (UI will refresh when ready)
             return Ok(Vec::new());
         }
 
         // Trigger background load
         // Note: We need to clone path_str for the closure
-        let path_str_clone = path_str.clone();
-        let path_buf = path.clone();
-
-        PATH_COMPLETION_CACHE.mark_pending(path_str.clone());
+        let path_str_clone = request.key.clone();
 
         // We assume we are running in a tokio runtime (dsh is tokio::main)
         tokio::spawn(async move {
             // Use spawn_blocking for IO-heavy directory scanning
-            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(path_buf)).await;
+            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(request)).await;
 
             match result {
                 Ok(Ok(candidates)) => {
@@ -296,16 +330,17 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
 /// Synchronous variant of path_completion_path for explicit user actions (TAB completion).
 /// Always returns results immediately, either from cache or by scanning synchronously.
 pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
+    let request = DirectoryRequest::new(path)?;
 
     // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        return Ok(candidates.as_ref().clone());
     }
 
     // Scan synchronously and cache
-    let candidates = scan_dir_candidates(path)?;
-    PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
+    let key = request.key.clone();
+    let candidates = scan_dir_candidates(request)?;
+    PATH_COMPLETION_CACHE.set(key, candidates.clone());
     Ok(candidates)
 }
 
@@ -318,7 +353,9 @@ pub fn is_path_cached(path: &Path) -> bool {
         None => return false,
     };
 
-    let parent_str = parent.display().to_string();
+    let Ok(request) = DirectoryRequest::new(parent) else {
+        return false;
+    };
 
     // Only check cache, don't trigger background load.
     //
@@ -328,8 +365,13 @@ pub fn is_path_cached(path: &Path) -> bool {
     // on every keystroke, so the clone is the dominant cost. The prefix walk is
     // also wrong for directory keys — it can match an unrelated directory whose
     // path happens to be a prefix of this one (`/home/ma` vs `/home/ma2`).
-    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&parent_str) {
-        let path_str = path.display().to_string();
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+        // A bare 'foo' is listed under '.' as './foo'. Compare in the
+        // listing's display spelling rather than losing that provenance.
+        let path_str = request.display.join(name).display().to_string();
         let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
 
         for cand in candidates.iter() {
@@ -359,41 +401,22 @@ pub(crate) fn is_path_cached_for_shell_token(raw_token: &str) -> bool {
 }
 
 // Synchronous helper moved out for clarity and reuse in background task
-fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
-    let exp_str = shellexpand::tilde(&path_str).to_string();
-    let expand = path_str != exp_str;
-
-    let home = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .ok_or_else(|| anyhow::Error::msg("HOME environment variable not set"))?;
-    let path = PathBuf::from(exp_str);
-
-    let dir = read_dir(&path)?;
+fn scan_dir_candidates(request: DirectoryRequest) -> Result<Vec<Candidate>> {
+    let dir = read_dir(&request.lookup)?;
     let mut files: Vec<Candidate> = Vec::new();
 
     for entry in dir.flatten() {
         let entry_path = entry.path();
         let is_dir = path_is_dir(&entry_path)?;
-        if expand {
-            if let Ok(part) = entry_path.strip_prefix(&home) {
-                let mut pb = PathBuf::new();
-                pb.push("~/");
-                pb.push(part);
-                let mut path = pb.display().to_string();
-                if is_dir {
-                    path += "/";
-                }
-                files.push(Candidate::Path(path));
-            }
-        } else {
-            let mut path = entry_path.display().to_string();
-            if is_dir {
-                path += "/";
-            }
-            files.push(Candidate::Path(path));
+        let mut path = request
+            .display
+            .join(entry.file_name())
+            .display()
+            .to_string();
+        if is_dir {
+            path += "/";
         }
+        files.push(Candidate::Path(path));
         if files.len() >= MAX_RESULT {
             break;
         }

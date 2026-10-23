@@ -56,7 +56,11 @@ impl DynamicCompletionProvider {
             loader,
         );
 
-        cached_value_matches(values, current_token)
+        // Collectors pass raw cursor source (e.g. `"fe` or `hello\ world`).
+        // Decode only for matching, exactly once. Cached literal values and
+        // loader arguments retain their original spelling and scope.
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        cached_value_matches(values, &query)
             .into_iter()
             .map(|value| EnhancedCandidate {
                 text: value,
@@ -108,7 +112,11 @@ impl DynamicCompletionProvider {
             self.load_command_values(kind, scope_dir, loader)
         };
 
-        cached_value_matches(values, current_token)
+        // Collectors pass raw cursor source (e.g. `"fe` or `hello\ world`).
+        // Decode only for matching, exactly once. Cached literal values and
+        // loader arguments retain their original spelling and scope.
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        cached_value_matches(values, &query)
             .into_iter()
             .map(|value| EnhancedCandidate {
                 text: value,

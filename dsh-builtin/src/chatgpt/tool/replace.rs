@@ -4,7 +4,8 @@
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
-use std::fs;
+
+mod foreground;
 
 pub(crate) const NAME: &str = "str_replace";
 
@@ -105,10 +106,22 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 
     let restricted_io =
         proxy.agent_runtime().is_some() || proxy.background_task_context().is_some();
+    let preimage = if restricted_io {
+        None
+    } else {
+        Some(
+            foreground::Preimage::read(&normalized_abs_path)
+                .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?,
+        )
+    };
     let contents = if restricted_io {
         crate::agent::files::read(&normalized_abs_path)
     } else {
-        fs::read_to_string(&normalized_abs_path)
+        Ok(preimage
+            .as_ref()
+            .expect("foreground preimage")
+            .contents
+            .clone())
     }
     .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
@@ -178,7 +191,9 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     if restricted_io {
         crate::agent::files::write(&normalized_abs_path, &updated)
     } else {
-        fs::write(&normalized_abs_path, &updated)
+        preimage
+            .expect("foreground preimage")
+            .write(&normalized_abs_path, &updated)
     }
     .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
 
@@ -192,6 +207,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -406,3 +422,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "replace/approval_tests.rs"]
+mod approval_tests;

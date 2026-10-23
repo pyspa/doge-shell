@@ -120,7 +120,7 @@ impl<'a> CompletionGenerator<'a> {
         match &corrected.completion_context {
             CompletionContext::Command => self
                 .command_generator()
-                .generate_command_candidates(&corrected.current_token),
+                .generate_command_candidates(&corrected.completion_query()),
             CompletionContext::SubCommand => self
                 .command_generator()
                 .generate_subcommand_candidates(&corrected, |arg_type, p| {

@@ -5,7 +5,20 @@
     {
       "short": "-u",
       "long": "--user",
-      "description": "Run command as specified user"
+      "description": "Run command as specified user",
+      "takes_value": true,
+      "value_type": {
+        "type": "User"
+      }
+    },
+    {
+      "short": "-g",
+      "long": "--group",
+      "description": "Run command as specified group",
+      "takes_value": true,
+      "value_type": {
+        "type": "Group"
+      }
     },
     {
       "short": "-i",

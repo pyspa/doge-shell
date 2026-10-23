@@ -336,14 +336,18 @@ async fn directory_redirect_never_exposes_outside_symlinks_or_traversal() {
 async fn directory_redirect_cannot_become_a_network_path_reference() {
     let dir = TempDir::new().unwrap();
     let root = fs::canonicalize(dir.path()).unwrap();
-    let path = format!("/{}", root.display());
-    let (status, headers, _) = request(&root, &path, false, false).await;
-    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
-    let base = reqwest::Url::parse("http://localhost/").unwrap();
-    let redirect = base.join(headers["location"].to_str().unwrap()).unwrap();
-    assert_eq!(redirect.host_str(), Some("localhost"));
-    assert_eq!(
-        request(&root, redirect.path(), false, false).await.0,
-        StatusCode::OK
-    );
+    // Backslash is a filename character on both supported Unix platforms.
+    let directory_name = std::ffi::OsStr::new(r"\example.com");
+    fs::create_dir(root.join(directory_name)).unwrap();
+    for path in [format!("/{}", root.display()), r"/\example.com".into()] {
+        let (status, headers, _) = request(&root, &path, false, false).await;
+        assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+        let base = reqwest::Url::parse("http://localhost/").unwrap();
+        let redirect = base.join(headers["location"].to_str().unwrap()).unwrap();
+        assert_eq!(redirect.host_str(), Some("localhost"), "{path}");
+        assert_eq!(
+            request(&root, redirect.path(), false, false).await.0,
+            StatusCode::OK
+        );
+    }
 }

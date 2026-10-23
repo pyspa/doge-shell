@@ -519,12 +519,15 @@ pub async fn serve_file_handler(
                 response
             } else if canonical_path.is_dir() {
                 if !path.ends_with('/') {
+                    // Browsers treat raw backslashes as URL separators. Encode
+                    // them without changing any existing percent-escapes.
+                    let redirect_path = path.replace('\\', "%5C");
                     // A leading // is a network-path reference in Location.
                     // Prefix a dot segment to keep even that spelling on this origin.
                     let mut location = if path.starts_with("//") {
-                        format!("/.{path}/")
+                        format!("/.{redirect_path}/")
                     } else {
-                        format!("{path}/")
+                        format!("{redirect_path}/")
                     };
                     if let Some(query) = uri.query() {
                         location.push('?');

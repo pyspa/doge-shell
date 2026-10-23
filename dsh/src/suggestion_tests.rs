@@ -78,7 +78,9 @@ fn ai_backend_runs_when_preferences_enable_it() {
         ..Default::default()
     });
 
-    let result = engine.predict("git s", "git s".chars().count(), None);
+    // An empty argument has no filesystem continuation. A partial 's'
+    // legitimately completes a cwd entry such as src/ before AI backfill.
+    let result = engine.predict("git ", "git ".chars().count(), None);
 
     assert!(!result.is_empty());
     assert_eq!(result[0].full, "git status");
@@ -108,7 +110,7 @@ fn engine_handles_backend_returning_none() {
         ..Default::default()
     });
 
-    let result = engine.predict("git s", 5, None);
+    let result = engine.predict("git ", 4, None);
     assert!(result.is_empty(), "Should return empty when backend fails");
     assert_eq!(
         *backend.calls.lock(),
@@ -117,7 +119,7 @@ fn engine_handles_backend_returning_none() {
     );
 
     // Ensure state is clean for a subsequent call
-    let result2 = engine.predict("git st", 6, None);
+    let result2 = engine.predict("git s ", 6, None);
     assert!(
         result2.is_empty(),
         "Should return empty when backend fails again"

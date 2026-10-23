@@ -151,6 +151,20 @@ impl CommandLineParser {
             }
         }
 
+        // Redirect operators are shell syntax, not completable argv words.
+        // FD duplication targets are descriptor numbers (or `-`), never paths.
+        // Mark these regions before any provider or legacy TAB hook is reached.
+        let suppressed = segment.suppressed
+            || spans
+                .get(cursor_token_index)
+                .is_some_and(|word| Self::is_redirect_operator(&word.raw))
+            || cursor_token_index
+                .checked_sub(1)
+                .and_then(|i| spans.get(i))
+                .is_some_and(|word| {
+                    Self::is_redirect_operator(&word.raw)
+                        && (word.raw.ends_with(">&") || word.raw.ends_with("<&"))
+                });
         let mut parsed =
             self.analyze_tokens(tokens, cursor_token_index, source_input, local_cursor);
         parsed.cursor_index = cursor_pos;
@@ -161,9 +175,9 @@ impl CommandLineParser {
             cursor_word: cursor_token_index,
             argument_start: 0,
             multiple: segment.multiple,
-            suppressed: segment.suppressed,
+            suppressed,
         });
-        if segment.suppressed {
+        if suppressed {
             parsed.completion_context = CompletionContext::Unknown;
         }
         parsed
@@ -212,6 +226,16 @@ impl CommandLineParser {
     ) -> (usize, bool) {
         for (i, span) in spans.iter().enumerate() {
             if cursor_pos <= span.byte_end {
+                if cursor_pos == span.byte_end && Self::is_redirect_operator(&span.raw) {
+                    // `>¦out` begins the target, not a prefix of `>`.
+                    // A gap after the operator gets its own empty source span.
+                    return (
+                        i + 1,
+                        spans
+                            .get(i + 1)
+                            .is_some_and(|next| next.byte_start == cursor_pos),
+                    );
+                }
                 if cursor_pos >= span.byte_start {
                     // Inside or at the end of this token
                     return (i, true);

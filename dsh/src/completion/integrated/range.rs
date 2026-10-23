@@ -61,27 +61,21 @@ pub(crate) fn token_range_at_cursor(
 ) -> Option<CompletionReplacementRange> {
     let cursor_pos = cursor_pos.min(input.chars().count());
     let cursor_byte = crate::completion::command_segment::char_to_byte(input, cursor_pos);
-    let segment = crate::completion::command_segment::command_segment_at_cursor(input, cursor_byte);
-    if segment.suppressed {
+    let parsed = parser::CommandLineParser::new().parse(input, cursor_byte);
+    let source = parsed.source?;
+    if source.suppressed {
         return None;
     }
-    let token_range = crate::completion::command_segment::words(&input[segment.range.clone()])
-        .into_iter()
-        .find(|word| {
-            let local = cursor_byte.saturating_sub(segment.range.start);
-            word.byte_start <= local && local <= word.byte_end
-        })
-        .map(|word| {
-            let offset = input[..segment.range.start].chars().count();
-            CompletionReplacementRange {
-                start: offset + word.char_start,
-                end: offset + word.char_end,
-            }
-        })
-        .unwrap_or(CompletionReplacementRange {
-            start: cursor_pos,
-            end: cursor_pos,
-        });
+    // Share cursor ownership with provider dispatch, including adjacent redirect
+    // operators/targets and zero-width gaps. Never rediscover words by value.
+    let word = source.words.get(source.cursor_word)?;
+    let offset = input[..cursor_byte.saturating_sub(source.cursor)]
+        .chars()
+        .count();
+    let token_range = CompletionReplacementRange {
+        start: offset + word.char_start,
+        end: offset + word.char_end,
+    };
     Some(token_range)
 }
 

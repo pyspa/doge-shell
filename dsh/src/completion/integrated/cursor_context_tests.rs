@@ -183,3 +183,130 @@ fn concatenated_quotes_insert_one_complete_literal_word() {
         );
     }
 }
+
+fn job_engine() -> IntegratedCompletionEngine {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/bg.json")).unwrap(),
+    );
+    e.set_shell_jobs(vec![(1, "fixture-job".into(), "Stopped".into())]);
+    e
+}
+
+#[tokio::test]
+async fn descriptor_targets_and_operator_interiors_are_suppressed() {
+    let e = job_engine();
+    let cwd = tempfile::tempdir().unwrap();
+    for marked in [
+        "bg 2>&12345§",
+        "bg 2>&§1",
+        "bg 2<&0§",
+        "unknown 2>&1§",
+        "echo 日 && bg 2>&1§; echo next",
+        "bg 2>§&1",
+        "bg >§>out",
+    ] {
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let input = marked.replace('§', "");
+        let result = e.complete(&input, cursor, cwd.path(), 20, None).await;
+        assert!(
+            matches!(result.disposition, CompletionDisposition::Suppressed),
+            "{marked}: {result:?}"
+        );
+        assert!(token_range_at_cursor(&input, cursor).is_none(), "{marked}");
+        let p = parsed(&e, marked);
+        let db = e.command_completion.lock();
+        assert!(
+            CompletionGenerator::new(&db)
+                .generate_candidates(&p)
+                .unwrap()
+                .is_empty(),
+            "suppressed generator: {marked}"
+        );
+        drop(db);
+        assert!(
+            e.ghost_completion(&input, cursor, cwd.path(), None)
+                .is_none()
+        );
+    }
+    for input in ["bg '2>&1'", r"bg 2\>\&1"] {
+        let result = e
+            .complete(input, input.chars().count(), cwd.path(), 20, None)
+            .await;
+        assert!(
+            matches!(result.disposition, CompletionDisposition::Allowed),
+            "literal operator: {input}: {result:?}"
+        );
+    }
+    let input = "bg 2>&1 ";
+    assert!(
+        e.complete(input, input.len(), cwd.path(), 20, None)
+            .await
+            .candidates
+            .iter()
+            .any(|c| c.text == "%1")
+    );
+}
+
+#[test]
+fn redirect_boundary_belongs_to_target_not_operator() {
+    let e = job_engine();
+    for marked in [
+        "bg >§out tail",
+        "bg >>§out tail",
+        "echo 日 && bg >§out; echo next",
+        "bg >§ out",
+        "bg >§",
+    ] {
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let input = marked.replace('§', "");
+        let p = parsed(&e, marked);
+        assert_eq!(p.current_token, "", "{marked}: {p:?}");
+        assert!(
+            matches!(
+                p.completion_context,
+                CompletionContext::Argument {
+                    arg_type: Some(ArgumentType::File { .. }),
+                    ..
+                }
+            ),
+            "{marked}: {p:?}"
+        );
+        let range = token_range_at_cursor(&input, cursor).unwrap();
+        assert_eq!(range.start, cursor, "{marked}");
+        assert_eq!(
+            slice_chars(&input, range.start, range.end),
+            if marked.contains("§out") { "out" } else { "" },
+            "{marked}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn job_queries_decode_source_without_spawning_providers() {
+    let e = job_engine();
+    let cwd = tempfile::tempdir().unwrap();
+    for marked in [
+        "bg \"%§\"",
+        "bg '%§'",
+        r"bg \%§",
+        "echo 日 && bg \"%§x\" tail",
+        "bg %\"\"§",
+    ] {
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let input = marked.replace('§', "");
+        let result = e.complete(&input, cursor, cwd.path(), 20, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == "%1"),
+            "{marked}: {result:?}"
+        );
+    }
+    for (input, expected) in [("bg \"%", "bg \"%+"), ("bg '%", "bg '%+")] {
+        assert_eq!(
+            e.ghost_completion(input, input.chars().count(), cwd.path(), None)
+                .as_deref(),
+            Some(expected)
+        );
+    }
+    assert!(!e.dynamic.has_pending_refresh());
+}

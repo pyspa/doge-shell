@@ -48,7 +48,10 @@ impl IntegratedCompletionEngine {
                     priority: 150,
                 }),
         );
-        candidates.retain(|candidate| matches_prefix(current_token, &candidate.text));
+        // Both TAB and cached-only ghost pass raw cursor source. Decode for
+        // matching only; job names and provider metadata remain literal words.
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        candidates.retain(|candidate| matches_prefix(&query, &candidate.text));
         candidates
     }
 

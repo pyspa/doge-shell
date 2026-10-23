@@ -69,7 +69,12 @@ impl<'a> ContextCorrector<'a> {
 
     /// Correct the parsed command line if the parser incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
-        if parsed.completion_context == CompletionContext::Command {
+        if parsed
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+            || parsed.completion_context == CompletionContext::Command
+        {
             return parsed.clone();
         }
         if let Some(source) = &parsed.source

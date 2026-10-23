@@ -700,7 +700,7 @@ mod cursor_context_tests {
             .to_string_lossy()
             .trim_end_matches("it.txt")
             .to_string();
-        for left in ["bg > ", "echo ok && bg > ", "bg -- > "] {
+        for left in ["bg > ", "bg >", "bg >>", "echo ok && bg > ", "bg -- > "] {
             let environment = Environment::new_synthetic();
             environment.write().variable_state.paths.clear();
             let mut shell = Shell::new(environment);
@@ -714,6 +714,33 @@ mod cursor_context_tests {
                 repl.input.as_str(),
                 format!("{left}\"{}\" tail", path.display())
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tab_tests {
+    #[tokio::test]
+    async fn tab_preserves_descriptor_targets_and_operator_interiors() {
+        use crate::{environment::Environment, repl::Repl, shell::Shell};
+        for marked in [
+            "bg 2>&12345§",
+            "bg 2>&§1",
+            "unknown 2<&0§",
+            "echo 日 && bg 2>§&1",
+            "bg >§>out",
+        ] {
+            let cursor = marked[..marked.find('§').unwrap()].chars().count();
+            let before = marked.replace('§', "");
+            let env = Environment::new_synthetic();
+            env.write().variable_state.paths.clear();
+            let mut shell = Shell::new(env);
+            let mut repl = Repl::new(&mut shell);
+            repl.input.reset(before.clone());
+            repl.input.move_to(cursor);
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            assert_eq!(repl.input.as_str(), before, "{marked}");
+            assert_eq!(repl.input.cursor(), cursor, "{marked}");
         }
     }
 }

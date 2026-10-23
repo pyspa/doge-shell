@@ -18,6 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Minimum supported macOS; keep in sync with .cargo/config.toml.
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
   CARGO_TERM_COLOR: always
   # A backtrace on a CI-only failure is usually the whole investigation.
   RUST_BACKTRACE: 1

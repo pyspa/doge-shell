@@ -8,7 +8,7 @@ doge-shell (dogesh) is a simple yet powerful shell that combines traditional she
 
 ## 💻 Supported Platforms
 
-dogesh targets **Linux** (x86_64 / aarch64) and **macOS** (Apple Silicon / Intel). Both are
+dogesh targets **Linux** (x86_64 / aarch64) and **macOS 13 or newer** (Apple Silicon / Intel). Both are
 first-class: the shell, its tests and its host-aware completions are expected to behave the
 same on either. Windows is not supported.
 

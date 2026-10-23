@@ -66,9 +66,6 @@ dsh/src/agent_lifecycle/herdr.rs	process-env	std::env::var_os(...)	1
 dsh/src/completion/display.rs	process-env	std::env::var(...)	1
 # Completion timing flag: diagnostics sampling switch, not shell state.
 dsh/src/completion/integrated/timing.rs	process-env	std::env::var(...)	1
-# File-path completion HOME fallback: OS account fact when the shell has
-# no logical HOME; never resurrects an unset shell variable into lookup.
-dsh/src/completion/path.rs	process-env	std::env::var(...)	1
 # Completion framework selector flag + current-dir fallback: UI/process
 # facts, not command resolution or child environments.
 dsh/src/completion/selection.rs	process-env	std::env::var(...)	2

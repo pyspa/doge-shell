@@ -34,11 +34,9 @@ impl FileSystemGenerator {
                 continue;
             };
 
-            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
-                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
-                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR);
 
-            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let trimmed = path_str.trim_end_matches(MAIN_SEPARATOR);
             let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
@@ -97,15 +95,13 @@ impl FileSystemGenerator {
                 continue;
             };
 
-            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
-                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
-                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR);
 
             if !is_dir {
                 continue;
             }
 
-            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let trimmed = path_str.trim_end_matches(MAIN_SEPARATOR);
             let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
@@ -161,8 +157,6 @@ impl FileSystemGenerator {
 
     pub fn ends_with_path_separator(token: &str) -> bool {
         token.ends_with(MAIN_SEPARATOR)
-            || (MAIN_SEPARATOR != '/' && token.ends_with('/'))
-            || (MAIN_SEPARATOR != '\\' && token.ends_with('\\'))
     }
 
     pub fn normalize_dir_path(path: &Path) -> String {

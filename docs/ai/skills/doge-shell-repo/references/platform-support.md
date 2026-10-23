@@ -4,7 +4,7 @@
 
 ## 対応 OS
 
-- **Linux** (x86_64 / aarch64, glibc / musl) と **macOS** (Apple Silicon / Intel)。どちらも同格で、片方でしか動かない変更を入れない。
+- **Linux** (x86_64 / aarch64, glibc / musl) と **macOS 13 以上** (Apple Silicon / Intel)。どちらも同格で、片方でしか動かない変更を入れない。
 - Windows は非対応。`std::os::unix` の `RawFd` / `PermissionsExt` / `CommandExt` に 40 箇所以上依存している。`#[cfg(unix)]` / `#[cfg(not(unix))]` の対がいくつかあるが、これは Windows を意識した防御で macOS 差分ではない。
 - `dsh/src/lib.rs` と `dsh-builtin/src/lib.rs` の `compile_error!` が対応 OS を 2 つに固定する。だから木全体の `#[cfg(not(target_os = "macos"))]` は「Linux」と読んでよい。
 
@@ -53,6 +53,9 @@
 - どちらも `scripts/portability-allowlist.txt` に `パス<TAB>リテラル` の対で固定されている。
 
 ## ツールチェーンとビルド
+
+- macOS の最低対応版は **13.0**。AI tool の descriptor-relative traversal は `O_SEARCH`（Linux は `O_PATH`）で search-only directory fd を開き、listing 用の readable fd と分離する。これにより execute-only parent を traversal できる。
+- `.cargo/config.toml` の `MACOSX_DEPLOYMENT_TARGET=13.0` が通常ビルドの既定値で、CI と stress workflow でも同じ値を指定する。明示上書きは 13.0 以上のみをサポートする。新しい macOS の CI 成功は macOS 13 実機での実行証明ではない。
 
 - MSRV 1.95 (`Cargo.toml` の `rust-version`)。`sysinfo 0.39.6` が 1.95 を要求するのが現在の床。旧根拠の `str::floor_char_boundary` (dsh-openai) は 1.91、`std::io::pipe` は 1.87。CI の `msrv (1.95)` job が `cargo check --workspace --all-targets` で実証する。
 - mold は Linux のみ。`.cargo/config.toml` は `[target.'cfg(target_os = "linux")']` の下に書く。`[build] rustflags` に置くと macOS の clang が `-fuse-ld=mold` を `invalid linker name` で拒否して**全リンクが落ちる** (`f866418`)。`scripts/check-portability.py` がこれを見る。

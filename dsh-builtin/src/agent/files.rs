@@ -1,25 +1,25 @@
 //! Descriptor-relative access after host path authorization. Never follow a
 //! symlink introduced between authorization and opening a task file.
 use nix::libc;
+mod traversal;
+mod write_target;
 use std::{
     ffi::{CString, OsString},
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read},
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::{
-            ffi::{OsStrExt, OsStringExt},
-            fs::MetadataExt,
-        },
+        unix::ffi::{OsStrExt, OsStringExt},
     },
     path::{Component, Path},
 };
+pub(crate) use write_target::WriteTarget;
 
-pub(crate) fn open(path: &Path, write: bool) -> io::Result<File> {
+pub(crate) fn open(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(io::Error::other("task file must be absolute"));
     }
-    let mut directory = File::open("/")?;
+    let mut directory = traversal::root()?;
     let mut parts = path
         .components()
         .filter(|c| *c != Component::RootDir)
@@ -30,39 +30,21 @@ pub(crate) fn open(path: &Path, write: bool) -> io::Result<File> {
         };
         let name = CString::new(name.as_bytes())?;
         let final_part = parts.peek().is_none();
-        let flags = libc::O_CLOEXEC
-            | libc::O_NOFOLLOW
-            | if final_part {
-                libc::O_NONBLOCK
-                    | if write {
-                        libc::O_WRONLY | libc::O_CREAT
-                    } else {
-                        libc::O_RDONLY
-                    }
-            } else {
-                libc::O_RDONLY | libc::O_DIRECTORY
-            };
+        if !final_part {
+            directory = traversal::directory(&directory, &name)?;
+            continue;
+        }
+        let flags = libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_RDONLY;
         // SAFETY: directory owns a valid fd; CString is terminated, and all
         // returned descriptors are immediately owned by File.
-        let mut fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, 0o600) };
-        if fd < 0
-            && write
-            && !final_part
-            && io::Error::last_os_error().kind() == io::ErrorKind::NotFound
-        {
-            let made = unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o700) };
-            if made < 0 && io::Error::last_os_error().kind() != io::ErrorKind::AlreadyExists {
-                return Err(io::Error::last_os_error());
-            }
-            fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, 0o600) };
-        }
+        let fd = unsafe { libc::openat(directory.as_raw_fd(), name.as_ptr(), flags, 0o600) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
         let file = unsafe { File::from_raw_fd(fd) };
         if final_part {
             let metadata = file.metadata()?;
-            if !metadata.is_file() || (write && metadata.nlink() > 1) {
+            if !metadata.is_file() {
                 return Err(io::Error::other(
                     "task access requires a regular file; writes reject hard links",
                 ));
@@ -76,7 +58,7 @@ pub(crate) fn open(path: &Path, write: bool) -> io::Result<File> {
 
 pub fn read(path: &Path) -> io::Result<String> {
     let mut text = String::new();
-    open(path, false)?
+    open(path)?
         .take(16 * 1024 * 1024 + 1)
         .read_to_string(&mut text)?;
     if text.len() > 16 * 1024 * 1024 {
@@ -85,10 +67,7 @@ pub fn read(path: &Path) -> io::Result<String> {
     Ok(text)
 }
 pub fn write(path: &Path, contents: &str) -> io::Result<()> {
-    let mut file = open(path, true)?;
-    file.set_len(0)?;
-    file.write_all(contents.as_bytes())?;
-    file.sync_all()
+    WriteTarget::prepare(path, true)?.write(contents)
 }
 
 /// Open a host-authorized directory without following any symlink component.
@@ -97,27 +76,16 @@ pub fn open_directory(path: &Path) -> io::Result<File> {
     if !path.is_absolute() {
         return Err(io::Error::other("task directory must be absolute"));
     }
-    let mut directory = File::open("/")?;
+    let mut directory = traversal::root()?;
     for component in path.components().filter(|part| *part != Component::RootDir) {
         let Component::Normal(name) = component else {
             return Err(io::Error::other("task directory must be normalized"));
         };
         let name = CString::new(name.as_bytes())?;
-        // SAFETY: directory owns the base fd, name is NUL-terminated, and
-        // every successful open is immediately wrapped in exactly one File.
-        let fd = unsafe {
-            libc::openat(
-                directory.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        directory = unsafe { File::from_raw_fd(fd) };
+        directory = traversal::directory(&directory, &name)?;
     }
-    Ok(directory)
+    // Search handles cannot be passed to readdir/fdopendir.
+    traversal::open_at(&directory, c".", libc::O_RDONLY | libc::O_DIRECTORY, 0)
 }
 
 #[derive(Debug)]
@@ -237,5 +205,35 @@ mod tests {
             metadata.size,
             std::fs::symlink_metadata(link).unwrap().len()
         );
+    }
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn search_only_ancestors_do_not_require_listing_permission() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().canonicalize().unwrap();
+        let parent = root.join("search-only");
+        let child = parent.join("listable");
+        fs::create_dir_all(&child).unwrap();
+        fs::write(child.join("file"), "original").unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o111)).unwrap();
+        let listing = read_directory(&child);
+        let parent_listing = read_directory(&parent);
+        let contents = read(&child.join("file"));
+        let written = write(&child.join("file"), "updated");
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(listing.unwrap()[0].name, "file");
+        assert_eq!(
+            parent_listing.unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(contents.unwrap(), "original");
+        written.unwrap();
+        assert_eq!(fs::read_to_string(child.join("file")).unwrap(), "updated");
     }
 }

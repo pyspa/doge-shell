@@ -58,6 +58,7 @@ pub(crate) struct TestShellProxy {
     pub approval_decision: Option<ApprovalDecision>,
     /// Runs inside the approval prompt, allowing deterministic concurrent-edit tests.
     pub approval_callback: Option<Box<dyn FnMut() + Send + Sync>>,
+    pub approval_messages: Vec<String>,
     /// Present when the test is exercising the persistent-task path, where
     /// nothing may prompt and every refusal has to be an error.
     pub agent_runtime: Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
@@ -166,6 +167,7 @@ impl Default for TestShellProxy {
             mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
             approval_callback: None,
+            approval_messages: Vec::new(),
             agent_runtime: None,
             background_context: None,
             vars: HashMap::new(),
@@ -579,11 +581,12 @@ impl AgentCommandPolicy for TestShellProxy {
         self.agent_verdict.clone()
     }
 
-    fn request_agent_approval(&mut self, _message: &str) -> Result<ApprovalDecision> {
+    fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
         self.confirm_calls += 1;
         if let Some(counter) = &self.confirm_counter {
             counter.fetch_add(1, Ordering::SeqCst);
         }
+        self.approval_messages.push(message.to_owned());
         if let Some(callback) = &mut self.approval_callback {
             callback();
         }

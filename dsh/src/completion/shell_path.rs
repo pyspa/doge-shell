@@ -22,15 +22,7 @@ pub struct ShellPathToken {
 impl ShellPathToken {
     pub fn from_raw(raw: &str) -> Self {
         let style = detect_style(raw);
-        let normalized = match &style {
-            ShellPathStyle::Plain | ShellPathStyle::Escaped => decode_backslashes(raw),
-            ShellPathStyle::SingleQuoted { closed } => {
-                decode_quoted(strip_wrapping_quote(raw, '\'', *closed), false)
-            }
-            ShellPathStyle::DoubleQuoted { closed } => {
-                decode_quoted(strip_wrapping_quote(raw, '"', *closed), true)
-            }
-        };
+        let normalized = decode_literal_word(raw);
 
         Self { normalized, style }
     }
@@ -144,82 +136,69 @@ pub fn format_candidates_for_token(
 }
 
 fn detect_style(raw: &str) -> ShellPathStyle {
-    if raw.starts_with('"') {
-        return ShellPathStyle::DoubleQuoted {
-            closed: has_closing_quote(raw, '"'),
-        };
-    }
-    if raw.starts_with('\'') {
-        return ShellPathStyle::SingleQuoted {
-            closed: has_closing_quote(raw, '\''),
-        };
-    }
-    if raw.contains('\\') {
-        return ShellPathStyle::Escaped;
-    }
-    ShellPathStyle::Plain
-}
-
-fn has_closing_quote(raw: &str, quote: char) -> bool {
-    if raw.len() <= 1 || !raw.ends_with(quote) {
-        return false;
-    }
-    let backslashes = raw[..raw.len() - 1]
-        .chars()
-        .rev()
-        .take_while(|ch| *ch == '\\')
-        .count();
-    // Single quotes honour only \\', while double quotes consume pairs of
-    // backslashes. An escaped last quote is content, not a closing delimiter.
-    if quote == '\'' {
-        backslashes == 0
-    } else {
-        backslashes % 2 == 0
-    }
-}
-
-fn strip_wrapping_quote(raw: &str, quote: char, closed: bool) -> &str {
-    let inner = raw.strip_prefix(quote).unwrap_or(raw);
-    if closed {
-        inner.strip_suffix(quote).unwrap_or(inner)
-    } else {
-        inner
-    }
-}
-
-fn decode_backslashes(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            if let Some(next) = chars.next() {
-                out.push(next);
+    for quote in ['"', '\''] {
+        if raw.starts_with(quote)
+            && let Some(closed) = wrapping_quote(raw, quote)
+        {
+            return if quote == '"' {
+                ShellPathStyle::DoubleQuoted { closed }
             } else {
-                out.push(ch);
-            }
-        } else {
-            out.push(ch);
+                ShellPathStyle::SingleQuoted { closed }
+            };
         }
     }
-
-    out
+    if raw.contains('\\') {
+        ShellPathStyle::Escaped
+    } else {
+        ShellPathStyle::Plain
+    }
 }
 
-fn decode_quoted(raw: &str, double: bool) -> String {
-    let mut result = String::new();
-    let mut chars = raw.chars().peekable();
-    while let Some(ch) = chars.next() {
+/// Preserve quote style only when one quote wraps the entire word (or is
+/// unfinished). `"he"llo` is a concatenation, not an unfinished double quote.
+fn wrapping_quote(raw: &str, quote: char) -> Option<bool> {
+    let mut chars = raw.char_indices().skip(1).peekable();
+    while let Some((offset, ch)) = chars.next() {
         if ch == '\\'
-            && chars.peek().is_some_and(|next| {
-                if double {
-                    matches!(next, '$' | '"' | '\\' | '`')
-                } else {
+            && chars.peek().is_some_and(|(_, next)| {
+                if quote == '\'' {
                     *next == '\''
+                } else {
+                    matches!(next, '$' | '"' | '\\' | '`')
                 }
             })
         {
-            result.push(chars.next().unwrap());
+            chars.next();
+        } else if ch == quote {
+            return (offset + ch.len_utf8() == raw.len()).then_some(true);
+        }
+    }
+    Some(false)
+}
+
+/// Decode literal source spelling only. Never expand variables, globs or
+/// substitutions. Adjacent quoted/unquoted parts form one search word; an
+/// unfinished quote is accepted at the cursor just like a complete quote.
+pub(crate) fn decode_literal_word(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut quote = None;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let escaped = chars.peek().is_some_and(|next| match quote {
+                Some('\'') => *next == '\'',
+                Some('"') => matches!(next, '$' | '"' | '\\' | '`'),
+                _ => true,
+            });
+            if escaped {
+                result.push(chars.next().unwrap());
+            } else {
+                result.push(ch);
+            }
+        } else if Some(ch) == quote {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
         } else {
             result.push(ch);
         }

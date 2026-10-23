@@ -39,6 +39,7 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
         let stdout = self.runner.run(&command)?;
         let mut candidates = Vec::new();
 
+        let query = parsed.completion_query();
         for line in stdout.lines() {
             let trimmed = line.trim();
             if trimmed.is_empty() {
@@ -51,7 +52,7 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
                 (trimmed, None)
             };
 
-            if value.starts_with(&parsed.current_token) {
+            if value.starts_with(&query) {
                 candidates.push(CompletionCandidate::argument(
                     value.to_string(),
                     description,
@@ -340,5 +341,29 @@ mod tests {
 
         assert_eq!(res, "");
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+}
+
+#[cfg(test)]
+mod cursor_query_tests {
+    use super::*;
+    #[test]
+    fn decoded_filter_does_not_change_script_metadata() {
+        struct Runner;
+        impl ScriptRunner for Runner {
+            fn run(&self, command: &str) -> Result<String> {
+                assert_eq!(command, "echo '\"al'");
+                Ok("alpha\nbeta".into())
+            }
+        }
+        let input = "pick --mode \"al";
+        let parsed = crate::completion::parser::CommandLineParser::new().parse(input, input.len());
+        let result = ScriptGenerator::new(Runner)
+            .generate_script_candidates("echo $CURRENT_TOKEN", &parsed)
+            .unwrap();
+        assert_eq!(
+            result.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            ["alpha"]
+        );
     }
 }

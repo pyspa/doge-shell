@@ -26,19 +26,7 @@ impl ContextCorrector<'_> {
     }
 
     pub(super) fn is_redirect_operator(token: &str) -> bool {
-        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
-            return true;
-        }
-
-        if let Some(prefix) = token.strip_suffix(">>") {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        if let Some(prefix) = token.strip_suffix('>') {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        false
+        CommandLineParser::is_redirect_operator(token)
     }
 
     pub(super) fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {
@@ -195,42 +183,13 @@ impl ContextCorrector<'_> {
     ) -> Option<usize> {
         let definition = self.database.get_command(&parsed.command)?;
         let options = self.collect_available_options(definition, &parsed.subcommand_path);
-        let mut positional = 0;
-        let mut index = parsed
+        let start = parsed
             .source
             .as_ref()
             .map_or(0, |source| source.argument_start);
-        let mut end_options = false;
-        while let Some(token) = parsed.raw_args.get(index) {
-            if !end_options && token == "--" {
-                end_options = true;
-                index += 1;
-                continue;
-            }
-            if !end_options && Self::is_redirect_operator(token) {
-                index += 2;
-                continue;
-            }
-            if !end_options
-                && (is_separate_value_option(token, &options)
-                    || CommandLineParser::new().option_takes_value(token))
-            {
-                index += 2;
-                continue;
-            }
-            if !end_options
-                && (Self::looks_like_known_option(token, &options) || token.starts_with('-'))
-            {
-                index += 1;
-                continue;
-            }
-            if positional == wanted {
-                return Some(index);
-            }
-            positional += 1;
-            index += 1;
-        }
-        None
+        Self::positional_raw_indices(parsed, start, &options)
+            .get(wanted)
+            .copied()
     }
 
     pub fn reparse_inner_command(

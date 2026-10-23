@@ -271,6 +271,7 @@ impl<'a> ArgumentGenerator<'a> {
         arg_type: &ArgumentType,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
+        let query = parsed.completion_query();
         match arg_type {
             ArgumentType::File { extensions } => {
                 FileSystemGenerator::generate_file_candidates_with_filter(
@@ -283,14 +284,14 @@ impl<'a> ArgumentGenerator<'a> {
             }
             ArgumentType::Choice(choices) => Ok(choices
                 .iter()
-                .filter(|choice| fuzzy_match_score(choice, &parsed.current_token).is_some())
+                .filter(|choice| fuzzy_match_score(choice, &query).is_some())
                 .map(|choice| CompletionCandidate::argument(choice.clone(), None))
                 .collect()),
-            ArgumentType::Command => self.generate_system_command_candidates(&parsed.current_token),
+            ArgumentType::Command => self.generate_system_command_candidates(&query),
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
                 for key in self.environment_names {
-                    if fuzzy_match_score(key, &parsed.current_token).is_some() {
+                    if fuzzy_match_score(key, &query).is_some() {
                         candidates.push(CompletionCandidate::argument(key.clone(), None));
                     }
                 }
@@ -300,20 +301,12 @@ impl<'a> ArgumentGenerator<'a> {
                 ScriptGenerator::default().generate_script_candidates(command, parsed)
             }
             ArgumentType::Dynamic { .. } => Ok(Vec::new()),
-            ArgumentType::Process => {
-                ProcessGenerator::new().generate_candidates(&parsed.current_token)
-            }
-            ArgumentType::CommandWithArgs => {
-                self.generate_system_command_candidates(&parsed.current_token)
-            }
-            ArgumentType::User => UserGenerator::new().generate_candidates(&parsed.current_token),
-            ArgumentType::Group => GroupGenerator::new().generate_candidates(&parsed.current_token),
-            ArgumentType::Signal => {
-                SignalGenerator::new().generate_candidates(&parsed.current_token)
-            }
-            ArgumentType::Interface => {
-                InterfaceGenerator::new().generate_candidates(&parsed.current_token)
-            }
+            ArgumentType::Process => ProcessGenerator::new().generate_candidates(&query),
+            ArgumentType::CommandWithArgs => self.generate_system_command_candidates(&query),
+            ArgumentType::User => UserGenerator::new().generate_candidates(&query),
+            ArgumentType::Group => GroupGenerator::new().generate_candidates(&query),
+            ArgumentType::Signal => SignalGenerator::new().generate_candidates(&query),
+            ArgumentType::Interface => InterfaceGenerator::new().generate_candidates(&query),
             _ => Ok(Vec::new()),
         }
     }

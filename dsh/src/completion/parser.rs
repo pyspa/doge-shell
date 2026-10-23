@@ -58,6 +58,14 @@ pub struct ParsedCommandLine {
     pub cursor_index: usize,
 }
 
+impl ParsedCommandLine {
+    /// Internal literal search prefix. `current_token`/`current_arg`, source
+    /// spans and provider INPUT/CURSOR remain raw source for compatibility.
+    pub(crate) fn completion_query(&self) -> String {
+        super::shell_path::decode_literal_word(&self.current_token)
+    }
+}
+
 /// Parameters for determining completion context
 struct CompletionContextParams<'a> {
     cursor_token_index: usize,
@@ -253,6 +261,10 @@ impl CommandLineParser {
 
         // Parse subcommands
         while let Some(token) = tokens_queue.front() {
+            // A word to the right of the cursor cannot be a parent subcommand.
+            if subcommand_path.len() + 1 > cursor_token_index {
+                break;
+            }
             if is_option_token(token) {
                 break; // End subcommand parsing when options start
             }
@@ -289,6 +301,11 @@ impl CommandLineParser {
                 continue;
             }
 
+            if Self::is_redirect_operator(token) {
+                skip_next_redirect_target = true;
+                continue;
+            }
+
             if end_of_options {
                 specified_arguments.push(token.clone());
                 continue;
@@ -296,11 +313,6 @@ impl CommandLineParser {
 
             if token == "--" {
                 end_of_options = true;
-                continue;
-            }
-
-            if Self::is_redirect_operator(token) {
-                skip_next_redirect_target = true;
                 continue;
             }
 
@@ -615,20 +627,15 @@ impl CommandLineParser {
     }
 
     /// Determine if token represents a redirect operator
-    fn is_redirect_operator(token: &str) -> bool {
-        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
+    pub(crate) fn is_redirect_operator(token: &str) -> bool {
+        if matches!(token, "&>" | "&>>") {
             return true;
         }
-
-        if let Some(prefix) = token.strip_suffix(">>") {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        if let Some(prefix) = token.strip_suffix('>') {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        false
+        [">&", "<&", ">>", ">", "<"].iter().any(|suffix| {
+            token
+                .strip_suffix(suffix)
+                .is_some_and(|prefix| prefix.bytes().all(|c| c.is_ascii_digit()))
+        })
     }
 }
 

@@ -687,3 +687,33 @@ mod tests {
         assert_eq!(service.0.load(Ordering::SeqCst), 3);
     }
 }
+
+#[cfg(test)]
+mod cursor_context_tests {
+    #[tokio::test]
+    async fn actual_tab_uses_files_for_redirect_targets_at_middle_cursor() {
+        use crate::{environment::Environment, repl::Repl, shell::Shell};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("界é audit.txt");
+        std::fs::write(&path, "fixture").unwrap();
+        let prefix = path
+            .to_string_lossy()
+            .trim_end_matches("it.txt")
+            .to_string();
+        for left in ["bg > ", "echo ok && bg > ", "bg -- > "] {
+            let environment = Environment::new_synthetic();
+            environment.write().variable_state.paths.clear();
+            let mut shell = Shell::new(environment);
+            let mut repl = Repl::new(&mut shell);
+            let before = format!("{left}\"{prefix}wrong\" tail");
+            repl.input.reset(before);
+            repl.input
+                .move_to(format!("{left}\"{prefix}").chars().count());
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            assert_eq!(
+                repl.input.as_str(),
+                format!("{left}\"{}\" tail", path.display())
+            );
+        }
+    }
+}

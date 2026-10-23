@@ -1,3 +1,7 @@
+//! Cursor-aware interpretation of completion definitions over lexical source.
+//! Resolve subcommand parents, option values, redirect targets and positional
+//! indexes without evaluating shell syntax. Source identity survives repeated
+//! correction and wrapper dispatch; raw provider metadata remains unchanged.
 use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, SubCommand,
 };
@@ -65,6 +69,23 @@ impl<'a> ContextCorrector<'a> {
 
     /// Correct the parsed command line if the parser incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
+        if parsed.completion_context == CompletionContext::Command {
+            return parsed.clone();
+        }
+        if let Some(source) = &parsed.source
+            && let Some(previous) = source
+                .cursor_word
+                .checked_sub(1)
+                .and_then(|index| source.words.get(index))
+            && Self::is_redirect_operator(&previous.raw)
+        {
+            let mut target = parsed.clone();
+            target.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            };
+            return target;
+        }
         let mut corrected = self.correct_inner(parsed);
         if corrected.source.is_some()
             && matches!(
@@ -100,6 +121,14 @@ impl<'a> ContextCorrector<'a> {
 
         // 1. Identify valid subcommand chain
         for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
+            if parsed
+                .source
+                .as_ref()
+                .is_some_and(|source| source.cursor_word == idx + 1)
+            {
+                split_index = idx;
+                break;
+            }
             if let Some(sub) = Self::find_matching_subcommand(current_subcommands, sub_name) {
                 valid_subcommands.push(sub.name.clone());
                 current_subcommands = &sub.subcommands;
@@ -116,9 +145,12 @@ impl<'a> ContextCorrector<'a> {
             let invalid_tokens = &parsed.subcommand_path[split_index..];
             let first_invalid = &invalid_tokens[0];
             let is_last_token = split_index + 1 == parsed.subcommand_path.len();
-            let is_completion_target = first_invalid == &parsed.current_token;
+            let is_completion_target = parsed.source.as_ref().map_or(
+                is_last_token && first_invalid == &parsed.current_token,
+                |source| source.cursor_word == split_index + 1,
+            );
 
-            if is_last_token && is_completion_target {
+            if is_completion_target {
                 // The cursor is on this token.
                 // Check if it is a partial subcommand match
                 let is_partial_subcommand = current_subcommands
@@ -130,6 +162,11 @@ impl<'a> ContextCorrector<'a> {
 
                 if is_partial_subcommand && !is_option {
                     // Treat as SubCommand completion
+                    // Keep the cursor word in raw_args so a second correction
+                    // retains its source identity and cannot consume suffix words.
+                    let mut raw = invalid_tokens.to_vec();
+                    raw.extend(new_parsed.raw_args);
+                    new_parsed.raw_args = raw;
                     new_parsed.subcommand_path = valid_subcommands;
                     // We don't push the partial token to valid_subcommands for the path,
                     // but we do want the context to be SubCommand.
@@ -192,6 +229,20 @@ impl<'a> ContextCorrector<'a> {
         if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
         {
             return corrected;
+        }
+
+        // Quotes/escapes are source style, not part of a subcommand prefix.
+        // A nonmatching word belongs to arguments even when the parser guessed
+        // SubCommand because its subcommand_path was empty.
+        if new_parsed.completion_context == CompletionContext::SubCommand
+            && !current_subcommands
+                .iter()
+                .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
+        {
+            new_parsed.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            };
         }
 
         // Special Case: Context is SubCommand (from parser heuristic), but the matched command

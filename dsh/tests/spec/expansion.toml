@@ -322,6 +322,28 @@ status = 0
 stdout_contains = ["3"]
 
 [[case]]
+id = "expansion.arithmetic-simple-assignment-replaces-text"
+class = "posix"
+mode = "command"
+script = 'X=abc; echo $((X = 7)); echo "$X"'
+
+[case.expect]
+status = 0
+stdout_exact = "7\n7\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.arithmetic-chained-assignment-replaces-text"
+class = "posix"
+mode = "command"
+script = 'A=abc; B=def; echo $((A = B = 7)); echo "$A/$B"'
+
+[case.expect]
+status = 0
+stdout_exact = "7\n7/7\n"
+stderr_exact = ""
+
+[[case]]
 id = "expansion.arithmetic-short-circuit-and"
 class = "posix"
 mode = "command"

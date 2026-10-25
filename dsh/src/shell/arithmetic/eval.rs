@@ -218,8 +218,14 @@ pub(crate) fn eval_expr(
                 return Err(fail(expression, "invalid assignment target".to_string()));
             }
             let rhs_value = eval_expr(expression, rhs, shell)?;
-            let current = resolve_variable(expression, target, shell)?;
-            let result = apply_assignment_op(expression, *op, current, rhs_value)?;
+            // Simple assignment replaces the old text without reading it.
+            // Compound assignment still resolves the target after the RHS.
+            let result = if *op == AssignmentOp::Assign {
+                rhs_value
+            } else {
+                let current = resolve_variable(expression, target, shell)?;
+                apply_assignment_op(expression, *op, current, rhs_value)?
+            };
             shell
                 .expansion_environment()
                 .write()
@@ -341,6 +347,145 @@ mod tests {
         assert_eq!(
             shell.environment.read().lookup_variable("B").as_deref(),
             Some("3")
+        );
+    }
+
+    #[test]
+    fn simple_assignment_does_not_read_previous_value() {
+        for previous in [
+            None,
+            Some(""),
+            Some("4"),
+            Some("abc"),
+            Some("08"),
+            Some("1+2"),
+            Some("9223372036854775808"),
+        ] {
+            let mut shell = test_shell();
+            shell.environment.write().unset_shell_var("DOGESH_ASSIGN");
+            if let Some(previous) = previous {
+                shell
+                    .environment
+                    .write()
+                    .set_shell_var("DOGESH_ASSIGN".into(), previous.into());
+            }
+            assert_eq!(
+                eval_ok("DOGESH_ASSIGN = 7", &mut shell),
+                7,
+                "old value: {previous:?}"
+            );
+            assert_eq!(
+                shell
+                    .environment
+                    .read()
+                    .lookup_variable("DOGESH_ASSIGN")
+                    .as_deref(),
+                Some("7")
+            );
+        }
+    }
+
+    #[test]
+    fn chained_assignment_evaluates_rhs_once() {
+        let mut shell = test_shell();
+        for name in ["A", "B"] {
+            shell
+                .environment
+                .write()
+                .set_shell_var(name.into(), "abc".into());
+        }
+        shell
+            .environment
+            .write()
+            .set_shell_var("N".into(), "0".into());
+        assert_eq!(eval_ok("A = B = (N += 1)", &mut shell), 1);
+        for name in ["A", "B", "N"] {
+            assert_eq!(
+                shell.environment.read().lookup_variable(name).as_deref(),
+                Some("1")
+            );
+        }
+    }
+
+    #[test]
+    fn assignment_preserves_export_attribute() {
+        for exported in [false, true] {
+            let mut shell = test_shell();
+            shell.environment.write().unset_shell_var("DOGESH_ASSIGN");
+            shell
+                .environment
+                .write()
+                .set_shell_var("DOGESH_ASSIGN".into(), "abc".into());
+            if exported {
+                shell
+                    .environment
+                    .write()
+                    .export_shell_var("DOGESH_ASSIGN".into());
+            }
+            assert_eq!(eval_ok("DOGESH_ASSIGN = 7", &mut shell), 7);
+            let state = shell.environment.read().shell_var_state("DOGESH_ASSIGN");
+            assert_eq!(state.value.as_deref(), Some("7"));
+            assert_eq!(state.exported, exported);
+        }
+    }
+
+    #[test]
+    fn compound_assignment_still_requires_numeric_target() {
+        for op in ["+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "^=", "|="] {
+            let mut shell = test_shell();
+            shell
+                .environment
+                .write()
+                .set_shell_var("X".into(), "abc".into());
+            assert!(
+                eval_err(&format!("X {op} 1"), &mut shell).contains("variable 'X'"),
+                "{op}"
+            );
+            assert_eq!(
+                shell.environment.read().lookup_variable("X").as_deref(),
+                Some("abc")
+            );
+        }
+    }
+
+    #[test]
+    fn assignment_rhs_errors_do_not_write_target() {
+        let mut shell = test_shell();
+        shell
+            .environment
+            .write()
+            .set_shell_var("X".into(), "abc".into());
+        assert!(eval_err("X = X + 1", &mut shell).contains("variable 'X'"));
+        assert_eq!(
+            shell.environment.read().lookup_variable("X").as_deref(),
+            Some("abc")
+        );
+        shell
+            .environment
+            .write()
+            .set_shell_var("N".into(), "0".into());
+        assert!(eval_err("X = (N += 1) / 0", &mut shell).contains("division by zero"));
+        assert_eq!(
+            shell.environment.read().lookup_variable("X").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(
+            shell.environment.read().lookup_variable("N").as_deref(),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn compound_assignment_reads_target_after_rhs() {
+        let mut shell = test_shell();
+        shell
+            .environment
+            .write()
+            .set_shell_var("X".into(), "1".into());
+        assert_eq!(eval_ok("X += (X = 3)", &mut shell), 6);
+        assert_eq!(
+            shell.environment.read().lookup_variable("X").as_deref(),
+            Some("6")
         );
     }
 

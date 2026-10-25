@@ -1,6 +1,6 @@
 mod output_monitor;
 
-pub(crate) use output_monitor::OutputMonitor;
+pub(crate) use output_monitor::{ConcurrentOutputDrain, OutputMonitor};
 
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};

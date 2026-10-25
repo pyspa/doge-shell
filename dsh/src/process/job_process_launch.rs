@@ -12,7 +12,7 @@ use tracing::debug;
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::builtin_execution_placement;
 use super::fork::fork_process;
-use super::io::{OutputMonitor, cloexec_pipe, default_output_wiring};
+use super::io::{ConcurrentOutputDrain, OutputMonitor, cloexec_pipe, default_output_wiring};
 use super::job_process::{JobProcess, ProcessLaunchOutcome, apply_pty_stdio};
 use super::launch_outcome::CommandFailure;
 use super::pty::PtyChildConfig;
@@ -203,7 +203,18 @@ impl JobProcess {
                     match builtin_execution_placement(ctx.foreground, pipeline_context) {
                         BuiltinExecutionPlacement::Parent => {
                             process.pid = Some(current_pid);
-                            process.launch(ctx, shell).await?;
+                            // A sync builtin can fill its automatic capture pipe
+                            // before returning. Temporarily give its reader an
+                            // independent thread, retaining parent shell state.
+                            let drain = monitors
+                                .pop()
+                                .map(ConcurrentOutputDrain::start)
+                                .transpose()?;
+                            let result = process.launch(ctx, shell).await;
+                            if let Some(drain) = drain {
+                                monitors.push(drain.finish()?);
+                            }
+                            result?;
                             current_pid
                         }
                         BuiltinExecutionPlacement::Reexec => {

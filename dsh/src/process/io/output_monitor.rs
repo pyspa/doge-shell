@@ -28,6 +28,9 @@
 //! once rendering fails, this monitor stops rendering but continues draining,
 //! capturing and observing output for the rest of its lifetime.
 
+mod concurrent;
+pub(crate) use concurrent::ConcurrentOutputDrain;
+
 use anyhow::{Context as _, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use std::borrow::Cow;

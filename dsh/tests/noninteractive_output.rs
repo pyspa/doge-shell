@@ -53,3 +53,62 @@ fn external_output_preserves_bytes_and_streams() {
         assert_eq!(output.stderr, *stderr, "stderr for {script}");
     }
 }
+
+fn large_alias() -> (String, String) {
+    let value = "x".repeat(100_000);
+    (
+        format!("alias probe={value}; "),
+        format!("probe='{value}'\n"),
+    )
+}
+
+#[test]
+fn parent_builtin_large_output_and_history_are_exact() {
+    let _guard = common::serial_guard();
+    let (setup, expected) = large_alias();
+    let script = format!("{setup}alias probe; printf '%s' \"$OUT\"");
+    let output = spawn_dsh_unlocked(["-c", &script], None)
+        .wait(DEFAULT_CASE_TIMEOUT)
+        .expect("parent builtin must not block on its own capture pipe");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    assert_eq!(output.stdout, expected.repeat(2).as_bytes());
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+}
+
+#[test]
+fn parent_builtin_large_output_preserves_redirect_and_pipeline() {
+    let _guard = common::serial_guard();
+    let (setup, expected) = large_alias();
+    for suffix in ["alias probe > result; cat result", "alias probe | cat"] {
+        let script = format!("{setup}{suffix}");
+        let output = spawn_dsh_unlocked(["-c", &script], None)
+            .wait(DEFAULT_CASE_TIMEOUT)
+            .expect("redirected and pipeline builtin output must complete");
+        assert!(output.status.success(), "{suffix}: {:?}", output.stderr);
+        assert_eq!(output.stdout, expected.as_bytes(), "{suffix}");
+        assert!(output.stderr.is_empty(), "{suffix}: {:?}", output.stderr);
+    }
+}
+
+#[test]
+fn repeated_parent_builtin_capture_releases_fds_and_keeps_parent_state() {
+    let _guard = common::serial_guard();
+    let (setup, expected) = large_alias();
+    let script = format!(
+        "{setup}{}export CAPTURE_KEEP=kept; cd ..; alias after=parent; alias after; echo $CAPTURE_KEEP; pwd",
+        "alias probe; ".repeat(80),
+    );
+    let child = common::process::spawn_dsh_unlocked_with_nofile_limit(["-c", &script], None, 64);
+    let expected_cwd = child.workdir().parent().unwrap().canonicalize().unwrap();
+    let output = child
+        .wait(DEFAULT_CASE_TIMEOUT)
+        .expect("repeated captures must release readers and wake descriptors");
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let expected = format!(
+        "{}after='parent'\nkept\n{}\n",
+        expected.repeat(80),
+        expected_cwd.display(),
+    );
+    assert_eq!(output.stdout, expected.as_bytes());
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+}

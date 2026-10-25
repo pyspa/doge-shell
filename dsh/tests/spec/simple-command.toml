@@ -86,3 +86,14 @@ script = "printf '%s' 'printf out; printf err >&2' > emit.sh; {{SH}} emit.sh"
 status = 0
 stdout_exact = "out"
 stderr_exact = "err"
+
+[[case]]
+id = "simple-command.parent-builtin-capture-keeps-state"
+class = "dogesh"
+mode = "command"
+script = "alias capture_probe=parent; alias capture_probe; export CAPTURE_PROBE=kept; echo $CAPTURE_PROBE"
+
+[case.expect]
+status = 0
+stdout_exact = "capture_probe='parent'\nkept\n"
+stderr_exact = ""

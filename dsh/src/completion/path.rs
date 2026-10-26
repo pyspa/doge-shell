@@ -114,42 +114,17 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
 }
 
 pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Option<String>> {
-    let pbuf = PathBuf::from(input);
-    let absolute = pbuf.is_absolute();
-    let _file_name = pbuf.file_name();
-    let parent = pbuf.parent();
-
-    // If input is empty or just a dot, suggest from current dir?
-    // For ghost text, usually we have some letters.
-    // If input ends with '/', parent is the input itself.
-
-    let paths = if absolute {
-        let dir = if let Some(f) = parent {
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                input.to_string()
-            } else {
-                f.to_string_lossy().to_string()
-            }
-        } else {
-            // Root?
-            input.to_string()
-        };
-        path_completion_path(PathBuf::from(dir))?
-    } else if let Some(dir) = parent {
-        let dir_str = dir.display().to_string();
-        if dir_str.is_empty() {
-            path_completion_path(PathBuf::from("."))?
-        } else {
-            // if input ends with separator, we should list contents of directory
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                path_completion_path(PathBuf::from(input))?
-            } else {
-                path_completion_path(PathBuf::from(dir))?
-            }
-        }
+    let path = Path::new(input);
+    // Path::parent("dir/") is empty. A trailing separator means list the
+    // directory itself, before considering a parent or the cwd fallback.
+    let directory = if input.ends_with(std::path::MAIN_SEPARATOR) {
+        path
     } else {
-        path_completion()?
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
     };
+    let paths = path_completion_path(directory.to_path_buf())?;
 
     let mut candidates: Vec<String> = Vec::new();
     let search = input.to_string();
@@ -541,3 +516,6 @@ mod tests {
         assert!(!is_path_cached_for_shell_token(&missing));
     }
 }
+
+#[cfg(test)]
+mod relative_tests;

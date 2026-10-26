@@ -140,7 +140,10 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        let trimmed = path.trim_end_matches(&['/', '\\'][..]);
+        // Parser arguments retain shell source. Decode once before treating the
+        // value as a path; a literal backslash is filename data on Linux/macOS.
+        let decoded = crate::completion::shell_path::decode_literal_word(path);
+        let trimmed = decoded.trim_end_matches('/');
         let Some(name) = std::path::Path::new(trimmed)
             .file_name()
             .and_then(|s| s.to_str())
@@ -148,7 +151,8 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        if !matches_prefix(current_token, name) {
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        if !matches_prefix(&query, name) {
             return Vec::new();
         }
 

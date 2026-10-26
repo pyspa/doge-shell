@@ -22,7 +22,14 @@ pub fn get_current_context() -> Option<String> {
 /// Shared marker walking with the prompt (`crate::git_context`) without
 /// depending on `Prompt`: history must not observe prompt state.
 pub fn get_current_context_from(cwd: &Path) -> Option<String> {
-    if let Some(root) = crate::git_context::find_marker_root(cwd) {
+    context_with_marker_lookup(cwd, crate::git_context::find_marker_root)
+}
+
+fn context_with_marker_lookup(
+    cwd: &Path,
+    find_root: impl FnOnce(&Path) -> Option<std::path::PathBuf>,
+) -> Option<String> {
+    if let Some(root) = find_root(cwd) {
         return Some(root.to_string_lossy().into_owned());
     }
     Some(cwd.to_string_lossy().into_owned())
@@ -62,7 +69,18 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         // No `git` binary involved: even with an empty PATH this answers.
         assert_eq!(
-            get_current_context_from(root.path()),
+            context_with_marker_lookup(root.path(), |_| None),
+            Some(root.path().to_string_lossy().into_owned())
+        );
+    }
+    #[test]
+    fn ancestor_marker_wins_over_cwd() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        let child = root.path().join("unmarked/child");
+        std::fs::create_dir_all(&child).unwrap();
+        assert_eq!(
+            get_current_context_from(&child),
             Some(root.path().to_string_lossy().into_owned())
         );
     }

@@ -1395,7 +1395,7 @@ fn git_root_fallback_uses_logical_git_only() {
     write_fake_git(logical.path(), "logical-branch");
     write_fake_git(process.path(), "process-branch");
 
-    // No `.git` marker anywhere, so the `rev-parse` fallback must run.
+    // Test the command boundary directly: host ancestors may contain .git.
     let work = tempdir().unwrap();
     let environment = prompt_test_environment(&logical.path().to_string_lossy());
     let _stale_path = ProcessEnvGuard::prepend_path(process.path());
@@ -1407,8 +1407,22 @@ fn git_root_fallback_uses_logical_git_only() {
     );
 
     let runtime = std::sync::Arc::new(git_runtime_for(&environment, work.path()));
-    let root = block_on_probe(super::find_git_root_async(Arc::clone(&runtime)));
+    let root = super::git_status::find_git_root_via_command(&runtime).map(PathBuf::from);
     assert_eq!(root, Some(work.path().to_path_buf()));
+}
+
+#[test]
+fn git_root_marker_precedes_command_fallback() {
+    let root = tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".git")).unwrap();
+    let work = root.path().join("unmarked/child");
+    std::fs::create_dir_all(&work).unwrap();
+    let environment = prompt_test_environment("");
+    let runtime = Arc::new(git_runtime_for(&environment, &work));
+    assert_eq!(
+        block_on_probe(super::find_git_root_async(runtime)),
+        Some(root.path().to_path_buf())
+    );
 }
 
 /// Stale git refreshes never overwrite a newer runtime: the Git probe

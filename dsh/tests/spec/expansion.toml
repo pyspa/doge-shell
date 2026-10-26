@@ -492,3 +492,13 @@ script = "mkdir -p sub; touch sub/x.txt sub/.hx; echo ./sub/*.txt"
 status = 0
 stdout_exact = "./sub/x.txt\n"
 stderr_exact = ""
+
+[[case]]
+id = "expansion.arithmetic-signed-variable-radix"
+class = "posix"
+mode = "command"
+script = 'X=-010; echo $((X)); X=+010; echo $((X)); X=-0x10; echo $((X))'
+[case.expect]
+status = 0
+stdout_exact = "-8\n8\n-16\n"
+stderr_exact = ""

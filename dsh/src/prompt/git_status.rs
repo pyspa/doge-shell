@@ -186,6 +186,11 @@ fn find_git_root(runtime: &PromptRuntimeSnapshot) -> Option<String> {
         return Some(root.to_string_lossy().into_owned());
     }
 
+    find_git_root_via_command(runtime)
+}
+
+pub(super) fn find_git_root_via_command(runtime: &PromptRuntimeSnapshot) -> Option<String> {
+    let cwd = runtime.current_dir();
     let result = runtime
         .command_runtime()
         .std_command("git")?

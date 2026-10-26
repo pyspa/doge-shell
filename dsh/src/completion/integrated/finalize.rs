@@ -132,7 +132,8 @@ impl IntegratedCompletionEngine {
         // history entry) that happens to share text with a trimmed directory.
         let mut seen = HashSet::with_capacity(candidates.len());
         candidates.retain(|candidate| {
-            let key = candidate.text.trim_end_matches(['/', '\\']);
+            // Candidate text is raw: backslashes are not separators or escapes.
+            let key = candidate.text.trim_end_matches('/');
             seen.insert((candidate.candidate_type.clone(), key.to_string()))
         });
 

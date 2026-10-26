@@ -128,7 +128,8 @@ pub fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
         // Trim a trailing separator first so directory names ending in `/`
         // (path.rs's convention) don't have `rfind('/')` match that trailing
         // slash itself and collapse `base_name` to an empty string.
-        let trimmed_name = name.trim_end_matches(['/', '\\']);
+        // On Linux/macOS a backslash is literal filename data.
+        let trimmed_name = name.trim_end_matches('/');
         let base_name = if let Some(pos) = trimmed_name.rfind('/') {
             &trimmed_name[pos + 1..]
         } else {

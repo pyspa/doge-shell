@@ -638,3 +638,6 @@ mod cursor_context_tests;
 
 #[cfg(test)]
 mod identity_tests;
+
+#[cfg(test)]
+mod pm_name_tests;

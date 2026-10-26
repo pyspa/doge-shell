@@ -490,6 +490,61 @@ mod tests {
     }
 
     #[test]
+    fn signed_variable_radix_values_and_bounds() {
+        let mut shell = test_shell();
+        for (value, expected) in [
+            ("-010", -8),
+            ("+010", 8),
+            ("-0x10", -16),
+            ("+0X10", 16),
+            ("-0", 0),
+            ("+0", 0),
+            ("-42", -42),
+            ("-9223372036854775808", i64::MIN),
+            ("-0x8000000000000000", i64::MIN),
+            ("-01000000000000000000000", i64::MIN),
+        ] {
+            shell
+                .environment
+                .write()
+                .set_shell_var("X".into(), value.into());
+            assert_eq!(eval_ok("X", &mut shell), expected, "{value}");
+        }
+        for value in [
+            "-08",
+            "+09",
+            "-0xG",
+            "+0x",
+            "--1",
+            "+-1",
+            "+",
+            "+9223372036854775808",
+            "-9223372036854775809",
+            "+0x8000000000000000",
+            "-0x8000000000000001",
+            "-01000000000000000000001",
+            "1+2",
+        ] {
+            shell
+                .environment
+                .write()
+                .set_shell_var("X".into(), value.into());
+            assert!(!eval_err("X += 1", &mut shell).is_empty(), "{value}");
+            assert_eq!(
+                shell.environment.read().lookup_variable("X").as_deref(),
+                Some(value)
+            );
+            assert_eq!(eval_ok("X = 7", &mut shell), 7);
+        }
+        shell
+            .environment
+            .write()
+            .set_shell_var("X".into(), "-010".into());
+        assert_eq!(eval_ok("Y = X", &mut shell), -8);
+        assert_eq!(eval_ok("X += 2", &mut shell), -6);
+    }
+
+    #[test]
     fn variable_resolution_rules() {
         let mut shell = test_shell();
         // Unset and empty are zero.

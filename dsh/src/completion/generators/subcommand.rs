@@ -1,7 +1,6 @@
 use crate::completion::command::{
     ArgumentType, CommandCompletion, CompletionCandidate, SubCommand,
 };
-use crate::completion::generators::filesystem::FileSystemGenerator;
 use crate::completion::integrated::matches_prefix;
 use crate::completion::parser::ParsedCommandLine; // Circular dependency if we call back?
 // Actually SubCommandGenerator needs access to `generate_candidates_for_type` which is currently in CompletionGenerator.
@@ -52,8 +51,9 @@ impl SubCommandGenerator {
         if candidates.is_empty() {
             // Fallback for unknown commands OR valid commands with undefined arguments
             // This ensures `git add <file>` works even if we have some minimal git definition
-            candidates.extend(FileSystemGenerator::generate_file_candidates(
-                &parsed.current_token,
+            candidates.extend(arg_generator_fn(
+                &ArgumentType::File { extensions: None },
+                parsed,
             )?);
         }
 

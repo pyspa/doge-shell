@@ -8,7 +8,10 @@ impl IntegratedCompletionEngine {
     /// Capture all shell state used by JSON/system completion under one read
     /// lock, so one collection cannot mix variable names from before a mutation
     /// with executable paths from after it.
-    pub(super) fn runtime_completion_snapshot(&self) -> (Vec<String>, SystemCommandCacheTicket) {
+    pub(super) fn runtime_completion_snapshot(
+        &self,
+        current_dir: &Path,
+    ) -> (Vec<String>, SystemCommandCacheTicket, FileSystemContext) {
         let environment = self.environment.read();
         let names = environment
             .variable_state
@@ -18,11 +21,28 @@ impl IntegratedCompletionEngine {
             .collect();
         let system_command_ticket =
             activate_system_command_cache(&environment.variable_state.paths);
-        (names, system_command_ticket)
+        let filesystem = FileSystemContext::new(current_dir, environment.lookup_variable("HOME"));
+        (names, system_command_ticket, filesystem)
     }
 
-    pub(super) fn current_path_cache_scope(&self) -> u64 {
-        self.environment.read().completion_state.path_generation
+    pub(super) fn filesystem_context(&self, current_dir: &Path) -> FileSystemContext {
+        FileSystemContext::new(current_dir, self.environment.read().lookup_variable("HOME"))
+    }
+
+    pub(super) fn current_cache_scope(&self, current_dir: &Path) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let environment = self.environment.read();
+        let mut scope = std::collections::hash_map::DefaultHasher::new();
+        environment
+            .completion_state
+            .path_generation
+            .hash(&mut scope);
+        environment.lookup_variable("HOME").hash(&mut scope);
+        if !current_dir.is_absolute() {
+            std::env::current_dir().ok().hash(&mut scope);
+        }
+        current_dir.hash(&mut scope);
+        scope.finish()
     }
 
     /// Collect candidates for "special" tokens that complete the same way
@@ -111,14 +131,16 @@ impl IntegratedCompletionEngine {
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
 
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(request.current_dir);
         let db_lock = self.command_completion.lock();
 
         let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
             &db_lock,
             &environment_names,
             system_command_ticket.clone(),
-        );
+        )
+        .with_filesystem_context(&filesystem);
 
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
@@ -156,7 +178,8 @@ impl IntegratedCompletionEngine {
                                     &db_lock,
                                     &environment_names,
                                     system_command_ticket.clone(),
-                                );
+                                )
+                                .with_filesystem_context(&filesystem);
                             match completion_generator.generate_candidates(parsed_command_line) {
                                 Ok(candidates) => {
                                     let enhanced_candidates = candidates
@@ -192,7 +215,8 @@ impl IntegratedCompletionEngine {
                     &db_lock,
                     &environment_names,
                     system_command_ticket.clone(),
-                );
+                )
+                .with_filesystem_context(&filesystem);
                 if let Ok(candidates) = completion_generator
                     .generate_fallback_candidates(&parsed_command_line.current_token)
                 {

@@ -10,7 +10,7 @@ use crate::completion::errors::GeneratorError;
 use crate::completion::fuzzy_match_score;
 use crate::completion::parser::{CompletionContext, ParsedCommandLine};
 
-use super::filesystem::FileSystemGenerator;
+use super::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::group::GroupGenerator;
 use super::interface::InterfaceGenerator;
 use super::option::OptionGenerator;
@@ -28,6 +28,7 @@ pub struct ArgumentGenerator<'a> {
     database: &'a CommandCompletionDatabase,
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
+    filesystem: Option<&'a FileSystemContext>,
 }
 
 impl<'a> ArgumentGenerator<'a> {
@@ -36,6 +37,7 @@ impl<'a> ArgumentGenerator<'a> {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            filesystem: None,
         }
     }
 
@@ -60,7 +62,16 @@ impl<'a> ArgumentGenerator<'a> {
             database,
             environment_names,
             system_command_ticket,
+            filesystem: None,
         }
+    }
+
+    pub(crate) fn with_filesystem_context(
+        mut self,
+        context: Option<&'a FileSystemContext>,
+    ) -> Self {
+        self.filesystem = context;
+        self
     }
 
     /// Generate argument completion candidates
@@ -111,8 +122,12 @@ impl<'a> ArgumentGenerator<'a> {
             // Default to file completion if no candidates generated yet
             if candidates.is_empty() && resolved_arg_type.is_none() {
                 candidates.extend(
-                    FileSystemGenerator::generate_file_candidates(&parsed.current_token)
-                        .map_err(GeneratorError::Other)?,
+                    FileSystemGenerator::file_candidates(
+                        &parsed.current_token,
+                        None,
+                        self.filesystem,
+                    )
+                    .map_err(GeneratorError::Other)?,
                 );
             }
         }
@@ -178,7 +193,7 @@ impl<'a> ArgumentGenerator<'a> {
         // Fallback: file completion
         if candidates.is_empty() && actual_value_type.is_none() {
             candidates.extend(
-                FileSystemGenerator::generate_file_candidates(&parsed.current_token)
+                FileSystemGenerator::file_candidates(&parsed.current_token, None, self.filesystem)
                     .map_err(GeneratorError::Other)?,
             );
         }
@@ -273,14 +288,13 @@ impl<'a> ArgumentGenerator<'a> {
     ) -> Result<Vec<CompletionCandidate>> {
         let query = parsed.completion_query();
         match arg_type {
-            ArgumentType::File { extensions } => {
-                FileSystemGenerator::generate_file_candidates_with_filter(
-                    &parsed.current_token,
-                    extensions.as_ref(),
-                )
-            }
+            ArgumentType::File { extensions } => FileSystemGenerator::file_candidates(
+                &parsed.current_token,
+                extensions.as_ref(),
+                self.filesystem,
+            ),
             ArgumentType::Directory => {
-                FileSystemGenerator::generate_directory_candidates(&parsed.current_token)
+                FileSystemGenerator::directory_candidates(&parsed.current_token, self.filesystem)
             }
             ArgumentType::Choice(choices) => Ok(choices
                 .iter()

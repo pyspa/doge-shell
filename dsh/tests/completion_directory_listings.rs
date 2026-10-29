@@ -144,7 +144,12 @@ fn relative_ghost_keeps_input_spelling() {
         ] {
             let span = pest::Span::new(input, start, input.len()).unwrap();
             assert_eq!(
-                doge_shell::repl::completion::complete_argument_word(input, &span, &input[start..]),
+                doge_shell::repl::completion::complete_argument_word(
+                    &doge_shell::environment::Environment::new(),
+                    input,
+                    &span,
+                    &input[start..],
+                ),
                 Some(expected.into()),
                 "{input}"
             );

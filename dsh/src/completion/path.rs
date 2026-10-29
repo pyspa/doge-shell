@@ -1,19 +1,23 @@
 //! Directory listings retain the request's lookup location and source spelling.
 //! Cache entries describe one exact directory, never a parent-prefix result.
+use crate::completion::Candidate;
 use crate::completion::cache::CompletionCache;
 use crate::completion::fuzzy::fuzzy_rank;
+use crate::completion::generators::filesystem::FileSystemContext;
 #[cfg(not(test))]
 use crate::completion::notify_completion_update;
 use crate::completion::shell_path::{format_path_for_token, normalize_path_token};
-use crate::completion::{Candidate, MAX_RESULT};
 use anyhow::Result;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
+
+#[cfg(test)]
+mod shared_tests;
 
 struct DirectoryRequest {
     key: String,
@@ -23,8 +27,17 @@ struct DirectoryRequest {
 
 impl DirectoryRequest {
     fn new(path: PathBuf) -> Result<Self> {
+        Self::with_context(path, None)
+    }
+
+    fn with_context(path: PathBuf, context: Option<&FileSystemContext>) -> Result<Self> {
         let spelling = path.to_string_lossy();
-        let expanded = PathBuf::from(shellexpand::tilde(&spelling).as_ref());
+        let expanded = context.map_or_else(
+            || PathBuf::from(shellexpand::tilde(&spelling).as_ref()),
+            |context| {
+                context.lookup_directory(&spelling, spelling == "~" || spelling.starts_with("~/"))
+            },
+        );
         // Resolve before background work is queued: a later cd must neither
         // change the scan target nor reuse relative results from another cwd.
         let lookup = if expanded.is_absolute() {
@@ -114,6 +127,14 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
 }
 
 pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Option<String>> {
+    path_completion_prefix_strict_with_context(input, only_dirs, None)
+}
+
+fn path_completion_prefix_strict_with_context(
+    input: &str,
+    only_dirs: bool,
+    context: Option<&FileSystemContext>,
+) -> Result<Option<String>> {
     let path = Path::new(input);
     // Path::parent("dir/") is empty. A trailing separator means list the
     // directory itself, before considering a parent or the cwd fallback.
@@ -124,70 +145,38 @@ pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Opt
             .filter(|parent| !parent.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."))
     };
-    let paths = path_completion_path(directory.to_path_buf())?;
+    let paths = path_completion_path_with_context(directory.to_path_buf(), context)?;
 
-    let mut candidates: Vec<String> = Vec::new();
-    let search = input.to_string();
-
-    for cand in paths.iter() {
-        if let Candidate::Path(path) = cand {
-            let path_str = path.to_string();
-
-            // Filter by prefix strictly
-            if !path_str.starts_with(&search) {
-                // Try handling "./" prefix if input doesn't have it but path does
-                if let Ok(stripped) = PathBuf::from(path).strip_prefix("./") {
-                    let stripped_str = stripped.display().to_string();
-                    if !stripped_str.starts_with(&search) {
-                        continue;
-                    }
-                    // Use striped version? path_completion_path returns relative paths often with ./ ?
-                    // Actually path_completion_path implementation joins with dir.
-                } else {
-                    continue;
-                }
+    // Read the shared listing once and retain only a borrowed winner. Ghost
+    // completion runs on every keystroke: cloning all paths and sorting the
+    // matches makes even a warm cache expensive in large directories.
+    let best = paths
+        .iter()
+        .filter_map(|candidate| {
+            let Candidate::Path(path) = candidate else {
+                return None;
+            };
+            if only_dirs && !path.ends_with(std::path::MAIN_SEPARATOR) {
+                return None;
             }
-
-            // Filter for directories if requested
-            if only_dirs {
-                // Candidate::Path doesn't store is_dir directly?
-                // Wait, path_completion implementation adds trailing slash for dirs!
-                // Let's rely on trailing slash convention used in path_completion_path.
-                if !path_str.ends_with(std::path::MAIN_SEPARATOR) {
-                    continue;
-                }
-            }
-
-            // The stripped spelling that matched is also the continuation.
-            // Returning './foo' for bare 'fo' loses the append-only ghost.
-            candidates.push(if !path_str.starts_with(&search) {
-                path_str.strip_prefix("./").unwrap_or(&path_str).to_string()
+            if path.starts_with(input) {
+                Some(path.as_str())
             } else {
-                path_str
-            });
-        }
-    }
+                // A bare 'fo' is listed as './foo'; preserve the spelling that
+                // matched so the result can be appended to the user's input.
+                path.strip_prefix("./")
+                    .filter(|path| path.starts_with(input))
+            }
+        })
+        .min_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
 
-    // Sort candidates
-    // 1. Length (shorter is better/more likely next step)
-    // 2. Alphabetical
-    // (Frecency integration is omitted for simplicity in this step, relying on default path order or sort)
-
-    candidates.sort_by(|a, b| {
-        let len_ord = a.len().cmp(&b.len());
-        if len_ord != std::cmp::Ordering::Equal {
-            len_ord
-        } else {
-            a.cmp(b)
-        }
-    });
-
-    Ok(candidates.first().cloned())
+    Ok(best.map(str::to_owned))
 }
 
 pub(crate) fn path_completion_prefix_for_shell_token(
     raw_token: &str,
     only_dirs: bool,
+    context: Option<&FileSystemContext>,
 ) -> Result<Option<String>> {
     if raw_token.is_empty() {
         return Ok(None);
@@ -203,7 +192,8 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     } else {
         normalized.clone()
     };
-    let Some(candidate) = path_completion_prefix_strict(&lookup, only_dirs)? else {
+    let Some(candidate) = path_completion_prefix_strict_with_context(&lookup, only_dirs, context)?
+    else {
         return Ok(None);
     };
     let candidate = if literal_home {
@@ -243,11 +233,20 @@ pub fn path_completion() -> Result<Vec<Candidate>> {
 }
 
 pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
-    let request = DirectoryRequest::new(path)?;
+    Ok(path_completion_path_with_context(path, None)?
+        .as_ref()
+        .clone())
+}
+
+fn path_completion_path_with_context(
+    path: PathBuf,
+    context: Option<&FileSystemContext>,
+) -> Result<Arc<Vec<Candidate>>> {
+    let request = DirectoryRequest::with_context(path, context)?;
 
     // Check cache first
     if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
-        return Ok(candidates.as_ref().clone());
+        return Ok(candidates);
     }
 
     #[cfg(test)]
@@ -256,7 +255,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         let key = request.key.clone();
         let candidates = scan_dir_candidates(request)?;
         PATH_COMPLETION_CACHE.set(key, candidates.clone());
-        Ok(candidates)
+        Ok(Arc::new(candidates))
     }
 
     #[cfg(not(test))]
@@ -264,7 +263,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         // Check if pending to avoid duplicate loaded
         if !PATH_COMPLETION_CACHE.mark_pending(request.key.clone()) {
             // If pending, return empty for now (UI will refresh when ready)
-            return Ok(Vec::new());
+            return Ok(Arc::default());
         }
 
         // Trigger background load
@@ -298,7 +297,7 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         });
 
         // Return empty immediately
-        Ok(Vec::new())
+        Ok(Arc::default())
     }
 }
 
@@ -336,7 +335,7 @@ pub fn is_path_cached(path: &Path) -> bool {
     //
     // `get_entry` rather than `lookup`: this is a membership test, and `lookup`
     // both walks every byte prefix of the key and clones the whole candidate Vec
-    // (up to MAX_RESULT Strings). This runs once per argument-ish highlight range
+    // (one String per directory entry). This runs once per argument-ish highlight range
     // on every keystroke, so the clone is the dominant cost. The prefix walk is
     // also wrong for directory keys — it can match an unrelated directory whose
     // path happens to be a prefix of this one (`/home/ma` vs `/home/ma2`).
@@ -392,9 +391,8 @@ fn scan_dir_candidates(request: DirectoryRequest) -> Result<Vec<Candidate>> {
             path += "/";
         }
         files.push(Candidate::Path(path));
-        if files.len() >= MAX_RESULT {
-            break;
-        }
+        // Keep the complete listing: callers filter by name/type first, and
+        // the integrated engine limits the ranked matches, not arbitrary entries.
     }
     files.sort();
     Ok(files)
@@ -457,7 +455,7 @@ mod tests {
         let expected = format!("{}/dir\\ with\\ space/foo.txt", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, false, None).unwrap(),
             Some(expected)
         );
     }
@@ -473,7 +471,7 @@ mod tests {
         let expected = format!("\"{}/dir with space/foo.txt", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, false, None).unwrap(),
             Some(expected)
         );
     }
@@ -490,7 +488,7 @@ mod tests {
         let expected = format!("'{}/dir with space/foodir/", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, true).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, true, None).unwrap(),
             Some(expected)
         );
     }

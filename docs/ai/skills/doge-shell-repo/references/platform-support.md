@@ -62,3 +62,8 @@
 - mold が PATH に必要。CI の Linux ジョブは `apt-get install -y mold` を踏む。
 - `[profile.dev] strip = "none"` は macOS 用。`debug = 0` だと cargo が `strip = "debuginfo"` を既定にし、macOS では `rust-objcopy` (optional な `llvm-tools` component) を要求して毎ビルド警告が出る。
 - `nix` の Linux 拡張 API を使わない。`pipe2` は nix が macOS に出しておらず、これで crate 全体がコンパイル不能だった (`a846e3c`)。`std::io::pipe` が両 OS で cloexec な pipe をくれる。
+
+## 非UTF-8ファイル名のテスト
+
+- APFSは非UTF-8名の作成を `EILSEQ` で拒否する。実ファイルのテストはこのエラーだけを能力不足として扱い、それ以外の作成エラーは失敗にする。OS名だけでテスト全体を無効化しない。
+- 実ファイル作成を伴わないパス照合テストは両OSで実行する。リネームなど別の性質の検証を非UTF-8ファイルの作成可否に巻き込まない。

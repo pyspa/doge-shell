@@ -32,6 +32,7 @@ pub mod quick_fix;
 pub mod safety_policy;
 pub mod schedule;
 pub mod shell_options;
+pub mod shell_variable;
 pub mod snippet;
 pub mod text;
 pub use project::Project;

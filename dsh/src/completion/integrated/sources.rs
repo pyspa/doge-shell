@@ -58,6 +58,7 @@ impl IntegratedCompletionEngine {
     pub(super) fn collect_pm_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
         use parser::CompletionContext;
 
@@ -70,7 +71,7 @@ impl IntegratedCompletionEngine {
                 };
                 match subcommand.as_str() {
                     "add" => match arg_index {
-                        0 => self.collect_directory_candidates(current_token),
+                        0 => self.collect_directory_candidates(current_token, current_dir),
                         1 => self.collect_project_name_candidates_from_path(
                             parsed_command_line,
                             current_token,
@@ -167,8 +168,12 @@ impl IntegratedCompletionEngine {
     pub(super) fn collect_directory_candidates(
         &self,
         current_token: &str,
+        current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
-        match FileSystemGenerator::generate_directory_candidates(current_token) {
+        match FileSystemGenerator::directory_candidates(
+            current_token,
+            Some(&self.filesystem_context(current_dir)),
+        ) {
             Ok(candidates) => candidates
                 .into_iter()
                 .map(|candidate| self.convert_to_enhanced_candidate(candidate))

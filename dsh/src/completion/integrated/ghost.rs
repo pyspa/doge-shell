@@ -89,7 +89,8 @@ impl IntegratedCompletionEngine {
         }
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(current_dir);
         let db_lock = self.command_completion.lock();
         if db_lock.get_command(&parsed_command_line.command).is_none() {
             return Vec::new();
@@ -99,7 +100,8 @@ impl IntegratedCompletionEngine {
             &db_lock,
             &environment_names,
             system_command_ticket,
-        );
+        )
+        .with_filesystem_context(&filesystem);
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(candidates) => candidates
                 .into_iter()
@@ -142,12 +144,14 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         }
 
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(current_dir);
         let generator = ArgumentGenerator::with_runtime_environment_ticket(
             &db_lock,
             &environment_names,
             Some(system_command_ticket),
-        );
+        )
+        .with_filesystem_context(Some(&filesystem));
         generator
             .generate_candidates_for_type(&arg_type, parsed_command_line)
             .map(|candidates| {

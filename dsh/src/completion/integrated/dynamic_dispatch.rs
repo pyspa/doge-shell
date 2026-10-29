@@ -66,7 +66,8 @@ impl IntegratedCompletionEngine {
         // otherwise make `git checkout <file>` impossible to complete. Merge in
         // file/directory candidates so both branches and paths are offered.
         if git_subcommand_accepts_paths(&target) {
-            candidates.extend(self.file_candidates_for_token(&target.current_token));
+            candidates
+                .extend(self.file_candidates_for_token(&target.current_token, request.current_dir));
         }
 
         let task_id_argument = matches!(
@@ -85,8 +86,16 @@ impl IntegratedCompletionEngine {
     /// File/directory candidates for the current token, converted to the
     /// engine's `EnhancedCandidate` form. Errors are swallowed (completion is
     /// best-effort) and yield an empty list.
-    pub(super) fn file_candidates_for_token(&self, current_token: &str) -> Vec<EnhancedCandidate> {
-        match FileSystemGenerator::generate_file_candidates(current_token) {
+    pub(super) fn file_candidates_for_token(
+        &self,
+        current_token: &str,
+        current_dir: &Path,
+    ) -> Vec<EnhancedCandidate> {
+        match FileSystemGenerator::file_candidates(
+            current_token,
+            None,
+            Some(&self.filesystem_context(current_dir)),
+        ) {
             Ok(candidates) => candidates
                 .into_iter()
                 .map(|c| self.convert_to_enhanced_candidate(c))

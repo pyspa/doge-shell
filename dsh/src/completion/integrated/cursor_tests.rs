@@ -122,7 +122,7 @@ async fn separator_matrix_keeps_providers_ranges_and_neighbors_together() {
                     replaced,
                     format!("{left}{padding}{separator}{padding}bg %1{right}")
                 );
-                assert!(top_cache_empty(&engine, &input));
+                assert!(top_cache_empty(&engine, &input, dir.path()));
             }
         }
         let (input, cursor, parsed) =
@@ -144,10 +144,10 @@ async fn separator_matrix_keeps_providers_ranges_and_neighbors_together() {
     }
 }
 
-fn top_cache_empty(engine: &IntegratedCompletionEngine, input: &str) -> bool {
+fn top_cache_empty(engine: &IntegratedCompletionEngine, input: &str, cwd: &Path) -> bool {
     engine
         .cache
-        .lookup_scoped(engine.current_path_cache_scope(), input)
+        .lookup_scoped(engine.current_cache_scope(cwd), input)
         .is_none()
 }
 
@@ -507,7 +507,7 @@ fn real_home_file_candidates_preserve_expansion_and_literal_tail() {
         assert!(
             // A missing literal directory can be uncached I/O failure or a
             // cached empty listing; neither may offer the HOME-backed value.
-            crate::completion::path::path_completion_prefix_for_shell_token(&literal, false)
+            crate::completion::path::path_completion_prefix_for_shell_token(&literal, false, None)
                 .ok()
                 .flatten()
                 .is_none(),

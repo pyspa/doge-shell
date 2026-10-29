@@ -9,6 +9,35 @@ fn completion_input(input: &str) -> Input {
     state
 }
 
+fn file_context(input: &str, environment: &Arc<RwLock<Environment>>) -> FileSystemContext {
+    let mut engine =
+        crate::completion::integrated::IntegratedCompletionEngine::new(environment.clone());
+    engine.initialize_command_completion().unwrap();
+    engine
+        .filesystem_context_for_input(
+            input,
+            input.chars().count(),
+            &std::env::current_dir().unwrap(),
+        )
+        .unwrap()
+}
+
+#[test]
+fn git_path_ghost_uses_the_same_directory_as_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("audit_ghost_target"), "").unwrap();
+    let input = format!("git -C {} checkout audit_ghost_", dir.path().display());
+    let state = completion_input(&input);
+    let environment = Environment::new_isolated();
+    let suggestion = completion_suggestion(
+        &state,
+        &input,
+        &environment,
+        &file_context(&input, &environment),
+    );
+    assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
+}
+
 #[test]
 fn path_suggestion_follows_logical_home_changes() {
     let dir = tempfile::tempdir().unwrap();
@@ -22,7 +51,12 @@ fn path_suggestion_follows_logical_home_changes() {
         environment
             .write()
             .set_shell_var("HOME".into(), home.display().to_string());
-        let suggestion = completion_suggestion(&state, input, &environment);
+        let suggestion = completion_suggestion(
+            &state,
+            input,
+            &environment,
+            &file_context(input, &environment),
+        );
         assert_eq!(
             suggestion.map(|s| s.full),
             Some(format!("cat ~/audit_{name}.txt"))
@@ -117,9 +151,14 @@ fn test_argument_path_completion_preserves_escaped_style() {
     let input = format!("ls {raw_prefix}");
     let expected = format!("ls {}/dir\\ with\\ space/foo.txt", dir.path().display());
 
-    let completion =
-        complete_path_for_span(&input, 3, input.len(), false, &Environment::new_isolated())
-            .unwrap();
+    let completion = complete_path_for_span(
+        &input,
+        3,
+        input.len(),
+        false,
+        &file_context(&input, &Environment::new_isolated()),
+    )
+    .unwrap();
 
     assert_eq!(completion.full, expected);
     assert_eq!(completion.suffix, "o.txt");
@@ -135,9 +174,14 @@ fn test_argument_path_completion_replaces_quoted_raw_token() {
     let input = format!("ls \"{}/dir with space/fo", dir.path().display());
     let expected = format!("ls \"{}/dir with space/foo.txt", dir.path().display());
 
-    let completion =
-        complete_path_for_span(&input, 4, input.len(), false, &Environment::new_isolated())
-            .unwrap();
+    let completion = complete_path_for_span(
+        &input,
+        4,
+        input.len(),
+        false,
+        &file_context(&input, &Environment::new_isolated()),
+    )
+    .unwrap();
 
     assert_eq!(completion.full, expected);
     assert_eq!(completion.suffix, "o.txt");
@@ -155,8 +199,14 @@ fn test_argument_path_completion_directory_only() {
     let input = format!("cd {raw_prefix}");
     let expected = format!("cd {}/dir\\ with\\ space/foodir/", dir.path().display());
 
-    let completion =
-        complete_path_for_span(&input, 3, input.len(), true, &Environment::new_isolated()).unwrap();
+    let completion = complete_path_for_span(
+        &input,
+        3,
+        input.len(),
+        true,
+        &file_context(&input, &Environment::new_isolated()),
+    )
+    .unwrap();
 
     assert_eq!(completion.full, expected);
     assert_eq!(completion.suffix, "odir/");
@@ -174,7 +224,13 @@ fn test_command_path_completion_preserves_escaped_style() {
     let input_state = completion_input(&input);
     let environment = Environment::new();
 
-    let suggestion = completion_suggestion(&input_state, &input, &environment).unwrap();
+    let suggestion = completion_suggestion(
+        &input_state,
+        &input,
+        &environment,
+        &file_context(&input, &environment),
+    )
+    .unwrap();
 
     assert_eq!(suggestion.full, expected);
     assert_eq!(suggestion.source, SuggestionSource::Completion);
@@ -190,8 +246,14 @@ fn test_command_path_completion_replaces_quoted_raw_token() {
     let input = format!("\"{}/dir with space/fo", dir.path().display());
     let expected = format!("\"{}/dir with space/foodir/", dir.path().display());
 
-    let completion =
-        complete_path_for_span(&input, 1, input.len(), true, &Environment::new_isolated()).unwrap();
+    let completion = complete_path_for_span(
+        &input,
+        1,
+        input.len(),
+        true,
+        &file_context(&input, &Environment::new_isolated()),
+    )
+    .unwrap();
 
     assert_eq!(completion.full, expected);
     assert_eq!(completion.suffix, "odir/");
@@ -209,7 +271,12 @@ fn test_command_path_completion_keeps_directory_only_policy() {
     let environment = Environment::new();
 
     assert_eq!(
-        completion_suggestion(&input_state, &input, &environment),
+        completion_suggestion(
+            &input_state,
+            &input,
+            &environment,
+            &file_context(&input, &environment)
+        ),
         None
     );
 }
@@ -223,7 +290,13 @@ fn test_command_prefix_completion_still_uses_environment_first() {
         .write()
         .set_executable_names(vec!["zz-test-command".to_string()]);
 
-    let suggestion = completion_suggestion(&input_state, input, &environment).unwrap();
+    let suggestion = completion_suggestion(
+        &input_state,
+        input,
+        &environment,
+        &file_context(input, &environment),
+    )
+    .unwrap();
 
     assert_eq!(suggestion.full, "zz-test-command");
     assert_eq!(suggestion.source, SuggestionSource::Completion);

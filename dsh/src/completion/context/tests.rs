@@ -136,6 +136,7 @@ fn option_value_context_uses_completion_definition() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: None,
@@ -170,6 +171,7 @@ fn global_option_before_subcommand_preserves_argument_context() {
         command: "snapper".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-c".to_string()),
             long: Some("--config".to_string()),
             description: None,
@@ -214,6 +216,7 @@ fn recovered_subcommand_counts_only_preceding_positional_arguments() {
         command: "helm".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: None,
             long: Some("--kube-context".to_string()),
             description: None,
@@ -267,6 +270,7 @@ fn known_option_value_is_removed_before_positional_argument_index() {
         command: "pytest".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-k".to_string()),
             long: None,
             description: None,
@@ -302,6 +306,7 @@ fn known_option_value_removal_preserves_same_text_positional_argument() {
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-k".to_string()),
             long: None,
             description: None,
@@ -338,6 +343,7 @@ fn known_option_value_is_removed_before_empty_positional_argument() {
         command: "pytest".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-k".to_string()),
             long: None,
             description: None,
@@ -371,6 +377,7 @@ fn inline_long_option_value_uses_completion_definition() {
         command: "kubectl".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: None,
             long: Some("--context".to_string()),
             description: None,
@@ -405,6 +412,7 @@ fn short_attached_option_value_uses_completion_definition() {
         command: "kubectl".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-n".to_string()),
             long: Some("--namespace".to_string()),
             description: None,
@@ -439,6 +447,7 @@ fn short_attached_option_without_value_definition_does_not_use_value_provider() 
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-v".to_string()),
             long: Some("--verbose".to_string()),
             description: None,
@@ -465,6 +474,7 @@ fn short_equals_option_value_stays_out_of_scope() {
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-x".to_string()),
             long: Some("--example".to_string()),
             description: None,
@@ -496,6 +506,7 @@ fn separate_option_empty_value_uses_completion_definition() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: None,
@@ -529,6 +540,7 @@ fn inline_long_option_without_value_definition_does_not_use_value_provider() {
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: None,
             long: Some("--verbose".to_string()),
             description: None,

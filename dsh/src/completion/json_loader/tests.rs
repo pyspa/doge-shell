@@ -525,6 +525,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test short option with placeholder
     let option_with_short = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("-f <FILE>".to_string()),
         long: None,
         description: None,
@@ -536,6 +537,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test long option with placeholder
     let option_with_long = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("--type <TYPE>".to_string()),
         description: None,
@@ -547,6 +549,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test both short and long with placeholders
     let option_both = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("-f <FILE>".to_string()),
         long: Some("--file <FILE>".to_string()),
         description: None,
@@ -558,6 +561,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test invalid short options (short must start with a single dash and have content)
     let invalid_short = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
         long: None,
         description: None,
@@ -568,6 +572,7 @@ fn test_validate_option_with_placeholders() {
     assert!(loader.validate_option(&invalid_short, "test").is_err());
 
     let invalid_bare_short = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("-".to_string()),
         long: None,
         description: None,
@@ -579,6 +584,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test that valid short option like -123 is now accepted
     let valid_short_with_number = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("-123".to_string()), // Should be valid now: starts with -
         long: None,
         description: None,
@@ -593,6 +599,7 @@ fn test_validate_option_with_placeholders() {
     );
 
     let valid_short_with_attached_value = crate::completion::command::CommandOption {
+        multiple: false,
         short: Some("-ofile".to_string()),
         long: None,
         description: None,
@@ -608,6 +615,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test invalid long option (should still fail)
     let invalid_long = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("--".to_string()), // Invalid: just -- without any content
         description: None,
@@ -618,6 +626,7 @@ fn test_validate_option_with_placeholders() {
     assert!(loader.validate_option(&invalid_long, "test").is_err());
 
     let invalid_long_with_placeholder = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("-- <ARG>".to_string()),
         description: None,
@@ -632,6 +641,7 @@ fn test_validate_option_with_placeholders() {
     );
 
     let invalid_bare_long = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("-".to_string()),
         description: None,
@@ -643,6 +653,7 @@ fn test_validate_option_with_placeholders() {
 
     // Test that long option starting with -- and containing numbers is now valid
     let valid_long_with_number = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("--123invalid".to_string()), // Should be valid now: starts with --
         description: None,
@@ -657,6 +668,7 @@ fn test_validate_option_with_placeholders() {
     );
 
     let valid_single_dash_long = crate::completion::command::CommandOption {
+        multiple: false,
         short: None,
         long: Some("-Xmx".to_string()),
         description: None,

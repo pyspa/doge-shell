@@ -423,11 +423,7 @@ async fn variable_syntax_validates_names_and_preserves_quote_context() {
         }
     }
     let engine = IntegratedCompletionEngine::new(environment);
-    for (raw, expected) in [
-        ("$SAFE_N", "$SAFE_NAME"),
-        ("\"$SAFE_N\"", "\"$SAFE_NAME\""),
-        ("'$SAFE_N'", "'$SAFE_NAME'"),
-    ] {
+    for (raw, expected) in [("$SAFE_N", "$SAFE_NAME"), ("\"$SAFE_N\"", "\"$SAFE_NAME\"")] {
         let input = format!("echo {raw}");
         let result = engine
             .complete(
@@ -448,6 +444,18 @@ async fn variable_syntax_validates_names_and_preserves_quote_context() {
             "{raw:?}: {formatted:?}"
         );
     }
+    // Single quotes suppress variable syntax; literal filenames are covered
+    // by quoted_literal_names_are_not_variable_or_home_references.
+    let input = "echo '$SAFE_N'";
+    let result = engine
+        .complete(input, input.len(), std::path::Path::new("."), 50, None)
+        .await;
+    assert!(
+        result
+            .candidates
+            .iter()
+            .all(|candidate| candidate.candidate_type != CandidateType::VariableReference)
+    );
     let names = engine.variable_candidates("", |name| format!("${name}"));
     assert!(names.iter().any(|candidate| candidate.text == "$SAFE_NAME"));
     assert!(

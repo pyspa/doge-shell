@@ -71,6 +71,15 @@ pub struct CompletionCache<T: CacheableCandidate> {
 }
 
 impl<T: CacheableCandidate> CompletionCache<T> {
+    #[cfg(test)]
+    pub(super) fn scoped_expiration(&self, scope: u64, key: &str) -> Option<Instant> {
+        self.scoped_entries
+            .read()
+            .get(&scope)?
+            .get(key)
+            .map(|entry| entry.expires_at)
+    }
+
     pub fn new(default_ttl: Duration) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),

@@ -15,8 +15,9 @@ impl IntegratedCompletionEngine {
             return None;
         }
 
-        let request = CompletionRequest::new(input, current_dir, 10, cursor_pos);
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        let completion_dir = self.completion_directory(&parsed_command_line, current_dir)?;
+        let request = CompletionRequest::new(input, &completion_dir, 10, cursor_pos);
         if parsed_command_line
             .source
             .as_ref()

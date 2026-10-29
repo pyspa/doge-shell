@@ -54,11 +54,10 @@ impl IntegratedCompletionEngine {
         &self,
         current_token: &str,
     ) -> Option<Vec<EnhancedCandidate>> {
-        // Quote delimiters are source style, not part of an environment name.
-        let current_token = current_token
-            .strip_prefix('"')
-            .or_else(|| current_token.strip_prefix('\''))
-            .unwrap_or(current_token);
+        // Variables expand inside double quotes, but single-quoted variables
+        // and any quoted tilde are literal filenames.
+        let home_reference = current_token.starts_with('~');
+        let current_token = current_token.strip_prefix('"').unwrap_or(current_token);
         let current_token = current_token.trim_end_matches(['"', '\'']);
         if let Some(rest) = current_token.strip_prefix("${") {
             // Still typing the name inside `${...}` (no closing brace / path yet).
@@ -75,7 +74,7 @@ impl IntegratedCompletionEngine {
             }
             return Some(self.variable_candidates(rest, |name| format!("${name}")));
         }
-        if let Some(rest) = current_token.strip_prefix('~') {
+        if home_reference && let Some(rest) = current_token.strip_prefix('~') {
             // `~user`. Once a `/` appears it is a path under the home directory.
             if rest.contains('/') {
                 return None;

@@ -3,6 +3,9 @@
 [../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。
 
 - subcommand補正後の引数位置は既存の `positional_arguments_after_raw_index` で数える。`specified_arguments.len()` はcursor後方の引数も含むため、task_idの後にrequest_idがあると別引数の補完になる。
+- ファイル補完は要求のcwdと論理HOMEを参照し、上位の結果キャッシュも両方を区別する。TABと入力中のパス候補で参照先を変えない。件数制限は名前・拡張子・種別の絞り込み後に行い、ディレクトリ列挙を先に打ち切らない。
+- 入力ごとのゴースト補完は共有キャッシュを借用して最良候補だけを選ぶ。全件の複製・候補Vecの構築・再ソートを行わず、返す1件だけを文字列化する。全件キャッシュを維持する変更では、大規模ディレクトリのキャッシュヒット時も計測する。
+- GitのNUL区切りパスは空白だけの名前も含めて保持する。porcelainのパスはリポジトリルート基準なので、cwd相対へ変換してから照合する。変換済み候補のキャッシュはcwd単位とし、削除済みファイルの変換にcanonicalizeを要求しない。
 
 - 埋め込み元は `completions/` ただ 1 つ（`dsh/src/completion/json_loader.rs` の `#[folder = "../completions/"]`）。ディレクトリを増やさない。以前は `dsh/completions/` との二重管理で、root にだけ足した 4 ファイルが出荷バイナリに載っていなかった。
 - provider 名のタイポは**どのテストも落ちない**。loader は `provider` をただの `String` として通し、`DynamicProviderId::parse` が `None` を返して候補が静かに 0 件になるだけ。`json_loader.rs` の `embedded_completion_definitions_are_valid` が唯一の防波堤なので、ここを弱めない。

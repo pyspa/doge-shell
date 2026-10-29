@@ -15,7 +15,7 @@ use super::dynamic::{CachePolicy, CompletionRuntime, DynamicCompletionProvider};
 use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
-use crate::completion::generators::filesystem::FileSystemGenerator;
+use crate::completion::generators::filesystem::{FileSystemContext, FileSystemGenerator};
 
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
@@ -244,7 +244,7 @@ pub struct IntegratedCompletionEngine {
 
     /// Dynamic completion registry
 
-    /// Short lived completion cache, scoped by the logical PATH generation.
+    /// Short lived completion cache, scoped by PATH generation, cwd and HOME.
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<(u64, String), CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
@@ -482,11 +482,9 @@ impl IntegratedCompletionEngine {
             };
         }
 
-        // Keep the top-level prefix/sliding cache, but scope every entry to the
-        // logical PATH generation. This preserves hot-keypress reuse without
-        // allowing any collector reached through a command argument to retain
-        // results from an older PATH activation.
-        let cache_scope = self.current_path_cache_scope();
+        // File and command candidates depend on the request's directory and
+        // logical shell environment, even when the input text is unchanged.
+        let cache_scope = self.current_cache_scope(request.current_dir);
 
         if cache_allowed
             && !request.input.is_empty()
@@ -641,3 +639,6 @@ mod identity_tests;
 
 #[cfg(test)]
 mod pm_name_tests;
+
+#[cfg(test)]
+mod filesystem_tests;

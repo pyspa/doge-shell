@@ -3,6 +3,7 @@ use super::context::ContextCorrector;
 pub use super::errors::GeneratorError;
 use super::generators::argument::ArgumentGenerator;
 use super::generators::command::CommandGenerator;
+use super::generators::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 
@@ -23,6 +24,7 @@ pub struct CompletionGenerator<'a> {
     database: &'a CommandCompletionDatabase,
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
+    filesystem: Option<&'a FileSystemContext>,
 }
 
 impl<'a> CompletionGenerator<'a> {
@@ -32,6 +34,7 @@ impl<'a> CompletionGenerator<'a> {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            filesystem: None,
         }
     }
 
@@ -57,7 +60,13 @@ impl<'a> CompletionGenerator<'a> {
             database,
             environment_names,
             system_command_ticket: Some(system_command_ticket),
+            filesystem: None,
         }
+    }
+
+    pub(crate) fn with_filesystem_context(mut self, context: &'a FileSystemContext) -> Self {
+        self.filesystem = Some(context);
+        self
     }
 
     /// Get available command list (for debugging)
@@ -79,8 +88,9 @@ impl<'a> CompletionGenerator<'a> {
         &self,
         current_token: &str,
     ) -> Result<Vec<CompletionCandidate>, GeneratorError> {
-        let mut candidates = crate::completion::generators::filesystem::FileSystemGenerator::generate_file_candidates(current_token)
-            .map_err(GeneratorError::Other)?;
+        let mut candidates =
+            FileSystemGenerator::file_candidates(current_token, None, self.filesystem)
+                .map_err(GeneratorError::Other)?;
 
         if let Some(ticket) = &self.system_command_ticket {
             candidates.extend(
@@ -165,6 +175,7 @@ impl<'a> CompletionGenerator<'a> {
             self.environment_names,
             self.system_command_ticket.clone(),
         )
+        .with_filesystem_context(self.filesystem)
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::completion::generators::filesystem::FileSystemContext;
 use crate::completion::path::path_completion_prefix_for_shell_token;
 use crate::completion::shell_token::{self, SeparatorMode};
 use crate::environment::Environment;
@@ -56,7 +57,7 @@ pub fn word_based_completion(
                 }
             }
             Rule::args => {
-                if let Some(result) = complete_argument_word(input, span, word) {
+                if let Some(result) = complete_argument_word(environment, input, span, word) {
                     return Some(result);
                 }
             }
@@ -83,11 +84,18 @@ pub fn complete_command_word(
         return Some(replace_range(input, span.start(), span.end(), &name));
     }
 
-    complete_path_for_span(input, span.start(), span.end(), true).map(|completion| completion.full)
+    complete_path_for_span(input, span.start(), span.end(), true, environment)
+        .map(|completion| completion.full)
 }
 
-pub fn complete_argument_word(input: &str, span: &pest::Span<'_>, _word: &str) -> Option<String> {
-    complete_path_for_span(input, span.start(), span.end(), false).map(|completion| completion.full)
+pub fn complete_argument_word(
+    environment: &Arc<RwLock<Environment>>,
+    input: &str,
+    span: &pest::Span<'_>,
+    _word: &str,
+) -> Option<String> {
+    complete_path_for_span(input, span.start(), span.end(), false, environment)
+        .map(|completion| completion.full)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,9 +109,14 @@ pub(super) fn complete_path_for_span(
     span_start: usize,
     span_end: usize,
     only_dirs: bool,
+    environment: &Arc<RwLock<Environment>>,
 ) -> Option<PathCompletion> {
     let token = shell_token_for_byte_span(input, span_start, span_end)?;
-    let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs)
+    let context = FileSystemContext::new(
+        &std::env::current_dir().ok()?,
+        environment.read().lookup_variable("HOME"),
+    );
+    let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs, Some(&context))
         .ok()
         .flatten()?;
     let suffix = candidate.strip_prefix(&token.raw)?;

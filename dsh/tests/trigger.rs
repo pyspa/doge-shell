@@ -32,7 +32,20 @@ fn assert_watch_preserves_arguments(filename: &std::ffi::OsStr) {
     };
     // This message is emitted only after watch registration succeeds.
     wait_for("Press Ctrl+C to stop.");
-    std::fs::write(child.workdir().join("src").join(filename), "change").unwrap();
+    if let Err(error) = std::fs::write(child.workdir().join("src").join(filename), "change") {
+        child.kill_group();
+        child.wait(Duration::from_secs(3)).unwrap();
+        // APFS rejects invalid UTF-8 at file creation, before notify can observe it.
+        // Keep real watcher coverage on filesystems that support these names;
+        // the pure event_matches tests cover non-UTF-8 paths on every platform.
+        if filename.to_str().is_none()
+            && error.raw_os_error() == Some(nix::errno::Errno::EILSEQ as i32)
+        {
+            eprintln!("filesystem rejects non-UTF-8 filenames; real watcher case unavailable");
+            return;
+        }
+        panic!("failed to create watched file {filename:?}: {error}");
+    }
     let text = wait_for("[trigger] Success");
     child.kill_group();
     child.wait(Duration::from_secs(3)).unwrap();

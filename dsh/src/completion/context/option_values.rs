@@ -51,7 +51,7 @@ impl ContextCorrector<'_> {
                 continue;
             }
             if !end_options && is_separate_value_option(token, options) {
-                index += 2;
+                index = Self::next_argv_index(&parsed.raw_args, index + 1) + 1;
                 continue;
             }
             if !end_options && Self::looks_like_known_option(token, options) {
@@ -147,7 +147,7 @@ impl ContextCorrector<'_> {
             return None;
         }
 
-        let previous = Self::previous_raw_token(parsed)?;
+        let previous = Self::previous_argv_token(parsed)?;
         let option = options
             .into_iter()
             .find(|option| option.matches_name(previous) && option.expects_value())?;

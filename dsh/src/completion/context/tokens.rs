@@ -29,6 +29,29 @@ impl ContextCorrector<'_> {
         CommandLineParser::is_redirect_operator(token)
     }
 
+    /// The next argv word, retaining raw indexes for cursor/replacement spans.
+    /// Shell redirections may also occur between an option and its value.
+    pub(super) fn next_argv_index(args: &[String], mut index: usize) -> usize {
+        while args
+            .get(index)
+            .is_some_and(|token| Self::is_redirect_operator(token))
+        {
+            index += 2;
+        }
+        index.min(args.len())
+    }
+
+    pub(super) fn previous_argv_token(parsed: &ParsedCommandLine) -> Option<&str> {
+        let current = Self::current_raw_index(parsed)?;
+        let mut index = Self::next_argv_index(&parsed.raw_args, 0);
+        let mut previous = None;
+        while index < current {
+            previous = parsed.raw_args.get(index).map(String::as_str);
+            index = Self::next_argv_index(&parsed.raw_args, index + 1);
+        }
+        previous
+    }
+
     pub(super) fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {
         if parsed.current_token.is_empty() {
             return;
@@ -101,19 +124,6 @@ impl ContextCorrector<'_> {
         }
 
         Some(parsed.raw_args.len())
-    }
-
-    pub(super) fn previous_raw_token(parsed: &ParsedCommandLine) -> Option<&str> {
-        if parsed.raw_args.is_empty() {
-            return None;
-        }
-
-        let current_index = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
-
-        parsed
-            .raw_args
-            .get(current_index.checked_sub(1)?)
-            .map(String::as_str)
     }
 
     pub(super) fn collect_available_options<'b>(

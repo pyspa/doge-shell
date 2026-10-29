@@ -329,6 +329,12 @@ impl<'a> ContextCorrector<'a> {
 
         while tokens_consumed < parsed.raw_args.len() {
             let token = &parsed.raw_args[tokens_consumed];
+            // Shell redirections do not interrupt Git/global-option argv
+            // scanning. A cursor on their target was handled above.
+            if Self::is_redirect_operator(token) {
+                tokens_consumed += 2;
+                continue;
+            }
             // If this token is the current one being typed, don't consume it as a parent
             // But if it IS a valid subcommand, we should set context to SubCommand
             let is_current =
@@ -375,7 +381,8 @@ impl<'a> ContextCorrector<'a> {
                 {
                     tokens_consumed += 1;
                     if option.expects_value() && tokens_consumed < parsed.raw_args.len() {
-                        tokens_consumed += 1;
+                        tokens_consumed =
+                            Self::next_argv_index(&parsed.raw_args, tokens_consumed) + 1;
                     }
                     continue;
                 }

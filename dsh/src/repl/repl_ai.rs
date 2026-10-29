@@ -180,14 +180,21 @@ impl<'a> Repl<'a> {
             }
         }
 
-        if candidates.is_empty()
-            && let Some(extra) = super::completion::completion_suggestion(
-                &self.input,
-                current_input.as_str(),
-                &self.shell.environment,
-            )
-        {
-            candidates.push(extra);
+        if candidates.is_empty() {
+            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
+            if let Some(filesystem) = self
+                .completion_ui
+                .integrated_completion
+                .filesystem_context_for_input(&current_input, cursor_pos, &current_dir)
+                && let Some(extra) = super::completion::completion_suggestion(
+                    &self.input,
+                    current_input.as_str(),
+                    &self.shell.environment,
+                    &filesystem,
+                )
+            {
+                candidates.push(extra);
+            }
         }
 
         // If no deterministic candidates are available, try AI with full context.

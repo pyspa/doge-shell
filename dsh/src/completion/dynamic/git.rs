@@ -565,6 +565,16 @@ impl DynamicCompletionProvider {
                 }
             },
         )
+        .into_iter()
+        .map(|mut candidate| {
+            candidate.candidate_type = if candidate.text.ends_with('/') {
+                CandidateType::Directory
+            } else {
+                CandidateType::File
+            };
+            candidate
+        })
+        .collect()
     }
 }
 

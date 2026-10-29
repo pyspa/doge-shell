@@ -15,6 +15,64 @@ fn engine() -> IntegratedCompletionEngine {
 }
 
 #[tokio::test]
+async fn quoted_literal_names_are_not_variable_or_home_references() {
+    let dir = tempfile::tempdir().unwrap();
+    let engine = engine();
+    engine
+        .environment
+        .write()
+        .set_shell_var("AUDIT_VARIABLE".into(), "value".into());
+    fs::write(dir.path().join("$AUDIT_FILE"), "").unwrap();
+    fs::write(dir.path().join("~root_file"), "").unwrap();
+    for (input, expected) in [
+        ("cat '$AUDIT", "$AUDIT_FILE"),
+        ("cat '$AUDIT'", "$AUDIT_FILE"),
+        ("cat '~roo", "~root_file"),
+        ("cat \"~roo", "~root_file"),
+    ] {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert_eq!(
+            result
+                .candidates
+                .iter()
+                .map(|c| (c.text.as_str(), &c.candidate_type))
+                .collect::<Vec<_>>(),
+            vec![(expected, &CandidateType::File)],
+            "{input}"
+        );
+    }
+    let input = "cat \"$AUDIT";
+    let result = engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    assert!(result.candidates.iter().any(
+        |c| c.text == "$AUDIT_VARIABLE" && c.candidate_type == CandidateType::VariableReference
+    ));
+}
+
+#[tokio::test]
+async fn cache_hits_keep_the_original_refresh_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("deadline_file"), "").unwrap();
+    let engine = engine();
+    let input = "cat deadline_";
+    let scope = engine.current_cache_scope(dir.path());
+    engine
+        .complete(input, input.len(), dir.path(), 50, None)
+        .await;
+    let original = engine.cache.scoped_expiration(scope, input).unwrap();
+    for _ in 0..3 {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert_eq!(result.candidates[0].text, "deadline_file");
+        assert_eq!(engine.cache.scoped_expiration(scope, input), Some(original));
+    }
+}
+
+#[tokio::test]
 async fn filesystem_cache_follows_request_directory() {
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("a");

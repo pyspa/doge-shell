@@ -84,7 +84,7 @@ fn stage_from_subdirectory_uses_repository_paths() {
 }
 
 #[test]
-fn rename_and_non_utf8_paths_can_be_staged() {
+fn renamed_paths_can_be_staged() {
     let dir = tempfile::tempdir().unwrap();
     let rt = runtime(dir.path());
     let git = |args: &[&str]| {
@@ -111,16 +111,13 @@ fn rename_and_non_utf8_paths_can_be_staged() {
     ]);
     git(&["mv", "old", "new name"]);
     std::fs::write(dir.path().join("new name"), "changed").unwrap();
-    let raw = PathBuf::from(OsString::from_vec(b"raw-\xff".to_vec()));
-    std::fs::write(dir.path().join(&raw), "raw").unwrap();
     let entries = get_git_status(&rt).unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 1);
     assert!(
         entries
             .iter()
             .any(|item| item.path == std::path::Path::new("new name"))
     );
-    assert!(entries.iter().any(|item| item.path == raw));
     let paths: Vec<_> = entries.iter().map(|item| item.path.clone()).collect();
     assert!(stage_files(&rt, &paths).unwrap().status.success());
     let output = rt
@@ -130,13 +127,45 @@ fn rename_and_non_utf8_paths_can_be_staged() {
         .output()
         .unwrap();
     assert_eq!(output.stdout, b"changed");
+}
+
+#[test]
+fn non_utf8_paths_can_be_staged_when_supported_by_filesystem() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime(dir.path());
+    assert!(
+        rt.std_command("git")
+            .unwrap()
+            .args(["init", "-q"])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let raw = PathBuf::from(OsString::from_vec(b"raw-\xff".to_vec()));
+    if let Err(error) = std::fs::write(dir.path().join(&raw), "raw") {
+        // APFS rejects this filename before Git sees it. Other errors are failures.
+        if error.raw_os_error() == Some(nix::errno::Errno::EILSEQ as i32) {
+            eprintln!("filesystem rejects non-UTF-8 filenames; real Git case unavailable");
+            return;
+        }
+        panic!("failed to create non-UTF-8 fixture: {error}");
+    }
+    let entries = get_git_status(&rt).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, raw);
+    assert!(
+        stage_files(&rt, &[entries[0].path.clone()])
+            .unwrap()
+            .status
+            .success()
+    );
     let indexed = rt
         .std_command("git")
         .unwrap()
         .args(["ls-files", "-z"])
         .output()
         .unwrap();
-    assert!(indexed.stdout.split(|b| *b == 0).any(|p| p == b"raw-\xff"));
+    assert_eq!(indexed.stdout, b"raw-\xff\0");
 }
 
 #[test]

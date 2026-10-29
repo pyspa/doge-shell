@@ -530,7 +530,8 @@ impl DynamicCompletionProvider {
         current_token: &str,
         cached_only: bool,
     ) -> Vec<EnhancedCandidate> {
-        let scope_dir = self.cached_project_root(current_dir);
+        // The cached values are rebased to this invocation directory.
+        let scope_dir = super::canonicalize_path(current_dir);
         let command_path = self.resolve_command_path("git");
         self.collect_cached_value_candidates(
             "git",
@@ -545,15 +546,53 @@ impl DynamicCompletionProvider {
                     let Some(command_path) = command_path else {
                         return Ok(Vec::new());
                     };
-                    Ok(parse_status_porcelain_paths(&run_command_stdout(
+                    let prefix = run_command_stdout(
+                        &command_path,
+                        &["rev-parse", "--show-prefix"],
+                        &current_dir,
+                    )?;
+                    // Remove only Git's record terminator, never filename whitespace.
+                    let prefix = prefix.strip_suffix('\n').unwrap_or(&prefix);
+                    let paths = parse_status_porcelain_paths(&run_command_stdout(
                         &command_path,
                         &["status", "--porcelain", "-z"],
                         &current_dir,
-                    )?))
+                    )?);
+                    Ok(paths
+                        .into_iter()
+                        .map(|path| relative_status_path(&path, prefix))
+                        .collect())
                 }
             },
         )
     }
+}
+
+/// Git status paths are repository-relative even when invoked below its root.
+/// Work lexically so deleted files and untracked directories remain completable.
+fn relative_status_path(path: &str, prefix: &str) -> String {
+    let path_parts: Vec<_> = Path::new(path).components().collect();
+    let prefix_parts: Vec<_> = Path::new(prefix).components().collect();
+    let common = path_parts
+        .iter()
+        .zip(&prefix_parts)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let mut relative = std::path::PathBuf::new();
+    for _ in common..prefix_parts.len() {
+        relative.push("..");
+    }
+    for component in &path_parts[common..] {
+        relative.push(component.as_os_str());
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    let mut relative = relative.to_string_lossy().into_owned();
+    if path.ends_with('/') {
+        relative.push('/');
+    }
+    relative
 }
 
 pub(super) fn parse_remote_branches(lines: &[String], remote: Option<&str>) -> Vec<String> {
@@ -602,7 +641,7 @@ pub(super) fn parse_status_porcelain_paths(output: &str) -> Vec<String> {
             continue;
         }
         let status = &record[..2];
-        let path = record[3..].trim();
+        let path = &record[3..];
         if !path.is_empty() {
             values.push(path.to_string());
         }
@@ -612,12 +651,88 @@ pub(super) fn parse_status_porcelain_paths(output: &str) -> Vec<String> {
             index += 1;
         }
     }
-    dedup_sorted(values)
+    // Whitespace, including an all-space name, is valid filename content.
+    values.sort();
+    values.dedup();
+    values
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::environment::Environment;
+    use std::time::Duration;
+
+    #[test]
+    fn changed_paths_preserve_whitespace_and_rename_destination() {
+        assert_eq!(
+            parse_status_porcelain_paths("??  padded.txt \0??    \0R   new.txt \0old.txt\0"),
+            vec!["   ", " new.txt ", " padded.txt "]
+        );
+    }
+
+    #[test]
+    fn changed_paths_rebase_untracked_directories_and_whitespace() {
+        for (path, prefix, expected) in [
+            ("sub/", "sub/", "./"),
+            ("sub/", "sub/deep/", "../"),
+            ("sub/child/", "sub/", "child/"),
+            ("sub/ padded ", "sub/", " padded "),
+            ("sub\n dir/file", "sub\n dir/", "file"),
+        ] {
+            assert_eq!(relative_status_path(path, prefix), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_paths_are_relative_to_each_request_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{:?}", output);
+        };
+        git(&["init", "-q"]);
+        git(&["config", "status.relativePaths", "false"]);
+        git(&["config", "color.status", "always"]);
+        std::fs::write(root.join("root.txt"), "root").unwrap();
+        std::fs::write(sub.join("nested.txt"), "nested").unwrap();
+        std::fs::write(sub.join("deleted.txt"), "deleted").unwrap();
+        git(&["add", "."]);
+        std::fs::remove_file(sub.join("deleted.txt")).unwrap();
+
+        let provider = DynamicCompletionProvider::new(Environment::new_isolated());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        provider.runtime.set_notifier(tx);
+        for (cwd, expected) in [
+            (&root, vec!["root.txt", "sub/deleted.txt", "sub/nested.txt"]),
+            (&sub, vec!["../root.txt", "deleted.txt", "nested.txt"]),
+            (&root, vec!["root.txt", "sub/deleted.txt", "sub/nested.txt"]),
+        ] {
+            let mut values = provider.collect_git_changed_path_candidates(cwd, "", false);
+            if values.is_empty() {
+                tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                values = provider.collect_git_changed_path_candidates(cwd, "", true);
+            }
+            let mut texts: Vec<_> = values.into_iter().map(|c| c.text).collect();
+            texts.sort();
+            assert_eq!(texts, expected, "cwd={cwd:?}");
+        }
+        let values = provider.collect_git_changed_path_candidates(&sub, "nest", true);
+        assert_eq!(
+            values.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            vec!["nested.txt"]
+        );
+    }
 
     #[test]
     fn git_parsers_normalize_remote_stash_and_status_values() {

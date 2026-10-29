@@ -71,6 +71,7 @@ pub(crate) fn analyze_input(
                                     span.start(),
                                     span.end(),
                                     true,
+                                    &repl.shell.environment,
                                 )
                             {
                                 completion = Some(path_completion.suffix);
@@ -88,6 +89,7 @@ pub(crate) fn analyze_input(
                                     span.start(),
                                     span.end(),
                                     false,
+                                    &repl.shell.environment,
                                 )
                         {
                             completion = Some(path_completion.suffix);

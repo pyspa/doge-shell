@@ -1,3 +1,5 @@
+//! File and directory candidates retain shell spelling while resolving lookups
+//! against the request's cwd and logical HOME before filtering and ranking.
 use crate::completion::command::{CompletionCandidate, CompletionType};
 use crate::completion::shell_path::normalize_path_token;
 use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync};
@@ -5,6 +7,40 @@ use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 pub struct FileSystemGenerator;
+
+/// Request-local filesystem state. Resolve lookup paths against this snapshot
+/// while retaining the user's relative/tilde spelling in candidate text.
+pub(crate) struct FileSystemContext {
+    current_dir: PathBuf,
+    home: Option<String>,
+}
+
+impl FileSystemContext {
+    pub(crate) fn new(current_dir: &Path, home: Option<String>) -> Self {
+        Self {
+            current_dir: if current_dir.is_absolute() {
+                current_dir.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(current_dir)
+            },
+            home,
+        }
+    }
+
+    pub(crate) fn lookup_directory(&self, dir: &str, home_expansion: bool) -> PathBuf {
+        let expanded = if home_expansion {
+            match &self.home {
+                Some(home) => format!("{home}/{}", dir.strip_prefix("~/").unwrap_or("")),
+                None => shellexpand::tilde(dir).into_owned(),
+            }
+        } else {
+            dir.to_string()
+        };
+        self.current_dir.join(expanded)
+    }
+}
 
 impl FileSystemGenerator {
     /// Generate file completion candidates
@@ -17,6 +53,14 @@ impl FileSystemGenerator {
         current_token: &str,
         extensions: Option<&Vec<String>>,
     ) -> Result<Vec<CompletionCandidate>> {
+        Self::file_candidates(current_token, extensions, None)
+    }
+
+    pub(crate) fn file_candidates(
+        current_token: &str,
+        extensions: Option<&Vec<String>>,
+        context: Option<&FileSystemContext>,
+    ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(32);
         let normalized_extensions =
             extensions.map(|extensions| normalize_extension_filters(extensions));
@@ -26,8 +70,11 @@ impl FileSystemGenerator {
 
         // Reuse legacy path listing cache for better performance.
         let home_expansion = current_token.starts_with("~/");
-        let lookup_dir = lookup_directory(&dir_path, home_expansion);
-        let listing = path_completion_path_sync(PathBuf::from(lookup_dir)).unwrap_or_default();
+        let lookup_dir = context.map_or_else(
+            || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
+            |context| context.lookup_directory(&dir_path, home_expansion),
+        );
+        let listing = path_completion_path_sync(lookup_dir).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {
@@ -81,14 +128,24 @@ impl FileSystemGenerator {
 
     /// Generate directory completion candidates
     pub fn generate_directory_candidates(current_token: &str) -> Result<Vec<CompletionCandidate>> {
+        Self::directory_candidates(current_token, None)
+    }
+
+    pub(crate) fn directory_candidates(
+        current_token: &str,
+        context: Option<&FileSystemContext>,
+    ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(16);
 
         let normalized_token = normalize_path_token(current_token);
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
         let home_expansion = current_token.starts_with("~/");
-        let lookup_dir = lookup_directory(&dir_path, home_expansion);
-        let listing = path_completion_path_sync(PathBuf::from(lookup_dir)).unwrap_or_default();
+        let lookup_dir = context.map_or_else(
+            || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
+            |context| context.lookup_directory(&dir_path, home_expansion),
+        );
+        let listing = path_completion_path_sync(lookup_dir).unwrap_or_default();
 
         for cand in listing {
             let Candidate::Path(path_str) = cand else {

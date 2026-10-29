@@ -59,7 +59,7 @@ fn bare_relative_directory_prefix_lists_children() {
             ("space\\ dir/", "space\\ dir/child"),
         ] {
             assert_eq!(
-                path_completion_prefix_for_shell_token(raw, false)
+                path_completion_prefix_for_shell_token(raw, false, None)
                     .unwrap()
                     .as_deref(),
                 Some(expected),

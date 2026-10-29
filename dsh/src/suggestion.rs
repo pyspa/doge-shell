@@ -372,7 +372,9 @@ impl SuggestionEngine {
 
         let is_cd = is_cd_path_context(input, &token);
 
-        if let Ok(Some(completion)) = path_completion_prefix_for_shell_token(&token.raw, is_cd) {
+        if let Ok(Some(completion)) =
+            path_completion_prefix_for_shell_token(&token.raw, is_cd, None)
+        {
             let full = format!(
                 "{}{}{}",
                 &input[..token.byte_start],

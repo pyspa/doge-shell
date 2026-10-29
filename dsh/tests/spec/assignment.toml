@@ -88,3 +88,14 @@ script = "pwd > before; HOME=\"$(pwd)/missing\"; cd; echo MISSING:$?; pwd > afte
 status = 0
 stdout_contains = ["MISSING:1", "FILE:1"]
 stderr_contains = ["cd:"]
+
+[[case]]
+id = "assignment.export-rejects-invalid-names"
+class = "dogesh"
+mode = "command"
+script = "export =value; echo EMPTY:$?; export 1BAD=value; echo DIGIT:$?; export 'bad-name=value'; echo DASH:$?; export GOOD=before '=bad' AFTER=after; echo MIXED:$? GOOD:$GOOD AFTER:$AFTER"
+
+[case.expect]
+status = 0
+stdout_contains = ["EMPTY:1", "DIGIT:1", "DASH:1", "MIXED:1 GOOD:before AFTER:after"]
+stderr_contains = ["export:", "invalid variable name"]

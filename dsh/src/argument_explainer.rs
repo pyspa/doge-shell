@@ -178,6 +178,7 @@ mod tests {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: Some("Stage all modified files".to_string()),
@@ -186,6 +187,7 @@ mod tests {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: Some("Commit message".to_string()),
@@ -203,6 +205,7 @@ mod tests {
             description: Some("Version control".to_string()),
             subcommands: vec![commit],
             global_options: vec![CommandOption {
+                multiple: false,
                 short: Some("-v".to_string()),
                 long: Some("--version".to_string()),
                 description: Some("Show version".to_string()),

@@ -195,6 +195,7 @@ fn test_recursive_command_correction() {
     let mut db2 = db.clone();
     let mut pacman = db2.get_command("pacman").unwrap().clone();
     pacman.subcommands[0].options.push(CommandOption {
+        multiple: false,
         short: None,
         long: Some("--unique-flag".to_string()),
         description: None,
@@ -332,6 +333,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: None,
@@ -340,6 +342,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
@@ -437,6 +440,7 @@ fn test_git_add_completion_options_with_single_dash() {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-A".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
@@ -445,6 +449,7 @@ fn test_git_add_completion_options_with_single_dash() {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-u".to_string()),
                     long: Some("--update".to_string()),
                     description: None,
@@ -882,6 +887,7 @@ fn test_option_completion_guard() {
         command: "mycmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-o".to_string()),
             long: Some("--option".to_string()),
             description: None,
@@ -961,6 +967,7 @@ fn subcommand_option_value_uses_value_type_choice() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: Some("Package to test".to_string()),
@@ -1001,6 +1008,7 @@ fn subcommand_option_value_uses_value_type_script() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-s".to_string()),
                 long: Some("--source".to_string()),
                 description: Some("Restore source".to_string()),

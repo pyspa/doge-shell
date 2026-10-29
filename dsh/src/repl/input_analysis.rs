@@ -43,6 +43,16 @@ pub(crate) fn analyze_input(
         };
     }
 
+    let filesystem = completion
+        .is_none()
+        .then(|| {
+            let current_dir = repl.terminal_ui.prompt.read().current_path().to_path_buf();
+            repl.completion_ui
+                .integrated_completion
+                .filesystem_context_for_input(input, repl.input.cursor(), &current_dir)
+        })
+        .flatten();
+
     match ShellParser::parse(Rule::commands, input) {
         Ok(pairs) => {
             // 1. Get words for completion check
@@ -65,13 +75,14 @@ pub(crate) fn analyze_input(
                                 }
                                 completion_full = Some(file);
                                 break;
-                            } else if let Some(path_completion) =
+                            } else if let Some(filesystem) = filesystem.as_ref()
+                                && let Some(path_completion) =
                                 super::completion::complete_path_for_span(
                                     input,
                                     span.start(),
                                     span.end(),
                                     true,
-                                    &repl.shell.environment,
+                                    filesystem,
                                 )
                             {
                                 completion = Some(path_completion.suffix);
@@ -83,13 +94,14 @@ pub(crate) fn analyze_input(
                         // Completion logic for arguments
                         if current
                             && completion.is_none()
+                            && let Some(filesystem) = filesystem.as_ref()
                             && let Some(path_completion) =
                                 super::completion::complete_path_for_span(
                                     input,
                                     span.start(),
                                     span.end(),
                                     false,
-                                    &repl.shell.environment,
+                                    filesystem,
                                 )
                         {
                             completion = Some(path_completion.suffix);

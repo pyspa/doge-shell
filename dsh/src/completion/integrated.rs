@@ -37,6 +37,7 @@ mod command_candidates;
 mod dynamic_dispatch;
 mod finalize;
 mod ghost;
+mod git_directory;
 mod predicates;
 mod providers;
 mod range;
@@ -431,14 +432,15 @@ impl IntegratedCompletionEngine {
             input, cursor_pos, current_dir
         );
 
-        let request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
         let mut timing = CompletionTiming::start();
 
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
+        let completion_dir = self.completion_directory(&parsed_command_line, current_dir);
         if parsed_command_line
             .source
             .as_ref()
             .is_some_and(|source| source.suppressed)
+            || completion_dir.is_none()
         {
             return CompletionResult {
                 disposition: CompletionDisposition::Suppressed,
@@ -447,6 +449,9 @@ impl IntegratedCompletionEngine {
                 replacement_range: None,
             };
         }
+        let completion_dir = completion_dir.unwrap();
+        let source_request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
+        let request = CompletionRequest::new(input, &completion_dir, max_results, cursor_pos);
         let replacement_range =
             completion_replacement_range(input, cursor_pos, &parsed_command_line);
         let dynamic_generation = self.dynamic.refresh_generation();
@@ -499,7 +504,8 @@ impl IntegratedCompletionEngine {
             // Prefixes may cross argument/subcommand boundaries (go -> go mod).
             // Reuse only exact input snapshots; provider caches remain scoped separately.
             if hit.exact {
-                self.cache.extend_ttl_scoped(cache_scope, &hit.key);
+                // A hit must not postpone refresh indefinitely: filesystem
+                // and other source data can change while TAB is repeated.
                 let framework = self
                     .lookup_cached_framework(cache_scope, &hit.key)
                     .unwrap_or_else(super::default_completion_framework);
@@ -571,7 +577,10 @@ impl IntegratedCompletionEngine {
         }
 
         // 3. External completer fallback
-        let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
+        // External completers interpret the original input, including `-C`.
+        // Keep their cwd unchanged so they do not apply that option twice.
+        let external_batch =
+            self.collect_external_candidates(&source_request, &parsed_command_line);
         timing.mark("external");
         if !aggregator.extend(external_batch) {
             let mut results = aggregator.finalize(history);
@@ -592,7 +601,8 @@ impl IntegratedCompletionEngine {
         // 4. Optional fish-compatible fallback. This is deliberately lower priority than
         // project-aware dynamic and JSON completion, but it can supply broad fish-style
         // candidates for commands without built-in definitions.
-        let fish_batch = self.collect_fish_fallback_candidates(&request, &parsed_command_line);
+        let fish_batch =
+            self.collect_fish_fallback_candidates(&source_request, &parsed_command_line);
         timing.mark("fish");
         if !aggregator.extend(fish_batch) {
             let mut results = aggregator.finalize(history);
@@ -642,3 +652,6 @@ mod pm_name_tests;
 
 #[cfg(test)]
 mod filesystem_tests;
+
+#[cfg(test)]
+mod git_context_tests;

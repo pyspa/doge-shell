@@ -51,10 +51,25 @@ impl OptionGenerator {
         let build = |matcher: &dyn Fn(&str, &str) -> bool| -> Vec<CompletionCandidate> {
             let mut candidates = Vec::with_capacity(16);
             for option in options {
+                // Global and subcommand options may reuse a short name
+                // (git -p: paginate versus fetch --prune). An ambiguous
+                // spelling cannot prove that its other name was used.
+                let used = |name: &str| {
+                    !option.multiple
+                        && already_specified.iter().any(|specified| {
+                            specified == name
+                                || (option.matches_name(specified)
+                                    && options
+                                        .iter()
+                                        .filter(|other| other.matches_name(specified))
+                                        .count()
+                                        == 1)
+                        })
+                };
                 if include_long
                     && let Some(ref long) = option.long
                     && matcher(&parsed.current_token, long)
-                    && !already_specified.contains(long)
+                    && !used(long)
                 {
                     candidates.push(CompletionCandidate::long_option(
                         long.clone(),
@@ -65,7 +80,7 @@ impl OptionGenerator {
                 if include_short
                     && let Some(ref short) = option.short
                     && matcher(&parsed.current_token, short)
-                    && !already_specified.contains(short)
+                    && !used(short)
                 {
                     candidates.push(CompletionCandidate::short_option(
                         short.clone(),
@@ -134,6 +149,7 @@ mod tests {
 
     fn opt(long: &str, description: &str) -> CommandOption {
         CommandOption {
+            multiple: false,
             short: None,
             long: Some(long.to_string()),
             description: Some(description.to_string()),
@@ -166,6 +182,35 @@ mod tests {
             .into_iter()
             .map(|c| c.text)
             .collect()
+    }
+
+    #[test]
+    fn multiple_options_remain_available_under_both_names() {
+        let option: CommandOption =
+            serde_json::from_str(r#"{"short":"-e","long":"--regexp","multiple":true}"#).unwrap();
+        for used in ["-e", "--regexp"] {
+            let mut p = parsed("-");
+            p.specified_options = vec![used.into()];
+            let candidates = OptionGenerator::match_options(&[&option], &p, true, true);
+            assert_eq!(
+                candidates
+                    .iter()
+                    .map(|c| c.text.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["--regexp", "-e"]
+            );
+        }
+    }
+
+    #[test]
+    fn single_use_option_excludes_its_other_spelling() {
+        let option: CommandOption =
+            serde_json::from_str(r#"{"short":"-i","long":"--ignore-case"}"#).unwrap();
+        for used in ["-i", "--ignore-case"] {
+            let mut p = parsed("-");
+            p.specified_options = vec![used.into()];
+            assert!(OptionGenerator::match_options(&[&option], &p, true, true).is_empty());
+        }
     }
 
     #[test]

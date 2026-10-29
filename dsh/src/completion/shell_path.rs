@@ -54,6 +54,16 @@ impl ShellPathToken {
         }
     }
 
+    fn encode_path(&self, path: &str) -> String {
+        // Quoting does not prevent a leading dash from becoming a command
+        // option (or stdin for a lone '-'). Keep filesystem words explicit.
+        if path.starts_with('-') {
+            self.encode(&format!("./{path}"))
+        } else {
+            self.encode(path)
+        }
+    }
+
     pub fn encode(&self, path: &str) -> String {
         match self.style {
             ShellPathStyle::Plain | ShellPathStyle::Escaped => escape_unquoted(path),
@@ -97,7 +107,7 @@ pub(crate) fn format_path_for_token(path: &str, raw_token: &str) -> String {
     if raw_token.starts_with("~/") {
         token.encode_home_path(path)
     } else {
-        token.encode(path)
+        token.encode_path(path)
     }
 }
 
@@ -125,6 +135,7 @@ pub fn format_candidates_for_token(
                     token.encode_home_path(candidate.get_display_name())
                 }
                 Candidate::ShellSyntax { kind, text, .. } => token.encode_syntax(text, *kind),
+                Candidate::Path(path) | Candidate::File { path, .. } => token.encode_path(path),
                 _ => token.encode(candidate.get_display_name()),
             };
             Candidate::Prepared {
@@ -269,6 +280,35 @@ fn escape_double_quoted(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_candidates_cannot_be_inserted_as_options() {
+        use skim::SkimItem;
+        for name in ["-", "-r", "--version", "-dir/", "-two words"] {
+            for candidate in [
+                Candidate::Path(name.into()),
+                Candidate::File {
+                    path: name.into(),
+                    is_dir: name.ends_with('/'),
+                },
+            ] {
+                for raw in ["", "'", "\""] {
+                    let result = format_candidates_for_token(vec![candidate.clone()], Some(raw));
+                    assert_eq!(result[0].get_display_name(), name);
+                    assert_eq!(
+                        normalize_path_token(&result[0].output()),
+                        format!("./{name}")
+                    );
+                    assert_eq!(
+                        normalize_path_token(&format_path_for_token(name, raw)),
+                        format!("./{name}")
+                    );
+                }
+            }
+        }
+        let option = format_candidates_for_token(vec![Candidate::Basic("--version".into())], None);
+        assert_eq!(option[0].output(), "--version");
+    }
 
     #[test]
     fn quote_style_does_not_treat_escaped_quotes_as_closing_delimiters() {

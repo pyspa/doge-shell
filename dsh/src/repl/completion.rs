@@ -13,17 +13,18 @@ const MCP_FORM_SUGGESTIONS: &[&str] =
 #[cfg(test)]
 mod tests;
 
-pub fn completion_suggestion(
+pub(super) fn completion_suggestion(
     input_state: &Input,
     input: &str,
     environment: &Arc<RwLock<Environment>>,
+    filesystem: &FileSystemContext,
 ) -> Option<SuggestionState> {
     if input.is_empty() || input_state.cursor() != input_state.len() {
         return None;
     }
 
     if let Ok(words) = input_state.get_words()
-        && let Some(full) = word_based_completion(environment, input, &words)
+        && let Some(full) = word_based_completion(environment, input, &words, filesystem)
     {
         return Some(SuggestionState {
             full,
@@ -37,10 +38,11 @@ pub fn completion_suggestion(
     })
 }
 
-pub fn word_based_completion(
+fn word_based_completion(
     environment: &Arc<RwLock<Environment>>,
     input: &str,
     words: &[(Rule, pest::Span<'_>, bool)],
+    filesystem: &FileSystemContext,
 ) -> Option<String> {
     for (rule, span, current) in words {
         if !*current {
@@ -52,12 +54,16 @@ pub fn word_based_completion(
         }
         match rule {
             Rule::argv0 => {
-                if let Some(result) = complete_command_word(environment, input, span, word) {
+                if let Some(result) =
+                    complete_command_word(environment, input, span, word, filesystem)
+                {
                     return Some(result);
                 }
             }
             Rule::args => {
-                if let Some(result) = complete_argument_word(environment, input, span, word) {
+                if let Some(result) =
+                    complete_argument_word_in_context(filesystem, input, span, word)
+                {
                     return Some(result);
                 }
             }
@@ -67,11 +73,12 @@ pub fn word_based_completion(
     None
 }
 
-pub fn complete_command_word(
+fn complete_command_word(
     environment: &Arc<RwLock<Environment>>,
     input: &str,
     span: &pest::Span<'_>,
     word: &str,
+    filesystem: &FileSystemContext,
 ) -> Option<String> {
     let candidate = {
         let env = environment.read();
@@ -84,17 +91,32 @@ pub fn complete_command_word(
         return Some(replace_range(input, span.start(), span.end(), &name));
     }
 
-    complete_path_for_span(input, span.start(), span.end(), true, environment)
+    complete_path_for_span(input, span.start(), span.end(), true, filesystem)
         .map(|completion| completion.full)
 }
 
+/// Legacy path-only entry point. The interactive REPL supplies its resolved
+/// request context to `complete_argument_word_in_context` instead.
 pub fn complete_argument_word(
     environment: &Arc<RwLock<Environment>>,
     input: &str,
     span: &pest::Span<'_>,
+    word: &str,
+) -> Option<String> {
+    let filesystem = FileSystemContext::new(
+        &std::env::current_dir().ok()?,
+        environment.read().lookup_variable("HOME"),
+    );
+    complete_argument_word_in_context(&filesystem, input, span, word)
+}
+
+fn complete_argument_word_in_context(
+    filesystem: &FileSystemContext,
+    input: &str,
+    span: &pest::Span<'_>,
     _word: &str,
 ) -> Option<String> {
-    complete_path_for_span(input, span.start(), span.end(), false, environment)
+    complete_path_for_span(input, span.start(), span.end(), false, filesystem)
         .map(|completion| completion.full)
 }
 
@@ -109,14 +131,10 @@ pub(super) fn complete_path_for_span(
     span_start: usize,
     span_end: usize,
     only_dirs: bool,
-    environment: &Arc<RwLock<Environment>>,
+    filesystem: &FileSystemContext,
 ) -> Option<PathCompletion> {
     let token = shell_token_for_byte_span(input, span_start, span_end)?;
-    let context = FileSystemContext::new(
-        &std::env::current_dir().ok()?,
-        environment.read().lookup_variable("HOME"),
-    );
-    let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs, Some(&context))
+    let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs, Some(filesystem))
         .ok()
         .flatten()?;
     let suffix = candidate.strip_prefix(&token.raw)?;

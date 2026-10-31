@@ -191,16 +191,12 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     // Attempt to get completion result
     // First try with integrated engine
     if !engine_candidates.is_empty() {
-        let raw_token = replacement_range.map(|range| range_text(&input_text, range));
         let selection_query_owned = replacement_range.map(|range| {
-            let prefix = range_text(
+            completion::shell_path::query_for_range(
                 &input_text,
-                CompletionReplacementRange {
-                    start: range.start,
-                    end: expected_cursor.min(range.end),
-                },
-            );
-            completion::shell_path::normalize_path_token(&prefix)
+                range.start,
+                expected_cursor.min(range.end),
+            )
         });
         let selection_query = selection_query_owned.as_deref().or(completion_query);
 
@@ -209,9 +205,10 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
             .completion_ui
             .integrated_completion
             .to_candidates(engine_candidates);
-        let completion_candidates = completion::shell_path::format_candidates_for_token(
+        let completion_candidates = completion::shell_path::format_candidates_for_range(
             completion_candidates,
-            raw_token.as_deref(),
+            &input_text,
+            replacement_range.expect("allowed completion has a source range"),
         );
 
         let res = completion::select_completion_items_with_framework(

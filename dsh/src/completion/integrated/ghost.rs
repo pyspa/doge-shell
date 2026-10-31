@@ -171,10 +171,10 @@ fn ghost_insertion(
     range: CompletionReplacementRange,
 ) -> String {
     use skim::SkimItem;
-    let raw = slice_chars(input, range.start, range.end);
-    crate::completion::shell_path::format_candidates_for_token(
+    crate::completion::shell_path::format_candidates_for_range(
         vec![candidate.to_candidate()],
-        Some(&raw),
+        input,
+        range,
     )[0]
     .output()
     .to_string()

@@ -12,6 +12,8 @@ pub struct CommandSource {
     pub(crate) cursor: usize,
     pub(crate) words: Vec<ShellTokenSpan>,
     pub(crate) cursor_word: usize,
+    /// Index of argv0 (or the empty command gap), distinct from prefix words.
+    pub(crate) command_word: usize,
     pub(crate) argument_start: usize,
     pub(crate) multiple: bool,
     pub(crate) suppressed: bool,

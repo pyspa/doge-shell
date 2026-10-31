@@ -421,3 +421,97 @@ fn test_multicolumn_file_rows_keep_stable_cell_widths() {
         }
     }
 }
+
+#[test]
+fn completion_display_data_cannot_emit_terminal_controls() {
+    use skim::SkimItem;
+    let raw = "界\n\r\t\x1b[2J\x07\u{009b}31m";
+    let candidates = [
+        Candidate::Basic(raw.into()),
+        Candidate::File {
+            path: raw.into(),
+            is_dir: false,
+        },
+        Candidate::Item(raw.into(), raw.into()),
+        Candidate::Command {
+            name: raw.into(),
+            description: raw.into(),
+        },
+        Candidate::Option {
+            name: raw.into(),
+            description: raw.into(),
+        },
+        Candidate::Process {
+            pid: raw.into(),
+            command: raw.into(),
+        },
+        Candidate::History {
+            command: raw.into(),
+            frequency: 1,
+            last_used: 0,
+        },
+        Candidate::GitBranch {
+            name: raw.into(),
+            is_current: false,
+        },
+        Candidate::ShellSyntax {
+            kind: ShellSyntaxKind::Variable,
+            text: raw.into(),
+            description: Some(raw.into()),
+        },
+        Candidate::HomePath(Box::new(Candidate::Basic(raw.into()))),
+        Candidate::Prepared {
+            candidate: Box::new(Candidate::Item(raw.into(), raw.into())),
+            insertion: raw.into(),
+        },
+    ];
+    for candidate in candidates {
+        let original = candidate.output().into_owned();
+        let (name, description) = candidate.get_formatted_display(120, 45);
+        assert!(!name.chars().any(char::is_control), "{name:?}");
+        assert!(
+            !description
+                .unwrap_or_default()
+                .chars()
+                .any(char::is_control)
+        );
+        assert!(!candidate.text().chars().any(char::is_control));
+        assert!(
+            !detail_line_text(&candidate)
+                .unwrap_or_default()
+                .chars()
+                .any(char::is_control)
+        );
+        assert_eq!(candidate.output(), original);
+        assert_eq!(candidate.get_display_name(), raw);
+    }
+}
+
+#[test]
+fn completion_cells_fit_every_small_width() {
+    for candidate in [
+        Candidate::Basic("界e\u{301}long".into()),
+        Candidate::Command {
+            name: "界e\u{301}long".into(),
+            description: "details".into(),
+        },
+        Candidate::Item("\n界".into(), "\tmore".into()),
+    ] {
+        for width in 0..=16 {
+            for alignment in [0, 1, 20] {
+                let (name, desc) = candidate.get_formatted_display(width, alignment);
+                assert_eq!(
+                    unicode_display_width(&name)
+                        + desc.as_deref().map(unicode_display_width).unwrap_or(0),
+                    width
+                );
+            }
+            let mut display = CompletionDisplay::new(vec![candidate.clone()], "".into(), "".into());
+            let layout = display.force_layout(width);
+            assert!(
+                layout.column_width < width || width == 0,
+                "width={width}, {layout:?}"
+            );
+        }
+    }
+}

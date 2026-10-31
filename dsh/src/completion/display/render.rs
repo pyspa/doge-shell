@@ -158,11 +158,7 @@ impl CompletionDisplay {
     /// Render the detail line for the highlighted candidate directly below the
     /// grid. Reuses the same dimmed style as the rest of the auxiliary text.
     /// A no-op when no detail line is reserved for this session.
-    fn render_detail_line(
-        &self,
-        writer: &mut TerminalRenderer,
-        layout: &LayoutCache,
-    ) -> Result<()> {
+    fn render_detail_line(&self, writer: &mut impl Write, layout: &LayoutCache) -> Result<()> {
         if !self.show_detail_line {
             return Ok(());
         }
@@ -203,7 +199,13 @@ impl CompletionDisplay {
         // Format the item for display with fixed width
         let (formatted, description_part) = if is_message_item {
             // For message items, don't apply column width formatting
-            (candidate.get_display_name().to_string(), None)
+            (
+                truncate_to_width(
+                    &display_text(candidate.get_display_name()),
+                    layout.column_width,
+                ),
+                None,
+            )
         } else {
             candidate.get_formatted_display(layout.column_width, layout.max_name_width)
         };
@@ -307,5 +309,48 @@ impl CompletionDisplay {
         renderer.flush()?;
         debug!("Completion display cleared successfully");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn real_grid_message_and_detail_writers_escape_data_preserving_selection() {
+        let payload = "evil\n\r\t\x1b[2J\x07\u{009b}31m";
+        let config = CompletionConfig {
+            max_items: 1,
+            more_items_message_template: payload.into(),
+            show_item_count: true,
+        };
+        let mut display = CompletionDisplay::new_with_config(
+            vec![
+                Candidate::Item(payload.into(), payload.into()),
+                Candidate::Basic("other".into()),
+            ],
+            payload,
+            payload,
+            config,
+        );
+        let layout = display.force_layout(120);
+        let mut output = Vec::new();
+        display.render_all_items(&mut output, &layout).unwrap();
+        display.render_detail_line(&mut output, &layout).unwrap();
+        assert!(
+            !output
+                .windows(payload.len())
+                .any(|window| window == payload.as_bytes())
+        );
+        assert!(!output.windows(4).any(|window| window == b"\x1b[2J"));
+        assert!(
+            !output
+                .iter()
+                .any(|byte| matches!(byte, b'\n' | b'\r' | b'\t' | 7))
+        );
+        assert!(String::from_utf8(output).unwrap().contains("evil\\n\\r\\t"));
+        assert_eq!(display.selected_output().as_deref(), Some(payload));
+        assert!(!display.prompt_text.chars().any(char::is_control));
+        assert!(!display.input_text.chars().any(char::is_control));
     }
 }

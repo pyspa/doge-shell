@@ -52,9 +52,10 @@ fn split_attached_short_option_value<'a>(
 }
 
 fn is_separate_value_option(raw_token: &str, options: &[&CommandOption]) -> bool {
-    options
-        .iter()
-        .any(|option| option.matches_name(raw_token) && option.expects_value())
+    options.iter().any(|option| {
+        option.matches_name(&super::shell_path::decode_literal_word(raw_token))
+            && option.expects_value()
+    })
 }
 
 /// Responsible for correcting parsed command line based on completion database
@@ -129,7 +130,7 @@ impl<'a> ContextCorrector<'a> {
             if parsed
                 .source
                 .as_ref()
-                .is_some_and(|source| source.cursor_word == idx + 1)
+                .is_some_and(|source| source.cursor_word == source.command_word + idx + 1)
             {
                 split_index = idx;
                 break;
@@ -147,12 +148,29 @@ impl<'a> ContextCorrector<'a> {
         // If we consumed everything, or stopped at the last token
         if split_index < parsed.subcommand_path.len() {
             // We have some invalid subcommands.
-            let invalid_tokens = &parsed.subcommand_path[split_index..];
+            let invalid_tokens: Vec<String> = parsed.subcommand_path[split_index..]
+                .iter()
+                .enumerate()
+                .map(|(offset, word)| {
+                    let Some(source) = &parsed.source else {
+                        return word.clone();
+                    };
+                    let index = source.command_word + split_index + offset + 1;
+                    if index == source.cursor_word {
+                        parsed.current_token.clone()
+                    } else {
+                        source
+                            .words
+                            .get(index)
+                            .map_or_else(|| word.clone(), |span| span.raw.clone())
+                    }
+                })
+                .collect();
             let first_invalid = &invalid_tokens[0];
             let is_last_token = split_index + 1 == parsed.subcommand_path.len();
             let is_completion_target = parsed.source.as_ref().map_or(
                 is_last_token && first_invalid == &parsed.current_token,
-                |source| source.cursor_word == split_index + 1,
+                |source| source.cursor_word == source.command_word + split_index + 1,
             );
 
             if is_completion_target {
@@ -315,7 +333,7 @@ impl<'a> ContextCorrector<'a> {
             if !current_subcommands.is_empty()
                 && current_subcommands
                     .iter()
-                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.current_token))
+                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
             {
                 new_parsed.completion_context = CompletionContext::SubCommand;
             }
@@ -328,10 +346,12 @@ impl<'a> ContextCorrector<'a> {
         let mut subcommands_found = false;
 
         while tokens_consumed < parsed.raw_args.len() {
-            let token = &parsed.raw_args[tokens_consumed];
+            let raw_token = &parsed.raw_args[tokens_consumed];
+            let logical_token = super::shell_path::decode_literal_word(raw_token);
+            let token = logical_token.as_str();
             // Shell redirections do not interrupt Git/global-option argv
             // scanning. A cursor on their target was handled above.
-            if Self::is_redirect_operator(token) {
+            if Self::is_redirect_operator(raw_token) {
                 tokens_consumed += 2;
                 continue;
             }
@@ -368,8 +388,8 @@ impl<'a> ContextCorrector<'a> {
                 let available_options =
                     self.collect_available_options(command_completion, &valid_subcommands);
 
-                if Self::is_inline_long_option_value(token, &available_options)
-                    || split_attached_short_option_value(token, &available_options).is_some()
+                if Self::is_inline_long_option_value(raw_token, &available_options)
+                    || split_attached_short_option_value(raw_token, &available_options).is_some()
                 {
                     tokens_consumed += 1;
                     continue;

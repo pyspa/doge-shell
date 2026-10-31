@@ -3,17 +3,19 @@
 use super::command::ArgumentType;
 pub use super::command_segment::CommandSource;
 use super::command_segment::{self, floor_byte};
+use super::shell_path::decode_literal_word;
 use super::shell_token::ShellTokenSpan;
 use std::collections::VecDeque;
+mod prefix;
 
 #[inline]
 fn is_option_token(token: &str) -> bool {
-    token.starts_with('-')
+    decode_literal_word(token).starts_with('-')
 }
 
 #[inline]
 fn is_long_option_token(token: &str) -> bool {
-    token.starts_with("--")
+    decode_literal_word(token).starts_with("--")
 }
 
 pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
@@ -22,7 +24,7 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
     }
 
     let (name, value) = token.split_once('=')?;
-    if name.len() <= 2 {
+    if decode_literal_word(name).len() <= 2 {
         return None;
     }
 
@@ -62,7 +64,24 @@ impl ParsedCommandLine {
     /// Internal literal search prefix. `current_token`/`current_arg`, source
     /// spans and provider INPUT/CURSOR remain raw source for compatibility.
     pub(crate) fn completion_query(&self) -> String {
-        super::shell_path::decode_literal_word(&self.current_token)
+        super::shell_path::decode_literal_word(&self.matching_source())
+    }
+
+    /// Matching-only source view for an inline value whose quote starts in the
+    /// option name. Raw current_token/current_arg/provider metadata stay intact.
+    pub(crate) fn matching_source(&self) -> std::borrow::Cow<'_, str> {
+        if matches!(
+            self.completion_context,
+            CompletionContext::OptionValue { .. }
+        ) && let Some(source) = &self.source
+            && let Some(word) = source.words.get(source.cursor_word)
+            && let Some(prefix) = source.input[word.byte_start..source.cursor.min(word.byte_end)]
+                .strip_suffix(&self.current_token)
+            && let Some(quote) = super::shell_path::quote_at_end(prefix)
+        {
+            return std::borrow::Cow::Owned(format!("{quote}{}", self.current_token));
+        }
+        std::borrow::Cow::Borrowed(&self.current_token)
     }
 }
 
@@ -154,7 +173,14 @@ impl CommandLineParser {
         // Redirect operators are shell syntax, not completable argv words.
         // FD duplication targets are descriptor numbers (or `-`), never paths.
         // Mark these regions before any provider or legacy TAB hook is reached.
+        let (command_word, malformed_prefix) = prefix::command_word(&spans);
+        let redirect_target = cursor_token_index
+            .checked_sub(1)
+            .and_then(|index| spans.get(index))
+            .is_some_and(|word| Self::is_redirect_operator(&word.raw));
         let suppressed = segment.suppressed
+            || malformed_prefix
+            || (cursor_token_index < command_word && !redirect_target)
             || spans
                 .get(cursor_token_index)
                 .is_some_and(|word| Self::is_redirect_operator(&word.raw))
@@ -165,14 +191,31 @@ impl CommandLineParser {
                     Self::is_redirect_operator(&word.raw)
                         && (word.raw.ends_with(">&") || word.raw.ends_with("<&"))
                 });
-        let mut parsed =
-            self.analyze_tokens(tokens, cursor_token_index, source_input, local_cursor);
+        let command_start = spans
+            .get(command_word)
+            .map_or(source_input.len(), |word| word.byte_start);
+        let current_token = tokens.get(cursor_token_index).cloned().unwrap_or_default();
+        let mut parsed = self.analyze_tokens(
+            tokens.into_iter().skip(command_word).collect(),
+            cursor_token_index.saturating_sub(command_word),
+            &source_input[command_start..],
+            local_cursor.saturating_sub(command_start),
+        );
+        if redirect_target && cursor_token_index < command_word {
+            parsed.current_token = current_token.clone();
+            parsed.current_arg = Some(current_token);
+            parsed.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            };
+        }
         parsed.cursor_index = cursor_pos;
         parsed.source = Some(CommandSource {
             input: source_input.to_string(),
             cursor: local_cursor,
             words: spans,
             cursor_word: cursor_token_index,
+            command_word,
             argument_start: 0,
             multiple: segment.multiple,
             suppressed,
@@ -274,14 +317,15 @@ impl CommandLineParser {
             };
         }
 
-        let command = tokens[0].clone();
+        let raw_command = tokens[0].clone();
+        let command = decode_literal_word(&raw_command);
         let mut subcommand_path = Vec::new();
         let mut specified_options = Vec::new();
         let mut specified_arguments = Vec::new();
         let mut tokens_queue: VecDeque<String> = tokens.into_iter().skip(1).collect();
 
         // Check if there's a space after the command
-        let has_space_after_command = self.has_space_after_command(input, &command);
+        let has_space_after_command = self.has_space_after_command(input, &raw_command);
 
         // Parse subcommands
         while let Some(token) = tokens_queue.front() {
@@ -344,7 +388,7 @@ impl CommandLineParser {
                 let option_name = split_inline_long_option(token)
                     .map(|(name, _)| name)
                     .unwrap_or(token);
-                specified_options.push(option_name.to_string());
+                specified_options.push(decode_literal_word(option_name));
 
                 // Check if next token is option value
                 if split_inline_long_option(token).is_none()
@@ -363,9 +407,9 @@ impl CommandLineParser {
 
         // Determine current token and completion context
         let (current_token, completion_context) = if cursor_token_index == 0 {
-            (command.clone(), CompletionContext::Command)
+            (raw_command.clone(), CompletionContext::Command)
         } else {
-            let all_tokens: Vec<String> = std::iter::once(command.clone())
+            let all_tokens: Vec<String> = std::iter::once(raw_command.clone())
                 .chain(subcommand_path.iter().cloned())
                 .chain(tokens_queue.iter().cloned())
                 .collect();
@@ -378,7 +422,7 @@ impl CommandLineParser {
             let after_end_of_options = all_tokens
                 .iter()
                 .take(cursor_token_index)
-                .any(|token| token == "--");
+                .any(|token| decode_literal_word(token) == "--");
 
             let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
@@ -412,7 +456,10 @@ impl CommandLineParser {
         ParsedCommandLine {
             source: None,
             command: command.clone(),
-            subcommand_path: subcommand_path.clone(),
+            subcommand_path: subcommand_path
+                .iter()
+                .map(|word| decode_literal_word(word))
+                .collect(),
             raw_args,
             args,
             options,
@@ -528,7 +575,7 @@ impl CommandLineParser {
 
         if let Some((option_name, _)) = split_inline_long_option(params.current_token) {
             return CompletionContext::OptionValue {
-                option_name: option_name.to_string(),
+                option_name: decode_literal_word(option_name),
                 value_type: None,
             };
         }

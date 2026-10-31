@@ -52,7 +52,7 @@ impl IntegratedCompletionEngine {
         let mut redirect_target = false;
         let mut words = source.words[..source.cursor_word]
             .iter()
-            .skip(1)
+            .skip(source.command_word + 1)
             .filter(|word| {
                 if redirect_target {
                     redirect_target = false;

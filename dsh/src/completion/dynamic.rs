@@ -365,10 +365,20 @@ impl DynamicCompletionProvider {
         cache_policy: CachePolicy,
     ) -> Option<Vec<EnhancedCandidate>> {
         let registration = registry::registration(provider)?;
+        // Only trusted built-in collectors receive this matching view. Configured
+        // external/fish helpers below retain the original INPUT/CURSOR/token.
+        let matching_view = match parsed_command_line.matching_source() {
+            std::borrow::Cow::Borrowed(_) => std::borrow::Cow::Borrowed(parsed_command_line),
+            std::borrow::Cow::Owned(source) => {
+                let mut view = parsed_command_line.clone();
+                view.current_token = source;
+                std::borrow::Cow::Owned(view)
+            }
+        };
         let request = registry::DynamicProviderRequest {
             provider: registration.id,
             scope,
-            parsed_command_line,
+            parsed_command_line: &matching_view,
             current_dir,
             cache_policy,
         };

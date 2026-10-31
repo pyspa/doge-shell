@@ -38,7 +38,7 @@ impl ContextCorrector<'_> {
                 index += 2;
                 continue;
             }
-            if !end_options && token == "--" {
+            if !end_options && super::super::shell_path::decode_literal_word(token) == "--" {
                 end_options = true;
                 index += 1;
                 continue;
@@ -89,7 +89,7 @@ impl ContextCorrector<'_> {
             .raw_args
             .iter()
             .take(current)
-            .any(|token| token == "--")
+            .any(|token| super::super::shell_path::decode_literal_word(token) == "--")
         {
             return None;
         }
@@ -97,13 +97,14 @@ impl ContextCorrector<'_> {
         if let Some(raw_token) = Self::current_raw_token(parsed)
             && let Some((option_name, value)) = split_inline_long_option(raw_token)
         {
+            let option_name = super::super::shell_path::decode_literal_word(option_name);
             let mut corrected = parsed.clone();
             corrected.current_token = value.to_string();
             corrected.current_arg = Some(corrected.current_token.clone());
 
             if let Some(option) = options
                 .iter()
-                .find(|option| option.matches_name(option_name))
+                .find(|option| option.matches_name(&option_name))
             {
                 if option.expects_value() {
                     corrected.completion_context = CompletionContext::OptionValue {
@@ -113,7 +114,7 @@ impl ContextCorrector<'_> {
                     corrected.specified_options = normalize_specified_option(
                         &corrected.specified_options,
                         raw_token,
-                        option_name,
+                        &option_name,
                     );
                     corrected.options = corrected.specified_options.clone();
                     return Some(corrected);
@@ -147,10 +148,11 @@ impl ContextCorrector<'_> {
             return None;
         }
 
-        let previous = Self::previous_argv_token(parsed)?;
+        let previous =
+            super::super::shell_path::decode_literal_word(Self::previous_argv_token(parsed)?);
         let option = options
             .into_iter()
-            .find(|option| option.matches_name(previous) && option.expects_value())?;
+            .find(|option| option.matches_name(&previous) && option.expects_value())?;
 
         let mut corrected = parsed.clone();
         corrected.completion_context = CompletionContext::OptionValue {
@@ -209,7 +211,7 @@ impl ContextCorrector<'_> {
                 continue;
             }
 
-            if !end_of_options && token == "--" {
+            if !end_of_options && super::super::shell_path::decode_literal_word(token) == "--" {
                 end_of_options = true;
                 raw_index += 1;
                 continue;

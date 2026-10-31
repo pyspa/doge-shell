@@ -1,4 +1,4 @@
-use crate::completion::display::{Candidate, CompletionConfig};
+use crate::completion::display::{Candidate, CompletionConfig, display_text};
 use crate::completion::framework::{CompletionFrameworkKind, CompletionSelection};
 use crate::completion::subprocess::shell_quote;
 use skim::{ItemPreview, PreviewContext, SkimItem};
@@ -90,7 +90,7 @@ impl SkimItem for Candidate {
     }
 
     fn text(&self) -> Cow<'_, str> {
-        match self {
+        let text: Cow<'_, str> = match self {
             Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
                 candidate.text()
             }
@@ -141,13 +141,21 @@ impl SkimItem for Candidate {
                 let desc = format!("{icon} {pid:<8} {command}");
                 Cow::Owned(desc)
             }
+        };
+        if text
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+        {
+            Cow::Owned(display_text(&text).into_owned())
+        } else {
+            text
         }
     }
 
     fn preview(&self, _context: PreviewContext) -> ItemPreview {
         match candidate_preview(self) {
             PreviewSpec::Command(cmd) => ItemPreview::Command(cmd),
-            PreviewSpec::Text(text) => ItemPreview::Text(text),
+            PreviewSpec::Text(text) => ItemPreview::Text(display_text(&text).into_owned()),
             PreviewSpec::None => ItemPreview::Global,
         }
     }

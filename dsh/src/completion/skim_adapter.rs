@@ -90,7 +90,7 @@ impl SkimItem for Candidate {
     }
 
     fn text(&self) -> Cow<'_, str> {
-        match self {
+        let text: Cow<'_, str> = match self {
             Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
                 candidate.text()
             }
@@ -141,7 +141,8 @@ impl SkimItem for Candidate {
                 let desc = format!("{icon} {pid:<8} {command}");
                 Cow::Owned(desc)
             }
-        }
+        };
+        Cow::Owned(crate::completion::display::visible_text(&text))
     }
 
     fn preview(&self, _context: PreviewContext) -> ItemPreview {

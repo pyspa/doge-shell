@@ -332,23 +332,19 @@ fn option_value_ranges_preserve_prefix_and_unicode_neighbors() {
 
 #[test]
 fn script_templates_receive_only_active_command_arguments() {
-    use crate::completion::generators::script::{ScriptGenerator, ScriptRunner};
-    struct Capture;
-    impl ScriptRunner for Capture {
-        fn run(&self, command: &str) -> anyhow::Result<String> {
-            assert_eq!(command, "'probe' 'token' 'token'");
-            Ok("token-result\n".into())
-        }
-    }
+    use crate::completion::generators::script::ScriptGenerator;
     let engine = cursor_engine();
     engine.command_completion.lock().add_command(
         serde_json::from_str(r#"{"command":"probe","arguments":[{"name":"value"}]}"#).unwrap(),
     );
     let (_, _, parsed) = at(&engine, "echo before && probe token§ && echo after");
-    let candidates = ScriptGenerator::new(Capture)
-        .generate_script_candidates("$COMMAND $CURRENT_TOKEN $ARG_0", &parsed)
+    let candidates = ScriptGenerator::default()
+        .generate_script_candidates(
+            r#"printf '%s:%s:%s\n' "$CURRENT_TOKEN" "$COMMAND" "$ARG_0""#,
+            &parsed,
+        )
         .unwrap();
-    assert_eq!(candidates[0].text, "token-result");
+    assert_eq!(candidates[0].text, "token:probe:token");
 }
 
 #[tokio::test]

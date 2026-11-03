@@ -25,8 +25,11 @@ impl IntegratedCompletionEngine {
         {
             return None;
         }
-        let replacement_range =
-            completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
+        let replacement_range = completion_replacement_range(
+            input,
+            cursor_pos,
+            &self.dynamic_provider_target(&parsed_command_line),
+        )?;
 
         // Variable / user-home references: predict the first matching candidate.
         if let Some(candidates) =
@@ -77,6 +80,8 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &parser::ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
+        let target = self.dynamic_provider_target(parsed_command_line);
+        let parsed_command_line = target.as_ref();
         match parsed_command_line.completion_context {
             parser::CompletionContext::SubCommand
             | parser::CompletionContext::ShortOption

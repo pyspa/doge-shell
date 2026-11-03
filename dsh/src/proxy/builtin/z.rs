@@ -173,6 +173,8 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
                         SkimCompletionFramework::run_with_skim(items, Some(query))
                     }
                     crate::completion::CompletionSelection::None
+                    | crate::completion::CompletionSelection::Cancelled
+                    | crate::completion::CompletionSelection::Event(_)
                     | crate::completion::CompletionSelection::Input(_) => None,
                 } {
                     shell.changepwd(&selected)?;

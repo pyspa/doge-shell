@@ -341,6 +341,8 @@ impl ShellProxy for Shell {
                 Ok(SkimCompletionFramework::run_with_skim(items, Some(query)))
             }
             crate::completion::CompletionSelection::None
+            | crate::completion::CompletionSelection::Cancelled
+            | crate::completion::CompletionSelection::Event(_)
             | crate::completion::CompletionSelection::Input(_) => Ok(None),
         }
     }

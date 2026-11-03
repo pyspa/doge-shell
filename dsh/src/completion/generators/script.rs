@@ -63,57 +63,35 @@ impl<R: ScriptRunner> ScriptGenerator<R> {
     }
 }
 
-/// Interpolate complete, unbraced placeholders in one pass over the template.
-/// Values are shell-quoted data and are never scanned again. Unknown identifiers,
-/// noncanonical/overflow/out-of-range ARG indexes remain verbatim for compatibility
-/// with ordinary shell variables. This is not a shell-template parser: existing
-/// textual substitution also applies inside template quotes and after backslashes.
-/// Suffix concatenation needs a boundary: `$CURRENT_TOKEN'_suffix'`, rather
-/// than `$CURRENT_TOKEN_suffix` (an unknown identifier, left unchanged).
+/// Pass input as environment data to a fresh shell, never as shell source.
+/// Templates use normal shell quoting: "$ARG_0" preserves a single value,
+/// while '$ARG_0' is literal text. Expansion results are never re-evaluated.
 fn expand_script_template(template: &str, parsed: &ParsedCommandLine) -> String {
-    let mut result = String::with_capacity(template.len());
-    let mut chars = template.char_indices().peekable();
-    while let Some((start, ch)) = chars.next() {
-        if ch != '$' {
-            result.push(ch);
-            continue;
-        }
-        let mut end = start + 1;
-        while let Some(&(offset, next)) = chars.peek() {
-            if !next.is_alphanumeric() && next != '_' {
-                break;
-            }
-            end = offset + next.len_utf8();
-            chars.next();
-        }
-        let name = &template[start + 1..end];
-        let value = match name {
-            "COMMAND" => Some(parsed.command.as_str()),
-            "CURRENT_TOKEN" => Some(parsed.current_arg.as_deref().unwrap_or_default()),
-            "SUBCOMMAND" => Some(
-                parsed
-                    .subcommand_path
-                    .first()
-                    .map(String::as_str)
-                    .unwrap_or_default(),
-            ),
-            _ => name
-                .strip_prefix("ARG_")
-                .filter(|index| {
-                    !index.is_empty()
-                        && index.bytes().all(|ch| ch.is_ascii_digit())
-                        && (*index == "0" || !index.starts_with('0'))
-                })
-                .and_then(|index| index.parse::<usize>().ok())
-                .and_then(|index| parsed.specified_arguments.get(index))
-                .map(String::as_str),
-        };
-        if let Some(value) = value {
-            result.push_str(&subprocess::shell_quote(value));
-        } else {
-            result.push_str(&template[start..end]);
-        }
+    let mut result = String::new();
+    let mut assign = |name: &str, value: &str| {
+        result.push_str(name);
+        result.push('=');
+        result.push_str(&subprocess::shell_quote(value));
+        result.push(' ');
+    };
+    assign("COMMAND", &parsed.command);
+    assign(
+        "CURRENT_TOKEN",
+        parsed.current_arg.as_deref().unwrap_or_default(),
+    );
+    assign(
+        "SUBCOMMAND",
+        parsed
+            .subcommand_path
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default(),
+    );
+    for (index, value) in parsed.specified_arguments.iter().enumerate() {
+        assign(&format!("ARG_{index}"), value);
     }
+    result.push_str("/bin/sh -c ");
+    result.push_str(&subprocess::shell_quote(template));
     result
 }
 
@@ -124,246 +102,70 @@ impl Default for ScriptGenerator<DefaultScriptRunner> {
 }
 
 #[cfg(test)]
-mod tests {
+mod audit_tests {
     use super::*;
-    use crate::completion::parser::CompletionContext;
-
-    struct MockScriptRunner {
-        expected_command: String,
-        output: String,
-    }
-
-    impl MockScriptRunner {
-        fn new(expected_command: &str, output: &str) -> Self {
-            Self {
-                expected_command: expected_command.to_string(),
-                output: output.to_string(),
-            }
-        }
-    }
-
-    impl ScriptRunner for MockScriptRunner {
-        fn run(&self, command: &str) -> Result<String> {
-            assert_eq!(command, self.expected_command);
-            Ok(self.output.clone())
-        }
-    }
-
     #[test]
-    fn script_placeholder_boundaries_and_unknown_values() {
+    fn audit_quoted_placeholder_never_executes_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
         let mut parsed = crate::completion::parser::CommandLineParser::new().parse("probe ", 6);
-        parsed.current_arg = None;
-        parsed.specified_arguments = (0..=10).map(|n| format!("value{n}")).collect();
-        let unknown = "$ARG_ $ARG_-1 $ARG_01 $ARG_999999999999999999999999999999 $ARG_11 $ARG_1suffix $CURRENT_TOKEN_suffix $COMMAND日本 ${COMMAND} $UNKNOWN";
-        assert_eq!(expand_script_template(unknown, &parsed), unknown);
-        assert_eq!(
-            expand_script_template(
-                "$ARG_1/$ARG_10/$ARG_1 $CURRENT_TOKEN $SUBCOMMAND $COMMAND",
-                &parsed
-            ),
-            "'value1'/'value10'/'value1' '' '' 'probe'"
-        );
-        parsed.command = "$CURRENT_TOKEN".into();
-        parsed.current_arg = Some("日本語 e\u{301} \\ ' \n$COMMAND".into());
-        assert_eq!(
-            expand_script_template("$COMMAND $CURRENT_TOKEN", &parsed),
-            format!(
-                "'$CURRENT_TOKEN' {}",
-                subprocess::shell_quote(parsed.current_arg.as_deref().unwrap())
-            )
-        );
-    }
-
-    #[test]
-    fn script_placeholders_are_complete_and_nonrecursive() {
-        let mut parsed =
-            crate::completion::parser::CommandLineParser::new().parse("probe value", 11);
-        parsed.current_arg = Some("$ARG_0".into());
-        parsed.specified_arguments = vec!["x; printf INJECTED; #".into()];
-        // Mock only: these strings must never reach DefaultScriptRunner.
-        ScriptGenerator::new(MockScriptRunner::new("printf %s '$ARG_0'", ""))
-            .generate_script_candidates("printf %s $CURRENT_TOKEN", &parsed)
+        parsed.specified_arguments = vec![format!("$(printf bad > {})", marker.display())];
+        let result = ScriptGenerator::default()
+            .generate_script_candidates(r#"printf '%s\n' "$ARG_0""#, &parsed)
             .unwrap();
-        parsed.specified_arguments = (0..=10).map(|n| format!("value{n}")).collect();
-        ScriptGenerator::new(MockScriptRunner::new("printf %s 'value10'", ""))
-            .generate_script_candidates("printf %s $ARG_10", &parsed)
-            .unwrap();
-    }
-
-    #[test]
-    fn test_script_variable_substitution() {
-        let runner = MockScriptRunner::new("echo 'br'", "branch1\nbranch2");
-
-        let generator = ScriptGenerator::new(runner);
-
-        let parsed = ParsedCommandLine {
-            command: "git".to_string(),
-            subcommand_path: vec![],
-            raw_args: vec![],
-            args: vec![],
-            options: vec![],
-            current_token: "br".to_string(),
-            current_arg: Some("br".to_string()),
-            completion_context: CompletionContext::Argument {
-                arg_index: 0,
-                arg_type: None,
-            },
-            specified_options: vec![],
-            specified_arguments: vec![],
-            cursor_index: 0,
-            source: None,
-        };
-
-        let template = "echo $CURRENT_TOKEN";
-
-        let result = generator
-            .generate_script_candidates(template, &parsed)
-            .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].text, "branch1");
-    }
-
-    #[test]
-    fn test_script_description_parsing() {
-        let runner = MockScriptRunner::new("echo test", "value1\tdescription1\nvalue2");
-        let generator = ScriptGenerator::new(runner);
-
-        let parsed = ParsedCommandLine {
-            command: "test".to_string(),
-            subcommand_path: vec![],
-            raw_args: vec![],
-            args: vec![],
-            options: vec![],
-            current_token: "val".to_string(),
-            current_arg: Some("val".to_string()),
-            completion_context: CompletionContext::Argument {
-                arg_index: 0,
-                arg_type: None,
-            },
-            specified_options: vec![],
-            specified_arguments: vec![],
-            cursor_index: 0,
-            source: None,
-        };
-
-        let result = generator
-            .generate_script_candidates("echo test", &parsed)
-            .unwrap();
-
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].text, "value1");
-        assert_eq!(result[0].description, Some("description1".to_string()));
-        assert_eq!(result[1].text, "value2");
-        assert_eq!(result[1].description, None);
-    }
-
-    #[test]
-    fn test_script_arg_substitution() {
-        let runner = MockScriptRunner::new("echo 'foo'", "result");
-
-        let generator = ScriptGenerator::new(runner);
-
-        let parsed = ParsedCommandLine {
-            command: "test".to_string(),
-            subcommand_path: vec![],
-            raw_args: vec![],
-            args: vec![],
-            options: vec![],
-            current_token: "".to_string(),
-            current_arg: None,
-            completion_context: CompletionContext::Argument {
-                arg_index: 1,
-                arg_type: None,
-            },
-            specified_options: vec![],
-            specified_arguments: vec!["foo".to_string()],
-            cursor_index: 0,
-            source: None,
-        };
-
-        let template = "echo $ARG_0";
-
-        let result = generator
-            .generate_script_candidates(template, &parsed)
-            .unwrap();
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text, "result");
-    }
-    #[test]
-    fn script_current_token_is_shell_quoted_against_injection() {
-        // A malicious token must be passed as a single literal argument, never
-        // interpreted as additional shell commands.
-        let runner = MockScriptRunner::new(r#"git checkout '"; rm -rf ~'"#, "");
-
-        let generator = ScriptGenerator::new(runner);
-
-        let parsed = ParsedCommandLine {
-            command: "git".to_string(),
-            subcommand_path: vec![],
-            raw_args: vec![],
-            args: vec![],
-            options: vec![],
-            current_token: r#""; rm -rf ~"#.to_string(),
-            current_arg: Some(r#""; rm -rf ~"#.to_string()),
-            completion_context: CompletionContext::Argument {
-                arg_index: 0,
-                arg_type: None,
-            },
-            specified_options: vec![],
-            specified_arguments: vec![],
-            cursor_index: 0,
-            source: None,
-        };
-
-        // Assertion of the exact quoted command happens inside MockScriptRunner::run.
-        let result = generator
-            .generate_script_candidates("git checkout $CURRENT_TOKEN", &parsed)
-            .unwrap();
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_large_output_deadlock() {
-        let runner = DefaultScriptRunner;
-        let res = runner.run("seq 1 20000").unwrap(); // 20000 lines * ~6 chars = 120KB > 64KB.
-        assert!(res.len() > 100000);
-    }
-
-    #[test]
-    fn script_runner_does_not_wait_for_background_stdout_holder() {
-        let runner = DefaultScriptRunner;
-        let started = std::time::Instant::now();
-
-        let res = runner.run("(sleep 2; printf late) & exit 0").unwrap();
-
-        assert_eq!(res, "");
-        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(!marker.exists());
+        assert_eq!(result[0].text, parsed.specified_arguments[0]);
     }
 }
 
 #[cfg(test)]
-mod cursor_query_tests {
+mod transport_tests {
     use super::*;
     #[test]
-    fn decoded_filter_does_not_change_script_metadata() {
-        struct Runner;
-        impl ScriptRunner for Runner {
-            fn run(&self, command: &str) -> Result<String> {
-                assert_eq!(command, "echo '\"al'");
-                Ok("alpha\nbeta".into())
-            }
+    fn template_values_are_data_in_shell_quote_contexts() {
+        let mut parsed = crate::completion::parser::CommandLineParser::new().parse("probe ", 6);
+        let payload = "日本語 e\u{301} ' \\ ; $COMMAND `printf BAD` $(printf BAD)";
+        parsed.current_arg = Some(payload.into());
+        parsed.specified_arguments = (0..=10).map(|n| format!("value{n}")).collect();
+        for (template, expected) in [
+            (r#"printf '%s' "$CURRENT_TOKEN""#, payload),
+            ("printf '%s' '$CURRENT_TOKEN'", "$CURRENT_TOKEN"),
+            (
+                r#"printf '%s' "${COMMAND}:$ARG_1/$ARG_10:$SUBCOMMAND""#,
+                "probe:value1/value10:",
+            ),
+            ("printf '%s' $ARG_1", "value1"),
+        ] {
+            let output = DefaultScriptRunner
+                .run(&expand_script_template(template, &parsed))
+                .unwrap();
+            assert_eq!(output, expected);
         }
-        let input = "pick --mode \"al";
+    }
+    #[test]
+    fn descriptions_and_decoded_filter_preserve_values() {
+        let input = "probe \"al";
         let parsed = crate::completion::parser::CommandLineParser::new().parse(input, input.len());
-        let result = ScriptGenerator::new(Runner)
-            .generate_script_candidates("echo $CURRENT_TOKEN", &parsed)
+        let result = ScriptGenerator::default()
+            .generate_script_candidates("printf 'alpha\\tdescription\\nbeta\\n'", &parsed)
             .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].text, "alpha");
+        assert_eq!(result[0].description.as_deref(), Some("description"));
+    }
+    #[test]
+    fn large_output_is_drained() {
+        assert!(DefaultScriptRunner.run("seq 1 20000").unwrap().len() > 100000);
+    }
+    #[test]
+    fn background_stdout_holder_does_not_block() {
+        let started = std::time::Instant::now();
         assert_eq!(
-            result.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
-            ["alpha"]
+            DefaultScriptRunner
+                .run("(sleep 2; printf late) & exit 0")
+                .unwrap(),
+            ""
         );
+        assert!(started.elapsed() < Duration::from_millis(500));
     }
 }

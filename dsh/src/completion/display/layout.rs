@@ -15,11 +15,11 @@ impl CompletionDisplay {
         let mut max_total_width = 0;
 
         for c in &self.candidates {
-            let name_width = unicode_display_width(c.get_display_name());
+            let name_width = unicode_display_width(&visible_text(c.get_display_name()));
             let type_char_width = c.get_type_char().width().unwrap_or(2);
             let desc = c.get_description();
             let desc_width = if let Some(d) = desc {
-                unicode_display_width(d) + 2 // +2 for spacing/separator
+                unicode_display_width(&visible_text(d)) + 2 // +2 for spacing/separator
             } else {
                 0
             };

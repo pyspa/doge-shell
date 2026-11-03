@@ -203,7 +203,7 @@ impl CompletionDisplay {
         // Format the item for display with fixed width
         let (formatted, description_part) = if is_message_item {
             // For message items, don't apply column width formatting
-            (candidate.get_display_name().to_string(), None)
+            (visible_text(candidate.get_display_name()), None)
         } else {
             candidate.get_formatted_display(layout.column_width, layout.max_name_width)
         };

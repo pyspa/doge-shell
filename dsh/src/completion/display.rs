@@ -31,6 +31,19 @@ fn default_max_completion_items() -> usize {
         .unwrap_or(MAX_COMPLETION_ITEMS)
 }
 
+/// Visible rendering for terminal control characters; insertion values stay raw.
+pub(crate) fn visible_text(text: &str) -> String {
+    text.chars()
+        .flat_map(|ch| {
+            if ch.is_control() {
+                ch.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![ch]
+            }
+        })
+        .collect()
+}
+
 fn unicode_display_width(s: &str) -> usize {
     s.width()
 }
@@ -116,7 +129,7 @@ pub struct CompletionDisplay {
 fn detail_line_text(candidate: &Candidate) -> Option<String> {
     let description = candidate.get_description()?;
     let name = candidate.get_display_name();
-    Some(format!("{name} — {description}"))
+    Some(visible_text(&format!("{name} — {description}")))
 }
 
 #[derive(Debug, Clone)]
@@ -488,7 +501,7 @@ impl Candidate {
         max_name_width: usize,
     ) -> (String, Option<String>) {
         let type_char = self.get_type_char();
-        let name = self.get_display_name();
+        let name = visible_text(self.get_display_name());
 
         let type_char_width = type_char.width().unwrap_or(2);
 
@@ -497,8 +510,8 @@ impl Candidate {
         let max_content_width = width.saturating_sub(type_char_width + 1);
 
         // Truncate name if it exceeds available width
-        let display_name = if unicode_display_width(name) > max_content_width {
-            truncate_to_width(name, max_content_width)
+        let display_name = if unicode_display_width(&name) > max_content_width {
+            truncate_to_width(&name, max_content_width)
         } else {
             name.to_string()
         };
@@ -526,7 +539,7 @@ impl Candidate {
 
             if remaining_width > 3 {
                 let desc_width = remaining_width.saturating_sub(2);
-                let actual_desc = truncate_to_width(desc, desc_width);
+                let actual_desc = truncate_to_width(&visible_text(desc), desc_width);
                 let actual_desc_width = unicode_display_width(&actual_desc);
                 let trailing_padding = desc_width.saturating_sub(actual_desc_width);
                 Some(format!("  {}{}", actual_desc, " ".repeat(trailing_padding)))

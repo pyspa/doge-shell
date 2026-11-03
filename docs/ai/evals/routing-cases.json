@@ -55,5 +55,10 @@
   {"id":"product-ai-usage-not-guidance","topic":"chat token usageの表示を修正","expected_primary_route":"chat-tools"},
   {"id":"coding-agent-mcp-not-guidance","topic":"AIコーディングエージェントがMCPツールを使えない","expected_primary_route":"chat-tools","max_routes":1},
   {"id":"coding-agent-safe-run-not-guidance","topic":"AIコーディングエージェントからsafe-runが動かない","expected_primary_route":"safety-policy","max_routes":1},
-  {"id":"unknown-fallback","topic":"unrelated task","expected_primary_route":"repo-general"}
+  {"id":"unknown-fallback","topic":"unrelated task","expected_primary_route":"repo-general"},
+  {"id":"guidance-correctness-ja","topic":"AIコーディングエージェントの実装の正確性とトークン使用効率を上げる","expected_primary_route":"ai-guidance","max_routes":1},
+  {"id":"guidance-coding-en","topic":"improve coding agent implementation accuracy and token efficiency","expected_primary_route":"ai-guidance","max_routes":1},
+  {"id":"guidance-eval-script-path","paths":["scripts/eval-agent-routing.py"],"expected_primary_route":"ai-guidance","max_routes":1},
+  {"id":"guidance-budget-script-path","paths":["scripts/check-agent-context-budget.py"],"expected_primary_route":"ai-guidance","max_routes":1},
+  {"id":"generic-skills-ambiguous","topic":"Skillsの追加、最適化","expected_primary_route":"repo-general","max_routes":1}
 ]

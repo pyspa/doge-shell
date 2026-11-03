@@ -553,6 +553,18 @@ duration shown are those of that last run.
 
 Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 
+### Completion Selection
+
+In the inline completion chooser, Home/End select the first/last displayed
+candidate and PageUp/PageDown move by a screen-sized step. Shift-Tab moves
+backward. Esc or Ctrl-C closes the chooser without starting another completion
+source. Pasting or using an editing shortcut such as Ctrl-A closes the chooser
+and applies that original input to the command line.
+
+Command-backed Lisp completions use the shell's exported environment and current
+directory, with a 1.5-second timeout and a 1 MiB stdout limit. While waiting,
+Esc/Ctrl-C cancels the helper; other input cancels it and returns to normal editing.
+
 ### Fish Completion Fallback
 
 TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.

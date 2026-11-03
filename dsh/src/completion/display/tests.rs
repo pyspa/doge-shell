@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn real_grid_jump_and_page_navigation_keeps_selection_on_candidates() {
+    let mut display = CompletionDisplay::new_with_config(
+        (0..12)
+            .map(|i| Candidate::Basic(format!("item{i:02}")))
+            .collect(),
+        "",
+        "",
+        CompletionConfig {
+            max_items: 10,
+            ..CompletionConfig::default()
+        },
+    );
+    display.force_layout(30);
+    CompletionUi::move_end(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item09");
+    CompletionUi::move_home(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+    CompletionUi::move_page_down(&mut display);
+    assert!(display.selected_index > 0);
+    assert!(display.get_selected().is_some());
+    CompletionUi::move_page_up(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+}
+
+#[test]
 fn detail_line_text_combines_name_and_description() {
     let candidate = Candidate::Command {
         name: "git".to_string(),

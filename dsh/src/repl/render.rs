@@ -443,12 +443,16 @@ fn apply_cached_analysis(
     completion_full: Option<String>,
     analysis_completion: Option<String>,
 ) {
-    if let Some(c) = completion_full {
-        repl.input.completion = Some(c);
-    }
     if let Some(suffix) = analysis_completion {
         *completion = Some(suffix);
     }
+    // Derive acceptance from the suffix that will actually be displayed,
+    // including cached history when the current history query could not lock.
+    repl.input.completion = completion_full.or_else(|| {
+        completion
+            .as_ref()
+            .map(|suffix| format!("{}{suffix}", repl.input.as_str()))
+    });
 }
 
 fn apply_fresh_analysis(
@@ -463,12 +467,12 @@ fn apply_fresh_analysis(
         can_execute,
     } = analysis;
 
-    if let Some(c) = completion_full.as_ref() {
-        repl.input.completion = Some(c.clone());
-    }
-    if let Some(suffix) = analysis_completion.as_ref() {
-        *completion = Some(suffix.clone());
-    }
+    apply_cached_analysis(
+        repl,
+        completion,
+        completion_full.clone(),
+        analysis_completion.clone(),
+    );
 
     repl.input.color_ranges = color_ranges;
     repl.input.can_execute = can_execute;

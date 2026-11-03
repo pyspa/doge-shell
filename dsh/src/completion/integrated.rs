@@ -32,6 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
+mod aliases;
 mod candidate;
 mod command_candidates;
 mod dynamic_dispatch;
@@ -132,6 +133,7 @@ impl CandidateBatch {
 struct ParsedCommandLineCache {
     input: String,
     cursor_pos: usize,
+    alias_signature: u64,
     parsed: ParsedCommandLine,
 }
 
@@ -245,7 +247,7 @@ pub struct IntegratedCompletionEngine {
 
     /// Dynamic completion registry
 
-    /// Short lived completion cache, scoped by PATH generation, cwd and HOME.
+    /// Short lived completion cache, scoped by PATH generation, aliases, cwd and HOME.
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<(u64, String), CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
@@ -316,9 +318,12 @@ impl IntegratedCompletionEngine {
 
     /// Convert ParsedCommand to ParsedCommandLine for dynamic completion
     fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
+        let alias_signature =
+            aliases::alias_signature(&self.environment.read().variable_state.alias);
         if let Some(cached) = self.parsed_cache.read().as_ref()
             && cached.input == input
             && cached.cursor_pos == cursor_pos
+            && cached.alias_signature == alias_signature
         {
             return cached.parsed.clone();
         }
@@ -330,6 +335,7 @@ impl IntegratedCompletionEngine {
         *self.parsed_cache.write() = Some(ParsedCommandLineCache {
             input: input.to_string(),
             cursor_pos,
+            alias_signature,
             parsed: parsed.clone(),
         });
 
@@ -350,7 +356,7 @@ impl IntegratedCompletionEngine {
         {
             return;
         }
-        parsed.command = self.environment.read().resolve_alias(&parsed.command);
+        self.expand_completion_alias(parsed);
 
         self.ensure_command_completion_loaded(&parsed.command);
         {
@@ -452,8 +458,11 @@ impl IntegratedCompletionEngine {
         let completion_dir = completion_dir.unwrap();
         let source_request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
         let request = CompletionRequest::new(input, &completion_dir, max_results, cursor_pos);
-        let replacement_range =
-            completion_replacement_range(input, cursor_pos, &parsed_command_line);
+        let replacement_range = completion_replacement_range(
+            input,
+            cursor_pos,
+            &self.dynamic_provider_target(&parsed_command_line),
+        );
         let dynamic_generation = self.dynamic.refresh_generation();
         // A request that starts while dynamic data is in flight stays
         // non-cacheable for its lifetime: the refresh may finish after this
@@ -655,3 +664,6 @@ mod filesystem_tests;
 
 #[cfg(test)]
 mod git_context_tests;
+
+#[cfg(test)]
+mod alias_tests;

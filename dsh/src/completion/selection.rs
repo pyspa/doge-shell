@@ -1,3 +1,4 @@
+//! Legacy completion selection, request-scoped candidates, and Lisp adapters.
 use crate::completion::cache::CompletionCache;
 use crate::completion::commands::{deduplicate_candidates, get_commands};
 use crate::completion::display::{Candidate, CompletionConfig};
@@ -14,11 +15,13 @@ use dsh_frecency::SortMethod;
 use skim::SkimItem;
 use std::collections::BTreeSet;
 use std::fs::read_dir;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tracing::{debug, warn};
+
+mod command;
 
 const LEGACY_CACHE_TTL_MS: u64 = 3000;
 
@@ -129,34 +132,14 @@ fn strip_selected_marker(val: String) -> String {
     }
 }
 
+/// Synchronous compatibility entry point; runtime Lisp completion uses the
+/// cancellable async adapter with an explicit logical environment snapshot.
 pub fn completion_from_cmd(
     input: String,
     query: Option<&str>,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    debug!("{} ", &input);
-    // Internal interpreter boundary: never resolved through logical or
-    // process-global PATH.
-    match std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg(input)
-        .output()
-    {
-        Ok(output) => {
-            if let Ok(out) = String::from_utf8(output.stdout) {
-                let items: Vec<Candidate> = out
-                    .lines()
-                    .map(|x| x.trim())
-                    .filter(|x| !x.is_empty())
-                    .map(|x| Candidate::Basic(x.to_string()))
-                    .collect();
-
-                return select_completion_items_simple(items, query, framework);
-            }
-            CompletionSelection::None
-        }
-        _ => CompletionSelection::None,
-    }
+    command::complete_sync(input, query, framework)
 }
 
 pub async fn input_completion(
@@ -176,13 +159,16 @@ pub async fn input_completion(
     debug!("input_completion starting with query: {:?}", query);
 
     // Try lisp-based completion first (custom completions defined by user)
-    // Lisp logic is synchronous but fast (unless user func is slow).
-    // We keep it synchronous for now or wrap it if needed.
+    // Lisp callbacks stay local; command-backed definitions yield while the
+    // bounded helper runs and return any interrupted editor event unchanged.
     let (res, preformatted) =
-        completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text, framework);
+        completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text, framework)
+            .await;
     if let CompletionSelection::Selected(_)
     | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_) = res
+    | CompletionSelection::Input(_)
+    | CompletionSelection::Event(_)
+    | CompletionSelection::Cancelled = res
     {
         debug!("Lisp completion returned result: {:?}", res);
         return if preformatted {
@@ -197,7 +183,9 @@ pub async fn input_completion(
         completion_for_dir_stack(input, repl, query, prompt_text, input_text, framework);
     if let CompletionSelection::Selected(_)
     | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_) = stack_res
+    | CompletionSelection::Input(_)
+    | CompletionSelection::Event(_)
+    | CompletionSelection::Cancelled = stack_res
     {
         return render_legacy_selection(stack_res, raw_token);
     }
@@ -206,7 +194,9 @@ pub async fn input_completion(
     let z_res = completion_for_z(input, repl, query, prompt_text, input_text, framework);
     if let CompletionSelection::Selected(_)
     | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_) = z_res
+    | CompletionSelection::Input(_)
+    | CompletionSelection::Event(_)
+    | CompletionSelection::Cancelled = z_res
     {
         return render_legacy_selection(z_res, raw_token);
     }
@@ -217,7 +207,9 @@ pub async fn input_completion(
             .await;
     if let CompletionSelection::Selected(_)
     | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_) = res
+    | CompletionSelection::Input(_)
+    | CompletionSelection::Event(_)
+    | CompletionSelection::Cancelled = res
     {
         debug!("Context completion returned result: {:?}", res);
         return render_legacy_selection(res, raw_token);
@@ -253,9 +245,9 @@ fn render_legacy_selection(
     }
 }
 
-fn completion_from_lisp_with_prompt(
+async fn completion_from_lisp_with_prompt(
     input: &Input,
-    repl: &Repl,
+    repl: &Repl<'_>,
     query: Option<&str>,
     prompt_text: &str,
     input_text: &str,
@@ -268,8 +260,13 @@ fn completion_from_lisp_with_prompt(
         Rc::clone(&engine.env.borrow().autocompletion)
     };
 
-    // 1. completion from autocomplete
-    for compl in autocompletion.borrow().iter() {
+    // Release the RefCell borrow before a command-backed definition awaits.
+    let completion = autocompletion
+        .borrow()
+        .iter()
+        .find(|compl| replace_space(input.as_str()).starts_with(&compl.target))
+        .cloned();
+    for compl in completion.iter() {
         let cmd_str = compl.target.to_string();
         // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
         if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
@@ -305,8 +302,18 @@ fn completion_from_lisp_with_prompt(
                     _ => {}
                 }
             } else if let Some(cmd) = &compl.cmd {
-                // run command
-                let res = completion_from_cmd(cmd.to_string(), query, framework);
+                let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
+                    return (CompletionSelection::None, false);
+                };
+                let res = command::complete_with_runtime(
+                    cmd.to_string(),
+                    snapshot.runtime,
+                    query,
+                    prompt_text,
+                    input_text,
+                    framework,
+                )
+                .await;
                 if let CompletionSelection::Selected(val) = res {
                     return (
                         CompletionSelection::Selected(strip_selected_marker(val)),
@@ -314,7 +321,10 @@ fn completion_from_lisp_with_prompt(
                     );
                 } else if matches!(
                     res,
-                    CompletionSelection::Interactive(..) | CompletionSelection::Input(_)
+                    CompletionSelection::Interactive(..)
+                        | CompletionSelection::Input(_)
+                        | CompletionSelection::Event(_)
+                        | CompletionSelection::Cancelled
                 ) {
                     return (res, false);
                 }
@@ -431,39 +441,15 @@ async fn completion_from_current_with_prompt(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    debug!("completion_from_current_with_prompt: query={:?}", query);
-
-    let query_str = query.unwrap_or("");
-    // Check caching first
-    if let Some(hit) = LEGACY_COMPLETION_CACHE.lookup(query_str) {
-        debug!("Cache hit for query '{}'", query_str);
-        LEGACY_COMPLETION_CACHE.extend_ttl(&hit.key);
-        debug!("Returning cached results");
-        return select_completion_items(
-            hit.candidates.clone(),
-            query,
-            prompt_text,
-            input_text,
-            framework,
-        );
-    }
-
-    let data = match collect_current_context_candidates(repl, query_str).await {
-        Some(d) => d,
-        None => return CompletionSelection::None,
-    };
-
-    if data.items.is_empty() {
+    let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
         return CompletionSelection::None;
-    }
-
-    // Cache the result
-    // We only cache if we have results, to avoid caching "not found" states too aggressively
-    // if the user is typing quickly.
-    // However, caching partial results might be good.
-    // For now, let's cache what we found.
-    LEGACY_COMPLETION_CACHE.set(query_str.to_string(), data.items.clone());
-
+    };
+    let Some(data) =
+        cached_current_context_candidates(&snapshot, query.unwrap_or(""), &LEGACY_COMPLETION_CACHE)
+            .await
+    else {
+        return CompletionSelection::None;
+    };
     select_completion_items(
         data.items,
         data.selection_query.as_deref(),
@@ -473,6 +459,70 @@ async fn completion_from_current_with_prompt(
     )
 }
 
+/// The cache identity and collection inputs come from the same logical state.
+/// This static cache also serves distinct Environment instances, so PATH's
+/// actual values are included alongside its per-Environment generation.
+struct LegacyCompletionSnapshot {
+    runtime: dsh_types::process_runtime::CommandRuntimeSnapshot,
+    home: Option<String>,
+    path_generation: u64,
+}
+
+impl LegacyCompletionSnapshot {
+    fn capture(repl: &Repl<'_>) -> Option<Self> {
+        let cwd = std::env::current_dir().ok()?;
+        Some(Self::from_environment(&repl.shell.environment.read(), cwd))
+    }
+
+    fn from_environment(environment: &crate::environment::Environment, cwd: PathBuf) -> Self {
+        Self {
+            runtime: environment.command_runtime_snapshot(cwd),
+            home: environment.lookup_variable("HOME"),
+            path_generation: environment.completion_state.path_generation,
+        }
+    }
+
+    fn cache_scope(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut scope = std::collections::hash_map::DefaultHasher::new();
+        self.runtime.current_dir().hash(&mut scope);
+        self.home.hash(&mut scope);
+        self.runtime.command_search_paths().hash(&mut scope);
+        self.path_generation.hash(&mut scope);
+        scope.finish()
+    }
+
+    fn expand_home(&self, query: &str) -> String {
+        if (query == "~" || query.starts_with("~/"))
+            && let Some(home) = &self.home
+        {
+            format!("{home}{}", &query[1..])
+        } else {
+            // Logical unset is final: do not rediscover process-global HOME.
+            query.to_string()
+        }
+    }
+}
+
+async fn cached_current_context_candidates(
+    snapshot: &LegacyCompletionSnapshot,
+    query: &str,
+    cache: &CompletionCache<Candidate>,
+) -> Option<CurrentCompletionData> {
+    let scope = snapshot.cache_scope();
+    if let Some(hit) = cache.lookup_scoped(scope, query) {
+        return Some(CurrentCompletionData {
+            items: hit.candidates,
+            selection_query: Some(query.to_string()),
+        });
+    }
+    let data = collect_current_context_candidates(snapshot, query).await?;
+    if !data.items.is_empty() {
+        cache.set_scoped(scope, query.to_string(), data.items.clone());
+    }
+    Some(data)
+}
+
 #[derive(Debug, Clone)]
 struct CurrentCompletionData {
     items: Vec<Candidate>,
@@ -480,33 +530,16 @@ struct CurrentCompletionData {
 }
 
 async fn collect_current_context_candidates(
-    repl: &Repl<'_>,
+    snapshot: &LegacyCompletionSnapshot,
     query_str: &str,
 ) -> Option<CurrentCompletionData> {
-    let lisp_engine = Rc::clone(&repl.shell.lisp_engine);
-    let environment = Arc::clone(&lisp_engine.borrow().shell_env);
-
-    // Determine current directory for relative path resolution
-    let current_dir = std::env::current_dir().unwrap_or_else(|e| {
-        warn!(
-            "Failed to get current directory: {}, using home directory",
-            e
-        );
-        std::env::var("HOME")
-            .map(std::path::PathBuf::from)
-            .ok()
-            .unwrap_or_else(|| {
-                warn!("Failed to get home directory, using root");
-                std::path::PathBuf::from("/")
-            })
-    });
-
-    // Expand tilde (~) in the query path
-    let expanded = shellexpand::tilde(query_str).to_string();
+    let current_dir = snapshot.runtime.current_dir();
+    let expanded = snapshot.expand_home(query_str);
     let expanded_path = Path::new(&expanded);
+    let lookup_path = current_dir.join(expanded_path);
 
     // Determine the path to search and query substring
-    let (search_path, path_query, only_path) = if expanded_path.is_dir() {
+    let (search_path, path_query, only_path) = if !expanded.is_empty() && lookup_path.is_dir() {
         (expanded_path.to_path_buf(), String::new(), true)
     } else if let Some(parent) = expanded_path.parent() {
         let parent_buf = parent.to_path_buf();
@@ -519,13 +552,12 @@ async fn collect_current_context_candidates(
             (expanded_path.to_path_buf(), String::new(), has_parent)
         }
     } else {
-        (current_dir.clone(), query_str.to_string(), false)
+        (PathBuf::new(), query_str.to_string(), false)
     };
 
     // Canonicalize the path for consistent resolution
-    let canonical_path = search_path
-        .canonicalize()
-        .unwrap_or_else(|_| current_dir.clone());
+    let lookup_dir = current_dir.join(&search_path);
+    let canonical_path = lookup_dir.canonicalize().unwrap_or(lookup_dir);
     let canonical_str = canonical_path.display().to_string();
     let search_path_str = search_path.to_str()?.to_string();
 
@@ -536,8 +568,13 @@ async fn collect_current_context_candidates(
     };
 
     if !only_path {
-        // Paths cloning for thread safety
-        let paths = environment.read().variable_state.paths.clone();
+        // Anchor relative/empty PATH entries before crossing the worker boundary.
+        let paths: Vec<String> = snapshot
+            .runtime
+            .command_search_paths()
+            .iter()
+            .map(|path| current_dir.join(path).to_string_lossy().into_owned())
+            .collect();
         let query_str = query_str.to_string();
 
         let mut command_items =

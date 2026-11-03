@@ -155,8 +155,18 @@ impl<'a> Repl<'a> {
         Ok(true)
     }
 
-    async fn apply_repl_control_flow(&mut self, control_flow: ReplControlFlow) -> bool {
+    async fn apply_repl_control_flow(&mut self, mut control_flow: ReplControlFlow) -> bool {
+        while let ReplControlFlow::ReplayInput(event) = control_flow {
+            control_flow = match self.handle_event(ShellEvent::Input(event)).await {
+                Ok(flow) => flow,
+                Err(error) => {
+                    self.shell.print_error(format!("Error: {error:?}\r"));
+                    return false;
+                }
+            };
+        }
         match control_flow {
+            ReplControlFlow::ReplayInput(_) => unreachable!("replayed above"),
             ReplControlFlow::Continue => true,
             ReplControlFlow::ExecuteCurrentInput => {
                 self.event_loop.pause_input();
@@ -541,5 +551,43 @@ impl<'a> Repl<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_replay_tests {
+    use super::*;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    #[tokio::test]
+    async fn chooser_replays_paste_and_edit_keys_through_normal_editor() {
+        let mut shell = Shell::new(crate::environment::Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("cat al".into());
+        assert!(
+            repl.apply_repl_control_flow(
+                ReplControlFlow::ReplayInput(Event::Paste("pine".into()),)
+            )
+            .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpine");
+        assert!(
+            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL
+            )),))
+                .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpine");
+        assert_eq!(repl.input.cursor(), 0);
+        repl.input.move_to_end();
+        assert!(
+            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::NONE
+            )),))
+                .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpin");
     }
 }

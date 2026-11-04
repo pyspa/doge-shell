@@ -184,7 +184,7 @@ pub fn mcp_form_completion(input: &str) -> Option<String> {
 pub fn trailing_symbol(input: &str) -> &str {
     let boundary = input
         .rfind(|c: char| c.is_whitespace() || matches!(c, '(' | ')'))
-        .map(|idx| idx + 1)
+        .map(|idx| idx + input[idx..].chars().next().unwrap().len_utf8())
         .unwrap_or(0);
     &input[boundary..]
 }

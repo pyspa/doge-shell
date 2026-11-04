@@ -38,6 +38,7 @@ impl IntegratedCompletionEngine {
             .path_generation
             .hash(&mut scope);
         environment.lookup_variable("HOME").hash(&mut scope);
+        aliases::alias_signature(&environment.variable_state.alias).hash(&mut scope);
         if !current_dir.is_absolute() {
             std::env::current_dir().ok().hash(&mut scope);
         }
@@ -123,6 +124,8 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
+        let target = self.dynamic_provider_target(parsed_command_line);
+        let parsed_command_line = target.as_ref();
         if parsed_command_line.completion_context == parser::CompletionContext::Command {
             debug!("No completion context found - skipping JSON completion");
             return CandidateBatch::empty();
@@ -271,12 +274,13 @@ impl IntegratedCompletionEngine {
             corrector.reparse_inner_command(parsed, cmd_index, cmd_name)
         };
 
-        let source_progress = inner
-            .source
-            .as_ref()
-            .zip(parsed.source.as_ref())
-            .is_some_and(|(inner, outer)| inner.input.len() < outer.input.len());
-        if inner.command.is_empty() || (inner.command == parsed.command && !source_progress) {
+        // Check that the wrapper was consumed before normalization: an alias
+        // can add fixed arguments, so its final argv need not be shorter.
+        let consumed_wrapper = match (&inner.source, &parsed.source) {
+            (Some(inner), Some(outer)) => inner.input.len() < outer.input.len(),
+            _ => inner.raw_args.len() < parsed.raw_args.len(),
+        };
+        if inner.command.is_empty() || !consumed_wrapper {
             return None;
         }
 

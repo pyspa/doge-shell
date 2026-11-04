@@ -107,6 +107,7 @@ pub struct CompletionDisplay {
     cursor_hidden: bool,
     has_more_items: bool,
     total_items_count: usize,
+    selectable_items_count: usize,
     /// Whether to reserve a detail line below the grid for the highlighted
     /// candidate's description. Decided once per session (constant while the
     /// grid is open) so the rendered geometry does not change as the selection
@@ -201,6 +202,7 @@ impl CompletionDisplay {
             cursor_hidden: false,
             has_more_items,
             total_items_count,
+            selectable_items_count: total_items_count.min(config.max_items),
             show_detail_line,
         }
     }
@@ -279,7 +281,7 @@ impl CompletionDisplay {
 
     pub fn move_down(&mut self) {
         if let Some(layout) = self.layout_cache.as_ref()
-            && self.selected_index + layout.items_per_row < self.candidates.len()
+            && self.selected_index + layout.items_per_row < self.selectable_count()
         {
             self.selected_index += layout.items_per_row;
         }
@@ -292,18 +294,25 @@ impl CompletionDisplay {
     }
 
     pub fn move_right(&mut self) {
-        if self.selected_index + 1 < self.candidates.len() {
+        if self.selected_index + 1 < self.selectable_count() {
             self.selected_index += 1;
         }
+    }
+
+    fn selectable_count(&self) -> usize {
+        self.selectable_items_count
+    }
+
+    fn page_step(&self) -> usize {
+        let columns = self.layout_cache.as_ref().map_or(1, |l| l.items_per_row);
+        let height = crossterm::terminal::size().map_or(24, |(_, height)| height);
+        usize::from(height.saturating_sub(2 + self.detail_rows()).max(1)) * columns
     }
 
     pub fn get_selected(&self) -> Option<&Candidate> {
         if let Some(candidate) = self.candidates.get(self.selected_index) {
             // Don't return message items as selectable
-            if self.has_more_items
-                && self.selected_index == self.candidates.len() - 1
-                && candidate.get_display_name().starts_with("📋")
-            {
+            if self.selected_index >= self.selectable_count() {
                 return None;
             }
             Some(candidate)
@@ -340,6 +349,25 @@ impl CompletionUi for CompletionDisplay {
 
     fn move_right(&mut self) {
         CompletionDisplay::move_right(self);
+    }
+
+    fn move_page_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(self.page_step());
+    }
+
+    fn move_page_down(&mut self) {
+        self.selected_index = self
+            .selected_index
+            .saturating_add(self.page_step())
+            .min(self.selectable_count().saturating_sub(1));
+    }
+
+    fn move_home(&mut self) {
+        self.selected_index = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.selected_index = self.selectable_count().saturating_sub(1);
     }
 
     fn selected_output(&self) -> Option<String> {

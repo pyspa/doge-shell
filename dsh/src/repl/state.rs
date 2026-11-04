@@ -77,6 +77,8 @@ pub enum InteractiveAction {
 
 pub enum ReplControlFlow {
     Continue,
+    /// Return an event consumed by a chooser to the normal editor dispatcher.
+    ReplayInput(Event),
     RunInteractive(Box<dyn FnOnce() -> anyhow::Result<Option<InteractiveAction>> + Send>),
     ExecuteCurrentInput,
     OpenCommandPalette,

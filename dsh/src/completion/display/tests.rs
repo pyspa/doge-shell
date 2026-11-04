@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn real_grid_jump_and_page_navigation_keeps_selection_on_candidates() {
+    let mut display = CompletionDisplay::new_with_config(
+        (0..12)
+            .map(|i| Candidate::Basic(format!("item{i:02}")))
+            .collect(),
+        "",
+        "",
+        CompletionConfig {
+            max_items: 10,
+            ..CompletionConfig::default()
+        },
+    );
+    display.force_layout(30);
+    CompletionUi::move_end(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item09");
+    CompletionUi::move_home(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+    CompletionUi::move_page_down(&mut display);
+    assert!(display.selected_index > 0);
+    assert!(display.get_selected().is_some());
+    CompletionUi::move_page_up(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+}
+
+#[test]
 fn detail_line_text_combines_name_and_description() {
     let candidate = Candidate::Command {
         name: "git".to_string(),
@@ -514,4 +539,32 @@ fn completion_cells_fit_every_small_width() {
             );
         }
     }
+}
+
+#[test]
+fn audit_control_characters_are_display_only() {
+    let raw = "name\x1b[2J\n\r\t";
+    let candidate = Candidate::Path(raw.into());
+    let (shown, _) = candidate.get_formatted_display(80, 0);
+    assert!(!shown.chars().any(char::is_control));
+    assert_eq!(candidate.get_display_name(), raw);
+}
+
+#[test]
+fn audit_description_and_skim_are_safe_without_changing_output() {
+    use skim::SkimItem;
+    let candidate = Candidate::Command {
+        name: "na\x1b[2Jme".into(),
+        description: "first\nsecond\r\t\x1b[2J".into(),
+    };
+    let (_, description) = candidate.get_formatted_display(100, 24);
+    assert!(!description.unwrap().chars().any(char::is_control));
+    assert!(
+        !detail_line_text(&candidate)
+            .unwrap()
+            .chars()
+            .any(char::is_control)
+    );
+    assert!(!candidate.text().chars().any(char::is_control));
+    assert_eq!(candidate.output(), "na\x1b[2Jme");
 }

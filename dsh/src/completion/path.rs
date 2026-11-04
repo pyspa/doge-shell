@@ -17,6 +17,8 @@ static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
 
 #[cfg(test)]
+mod membership_tests;
+#[cfg(test)]
 mod shared_tests;
 
 struct DirectoryRequest {
@@ -343,16 +345,28 @@ pub fn is_path_cached(path: &Path) -> bool {
         // A bare 'foo' is listed under '.' as './foo'. Compare in the
         // listing's display spelling rather than losing that provenance.
         let path_str = request.display.join(name).display().to_string();
-        let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
-
-        for cand in candidates.iter() {
-            if let Candidate::Path(p) = cand {
-                let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
-                if p_clean == search {
-                    return true;
-                }
-            }
+        // Preserve the linear lookup's cheap first hit and single-entry miss.
+        // This equality check does not impose an ordering on trimmed paths.
+        if let Some(Candidate::Path(first)) = candidates.first()
+            && first.trim_end_matches(std::path::MAIN_SEPARATOR) == path_str
+        {
+            return true;
         }
+        if candidates.len() <= 1 {
+            return false;
+        }
+        // scan_dir_candidates publishes only raw Candidate::Path values sorted
+        // by Candidate::Ord. Search that same order: trimming directory suffixes
+        // in the comparator would move "a/" before "a!" and break binary search.
+        // Joining file_name above leaves no trailing separator in this needle.
+        let mut needle = Candidate::Path(path_str);
+        if candidates.binary_search(&needle).is_ok() {
+            return true;
+        }
+        if let Candidate::Path(raw) = &mut needle {
+            raw.push(std::path::MAIN_SEPARATOR);
+        }
+        return candidates.binary_search(&needle).is_ok();
     }
 
     false
@@ -398,6 +412,7 @@ fn scan_dir_candidates(request: DirectoryRequest) -> Result<Vec<Candidate>> {
         // Keep the complete listing: callers filter by name/type first, and
         // the integrated engine limits the ranked matches, not arbitrary entries.
     }
+    // Membership checks binary-search these raw Path values, including directory suffixes.
     files.sort();
     Ok(files)
 }

@@ -34,13 +34,14 @@ pub(super) fn option_value_range_from_token(
     token_start: usize,
     option_name: &str,
 ) -> Option<CompletionReplacementRange> {
-    if option_name.starts_with("--") {
-        let prefix = format!("{option_name}=");
-        if token.starts_with(&prefix) {
-            let start = token_start + prefix.chars().count();
-            let end = token_start + token.chars().count();
-            return Some(CompletionReplacementRange { start, end });
-        }
+    if option_name.starts_with("--")
+        && let Some((raw_name, _)) = parser::split_inline_long_option(token)
+        && super::super::shell_path::decode_literal_word(raw_name) == option_name
+    {
+        return Some(CompletionReplacementRange {
+            start: token_start + raw_name.chars().count() + 1,
+            end: token_start + token.chars().count(),
+        });
     }
 
     if option_name.len() == 2 && !option_name.starts_with("--") && token.starts_with(option_name) {

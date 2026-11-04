@@ -48,6 +48,9 @@ async fn alias_fixed_subcommand_keeps_public_options_and_original_range() {
         "echo 日本語 && auditg --ame§nd later",
         "sudo auditg --ame§nd later",
         "env TERM=x sudo auditg --ame§nd later",
+        "X='界 space' >out auditg --ame§nd later",
+        ">out auditg --ame§nd later",
+        "X=value sudo auditg --ame§nd later",
     ] {
         let (input, cursor, parsed) = at(&engine, marked);
         let target = engine.dynamic_provider_target(&parsed);
@@ -76,6 +79,11 @@ async fn alias_fixed_subcommand_keeps_public_options_and_original_range() {
     assert_eq!(
         engine.ghost_completion("sudo auditg --ame", 17, dir.path(), None),
         Some("sudo auditg --amend".into())
+    );
+    let input = "X=value >out auditg --ame";
+    assert_eq!(
+        engine.ghost_completion(input, input.chars().count(), dir.path(), None),
+        Some("X=value >out auditg --amend".into())
     );
 }
 
@@ -127,11 +135,15 @@ fn alias_respects_syntax_authority_and_command_cursor() {
     alias(&engine, "auditg", "git commit");
     alias(&engine, "chain", "auditg");
     for (marked, expected) in [
-        ("'auditg' --ame§", "'auditg'"),
-        ("\"auditg\" --ame§", "\"auditg\""),
-        (r"audit\g --ame§", r"audit\g"),
+        ("'auditg' --ame§", "auditg"),
+        ("\"auditg\" --ame§", "auditg"),
+        (r"audit\g --ame§", "auditg"),
         ("audit§g --amend", "audit"),
         ("auditg§ --amend", "auditg"),
+        ("X=value audit§g --amend", "audit"),
+        ("X=value >out auditg§ --amend", "auditg"),
+        ("X=value 'auditg' --ame§", "auditg"),
+        ("X=value >out \"auditg\" --ame§", "auditg"),
         ("chain --ame§", "auditg"),
     ] {
         let (_, _, parsed) = at(&engine, marked);

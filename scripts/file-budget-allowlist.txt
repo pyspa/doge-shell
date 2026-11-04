@@ -30,7 +30,6 @@ no-doc	dsh-openai/src/client.rs
 no-doc	dsh-openai/src/config.rs
 no-doc	dsh-types/src/safety_policy.rs
 no-doc	dsh/src/completion/commands.rs
-no-doc	dsh/src/completion/display.rs
 no-doc	dsh/src/completion/dynamic.rs
 no-doc	dsh/src/completion/dynamic/platform.rs
 no-doc	dsh/src/completion/json_loader.rs

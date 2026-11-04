@@ -81,3 +81,45 @@ fn cached_queries_decode_source_once_and_preserve_values() {
             .all(|entry| entry.values == values)
     );
 }
+
+#[test]
+fn inherited_inline_quotes_match_cached_values_without_changing_raw_metadata() {
+    let env = Environment::new_synthetic();
+    env.write().variable_state.paths.clear();
+    let provider = DynamicCompletionProvider::new(env);
+    let dir = tempfile::tempdir().unwrap();
+    let scope_dir = provider.cached_project_root(dir.path());
+    provider.cache.write().commands.insert(
+        DynamicCommandCacheKey {
+            kind: DynamicCommandCacheKind::GitBranch,
+            scope_dir,
+        },
+        CommandValueCacheEntry {
+            values: vec!["a'b".into(), "a\"b".into(), "a\\b".into()],
+            cached_at: Instant::now(),
+            last_load_duration: None,
+            last_error: None,
+        },
+    );
+    for (input, expected) in [
+        (r#"probe "--mode=a'b""#, "a'b"),
+        (r#"probe '--mode=a"b'"#, "a\"b"),
+        (r"probe '--mode=a\b'", "a\\b"),
+    ] {
+        let parsed = crate::completion::parser::CommandLineParser::new().parse(input, input.len());
+        let raw = parsed.current_token.clone();
+        let result = provider.collect_declared_dynamic_candidates(
+            "git.branch",
+            None,
+            &parsed,
+            dir.path(),
+            CachePolicy::CachedOnly,
+        );
+        assert!(
+            result.iter().any(|candidate| candidate.text == expected),
+            "{input}: {result:?}"
+        );
+        assert_eq!(parsed.current_token, raw);
+        assert!(!provider.has_pending_refresh());
+    }
+}

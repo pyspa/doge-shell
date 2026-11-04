@@ -1,3 +1,5 @@
+//! Completion candidate metadata and terminal grid state. Raw candidate identity
+//! is retained independently of the sanitized presentation and insertion source.
 use super::ui::CompletionUi;
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
@@ -12,6 +14,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 mod layout;
 mod render;
+mod text;
+pub(crate) use text::display_text;
 
 #[derive(Debug, Clone, Copy)]
 enum DisplayMode {
@@ -29,19 +33,6 @@ fn default_max_completion_items() -> usize {
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(MAX_COMPLETION_ITEMS)
-}
-
-/// Visible rendering for terminal control characters; insertion values stay raw.
-pub(crate) fn visible_text(text: &str) -> String {
-    text.chars()
-        .flat_map(|ch| {
-            if ch.is_control() {
-                ch.escape_default().collect::<Vec<_>>()
-            } else {
-                vec![ch]
-            }
-        })
-        .collect()
 }
 
 fn unicode_display_width(s: &str) -> usize {
@@ -130,7 +121,11 @@ pub struct CompletionDisplay {
 fn detail_line_text(candidate: &Candidate) -> Option<String> {
     let description = candidate.get_description()?;
     let name = candidate.get_display_name();
-    Some(visible_text(&format!("{name} — {description}")))
+    Some(format!(
+        "{} — {}",
+        display_text(name),
+        display_text(description)
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -202,8 +197,8 @@ impl CompletionDisplay {
             layout_dirty: true,
             display_start_row: None,
             display_start_col: None,
-            prompt_text: prompt_text.to_string(),
-            input_text: input_text.to_string(),
+            prompt_text: display_text(prompt_text).into_owned(),
+            input_text: display_text(input_text).into_owned(),
             cursor_hidden: false,
             has_more_items,
             total_items_count,
@@ -529,9 +524,12 @@ impl Candidate {
         max_name_width: usize,
     ) -> (String, Option<String>) {
         let type_char = self.get_type_char();
-        let name = visible_text(self.get_display_name());
+        let name = display_text(self.get_display_name());
 
         let type_char_width = type_char.width().unwrap_or(2);
+        if width < type_char_width + 1 {
+            return (" ".repeat(width), None);
+        }
 
         let mut result_name = String::new();
 
@@ -567,7 +565,7 @@ impl Candidate {
 
             if remaining_width > 3 {
                 let desc_width = remaining_width.saturating_sub(2);
-                let actual_desc = truncate_to_width(&visible_text(desc), desc_width);
+                let actual_desc = truncate_to_width(&display_text(desc), desc_width);
                 let actual_desc_width = unicode_display_width(&actual_desc);
                 let trailing_padding = desc_width.saturating_sub(actual_desc_width);
                 Some(format!("  {}{}", actual_desc, " ".repeat(trailing_padding)))

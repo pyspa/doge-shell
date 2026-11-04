@@ -666,4 +666,7 @@ mod filesystem_tests;
 mod git_context_tests;
 
 #[cfg(test)]
+mod source_identity_tests;
+
+#[cfg(test)]
 mod alias_tests;

@@ -19,10 +19,10 @@ impl IntegratedCompletionEngine {
         };
         // While editing argv0, complete the alias name itself. In particular,
         // a suffix to the right of the cursor must not trigger expansion.
-        if source.suppressed || source.cursor_word == 0 {
+        if source.suppressed || source.cursor_word <= source.command_word {
             return;
         }
-        let Some(word) = source.words.first() else {
+        let Some(word) = source.words.get(source.command_word) else {
             return;
         };
         // Rewrite only the selected argv0. The argument being edited may have

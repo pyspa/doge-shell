@@ -7,22 +7,24 @@ use super::*;
 impl ContextCorrector<'_> {
     pub(super) fn is_inline_long_option_value(token: &str, options: &[&CommandOption]) -> bool {
         if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options
-                .iter()
-                .any(|option| option.matches_name(option_name) && option.expects_value());
+            return options.iter().any(|option| {
+                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
+                    && option.expects_value()
+            });
         }
         false
     }
 
     pub(super) fn looks_like_known_option(token: &str, options: &[&CommandOption]) -> bool {
         if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options
-                .iter()
-                .any(|option| option.matches_name(option_name));
+            return options.iter().any(|option| {
+                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
+            });
         }
 
-        options.iter().any(|option| option.matches_name(token))
-            || split_attached_short_option_value(token, options).is_some()
+        options.iter().any(|option| {
+            option.matches_name(&super::super::shell_path::decode_literal_word(token))
+        }) || split_attached_short_option_value(token, options).is_some()
     }
 
     pub(super) fn is_redirect_operator(token: &str) -> bool {

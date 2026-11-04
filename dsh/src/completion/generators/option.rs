@@ -43,7 +43,7 @@ impl OptionGenerator {
         let mut already_specified = parsed.specified_options.clone();
         if let Some(pos) = already_specified
             .iter()
-            .position(|opt| opt == &parsed.current_token)
+            .position(|opt| opt == &parsed.completion_query())
         {
             already_specified.remove(pos);
         }
@@ -68,7 +68,7 @@ impl OptionGenerator {
                 };
                 if include_long
                     && let Some(ref long) = option.long
-                    && matcher(&parsed.current_token, long)
+                    && matcher(&parsed.completion_query(), long)
                     && !used(long)
                 {
                     candidates.push(CompletionCandidate::long_option(
@@ -79,7 +79,7 @@ impl OptionGenerator {
 
                 if include_short
                     && let Some(ref short) = option.short
-                    && matcher(&parsed.current_token, short)
+                    && matcher(&parsed.completion_query(), short)
                     && !used(short)
                 {
                     candidates.push(CompletionCandidate::short_option(

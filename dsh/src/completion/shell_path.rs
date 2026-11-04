@@ -277,6 +277,110 @@ fn escape_double_quoted(path: &str) -> String {
     out
 }
 
+/// Tolerant literal quote state; shares decode_literal_word's escape rules.
+pub(crate) fn quote_at_end(raw: &str) -> Option<char> {
+    let mut quote = None;
+    let mut chars = raw.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\'
+            && chars.peek().is_some_and(|next| match quote {
+                Some('\'') => *next == '\'',
+                Some('"') => matches!(next, '$' | '"' | '\\' | '`'),
+                _ => true,
+            })
+        {
+            chars.next();
+        } else if Some(ch) == quote {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        }
+    }
+    quote
+}
+
+/// Decode a selector query with the same inherited quote context as insertion.
+pub(crate) fn query_for_range(input: &str, start: usize, end: usize) -> String {
+    let raw: String = input
+        .chars()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .collect();
+    if input.chars().take(start).last() == Some('=')
+        && let Some(token) = super::shell_token::token_at_char_cursor(
+            input,
+            start,
+            super::shell_token::SeparatorMode::CompletionRange,
+        )
+    {
+        let prefix: String = input
+            .chars()
+            .skip(token.char_start)
+            .take(start - token.char_start)
+            .collect();
+        if let Some(quote) = quote_at_end(&prefix) {
+            return decode_literal_word(&format!("{quote}{raw}"));
+        }
+    }
+    decode_literal_word(&raw)
+}
+
+/// Inline values can start inside a quote opened by their option name, e.g.
+/// `"--mode=al"`. Encode in that original context without inserting another
+/// opening quote. The raw candidate remains the selector's identity.
+pub(crate) fn format_candidates_for_range(
+    candidates: Vec<Candidate>,
+    input: &str,
+    range: crate::completion::integrated::CompletionReplacementRange,
+) -> Vec<Candidate> {
+    use super::shell_token::{self, SeparatorMode};
+    let raw: String = input
+        .chars()
+        .skip(range.start)
+        .take(range.end - range.start)
+        .collect();
+    // Whole-word completion is the hot ghost path; only inline values inherit
+    // quote context from outside their replacement range.
+    if input.chars().take(range.start).last() != Some('=') {
+        return format_candidates_for_token(candidates, Some(&raw));
+    }
+    let token =
+        shell_token::token_at_char_cursor(input, range.start, SeparatorMode::CompletionRange);
+    let prefix: String = token
+        .as_ref()
+        .map(|token| {
+            input
+                .chars()
+                .skip(token.char_start)
+                .take(range.start - token.char_start)
+                .collect()
+        })
+        .unwrap_or_default();
+    let quote = quote_at_end(&prefix);
+    let Some(quote) = quote else {
+        return format_candidates_for_token(candidates, Some(&raw));
+    };
+    let style = format!("{quote}{raw}");
+    format_candidates_for_token(candidates, Some(&style))
+        .into_iter()
+        .map(|candidate| match candidate {
+            Candidate::Prepared {
+                candidate,
+                insertion,
+            } => Candidate::Prepared {
+                candidate,
+                insertion: insertion
+                    .strip_prefix(quote)
+                    .map(str::to_string)
+                    // A trailing backslash needs double quotes in doge's grammar.
+                    // Close the original single quote before switching styles.
+                    .unwrap_or_else(|| format!("{quote}{insertion}")),
+            },
+            other => other,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

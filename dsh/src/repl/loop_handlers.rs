@@ -330,6 +330,7 @@ impl<'a> Repl<'a> {
     }
 
     async fn handle_background_tick(&mut self) -> Result<()> {
+        self.shell.environment.read().ensure_path_ghost_scan();
         self.save_history_periodic();
         self.schedule_command_timing_save();
         self.check_background_jobs(true).await?;
@@ -516,12 +517,14 @@ impl<'a> Repl<'a> {
         });
     }
 
-    fn handle_completion_refresh(&mut self) {
-        if self.input.completion.is_none() && self.refresh_inline_suggestion() {
-            let mut renderer = TerminalRenderer::new();
-            self.print_input(&mut renderer, false, false);
-            renderer.flush().ok();
-        }
+    pub(crate) fn handle_completion_refresh(&mut self) {
+        // A ready PATH (including empty) changes analysis even without a keystroke.
+        // Recompute from current text/history; never accept a stale worker's input.
+        self.ai_ui.last_analyzed_input.clear();
+        self.ai_ui.last_analysis_result = None;
+        let mut renderer = TerminalRenderer::new();
+        self.print_input(&mut renderer, false, true);
+        renderer.flush().ok();
     }
 
     fn handle_ai_event(&mut self, event: AiEvent) {

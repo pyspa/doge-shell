@@ -489,3 +489,6 @@ pub(crate) use render::render_transient_prompt_to;
 mod state_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod path_ghost_tests;

@@ -168,6 +168,9 @@ impl<'a> Repl<'a> {
         let (ai_tx, ai_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_io_tx, background_io_rx) = tokio::sync::mpsc::unbounded_channel();
         let background_io = BackgroundIoCoordinator::new(background_io_tx);
+        envronment
+            .read()
+            .set_path_ghost_notifier(completion_tx.clone());
         let integrated_completion = IntegratedCompletionEngine::new(Arc::clone(&envronment));
         integrated_completion.set_notifier(completion_tx.clone());
         shell.completion_runtime = Some(integrated_completion.runtime());

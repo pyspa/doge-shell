@@ -78,6 +78,13 @@ fn main() {
         return;
     }
     println!("case,fixture_size,iterations_per_sample,samples,median_ns_per_op,p95_ns_per_op");
+    if std::env::args().nth(1).as_deref() == Some("--cached-path-only") {
+        let root = std::env::temp_dir().join(format!("dogesh-cache-bench-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let scratch = Scratch(root);
+        cached_path_cases(&scratch.0);
+        return;
+    }
     for n in [1, 500, 1_000, 10_000] {
         let cache = CompletionCache::new(Duration::from_secs(3600));
         cache.set_scoped(
@@ -129,31 +136,7 @@ fn main() {
     let root = std::env::temp_dir().join(format!("dogesh-cache-bench-{}", std::process::id()));
     fs::create_dir(&root).expect("unique scratch directory");
     let scratch = Scratch(root);
-    for n in [1, 1_000, 10_000] {
-        let dir = scratch.0.join(format!("files-{n}"));
-        fs::create_dir(&dir).unwrap();
-        for i in 0..n {
-            fs::write(dir.join(format!("file{i:06}")), "").unwrap();
-        }
-        for (case, name, expected) in [
-            ("cached_path_first", "file000000".to_string(), true),
-            ("cached_path_last", format!("file{:06}", n - 1), true),
-            ("cached_path_missing", "missing".to_string(), false),
-        ] {
-            let path = dir.join(name);
-            report(
-                case,
-                n,
-                200,
-                || {
-                    black_box(path_completion_path_sync(dir.clone()).unwrap());
-                },
-                || {
-                    assert_eq!(black_box(is_path_cached(black_box(&path))), expected);
-                },
-            );
-        }
-    }
+    cached_path_cases(&scratch.0);
     let mut paths = Vec::new();
     for i in 0..128 {
         let dir = scratch.0.join(format!("bin-{i}"));
@@ -177,6 +160,34 @@ fn main() {
                 .unwrap()
                 .success()
         );
+    }
+}
+
+fn cached_path_cases(root: &std::path::Path) {
+    for n in [1, 100, 1_000, 10_000] {
+        let dir = root.join(format!("files-{n}"));
+        fs::create_dir(&dir).unwrap();
+        for i in 0..n {
+            fs::write(dir.join(format!("file{i:06}")), "").unwrap();
+        }
+        for (case, name, expected) in [
+            ("cached_path_first", "file000000".to_string(), true),
+            ("cached_path_last", format!("file{:06}", n - 1), true),
+            ("cached_path_missing", "missing".to_string(), false),
+        ] {
+            let path = dir.join(name);
+            report(
+                case,
+                n,
+                1_000,
+                || {
+                    black_box(path_completion_path_sync(dir.clone()).unwrap());
+                },
+                || {
+                    assert_eq!(black_box(is_path_cached(black_box(&path))), expected);
+                },
+            );
+        }
     }
 }
 

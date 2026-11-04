@@ -207,3 +207,38 @@ fn relative_cached_membership_matches_listing_spelling() {
         },
     );
 }
+
+#[test]
+fn cached_membership_keeps_cwd_and_request_spelling_separate() {
+    isolated(
+        "cached_membership_keeps_cwd_and_request_spelling_separate",
+        || {
+            use doge_shell::completion::is_path_cached;
+            use std::path::Path;
+            let first = tempfile::tempdir().unwrap();
+            let second = tempfile::tempdir().unwrap();
+            std::fs::write(first.path().join("first"), "").unwrap();
+            std::fs::write(second.path().join("second"), "").unwrap();
+            std::env::set_current_dir(first.path()).unwrap();
+            path_completion_path_sync(PathBuf::from(".")).unwrap();
+            for spelling in ["first", "./first"] {
+                assert!(is_path_cached(Path::new(spelling)));
+            }
+            assert!(
+                !is_path_cached(&first.path().join("first")),
+                "absolute spelling has its own cache key"
+            );
+            std::env::set_current_dir(second.path()).unwrap();
+            assert!(!is_path_cached(Path::new("first")));
+            assert!(
+                !is_path_cached(Path::new("second")),
+                "different cwd is cold"
+            );
+            path_completion_path_sync(PathBuf::from(".")).unwrap();
+            assert!(is_path_cached(Path::new("second")));
+            assert!(!is_path_cached(Path::new("first")));
+            std::env::set_current_dir(first.path()).unwrap();
+            assert!(is_path_cached(Path::new("./first")));
+        },
+    );
+}

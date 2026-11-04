@@ -2,7 +2,7 @@
 //! against the request's cwd and logical HOME before filtering and ranking.
 use crate::completion::command::{CompletionCandidate, CompletionType};
 use crate::completion::shell_path::normalize_path_token;
-use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync};
+use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync_shared};
 use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
@@ -74,9 +74,9 @@ impl FileSystemGenerator {
             || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
             |context| context.lookup_directory(&dir_path, home_expansion),
         );
-        let listing = path_completion_path_sync(lookup_dir).unwrap_or_default();
+        let listing = path_completion_path_sync_shared(lookup_dir).unwrap_or_default();
 
-        for cand in listing {
+        for cand in listing.iter() {
             let Candidate::Path(path_str) = cand else {
                 continue;
             };
@@ -145,9 +145,9 @@ impl FileSystemGenerator {
             || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
             |context| context.lookup_directory(&dir_path, home_expansion),
         );
-        let listing = path_completion_path_sync(lookup_dir).unwrap_or_default();
+        let listing = path_completion_path_sync_shared(lookup_dir).unwrap_or_default();
 
-        for cand in listing {
+        for cand in listing.iter() {
             let Candidate::Path(path_str) = cand else {
                 continue;
             };

@@ -36,6 +36,7 @@ struct AiBackendInner {
     state: ParkingMutex<AiBackendState>,
     settings: AiBackendSettings,
     notify: Notify,
+    completion_notifier: RwLock<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
     /// `AI_CHAT_MODEL`/`OPENAI_MODEL`, shared with the shell's `Environment`.
     /// Same slot `LiveAiService` reads, so `chat_model` reaches ghost text too
     /// instead of staying pinned to the model resolved when this backend was
@@ -94,6 +95,10 @@ impl AiSuggestionBackend {
         Self::with_settings(client_slot, chat_model, AiBackendSettings::default())
     }
 
+    pub(crate) fn set_completion_notifier(&self, sender: tokio::sync::mpsc::UnboundedSender<()>) {
+        *self.inner.completion_notifier.write() = Some(sender);
+    }
+
     fn with_settings(
         client_slot: Arc<RwLock<Option<Arc<ChatGptClient>>>>,
         chat_model: Arc<RwLock<Option<String>>>,
@@ -104,6 +109,7 @@ impl AiSuggestionBackend {
             state: ParkingMutex::new(AiBackendState::default()),
             settings,
             notify: Notify::new(),
+            completion_notifier: RwLock::new(None),
             chat_model,
         });
         let backend = Self {
@@ -244,6 +250,7 @@ impl AiSuggestionBackend {
     ) {
         debug!(input = %request.input, "ai suggestion backend completed request");
         let mut state = self.inner.state.lock();
+        let mut ready = false;
 
         if let Some(content) = completion
             && scope == self.cache_scope()
@@ -266,6 +273,7 @@ impl AiSuggestionBackend {
                     debug!("ai suggestion backend stored new context completion");
                 }
             } else {
+                ready = content.starts_with(&request.input) && content.len() > request.input.len();
                 state.cached = Some(AiCachedSuggestion {
                     completion: content,
                     received_at: Instant::now(),
@@ -281,6 +289,12 @@ impl AiSuggestionBackend {
             self.inner.notify.notify_one();
         } else {
             state.inflight = false;
+        }
+        drop(state);
+        // Publish only useful accepted results. Failed, stale or unchanged
+        // responses must not trigger an immediate refresh/retry feedback loop.
+        if ready && let Some(sender) = self.inner.completion_notifier.read().as_ref() {
+            let _ = sender.send(());
         }
     }
 
@@ -471,6 +485,74 @@ fn extract_ai_message_content(response: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn completion_notifies_only_for_useful_current_results() {
+        for (content, scope, model, expected) in [
+            (Some("git status"), "unavailable", None, true),
+            (Some("git"), "unavailable", None, false),
+            (Some("echo wrong"), "unavailable", None, false),
+            (None, "unavailable", None, false),
+            (Some("git status"), "stale-scope", None, false),
+            (Some("git status"), "unavailable", Some("old-model"), false),
+        ] {
+            let backend =
+                AiSuggestionBackend::new(Arc::new(RwLock::new(None)), Arc::new(RwLock::new(None)));
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            backend.set_completion_notifier(tx);
+            backend.inner.state.lock().inflight = true;
+            let request = SuggestionRequest::new(
+                "git".into(),
+                3,
+                InputPreferences::default(),
+                Vec::new(),
+                None,
+                Arc::new(Vec::new()),
+                None,
+            );
+            backend.handle_completion(
+                request,
+                content.map(str::to_owned),
+                scope.into(),
+                model.map(str::to_owned),
+            );
+            assert_eq!(
+                rx.try_recv().is_ok(),
+                expected,
+                "{content:?} {scope} {model:?}"
+            );
+            assert!(!backend.inner.state.lock().inflight);
+            assert!(
+                rx.try_recv().is_err(),
+                "one result must cause at most one refresh"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_tolerates_a_closed_repl_and_keeps_cached_result() {
+        let backend =
+            AiSuggestionBackend::new(Arc::new(RwLock::new(None)), Arc::new(RwLock::new(None)));
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        backend.set_completion_notifier(tx);
+        drop(rx);
+        let request = SuggestionRequest::new(
+            "git".into(),
+            3,
+            InputPreferences::default(),
+            Vec::new(),
+            None,
+            Arc::new(Vec::new()),
+            None,
+        );
+        backend.handle_completion(
+            request.clone(),
+            Some("git status".into()),
+            backend.cache_scope(),
+            None,
+        );
+        assert_eq!(backend.try_cached(&request).as_deref(), Some("git status"));
+    }
 
     /// A `chat_model` switch must not keep serving the previous model's
     /// cached completion for up to the TTL: the cache key used to be

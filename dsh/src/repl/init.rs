@@ -124,7 +124,8 @@ impl<'a> Repl<'a> {
         // later (or removed later) takes effect without a restart.
         // Availability checks must read `ai_configured()` (or the slot via
         // `get_ai_service`), never `ai_service.is_some()`.
-        let (ai_backend, shared_client) = Self::build_ai_backend(&envronment);
+        let (ai_backend, shared_client) =
+            Self::build_ai_backend(&envronment, completion_tx.clone());
         suggestion_manager.engine.set_ai_backend(Some(ai_backend));
 
         // ... (in Repl::new)
@@ -240,6 +241,7 @@ impl<'a> Repl<'a> {
 
     fn build_ai_backend(
         environment: &Arc<RwLock<Environment>>,
+        completion_notifier: tokio::sync::mpsc::UnboundedSender<()>,
     ) -> (
         Arc<dyn SuggestionBackend + Send + Sync>,
         crate::ai_features::SharedChatClient,
@@ -250,6 +252,7 @@ impl<'a> Repl<'a> {
             slot.clone(),
             chat_model,
         ));
+        backend.set_completion_notifier(completion_notifier);
         (backend, crate::ai_features::SharedChatClient::new(slot))
     }
 }

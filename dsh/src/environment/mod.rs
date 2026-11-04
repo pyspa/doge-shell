@@ -16,6 +16,7 @@
 
 pub mod child_snapshot;
 mod mcp;
+mod path_ghost;
 mod paths;
 mod preferences;
 mod stage_expansion;
@@ -145,6 +146,7 @@ pub(crate) struct CompletionState {
     pub(crate) input_preferences: InputPreferences,
     pub(crate) command_cache: RwLock<HashMap<String, String>>,
     pub(crate) executable_names: Arc<RwLock<Vec<String>>>,
+    pub(crate) path_ghost: Arc<parking_lot::Mutex<path_ghost::PathGhost>>,
     /// Monotonic logical-PATH activation counter for generation-scoped caches.
     pub(crate) path_generation: u64,
 }
@@ -327,6 +329,7 @@ impl Environment {
                 input_preferences: InputPreferences::default(),
                 command_cache: RwLock::new(HashMap::new()),
                 executable_names: Arc::new(RwLock::new(Vec::new())),
+                path_ghost: Arc::new(parking_lot::Mutex::new(path_ghost::PathGhost::default())),
                 path_generation: 0,
             },
             dir_stack: Vec::new(),
@@ -414,6 +417,7 @@ impl Environment {
                     input_preferences: parent.completion_state.input_preferences,
                     command_cache: RwLock::new(HashMap::new()),
                     executable_names: Arc::new(RwLock::new(Vec::new())),
+                    path_ghost: Arc::new(parking_lot::Mutex::new(path_ghost::PathGhost::default())),
                     path_generation: 0,
                 },
             )
@@ -536,28 +540,81 @@ fn ensure_test_data_dir() {
 /// Collect executable names from the given PATH directories.
 /// This is a standalone function to allow calling from a background thread.
 pub fn collect_executables(paths: &[String]) -> Vec<String> {
-    use std::fs::read_dir;
+    scan_executables(paths, false).unwrap_or_default()
+}
+pub(crate) fn collect_executables_checked(paths: &[String]) -> Result<Vec<String>> {
+    scan_executables(paths, true)
+}
+#[derive(Debug)]
+struct ExecutableScanFailure {
+    names: Vec<String>,
+    error: std::io::Error,
+}
+impl std::fmt::Display for ExecutableScanFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+impl std::error::Error for ExecutableScanFailure {}
+fn scan_part<T>(
+    result: std::io::Result<T>,
+    strict: bool,
+    failure: &mut Option<std::io::Error>,
+) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            if strict
+                && failure.is_none()
+                && !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                )
+            {
+                *failure = Some(error);
+            }
+            None
+        }
+    }
+}
+fn scan_executables(paths: &[String], strict: bool) -> Result<Vec<String>> {
     use std::os::unix::fs::PermissionsExt;
-
     let mut names = HashSet::new();
+    let mut failure = None;
     for path in paths {
-        if let Ok(entries) = read_dir(path) {
-            for entry in entries.flatten() {
-                if let Ok(ft) = entry.file_type()
-                    && (ft.is_file() || ft.is_symlink())
-                    && let Ok(meta) = entry.metadata()
-                    && meta.permissions().mode() & 0o111 != 0
-                    && let Some(name) = entry.file_name().to_str()
-                {
-                    names.insert(name.to_string());
-                }
+        let Some(entries) = scan_part(std::fs::read_dir(path), strict, &mut failure) else {
+            continue;
+        };
+        for entry in entries {
+            let Some(entry) = scan_part(entry, strict, &mut failure) else {
+                continue;
+            };
+            let Some(ft) = scan_part(entry.file_type(), strict, &mut failure) else {
+                continue;
+            };
+            if !(ft.is_file() || ft.is_symlink()) {
+                continue;
+            }
+            let Some(meta) = scan_part(entry.metadata(), strict, &mut failure) else {
+                continue;
+            };
+            if meta.permissions().mode() & 0o111 != 0
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.insert(name.to_string());
             }
         }
     }
-
     let mut sorted: Vec<String> = names.into_iter().collect();
     sorted.sort();
-    sorted
+    match failure {
+        Some(error) => Err(ExecutableScanFailure {
+            names: sorted,
+            error,
+        }
+        .into()),
+        None => Ok(sorted),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

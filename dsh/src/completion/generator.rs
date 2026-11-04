@@ -7,10 +7,12 @@ use super::generators::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::parser::{CompletionContext, ParsedCommandLine};
 use anyhow::Result;
 
+#[cfg(test)]
+pub(crate) use super::generators::system::publish_system_command_scan;
 pub(crate) use super::generators::system::{
-    SystemCommandCacheTicket, activate_system_command_cache, begin_background_system_command_scan,
-    publish_cached_system_commands, publish_environment_executable_names,
-    publish_system_command_scan, release_system_command_scan, system_command_scan_is_current,
+    SystemCommandCacheTicket, SystemCommandScanTicket, activate_system_command_cache,
+    begin_background_system_command_scan, publish_cached_system_commands,
+    publish_system_command_scan_if, release_system_command_scan, system_command_scan_is_current,
 };
 
 /// Completion candidate generator.

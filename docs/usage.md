@@ -553,6 +553,18 @@ duration shown are those of that last run.
 
 Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 
+### Completion Selection
+
+In the inline completion chooser, Home/End select the first/last displayed
+candidate and PageUp/PageDown move by a screen-sized step. Shift-Tab moves
+backward. Esc or Ctrl-C closes the chooser without starting another completion
+source. Pasting or using an editing shortcut such as Ctrl-A closes the chooser
+and applies that original input to the command line.
+
+Command-backed Lisp completions use the shell's exported environment and current
+directory, with a 1.5-second timeout and a 1 MiB stdout limit. While waiting,
+Esc/Ctrl-C cancels the helper; other input cancels it and returns to normal editing.
+
 ### Fish Completion Fallback
 
 TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is available in `PATH`. Leave `DOGESH_COMPLETION_FISH_FALLBACK` unset for auto mode, set it to `1`, `true`, `yes`, or `on` to force it on, or set it to `0`, `false`, `no`, or `off` to disable it. This fallback runs with a timeout, is cached with other external completion results, and is merged below built-in JSON and project-aware dynamic candidates.
@@ -560,6 +572,14 @@ TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is av
 Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents. Additional providers cover 1Password (`op item get/edit/delete`), Vagrant installed boxes (`vagrant box remove/repackage`, `vagrant init`), and `.envrc` files plus their containing directories discovered from the working directory chain for `direnv allow/deny/edit`.
 
 Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, SELinux modules and booleans, wireless devices, device subsystems, and the login shells listed in `/etc/shells`. Arch Linux definitions cover `yay`, `paru`, `paccache`, `pacdiff`, `pactree`, `pacman-conf`, `pacman-key`, `pkgctl`, repository database tools, devtools chroot commands, `namcap`, and `snapper`. `yay` and `paru` deliberately reuse only the local pacman databases: sync operations complete repository packages, removal operations complete installed packages, and completion never performs an AUR network search. Snapper configurations and snapshots, pacman repositories, and mkinitcpio presets are discovered with read-only local probes. A `systemctl.unit` provider scope narrows candidates to a single unit type, so `systemd-run --slice` offers slices rather than every unit. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
+
+Custom JSON `Script` completion templates receive `COMMAND`, `CURRENT_TOKEN`,
+`SUBCOMMAND`, and `ARG_0`, `ARG_1`, etc. as environment variables in `/bin/sh`.
+Use `"$ARG_0"` or `"$CURRENT_TOKEN"` to preserve spaces and wildcard characters.
+Single quotes (for example, `'$ARG_0'`) produce literal text. This replaces the
+older textual placeholder substitution: templates that depended on expansion
+inside single quotes must switch to double quotes. Values retain their source
+spelling and are never inserted into the template as executable shell code.
 
 Developer toolchains are covered as well: `rustup` components and targets, crates installed with `cargo install`, `cargo` test and bench targets, `cargo nextest`, `cargo watch`, `sccache`, `bacon`, Jujutsu (`jj`), PDM, Pipenv, Pyright, Biome, golangci-lint, GoReleaser, Delve, Meson, watchexec, and ghq, in addition to the existing language and editor tools. Dynamic candidates include Jujutsu bookmarks, revisions, and workspaces; Meson targets; golangci-lint linters; ghq repositories; and scripts or jobs declared by bacon, PDM, and Pipenv. Definitions that live in project files — `bacon.toml` jobs, `pyproject.toml` PDM scripts, `Pipfile` scripts, `noxfile.py` sessions, `tox` environments, `hatch` environments, `pre-commit` hook ids, and `just` recipes and `make` targets through the shared project task provider — are parsed directly, so completion never imports or evaluates project code. Local CLI probes use a one-second cache and two-second error backoff; missing tools, permission failures, timeouts, and malformed output safely produce no dynamic candidates.
 

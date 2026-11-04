@@ -194,7 +194,11 @@ impl<'a> Repl<'a> {
                             }))
                         })));
                     }
+                    completion_lib::CompletionSelection::Event(event) => {
+                        return Ok(ReplControlFlow::ReplayInput(event));
+                    }
                     completion_lib::CompletionSelection::None
+                    | completion_lib::CompletionSelection::Cancelled
                     | crate::completion::CompletionSelection::Input(_) => {
                         return Ok(ReplControlFlow::Continue);
                     }

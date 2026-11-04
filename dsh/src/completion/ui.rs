@@ -1,3 +1,6 @@
+//! Inline completion interaction and terminal event interpretation.
+//! Candidate navigation stays in the chooser; editor events retain their
+//! modifiers and paste payload when returned to the normal REPL dispatcher.
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use tracing::debug;
@@ -38,6 +41,7 @@ impl CompletionEventSource for TerminalEventSource {
 pub enum CompletionOutcome {
     Submitted(String),
     Input(String),
+    Event(Event),
     Cancelled,
     NoSelection,
 }
@@ -119,6 +123,10 @@ where
                     debug!("Completion cancelled by user");
                     return Ok(CompletionOutcome::Cancelled);
                 }
+                InteractionCommand::Replay => {
+                    ui.clear()?;
+                    return Ok(CompletionOutcome::Event(event));
+                }
                 InteractionCommand::Noop => {}
             }
         }
@@ -138,37 +146,41 @@ enum InteractionCommand {
     Submit,
     Input(char),
     Cancel,
+    Replay,
     Noop,
 }
 
 fn interpret_event(event: &Event) -> InteractionCommand {
     match event {
         Event::Key(key) => {
-            if key.kind != event::KeyEventKind::Press {
+            if key.kind == event::KeyEventKind::Release {
                 return InteractionCommand::Noop;
             }
 
             match (key.code, key.modifiers) {
-                (KeyCode::Up, _) => InteractionCommand::MoveUp,
-                (KeyCode::Down, _) => InteractionCommand::MoveDown,
-                (KeyCode::Left, _) => InteractionCommand::MoveLeft,
-                (KeyCode::Right, _) | (KeyCode::Tab, KeyModifiers::NONE) => {
+                (KeyCode::Up, KeyModifiers::NONE) => InteractionCommand::MoveUp,
+                (KeyCode::Down, KeyModifiers::NONE) => InteractionCommand::MoveDown,
+                (KeyCode::Left, KeyModifiers::NONE) | (KeyCode::BackTab, _) => {
+                    InteractionCommand::MoveLeft
+                }
+                (KeyCode::Right, KeyModifiers::NONE) | (KeyCode::Tab, KeyModifiers::NONE) => {
                     InteractionCommand::MoveRight
                 }
-                (KeyCode::PageUp, _) => InteractionCommand::MovePageUp,
-                (KeyCode::PageDown, _) => InteractionCommand::MovePageDown,
-                (KeyCode::Home, _) => InteractionCommand::MoveHome,
-                (KeyCode::End, _) => InteractionCommand::MoveEnd,
-                (KeyCode::Enter, _) => InteractionCommand::Submit,
+                (KeyCode::PageUp, KeyModifiers::NONE) => InteractionCommand::MovePageUp,
+                (KeyCode::PageDown, KeyModifiers::NONE) => InteractionCommand::MovePageDown,
+                (KeyCode::Home, KeyModifiers::NONE) => InteractionCommand::MoveHome,
+                (KeyCode::End, KeyModifiers::NONE) => InteractionCommand::MoveEnd,
+                (KeyCode::Enter, KeyModifiers::NONE) => InteractionCommand::Submit,
                 (KeyCode::Esc, _)
-                | (KeyCode::Backspace, _)
                 | (KeyCode::Char('c'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('g'), KeyModifiers::CONTROL)
-                | (KeyCode::Char('q'), KeyModifiers::NONE) => InteractionCommand::Cancel,
-                (KeyCode::Char(ch), _) => InteractionCommand::Input(ch),
-                _ => InteractionCommand::Noop,
+                | (KeyCode::Char('g'), KeyModifiers::CONTROL) => InteractionCommand::Cancel,
+                (KeyCode::Char(ch), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                    InteractionCommand::Input(ch)
+                }
+                _ => InteractionCommand::Replay,
             }
         }
+        Event::Paste(_) | Event::Resize(..) => InteractionCommand::Replay,
         _ => InteractionCommand::Noop,
     }
 }
@@ -321,6 +333,34 @@ mod tests {
         assert_eq!(outcome, CompletionOutcome::Cancelled);
         assert_eq!(ui.clear_calls, 1);
         assert_eq!(ui.refresh_calls, 0);
+    }
+
+    #[test]
+    fn paste_and_modified_edit_keys_are_not_dropped_or_inserted_as_text() {
+        for event in [
+            Event::Paste("pine".into()),
+            ctrl('a'),
+            key(KeyCode::Backspace),
+            Event::Resize(80, 24),
+        ] {
+            let mut ui = MockUi::default();
+            let mut controller =
+                CompletionInteraction::new(TestEventSource::new(vec![event.clone()]));
+            let outcome = controller.run(&mut ui).unwrap();
+            assert_eq!(outcome, CompletionOutcome::Event(event.clone()));
+            assert_eq!(
+                crate::completion::framework::inline_selection(outcome),
+                crate::completion::framework::CompletionSelection::Event(event)
+            );
+        }
+    }
+
+    #[test]
+    fn cancellation_remains_distinct_from_no_candidates() {
+        assert_ne!(
+            crate::completion::framework::inline_selection(CompletionOutcome::Cancelled),
+            crate::completion::framework::CompletionSelection::None,
+        );
     }
 
     #[test]

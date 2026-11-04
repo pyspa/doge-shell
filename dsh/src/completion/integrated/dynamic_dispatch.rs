@@ -21,11 +21,8 @@ impl IntegratedCompletionEngine {
             let Some(inner) = self.unwrap_command_with_args_once(&current) else {
                 break;
             };
-            // Each unwrap must consume the wrapper's own tokens. Bail out rather
-            // than spin if a malformed definition ever breaks that.
-            if inner.raw_args.len() >= current.raw_args.len() {
-                break;
-            }
+            // unwrap_command_with_args_once checks source progress before
+            // aliases can add the wrapped command's fixed arguments.
             current = Cow::Owned(inner);
         }
 

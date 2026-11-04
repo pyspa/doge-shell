@@ -34,7 +34,9 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
 /// Command line parsing result for dynamic completion
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommandLine {
-    /// Original invocation source and cursor identity, retained through correction.
+    /// Invocation source used for completion semantics, including fixed alias
+    /// arguments after normalization. Public provider/insertion coordinates
+    /// continue to use the original request.
     pub source: Option<CommandSource>,
     /// Main command name
     pub command: String,

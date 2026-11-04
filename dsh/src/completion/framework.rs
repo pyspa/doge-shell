@@ -50,6 +50,9 @@ pub enum CompletionSelection {
     /// Printable source typed while the Inline chooser is open. This is an
     /// editor insertion at the current cursor, never a candidate replacement.
     Input(String),
+    /// Resume the normal editor with the original key/paste/resize event.
+    Event(crossterm::event::Event),
+    Cancelled,
     None,
     Interactive(Vec<Candidate>, Option<String>),
 }
@@ -93,7 +96,10 @@ pub(crate) fn inline_selection(outcome: CompletionOutcome) -> CompletionSelectio
     match outcome {
         CompletionOutcome::Submitted(value) => CompletionSelection::Selected(value),
         CompletionOutcome::Input(value) => CompletionSelection::Input(value),
-        CompletionOutcome::Cancelled | CompletionOutcome::NoSelection => CompletionSelection::None,
+        CompletionOutcome::Event(event) => CompletionSelection::Event(event),
+        CompletionOutcome::Cancelled | CompletionOutcome::NoSelection => {
+            CompletionSelection::Cancelled
+        }
     }
 }
 

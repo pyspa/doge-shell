@@ -58,6 +58,7 @@ enum DrainStatus {
     WouldBlock,
     DeadlineReached,
     OutputLimitExceeded,
+    Cancelled,
 }
 
 pub(crate) fn command(program: &str) -> Command {
@@ -97,15 +98,35 @@ pub(crate) fn shell_command(command_template: &str) -> Command {
 }
 
 pub(crate) fn collect_stdout_outcome(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
 ) -> Result<CollectStdoutOutcome> {
+    collect_stdout_outcome_cancellable(command, timeout, &|| false)?
+        .ok_or_else(|| anyhow::anyhow!("uncancellable completion helper was cancelled"))
+}
+
+/// `None` means cancellation, never a successful empty candidate set. The
+/// cancellation predicate must be cheap; it also runs between stdout reads.
+pub(crate) fn collect_stdout_outcome_cancellable(
+    mut command: Command,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<CollectStdoutOutcome>> {
+    if cancelled() {
+        return Ok(None);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = command.spawn()?;
-    wait_and_collect_stdout(&mut child, timeout)
+    let result = wait_and_collect_stdout(&mut child, timeout, cancelled);
+    if result.is_err() {
+        // Setup/read/wait errors must not detach the helper or its descendants.
+        terminate_child(&mut child);
+        let _ = child.wait();
+    }
+    result
 }
 
 /// Explicitly lossy compatibility wrapper: timeout, output-limit exhaustion
@@ -121,7 +142,11 @@ pub(crate) fn collect_stdout_or_empty(command: Command, timeout: Duration) -> Re
     }
 }
 
-fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<CollectStdoutOutcome> {
+fn wait_and_collect_stdout(
+    child: &mut Child,
+    timeout: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<CollectStdoutOutcome>> {
     let mut stdout = child
         .stdout
         .take()
@@ -133,68 +158,63 @@ fn wait_and_collect_stdout(child: &mut Child, timeout: Duration) -> Result<Colle
     let mut output = Vec::new();
 
     loop {
-        match drain_available_stdout(&mut stdout, &mut output, deadline)? {
+        match drain_available_stdout(&mut stdout, &mut output, deadline, cancelled)? {
+            DrainStatus::Cancelled => {
+                terminate_child(child);
+                let _ = child.wait();
+                return Ok(None);
+            }
             DrainStatus::DeadlineReached => {
                 terminate_child(child);
                 let _ = child.wait();
-                return Ok(CollectStdoutOutcome::TimedOut { timeout });
+                return Ok(Some(CollectStdoutOutcome::TimedOut { timeout }));
             }
             DrainStatus::OutputLimitExceeded => {
                 terminate_child(child);
                 let _ = child.wait();
-                return Ok(CollectStdoutOutcome::OutputLimitExceeded {
+                return Ok(Some(CollectStdoutOutcome::OutputLimitExceeded {
                     limit: MAX_STDOUT_BYTES,
-                });
+                }));
             }
             DrainStatus::Eof | DrainStatus::WouldBlock => {}
         }
 
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
-                if drain_status == DrainStatus::OutputLimitExceeded {
-                    terminate_child(child);
-                    return Ok(CollectStdoutOutcome::OutputLimitExceeded {
-                        limit: MAX_STDOUT_BYTES,
-                    });
-                }
-                if drain_status == DrainStatus::DeadlineReached {
-                    // The child has already exited here; EXIT_DRAIN_GRACE expiry is an
-                    // output-ownership boundary, not a command runtime timeout.
-                    // Typically a background descendant still holds the stdout
-                    // write end open. Clean up descendants, then report whatever
-                    // the canonical child produced as a normal completion.
-                    terminate_child(child);
-                }
-                return if status.success() {
-                    Ok(CollectStdoutOutcome::Completed(String::from_utf8(output)?))
-                } else {
-                    Ok(CollectStdoutOutcome::NonZeroExit { status })
-                };
-            }
-            Ok(None) => {}
-            Err(err) if child_was_reaped(&err) => {
-                let drain_status = drain_stdout_after_exit(&mut stdout, &mut output)?;
-                if drain_status == DrainStatus::OutputLimitExceeded {
-                    terminate_child(child);
-                    return Ok(CollectStdoutOutcome::OutputLimitExceeded {
-                        limit: MAX_STDOUT_BYTES,
-                    });
-                }
-                if drain_status == DrainStatus::DeadlineReached {
-                    // Same output-ownership boundary as above: canonical status is
-                    // unavailable (ECHILD), so report drained output as completed.
-                    terminate_child(child);
-                }
-                return Ok(CollectStdoutOutcome::Completed(String::from_utf8(output)?));
-            }
+        let status = match child.try_wait() {
+            Ok(Some(status)) => Some(Some(status)),
+            Ok(None) => None,
+            Err(err) if child_was_reaped(&err) => Some(None),
             Err(err) => return Err(err.into()),
+        };
+        if let Some(status) = status {
+            let drain_status = drain_stdout_after_exit(&mut stdout, &mut output, cancelled)?;
+            match drain_status {
+                DrainStatus::Cancelled => {
+                    terminate_child(child);
+                    return Ok(None);
+                }
+                DrainStatus::OutputLimitExceeded => {
+                    terminate_child(child);
+                    return Ok(Some(CollectStdoutOutcome::OutputLimitExceeded {
+                        limit: MAX_STDOUT_BYTES,
+                    }));
+                }
+                DrainStatus::DeadlineReached => {
+                    // The canonical child has exited: drain-grace expiry only
+                    // closes descendant ownership, not the command deadline.
+                    terminate_child(child);
+                }
+                DrainStatus::Eof | DrainStatus::WouldBlock => {}
+            }
+            return Ok(Some(match status {
+                Some(status) if !status.success() => CollectStdoutOutcome::NonZeroExit { status },
+                _ => CollectStdoutOutcome::Completed(String::from_utf8(output)?),
+            }));
         }
 
         if started.elapsed() >= timeout {
             terminate_child(child);
             let _ = child.wait();
-            return Ok(CollectStdoutOutcome::TimedOut { timeout });
+            return Ok(Some(CollectStdoutOutcome::TimedOut { timeout }));
         }
 
         let remaining = timeout.saturating_sub(started.elapsed());
@@ -219,11 +239,13 @@ fn child_was_reaped(_err: &io::Error) -> bool {
 fn drain_stdout_after_exit(
     stdout: &mut std::process::ChildStdout,
     output: &mut Vec<u8>,
+    cancelled: &dyn Fn() -> bool,
 ) -> io::Result<DrainStatus> {
     let deadline = Instant::now() + EXIT_DRAIN_GRACE;
     loop {
         let before = output.len();
-        match drain_available_stdout(stdout, output, deadline)? {
+        match drain_available_stdout(stdout, output, deadline, cancelled)? {
+            DrainStatus::Cancelled => return Ok(DrainStatus::Cancelled),
             DrainStatus::Eof => return Ok(DrainStatus::Eof),
             DrainStatus::DeadlineReached => return Ok(DrainStatus::DeadlineReached),
             DrainStatus::OutputLimitExceeded => return Ok(DrainStatus::OutputLimitExceeded),
@@ -242,9 +264,13 @@ fn drain_available_stdout(
     stdout: &mut std::process::ChildStdout,
     output: &mut Vec<u8>,
     deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
 ) -> io::Result<DrainStatus> {
     let mut buf = [0_u8; 8192];
     loop {
+        if cancelled() {
+            return Ok(DrainStatus::Cancelled);
+        }
         if Instant::now() >= deadline {
             return Ok(DrainStatus::DeadlineReached);
         }

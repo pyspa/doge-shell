@@ -301,3 +301,10 @@ fn test_command_prefix_completion_still_uses_environment_first() {
     assert_eq!(suggestion.full, "zz-test-command");
     assert_eq!(suggestion.source, SuggestionSource::Completion);
 }
+
+#[test]
+fn audit_unicode_separator() {
+    for sep in ['\u{3000}', '\u{a0}'] {
+        assert_eq!(trailing_symbol(&format!("echo{sep}mcp-")), "mcp-");
+    }
+}

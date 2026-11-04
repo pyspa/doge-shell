@@ -52,8 +52,11 @@ pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
 }
 
 pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
-    if let Some(comp) = &repl.input.completion.take() {
-        repl.input.reset(comp.to_string());
+    if let Some(comp) = repl.input.completion.take()
+        && comp.starts_with(repl.input.as_str())
+        && comp.len() > repl.input.as_str().len()
+    {
+        repl.input.reset(comp);
     }
     repl.completion_ui.completion.clear();
 }
@@ -221,6 +224,14 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         );
 
         match res {
+            completion::CompletionSelection::Cancelled => {
+                repl.completion_ui.start_completion = true;
+                return Ok(ReplControlFlow::Continue);
+            }
+            completion::CompletionSelection::Event(event) => {
+                repl.completion_ui.start_completion = true;
+                return Ok(ReplControlFlow::ReplayInput(event));
+            }
             completion::CompletionSelection::Selected(val) => {
                 debug!("Completion selected: '{}'", val);
                 if let Some(range) = replacement_range {
@@ -290,6 +301,14 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     // Process the completion result
     let mut completion_handled = false;
     match completion_result {
+        completion::CompletionSelection::Cancelled => {
+            repl.completion_ui.start_completion = true;
+            return Ok(ReplControlFlow::Continue);
+        }
+        completion::CompletionSelection::Event(event) => {
+            repl.completion_ui.start_completion = true;
+            return Ok(ReplControlFlow::ReplayInput(event));
+        }
         completion::CompletionSelection::Selected(val) => {
             debug!("Completion selected: '{}'", val);
             if let Some(range) = replacement_range {

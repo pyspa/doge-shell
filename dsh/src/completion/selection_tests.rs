@@ -1,6 +1,41 @@
 //! Legacy selection contracts and raw/preformatted insertion regressions.
 use super::*;
 
+#[test]
+fn legacy_public_selection_changes_with_working_directory() {
+    let _guard = crate::test_env_lock();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        struct RestoreCwd(std::path::PathBuf);
+        impl Drop for RestoreCwd {
+            fn drop(&mut self) {
+                std::env::set_current_dir(&self.0).unwrap();
+            }
+        }
+        let _restore = RestoreCwd(std::env::current_dir().unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let mut shell = crate::shell::Shell::new(crate::environment::Environment::new_synthetic());
+        let repl = Repl::new(&mut shell);
+        let input = Input::new(crate::input::InputConfig::default());
+        for name in ["apple", "banana"] {
+            let dir = root.path().join(name);
+            std::fs::create_dir(&dir).unwrap();
+            let filename = format!("legacy_public_scope_{name}");
+            std::fs::write(dir.join(&filename), "").unwrap();
+            std::env::set_current_dir(&dir).unwrap();
+            let result = completion_from_current_with_prompt(
+                &input,
+                &repl,
+                Some("legacy_public_scope_"),
+                "",
+                "",
+                CompletionFrameworkKind::Inline,
+            )
+            .await;
+            assert_eq!(result, CompletionSelection::Selected(filename));
+        }
+    });
+}
+
 #[tokio::test]
 async fn legacy_lisp_lists_are_literal_but_direct_strings_are_preformatted() {
     use crate::{completion::AutoComplete, environment::Environment, shell::Shell};
@@ -175,4 +210,200 @@ fn test_get_file_completions_directories_labeled() {
         .any(|c| matches!(c, Candidate::Item(_, desc) if desc == "(file)"));
     assert!(has_dir_label, "Directory should be labeled (directory)");
     assert!(has_file_label, "File should be labeled (file)");
+}
+
+fn legacy_test_snapshot(
+    environment: &crate::environment::Environment,
+    cwd: &Path,
+) -> LegacyCompletionSnapshot {
+    LegacyCompletionSnapshot::from_environment(environment, cwd.to_path_buf())
+}
+
+fn legacy_candidate_names(data: CurrentCompletionData) -> Vec<String> {
+    data.items
+        .into_iter()
+        .map(|item| item.output().into_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn legacy_cache_follows_directory_without_changing_process_cwd() {
+    let root = tempfile::tempdir().unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    std::fs::create_dir(&a).unwrap();
+    std::fs::create_dir(&b).unwrap();
+    std::fs::write(a.join("legacy_apple"), "").unwrap();
+    std::fs::write(b.join("legacy_banana"), "").unwrap();
+    let environment = crate::environment::Environment::new_synthetic();
+    environment
+        .write()
+        .set_shell_var("PATH".into(), String::new());
+    let cache = CompletionCache::new(Duration::from_secs(3));
+    for (cwd, expected) in [
+        (&a, "legacy_apple"),
+        (&b, "legacy_banana"),
+        (&a, "legacy_apple"),
+    ] {
+        let snapshot = legacy_test_snapshot(&environment.read(), cwd);
+        let data = cached_current_context_candidates(&snapshot, "legacy_", &cache)
+            .await
+            .unwrap();
+        assert_eq!(legacy_candidate_names(data), vec![expected]);
+    }
+}
+
+#[tokio::test]
+async fn legacy_cache_follows_logical_home_and_preserves_unset() {
+    let root = tempfile::tempdir().unwrap();
+    let environment = crate::environment::Environment::new_synthetic();
+    let cache = CompletionCache::new(Duration::from_secs(3));
+    for name in ["first", "second"] {
+        let home = root.path().join(name);
+        std::fs::create_dir(&home).unwrap();
+        let filename = format!("legacy_{name}");
+        std::fs::write(home.join(&filename), "").unwrap();
+        environment
+            .write()
+            .set_shell_var("HOME".into(), home.display().to_string());
+        let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+        let data = cached_current_context_candidates(&snapshot, "~/legacy_", &cache)
+            .await
+            .unwrap();
+        assert_eq!(
+            legacy_candidate_names(data),
+            vec![home.join(filename).display().to_string()]
+        );
+    }
+    let literal = root.path().join("~");
+    std::fs::create_dir(&literal).unwrap();
+    std::fs::write(literal.join("legacy_literal"), "").unwrap();
+    environment.write().remove_shell_var("HOME");
+    let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+    let data = cached_current_context_candidates(&snapshot, "~/legacy_", &cache)
+        .await
+        .unwrap();
+    assert_eq!(legacy_candidate_names(data), vec!["~/legacy_literal"]);
+}
+
+#[tokio::test]
+async fn legacy_cache_separates_paths_across_environments_with_equal_generations() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let cache = CompletionCache::new(Duration::from_secs(3));
+    let mut generations = Vec::new();
+    for name in ["first", "second"] {
+        let bin = root.path().join(name);
+        std::fs::create_dir(&bin).unwrap();
+        let filename = format!("legacy_command_{name}");
+        let executable = bin.join(&filename);
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let environment = crate::environment::Environment::new_synthetic();
+        environment
+            .write()
+            .set_shell_var("PATH".into(), bin.display().to_string());
+        environment
+            .write()
+            .set_shell_var("HOME".into(), root.path().display().to_string());
+        let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+        generations.push(snapshot.path_generation);
+        let data = cached_current_context_candidates(&snapshot, "legacy_command_", &cache)
+            .await
+            .unwrap();
+        assert_eq!(legacy_candidate_names(data), vec![filename]);
+        let previous_scope = snapshot.cache_scope();
+        environment
+            .write()
+            .set_shell_var("PATH".into(), bin.display().to_string());
+        assert_ne!(
+            legacy_test_snapshot(&environment.read(), root.path()).cache_scope(),
+            previous_scope
+        );
+    }
+    assert_eq!(generations[0], generations[1]);
+}
+
+#[tokio::test]
+async fn legacy_relative_and_empty_path_entries_use_the_snapshot_cwd() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for executable in [root.path().join("legacy_local"), bin.join("legacy_bin")] {
+        std::fs::write(&executable, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let environment = crate::environment::Environment::new_synthetic();
+    environment
+        .write()
+        .set_shell_var("PATH".into(), ":bin".into());
+    let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+    let data = collect_current_context_candidates(&snapshot, "legacy_")
+        .await
+        .unwrap();
+    for name in ["legacy_local", "legacy_bin"] {
+        assert!(data.items.iter().any(|candidate| {
+            matches!(candidate, Candidate::Item(value, description) if value == name && description == "(command)")
+        }));
+    }
+}
+
+#[tokio::test]
+async fn legacy_cache_hits_keep_the_initial_expiration() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("legacy_deadline"), "").unwrap();
+    let environment = crate::environment::Environment::new_synthetic();
+    environment
+        .write()
+        .set_shell_var("PATH".into(), String::new());
+    let snapshot = legacy_test_snapshot(&environment.read(), root.path());
+    let cache = CompletionCache::new(Duration::from_secs(3));
+    cached_current_context_candidates(&snapshot, "legacy_", &cache)
+        .await
+        .unwrap();
+    let expiration = cache
+        .scoped_expiration(snapshot.cache_scope(), "legacy_")
+        .unwrap();
+    for _ in 0..3 {
+        let data = cached_current_context_candidates(&snapshot, "legacy_", &cache)
+            .await
+            .unwrap();
+        assert_eq!(legacy_candidate_names(data), vec!["legacy_deadline"]);
+        assert_eq!(
+            cache.scoped_expiration(snapshot.cache_scope(), "legacy_"),
+            Some(expiration)
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_lisp_command_uses_the_logical_exported_environment() {
+    use crate::{completion::AutoComplete, environment::Environment, shell::Shell};
+    let environment = Environment::new_synthetic();
+    environment
+        .write()
+        .set_and_export_shell_var("LEGACY_COMPLETION_VALUE".into(), "logical_value".into());
+    let mut shell = Shell::new(environment);
+    let repl = Repl::new(&mut shell);
+    let callbacks = repl
+        .shell
+        .lisp_engine
+        .borrow()
+        .env
+        .borrow()
+        .autocompletion
+        .clone();
+    *callbacks.borrow_mut() = vec![AutoComplete {
+        target: "legacy_probe".into(),
+        cmd: Some("printf '%s' \"$LEGACY_COMPLETION_VALUE\"".into()),
+        func: None,
+        candidates: None,
+    }];
+    let mut input = Input::new(crate::input::InputConfig::default());
+    input.reset("legacy_probe log".into());
+    assert_eq!(
+        input_completion(&input, &repl, Some("log"), Some("log"), "", input.as_str()).await,
+        CompletionSelection::Selected("logical_value".into()),
+    );
 }

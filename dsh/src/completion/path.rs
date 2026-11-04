@@ -212,18 +212,13 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     Ok(Some(format_path_for_token(&candidate, raw_token)))
 }
 
-fn path_is_dir(path: &PathBuf) -> Result<bool> {
-    if let Ok(mut metadata) = path.metadata() {
-        if metadata.is_symlink() {
-            let link = std::fs::read_link(path)?;
-            let relative = link.is_relative();
-            if relative {
-                metadata = path.join(&link).metadata()?;
-            }
-        }
-        Ok(metadata.is_dir())
-    } else {
-        Ok(false)
+fn entry_is_dir(entry: &std::fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) if !file_type.is_symlink() => file_type.is_dir(),
+        // Follow links just as Path::metadata did, including relative links.
+        // A dangling link or inaccessible target stays a
+        // non-directory candidate rather than failing the whole listing.
+        _ => entry.path().is_dir(),
     }
 }
 
@@ -304,18 +299,20 @@ fn path_completion_path_with_context(
 /// Synchronous variant of path_completion_path for explicit user actions (TAB completion).
 /// Always returns results immediately, either from cache or by scanning synchronously.
 pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
-    let request = DirectoryRequest::new(path)?;
+    path_completion_path_sync_shared(path).map(|candidates| candidates.as_ref().clone())
+}
 
-    // Check cache first
+/// Borrow the full listing for internal filtering without copying every path.
+/// Cache hits retain the original expiry and exact request spelling.
+pub(crate) fn path_completion_path_sync_shared(path: PathBuf) -> Result<Arc<Vec<Candidate>>> {
+    let request = DirectoryRequest::new(path)?;
     if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
-        return Ok(candidates.as_ref().clone());
+        return Ok(candidates);
     }
 
-    // Scan synchronously and cache
     let key = request.key.clone();
     let candidates = scan_dir_candidates(request)?;
-    PATH_COMPLETION_CACHE.set(key, candidates.clone());
-    Ok(candidates)
+    Ok(PATH_COMPLETION_CACHE.set_shared(key, candidates))
 }
 
 /// Check if a path exists in the completion cache without triggering a background scan.
@@ -377,11 +374,18 @@ pub(crate) fn is_path_cached_for_shell_token(raw_token: &str) -> bool {
 // Synchronous helper moved out for clarity and reuse in background task
 fn scan_dir_candidates(request: DirectoryRequest) -> Result<Vec<Candidate>> {
     let dir = read_dir(&request.lookup)?;
+    // Reading names does not require search permission. Resolving `.` does:
+    // without it, preserve metadata's error-as-file classification instead of
+    // exposing directory types from dirents that cannot be searched.
+    let searchable = request.lookup.join(".").metadata().is_ok();
     let mut files: Vec<Candidate> = Vec::new();
 
     for entry in dir.flatten() {
-        let entry_path = entry.path();
-        let is_dir = path_is_dir(&entry_path)?;
+        let is_dir = if searchable {
+            entry_is_dir(&entry)
+        } else {
+            entry.path().is_dir()
+        };
         let mut path = request
             .display
             .join(entry.file_name())

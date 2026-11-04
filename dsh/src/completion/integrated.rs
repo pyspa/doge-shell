@@ -502,7 +502,7 @@ impl IntegratedCompletionEngine {
 
         if cache_allowed
             && !request.input.is_empty()
-            && let Some(hit) = self.cache.lookup_scoped(cache_scope, request.input)
+            && let Some(hit) = self.cache.lookup_scoped_exact(cache_scope, request.input)
         {
             timing.mark("cache_lookup");
             debug!(
@@ -670,3 +670,6 @@ mod source_identity_tests;
 
 #[cfg(test)]
 mod alias_tests;
+
+#[cfg(test)]
+mod exact_cache_tests;

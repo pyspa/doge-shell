@@ -1,3 +1,4 @@
+//! Candidate snapshots with fixed TTLs; prefix and exact-only lookups remain separate.
 use super::command::CompletionCandidate;
 use super::display::Candidate;
 use super::integrated::EnhancedCandidate;
@@ -209,6 +210,23 @@ impl<T: CacheableCandidate> CompletionCache<T> {
         result
     }
 
+    /// Return only a live snapshot of this exact scoped input.
+    /// Misses never inspect candidate text or copy prefix candidates, and hits
+    /// retain the insertion deadline rather than extending the TTL.
+    pub fn lookup_scoped_exact(&self, scope: u64, input: &str) -> Option<CacheLookup<T>> {
+        let now = Instant::now();
+        let guard = self.scoped_entries.read();
+        let entry = guard.get(&scope)?.get(input)?;
+        if entry.is_expired(now) {
+            return None;
+        }
+        Some(CacheLookup {
+            key: input.to_string(),
+            candidates: entry.candidates.as_ref().clone(),
+            exact: true,
+        })
+    }
+
     pub fn lookup_scoped(&self, scope: u64, input: &str) -> Option<CacheLookup<T>> {
         let now = Instant::now();
         let guard = self.scoped_entries.read();
@@ -394,3 +412,6 @@ mod tests {
         assert_eq!(result.candidates[0].get_display_name(), "abc");
     }
 }
+
+#[cfg(test)]
+mod exact_tests;

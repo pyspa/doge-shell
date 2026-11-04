@@ -90,10 +90,18 @@ impl<T: CacheableCandidate> CompletionCache<T> {
     }
 
     pub fn set(&self, key: String, candidates: Vec<T>) {
+        self.set_shared(key, candidates);
+    }
+
+    /// Insert and retain the same buffer even if another thread clears the cache.
+    pub(crate) fn set_shared(&self, key: String, candidates: Vec<T>) -> Arc<Vec<T>> {
         let mut guard = self.entries.write();
         Self::purge_expired_locked(&mut guard);
         debug!("cache set for '{}'. len: {}", key, candidates.len());
-        guard.insert(key, CacheEntry::new(candidates, self.default_ttl));
+        let entry = CacheEntry::new(candidates, self.default_ttl);
+        let candidates = Arc::clone(&entry.candidates);
+        guard.insert(key, entry);
+        candidates
     }
 
     pub fn set_scoped(&self, scope: u64, key: String, candidates: Vec<T>) {

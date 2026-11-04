@@ -204,6 +204,7 @@ impl<'a> Repl<'a> {
         // suggestions but stops a request per character.
         if candidates.is_empty()
             && self.ai_ui.input_preferences.ai_backfill
+            && !self.shell.environment.read().path_ghost_pending()
             && self.ai_ui.last_input_change_time.elapsed() >= AI_BACKFILL_DEBOUNCE
         {
             let (cwd, files) = {

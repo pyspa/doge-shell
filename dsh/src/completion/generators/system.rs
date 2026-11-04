@@ -41,6 +41,9 @@ pub(crate) struct SystemCommandScanTicket {
 }
 
 impl SystemCommandScanTicket {
+    pub(crate) fn order_key(&self) -> (u64, u64) {
+        (self.cache.generation, self.scan_id)
+    }
     pub(crate) fn activation(&self) -> &SystemCommandCacheTicket {
         &self.cache
     }
@@ -277,6 +280,23 @@ pub(crate) fn publish_system_command_scan(
     SYSTEM_COMMAND_CACHE.write().publish_live(ticket, commands)
 }
 
+/// Publish the local projection and global result under the same ownership check.
+/// The callback must be short, contain no I/O and follow state -> projection lock order.
+pub(crate) fn publish_system_command_scan_if(
+    ticket: &SystemCommandScanTicket,
+    commands: BTreeSet<String>,
+    publish_projection: impl FnOnce() -> bool,
+) -> bool {
+    let mut state = SYSTEM_COMMAND_CACHE.write();
+    if !state.is_current(&ticket.cache)
+        || ticket.scan_id <= state.last_published_scan_id
+        || !publish_projection()
+    {
+        return false;
+    }
+    state.publish_live(ticket, commands)
+}
+
 /// Publish a persistent-cache snapshot only before any live scan has started.
 pub(crate) fn publish_cached_system_commands(
     ticket: &SystemCommandCacheTicket,
@@ -296,24 +316,6 @@ pub(crate) fn release_system_command_scan(ticket: &SystemCommandScanTicket) {
 
 pub(crate) fn system_command_scan_is_current(ticket: &SystemCommandScanTicket) -> bool {
     SYSTEM_COMMAND_CACHE.read().is_current(&ticket.cache)
-}
-
-/// Update the environment-local executable-name projection under the same
-/// generation check. The global-state read is intentionally held while taking
-/// the projection lock: PATH activation takes these locks in the same order,
-/// and projection writers must stay short and perform no filesystem I/O.
-pub(crate) fn publish_environment_executable_names(
-    ticket: &SystemCommandCacheTicket,
-    executable_names: &RwLock<Vec<String>>,
-    names: Vec<String>,
-) -> bool {
-    let state = SYSTEM_COMMAND_CACHE.read();
-    if !state.is_current(ticket) {
-        return false;
-    }
-
-    *executable_names.write() = names;
-    true
 }
 
 fn lookup_candidates(

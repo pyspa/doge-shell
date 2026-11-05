@@ -367,6 +367,30 @@ fn failed_spawn_release_allows_retry_without_releasing_a_new_owner() {
 }
 
 #[test]
+fn relative_path_activation_preserves_non_utf8_bytes_without_filesystem_support() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let _guard = crate::test_env_lock();
+    let cwd = PathBuf::from(std::ffi::OsString::from_vec(b"/cwd-\xff".to_vec()));
+    let paths = ["".into(), "bin".into()];
+    let filesystem = super::super::filesystem::FileSystemContext::new(&cwd, None);
+    let activation = activate_system_command_cache_at(&paths, &filesystem);
+    let scan_paths = activation.scan_paths.as_ref().unwrap();
+    assert_eq!(scan_paths[0].as_os_str().as_bytes(), b"/cwd-\xff/");
+    assert_eq!(scan_paths[1].as_os_str().as_bytes(), b"/cwd-\xff/bin");
+    assert_eq!(
+        activation,
+        activate_system_command_cache_at(&paths, &filesystem)
+    );
+
+    let lossy_cwd = PathBuf::from(cwd.to_string_lossy().into_owned());
+    let lossy_activation = activate_system_command_cache_at(
+        &paths,
+        &super::super::filesystem::FileSystemContext::new(&lossy_cwd, None),
+    );
+    assert_ne!(activation, lossy_activation);
+}
+
+#[test]
 fn relative_background_scan_preserves_non_utf8_request_directory() {
     use std::os::unix::ffi::OsStringExt;
     let _guard = crate::test_env_lock();
@@ -374,7 +398,14 @@ fn relative_background_scan_preserves_non_utf8_request_directory() {
     let cwd = root
         .path()
         .join(std::ffi::OsString::from_vec(b"cwd-\xff".to_vec()));
-    fs::create_dir(&cwd).unwrap();
+    if let Err(error) = fs::create_dir(&cwd) {
+        // APFS can reject non-UTF-8 names. Keep the byte-identity contract in
+        // the filesystem-independent test above on every supported platform.
+        if error.raw_os_error() == Some(libc::EILSEQ) {
+            return;
+        }
+        panic!("could not create non-UTF-8 cwd fixture: {error}");
+    }
     fs::create_dir(cwd.join("bin")).unwrap();
     write_executable(&cwd.join("zz-empty-path"));
     write_executable(&cwd.join("bin/zz-relative-path"));

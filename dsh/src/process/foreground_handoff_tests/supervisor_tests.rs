@@ -4,7 +4,7 @@
 //! pipe EOF it signals its OWN group with kill(0), so delivery never resolves a
 //! sampled PID/PGID. The shell worker and external job use separate groups.
 
-use super::pty_pump::{Outcome, PtyPump};
+use super::pty_pump::{Outcome, PtyPump, scratch_pty};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
@@ -213,7 +213,7 @@ impl Drop for Supervisor {
 
 pub(super) fn run_scratch(mode: &str) {
     let root = tempfile::tempdir().unwrap();
-    let pty = nix::pty::openpty(None, None).unwrap();
+    let pty = scratch_pty().unwrap();
     let master = File::from(pty.master);
     let slave = File::from(pty.slave);
     let proof = root.path().join("proof");

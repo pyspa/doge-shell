@@ -114,12 +114,46 @@ pub struct KeyContext {
     pub cursor_at_start: bool,
     /// Next character (for OvertypeClosingBracket)
     pub next_char: Option<char>,
+    /// Matching, unescaped quote closer at the cursor, including continuation input.
+    pub closing_quote: Option<char>,
     /// Is auto-pair enabled
     pub auto_pair: bool,
     /// Is a multi-line continuation in progress (`multiline_buffer` non-empty).
     ///
     /// Ctrl-D must not exit the shell from an empty continuation line.
     pub multiline_active: bool,
+}
+
+/// Overtype only a closing delimiter recognized by the shell grammar.
+/// Nested substitutions have their own quote scopes; a flat quote count cannot
+/// distinguish their closers from literals. Unparsed/incomplete spans retain
+/// the existing insertion policy rather than guessing a closer.
+pub(crate) fn closing_quote_at_cursor(
+    input: &str,
+    cursor: usize,
+    multiline_prefix: &str,
+) -> Option<char> {
+    use crate::parser::{Rule, ShellParser};
+    use pest::Parser;
+    use std::borrow::Cow;
+
+    let (byte_cursor, next) = input.char_indices().nth(cursor)?;
+    let rule = match next {
+        '\'' => Rule::s_quoted,
+        '"' => Rule::d_quoted,
+        _ => return None,
+    };
+    let candidate_end = multiline_prefix.len() + byte_cursor + next.len_utf8();
+    let source = if multiline_prefix.is_empty() {
+        Cow::Borrowed(input)
+    } else {
+        Cow::Owned(format!("{multiline_prefix}{input}"))
+    };
+    ShellParser::parse(Rule::commands, &source)
+        .ok()?
+        .flatten()
+        .any(|pair| pair.as_rule() == rule && pair.as_span().end() == candidate_end)
+        .then_some(next)
 }
 
 /// Determine action from key input (pure function)
@@ -184,6 +218,16 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Space input (Abbreviation expansion check)
         (KeyCode::Char(' '), NONE) => KeyAction::ExpandAbbreviationAndInsertSpace,
 
+        // Quotes are both openers and closers: prefer a real existing closer.
+        (KeyCode::Char(ch), NONE)
+            if ctx.auto_pair
+                && matches!(ch, '\'' | '"')
+                && ctx.next_char == Some(ch)
+                && ctx.closing_quote == Some(ch) =>
+        {
+            KeyAction::OvertypeClosingBracket(ch)
+        }
+
         // Auto-pairing: Open bracket
         (KeyCode::Char(ch), NONE)
             if ctx.auto_pair && matches!(ch, '(' | '{' | '[' | '\'' | '"') =>
@@ -206,11 +250,6 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             } else {
                 KeyAction::InsertChar(ch)
             }
-        }
-
-        // Quote overtype
-        (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, '\'' | '"') => {
-            KeyAction::InsertChar(ch)
         }
 
         // Normal character input

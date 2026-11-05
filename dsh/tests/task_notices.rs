@@ -9,19 +9,21 @@ use std::fs::File;
 
 use std::net::TcpListener;
 
+use std::io::Read;
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 struct Session {
-    child: Child,
+    child: support::OwnedChild,
     master: File,
     output: Vec<u8>,
     reaped: bool,
+    deadline: Instant,
 }
 impl Session {
-    fn new(root: &tempfile::TempDir, endpoint: &str) -> Self {
+    fn new(root: &tempfile::TempDir, endpoint: &str, deadline: Instant) -> Self {
         let pty = openpty(
             Some(&Winsize {
                 ws_row: 40,
@@ -59,17 +61,17 @@ impl Session {
             .stderr(Stdio::from(slave));
         support::nonblocking(&master).unwrap();
         support::phase("session", "spawning post-exec terminal worker");
-        let child = command.spawn().unwrap();
+        let child = support::OwnedChild(command.spawn().unwrap());
         support::phase("session", &format!("spawned PID {}", child.id()));
-        let session = Self {
+        let mut session = Self {
             child,
             master,
             output: Vec::new(),
             reaped: false,
+            deadline,
         };
-        if let Ok(path) = std::env::var("DOGESH_NOTICE_PID_FILE") {
-            std::fs::write(path, session.child.id().to_string()).unwrap();
-        }
+        // The worker cannot isolate until the direct Child owner exists.
+        session.send(b"OWNED\n");
         session
     }
     fn text(&self) -> String {
@@ -80,21 +82,20 @@ impl Session {
         support::write_until(
             &mut self.master,
             bytes,
-            Instant::now() + Duration::from_secs(2),
+            support::phase_deadline(self.deadline, Duration::from_secs(2)),
         )
         .unwrap();
     }
-    fn until(&mut self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(12);
+    fn wait_for(&mut self, text: &str) -> bool {
+        let deadline = support::phase_deadline(self.deadline, Duration::from_secs(12));
         while !self.text().contains(text) && Instant::now() < deadline {
             self.read();
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(
-            self.text().contains(text),
-            "missing {text:?}: {}",
-            self.text()
-        );
+        self.text().contains(text)
+    }
+    fn until(&mut self, text: &str) {
+        assert!(self.wait_for(text), "missing {text:?}: {}", self.text());
     }
     fn read(&mut self) {
         if let Err(error) = support::pump(&mut self.master, &mut self.output) {
@@ -116,22 +117,28 @@ impl Session {
         )
         .ok();
         let (master, output) = (&mut self.master, &mut self.output);
+        let mut drain_error = None;
+        let mut drain = || {
+            if let Err(error) = support::pump(master, output)
+                && error.raw_os_error() != Some(libc::EIO)
+            {
+                drain_error.get_or_insert(error);
+            }
+        };
         self.reaped = support::wait_until(
             &mut self.child,
             Instant::now() + Duration::from_secs(2),
-            || {
-                let _ = support::pump(master, output);
-            },
+            &mut drain,
         )?;
         if !self.reaped {
             support::phase("session", "killing owned terminal child");
-            support::kill_owned(&mut self.child, || {
-                let _ = support::pump(master, output);
-            })?;
+            support::kill_owned(&mut self.child, &mut drain)?;
             self.reaped = true;
         }
-        if let Ok(path) = std::env::var("DOGESH_NOTICE_PID_FILE") {
-            let _ = std::fs::remove_file(path);
+        // Even late output overflow must fail a passing fixture. Reap first,
+        // then report the capture error; Drop never strands an owned child.
+        if let Some(error) = drain_error {
+            return Err(error);
         }
         support::phase("session", "reaped");
         Ok(())
@@ -147,7 +154,15 @@ impl Drop for Session {
 
 #[test]
 fn task_notices_terminal_worker() {
-    if std::env::var_os("DOGESH_NOTICE_TERMINAL").is_none() {
+    let Ok(mode) = std::env::var("DOGESH_NOTICE_TERMINAL") else {
+        return;
+    };
+    support::phase("session", "waiting ownership ACK before isolation");
+    let mut ack = [0; 6];
+    std::io::stdin().read_exact(&mut ack).unwrap();
+    assert_eq!(&ack, b"OWNED\n");
+    support::phase("session", "ownership ACK received");
+    if mode == "probe" {
         return;
     }
     support::phase("session", "post-exec setsid/TIOCSCTTY");
@@ -180,29 +195,13 @@ fn task_notices_stalled_worker() {
 
 #[test]
 fn task_notices_preserve_typed_command_on_real_pty() {
-    if let Ok(mode) = std::env::var("DOGESH_NOTICE_CASE") {
-        run_case(&mode);
-        return;
-    }
     for mode in ["completed", "failed", "approval_waiting"] {
-        let root = tempfile::tempdir().unwrap();
-        let pid_file = root.path().join("owned-terminal-pid");
-        let mut command = Command::new(std::env::current_exe().unwrap());
-        command
-            .args([
-                "--exact",
-                "task_notices_preserve_typed_command_on_real_pty",
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("DOGESH_NOTICE_CASE", mode)
-            .env("DOGESH_NOTICE_PID_FILE", &pid_file);
-        support::supervise(command, Duration::from_secs(30), &pid_file)
-            .unwrap_or_else(|error| panic!("{mode}: {error}"));
+        run_case(mode);
     }
 }
 
 fn run_case(mode: &str) {
+    let case_deadline = Instant::now() + Duration::from_secs(30);
     let root = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -210,11 +209,11 @@ fn run_case(mode: &str) {
     let (ready, requested) = mpsc::channel();
     let (release, released) = mpsc::channel();
     let mode_owned = mode.to_owned();
-    let mut session = Session::new(&root, &endpoint);
+    let mut session = Session::new(&root, &endpoint, case_deadline);
     let server = std::thread::spawn(move || {
         let mode = mode_owned;
         support::phase(&mode, "mock accepting");
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = support::phase_deadline(case_deadline, Duration::from_secs(12));
         let mut socket = loop {
             match listener.accept() {
                 Ok((socket, _)) => break socket,
@@ -229,10 +228,19 @@ fn run_case(mode: &str) {
         };
         support::phase(&mode, "mock reading request");
         socket.set_nonblocking(true).unwrap();
-        support::read_request(&mut socket, Instant::now() + Duration::from_secs(5)).unwrap();
+        support::read_request(
+            &mut socket,
+            support::phase_deadline(case_deadline, Duration::from_secs(5)),
+        )
+        .unwrap();
         ready.send(()).unwrap();
         support::phase(&mode, "mock waiting release");
-        released.recv_timeout(Duration::from_secs(5)).unwrap();
+        released
+            .recv_timeout(
+                support::phase_deadline(case_deadline, Duration::from_secs(5))
+                    .saturating_duration_since(Instant::now()),
+            )
+            .unwrap();
         let (status, body) = if mode == "completed" {
             (
                 "200 OK",
@@ -257,7 +265,7 @@ fn run_case(mode: &str) {
         support::write_until(
             &mut socket,
             response.as_bytes(),
-            Instant::now() + Duration::from_secs(5),
+            support::phase_deadline(case_deadline, Duration::from_secs(5)),
         )
         .unwrap();
     });
@@ -267,7 +275,12 @@ fn run_case(mode: &str) {
     session.send(b"chat_task start --profile read-only -- private-prompt\r");
     session.until(" started; chat_task status/output/cancel");
     support::phase(mode, "waiting provider request");
-    requested.recv_timeout(Duration::from_secs(10)).unwrap();
+    requested
+        .recv_timeout(
+            support::phase_deadline(case_deadline, Duration::from_secs(10))
+                .saturating_duration_since(Instant::now()),
+        )
+        .unwrap();
     support::phase(mode, "typing input");
     session.send(b"printf %s KEEP_TYPED > result");
     session.until("result");
@@ -284,7 +297,7 @@ fn run_case(mode: &str) {
     support::phase(mode, "inserting at preserved cursor");
     session.send(b"echo CURSOR_AFTER; \r");
     support::phase(mode, "waiting result file");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = support::phase_deadline(case_deadline, Duration::from_secs(5));
     while std::fs::read(root.path().join("result")).ok().as_deref() != Some(b"KEEP_TYPED")
         && Instant::now() < deadline
     {
@@ -305,7 +318,7 @@ fn run_case(mode: &str) {
         assert!(!notice.contains("synthetic-provider-key"));
     }
     support::phase(mode, "waiting provider thread exit");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = support::phase_deadline(case_deadline, Duration::from_secs(5));
     while !server.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
@@ -313,4 +326,66 @@ fn run_case(mode: &str) {
     server.join().unwrap();
     session.finish().unwrap();
     support::phase(mode, "scenario finished");
+}
+
+#[test]
+fn task_notices_terminal_waits_for_ownership_before_isolation() {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", "task_notices_terminal_worker", "--nocapture"])
+        .env("DOGESH_NOTICE_TERMINAL", "probe")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = support::OwnedChild(command.spawn().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    support::nonblocking(&stderr).unwrap();
+    let mut output = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !String::from_utf8_lossy(&output).contains("waiting ownership ACK")
+        && Instant::now() < deadline
+    {
+        support::pump(&mut stderr, &mut output).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(String::from_utf8_lossy(&output).contains("waiting ownership ACK"));
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    assert_eq!(
+        nix::unistd::getpgid(Some(pid)).unwrap(),
+        nix::unistd::getpgrp()
+    );
+    assert_eq!(
+        nix::unistd::getsid(Some(pid)).unwrap(),
+        nix::unistd::getsid(None).unwrap()
+    );
+    let mut stdin = child.stdin.take().unwrap();
+    support::nonblocking(&stdin).unwrap();
+    support::write_until(&mut stdin, b"OWNED\n", deadline).unwrap();
+    drop(stdin);
+    assert!(
+        support::wait_until(&mut child, deadline, || {
+            support::pump(&mut stderr, &mut output).unwrap();
+        })
+        .unwrap()
+    );
+    support::pump(&mut stderr, &mut output).unwrap();
+    assert!(child.try_wait().unwrap().unwrap().success());
+    assert!(String::from_utf8_lossy(&output).contains("ownership ACK received"));
+}
+
+#[test]
+fn task_notices_total_case_deadline_bounds_a_missing_phase_and_cleanup() {
+    let root = tempfile::tempdir().unwrap();
+    let mut session = Session::new(
+        &root,
+        "http://127.0.0.1:1",
+        Instant::now() + Duration::from_secs(30),
+    );
+    session.until("\x1b]133;A");
+    let started = Instant::now();
+    session.deadline = started + Duration::from_millis(50);
+    assert!(!session.wait_for("deliberately missing notice"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    session.finish().unwrap();
+    assert!(session.child.try_wait().unwrap().is_some());
 }

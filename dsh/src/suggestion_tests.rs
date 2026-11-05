@@ -39,8 +39,11 @@ fn test_input_preferences_default() {
 /// virtually and always found the trait's default no-op, so a cwd change
 /// never actually warmed the cache. Only a call through the trait object
 /// - not a direct call on the concrete type - can catch that regression.
-#[test]
-fn ai_backend_prefetch_reaches_the_override_through_dyn_dispatch() {
+#[tokio::test(flavor = "current_thread")]
+async fn ai_backend_prefetch_reaches_the_override_through_dyn_dispatch() {
+    // Do not await or yield: the worker must remain unpolled until runtime
+    // teardown drops it. The synchronous pending assertion proves trait
+    // dispatch without sending a network request or racing the worker.
     let client = ChatGptClient::new("test-key".to_string()).unwrap();
     let slot = Arc::new(RwLock::new(Some(Arc::new(client))));
     let backend: Arc<dyn SuggestionBackend + Send + Sync> =

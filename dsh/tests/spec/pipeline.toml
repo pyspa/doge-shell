@@ -1,5 +1,26 @@
 version = 1
 
+# Escaped operator bytes remain ordinary command arguments.
+[[case]]
+id = "pipeline.escaped-operator-literals"
+class = "posix"
+mode = "command"
+script = '''printf '%s\n' \| \|: \&\& \|\|'''
+[case.expect]
+status = 0
+stdout_exact = "|\n|:\n&&\n||\n"
+stderr_exact = ""
+
+[[case]]
+id = "pipeline.escaped-pipe-before-real-pipe"
+class = "posix"
+mode = "command"
+script = '''printf '%s\n' \|| cat'''
+[case.expect]
+status = 0
+stdout_exact = "|\n"
+stderr_exact = ""
+
 # Pipelines: default status is the last stage's; a failing stage never kills
 # its siblings.
 

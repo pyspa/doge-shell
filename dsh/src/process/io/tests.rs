@@ -51,38 +51,59 @@ async fn observe_chunks(chunks: &[&[u8]], real_pty: bool, fail_display: bool) {
         PtyMonitor::new(read_fd.into_raw_fd(), Some(observer.clone())).expect("create monitor");
     let mut writer = Some(std::fs::File::from(write_fd));
     writer.as_mut().unwrap().write_all(chunks[0]).unwrap();
+    let expected = chunks.concat();
+    let expected_text = String::from_utf8_lossy(&expected).into_owned();
+    let (writer_tx, writer_rx) = tokio::sync::oneshot::channel();
+    let mut writer_tx = Some(writer_tx);
+    let close_after_observation = async {
+        if fail_display {
+            // Display callbacks stop after failure. Keep the slave open until
+            // observer text acknowledges the complete final sentinel instead.
+            let writer = writer_rx.await.expect("writer from failed display");
+            while observer.lock().unwrap().snapshot().stdout != expected_text {
+                tokio::task::yield_now().await;
+            }
+            drop(writer);
+        }
+    };
     let mut next = 1;
     let mut displayed = Vec::new();
     let mut reads = 0;
-    let result = tokio::time::timeout(
-        Duration::from_secs(2),
-        monitor.process_output_with(|bytes| {
-            if !bytes.is_empty() {
-                reads += 1;
-            }
-            displayed.extend_from_slice(bytes);
-            if next < chunks.len() {
-                writer.as_mut().unwrap().write_all(chunks[next]).unwrap();
-                next += 1;
-            }
-            if next == chunks.len() {
-                drop(writer.take());
-            }
-            if fail_display {
-                Err(std::io::Error::new(
-                    ErrorKind::BrokenPipe,
-                    "test stdout failure",
-                ))
-            } else {
-                Ok(())
-            }
-        }),
-    )
+    let monitor_output = monitor.process_output_with(|bytes| {
+        if !bytes.is_empty() {
+            reads += 1;
+        }
+        displayed.extend_from_slice(bytes);
+        if next < chunks.len() {
+            writer.as_mut().unwrap().write_all(chunks[next]).unwrap();
+            next += 1;
+        } else {
+            // The final chunk has now been read. Closing immediately after
+            // writing it can discard unread slave output on macOS.
+            drop(writer.take());
+        }
+        if fail_display {
+            writer_tx
+                .take()
+                .unwrap()
+                .send(writer.take().unwrap())
+                .unwrap();
+            Err(std::io::Error::new(
+                ErrorKind::BrokenPipe,
+                "test stdout failure",
+            ))
+        } else {
+            Ok(())
+        }
+    });
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::join!(monitor_output, close_after_observation)
+    })
     .await
-    .expect("drain to EOF");
-    let expected = chunks.concat();
+    .expect("observer acknowledgement and drain to EOF");
     assert_eq!(monitor.captured_output, expected, "raw capture");
     if fail_display {
+        assert_eq!(reads, 1, "display remains disabled after its first failure");
         assert!(
             result
                 .unwrap_err()
@@ -129,6 +150,6 @@ async fn pty_observer_invalid_and_incomplete_eof_actual_reads() {
 #[tokio::test]
 async fn pty_observer_updates_after_display_failure() {
     for real_pty in [false, true] {
-        observe_chunks(&[b"\xe6", b"\x97\xa5\xf0\x9f\x98\x80\xe6"], real_pty, true).await;
+        observe_chunks(&[b"\xe6", b"\x97\xa5\xf0\x9f\x98\x80done"], real_pty, true).await;
     }
 }

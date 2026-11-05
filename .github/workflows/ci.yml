@@ -67,9 +67,18 @@ jobs:
           node-version: 22
 
       - name: Install pinned agent sandbox
-        run: >
-          npm install --global --ignore-scripts
-          @anthropic-ai/sandbox-runtime@0.0.75
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            # The sandbox masks /opt; its helper must live under allowed /usr.
+            sudo "$(command -v node)" "$(command -v npm)" install \
+              --global --prefix /usr/local --ignore-scripts \
+              @anthropic-ai/sandbox-runtime@0.0.75
+            test -x "/usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/$(node -p process.arch)/apply-seccomp"
+            echo "/usr/local/bin" >> "$GITHUB_PATH"
+          else
+            npm install --global --ignore-scripts \
+              @anthropic-ai/sandbox-runtime@0.0.75
+          fi
 
       - name: Install Linux sandbox dependencies
         if: runner.os == 'Linux'
@@ -83,7 +92,7 @@ jobs:
       - name: Agent OS sandbox boundary
         run: >
           cargo test -p dsh-builtin --lib
-          agent::sandbox::tests::real_sandbox -- --ignored
+          agent::sandbox::tests::real_sandbox -- --ignored --nocapture
 
       # Fail fast on a runaway suite: a healthy workspace run takes a few
       # minutes, so hitting this 15-minute step timeout means a regression,

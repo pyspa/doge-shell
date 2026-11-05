@@ -12,6 +12,12 @@ impl SuggestionBackend for CountAi {
 }
 #[test]
 fn path_completion_event_reanalyzes_current_input_without_a_new_key() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "path_completion_event_reanalyzes_current_input_without_a_new_key",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

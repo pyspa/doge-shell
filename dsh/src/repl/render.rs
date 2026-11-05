@@ -418,6 +418,7 @@ pub fn print_input(
         let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
         render_hint_if_room(repl, out, hint.text(), ghost_width);
     } else if auto_fix.is_none()
+        && !ai_pending_now
         && let Some(hint) = path_hint
     {
         // Completion/history suffixes are drawn after the cursor is restored;

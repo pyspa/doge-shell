@@ -504,3 +504,48 @@ fn history_navigation_no_match_keeps_index_stable() {
     assert_eq!(history.forward(), None);
     assert!(history.at_end());
 }
+
+#[test]
+fn picker_metadata_excludes_poison_output_and_bounds_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut history = History::new();
+    history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+    let conn = history.db.as_ref().unwrap().get_connection();
+    conn.execute_batch(
+        "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<5002)
+        INSERT INTO command_events(command, started_at, exit_code, author, output)
+        SELECT 'repeat', x/2, x%2, 'author-' || x, x'fffe' FROM n;",
+    )
+    .unwrap();
+    drop(conn);
+    let events = history.picker_execution_metadata(usize::MAX).unwrap();
+    assert_eq!(events.len(), 5000);
+    assert_eq!(events[0].id, 5002);
+    assert_eq!(events[1].id, 5001);
+    assert_eq!(events[2].id, 5000);
+    assert_eq!(events[0].author, "author-5002");
+    assert!(
+        events
+            .iter()
+            .all(|e| e.command == "repeat" && e.output.is_none())
+    );
+    assert!(history.picker_execution_metadata(0).unwrap().is_empty());
+    assert_eq!(history.picker_execution_metadata(1).unwrap().len(), 1);
+}
+
+#[test]
+fn picker_metadata_empty_and_failed_database_are_reported() {
+    let mut history = History::new();
+    assert!(history.picker_execution_metadata(5000).unwrap().is_empty());
+    let dir = tempfile::tempdir().unwrap();
+    history.db = Some(crate::db::Db::new(dir.path().join("history.db")).unwrap());
+    assert!(history.picker_execution_metadata(5000).unwrap().is_empty());
+    history
+        .db
+        .as_ref()
+        .unwrap()
+        .get_connection()
+        .execute("DROP TABLE command_events", [])
+        .unwrap();
+    assert!(history.picker_execution_metadata(5000).is_err());
+}

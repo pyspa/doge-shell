@@ -8,8 +8,21 @@ use crossterm::{cursor, queue};
 
 pub(crate) async fn handle_force_ai_suggestion(repl: &mut Repl<'_>) {
     let mut renderer = TerminalRenderer::new();
-    queue!(renderer, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
-    renderer.flush().ok();
+    handle_force_ai_suggestion_with_writer(repl, &mut renderer).await;
+}
+
+async fn handle_force_ai_suggestion_with_writer(
+    repl: &mut Repl<'_>,
+    out: &mut impl std::io::Write,
+) {
+    if repl.ai_service().is_none() {
+        let hint = repl.shell.environment.read().ai_readiness_hint();
+        crate::repl::render::print_above_prompt(repl, out, &[hint]);
+        out.flush().ok();
+        return;
+    }
+    queue!(out, Print(" 🤖 Generating...\r"), cursor::Hide).ok();
+    out.flush().ok();
     repl.force_ai_suggestion().await;
 }
 
@@ -218,4 +231,31 @@ pub(crate) async fn handle_ai_diagnose(repl: &mut Repl<'_>) -> Result<()> {
     final_renderer.flush().ok();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unconfigured_ai_notice_redraws_input_without_generating_or_new_prompt() {
+        let env = crate::environment::Environment::new_synthetic();
+        let hint = env.read().ai_readiness_hint();
+        let mut shell = crate::shell::Shell::new(env);
+        let mut repl = Repl::new(&mut shell);
+        repl.terminal_ui.columns = 120;
+        repl.input.reset("echo 日本語 draft".into());
+        repl.input.move_word_left();
+        let cursor = repl.input.cursor();
+        let mut out = Vec::new();
+        handle_force_ai_suggestion_with_writer(&mut repl, &mut out).await;
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains(&hint));
+        assert!(output.contains("draft"));
+        assert!(!output.contains("Generating"));
+        assert!(!output.contains("\x1b]133;A"));
+        assert!(output.contains("\x1b[?25h"), "restore visible cursor");
+        assert_eq!(repl.input.as_str(), "echo 日本語 draft");
+        assert_eq!(repl.input.cursor(), cursor);
+    }
 }

@@ -463,3 +463,42 @@ fn relative_background_scan_preserves_non_utf8_request_directory() {
         vec!["zz-empty-path", "zz-relative-path"]
     );
 }
+
+#[test]
+fn scan_status_distinguishes_empty_success_release_and_partial_publication() {
+    let mut state = SystemCommandCacheState::new();
+    let activation = state.activate_paths(&["/fixture/status".into()]);
+    let scan = state.next_background_scan_ticket(&activation);
+    assert_eq!(state.scan_status().pending, Some(scan.scan_id));
+    assert!(state.publish_live(&scan, BTreeSet::new()));
+    let status = state.scan_status();
+    assert_eq!(status.pending, None);
+    assert_eq!(status.published, scan.scan_id);
+    assert!(status.complete, "empty is a successful publication");
+    let next = state.next_background_scan_ticket(&activation);
+    assert_ne!(next.scan_id, status.latest_scan);
+    state.inflight_scan_id = None;
+    assert_ne!(
+        state.scan_status().published,
+        next.scan_id,
+        "release is not readiness"
+    );
+}
+
+#[test]
+fn scan_status_incomplete_projection_is_not_ready() {
+    let _guard = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let activation = activate_system_command_cache(&[dir.path().display().to_string()]);
+    let scan = begin_background_system_command_scan(&activation);
+    assert!(publish_system_command_scan_if(
+        &scan,
+        command_set(&["partial"]),
+        false,
+        || true
+    ));
+    let status = system_command_scan_status();
+    assert_eq!(status.published, scan.scan_id);
+    assert!(!status.complete);
+    assert_eq!(status.pending, None);
+}

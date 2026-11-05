@@ -237,6 +237,12 @@ fn empty_runtime_paths_do_not_fallback_to_process_environment() {
 
 #[test]
 fn cold_background_scan_returns_before_loader_release_and_coalesces() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "cold_background_scan_returns_before_loader_release_and_coalesces",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let dir = tempdir().unwrap();
     let generator = Arc::new(SystemCommandGenerator::new(&[dir
@@ -318,6 +324,12 @@ fn background_claim_release_and_stale_snapshots_keep_their_owner() {
 
 #[test]
 fn relative_and_empty_paths_are_anchored_before_worker_and_distinguish_cwd() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "relative_and_empty_paths_are_anchored_before_worker_and_distinguish_cwd",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let a = tempdir().unwrap();
     let b = tempdir().unwrap();
@@ -350,6 +362,12 @@ fn relative_and_empty_paths_are_anchored_before_worker_and_distinguish_cwd() {
 
 #[test]
 fn failed_spawn_release_allows_retry_without_releasing_a_new_owner() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "failed_spawn_release_allows_retry_without_releasing_a_new_owner",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let dir = tempdir().unwrap();
     let activation = activate_system_command_cache(&[dir.path().display().to_string()]);
@@ -368,6 +386,12 @@ fn failed_spawn_release_allows_retry_without_releasing_a_new_owner() {
 
 #[test]
 fn relative_path_activation_preserves_non_utf8_bytes_without_filesystem_support() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "relative_path_activation_preserves_non_utf8_bytes_without_filesystem_support",
+    ) {
+        return;
+    }
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
     let _guard = crate::test_env_lock();
     let cwd = PathBuf::from(std::ffi::OsString::from_vec(b"/cwd-\xff".to_vec()));
@@ -392,6 +416,12 @@ fn relative_path_activation_preserves_non_utf8_bytes_without_filesystem_support(
 
 #[test]
 fn relative_background_scan_preserves_non_utf8_request_directory() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "relative_background_scan_preserves_non_utf8_request_directory",
+    ) {
+        return;
+    }
     use std::os::unix::ffi::OsStringExt;
     let _guard = crate::test_env_lock();
     let root = tempdir().unwrap();

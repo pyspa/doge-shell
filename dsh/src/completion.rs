@@ -30,6 +30,8 @@ mod ui;
 #[cfg(test)]
 mod extra_tests;
 #[cfg(test)]
+pub(crate) mod isolation_tests;
+#[cfg(test)]
 mod wrapped_tests;
 #[cfg(test)]
 mod z_tests;

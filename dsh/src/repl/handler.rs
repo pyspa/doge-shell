@@ -152,6 +152,7 @@ pub(crate) async fn handle_key_event(
     repl: &mut Repl<'_>,
     ev: &KeyEvent,
 ) -> Result<ReplControlFlow> {
+    repl.completion_ui.path_feedback.clear();
     // DEBUG: Log all key events to trace the issue
     debug!(
         "KEY_EVENT_RECEIVED: code={:?}, modifiers={:?}, kind={:?}",

@@ -11,10 +11,10 @@
 //! builtin from blocking once it writes more than a pipe buffer.
 
 use dsh_types::Context;
+use nix::fcntl::{FcntlArg, fcntl};
 use nix::libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
-use nix::unistd::dup;
 use std::fs::{File, OpenOptions};
-use std::os::fd::BorrowedFd;
+use std::os::fd::{BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::io::{AsRawFd, RawFd};
 
 /// Exit status for any redirection setup failure, runnable or no-command.
@@ -279,11 +279,21 @@ fn open_redirect_source(
         // why `cmd 2>&1 > f` used to send stderr to the file too.
         RedirectOp::DupFrom(from) => {
             let source = current_slot(ctx, *from);
-            let copy = dup(unsafe { BorrowedFd::borrow_raw(source) }).map_err(|err| {
+            let raw = fcntl(
+                unsafe { BorrowedFd::borrow_raw(source) },
+                // Overwritten snapshots remain in the guard across fork.
+                // Close them at exec; active stdio dup2 copies stay inherited.
+                // Keep snapshots above stdio even when a standard fd is shut:
+                // the child skips dup2(source, target) when they are equal.
+                FcntlArg::F_DUPFD_CLOEXEC(3),
+            )
+            .map_err(|err| {
                 RedirectFailure::new(format!(
                     "failed to duplicate file descriptor {source}: {err}"
                 ))
             })?;
+            // SAFETY: fcntl returned a fresh descriptor owned exactly once.
+            let copy = unsafe { OwnedFd::from_raw_fd(raw) };
             let file = File::from(copy);
             let fd = file.as_raw_fd();
             files.push(file);
@@ -516,3 +526,6 @@ mod tests {
         assert_eq!((ctx.infile, ctx.outfile, ctx.errfile), before);
     }
 }
+
+#[cfg(test)]
+mod exec_tests;

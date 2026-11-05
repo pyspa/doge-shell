@@ -78,44 +78,19 @@ pub async fn run_shell() -> ExitCode {
 
     if run_mode.needs_interactive_services() {
         // Initialize command history (Async)
-        let cmd_history =
-            std::sync::Arc::new(parking_lot::Mutex::new(crate::history::History::new()));
+        let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::history::History::new_for_startup(),
+        ));
         shell.cmd_history = Some(cmd_history.clone());
 
         startup_tasks.push_loader(std::thread::spawn(move || {
             match crate::history::History::from_file("dsh_cmd_history") {
                 Ok(mut history) => {
-                    // Preload recent history (fast, immediate)
-                    let min_timestamp = match history.load_recent(1000) {
-                        Ok(ts) => ts,
-                        Err(e) => {
-                            tracing::warn!("Failed to load recent history items: {}", e);
-                            0
-                        }
-                    };
-                    history.start_background_writer();
-
-                    // Swap shared history immediately so user has something
-                    {
-                        *cmd_history.lock() = history.clone();
-                    }
-
-                    // Load the rest of history in background (slower)
-                    if min_timestamp > 0 {
-                        match history.load_older_than(min_timestamp, 9000) {
-                            Ok(entries) => {
-                                if !entries.is_empty() {
-                                    let mut locked = cmd_history.lock();
-                                    locked.prepend(entries);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to load remaining history: {}", e);
-                            }
-                        }
-                    }
+                    let older = prepare_command_history(&mut history, 1000, 9000);
+                    publish_command_history(&cmd_history, &history, older);
                 }
                 Err(e) => {
+                    fail_command_history_initialization(&cmd_history);
                     tracing::warn!("Failed to load command history: {}", e);
                 }
             }
@@ -554,4 +529,49 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         }
         ExitCode::from(0)
     }
+}
+
+// Publish both prepared baselines under one lock before reload can apply.
+pub(crate) fn publish_command_history(
+    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
+    loaded: &crate::history::History,
+    older: Vec<crate::history::Entry>,
+) {
+    shared.lock().install_startup_history(loaded, older);
+}
+
+/// Read both bounded database baselines before foreground writes can reach the
+/// writer. SQLite work stays on the startup loader, outside the shared lock.
+pub(crate) fn prepare_command_history(
+    history: &mut crate::history::History,
+    recent_limit: usize,
+    older_limit: usize,
+) -> Vec<crate::history::Entry> {
+    let min_timestamp = match history.load_recent(recent_limit) {
+        Ok(timestamp) => timestamp,
+        Err(error) => {
+            tracing::warn!("Failed to load recent history items: {}", error);
+            0
+        }
+    };
+    let older = if min_timestamp > 0 {
+        match history.load_older_than(min_timestamp, older_limit) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!("Failed to load remaining history: {}", error);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    history.start_background_writer();
+    older
+}
+
+// Terminal initialization failure has no retry owner.
+pub(crate) fn fail_command_history_initialization(
+    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
+) {
+    shared.lock().end_startup_initialization();
 }

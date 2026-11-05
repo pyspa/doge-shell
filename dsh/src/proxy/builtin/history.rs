@@ -31,8 +31,17 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
         return Ok(());
     }
 
+    let query = HistoryQuery {
+        text: options.query.clone(),
+        scope: options.scope,
+        status: options.status,
+        min_duration_ms: options.min_duration_ms,
+        limit: Some(options.limit),
+        ..crate::history::query_context(shell.session_id.clone())
+    };
+
     if let Some(author) = options.author.as_deref() {
-        let events = history.command_events(Some(author), options.limit)?;
+        let events = history.search_command_events(Some(author), &query)?;
         if options.json {
             ctx.write_stdout(&serde_json::to_string(&events)?)?;
         } else {
@@ -43,15 +52,6 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
         history.reset_index();
         return Ok(());
     }
-
-    let query = HistoryQuery {
-        text: options.query.clone(),
-        scope: options.scope,
-        status: options.status,
-        min_duration_ms: options.min_duration_ms,
-        limit: Some(options.limit),
-        ..crate::history::query_context(shell.session_id.clone())
-    };
 
     let entries = history.search_entries(&query);
     if options.json {
@@ -370,3 +370,7 @@ mod tests {
         assert!(!output.contains("secret"));
     }
 }
+
+#[cfg(test)]
+#[path = "history/tests_author.rs"]
+mod tests_author;

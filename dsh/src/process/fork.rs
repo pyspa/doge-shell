@@ -142,6 +142,8 @@ pub(crate) fn fork_process(
     // Later pipeline stages receive the existing job PGID.
     let pgid_raw = job_pgid.map(Pid::as_raw).unwrap_or(0);
 
+    #[cfg(test)]
+    let test_child_start_fd = super::foreground_handoff_tests::child_start_gate_fd();
     let pid = match unsafe { fork().context("failed fork") } {
         Ok(pid) => pid,
         Err(err) => {
@@ -180,6 +182,10 @@ pub(crate) fn fork_process(
             Ok((child, monitors, reported_failure || not_found.is_some()))
         }
         ForkResult::Child => {
+            #[cfg(test)]
+            unsafe {
+                super::foreground_handoff_tests::hold_before_setpgid(test_child_start_fd);
+            }
             // The ONLY post-fork logic: raw syscalls, then execve/_exit.
             // No tracing, no anyhow, no allocation, no locks, no
             // `std::process::exit`.

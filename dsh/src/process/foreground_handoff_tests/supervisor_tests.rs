@@ -1,0 +1,484 @@
+//! Scratch-session ownership: two live group leaders and an explicit EOF cleanup.
+//!
+//! Each anchor is a direct child kept unreaped by the supervisor. On control
+//! pipe EOF it signals its OWN group with kill(0), so delivery never resolves a
+//! sampled PID/PGID. The shell worker and external job use separate groups.
+
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
+
+static CLEANUP_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+extern "C" fn request_cleanup(_: i32) {
+    CLEANUP_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+const PREFIX: &str = "process::foreground_handoff_tests::supervisor::";
+
+/// Only direct Child handles are signaled; none has been reaped on this path.
+/// Killing a supervisor closes both anchor controls, killing both owned groups.
+struct OwnedChild(Child);
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            // The isolated supervisor handles TERM as an ordered cleanup
+            // request. Its handler is installed before creating any anchors.
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(self.0.id() as i32),
+                nix::sys::signal::Signal::SIGTERM,
+            );
+            if !observe_until(&self.0, Instant::now() + Duration::from_secs(7)) {
+                let _ = self.0.kill();
+            }
+            let _ = self.0.wait();
+        }
+    }
+}
+
+/// Observe exit without releasing the PID identity held by our direct child.
+fn exited(child: &Child) -> bool {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id() as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+        )
+    };
+    result == 0 && unsafe { info.si_pid() } == child.id() as i32
+}
+
+fn observe_until(child: &Child, deadline: Instant) -> bool {
+    loop {
+        if exited(child) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
+    }
+}
+
+struct Supervisor {
+    worker: Option<Child>,
+    shell_anchor: Option<Child>,
+    job_anchor: Option<Child>,
+    lifetime: Option<File>,
+    cleaned: bool,
+    child_start_writer: Option<std::os::fd::OwnedFd>,
+    drop_proof: Option<std::path::PathBuf>,
+}
+
+struct Cleanup {
+    worker: Option<ExitStatus>,
+    shell_anchor: Option<ExitStatus>,
+    job_anchor: Option<ExitStatus>,
+    lifetime_eof: bool,
+}
+
+impl Supervisor {
+    fn cleanup(&mut self) -> Cleanup {
+        self.cleaned = true;
+        if let Some(worker) = &mut self.worker {
+            if !exited(worker) {
+                let _ = worker.kill();
+            }
+            if !observe_until(worker, Instant::now() + Duration::from_secs(2)) {
+                // No successful cleanup claim or group snapshot while the
+                // spawning worker has not been observed quiescent.
+                return Cleanup {
+                    worker: None,
+                    shell_anchor: None,
+                    job_anchor: None,
+                    lifetime_eof: false,
+                };
+            }
+        }
+        // Child may still be in the shell group before setpgid, or may have
+        // moved to the job group. Quiesce worker spawning first, then signal
+        // shell -> job in that order. BOTH leader PIDs remain unreaped until
+        // after delivery and EOF proof; no identity probe authorizes a signal.
+        for anchor in [&self.shell_anchor, &self.job_anchor].into_iter().flatten() {
+            let _ = nix::sys::signal::killpg(
+                nix::unistd::Pid::from_raw(anchor.id() as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        for child in [&self.worker, &self.shell_anchor, &self.job_anchor]
+            .into_iter()
+            .flatten()
+        {
+            observe_until(child, deadline);
+        }
+        let lifetime_eof = self.lifetime.as_mut().is_none_or(|reader| {
+            let fd = reader.as_raw_fd();
+            drain_to_eof(reader, fd)
+        });
+        fn reap(child: &mut Option<Child>) -> Option<ExitStatus> {
+            child
+                .as_mut()
+                .filter(|child| exited(child))
+                .and_then(|child| child.wait().ok())
+        }
+        Cleanup {
+            worker: reap(&mut self.worker),
+            shell_anchor: reap(&mut self.shell_anchor),
+            job_anchor: reap(&mut self.job_anchor),
+            lifetime_eof,
+        }
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if !self.cleaned {
+            let cleanup = self.cleanup();
+            if cleanup.lifetime_eof
+                && cleanup.worker.is_some()
+                && cleanup
+                    .shell_anchor
+                    .is_some_and(|status| status.signal() == Some(libc::SIGKILL))
+                && cleanup
+                    .job_anchor
+                    .is_some_and(|status| status.signal() == Some(libc::SIGKILL))
+                && let Some(path) = self.drop_proof.take()
+            {
+                let _ = std::fs::write(path, b"ordered-signals+dedicated-eof+reaped");
+            }
+        }
+    }
+}
+
+pub(super) fn run_scratch(mode: &str) {
+    let root = tempfile::tempdir().unwrap();
+    let pty = nix::pty::openpty(None, None).unwrap();
+    let mut master = File::from(pty.master);
+    let slave = File::from(pty.slave);
+    let proof = root.path().join("proof");
+    let log = root.path().join("log");
+    let log_file = File::create(&log).unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            &format!("{PREFIX}scratch_supervisor"),
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", root.path())
+        .env("XDG_CONFIG_HOME", root.path().join("config"))
+        .env("XDG_DATA_HOME", root.path().join("data"))
+        .env("XDG_STATE_HOME", root.path().join("state"))
+        .env("DOGESH_ATUIN_DUAL_WRITE", "0")
+        .env("TERM", "dumb")
+        .env("DSH_HANDOFF_ROLE", "supervisor")
+        .env("DSH_HANDOFF_CASE", mode)
+        .env("DSH_HANDOFF_PROOF", &proof)
+        .env("DSH_HANDOFF_WORKER_PROOF", root.path().join("worker-proof"))
+        .env("DSH_HANDOFF_FAULT_READY", root.path().join("fault-ready"))
+        .current_dir(root.path())
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::from(log_file.try_clone().unwrap()))
+        .stderr(Stdio::from(log_file));
+    let controlling = mode != "no-ctty";
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setsid() < 0
+                || (controlling && libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0)
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut supervisor = OwnedChild(command.spawn().unwrap());
+    master
+        .write_all(&b"foreground-ready\n".repeat(if mode == "fd-budget" { 96 } else { 1 }))
+        .unwrap();
+    let status = if mode == "worker-parent-unwind" {
+        let ready = root.path().join("fault-ready");
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !ready.exists() && Instant::now() < deadline {
+            unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
+        }
+        assert_eq!(std::fs::read(ready).unwrap(), b"forked");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _supervisor = supervisor;
+            panic!("injected outer parent unwind with live worker/raw child");
+        }));
+        assert!(panicked.is_err());
+        None
+    } else {
+        let observed = observe_until(&supervisor.0, Instant::now() + Duration::from_secs(20));
+        let status = observed.then(|| supervisor.0.wait().unwrap());
+        drop(supervisor);
+        status
+    };
+    let output = std::fs::read_to_string(&log).unwrap();
+    eprintln!("{output}");
+    assert!(
+        mode == "worker-parent-unwind" || status.is_some_and(|status| status.success()),
+        "{mode}: {status:?}\n{output}"
+    );
+    assert_eq!(
+        std::fs::read(&proof).unwrap(),
+        b"ok",
+        "supervisor cleanup actually completed"
+    );
+    if mode == "exec-failure" {
+        assert!(output.contains("Permission denied"), "{output}");
+    }
+    if mode == "handoff-abort" {
+        assert!(
+            output.contains("failed foreground terminal handoff"),
+            "{output}"
+        );
+    }
+}
+
+fn spawn_anchor() -> Child {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", &format!("{PREFIX}scratch_anchor"), "--nocapture"])
+        .env("DSH_HANDOFF_ROLE", "anchor")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().unwrap()
+}
+
+#[test]
+fn scratch_anchor() {
+    if std::env::var("DSH_HANDOFF_ROLE").as_deref() != Ok("anchor") {
+        return;
+    }
+    assert_eq!(nix::unistd::getpgrp(), nix::unistd::getpid());
+    // No writer exists in this process. The supervisor's CLOEXEC ChildStdin
+    // is not inherited across worker exec. On EOF, our own membership pins the
+    // signal target through kernel delivery, even if the supervisor died.
+    let mut byte = 0u8;
+    loop {
+        let read = unsafe { libc::read(0, (&mut byte as *mut u8).cast(), 1) };
+        if read < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        break;
+    }
+    unsafe {
+        libc::kill(0, libc::SIGKILL);
+        libc::_exit(99);
+    }
+}
+
+fn drain_to_eof(reader: &mut impl Read, fd: i32) -> bool {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+            return false;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut bytes = [0; 4096];
+    loop {
+        match reader.read(&mut bytes) {
+            Ok(0) => return true,
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(_) => return false,
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
+    }
+}
+
+#[test]
+fn scratch_supervisor() {
+    if std::env::var("DSH_HANDOFF_ROLE").as_deref() != Ok("supervisor") {
+        return;
+    }
+    let mode = std::env::var("DSH_HANDOFF_CASE").unwrap();
+    // Process-local handler in this env-cleared scratch supervisor only.
+    unsafe {
+        libc::signal(
+            libc::SIGTERM,
+            request_cleanup as *const () as libc::sighandler_t,
+        );
+    }
+    // Construct the aggregate owner before each subsequent fallible step, so
+    // supervisor unwind runs the same ordered cleanup as ordinary outcomes.
+    let mut owner = Supervisor {
+        worker: None,
+        shell_anchor: None,
+        job_anchor: Some(spawn_anchor()),
+        lifetime: None,
+        cleaned: false,
+        child_start_writer: None,
+        drop_proof: None,
+    };
+    owner.shell_anchor = Some(spawn_anchor());
+    let job_group = owner.job_anchor.as_ref().unwrap().id() as i32;
+    let shell_group = owner.shell_anchor.as_ref().unwrap().id() as i32;
+    unsafe {
+        libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+    }
+    if mode != "no-ctty" {
+        nix::unistd::tcsetpgrp(
+            unsafe { BorrowedFd::borrow_raw(0) },
+            nix::unistd::Pid::from_raw(shell_group),
+        )
+        .unwrap();
+    }
+    // Dedicated inherited lifetime pipe, created AFTER anchors. It is not a
+    // stdio source, so OutputOnly PTY rewiring cannot close its child writer.
+    let (reader, writer) = super::super::io::cloexec_pipe().unwrap();
+    owner.lifetime = Some(File::from(reader));
+    let lifetime_fd = writer.as_raw_fd();
+    // Fault cases hold the raw child BEFORE its first setpgid. Only this
+    // supervisor owns the writer, retained until ordered group cleanup ends.
+    let child_start_reader = if mode.starts_with("worker-") || mode == "supervisor-panic" {
+        let (reader, writer) = super::super::io::cloexec_pipe().unwrap();
+        owner.child_start_writer = Some(writer);
+        Some(reader)
+    } else {
+        None
+    };
+    let start_fd = child_start_reader.as_ref().map_or(-1, AsRawFd::as_raw_fd);
+    let stdin = unsafe { BorrowedFd::borrow_raw(0) }
+        .try_clone_to_owned()
+        .unwrap();
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "process::foreground_handoff_tests::scratch_session",
+            "--nocapture",
+        ])
+        .env("DSH_HANDOFF_ROLE", "worker")
+        .env("DSH_HANDOFF_SUPERVISOR", std::process::id().to_string())
+        .env("DSH_HANDOFF_JOB_GROUP", job_group.to_string())
+        .env("DSH_HANDOFF_LIFETIME_FD", lifetime_fd.to_string())
+        .env("DSH_HANDOFF_CHILD_START_FD", start_fd.to_string())
+        .stdin(Stdio::from(stdin))
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setpgid(0, shell_group) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if start_fd >= 0 {
+                let flags = libc::fcntl(start_fd, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(start_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            let flags = libc::fcntl(lifetime_fd, libc::F_GETFD);
+            if flags < 0 || libc::fcntl(lifetime_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    owner.worker = Some(command.spawn().unwrap());
+    drop(child_start_reader);
+    drop(writer); // Only worker + its real fork/exec children own writers now.
+    if mode == "supervisor-panic" {
+        let ready = std::path::PathBuf::from(std::env::var_os("DSH_HANDOFF_FAULT_READY").unwrap());
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < deadline {
+            unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
+        }
+        assert_eq!(std::fs::read(&ready).unwrap(), b"forked");
+        let receipt = ready.with_extension("drop-proof");
+        owner.drop_proof = Some(receipt.clone());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _owner = owner;
+            panic!("injected supervisor unwind with live worker and pre-setpgid external child");
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            std::fs::read(receipt).unwrap(),
+            b"ordered-signals+dedicated-eof+reaped"
+        );
+        eprintln!("cleanup case=supervisor-panic Drop: ordered-signals+dedicated-eof+reaped");
+        std::fs::write(std::env::var_os("DSH_HANDOFF_PROOF").unwrap(), b"ok").unwrap();
+        return;
+    }
+    let timeout = if mode == "worker-timeout" {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_secs(12)
+    };
+    let deadline = Instant::now() + timeout;
+    let timed_out = loop {
+        if exited(owner.worker.as_ref().unwrap()) {
+            break false;
+        }
+        if CLEANUP_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) || Instant::now() >= deadline
+        {
+            break true;
+        }
+        unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
+    };
+    let cleanup = owner.cleanup(); // Reaps only AFTER both ordered signals/EOF.
+    eprintln!(
+        "cleanup case={mode} worker={:?} timeout={timed_out} job_anchor={:?} shell_anchor={:?} dedicated_lifetime_eof={}",
+        cleanup.worker, cleanup.job_anchor, cleanup.shell_anchor, cleanup.lifetime_eof
+    );
+    assert!(
+        cleanup
+            .job_anchor
+            .is_some_and(|status| status.signal() == Some(libc::SIGKILL))
+    );
+    assert!(
+        cleanup
+            .shell_anchor
+            .is_some_and(|status| status.signal() == Some(libc::SIGKILL))
+    );
+    assert!(
+        cleanup.lifetime_eof,
+        "all owned auxiliary lifetime writers must close, including PTY children"
+    );
+    let status = cleanup.worker.expect("worker reaped after group cleanup");
+    if mode.starts_with("worker-") {
+        assert_eq!(
+            std::fs::read(std::env::var_os("DSH_HANDOFF_FAULT_READY").unwrap()).unwrap(),
+            b"forked"
+        );
+        match mode.as_str() {
+            "worker-panic" => assert!(!status.success() && !timed_out),
+            "worker-abort" => assert_eq!(status.signal(), Some(libc::SIGABRT)),
+            "worker-timeout" => assert!(timed_out),
+            "worker-parent-unwind" => {
+                assert!(timed_out && CLEANUP_REQUESTED.load(std::sync::atomic::Ordering::SeqCst))
+            }
+            _ => panic!("unknown fault"),
+        }
+    } else {
+        assert!(status.success(), "worker failed: {status:?}");
+        assert_eq!(
+            std::fs::read(std::env::var_os("DSH_HANDOFF_WORKER_PROOF").unwrap()).unwrap(),
+            b"ok"
+        );
+    }
+    std::fs::write(std::env::var_os("DSH_HANDOFF_PROOF").unwrap(), b"ok").unwrap();
+}

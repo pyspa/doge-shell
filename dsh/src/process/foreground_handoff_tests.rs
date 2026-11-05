@@ -8,6 +8,8 @@ use std::cell::Cell;
 use std::os::fd::BorrowedFd;
 use std::time::{Duration, Instant};
 
+#[path = "foreground_handoff_tests/pty_pump_tests.rs"]
+mod pty_pump;
 #[path = "foreground_handoff_tests/supervisor_tests.rs"]
 mod supervisor;
 use supervisor::run_scratch;

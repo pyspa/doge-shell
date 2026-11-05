@@ -1,4 +1,7 @@
+//! PTY byte capture/display and text-only output observation.
+
 mod output_monitor;
+mod utf8_observer;
 
 pub(crate) use output_monitor::{ConcurrentOutputDrain, OutputMonitor};
 
@@ -210,6 +213,7 @@ impl PtyMonitor {
     {
         let mut buf = [0u8; 4096];
         let mut stdout_error = None;
+        let mut observer_decoder = utf8_observer::Utf8ObserverDecoder::default();
 
         loop {
             // Use timeout to avoid blocking indefinitely when PTY is closed
@@ -254,7 +258,7 @@ impl PtyMonitor {
                     if let Some(observer) = &self.observer
                         && let Ok(mut observer) = observer.lock()
                     {
-                        observer.append(ObservedStream::Stdout, &String::from_utf8_lossy(data));
+                        observer.append(ObservedStream::Stdout, &observer_decoder.push(data));
                     }
                 }
                 Ok(Err(e)) => {
@@ -284,6 +288,13 @@ impl PtyMonitor {
                     continue;
                 }
             }
+        }
+
+        // EOF (including PTY EIO) makes an incomplete character final.
+        if let Some(observer) = &self.observer
+            && let Ok(mut observer) = observer.lock()
+        {
+            observer.append(ObservedStream::Stdout, &observer_decoder.finish());
         }
 
         // Flush pending control bytes unless an earlier display write failed.
@@ -336,42 +347,4 @@ pub(crate) fn default_output_wiring(ctx: &mut Context, stdout: RawFd) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::PtyMonitor;
-    use nix::unistd::pipe;
-    use std::io::{ErrorKind, Write as _};
-    use std::os::fd::{FromRawFd, IntoRawFd};
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn pty_monitor_drains_to_eof_after_stdout_failure() {
-        let (read_fd, write_fd) = pipe().expect("pipe");
-        let mut monitor = PtyMonitor::new(read_fd.into_raw_fd(), None).expect("create monitor");
-        let mut writer = unsafe { std::fs::File::from_raw_fd(write_fd.into_raw_fd()) };
-        let expected = vec![b'x'; 8192];
-        writer.write_all(&expected).expect("write output");
-        drop(writer);
-
-        let mut flush_calls = 0;
-        let result = tokio::time::timeout(
-            Duration::from_secs(1),
-            monitor.process_output_with(|_| {
-                flush_calls += 1;
-                Err(std::io::Error::new(
-                    ErrorKind::BrokenPipe,
-                    "test stdout failure",
-                ))
-            }),
-        )
-        .await
-        .expect("monitor did not drain to EOF");
-
-        let err = result.expect_err("stdout failure should propagate after draining");
-        assert!(
-            err.to_string()
-                .contains("PtyMonitor: failed to flush stdout")
-        );
-        assert_eq!(flush_calls, 1);
-        assert_eq!(monitor.captured_output, expected);
-    }
-}
+mod tests;

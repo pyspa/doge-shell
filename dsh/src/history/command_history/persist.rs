@@ -142,8 +142,7 @@ impl History {
 
             for (cmd, when) in &entries {
                 let _count: i64 = upsert_stmt
-                    .query_row(rusqlite::params![cmd, when, context], |row| row.get(0))
-                    .unwrap_or(1);
+                    .query_row(rusqlite::params![cmd, when, context], |row| row.get(0))?;
             }
         }
         tx.commit()?;
@@ -355,3 +354,7 @@ impl History {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "persist_tests.rs"]
+mod tests;

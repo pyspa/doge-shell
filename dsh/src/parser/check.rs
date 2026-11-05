@@ -24,12 +24,13 @@ fn without_comments(input: &str) -> Cow<'_, str> {
 pub fn is_incomplete_input(input: &str) -> bool {
     let uncommented = without_comments(input);
     let input = uncommented.as_ref();
-    let chars = input.chars().peekable();
+    let trimmed = input.trim_end();
     let mut quote_char = None;
     let mut in_backslash = false;
     let mut braces = Vec::new();
+    let mut trailing_operator = false;
 
-    for c in chars {
+    for (index, c) in input.char_indices() {
         if in_backslash {
             in_backslash = false;
             continue;
@@ -42,6 +43,9 @@ pub fn is_incomplete_input(input: &str) -> bool {
                 quote_char = None;
             }
         } else {
+            // Only an unquoted, unescaped operator can request continuation.
+            // Check every suffix start: in `\||` the final `|` is still real.
+            trailing_operator |= matches!(trimmed.get(index..), Some("|" | "|:" | "&&" | "||"));
             match c {
                 '\\' => in_backslash = true,
                 '\'' | '"' => quote_char = Some(c),
@@ -88,21 +92,56 @@ pub fn is_incomplete_input(input: &str) -> bool {
     }
 
     // 4. Trailing operators
-    let trimmed = input.trim_end();
-    if trimmed.ends_with('|')
-        || trimmed.ends_with("|:")
-        || trimmed.ends_with("&&")
-        || trimmed.ends_with("||")
-    {
-        return true;
-    }
-
-    false
+    trailing_operator
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaped_operator_suffixes_are_complete() {
+        for input in [
+            r"echo \|",
+            r"echo \|:",
+            r"echo \&\&",
+            r"echo \|\|",
+            r"echo \&&",
+            r"echo \\\|",
+            r"echo \\\|:",
+            "echo \\|  \t",
+            "echo \\|\n",
+            "echo \\| # tail | &&",
+            "echo '\\|'",
+            "echo \"|:\"",
+            "echo $(echo \\|)",
+            "echo ${X:-\\|}",
+            "echo 日本語\\|",
+        ] {
+            assert!(!is_incomplete_input(input), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn real_operator_suffixes_after_escapes_still_continue() {
+        for input in [
+            r"echo \||",
+            r"echo \&&&",
+            r"echo \|||",
+            r"echo \\|",
+            r"echo \\|:",
+            r"echo \\&&",
+            r"echo \\||",
+            "echo | \n",
+            "echo && # ignored\n",
+            "echo |: # ignored",
+            "echo $(echo \\|",
+            "echo \"unclosed \\|",
+            "echo \\| |",
+        ] {
+            assert!(is_incomplete_input(input), "{input:?}");
+        }
+    }
 
     #[test]
     fn comments_do_not_request_continuation_or_hide_real_incompleteness() {

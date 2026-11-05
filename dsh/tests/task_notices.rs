@@ -1,6 +1,8 @@
 //! Background task notices on a scratch controlling PTY and local fake provider.
 //! No external model requests, inherited credentials or developer terminal.
 mod common;
+#[path = "task_notices/escaped_continuation.rs"]
+mod escaped_continuation;
 #[path = "task_notices/support.rs"]
 mod support;
 

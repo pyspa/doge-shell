@@ -114,12 +114,37 @@ pub struct KeyContext {
     pub cursor_at_start: bool,
     /// Next character (for OvertypeClosingBracket)
     pub next_char: Option<char>,
+    /// Matching, unescaped quote closer at the cursor, including continuation input.
+    pub closing_quote: Option<char>,
     /// Is auto-pair enabled
     pub auto_pair: bool,
     /// Is a multi-line continuation in progress (`multiline_buffer` non-empty).
     ///
     /// Ctrl-D must not exit the shell from an empty continuation line.
     pub multiline_active: bool,
+}
+
+/// Identify a quote that would close the prefix, rather than open a new pair.
+/// The completion scanner shares the grammar's quote/escape rules (including
+/// doge's escaped single quotes). Scan through the candidate to reject escapes.
+pub(crate) fn closing_quote_at_cursor(
+    input: &str,
+    cursor: usize,
+    multiline_prefix: &str,
+) -> Option<char> {
+    use crate::completion::shell_path::quote_at_end;
+
+    let next = input.chars().nth(cursor)?;
+    if !matches!(next, '\'' | '"') {
+        return None;
+    }
+    let mut prefix = multiline_prefix.to_string();
+    prefix.extend(input.chars().take(cursor));
+    if quote_at_end(&prefix) != Some(next) {
+        return None;
+    }
+    prefix.push(next);
+    quote_at_end(&prefix).is_none().then_some(next)
 }
 
 /// Determine action from key input (pure function)
@@ -184,6 +209,16 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
         // Space input (Abbreviation expansion check)
         (KeyCode::Char(' '), NONE) => KeyAction::ExpandAbbreviationAndInsertSpace,
 
+        // Quotes are both openers and closers: prefer a real existing closer.
+        (KeyCode::Char(ch), NONE)
+            if ctx.auto_pair
+                && matches!(ch, '\'' | '"')
+                && ctx.next_char == Some(ch)
+                && ctx.closing_quote == Some(ch) =>
+        {
+            KeyAction::OvertypeClosingBracket(ch)
+        }
+
         // Auto-pairing: Open bracket
         (KeyCode::Char(ch), NONE)
             if ctx.auto_pair && matches!(ch, '(' | '{' | '[' | '\'' | '"') =>
@@ -206,11 +241,6 @@ pub fn determine_key_action(key: &KeyEvent, ctx: &KeyContext) -> KeyAction {
             } else {
                 KeyAction::InsertChar(ch)
             }
-        }
-
-        // Quote overtype
-        (KeyCode::Char(ch), NONE) if ctx.auto_pair && matches!(ch, '\'' | '"') => {
-            KeyAction::InsertChar(ch)
         }
 
         // Normal character input

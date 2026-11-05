@@ -497,3 +497,6 @@ mod path_ghost_tests;
 
 #[cfg(test)]
 mod path_feedback_tests;
+
+#[cfg(test)]
+mod unconfigured_ai_tests;

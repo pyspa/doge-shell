@@ -212,6 +212,7 @@ impl<'a> Repl<'a> {
             },
             completion_ui: CompletionUiState {
                 start_completion: false,
+                path_feedback: Default::default(),
                 completion: Completion::new(),
                 integrated_completion,
                 cache: HistoryCache::new(Duration::from_millis(300)),

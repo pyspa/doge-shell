@@ -40,6 +40,7 @@ pub(crate) struct CompletionRuntime {
     external_workers: OnceLock<CompletionWorkerPool>,
     fish_workers: OnceLock<CompletionWorkerPool>,
     notifier: RwLock<Option<UnboundedSender<()>>>,
+    path_request: RwLock<Option<crate::completion::generators::system::SystemCommandScanStatus>>,
     pub(super) diagnostics: RwLock<super::DynamicCompletionDiagnostics>,
 }
 
@@ -55,8 +56,22 @@ impl CompletionRuntime {
             external_workers: OnceLock::new(),
             fish_workers: OnceLock::new(),
             notifier: RwLock::new(None),
+            path_request: RwLock::new(None),
             diagnostics: RwLock::new(super::DynamicCompletionDiagnostics::default()),
         }
+    }
+
+    pub(crate) fn take_path_request(
+        &self,
+    ) -> Option<crate::completion::generators::system::SystemCommandScanStatus> {
+        self.path_request.write().take()
+    }
+
+    pub(crate) fn record_path_request(
+        &self,
+        status: crate::completion::generators::system::SystemCommandScanStatus,
+    ) {
+        *self.path_request.write() = Some(status);
     }
 
     pub(crate) fn set_notifier(&self, sender: UnboundedSender<()>) {

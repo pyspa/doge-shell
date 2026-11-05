@@ -400,9 +400,36 @@ pub fn print_input(
         render_hint_if_room(repl, out, annotation, ghost_width);
     }
 
+    let path_hint = if repl.completion_ui.path_feedback.is_active() {
+        repl.completion_ui.path_feedback.text(
+            repl.input.as_str(),
+            repl.input.cursor(),
+            repl.shell
+                .environment
+                .read()
+                .completion_state
+                .path_generation,
+            crate::completion::generators::system::system_command_scan_status(),
+        )
+    } else {
+        None
+    };
     if let Some(hint) = input_hint(&input_string) {
         let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
         render_hint_if_room(repl, out, hint.text(), ghost_width);
+    } else if auto_fix.is_none()
+        && !ai_pending_now
+        && let Some(hint) = path_hint
+    {
+        // Completion/history suffixes are drawn after the cursor is restored;
+        // reserve their cells too. Multiline ghosts own their following rows.
+        let suffix = completion
+            .as_deref()
+            .or(ghost_suffix.as_deref())
+            .unwrap_or("");
+        if !input_string.contains('\n') && !suffix.contains('\n') {
+            render_hint_if_room(repl, out, hint, display_width(suffix));
+        }
     }
 
     if ai_pending_now {

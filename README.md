@@ -46,7 +46,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 
 ### Completion & UI
 
-- **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
+- **Context-Aware Completion**: Intelligent tab completion for commands, files, and options. If command-name collection is still running, an inline `PATH scanning…` hint becomes `PATH ready · Tab again` when ready (including empty results). Press Tab again to request candidates; editing or Escape clears the hint. This works with the status line disabled and appears only when the row has room.
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
 - **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker. Distinct commands remain the default; with the command ledger enabled, picker-only Ctrl+E switches to per-execution metadata and authors (stored output is never read). See [History Search](docs/usage.md#history-search) for snapshot and project-scope limits.
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command

@@ -262,7 +262,10 @@ fn cold_background_scan_returns_before_loader_release_and_coalesces() {
             caller_generator.generate_in_background_with("zz-", caller_runtime, 100, move |_| {
                 started_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
-                vec!["zz-ready".into()]
+                crate::environment::ExecutableScanOutcome {
+                    names: vec!["zz-ready".into()],
+                    complete: true,
+                }
             });
         returned_tx.send(result).unwrap();
     });
@@ -345,7 +348,10 @@ fn relative_and_empty_paths_are_anchored_before_worker_and_distinguish_cwd() {
         started_tx.send(()).unwrap();
         release_rx.recv().unwrap();
         observed_tx.send(paths.to_vec()).unwrap();
-        vec!["stale-from-a".into()]
+        crate::environment::ExecutableScanOutcome {
+            names: vec!["stale-from-a".into()],
+            complete: true,
+        }
     });
     started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     let other = activate_system_command_cache_at(
@@ -462,4 +468,109 @@ fn relative_background_scan_preserves_non_utf8_request_directory() {
         candidate_texts(generator.generate_in_background("zz-", runtime, 100)),
         vec!["zz-empty-path", "zz-relative-path"]
     );
+}
+
+#[test]
+fn scan_status_distinguishes_empty_success_release_and_partial_publication() {
+    let mut state = SystemCommandCacheState::new();
+    let activation = state.activate_paths(&["/fixture/status".into()]);
+    let scan = state.next_background_scan_ticket(&activation);
+    assert_eq!(state.scan_status().pending, Some(scan.scan_id));
+    assert!(state.publish_live(&scan, BTreeSet::new()));
+    let status = state.scan_status();
+    assert_eq!(status.pending, None);
+    assert_eq!(status.published, scan.scan_id);
+    assert!(status.complete, "empty is a successful publication");
+    let next = state.next_background_scan_ticket(&activation);
+    assert_ne!(next.scan_id, status.latest_scan);
+    state.inflight_scan_id = None;
+    assert_ne!(
+        state.scan_status().published,
+        next.scan_id,
+        "release is not readiness"
+    );
+}
+
+#[test]
+fn scan_status_incomplete_projection_is_not_ready() {
+    let _guard = crate::test_env_lock();
+    let dir = tempdir().unwrap();
+    let activation = activate_system_command_cache(&[dir.path().display().to_string()]);
+    let scan = begin_background_system_command_scan(&activation);
+    assert!(publish_system_command_scan_if(
+        &scan,
+        command_set(&["partial"]),
+        false,
+        || true
+    ));
+    let status = system_command_scan_status();
+    assert_eq!(status.published, scan.scan_id);
+    assert!(!status.complete);
+    assert_eq!(status.pending, None);
+}
+
+#[test]
+fn interactive_scan_diagnostics_preserve_partial_candidates_without_false_readiness() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "interactive_scan_diagnostics_preserve_partial_candidates_without_false_readiness",
+    ) {
+        return;
+    }
+    let _guard = crate::test_env_lock();
+    let async_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    for (has_error, has_command) in [(false, false), (false, true), (true, true), (true, false)] {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join("bin")).unwrap();
+        if has_command {
+            write_executable(&dir.path().join("bin/zz-fixture-command"));
+        }
+        // Preserve the scanner's existing benign missing/non-directory policy.
+        fs::write(dir.path().join("not-dir"), "").unwrap();
+        let mut paths = vec!["bin".into(), "missing".into(), "not-dir".into()];
+        if has_error {
+            std::os::unix::fs::symlink("loop", dir.path().join("loop")).unwrap();
+            assert_eq!(
+                fs::read_dir(dir.path().join("loop"))
+                    .unwrap_err()
+                    .raw_os_error(),
+                Some(libc::ELOOP)
+            );
+            paths.push("loop".into());
+        }
+        let activation = activate_system_command_cache_at(
+            &paths,
+            &super::super::filesystem::FileSystemContext::new(dir.path(), None),
+        );
+        let generator = SystemCommandGenerator::from_activation(activation);
+        let runtime = Arc::new(crate::completion::dynamic::CompletionRuntime::new());
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        runtime.set_notifier(tx);
+        generator.generate_in_background("zz-fixture-", runtime.clone(), 100);
+        async_runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+        });
+        let status = system_command_scan_status();
+        assert_eq!(status.pending, None);
+        assert!(status.published > 0);
+        let texts = candidate_texts(generator.generate_in_background("zz-fixture-", runtime, 100));
+        assert_eq!(
+            texts,
+            if has_command {
+                vec!["zz-fixture-command".to_string()]
+            } else {
+                vec![]
+            }
+        );
+        assert_eq!(
+            status.complete, !has_error,
+            "same-walk errors must not advertise ready; candidates are preserved"
+        );
+    }
 }

@@ -19,8 +19,20 @@ use tracing::{debug, error};
 /// the developer's terminal on fd 0, so job control would retarget *their*
 /// terminal's foreground process group.
 fn owns_terminal() -> bool {
-    crate::terminal::terminal_control_enabled()
-        && isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false)
+    let enabled = crate::terminal::terminal_control_enabled();
+    // Only the isolated scratch-session test can opt in; ordinary unit tests
+    // retain the real-terminal prohibition.
+    #[cfg(test)]
+    let enabled = enabled || super::foreground_handoff_tests::scratch_terminal_enabled();
+    enabled && isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false)
+}
+
+/// A tty descriptor can exist without being our controlling terminal (e.g.
+/// a caller used setsid without TIOCSCTTY). Preserve that caller's launch
+/// behavior: only a successful controlling-terminal query enables the gate.
+pub(crate) fn can_handoff_terminal() -> bool {
+    owns_terminal()
+        && nix::unistd::tcgetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).is_ok()
 }
 
 /// Report a job that just stopped, in the same `[1]+  Stopped  cmd` format bash
@@ -110,6 +122,30 @@ impl WaitBackoff {
     }
 }
 
+/// Covers early handoff during launch, including downstream setup failure and
+/// rollback paths that never reach `put_in_foreground`.
+pub(crate) struct LaunchTerminalGuard(Option<Pid>);
+
+impl LaunchTerminalGuard {
+    pub(crate) fn new(job: &Job, ctx: &dsh_types::Context) -> Self {
+        Self(
+            (ctx.interactive
+                && ctx.foreground
+                && can_handoff_terminal()
+                && !crate::process::job_pty::uses_full_pty_proxy(job))
+            .then_some(job.shell_pgid),
+        )
+    }
+}
+
+impl Drop for LaunchTerminalGuard {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            restore_shell_foreground(pgid);
+        }
+    }
+}
+
 pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Result<()> {
     debug!(
         "put_in_foreground: id: {} pgid {:?} no_hang: {} cont: {}",
@@ -135,7 +171,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         })
     {
         if handoff {
-            restore_shell_foreground(job);
+            restore_shell_foreground(job.shell_pgid);
         }
         return Err(err);
     }
@@ -143,7 +179,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
     let wait_result = wait_job(job, no_hang).await;
     // Restore on both wait success and failure, without masking that result.
     if handoff {
-        restore_shell_foreground(job);
+        restore_shell_foreground(job.shell_pgid);
     }
 
     match &wait_result {
@@ -168,8 +204,7 @@ fn resume_job_with(job: &mut Job, send: impl FnOnce(Pid) -> Result<()>) -> Resul
     Ok(())
 }
 
-fn restore_shell_foreground(job: &Job) {
-    let shell_pgid = job.shell_pgid;
+fn restore_shell_foreground(shell_pgid: Pid) {
     debug!("Restoring shell process group {}", shell_pgid);
     if let Err(err) = tcsetpgrp(
         unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },

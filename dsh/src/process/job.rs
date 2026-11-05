@@ -343,6 +343,7 @@ impl Job {
         // source of truth for the committed `job.pty_mode` (no side channel).
         let pty_child = self.setup_pty(ctx).await?;
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
+        let _terminal_guard = job_wait::LaunchTerminalGuard::new(self, ctx);
 
         // 2. Launch processes
         if let Some(mut process) = self.process.take() {

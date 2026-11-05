@@ -124,27 +124,36 @@ pub struct KeyContext {
     pub multiline_active: bool,
 }
 
-/// Identify a quote that would close the prefix, rather than open a new pair.
-/// The completion scanner shares the grammar's quote/escape rules (including
-/// doge's escaped single quotes). Scan through the candidate to reject escapes.
+/// Overtype only a closing delimiter recognized by the shell grammar.
+/// Nested substitutions have their own quote scopes; a flat quote count cannot
+/// distinguish their closers from literals. Unparsed/incomplete spans retain
+/// the existing insertion policy rather than guessing a closer.
 pub(crate) fn closing_quote_at_cursor(
     input: &str,
     cursor: usize,
     multiline_prefix: &str,
 ) -> Option<char> {
-    use crate::completion::shell_path::quote_at_end;
+    use crate::parser::{Rule, ShellParser};
+    use pest::Parser;
+    use std::borrow::Cow;
 
-    let next = input.chars().nth(cursor)?;
-    if !matches!(next, '\'' | '"') {
-        return None;
-    }
-    let mut prefix = multiline_prefix.to_string();
-    prefix.extend(input.chars().take(cursor));
-    if quote_at_end(&prefix) != Some(next) {
-        return None;
-    }
-    prefix.push(next);
-    quote_at_end(&prefix).is_none().then_some(next)
+    let (byte_cursor, next) = input.char_indices().nth(cursor)?;
+    let rule = match next {
+        '\'' => Rule::s_quoted,
+        '"' => Rule::d_quoted,
+        _ => return None,
+    };
+    let candidate_end = multiline_prefix.len() + byte_cursor + next.len_utf8();
+    let source = if multiline_prefix.is_empty() {
+        Cow::Borrowed(input)
+    } else {
+        Cow::Owned(format!("{multiline_prefix}{input}"))
+    };
+    ShellParser::parse(Rule::commands, &source)
+        .ok()?
+        .flatten()
+        .any(|pair| pair.as_rule() == rule && pair.as_span().end() == candidate_end)
+        .then_some(next)
 }
 
 /// Determine action from key input (pure function)

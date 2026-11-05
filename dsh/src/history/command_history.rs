@@ -187,6 +187,9 @@ struct HistoryPersistAck {
 #[derive(Debug, Clone)]
 struct PendingHistoryEntry {
     persistence_id: u64,
+    first_persistence_id: u64,
+    // One obligation per command occurrence sent to persistence, not per snapshot.
+    unconfirmed_operations: usize,
     entry: Entry,
 }
 

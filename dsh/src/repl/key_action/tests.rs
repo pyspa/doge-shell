@@ -753,3 +753,45 @@ fn quote_closer_discrimination_preserves_literal_and_opening_controls() {
         );
     }
 }
+
+#[test]
+fn quote_closer_nested_substitution_uses_inner_quote_context() {
+    for (marked, expected) in [
+        (r#"echo "$(echo 'a|"b')""#, None),
+        (r#"echo "$(echo "a|")""#, Some('"')),
+        (r#"echo "$(echo '日本語|')""#, Some('\'')),
+        (r#"echo "$(echo "$(echo "a|")")""#, Some('"')),
+        (r#"echo "$(echo 'a\|'b')""#, None),
+        (
+            r#"echo "$(echo a # |" comment
+)""#,
+            None,
+        ),
+        // Incomplete nested syntax is uncertain: retain pair insertion.
+        (r#"echo "$(echo "a|""#, None),
+    ] {
+        let (before, after) = marked.split_once('|').unwrap();
+        let input = format!("{before}{after}");
+        let quote = after.chars().next().unwrap();
+        let actual = closing_quote_at_cursor(&input, before.chars().count(), "");
+        assert_eq!(actual, expected, "{marked}");
+        let ctx = KeyContext {
+            auto_pair: true,
+            next_char: Some(quote),
+            closing_quote: actual,
+            ..ctx_default()
+        };
+        let action = expected.map_or(
+            KeyAction::InsertPairedChar {
+                open: quote,
+                close: quote,
+            },
+            KeyAction::OvertypeClosingBracket,
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), NONE), &ctx),
+            action,
+            "{marked}"
+        );
+    }
+}

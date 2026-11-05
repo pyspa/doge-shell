@@ -59,8 +59,20 @@ chat_task output
 `start` returns an ID such as `chat-12345678-1234-1234-1234-123456789abc`.
 You can run ordinary foreground shell commands while the task works or waits
 for approval. Run `status` again to inspect progress; `output` shows the retained
-output at that moment, without following it continuously. There is no automatic
-notification or daemon to check after closing the shell.
+output at that moment, without following it continuously. While the interactive
+prompt is available, a notice above your input reports `completed`, `failed`
+(including `timed_out` / `budget_exhausted`), or `approval_waiting`, with only the
+task ID and state. Your input and cursor stay intact. Each unanswered approval
+identity and terminal outcome is shown once; an already answered approval is
+obsolete and is not announced as waiting. Inspect current status and the complete
+approval preview before deciding. Notices never approve anything. Explicit
+cancellation is silent.
+
+Notices wait while a foreground command or menu owns the terminal. Starting
+another task preserves up to 32 unseen notices from retired tasks; the oldest
+historical notices are discarded if that bound is reached. The current task's
+approval notice has a separate slot. There are no OS notifications or persisted
+notices, and no daemon to check after closing the shell.
 
 The directory at submission is the task's fixed workspace root. Changing the
 foreground directory later does not move that root. Submit from the project

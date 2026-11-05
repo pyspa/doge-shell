@@ -215,12 +215,11 @@ pub(crate) fn command(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Re
                 conversation: dsh_builtin::background_session_snapshot(),
             };
             let worker = spawn(snapshot.clone(), request)?;
-            shell.background_task = Some(supervisor::TaskHandle::launch(
-                task_id.clone(),
-                snapshot,
-                scope,
-                worker,
-            )?);
+            let task = supervisor::TaskHandle::launch(task_id.clone(), snapshot, scope, worker)?;
+            if let Some(previous) = &shell.background_task {
+                task.inherit_notices(previous);
+            }
+            shell.background_task = Some(task);
             ctx.write_stdout(&format!(
                 "{task_id} started; chat_task status/output/cancel\n"
             ))?;

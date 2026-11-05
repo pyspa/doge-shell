@@ -329,11 +329,27 @@ impl<'a> Repl<'a> {
         true
     }
 
+    /// The event loop owns the inline prompt here, never a picker or foreground job.
+    pub(crate) fn print_task_notices(&mut self, out: &mut impl std::io::Write) {
+        if self.terminal_ui.columns == 0 {
+            return;
+        }
+        if let Some(task) = &self.shell.background_task {
+            let lines = task.take_notices();
+            render::print_above_prompt(self, out, &lines);
+        }
+    }
+
     async fn handle_background_tick(&mut self) -> Result<()> {
         self.shell.environment.read().ensure_path_ghost_scan();
         self.save_history_periodic();
         self.schedule_command_timing_save();
         self.check_background_jobs(true).await?;
+        {
+            let mut renderer = TerminalRenderer::new();
+            self.print_task_notices(&mut renderer);
+            renderer.flush().ok();
+        }
 
         if self.background_tasks.history_sync_last_check.elapsed() > Duration::from_secs(30) {
             self.background_tasks.io.schedule_history_sync(

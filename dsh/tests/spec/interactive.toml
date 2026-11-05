@@ -1,5 +1,16 @@
 version = 1
 
+[[case]]
+id = "interactive.foreground-chat-error-status"
+class = "dogesh"
+mode = "interactive"
+script = "PRIOR=success\n!\necho CHAT_STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CHAT_STATUS:1"]
+stderr_contains = ["chat: message content required"]
+
 # Interactive mode (`dogesh` reading lines from stdin): same semantics,
 # prompt-wrapped output, so only containment assertions are used.
 

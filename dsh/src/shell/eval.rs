@@ -575,9 +575,9 @@ pub async fn eval_str(
 
 /// Record the status `$?` should report.
 ///
-/// Every exit from `eval_str` goes through here, refusals and cancellations
-/// included: a line that was blocked still happened, and leaving the previous
-/// line's status in place would tell the user it succeeded.
+/// Job results, refusals, cancellations, and public evaluation errors are
+/// published here: a line that was blocked still happened, and leaving the
+/// previous line's status in place would tell the user it succeeded.
 ///
 /// `publish_exit_status` updates after each job completes, so later jobs on
 /// the same line resolve `$?` during their own materialization.

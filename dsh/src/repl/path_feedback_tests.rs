@@ -251,3 +251,82 @@ fn path_feedback_user_actions_clear_before_dispatch_and_explicit_accept_cancel()
             assert_eq!(repl.input.as_str(), "zz-accepted");
         });
 }
+
+#[test]
+fn path_feedback_pending_backend_owns_row_until_settled() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "path_feedback_pending_backend_owns_row_until_settled",
+    ) {
+        return;
+    }
+    struct PendingBackend(Arc<AtomicBool>);
+    impl crate::suggestion::SuggestionBackend for PendingBackend {
+        fn predict(&self, _: crate::suggestion::SuggestionRequest) -> Option<String> {
+            None
+        }
+        fn is_pending(&self) -> bool {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+    let _guard = crate::test_env_lock();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _entered = runtime.enter();
+    let dir = tempfile::tempdir().unwrap();
+    let env = Environment::new_synthetic();
+    env.write().variable_state.paths = vec![dir.path().display().to_string()];
+    let mut shell = Shell::new(env);
+    let mut repl = Repl::new(&mut shell);
+    let pending = Arc::new(AtomicBool::new(true));
+    repl.ai_ui
+        .suggestion_manager
+        .set_preferences(crate::suggestion::InputPreferences {
+            ai_backfill: true,
+            ..Default::default()
+        });
+    repl.ai_ui
+        .suggestion_manager
+        .engine
+        .set_ai_backend(Some(Arc::new(PendingBackend(pending.clone()))));
+    let activation = crate::completion::generator::activate_system_command_cache(&[dir
+        .path()
+        .display()
+        .to_string()]);
+    let scan = crate::completion::generator::begin_background_system_command_scan(&activation);
+    let receipt = crate::completion::generators::system::system_command_scan_status();
+    repl.input.reset("zz-unmatched".into());
+    repl.completion_ui
+        .path_feedback
+        .request("zz-unmatched", 12, 0, receipt);
+    repl.terminal_ui.columns = 120;
+    let mut out = Vec::new();
+    repl.print_input(&mut out, false, false);
+    assert!(String::from_utf8_lossy(&out).contains(" ⧗"));
+    assert!(
+        !String::from_utf8_lossy(&out).contains("PATH scanning"),
+        "pending marker must not follow a hint ending in the final column"
+    );
+    pending.store(false, Ordering::SeqCst);
+    out.clear();
+    repl.print_input(&mut out, false, false);
+    assert!(
+        String::from_utf8_lossy(&out).contains("PATH scanning"),
+        "coexistence suppression must retain the request"
+    );
+    assert!(crate::completion::generator::publish_system_command_scan(
+        &scan,
+        Default::default()
+    ));
+    pending.store(true, Ordering::SeqCst);
+    out.clear();
+    repl.print_input(&mut out, false, false);
+    assert!(String::from_utf8_lossy(&out).contains(" ⧗"));
+    assert!(!String::from_utf8_lossy(&out).contains("PATH ready"));
+    pending.store(false, Ordering::SeqCst);
+    out.clear();
+    repl.print_input(&mut out, false, false);
+    assert!(String::from_utf8_lossy(&out).contains("PATH ready · Tab again"));
+}

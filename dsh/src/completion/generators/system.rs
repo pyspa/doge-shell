@@ -587,7 +587,7 @@ impl SystemCommandGenerator {
             current_token,
             runtime,
             limit,
-            crate::environment::collect_executables_from_paths,
+            crate::environment::collect_executables_from_paths_with_status,
         )
     }
 
@@ -599,7 +599,7 @@ impl SystemCommandGenerator {
         loader: L,
     ) -> Vec<CompletionCandidate>
     where
-        L: FnOnce(&[PathBuf]) -> Vec<String> + Send + 'static,
+        L: FnOnce(&[PathBuf]) -> crate::environment::ExecutableScanOutcome + Send + 'static,
     {
         let (scan, status) = {
             let mut state = SYSTEM_COMMAND_CACHE.write();
@@ -627,8 +627,14 @@ impl SystemCommandGenerator {
                                 .collect(),
                         )
                     });
-                    let commands = loader(&paths).into_iter().collect();
-                    if publish_system_command_scan(&worker_ticket, commands) {
+                    let result = loader(&paths);
+                    let commands = result.names.into_iter().collect();
+                    if publish_system_command_scan_if(
+                        &worker_ticket,
+                        commands,
+                        result.complete,
+                        || true,
+                    ) {
                         runtime.notify();
                     }
                 });

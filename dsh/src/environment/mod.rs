@@ -546,7 +546,29 @@ pub(crate) fn collect_executables_from_paths(paths: &[std::path::PathBuf]) -> Ve
     scan_executables(paths, false).unwrap_or_default()
 }
 pub(crate) fn collect_executables_checked(paths: &[String]) -> Result<Vec<String>> {
-    scan_executables(paths, true)
+    scan_executables(paths, true).map_err(Into::into)
+}
+
+/// The interactive cache keeps soft/partial candidates, but diagnostics must
+/// distinguish a successful empty walk from a walk with filesystem errors.
+/// Both fields come from one enumeration using the existing scanner policy.
+pub(crate) struct ExecutableScanOutcome {
+    pub(crate) names: Vec<String>,
+    pub(crate) complete: bool,
+}
+pub(crate) fn collect_executables_from_paths_with_status(
+    paths: &[std::path::PathBuf],
+) -> ExecutableScanOutcome {
+    match scan_executables(paths, true) {
+        Ok(names) => ExecutableScanOutcome {
+            names,
+            complete: true,
+        },
+        Err(failure) => ExecutableScanOutcome {
+            names: failure.names,
+            complete: false,
+        },
+    }
 }
 #[derive(Debug)]
 struct ExecutableScanFailure {
@@ -580,7 +602,10 @@ fn scan_part<T>(
         }
     }
 }
-fn scan_executables(paths: &[impl AsRef<std::path::Path>], strict: bool) -> Result<Vec<String>> {
+fn scan_executables(
+    paths: &[impl AsRef<std::path::Path>],
+    strict: bool,
+) -> std::result::Result<Vec<String>, ExecutableScanFailure> {
     use std::os::unix::fs::PermissionsExt;
     let mut names = HashSet::new();
     let mut failure = None;
@@ -614,8 +639,7 @@ fn scan_executables(paths: &[impl AsRef<std::path::Path>], strict: bool) -> Resu
         Some(error) => Err(ExecutableScanFailure {
             names: sorted,
             error,
-        }
-        .into()),
+        }),
         None => Ok(sorted),
     }
 }

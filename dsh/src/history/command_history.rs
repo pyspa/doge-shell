@@ -259,6 +259,16 @@ pub struct EntryMatcher<'q> {
     normalized_text: Option<String>,
 }
 
+struct MatchFields<'a> {
+    command: &'a str,
+    normalized: Option<&'a str>,
+    exit_code: Option<i32>,
+    duration_ms: Option<u64>,
+    cwd: Option<&'a str>,
+    session: Option<&'a str>,
+    project: Option<&'a str>,
+}
+
 impl<'q> EntryMatcher<'q> {
     pub fn new(query: &'q HistoryQuery) -> Self {
         Self {
@@ -270,10 +280,34 @@ impl<'q> EntryMatcher<'q> {
     /// `normalized_entry` is the pre-lowercased command text when the caller
     /// maintains a cache for it; `None` lowercases on the fly.
     pub fn matches(&self, entry: &Entry, normalized_entry: Option<&str>) -> bool {
+        self.matches_fields(MatchFields {
+            command: &entry.entry,
+            normalized: normalized_entry,
+            exit_code: entry.exit_code,
+            duration_ms: entry.duration_ms,
+            cwd: entry.cwd.as_deref(),
+            session: entry.session_id.as_deref(),
+            project: entry.context.as_deref(),
+        })
+    }
+
+    fn matches_event(&self, event: &CommandEvent, project: Option<&str>) -> bool {
+        self.matches_fields(MatchFields {
+            command: &event.command,
+            normalized: None,
+            exit_code: event.exit_code,
+            duration_ms: event.duration_ms,
+            cwd: event.cwd.as_deref(),
+            session: event.session_id.as_deref(),
+            project,
+        })
+    }
+
+    fn matches_fields(&self, entry: MatchFields<'_>) -> bool {
         if let Some(text) = &self.normalized_text {
-            let contains_text = match normalized_entry {
+            let contains_text = match entry.normalized {
                 Some(normalized) => normalized.contains(text.as_str()),
-                None => entry.entry.to_lowercase().contains(text.as_str()),
+                None => entry.command.to_lowercase().contains(text.as_str()),
             };
             if !contains_text {
                 return false;
@@ -303,17 +337,17 @@ impl<'q> EntryMatcher<'q> {
         match self.query.scope {
             HistoryScope::Global => {}
             HistoryScope::Session => {
-                if entry.session_id.as_deref() != self.query.current_session_id.as_deref() {
+                if entry.session != self.query.current_session_id.as_deref() {
                     return false;
                 }
             }
             HistoryScope::Cwd => {
-                if entry.cwd.as_deref() != self.query.current_cwd.as_deref() {
+                if entry.cwd != self.query.current_cwd.as_deref() {
                     return false;
                 }
             }
             HistoryScope::Project => {
-                if entry.context.as_deref() != self.query.current_project.as_deref() {
+                if entry.project != self.query.current_project.as_deref() {
                     return false;
                 }
             }
@@ -399,3 +433,6 @@ impl History {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod query_tests;

@@ -27,6 +27,7 @@ mod persist;
 mod picker_metadata;
 mod query;
 mod reload;
+mod startup;
 
 fn truncate_ledger_output(output: &str) -> String {
     if output.len() <= LEDGER_MAX_OUTPUT_BYTES {
@@ -358,6 +359,22 @@ impl<'q> EntryMatcher<'q> {
     }
 }
 
+#[derive(Debug, Clone)]
+enum StartupHistoryWrite {
+    Batch {
+        entries: Vec<(String, i64)>,
+        context: Option<String>,
+        persistence_id: u64,
+        commands: Vec<String>,
+    },
+    Outcome {
+        command: String,
+        context: Option<String>,
+        metadata: HistoryMetadata,
+        persistence_id: u64,
+    },
+}
+
 /// Command history with SQLite persistence.
 #[derive(Debug, Clone)]
 pub struct History {
@@ -382,6 +399,8 @@ pub struct History {
     pending_persistence: HashMap<String, PendingHistoryEntry>,
     persist_ack_rx: Option<Arc<ParkingMutex<Receiver<HistoryPersistAck>>>>,
     next_persistence_id: u64,
+    /// Ordered writes made before startup attaches the persistence owner.
+    startup_writes: Option<Vec<StartupHistoryWrite>>,
 }
 
 impl Default for History {
@@ -406,6 +425,15 @@ impl History {
             pending_persistence: HashMap::new(),
             persist_ack_rx: None,
             next_persistence_id: 0,
+            startup_writes: None,
+        }
+    }
+
+    /// Buffer writes only for the live placeholder awaiting startup publication.
+    pub(crate) fn new_for_startup() -> Self {
+        Self {
+            startup_writes: Some(Vec::new()),
+            ..Self::new()
         }
     }
 
@@ -428,6 +456,7 @@ impl History {
             pending_persistence: HashMap::new(),
             persist_ack_rx: None,
             next_persistence_id: 0,
+            startup_writes: None,
         })
     }
 }
@@ -437,3 +466,6 @@ mod tests;
 
 #[cfg(test)]
 mod query_tests;
+
+#[cfg(test)]
+mod startup_tests;

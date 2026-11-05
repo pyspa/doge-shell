@@ -3,15 +3,17 @@
 use super::{Job, JobProcess, Process, ProcessState};
 use crate::{environment::Environment, shell::Shell};
 use dsh_types::Context;
-use nix::unistd::{Pid, getpgrp, getpid};
+use nix::unistd::{Pid, getpgrp};
 use std::cell::Cell;
-use std::io::Write;
 use std::os::fd::BorrowedFd;
-use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[path = "foreground_handoff_tests/supervisor_tests.rs"]
+mod supervisor;
+use supervisor::run_scratch;
+
 thread_local! {
+    static CHILD_START_FD: Cell<i32> = const { Cell::new(-1) };
     static SCRATCH_TERMINAL: Cell<bool> = const { Cell::new(false) };
     static REJECT_HANDOFF: Cell<bool> = const { Cell::new(false) };
     static OBSERVE_FIRST: Cell<bool> = const { Cell::new(false) };
@@ -26,65 +28,48 @@ pub(super) fn reject_handoff() -> bool {
     REJECT_HANDOFF.get()
 }
 
-pub(super) fn record_child(child: Pid) {
-    if SCRATCH_TERMINAL.get() {
-        let path = std::env::var_os("DSH_HANDOFF_CHILDREN").unwrap();
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-        writeln!(file, "{child}").unwrap();
+pub(super) fn child_start_gate_fd() -> i32 {
+    CHILD_START_FD.get()
+}
+
+/// Test-only child seam: raw read/close only, before actual setpgid/exec.
+/// Parent prepared fd; the supervisor keeps its writer through cleanup.
+///
+/// # Safety
+/// Called only immediately after fork, with a parent-prepared valid reader
+/// or -1. No Rust runtime/allocator/lock is used on this child path.
+pub(super) unsafe fn hold_before_setpgid(fd: i32) {
+    if fd >= 0 {
+        let mut byte = 0u8;
+        unsafe {
+            let count = libc::read(fd, (&mut byte as *mut u8).cast(), 1);
+            libc::close(fd);
+            if count != 1 {
+                libc::_exit(98);
+            }
+        }
     }
 }
 
-struct Worker {
-    child: std::process::Child,
-    children: std::path::PathBuf,
-}
-
-impl Drop for Worker {
-    fn drop(&mut self) {
-        if matches!(self.child.try_wait(), Ok(Some(_))) {
-            return;
+pub(super) fn record_child(_child: Pid) {
+    if !SCRATCH_TERMINAL.get() {
+        return;
+    }
+    let mode = std::env::var("DSH_HANDOFF_CASE").unwrap();
+    if mode.starts_with("worker-") || mode == "supervisor-panic" {
+        std::fs::write(
+            std::env::var_os("DSH_HANDOFF_FAULT_READY").unwrap(),
+            b"forked",
+        )
+        .unwrap();
+        match mode.as_str() {
+            "worker-panic" => panic!("injected panic after real external fork before admission"),
+            "worker-abort" => std::process::abort(),
+            "worker-timeout" | "worker-parent-unwind" | "supervisor-panic" => loop {
+                unsafe { libc::poll(std::ptr::null_mut(), 0, 100) };
+            },
+            _ => unreachable!(),
         }
-        // Kill the worker first, but retain its zombie until the final sweep:
-        // its PID/session identity cannot be reused while we validate groups.
-        let _ = self.child.kill();
-        let worker = self.child.id() as libc::pid_t;
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-            let observed = unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    worker as libc::id_t,
-                    &mut info,
-                    libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
-                )
-            };
-            if observed == 0 && unsafe { info.si_pid() } == worker {
-                if let Ok(children) = std::fs::read_to_string(&self.children) {
-                    for pid in children.lines().filter_map(|pid| pid.parse::<i32>().ok()) {
-                        let pid = Pid::from_raw(pid);
-                        if nix::unistd::getsid(Some(pid)).ok() == Some(Pid::from_raw(worker))
-                            && let Ok(group) = nix::unistd::getpgid(Some(pid))
-                            && group.as_raw() > 0
-                            && group.as_raw() != worker
-                        {
-                            let _ =
-                                nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
-                        }
-                    }
-                }
-                break;
-            }
-            if observed < 0 || Instant::now() >= deadline {
-                break;
-            }
-            unsafe { libc::poll(std::ptr::null_mut(), 0, 1) };
-        }
-        let _ = self.child.wait();
     }
 }
 
@@ -161,103 +146,63 @@ fn foreground_gate_repeated_launch_respects_fd_budget() {
     run_scratch("fd-budget");
 }
 
-fn run_scratch(mode: &str) {
-    let root = tempfile::tempdir().unwrap();
-    let pty = nix::pty::openpty(None, None).unwrap();
-    let mut master = std::fs::File::from(pty.master);
-    let slave = std::fs::File::from(pty.slave);
-    let proof = root.path().join("proof");
-    let log = root.path().join("log");
-    let children = root.path().join("children");
-    let log_file = std::fs::File::create(&log).unwrap();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            "process::foreground_handoff_tests::scratch_session",
-            "--nocapture",
-        ])
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("HOME", root.path())
-        .env("XDG_CONFIG_HOME", root.path().join("config"))
-        .env("XDG_DATA_HOME", root.path().join("data"))
-        .env("XDG_STATE_HOME", root.path().join("state"))
-        .env("DOGESH_ATUIN_DUAL_WRITE", "0")
-        .env("TERM", "dumb")
-        .env("DSH_HANDOFF_CASE", mode)
-        .env("DSH_HANDOFF_PROOF", &proof)
-        .env("DSH_HANDOFF_CHILDREN", &children)
-        .current_dir(root.path())
-        .stdin(Stdio::from(slave))
-        .stdout(Stdio::from(log_file.try_clone().unwrap()))
-        .stderr(Stdio::from(log_file));
-    let controlling = mode != "no-ctty";
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setsid() < 0
-                || (controlling && libc::ioctl(0, libc::TIOCSCTTY as libc::c_ulong, 0) < 0)
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    let mut worker = Worker {
-        child: command.spawn().unwrap(),
-        children,
-    };
-    master
-        .write_all(&b"foreground-ready\n".repeat(if mode == "fd-budget" { 96 } else { 1 }))
-        .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(12);
-    let status = loop {
-        if let Some(status) = worker.child.try_wait().unwrap() {
-            break Some(status);
-        }
-        if Instant::now() >= deadline {
-            break None;
-        }
-        unsafe { libc::poll(std::ptr::null_mut(), 0, 5) };
-    };
-    drop(worker);
-    let output = std::fs::read_to_string(&log).unwrap();
-    eprintln!("{output}");
-    assert!(
-        status.is_some_and(|status| status.success()),
-        "{mode}: {status:?}\n{output}"
-    );
-    if mode == "exec-failure" {
-        assert!(output.contains("Permission denied"), "{output}");
-    }
-    if mode == "handoff-abort" {
-        assert!(
-            output.contains("failed foreground terminal handoff"),
-            "{output}"
-        );
-    }
-    assert_eq!(
-        std::fs::read(&proof).unwrap(),
-        b"ok",
-        "scratch case actually ran"
-    );
+#[test]
+fn supervisor_cleans_external_children_after_worker_panic() {
+    run_scratch("worker-panic");
+}
+
+#[test]
+fn supervisor_cleans_external_children_after_worker_abort() {
+    run_scratch("worker-abort");
+}
+
+#[test]
+fn supervisor_cleans_external_children_after_worker_timeout() {
+    run_scratch("worker-timeout");
+}
+
+#[test]
+fn supervisor_unwind_runs_the_same_owned_group_cleanup() {
+    run_scratch("supervisor-panic");
+}
+
+#[test]
+fn parent_unwind_requests_supervisor_owned_cleanup() {
+    run_scratch("worker-parent-unwind");
 }
 
 #[test]
 fn scratch_session() {
+    if std::env::var("DSH_HANDOFF_ROLE").as_deref() != Ok("worker") {
+        return;
+    }
     let Ok(mode) = std::env::var("DSH_HANDOFF_CASE") else {
         return;
     };
-    // pre_exec established a fresh session and controlling PTY on fd 0.
+    // The supervisor owns this scratch session; the worker has its own
+    // anchored shell group, distinct from the anchored external job group.
     // This permission is thread-local and never set in the cargo test parent.
     let stdin = unsafe { BorrowedFd::borrow_raw(0) };
-    assert_eq!(nix::unistd::getsid(None).unwrap(), getpid());
+    let session = Pid::from_raw(
+        std::env::var("DSH_HANDOFF_SUPERVISOR")
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
+    let job_group = Pid::from_raw(
+        std::env::var("DSH_HANDOFF_JOB_GROUP")
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
+    assert_eq!(nix::unistd::getsid(None).unwrap(), session);
+    assert_ne!(getpgrp(), job_group);
     if mode == "no-ctty" {
         assert!(nix::unistd::isatty(stdin).unwrap());
         assert!(nix::unistd::tcgetpgrp(stdin).is_err());
     } else {
         assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), getpgrp());
-        assert_eq!(unsafe { libc::tcgetsid(0) }, getpid().as_raw());
+        assert_eq!(unsafe { libc::tcgetsid(0) }, session.as_raw());
     }
     if mode == "fd-budget" {
         let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
@@ -268,6 +213,26 @@ fn scratch_session() {
         limit.rlim_cur = limit.rlim_cur.min(64);
         assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
     }
+    let core_limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    assert_eq!(
+        unsafe { libc::setrlimit(libc::RLIMIT_CORE, &core_limit) },
+        0
+    );
+    let lifetime_fd: i32 = std::env::var("DSH_HANDOFF_LIFETIME_FD")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let lifetime_flags = unsafe { libc::fcntl(lifetime_fd, libc::F_GETFD) };
+    assert!(lifetime_flags >= 0 && lifetime_flags & libc::FD_CLOEXEC == 0);
+    CHILD_START_FD.set(
+        std::env::var("DSH_HANDOFF_CHILD_START_FD")
+            .unwrap()
+            .parse()
+            .unwrap(),
+    );
     SCRATCH_TERMINAL.set(true);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -280,6 +245,7 @@ fn scratch_session() {
         let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
         ctx.interactive = true;
         ctx.save_history = false;
+        ctx.pgid = Some(job_group);
         let entry_modes = nix::sys::termios::tcgetattr(stdin).unwrap();
         let entry = (
             ctx.infile,
@@ -303,15 +269,18 @@ fn scratch_session() {
                     "/bin/sh".into(),
                     "-c".into(),
                     if mode == "rollback" {
-                        "read -r line; test \"$line\" = foreground-ready || exit 2; kill -STOP $$"
-                            .into()
+                        format!(": >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready || exit 2; kill -STOP $$")
                     } else {
-                        "read -r line; test \"$line\" = foreground-ready".into()
+                        format!(": >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready")
                     },
                 ],
             ),
         };
+        // Existing-group launch is deliberate: the supervisor's live leader
+        // owns group identity through cleanup, even if this worker aborts.
+        ctx.pgid = Some(job_group);
         let mut job = Job::new("terminal reader".into(), shell.pgid);
+        job.pgid = Some(job_group);
         job.set_process(JobProcess::Command(Process::new(program, args)));
         job.disable_pty = mode != "output-only-pipeline";
         if mode == "output-only-pipeline" {
@@ -389,5 +358,5 @@ fn scratch_session() {
         }
     });
     SCRATCH_TERMINAL.set(false);
-    std::fs::write(std::env::var_os("DSH_HANDOFF_PROOF").unwrap(), b"ok").unwrap();
+    std::fs::write(std::env::var_os("DSH_HANDOFF_WORKER_PROOF").unwrap(), b"ok").unwrap();
 }

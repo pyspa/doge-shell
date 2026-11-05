@@ -1,4 +1,5 @@
 use crate::completion::command::{ArgumentType, CommandCompletionDatabase, CompletionCandidate};
+use crate::completion::dynamic::CompletionRuntime;
 use crate::completion::errors::GeneratorError;
 use crate::completion::fuzzy_match_score;
 use crate::completion::generators::subcommand::SubCommandGenerator;
@@ -7,19 +8,30 @@ use crate::completion::generators::system::{
 };
 use crate::completion::parser::ParsedCommandLine;
 use anyhow::Result;
+use std::sync::Arc;
 
 pub struct CommandGenerator<'a> {
     database: &'a CommandCompletionDatabase,
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
+    refresh_runtime: Option<Arc<CompletionRuntime>>,
 }
 
 impl<'a> CommandGenerator<'a> {
+    pub(crate) fn with_background_refresh(
+        mut self,
+        runtime: Option<Arc<CompletionRuntime>>,
+    ) -> Self {
+        self.refresh_runtime = runtime;
+        self
+    }
+
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            refresh_runtime: None,
         }
     }
 
@@ -44,6 +56,7 @@ impl<'a> CommandGenerator<'a> {
             database,
             environment_names,
             system_command_ticket,
+            refresh_runtime: None,
         }
     }
 
@@ -98,7 +111,7 @@ impl<'a> CommandGenerator<'a> {
             .as_ref()
             .map(|ticket| {
                 SystemCommandGenerator::from_activation(ticket.clone())
-                    .generate_candidates(current_token)
+                    .generate_for_runtime(current_token, self.refresh_runtime.as_ref())
             })
             .transpose()?
             .unwrap_or_default())

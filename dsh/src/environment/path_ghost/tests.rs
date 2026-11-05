@@ -15,6 +15,12 @@ fn environment(path: &str) -> Arc<RwLock<Environment>> {
 }
 #[test]
 fn pending_search_returns_before_the_scan_barrier_and_ready_empty_stays_ready() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "pending_search_returns_before_the_scan_barrier_and_ready_empty_stays_ready",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
     let pending = dir.path().join("pending-target");
@@ -53,6 +59,12 @@ fn pending_search_returns_before_the_scan_barrier_and_ready_empty_stays_ready() 
 }
 #[test]
 fn a_b_a_and_reverse_scan_completion_cannot_publish_old_names() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "a_b_a_and_reverse_scan_completion_cannot_publish_old_names",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let env = environment("/ghost-a");
     let gate = Arc::new(Barrier::new(2));
@@ -100,6 +112,12 @@ fn a_b_a_and_reverse_scan_completion_cannot_publish_old_names() {
 }
 #[test]
 fn failed_scan_can_retry_and_completion_before_registration_is_replayed() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "failed_scan_can_retry_and_completion_before_registration_is_replayed",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let env = environment("/ghost-retry");
     env.read()
@@ -129,6 +147,12 @@ fn failed_scan_can_retry_and_completion_before_registration_is_replayed() {
 
 #[test]
 fn cold_and_ready_keep_their_documented_order_exact_and_symlink_semantics() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "cold_and_ready_keep_their_documented_order_exact_and_symlink_semantics",
+    ) {
+        return;
+    }
     use std::os::unix::fs::{PermissionsExt, symlink};
     let _guard = crate::test_env_lock();
     let a = tempfile::tempdir().unwrap();
@@ -181,6 +205,12 @@ fn cold_and_ready_keep_their_documented_order_exact_and_symlink_semantics() {
 
 #[test]
 fn retry_after_failure_is_scheduled_without_another_key_and_not_before_backoff() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "retry_after_failure_is_scheduled_without_another_key_and_not_before_backoff",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let _guard = crate::test_env_lock();
     tokio::runtime::Builder::new_current_thread()
@@ -249,6 +279,12 @@ fn noninteractive_lookup_keeps_legacy_behavior_without_starting_a_worker() {
 
 #[test]
 fn unreadable_path_element_keeps_partial_names_and_retries_after_recovery() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "unreadable_path_element_keeps_partial_names_and_retries_after_recovery",
+    ) {
+        return;
+    }
     use std::os::unix::fs::PermissionsExt;
     let _guard = crate::test_env_lock();
     let good = tempfile::tempdir().unwrap();
@@ -289,6 +325,12 @@ fn unreadable_path_element_keeps_partial_names_and_retries_after_recovery() {
 
 #[test]
 fn changing_to_relative_or_empty_path_invalidates_the_old_worker() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "changing_to_relative_or_empty_path_invalidates_the_old_worker",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     for next in [".", ""] {
         let env = environment("/old-absolute-ghost");
@@ -327,4 +369,52 @@ fn changing_to_relative_or_empty_path_invalidates_the_old_worker() {
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn ordinary_ghost_refresh_coalesces_with_tab_and_clears_previous_path_projection() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "ordinary_ghost_refresh_coalesces_with_tab_and_clears_previous_path_projection",
+    ) {
+        return;
+    }
+    let _guard = crate::test_env_lock();
+    let old = tempfile::tempdir().unwrap();
+    let new = tempfile::tempdir().unwrap();
+    let env = environment(old.path().to_str().unwrap());
+    env.write()
+        .set_executable_names(vec!["old-path-name".into()]);
+    let paths = vec![new.path().display().to_string()];
+    let activation = generator::activate_system_command_cache(&paths);
+    let tab =
+        crate::completion::generators::system::claim_background_system_command_scan(&activation)
+            .unwrap();
+    env.write().variable_state.paths = paths;
+    assert!(
+        env.read()
+            .start_path_ghost_refresh(|_| panic!("Tab already owns this activation"))
+            .is_none()
+    );
+    assert!(
+        env.read()
+            .completion_state
+            .executable_names
+            .read()
+            .is_empty()
+    );
+    assert!(
+        crate::completion::generators::system::claim_background_system_command_scan(&activation)
+            .is_none()
+    );
+    generator::release_system_command_scan(&tab);
+    env.read()
+        .start_path_ghost_refresh(|_| Ok(vec!["new-path-name".into()]))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(
+        env.read().search_prefix("new-"),
+        Some("new-path-name".into())
+    );
 }

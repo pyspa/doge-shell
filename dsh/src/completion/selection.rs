@@ -466,12 +466,25 @@ struct LegacyCompletionSnapshot {
     runtime: dsh_types::process_runtime::CommandRuntimeSnapshot,
     home: Option<String>,
     path_generation: u64,
+    system: Option<(
+        super::generator::SystemCommandCacheTicket,
+        Arc<super::dynamic::CompletionRuntime>,
+    )>,
 }
 
 impl LegacyCompletionSnapshot {
     fn capture(repl: &Repl<'_>) -> Option<Self> {
         let cwd = std::env::current_dir().ok()?;
-        Some(Self::from_environment(&repl.shell.environment.read(), cwd))
+        let environment = repl.shell.environment.read();
+        let mut snapshot = Self::from_environment(&environment, cwd.clone());
+        let filesystem =
+            super::generators::filesystem::FileSystemContext::new(&cwd, snapshot.home.clone());
+        let ticket = super::generators::system::activate_system_command_cache_at(
+            &environment.variable_state.paths,
+            &filesystem,
+        );
+        snapshot.system = Some((ticket, repl.completion_ui.integrated_completion.runtime()));
+        Some(snapshot)
     }
 
     fn from_environment(environment: &crate::environment::Environment, cwd: PathBuf) -> Self {
@@ -479,6 +492,7 @@ impl LegacyCompletionSnapshot {
             runtime: environment.command_runtime_snapshot(cwd),
             home: environment.lookup_variable("HOME"),
             path_generation: environment.completion_state.path_generation,
+            system: None,
         }
     }
 
@@ -489,6 +503,9 @@ impl LegacyCompletionSnapshot {
         self.home.hash(&mut scope);
         self.runtime.command_search_paths().hash(&mut scope);
         self.path_generation.hash(&mut scope);
+        if self.system.is_some() {
+            super::generators::system::system_command_cache_revision().hash(&mut scope);
+        }
         scope.finish()
     }
 
@@ -568,19 +585,26 @@ async fn collect_current_context_candidates(
     };
 
     if !only_path {
-        // Anchor relative/empty PATH entries before crossing the worker boundary.
-        let paths: Vec<String> = snapshot
-            .runtime
-            .command_search_paths()
-            .iter()
-            .map(|path| current_dir.join(path).to_string_lossy().into_owned())
-            .collect();
         let query_str = query_str.to_string();
 
-        let mut command_items =
+        let mut command_items = if let Some((ticket, runtime)) = &snapshot.system {
+            super::generators::system::SystemCommandGenerator::from_activation(ticket.clone())
+                .generate_in_background(&query_str, runtime.clone(), usize::MAX)
+                .into_iter()
+                .map(|candidate| Candidate::Item(candidate.text, "(command)".into()))
+                .collect()
+        } else {
+            // Anchor relative/empty PATH entries before crossing the worker boundary.
+            let paths: Vec<String> = snapshot
+                .runtime
+                .command_search_paths()
+                .iter()
+                .map(|path| current_dir.join(path).to_string_lossy().into_owned())
+                .collect();
             tokio::task::spawn_blocking(move || get_commands(&paths, &query_str))
                 .await
-                .unwrap_or_default();
+                .unwrap_or_default()
+        };
 
         items.append(&mut command_items);
         items = deduplicate_candidates(items);

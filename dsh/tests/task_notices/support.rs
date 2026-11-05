@@ -2,11 +2,10 @@
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
-pub const TAIL_LIMIT: usize = 256 * 1024;
+pub const OUTPUT_LIMIT: usize = 256 * 1024;
 pub const READ_BUDGET: usize = 16 * 1024;
 
 pub fn phase(mode: &str, stage: &str) {
@@ -26,15 +25,16 @@ pub fn nonblocking(file: &impl AsRawFd) -> io::Result<()> {
 
 pub fn pump(reader: &mut impl Read, output: &mut Vec<u8>) -> io::Result<()> {
     // Exactly one read: a continuously ready stream cannot trap the caller
-    // inside this function and defeat its phase/watchdog deadline.
+    // inside this function and defeat its case/phase deadline.
     let mut bytes = [0; READ_BUDGET];
     match reader.read(&mut bytes) {
         Ok(count) => {
-            let discard = output
-                .len()
-                .saturating_add(count)
-                .saturating_sub(TAIL_LIMIT);
-            output.drain(..discard);
+            if output.len().saturating_add(count) > OUTPUT_LIMIT {
+                return Err(io::Error::new(
+                    io::ErrorKind::FileTooLarge,
+                    "assertion stream exceeded limit; refusing to discard earlier evidence",
+                ));
+            }
             output.extend_from_slice(&bytes[..count]);
             Ok(())
         }
@@ -89,16 +89,15 @@ pub fn kill_owned(child: &mut Child, drain: impl FnMut()) -> io::Result<()> {
     if child.try_wait()?.is_some() {
         return Ok(());
     }
-    // All callers spawned this PID as its own group/session; ESRCH before
-    // post-exec setsid is handled by the checked direct-child fallback.
-    let group = nix::sys::signal::killpg(
-        nix::unistd::Pid::from_raw(child.id() as i32),
-        nix::sys::signal::Signal::SIGKILL,
-    );
-    if let Err(error) = group {
+    // Signal a group only when this still-unreaped direct child owns it.
+    // Before ownership ACK/setsid it can share our group, which we never kill.
+    let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+    if nix::unistd::getpgid(Some(pid)).ok() == Some(pid)
+        && let Err(error) = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL)
+    {
         phase(
             "cleanup",
-            &format!("group kill: {error}; direct owned-child fallback"),
+            &format!("owned group kill: {error}; direct fallback"),
         );
     }
     if child.try_wait()?.is_none() {
@@ -113,100 +112,38 @@ pub fn kill_owned(child: &mut Child, drain: impl FnMut()) -> io::Result<()> {
     Ok(())
 }
 
-fn cleanup_registered_terminal(pid_file: &Path) {
-    // A private file written only by this scenario registers its owned terminal
-    // child. Consume once; the scenario remains that child's sole wait owner.
-    if let Ok(record) = std::fs::read_to_string(pid_file) {
-        let _ = std::fs::remove_file(pid_file);
-        if let Ok(pid) = record.trim().parse::<i32>()
-            && pid > 1
-        {
-            let pid = nix::unistd::Pid::from_raw(pid);
-            if let Err(error) = nix::sys::signal::killpg(pid, nix::sys::signal::Signal::SIGKILL) {
-                phase(
-                    "watchdog",
-                    &format!("registered group kill: {error}; direct fallback"),
-                );
-                if let Err(error) = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL)
-                    && error != nix::errno::Errno::ESRCH
-                {
-                    phase(
-                        "watchdog",
-                        &format!("registered terminal kill failed: {error}"),
-                    );
-                }
-            }
+/// One wait/signal owner; an unreaped Child pins its PID throughout cleanup.
+pub struct OwnedChild(pub Child);
+impl std::ops::Deref for OwnedChild {
+    type Target = Child;
+    fn deref(&self) -> &Child {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for OwnedChild {
+    fn deref_mut(&mut self) -> &mut Child {
+        &mut self.0
+    }
+}
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if let Err(error) = kill_owned(&mut self.0, || {}) {
+            phase("cleanup", &format!("owned child cleanup: {error}"));
         }
     }
 }
 
-pub fn supervise(mut command: Command, timeout: Duration, pid_file: &Path) -> io::Result<()> {
-    command
-        .process_group(0)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    struct Owned(Child, std::path::PathBuf);
-    impl Drop for Owned {
-        fn drop(&mut self) {
-            cleanup_registered_terminal(&self.1);
-            let _ = kill_owned(&mut self.0, || {});
-        }
-    }
-    let mut owned = Owned(command.spawn()?, pid_file.into());
-    let child = &mut owned.0;
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
-    nonblocking(&stdout)?;
-    nonblocking(&stderr)?;
-    let deadline = Instant::now() + timeout;
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    loop {
-        pump(&mut stdout, &mut out)?;
-        pump(&mut stderr, &mut err)?;
-        if let Some(status) = child.try_wait()? {
-            pump(&mut stdout, &mut out)?;
-            pump(&mut stderr, &mut err)?;
-            phase("watchdog", &String::from_utf8_lossy(&err));
-            return if status.success() {
-                Ok(())
-            } else {
-                Err(io::Error::other(format!(
-                    "scenario exited {status}; stdout={:?}; stderr={:?}",
-                    String::from_utf8_lossy(&out),
-                    String::from_utf8_lossy(&err)
-                )))
-            };
-        }
-        if Instant::now() >= deadline {
-            cleanup_registered_terminal(pid_file);
-            kill_owned(child, || {
-                let _ = pump(&mut stdout, &mut out);
-                let _ = pump(&mut stderr, &mut err);
-            })?;
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "scenario watchdog; stdout={:?}; stderr={:?}",
-                    String::from_utf8_lossy(&out),
-                    String::from_utf8_lossy(&err)
-                ),
-            ));
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
+pub fn phase_deadline(case: Instant, budget: Duration) -> Instant {
+    case.min(Instant::now() + budget)
 }
 
 #[test]
 fn pump_returns_with_a_byte_budget_even_when_reader_stays_ready() {
-    let mut reader = io::Cursor::new(vec![b'x'; TAIL_LIMIT * 2]);
+    let mut reader = io::Cursor::new(vec![b'x'; OUTPUT_LIMIT * 2]);
     let mut output = Vec::new();
     pump(&mut reader, &mut output).unwrap();
     assert!(reader.position() as usize <= READ_BUDGET);
-    for _ in 0..40 {
-        pump(&mut reader, &mut output).unwrap();
-    }
-    assert_eq!(output.len(), TAIL_LIMIT);
+    assert_eq!(output.len(), READ_BUDGET);
 }
 
 #[test]
@@ -235,21 +172,24 @@ fn write_deadline_handles_an_always_blocked_writer() {
 }
 
 #[test]
-fn watchdog_kills_and_reaps_its_unresponsive_owned_child() {
-    let root = tempfile::tempdir().unwrap();
+fn deadline_kills_and_reaps_only_the_direct_owned_child() {
+    use std::process::{Command, Stdio};
     let mut command = Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", "task_notices_stalled_worker", "--nocapture"])
-        .env("DOGESH_NOTICE_STALL", "1");
+        .env("DOGESH_NOTICE_STALL", "1")
+        .process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = OwnedChild(command.spawn().unwrap());
     let started = Instant::now();
-    let error = supervise(
-        command,
-        Duration::from_millis(150),
-        &root.path().join("pid"),
-    )
-    .unwrap_err();
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    assert!(error.to_string().contains("deliberately stalled"));
+    assert!(!wait_until(&mut child, started + Duration::from_millis(150), || {}).unwrap());
+    kill_owned(&mut child, || {}).unwrap();
+    let status = child.try_wait().unwrap().unwrap();
+    assert!(!status.success());
+    // Repeated cleanup of a reaped Child cannot signal a reused bare PID.
+    kill_owned(&mut child, || {}).unwrap();
+    assert_eq!(child.try_wait().unwrap(), Some(status));
     assert!(started.elapsed() < Duration::from_secs(4));
 }
 
@@ -313,4 +253,26 @@ fn provider_request_has_a_total_deadline_and_size_bound() {
             .kind(),
         io::ErrorKind::InvalidData
     );
+}
+
+#[test]
+fn assertion_stream_overflow_fails_without_erasing_early_evidence() {
+    let early = b"[AI task duplicate] private-violation\n";
+    let mut output = early.to_vec();
+    let mut reader = io::Cursor::new(vec![b'x'; OUTPUT_LIMIT * 2]);
+    let mut overflow = None;
+    for _ in 0..40 {
+        if let Err(error) = pump(&mut reader, &mut output) {
+            overflow = Some(error);
+            break;
+        }
+    }
+    assert_eq!(
+        overflow
+            .expect("assertion stream must fail on overflow")
+            .kind(),
+        io::ErrorKind::FileTooLarge
+    );
+    assert!(output.starts_with(early));
+    assert!(output.len() <= OUTPUT_LIMIT);
 }

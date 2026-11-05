@@ -119,12 +119,28 @@ impl<'a> Repl<'a> {
         };
 
         let entries = history.snapshot_entries(Self::HISTORY_PICKER_SNAPSHOT);
+        let ledger_mode = self
+            .shell
+            .environment
+            .read()
+            .variable_state
+            .command_ledger_mode;
+        let base = crate::history::query_context(self.shell.session_id.clone());
+        let picker = crate::history::picker::HistoryPicker::new(
+            entries,
+            base,
+            self.input.as_str().to_string(),
+            chrono::Local::now().timestamp(),
+        )
+        .with_execution_loader(ledger_mode, || {
+            history.picker_execution_metadata(Self::HISTORY_PICKER_SNAPSHOT)
+        });
         history.reset_index();
         // Released before the interactive session: the picker owns a snapshot,
         // and holding the lock would block the background history writer.
         drop(history);
 
-        if entries.is_empty() {
+        if picker.total() == 0 && ledger_mode == crate::history::CommandLedgerMode::Off {
             // Say so rather than swallowing the keypress: an unexplained no-op
             // reads as a broken binding.
             let mut renderer = TerminalRenderer::new();
@@ -136,16 +152,6 @@ impl<'a> Repl<'a> {
             renderer.flush().ok();
             return Ok(ReplControlFlow::Continue);
         }
-
-        // Same scope context the `history` builtin builds, so `scope:cwd` means
-        // the same thing in both.
-        let base = crate::history::query_context(self.shell.session_id.clone());
-        let picker = crate::history::picker::HistoryPicker::new(
-            entries,
-            base,
-            self.input.as_str().to_string(),
-            chrono::Local::now().timestamp(),
-        );
 
         Ok(ReplControlFlow::RunInteractive(Box::new(move || {
             Ok(crate::history::picker::run(picker)?

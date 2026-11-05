@@ -347,3 +347,135 @@ fn empty_history_produces_no_rows_and_no_selection() {
     assert!(p.rows().is_empty());
     assert!(p.selected_entry().is_none());
 }
+
+fn execution(author: &str, exit_code: i32, when: i64) -> super::super::CommandEvent {
+    super::super::CommandEvent {
+        id: when,
+        command: "cargo test".into(),
+        cwd: Some("/repo/src".into()),
+        started_at: when,
+        duration_ms: Some(2000),
+        exit_code: Some(exit_code),
+        session_id: Some("session-a".into()),
+        hostname: None,
+        author: author.into(),
+        output: None,
+    }
+}
+
+#[test]
+fn execution_source_keeps_duplicates_and_filters_and_raw_acceptance() {
+    let mut p = sample().with_execution_loader(super::super::CommandLedgerMode::Metadata, || {
+        Ok(vec![
+            execution("robot", 1, NOW),
+            execution("human", 0, NOW - 1),
+        ])
+    });
+    assert_eq!(p.total(), 3);
+    p.on_key(ctrl('e'));
+    assert_eq!(p.total(), 2);
+    assert!(p.header().contains("executions"));
+    assert!(p.header().contains("robot"));
+    p.on_key(key(KeyCode::Down));
+    assert_eq!(p.selected_entry().unwrap().when, NOW - 1);
+    assert!(p.header().contains("human"));
+    assert_eq!(
+        p.on_key(key(KeyCode::Tab)),
+        PickerAction::Accept("cargo test".into())
+    );
+    p.on_key(ctrl('s')); // failure
+    p.on_key(ctrl('t'));
+    p.on_key(ctrl('r')); // session
+    p.on_key(key(KeyCode::Char('c')));
+    assert_eq!(p.matched(), 1);
+    p.on_key(ctrl('e'));
+    assert_eq!(p.matched(), 0); // aggregate failure is too quick
+    assert_eq!(p.query(), "c");
+    assert_eq!(p.on_key(key(KeyCode::Enter)), PickerAction::Noop);
+    p.on_key(ctrl('e'));
+    assert_eq!(p.matched(), 1);
+    assert_eq!(p.selected(), 0);
+    assert!(p.header().contains("session"));
+    assert_eq!(p.on_key(key(KeyCode::Esc)), PickerAction::Cancel);
+}
+
+#[test]
+fn execution_source_off_never_loads_and_error_keeps_commands() {
+    let mut p = sample().with_execution_loader(super::super::CommandLedgerMode::Off, || {
+        panic!("OFF must not load events")
+    });
+    assert_eq!(p.on_key(ctrl('e')), PickerAction::Noop);
+    assert!(!p.help().contains("^E"));
+    let mut p = sample().with_execution_loader(super::super::CommandLedgerMode::Output, || {
+        anyhow::bail!("synthetic metadata failure")
+    });
+    assert_eq!(p.total(), 3);
+    assert_eq!(p.on_key(ctrl('e')), PickerAction::Noop);
+    assert!(p.header().contains("unavailable"));
+    assert!(!p.help().contains("^E"));
+}
+
+#[test]
+fn execution_empty_source_does_not_accept_or_clear_query() {
+    let mut p =
+        sample().with_execution_loader(super::super::CommandLedgerMode::Metadata, || Ok(vec![]));
+    p.on_key(key(KeyCode::Char('z')));
+    p.on_key(ctrl('e'));
+    assert_eq!(p.total(), 0);
+    assert_eq!(p.query(), "z");
+    assert_eq!(p.on_key(key(KeyCode::Enter)), PickerAction::Noop);
+    assert_eq!(p.on_key(key(KeyCode::Esc)), PickerAction::Cancel);
+}
+
+#[test]
+fn execution_project_scope_resolves_lazily_and_caches_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("child");
+    std::fs::create_dir(&cwd).unwrap();
+    let mut e = execution("human", 0, NOW);
+    e.cwd = Some(cwd.to_string_lossy().into_owned());
+    let mut p =
+        sample().with_execution_loader(super::super::CommandLedgerMode::Metadata, || Ok(vec![e]));
+    p.on_key(ctrl('e'));
+    assert!(p.selected_entry().unwrap().context.is_none());
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    p.base.current_project = Some(dir.path().to_string_lossy().into_owned());
+    for _ in 0..3 {
+        p.on_key(ctrl('r'));
+    }
+    assert_eq!(p.matched(), 1);
+    assert_eq!(p.selected_entry().unwrap().context, p.base.current_project);
+    std::fs::remove_dir(dir.path().join(".git")).unwrap();
+    p.on_key(ctrl('e'));
+    p.on_key(ctrl('e'));
+    assert_eq!(p.matched(), 1);
+}
+
+#[test]
+fn execution_render_shows_source_hint_on_narrow_terminal_and_sanitizes_labels() {
+    let mut e = execution("人\u{1b}[31m\nrobot", 1, NOW);
+    e.command = "echo\t日本語\u{1b}[2J\nraw".into();
+    e.cwd = Some("/repo/\u{1b}[2J\nname".into());
+    let raw = e.command.clone();
+    let mut p =
+        sample().with_execution_loader(super::super::CommandLedgerMode::Metadata, || Ok(vec![e]));
+    p.on_key(ctrl('e'));
+    for width in [20, 40, 80, 120] {
+        p.set_width(width);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 8)).unwrap();
+        terminal.draw(|frame| draw(frame, &p)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("^E source"), "width {width}: {text}");
+        assert!(text.contains("executions"));
+        assert!(!text.chars().any(|c| c.is_control()));
+        assert!(!p.rows()[0].command.chars().any(|c| c.is_control()));
+    }
+    assert_eq!(p.on_key(key(KeyCode::Enter)), PickerAction::Accept(raw));
+}

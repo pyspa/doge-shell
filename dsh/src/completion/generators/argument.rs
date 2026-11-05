@@ -6,9 +6,11 @@ use crate::completion::command::{
     Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate, SubCommand,
 };
 use crate::completion::context::ContextCorrector;
+use crate::completion::dynamic::CompletionRuntime;
 use crate::completion::errors::GeneratorError;
 use crate::completion::fuzzy_match_score;
 use crate::completion::parser::{CompletionContext, ParsedCommandLine};
+use std::sync::Arc;
 
 use super::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::group::GroupGenerator;
@@ -29,14 +31,24 @@ pub struct ArgumentGenerator<'a> {
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
     filesystem: Option<&'a FileSystemContext>,
+    refresh_runtime: Option<Arc<CompletionRuntime>>,
 }
 
 impl<'a> ArgumentGenerator<'a> {
+    pub(crate) fn with_background_refresh(
+        mut self,
+        runtime: Option<Arc<CompletionRuntime>>,
+    ) -> Self {
+        self.refresh_runtime = runtime;
+        self
+    }
+
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            refresh_runtime: None,
             filesystem: None,
         }
     }
@@ -62,6 +74,7 @@ impl<'a> ArgumentGenerator<'a> {
             database,
             environment_names,
             system_command_ticket,
+            refresh_runtime: None,
             filesystem: None,
         }
     }
@@ -274,7 +287,7 @@ impl<'a> ArgumentGenerator<'a> {
             .as_ref()
             .map(|ticket| {
                 SystemCommandGenerator::from_activation(ticket.clone())
-                    .generate_candidates(current_token)
+                    .generate_for_runtime(current_token, self.refresh_runtime.as_ref())
             })
             .transpose()?
             .unwrap_or_default())

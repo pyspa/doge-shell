@@ -328,3 +328,45 @@ fn changing_to_relative_or_empty_path_invalidates_the_old_worker() {
         );
     }
 }
+
+#[test]
+fn ordinary_ghost_refresh_coalesces_with_tab_and_clears_previous_path_projection() {
+    let _guard = crate::test_env_lock();
+    let old = tempfile::tempdir().unwrap();
+    let new = tempfile::tempdir().unwrap();
+    let env = environment(old.path().to_str().unwrap());
+    env.write()
+        .set_executable_names(vec!["old-path-name".into()]);
+    let paths = vec![new.path().display().to_string()];
+    let activation = generator::activate_system_command_cache(&paths);
+    let tab =
+        crate::completion::generators::system::claim_background_system_command_scan(&activation)
+            .unwrap();
+    env.write().variable_state.paths = paths;
+    assert!(
+        env.read()
+            .start_path_ghost_refresh(|_| panic!("Tab already owns this activation"))
+            .is_none()
+    );
+    assert!(
+        env.read()
+            .completion_state
+            .executable_names
+            .read()
+            .is_empty()
+    );
+    assert!(
+        crate::completion::generators::system::claim_background_system_command_scan(&activation)
+            .is_none()
+    );
+    generator::release_system_command_scan(&tab);
+    env.read()
+        .start_path_ghost_refresh(|_| Ok(vec!["new-path-name".into()]))
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(
+        env.read().search_prefix("new-"),
+        Some("new-path-name".into())
+    );
+}

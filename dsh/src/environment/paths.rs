@@ -289,7 +289,7 @@ impl Environment {
             self.completion_state.executable_names.write().clear();
             return;
         }
-        self.start_path_ghost_scan(super::collect_executables_checked);
+        self.start_path_ghost_refresh(super::collect_executables_checked);
     }
 
     /// Set the prewarmed executable names (called after background collection).

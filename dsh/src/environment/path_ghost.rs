@@ -67,7 +67,7 @@ impl Environment {
             .lock()
             .needs_scan(&self.variable_state.paths)
         {
-            self.start_path_ghost_scan(super::collect_executables_checked);
+            self.start_path_ghost_refresh(super::collect_executables_checked);
         }
     }
     pub(crate) fn path_ghost_pending(&self) -> bool {
@@ -99,7 +99,31 @@ impl Environment {
         state.phase = Phase::Ready(Instant::now());
         state.failures = 0;
     }
+    pub(super) fn start_path_ghost_refresh<L>(
+        &self,
+        loader: L,
+    ) -> Option<std::thread::JoinHandle<()>>
+    where
+        L: FnOnce(&[String]) -> anyhow::Result<Vec<String>> + Send + 'static,
+    {
+        self.start_path_ghost_worker(loader, false)
+    }
+
+    // Tests also exercise explicit same-generation rescan ordering. Ordinary
+    // refreshes must coalesce with a Tab worker instead of superseding it.
+    #[cfg(test)]
     pub(crate) fn start_path_ghost_scan<L>(&self, loader: L) -> Option<std::thread::JoinHandle<()>>
+    where
+        L: FnOnce(&[String]) -> anyhow::Result<Vec<String>> + Send + 'static,
+    {
+        self.start_path_ghost_worker(loader, true)
+    }
+
+    fn start_path_ghost_worker<L>(
+        &self,
+        loader: L,
+        supersede: bool,
+    ) -> Option<std::thread::JoinHandle<()>>
     where
         L: FnOnce(&[String]) -> anyhow::Result<Vec<String>> + Send + 'static,
     {
@@ -109,8 +133,22 @@ impl Environment {
             return None;
         }
         let paths = self.variable_state.paths.clone();
+        {
+            let mut state = self.completion_state.path_ghost.lock();
+            if state.paths != paths {
+                self.completion_state.executable_names.write().clear();
+                let notifier = state.take_notifier();
+                *state = PathGhost::uninitialized_for(paths.clone(), notifier);
+            }
+        }
         let activation = generator::activate_system_command_cache(&paths);
-        let ticket = generator::begin_background_system_command_scan(&activation);
+        let ticket = if supersede {
+            generator::begin_background_system_command_scan(&activation)
+        } else {
+            crate::completion::generators::system::claim_background_system_command_scan(
+                &activation,
+            )?
+        };
         let projection = self.completion_state.path_ghost.clone();
         let names = self.completion_state.executable_names.clone();
         {

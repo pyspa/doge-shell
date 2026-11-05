@@ -153,3 +153,44 @@ async fn pty_observer_updates_after_display_failure() {
         observe_chunks(&[b"\xe6", b"\x97\xa5\xf0\x9f\x98\x80done"], real_pty, true).await;
     }
 }
+
+#[tokio::test]
+async fn pty_observer_finalizes_incomplete_utf8_at_eof_after_display_failure() {
+    use dsh_types::observed_output::ObservedOutput;
+
+    let (read_fd, write_fd) = pipe().expect("pipe");
+    let observer = ObservedOutput::shared(4096);
+    let mut monitor =
+        PtyMonitor::new(read_fd.into_raw_fd(), Some(observer.clone())).expect("create monitor");
+    let mut writer = Some(std::fs::File::from(write_fd));
+    writer.as_mut().unwrap().write_all(b"\xe6").unwrap();
+    let mut flush_calls = 0;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        monitor.process_output_with(|_| {
+            flush_calls += 1;
+            // The first read is acknowledged before the display fails. Pipes
+            // retain these later bytes across close, including the pending tail
+            // that cannot become observer text until EOF.
+            let mut writer = writer.take().expect("only one display callback");
+            writer.write_all(b"\x97\xa5\xf0\x9f\x98\x80\xe6").unwrap();
+            drop(writer);
+            Err(std::io::Error::new(
+                ErrorKind::BrokenPipe,
+                "test stdout failure",
+            ))
+        }),
+    )
+    .await
+    .expect("drain pending UTF-8 to EOF after display failure");
+
+    let err = result.expect_err("display error must propagate after drain");
+    assert!(err.to_string().contains("failed to flush stdout"));
+    assert_eq!(
+        err.downcast_ref::<std::io::Error>().unwrap().kind(),
+        ErrorKind::BrokenPipe
+    );
+    assert_eq!(flush_calls, 1);
+    assert_eq!(monitor.captured_output, b"\xe6\x97\xa5\xf0\x9f\x98\x80\xe6");
+    assert_eq!(observer.lock().unwrap().snapshot().stdout, "日😀\u{fffd}");
+}

@@ -20,6 +20,9 @@ impl Shared {
         }
         {
             let mut inner = self.inner.lock();
+            if active(inner.task.status()) {
+                inner.completed_ok = Some(false);
+            }
             inner.task.cancel();
             inner.pending = None;
             inner.admitted = None;

@@ -36,6 +36,7 @@ use std::{
 const OUTPUT_LIMIT: usize = 256 * 1024;
 mod approval;
 mod lifecycle;
+mod notices;
 mod output;
 mod owned_job;
 use output::{drain, safe_output};
@@ -58,8 +59,10 @@ struct Inner {
     pending: Option<Pending>,
     admitted: Option<Admitted>,
     completed_ok: Option<bool>,
+    user_cancelled: bool,
     failure_reason: Option<String>,
     tokens_reported: bool,
+    notices: notices::Notices,
 }
 struct Shared {
     inner: Mutex<Inner>,
@@ -90,8 +93,10 @@ impl Shared {
                 pending: None,
                 admitted: None,
                 completed_ok: None,
+                user_cancelled: false,
                 failure_reason: None,
                 tokens_reported: false,
+                notices: notices::Notices::default(),
             }),
             changed: Condvar::new(),
             canceled: AtomicBool::new(false),
@@ -470,6 +475,7 @@ impl TaskHandle {
     pub(super) fn cancel(&mut self) {
         {
             let mut inner = self.shared.inner.lock();
+            inner.user_cancelled |= active(inner.task.status());
             inner.task.cancel();
             inner.pending = None;
         }
@@ -703,6 +709,9 @@ impl Drop for WorkerGuard {
     fn drop(&mut self) {
         {
             let mut inner = self.0.inner.lock();
+            if active(inner.task.status()) {
+                inner.completed_ok = Some(false);
+            }
             inner.task.cancel();
             inner.pending = None;
             inner.admitted = None;

@@ -329,10 +329,17 @@ impl History {
                 persistence_id,
                 commands,
             });
-        } else if let Some(db) = &mut self.db
-            && Self::write_batch_sync(db, entries, context).is_ok()
-        {
-            self.acknowledge_persistence(persistence_id, &commands);
+        } else if let Some(db) = &mut self.db {
+            if Self::write_batch_sync(db, entries, context).is_ok() {
+                self.acknowledge_persistence(persistence_id, &commands);
+            }
+        } else if let Some(writes) = &mut self.startup_writes {
+            writes.push(StartupHistoryWrite::Batch {
+                entries,
+                context,
+                persistence_id,
+                commands,
+            });
         }
         Ok(())
     }
@@ -364,10 +371,17 @@ impl History {
                 metadata,
                 persistence_id,
             });
-        } else if let Some(db) = &mut self.db
-            && Self::record_outcome_sync(db, command, context, &metadata).is_ok()
-        {
-            self.acknowledge_persistence(persistence_id, &commands);
+        } else if let Some(db) = &mut self.db {
+            if Self::record_outcome_sync(db, command, context, &metadata).is_ok() {
+                self.acknowledge_persistence(persistence_id, &commands);
+            }
+        } else if let Some(writes) = &mut self.startup_writes {
+            writes.push(StartupHistoryWrite::Outcome {
+                command: command.to_string(),
+                context,
+                metadata,
+                persistence_id,
+            });
         }
         self.bump_revision();
         Ok(())

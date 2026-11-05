@@ -271,6 +271,75 @@ mod tests {
         assert_eq!(value["filesystem"]["allowWrite"], json!([root]));
         assert_eq!(value["network"]["allowLocalBinding"], false);
     }
+    const NESTED_USERNS_FAILURE: &str = "apply-seccomp: write /proc/self/setgroups (nested userns is capability-restricted; caller must provide CAP_SYS_ADMIN): Permission denied";
+
+    fn sandbox_startup_unavailable(
+        stderr: &str,
+        exit_failed: bool,
+        sentinel_absent: bool,
+        stdout: &[u8],
+    ) -> bool {
+        if !exit_failed || !sentinel_absent || !stdout.is_empty() {
+            return false;
+        }
+        stderr.contains("RTM_NEWADDR")
+            || (stderr.contains("bwrap")
+                && (stderr.contains("Operation not permitted")
+                    || stderr.contains("Permission denied")))
+            || (stderr.contains("namespace") && stderr.contains("Operation not permitted"))
+            || stderr.lines().any(|line| line == NESTED_USERNS_FAILURE)
+    }
+
+    #[test]
+    fn sandbox_startup_recognizes_nested_userns_capability_failure() {
+        assert!(sandbox_startup_unavailable(
+            NESTED_USERNS_FAILURE,
+            true,
+            true,
+            b""
+        ));
+    }
+
+    #[test]
+    fn sandbox_startup_retains_known_capability_failures() {
+        for stderr in [
+            "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted",
+            "bwrap: Creating new namespace failed: Permission denied",
+            "namespace setup: Operation not permitted",
+        ] {
+            assert!(sandbox_startup_unavailable(stderr, true, true, b""));
+        }
+    }
+
+    #[test]
+    fn sandbox_startup_rejects_other_permission_and_command_errors() {
+        for stderr in [
+            "Permission denied".to_owned(),
+            "userns: Permission denied".to_owned(),
+            "bash: /usr/local/lib/node_modules/@anthropic-ai/sandbox-runtime/vendor/seccomp/x64/apply-seccomp: No such file or directory".to_owned(),
+            "apply-seccomp: write /proc/self/setgroups: Permission denied".to_owned(),
+            format!("user command: {NESTED_USERNS_FAILURE}"),
+            format!("{NESTED_USERNS_FAILURE}: command failed"),
+        ] {
+            assert!(
+                !sandbox_startup_unavailable(&stderr, true, true, b""),
+                "unexpected capability skip for {stderr}"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_startup_rejects_success_or_any_command_execution_evidence() {
+        for stderr in [NESTED_USERNS_FAILURE, "bwrap: Permission denied"] {
+            assert!(!sandbox_startup_unavailable(stderr, false, true, b""));
+            // Any sentinel file, even empty or partial, prevents a skip.
+            assert!(!sandbox_startup_unavailable(stderr, true, false, b""));
+            for stdout in [b"output".as_slice(), b"secret".as_slice()] {
+                assert!(!sandbox_startup_unavailable(stderr, true, true, stdout));
+            }
+        }
+    }
+
     #[test]
     #[ignore = "requires pinned SRT and OS sandbox support; exercised by agent-sandbox CI"]
     fn real_sandbox_blocks_outside_writes_and_reads() {
@@ -307,19 +376,28 @@ mod tests {
         let (mut cmd, _settings) = command(&line, &inside, &grant, &state, &snapshot).unwrap();
         let result = cmd.output().unwrap();
         let stderr = String::from_utf8_lossy(&result.stderr);
-        let inside_content = std::fs::read_to_string(inside.join("inside")).unwrap_or_default();
-        // GitHub-hosted Ubuntu runners reject bwrap's loopback / namespace
-        // setup (e.g. `bwrap: loopback: Failed RTM_NEWADDR: Operation not
-        // permitted`). That is an environment constraint, not a sandbox
-        // regression, so skip instead of failing CI. The match stays narrow
-        // (bwrap startup failure) so a real isolation regression still fails.
+        let sentinel = inside.join("inside");
+        let sentinel_absent = !sentinel
+            .try_exists()
+            .expect("inspect sandbox startup marker");
+        let inside_content = if sentinel_absent {
+            String::new()
+        } else {
+            std::fs::read_to_string(&sentinel).expect("read sandbox startup marker")
+        };
+        // These isolation checks also apply to a would-be capability skip.
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("secret"));
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
+        // Some runners reject bwrap or apply-seccomp namespace setup. Skip
+        // only recognized startup failures with no command-execution evidence.
+        // The fixed command creates the marker before attempting either access.
         // See .github/workflows/ci.yml `Agent OS sandbox boundary`.
-        let sandbox_unavailable = stderr.contains("RTM_NEWADDR")
-            || (stderr.contains("bwrap")
-                && (stderr.contains("Operation not permitted")
-                    || stderr.contains("Permission denied")))
-            || (stderr.contains("namespace") && stderr.contains("Operation not permitted"));
-        if inside_content != "allowed" && sandbox_unavailable {
+        if sandbox_startup_unavailable(
+            &stderr,
+            !result.status.success(),
+            sentinel_absent,
+            &result.stdout,
+        ) {
             eprintln!("SKIP real_sandbox: OS sandbox unavailable on this runner: {stderr}");
             return;
         }
@@ -328,8 +406,6 @@ mod tests {
             "sandbox startup failed: {stderr}"
         );
         assert!(!result.status.success());
-        assert!(!String::from_utf8_lossy(&result.stdout).contains("secret"));
-        assert_eq!(std::fs::read_to_string(outside).unwrap(), "secret");
     }
 
     fn proxy_with(vars: &[(&str, &str)], search_paths: Vec<PathBuf>) -> TestShellProxy {

@@ -129,6 +129,7 @@ pub async fn eval_str(
             ExitStatus::Running(_) => 0,
             ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => 0,
         };
+        publish_exit_status(shell, code);
         // Only re-enable raw mode in interactive context
         if ctx.interactive {
             enable_raw_mode().ok();

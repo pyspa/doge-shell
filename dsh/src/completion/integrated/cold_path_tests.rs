@@ -3,6 +3,12 @@ use std::sync::mpsc;
 
 #[test]
 fn cold_tab_borrows_pending_scan_and_invalidates_empty_result_on_publication() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "cold_tab_borrows_pending_scan_and_invalidates_empty_result_on_publication",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
     let env = Environment::new_synthetic();

@@ -410,6 +410,12 @@ async fn legacy_lisp_command_uses_the_logical_exported_environment() {
 
 #[test]
 fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
+    if crate::completion::isolation_tests::run_isolated(
+        module_path!(),
+        "cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan",
+    ) {
+        return;
+    }
     let _guard = crate::test_env_lock();
     let dir = tempfile::tempdir().unwrap();
     let bin = dir.path().join("bin");

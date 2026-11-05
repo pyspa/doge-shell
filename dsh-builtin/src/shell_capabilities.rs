@@ -433,6 +433,13 @@ pub trait JobControlCapability {
     fn foreground_job(&mut self, ctx: &Context, argv: Vec<String>) -> Result<i32>;
 }
 
+/// Read-only finite runtime configuration; explicit implementations must report
+/// unavailable state as `None` rather than fabricate defaults.
+/// A supertrait bound keeps the frozen facade method count unchanged.
+pub trait EffectiveConfigCapability {
+    fn effective_config(&self) -> Option<crate::effective_config::EffectiveConfig>;
+}
+
 /// POSIX `set -o` / `set +o` option state owned by the shell core.
 ///
 /// A supertrait bound on [`crate::ShellProxy`], not a new facade method:

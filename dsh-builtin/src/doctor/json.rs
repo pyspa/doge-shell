@@ -6,7 +6,6 @@ use crate::task;
 use dsh_types::mcp::McpTransport;
 use dsh_types::{Context, ExitStatus};
 use serde_json::json;
-use std::fs;
 use std::path::Path;
 
 use super::*;
@@ -75,18 +74,7 @@ pub(super) fn json_section_details(
 ) -> serde_json::Value {
     let section = options.section.as_deref();
     match section {
-        Some("config") => {
-            let config = crate::config_paths::config_file("config.lisp");
-            let skills = crate::config_paths::skills_dir();
-            json!({
-                "config": json!({"path": config, "exists": config.is_file()}),
-                "runtime_skills": json!({
-                    "path": skills,
-                    "exists": skills.is_dir(),
-                    "entries": fs::read_dir(&skills).map(|entries| entries.count()).unwrap_or(0)
-                })
-            })
-        }
+        Some("config") => config::config_details(proxy),
         Some("ai") => {
             let usage = dsh_openai::usage::session_total();
             let config = crate::chatgpt::load_openai_config(proxy);
@@ -222,7 +210,7 @@ pub(super) fn json_section_details(
             let root = crate::config_paths::config_home();
             json!({"config_root": json!({"path": root, "exists": root.is_dir()})})
         }
-        None => json!({"kind": "summary"}),
+        None => json!({"kind": "summary", "config": config::config_details(proxy)}),
         Some(_) => serde_json::Value::Null,
     }
 }

@@ -153,6 +153,17 @@ Focused doctor calls keep the same envelope and add section-specific `details`;
 for example, `doctor safety --json` reports safety configuration while
 `doctor validate --json` reports the selected validation commands.
 
+`doctor config` keeps the config-file and runtime-skills diagnostics and reports
+current runtime preferences. In `doctor config --json`, `details.effective`
+contains exactly `suggestion_mode` (`off`/`ghost`), `transient_prompt`, `auto_pair`,
+`status_line`, `failure_hint`, `auto_notify_enabled`, `auto_notify_threshold`
+(integer seconds), `command_ledger_mode` (`off`/`metadata`/`output`), and `pipefail`.
+The other six values are booleans. These values describe current state, including
+changes made after startup; they do not claim which file set a preference.
+The full JSON report includes the same config object at `details.config`.
+If runtime state is unavailable, `effective` is null with
+`effective_error: "runtime-config-unavailable"`.
+
 Run as `blocks tui` there is no input buffer to fill, so `Enter` prints the
 command and `r` runs it. From `Ctrl+O` and the command palette, both put it in
 the buffer for you to confirm.

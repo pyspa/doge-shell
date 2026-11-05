@@ -48,7 +48,7 @@ absent, so a Linux-only definition never gets in the way on macOS.
 
 - **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
-- **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker
+- **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker. Distinct commands remain the default; with the command ledger enabled, picker-only Ctrl+E switches to per-execution metadata and authors (stored output is never read). See [History Search](docs/usage.md#history-search) for snapshot and project-scope limits.
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI-compatible integration for inline suggestions, error diagnosis and commit messages. Off by default — an API key alone sends nothing; see [AI Integration](#-ai-integration)
 - **Execution Status & Duration**: The prompt shows the exit status and elapsed time of the previous command

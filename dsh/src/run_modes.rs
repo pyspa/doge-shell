@@ -87,12 +87,10 @@ pub async fn run_shell() -> ExitCode {
             match crate::history::History::from_file("dsh_cmd_history") {
                 Ok(mut history) => {
                     let older = prepare_command_history(&mut history, 1000, 9000);
-                    publish_command_history(&cmd_history, &history);
-                    if !older.is_empty() {
-                        publish_older_command_history(&cmd_history, older);
-                    }
+                    publish_command_history(&cmd_history, &history, older);
                 }
                 Err(e) => {
+                    fail_command_history_initialization(&cmd_history);
                     tracing::warn!("Failed to load command history: {}", e);
                 }
             }
@@ -533,19 +531,13 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     }
 }
 
-// The asynchronous loader publishes both phases through these boundaries.
+// Publish both prepared baselines under one lock before reload can apply.
 pub(crate) fn publish_command_history(
     shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
     loaded: &crate::history::History,
+    older: Vec<crate::history::Entry>,
 ) {
-    shared.lock().install_startup_history(loaded);
-}
-
-pub(crate) fn publish_older_command_history(
-    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
-    entries: Vec<crate::history::Entry>,
-) {
-    shared.lock().install_older_startup_history(entries);
+    shared.lock().install_startup_history(loaded, older);
 }
 
 /// Read both bounded database baselines before foreground writes can reach the
@@ -575,4 +567,11 @@ pub(crate) fn prepare_command_history(
     };
     history.start_background_writer();
     older
+}
+
+// Terminal initialization failure has no retry owner.
+pub(crate) fn fail_command_history_initialization(
+    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
+) {
+    shared.lock().end_startup_initialization();
 }

@@ -34,12 +34,13 @@ impl StartupHistoryWrite {
 impl History {
     /// The loader has already read SQLite and started its canonical writer.
     /// Only in-memory merge work and channel sends happen under the live lock.
-    pub(crate) fn install_startup_history(&mut self, loaded: &History) {
+    pub(crate) fn install_startup_history(&mut self, loaded: &History, mut older: Vec<Entry>) {
         debug_assert!(self.db.is_none());
         self.db = loaded.db.clone();
         self.sender = loaded.sender.clone();
         self.persist_ack_rx = loaded.persist_ack_rx.clone();
-        self.install_older_startup_history(loaded.histories.clone());
+        older.extend(loaded.histories.iter().cloned());
+        self.merge_startup_baseline(older);
 
         if let Some(sender) = &self.sender {
             let writes = self.startup_writes.take().unwrap_or_default();
@@ -56,10 +57,17 @@ impl History {
         }
     }
 
+    /// A terminal failure has no persistence or retry owner. Keep the aggregate
+    /// entries and pending snapshots, but release every original output payload
+    /// and prevent later memory-only writes from growing an operation journal.
+    pub(crate) fn end_startup_initialization(&mut self) {
+        self.startup_writes = None;
+    }
+
     /// Both snapshots predate foreground writes. Existing entries contain the
     /// local delta, so add the database baseline exactly once, keeping all live
-    /// metadata. The older phase contains commands absent from the recent one.
-    pub(crate) fn install_older_startup_history(&mut self, entries: Vec<Entry>) {
+    /// metadata. Merge the combined baseline once before any reload can apply.
+    fn merge_startup_baseline(&mut self, entries: Vec<Entry>) {
         let selected = self
             .histories
             .get(self.current_index)

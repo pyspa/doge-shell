@@ -1,7 +1,5 @@
 use super::*;
-use crate::run_modes::{
-    prepare_command_history, publish_command_history, publish_older_command_history,
-};
+use crate::run_modes::{prepare_command_history, publish_command_history};
 use std::time::Duration;
 
 fn fixture() -> (tempfile::TempDir, History, Vec<Entry>) {
@@ -29,7 +27,7 @@ fn flush(shared: &Arc<ParkingMutex<History>>) {
 }
 
 #[test]
-fn startup_publication_preserves_live_writes_outcomes_and_older_phase() {
+fn startup_publication_preserves_live_writes_outcomes_and_full_baseline() {
     let (_dir, loaded, older) = fixture();
     let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
     let shell_handle = shared.clone();
@@ -58,7 +56,7 @@ fn startup_publication_preserves_live_writes_outcomes_and_older_phase() {
         )
         .unwrap();
     }
-    publish_command_history(&shared, &loaded);
+    publish_command_history(&shared, &loaded, older);
     assert!(Arc::ptr_eq(&shared, &shell_handle));
     {
         let live = shell_handle.lock();
@@ -67,12 +65,11 @@ fn startup_publication_preserves_live_writes_outcomes_and_older_phase() {
         assert_eq!(live.normalized_entries.len(), live.histories.len());
         assert!(live.recent_cache.contains(&"Unique".to_string()));
     }
-    // Interleave another user write between recent and older publication.
+    // A write after the atomic publication uses the attached writer.
     shared
         .lock()
         .write_batch(vec![("Older".into(), 104)])
         .unwrap();
-    publish_older_command_history(&shared, older);
     flush(&shared);
     let live = shared.lock();
     assert!(live.at_end());
@@ -125,7 +122,7 @@ fn startup_publication_preserves_live_writes_outcomes_and_older_phase() {
 }
 
 #[test]
-fn startup_publication_preserves_navigation_in_both_phases() {
+fn startup_publication_preserves_navigation_with_full_baseline() {
     let (_dir, loaded, older) = fixture();
     let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
     {
@@ -134,8 +131,7 @@ fn startup_publication_preserves_navigation_in_both_phases() {
         live.search_word = Some("loc".into());
         assert_eq!(live.back().as_deref(), Some("Local"));
     }
-    publish_command_history(&shared, &loaded);
-    publish_older_command_history(&shared, older);
+    publish_command_history(&shared, &loaded, older);
     let mut live = shared.lock();
     assert_eq!(live.search_word.as_deref(), Some("loc"));
     assert!(!live.at_end());
@@ -167,11 +163,9 @@ fn startup_publication_replays_each_outcome_once_and_retires_journal() {
         )
         .unwrap();
     }
-    publish_command_history(&shared, &loaded);
+    publish_command_history(&shared, &loaded, older);
     flush(&shared);
-    // An acknowledged operation must remain accounted for when the older
-    // snapshot arrives, with no replay at the second publication boundary.
-    publish_older_command_history(&shared, older);
+    // Later writes must not replay any acknowledged startup operation.
     shared
         .lock()
         .write_batch(vec![("After ready".into(), 200)])
@@ -220,4 +214,126 @@ fn ordinary_memory_history_does_not_buffer_startup_operations() {
             .unwrap();
     }
     assert!(history.startup_writes.is_none());
+}
+
+#[test]
+fn review_regression_reload_must_not_double_startup_baseline() {
+    for early_executions in [0, 2] {
+        let (_dir, loaded, older) = fixture();
+        let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
+        for timestamp in 0..early_executions {
+            shared
+                .lock()
+                .write_batch(vec![("Older".into(), 100 + timestamp)])
+                .unwrap();
+        }
+        // The combined baseline is published atomically; the first opportunity
+        // to request/apply reload is after older counts are already installed.
+        publish_command_history(&shared, &loaded, older);
+        assert_eq!(
+            shared
+                .lock()
+                .histories
+                .iter()
+                .find(|entry| entry.entry == "Older")
+                .unwrap()
+                .count,
+            1 + early_executions
+        );
+        for _ in 0..2 {
+            let (tx, rx) = mpsc::channel();
+            assert!(
+                shared
+                    .lock()
+                    .request_reload(move |result| tx.send(result).unwrap())
+            );
+            let snapshot = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+            assert_eq!(
+                shared.lock().apply_reload_snapshot(snapshot),
+                HistoryReloadApply::Applied
+            );
+            let live = shared.lock();
+            let older_entry = live
+                .histories
+                .iter()
+                .find(|entry| entry.entry == "Older")
+                .unwrap();
+            assert_eq!(older_entry.count, 1 + early_executions);
+            let count: i64 = live
+                .db
+                .as_ref()
+                .unwrap()
+                .get_connection()
+                .query_row(
+                    "SELECT count FROM command_history WHERE command = 'Older'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(older_entry.count, count);
+        }
+        shared.lock().drain_persistence_acks();
+        assert!(shared.lock().pending_persistence.is_empty());
+    }
+}
+
+#[test]
+fn review_regression_terminal_initialization_failure_ends_journal() {
+    let dir = tempfile::tempdir().unwrap();
+    // Opening a directory as SQLite deterministically fails without real data.
+    assert!(Db::new(dir.path().to_path_buf()).is_err());
+    let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
+    {
+        let mut live = shared.lock();
+        live.write_batch(vec![("Keep".into(), 100)]).unwrap();
+        live.record_outcome(
+            "Keep",
+            HistoryMetadata {
+                exit_code: Some(-1),
+                ledger_mode: CommandLedgerMode::Output,
+                output: Some("buffered before failure".repeat(1000)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(live.startup_writes.as_ref().unwrap().len(), 2);
+        live.search_word = Some("keep".into());
+        assert_eq!(live.back().as_deref(), Some("Keep"));
+    }
+    crate::run_modes::fail_command_history_initialization(&shared);
+    {
+        let live = shared.lock();
+        assert_eq!(live.search_word.as_deref(), Some("keep"));
+        assert_eq!(live.histories[live.current_index].entry, "Keep");
+        assert_eq!(live.pending_persistence.len(), 1);
+        assert!(live.db.is_none());
+        assert!(live.sender.is_none());
+        assert_eq!(live.histories[0].exit_code, Some(-1));
+        assert_eq!(live.pending_persistence["Keep"].entry.exit_code, Some(-1));
+        assert_eq!(live.normalized_entries, ["keep"]);
+        assert_eq!(live.recent_cache, ["Keep"]);
+    }
+    for code in 0..32 {
+        let mut live = shared.lock();
+        live.write_batch(vec![("Keep".into(), 101 + i64::from(code))])
+            .unwrap();
+        live.record_outcome(
+            "Keep",
+            HistoryMetadata {
+                exit_code: Some(code),
+                ledger_mode: CommandLedgerMode::Output,
+                output: Some("synthetic output".repeat(1000)),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let live = shared.lock();
+    assert_eq!(live.histories.len(), 1);
+    assert_eq!(live.histories[0].count, 33);
+    assert_eq!(live.histories[0].exit_code, Some(31));
+    assert_eq!(live.pending_persistence.len(), 1);
+    assert_eq!(live.pending_persistence["Keep"].entry.count, 33);
+    assert_eq!(live.pending_persistence["Keep"].entry.exit_code, Some(31));
+    assert!(live.startup_writes.is_none());
 }

@@ -24,6 +24,7 @@ const LEDGER_MAX_EVENTS: i64 = 10_000;
 
 mod navigation;
 mod persist;
+mod picker_metadata;
 mod query;
 mod reload;
 

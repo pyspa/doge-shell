@@ -538,18 +538,35 @@ The filters that the `history` command exposes as flags are available as live to
 - `Ctrl+R` - cycle scope: `global` → `session` → `cwd` → `project`
 - `Ctrl+S` - cycle status: `any` → `failure` → `success`
 - `Ctrl+T` - show only commands that took a second or more
+- `Ctrl+E` - switch between distinct commands and executions when the command ledger is enabled
 - `Up` / `Down`, `Ctrl+P` / `Ctrl+N`, `PageUp` / `PageDown`, `Home` / `End` - move the selection
 - `Ctrl+U` - clear the query
 - `Enter` - put the command in the input buffer (it is never executed for you)
 - `Esc`, `Ctrl+C`, `Ctrl+G` - cancel and leave the input untouched
 
 The status line reports the active filters and how many entries match, e.g.
-`scope:cwd  status:failure  slow:off  (12/5000, last run)`.
+`commands  scope:cwd  status:failure  slow:off  (12/5000, last run)`.
 
 **`last run`**: history is stored one row per distinct command string, carrying only the
 metadata of its most recent execution. `scope:cwd` therefore means "commands whose *last*
 run was in this directory", not "every command ever run here", and the exit status and
 duration shown are those of that last run.
+
+Distinct commands remain the initial source. With `(pref-command-ledger "metadata")`
+or the existing `"output"` opt-in enabled, `Ctrl+E` switches to the newest 5000 recorded
+executions, preserving repeated commands and each run's time, status, duration, cwd,
+session and author. The footer identifies the source and selected execution's author;
+wide terminals also show authors in the rows. Switching sources preserves the query
+and filters and resets the selection. The picker reads metadata only, never stored output.
+With the current ledger preference `"off"`, it does not read or offer old execution data.
+If the execution snapshot cannot be read, the footer reports it as unavailable and
+distinct-command search remains usable.
+
+Execution project scope resolves the stored cwd against **current filesystem** repository
+markers the first time that scope is needed, then caches it for the picker session.
+Moved or deleted repositories and changed markers can therefore differ from the original
+execution's project. Both sources use bounded snapshots; older matching rows may fall
+outside the newest 5000 entries.
 
 Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
 

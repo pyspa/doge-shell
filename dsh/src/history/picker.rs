@@ -39,6 +39,7 @@ pub struct PickerRow {
     pub age: String,
     pub cwd: String,
     pub command: String,
+    pub author: String,
 }
 
 /// Which optional columns fit at a given width.
@@ -156,10 +157,30 @@ fn tail_within(text: &str, budget: usize) -> String {
 /// Multi-line entries would otherwise break the row layout; the raw command is
 /// still what [`PickerAction::Accept`] returns.
 fn flatten_command(command: &str) -> String {
-    command.replace("\r\n", "⏎").replace(['\n', '\r'], "⏎")
+    command
+        .replace("\r\n", "⏎")
+        .chars()
+        .map(|ch| match ch {
+            '\n' | '\r' => '⏎',
+            '\t' => ' ',
+            ch if ch.is_control() => '�',
+            ch => ch,
+        })
+        .collect()
+}
+
+struct AlternateSource {
+    entries: Vec<Entry>,
+    normalized: Vec<String>,
+    authors: Vec<Option<String>>,
 }
 
 pub struct HistoryPicker {
+    alternate: Option<AlternateSource>,
+    executions: bool,
+    execution_contexts_resolved: bool,
+    metadata_unavailable: bool,
+    authors: Vec<Option<String>>,
     entries: Vec<Entry>,
     /// Lowercased command text, parallel to `entries`, so filtering on each
     /// keystroke does not re-lowercase the whole snapshot.
@@ -182,6 +203,11 @@ impl HistoryPicker {
     pub fn new(entries: Vec<Entry>, base: HistoryQuery, initial_query: String, now: i64) -> Self {
         let normalized = entries.iter().map(|e| e.entry.to_lowercase()).collect();
         let mut picker = Self {
+            authors: vec![None; entries.len()],
+            alternate: None,
+            executions: false,
+            execution_contexts_resolved: false,
+            metadata_unavailable: false,
             entries,
             normalized,
             base,
@@ -197,6 +223,57 @@ impl HistoryPicker {
         };
         picker.recompute();
         picker
+    }
+
+    /// Load only while the caller holds its short-lived history snapshot lock.
+    /// OFF must not invoke the loader, even when old ledger data exists.
+    pub fn with_execution_loader(
+        mut self,
+        mode: super::CommandLedgerMode,
+        load: impl FnOnce() -> Result<Vec<super::CommandEvent>>,
+    ) -> Self {
+        if mode == super::CommandLedgerMode::Off {
+            return self;
+        }
+        match load() {
+            Ok(events) => {
+                let mut entries = Vec::with_capacity(events.len());
+                let mut authors = Vec::with_capacity(events.len());
+                for event in events.into_iter().take(5000) {
+                    entries.push(Entry {
+                        entry: event.command,
+                        when: event.started_at,
+                        count: 1,
+                        context: None,
+                        exit_code: event.exit_code,
+                        duration_ms: event.duration_ms,
+                        cwd: event.cwd,
+                        session_id: event.session_id,
+                        hostname: event.hostname,
+                    });
+                    authors.push(Some(event.author));
+                }
+                let normalized = entries.iter().map(|e| e.entry.to_lowercase()).collect();
+                self.alternate = Some(AlternateSource {
+                    entries,
+                    normalized,
+                    authors,
+                });
+            }
+            Err(_) => self.metadata_unavailable = true,
+        }
+        self
+    }
+
+    pub fn help(&self) -> String {
+        format!(
+            "{}^R scope  ^S status  ^T slow  Enter accept  Esc cancel",
+            if self.alternate.is_some() {
+                "^E source  "
+            } else {
+                ""
+            }
+        )
     }
 
     pub fn set_width(&mut self, width: u16) {
@@ -236,6 +313,25 @@ impl HistoryPicker {
 
     /// Rebuild the match set and keep the selection inside it.
     fn recompute(&mut self) {
+        // Marker walks are only needed by the execution/project combination.
+        // Resolve once per distinct cwd, then retain those contexts in the snapshot.
+        if self.executions
+            && self.scope == HistoryScope::Project
+            && !self.execution_contexts_resolved
+        {
+            let mut contexts = std::collections::HashMap::new();
+            for entry in &mut self.entries {
+                entry.context = entry.cwd.as_ref().and_then(|cwd| {
+                    contexts
+                        .entry(cwd.clone())
+                        .or_insert_with(|| {
+                            super::context::get_current_context_from(std::path::Path::new(cwd))
+                        })
+                        .clone()
+                });
+            }
+            self.execution_contexts_resolved = true;
+        }
         let query = self.current_query();
         let matcher = EntryMatcher::new(&query);
         self.filtered = self
@@ -289,6 +385,19 @@ impl HistoryPicker {
                 None => PickerAction::Noop,
                 Some(entry) => PickerAction::Accept(entry.entry.clone()),
             },
+
+            (KeyCode::Char('e'), CTRL) => {
+                let Some(other) = &mut self.alternate else {
+                    return PickerAction::Noop;
+                };
+                std::mem::swap(&mut self.entries, &mut other.entries);
+                std::mem::swap(&mut self.normalized, &mut other.normalized);
+                std::mem::swap(&mut self.authors, &mut other.authors);
+                self.executions = !self.executions;
+                self.selected = 0;
+                self.recompute();
+                PickerAction::Redraw
+            }
 
             // Cycle the filters that `HistoryQuery` already supported.
             (KeyCode::Char('r'), CTRL) => {
@@ -362,13 +471,40 @@ impl HistoryPicker {
             HistoryStatusFilter::Success => "success",
             HistoryStatusFilter::Failure => "failure",
         };
+        let author = self
+            .filtered
+            .get(self.selected)
+            .and_then(|index| self.authors[*index].as_deref())
+            .map(|author| {
+                format!(
+                    " author:{}",
+                    shorten_cwd(&flatten_command(author), None, 24)
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "scope:{}  status:{}  slow:{}  ({}/{}, last run)",
+            "{}{}{}  scope:{}  status:{}  slow:{}  ({}/{}, {})",
+            if self.executions {
+                "executions"
+            } else {
+                "commands"
+            },
+            author,
+            if self.metadata_unavailable {
+                " (executions unavailable)"
+            } else {
+                ""
+            },
             scope,
             status,
             if self.slow_only { "on" } else { "off" },
             self.filtered.len(),
             self.entries.len(),
+            if self.executions {
+                "each run"
+            } else {
+                "last run"
+            },
         )
     }
 
@@ -399,7 +535,7 @@ impl HistoryPicker {
                     },
                     cwd: if columns.cwd {
                         shorten_cwd(
-                            entry.cwd.as_deref().unwrap_or("-"),
+                            &flatten_command(entry.cwd.as_deref().unwrap_or("-")),
                             self.home.as_deref(),
                             cwd_budget,
                         )
@@ -407,6 +543,14 @@ impl HistoryPicker {
                         String::new()
                     },
                     command: flatten_command(&entry.entry),
+                    author: if self.width >= 120 {
+                        self.authors[*index]
+                            .as_deref()
+                            .map(|author| shorten_cwd(&flatten_command(author), None, 16))
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    },
                 }
             })
             .collect()
@@ -510,14 +654,14 @@ fn draw(frame: &mut ratatui::Frame, picker: &HistoryPicker) {
         .constraints([
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(area);
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("history> ", Style::default().fg(Color::Cyan)),
-            Span::raw(picker.query()),
+            Span::raw(flatten_command(picker.query())),
         ])),
         chunks[0],
     );
@@ -556,6 +700,12 @@ fn draw(frame: &mut ratatui::Frame, picker: &HistoryPicker) {
                     Style::default().fg(Color::Blue),
                 ));
             }
+            if !row.author.is_empty() {
+                spans.push(Span::styled(
+                    format!("{}  ", row.author),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
             spans.push(Span::raw(row.command.clone()));
             ListItem::new(Line::from(spans))
         })
@@ -571,13 +721,8 @@ fn draw(frame: &mut ratatui::Frame, picker: &HistoryPicker) {
     frame.render_stateful_widget(list, chunks[1], &mut state);
 
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!(
-                "{}   ^R scope  ^S status  ^T slow  Enter accept  Esc cancel",
-                picker.header()
-            ),
-            Style::default().fg(Color::DarkGray),
-        ))),
+        Paragraph::new(vec![Line::from(picker.header()), Line::from(picker.help())])
+            .style(Style::default().fg(Color::DarkGray)),
         chunks[2],
     );
 }

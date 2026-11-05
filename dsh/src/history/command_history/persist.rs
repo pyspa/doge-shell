@@ -17,25 +17,44 @@ impl History {
                 .find(|entry| entry.entry == *command)
                 .cloned()
             {
-                self.pending_persistence.insert(
-                    command.clone(),
-                    PendingHistoryEntry {
+                let pending = self
+                    .pending_persistence
+                    .entry(command.clone())
+                    .or_insert_with(|| PendingHistoryEntry {
                         persistence_id,
-                        entry,
-                    },
-                );
+                        first_persistence_id: persistence_id,
+                        unconfirmed_operations: 0,
+                        entry: entry.clone(),
+                    });
+                pending.persistence_id = persistence_id;
+                pending.entry = entry;
+                // Keep failed obligations when replacing the latest snapshot. A
+                // later outcome or increment persists only its own operation.
+                pending.unconfirmed_operations += 1;
             }
         }
     }
 
     fn acknowledge_persistence(&mut self, persistence_id: u64, commands: &[String]) {
         for command in commands {
-            if self
-                .pending_persistence
-                .get(command)
-                .is_some_and(|pending| pending.persistence_id == persistence_id)
-            {
-                self.pending_persistence.remove(command);
+            if let Some(pending) = self.pending_persistence.get_mut(command) {
+                // An outcome for an absent entry was never tracked. Its ACK can
+                // arrive after the first batch creates a pending entry; exclude it.
+                if persistence_id.wrapping_sub(pending.first_persistence_id)
+                    > pending
+                        .persistence_id
+                        .wrapping_sub(pending.first_persistence_id)
+                {
+                    continue;
+                }
+                // The single writer emits one ordered ACK per message; commands
+                // preserves batch multiplicity. Sync writes use this same boundary.
+                // Failed ACKs never reach here, so their obligations remain even
+                // after newer successes, without retaining an ID list per command.
+                pending.unconfirmed_operations -= 1;
+                if pending.unconfirmed_operations == 0 && pending.persistence_id == persistence_id {
+                    self.pending_persistence.remove(command);
+                }
             }
         }
     }

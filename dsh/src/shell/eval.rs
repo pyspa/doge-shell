@@ -510,8 +510,10 @@ pub async fn eval_str(
                     // Background jobs are considered successfully started.
                     last_exit_code = 0;
                 }
-                Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, _signal))) => {
+                Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, signal))) => {
                     debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
+                    // Invocation status only: the stopped tree has no final status.
+                    last_exit_code = crate::process::signal_exit_status(signal);
                     shell.wait_jobs.push(job);
                     // If a job is stopped, we return control to the user and do not continue
                     // evaluating the rest of the command list.

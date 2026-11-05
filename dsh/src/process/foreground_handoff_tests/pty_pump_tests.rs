@@ -19,6 +19,28 @@ pub(super) struct PtyPump {
     pub(super) blocked: usize,
 }
 
+/// Only explicit Stdio transfers should survive exec. Set both flags before
+/// exposing either owned end to the rest of the scratch harness.
+pub(super) fn scratch_pty() -> nix::Result<nix::pty::OpenptyResult> {
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    let pty = nix::pty::openpty(None, None)?;
+    for fd in [&pty.master, &pty.slave] {
+        let flags = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD)?);
+        fcntl(fd, FcntlArg::F_SETFD(flags | FdFlag::FD_CLOEXEC))?;
+    }
+    Ok(pty)
+}
+
+#[test]
+fn scratch_pty_live_ends_are_cloexec() {
+    use nix::fcntl::{FcntlArg, FdFlag, fcntl};
+    let pty = scratch_pty().unwrap();
+    for fd in [&pty.master, &pty.slave] {
+        let flags = FdFlag::from_bits_truncate(fcntl(fd, FcntlArg::F_GETFD).unwrap());
+        assert!(flags.contains(FdFlag::FD_CLOEXEC));
+    }
+}
+
 pub(super) fn nonblocking(file: &File) -> std::io::Result<()> {
     let fd = file.as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -121,7 +143,7 @@ impl PtyPump {
 }
 
 fn raw_pty() -> (File, File) {
-    let pty = nix::pty::openpty(None, None).unwrap();
+    let pty = scratch_pty().unwrap();
     let master = File::from(pty.master);
     let slave = File::from(pty.slave);
     let mut modes = nix::sys::termios::tcgetattr(&slave).unwrap();

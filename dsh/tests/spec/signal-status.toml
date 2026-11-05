@@ -41,3 +41,20 @@ script = "printf 'trap - PIPE\\nkill -PIPE $$\\n' > sigpipe.sh; {{SH}} sigpipe.s
 [case.expect]
 status = 0
 stdout_contains = ["GOT:141"]
+
+# Invocation status for a stop is observed signal + 128, not job completion.
+[[case]]
+id = "signal.foreground-stop-status"
+class = "dogesh"
+mode = "interactive"
+script = '''
+printf '%s\n' 'kill -STOP $$' > stop.sh
+printf '%s\n' '[ "$1" -gt 128 ] && [ "$(kill -l "$1")" = STOP ] && echo observed-stop-status' > check.sh
+{{FALSE}}; {{SH}} stop.sh; echo forbidden-after-stop
+{{SH}} check.sh $?
+'''
+
+[case.expect]
+status = 0
+stdout_contains = ["observed-stop-status"]
+stdout_not_contains = ["forbidden-after-stop"]

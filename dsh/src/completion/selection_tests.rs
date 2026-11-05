@@ -407,3 +407,88 @@ async fn legacy_lisp_command_uses_the_logical_exported_environment() {
         CompletionSelection::Selected("logical_value".into()),
     );
 }
+
+#[test]
+fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
+    let _guard = crate::test_env_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::write(dir.path().join("zz-cold-file"), "").unwrap();
+    let env = crate::environment::Environment::new_synthetic();
+    {
+        let mut environment = env.write();
+        environment.variable_state.paths = vec![bin.display().to_string()];
+        environment.isolated_projection = false;
+        environment.invocation.interactive = true;
+    }
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let worker = env
+        .read()
+        .start_path_ghost_scan(move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(vec!["zz-cold-command".into()])
+        })
+        .unwrap();
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let filesystem = super::super::generators::filesystem::FileSystemContext::new(dir.path(), None);
+    let ticket = super::super::generators::system::activate_system_command_cache_at(
+        &env.read().variable_state.paths,
+        &filesystem,
+    );
+    let mut snapshot = LegacyCompletionSnapshot::from_environment(&env.read(), dir.path().into());
+    snapshot.system = Some((
+        ticket,
+        Arc::new(super::super::dynamic::CompletionRuntime::new()),
+    ));
+    let cache = CompletionCache::new(Duration::from_secs(60));
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let first = runtime
+        .block_on(cached_current_context_candidates(
+            &snapshot, "zz-cold-", &cache,
+        ))
+        .unwrap();
+    let second = runtime
+        .block_on(cached_current_context_candidates(
+            &snapshot, "zz-cold-", &cache,
+        ))
+        .unwrap();
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    for result in [first, second] {
+        assert!(
+            result
+                .items
+                .iter()
+                .any(|item| item.output() == "zz-cold-file")
+        );
+        assert!(
+            !result
+                .items
+                .iter()
+                .any(|item| item.output() == "zz-cold-command")
+        );
+    }
+    let ready = runtime
+        .block_on(cached_current_context_candidates(
+            &snapshot, "zz-cold-", &cache,
+        ))
+        .unwrap();
+    assert!(
+        ready
+            .items
+            .iter()
+            .any(|item| item.output() == "zz-cold-command")
+    );
+    assert!(
+        ready
+            .items
+            .iter()
+            .any(|item| item.output() == "zz-cold-file")
+    );
+}

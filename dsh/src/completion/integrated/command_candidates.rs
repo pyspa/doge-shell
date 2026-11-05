@@ -2,7 +2,7 @@
 //! whatever the command is (`$VAR`, `~user`), plus the one-level unwrap that
 //! lets `sudo pacman -R <TAB>` reach pacman's own completion.
 use super::*;
-use crate::completion::generator::{SystemCommandCacheTicket, activate_system_command_cache};
+use crate::completion::generator::SystemCommandCacheTicket;
 
 impl IntegratedCompletionEngine {
     /// Capture all shell state used by JSON/system completion under one read
@@ -19,14 +19,25 @@ impl IntegratedCompletionEngine {
             .keys()
             .cloned()
             .collect();
-        let system_command_ticket =
-            activate_system_command_cache(&environment.variable_state.paths);
         let filesystem = FileSystemContext::new(current_dir, environment.lookup_variable("HOME"));
+        let system_command_ticket =
+            crate::completion::generators::system::activate_system_command_cache_at(
+                &environment.variable_state.paths,
+                &filesystem,
+            );
         (names, system_command_ticket, filesystem)
     }
 
     pub(super) fn filesystem_context(&self, current_dir: &Path) -> FileSystemContext {
         FileSystemContext::new(current_dir, self.environment.read().lookup_variable("HOME"))
+    }
+
+    pub(super) fn path_refresh_runtime(&self) -> Option<Arc<CompletionRuntime>> {
+        self.environment
+            .read()
+            .invocation
+            .interactive
+            .then(|| self.runtime.clone())
     }
 
     pub(super) fn current_cache_scope(&self, current_dir: &Path) -> u64 {
@@ -37,6 +48,9 @@ impl IntegratedCompletionEngine {
             .completion_state
             .path_generation
             .hash(&mut scope);
+        if environment.invocation.interactive {
+            crate::completion::generators::system::system_command_cache_revision().hash(&mut scope);
+        }
         environment.lookup_variable("HOME").hash(&mut scope);
         aliases::alias_signature(&environment.variable_state.alias).hash(&mut scope);
         if !current_dir.is_absolute() {
@@ -142,7 +156,8 @@ impl IntegratedCompletionEngine {
             &environment_names,
             system_command_ticket.clone(),
         )
-        .with_filesystem_context(&filesystem);
+        .with_filesystem_context(&filesystem)
+        .with_background_refresh(self.path_refresh_runtime());
 
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
@@ -181,7 +196,8 @@ impl IntegratedCompletionEngine {
                                     &environment_names,
                                     system_command_ticket.clone(),
                                 )
-                                .with_filesystem_context(&filesystem);
+                                .with_filesystem_context(&filesystem)
+                                .with_background_refresh(self.path_refresh_runtime());
                             match completion_generator.generate_candidates(parsed_command_line) {
                                 Ok(candidates) => {
                                     let enhanced_candidates = candidates
@@ -218,7 +234,8 @@ impl IntegratedCompletionEngine {
                     &environment_names,
                     system_command_ticket.clone(),
                 )
-                .with_filesystem_context(&filesystem);
+                .with_filesystem_context(&filesystem)
+                .with_background_refresh(self.path_refresh_runtime());
                 if let Ok(candidates) = completion_generator
                     .generate_fallback_candidates(&parsed_command_line.current_token)
                 {

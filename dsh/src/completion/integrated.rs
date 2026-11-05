@@ -673,3 +673,6 @@ mod alias_tests;
 
 #[cfg(test)]
 mod exact_cache_tests;
+
+#[cfg(test)]
+mod cold_path_tests;

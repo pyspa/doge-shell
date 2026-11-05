@@ -13,7 +13,7 @@ use crate::completion::fuzzy_match_score;
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::collections::{BTreeSet, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,7 @@ const GLOBAL_SYSTEM_COMMAND_CACHE_TTL: Duration = Duration::from_secs(30);
 pub(crate) struct SystemCommandCacheTicket {
     generation: u64,
     paths: Arc<Vec<String>>,
+    scan_paths: Option<Arc<Vec<PathBuf>>>,
 }
 
 /// Ownership of one live executable scan within a PATH generation.
@@ -60,6 +61,7 @@ enum RefreshDecision {
 #[derive(Debug)]
 struct SystemCommandCacheState {
     paths: Arc<Vec<String>>,
+    scan_paths: Option<Arc<Vec<PathBuf>>>,
     commands: Option<BTreeSet<String>>,
     updated_at: Option<Instant>,
     generation: u64,
@@ -74,6 +76,7 @@ impl SystemCommandCacheState {
     fn new() -> Self {
         Self {
             paths: Arc::new(Vec::new()),
+            scan_paths: None,
             commands: None,
             updated_at: None,
             generation: 0,
@@ -89,16 +92,26 @@ impl SystemCommandCacheState {
         SystemCommandCacheTicket {
             generation: self.generation,
             paths: Arc::clone(&self.paths),
+            scan_paths: self.scan_paths.clone(),
         }
     }
 
     fn activate_paths(&mut self, paths: &[String]) -> SystemCommandCacheTicket {
-        if self.paths.as_slice() != paths {
+        self.activate_paths_at(paths, None)
+    }
+
+    fn activate_paths_at(
+        &mut self,
+        paths: &[String],
+        scan_paths: Option<Arc<Vec<PathBuf>>>,
+    ) -> SystemCommandCacheTicket {
+        if self.paths.as_slice() != paths || self.scan_paths != scan_paths {
             self.generation = self
                 .generation
                 .checked_add(1)
                 .expect("system command PATH generation overflow");
             self.paths = Arc::new(paths.to_vec());
+            self.scan_paths = scan_paths;
             self.commands = None;
             self.updated_at = None;
             self.last_published_scan_id = 0;
@@ -113,7 +126,9 @@ impl SystemCommandCacheState {
     }
 
     fn is_current(&self, ticket: &SystemCommandCacheTicket) -> bool {
-        self.generation == ticket.generation && self.paths.as_slice() == ticket.paths.as_slice()
+        self.generation == ticket.generation
+            && self.paths.as_slice() == ticket.paths.as_slice()
+            && self.scan_paths == ticket.scan_paths
     }
 
     fn next_scan_ticket(
@@ -159,6 +174,7 @@ impl SystemCommandCacheState {
             return false;
         }
 
+        self.candidate_cache.clear();
         self.commands = Some(commands);
         self.updated_at = Some(now);
         self.last_published_scan_id = ticket.scan_id;
@@ -185,6 +201,7 @@ impl SystemCommandCacheState {
         if !self.is_current(ticket) || self.live_scan_started {
             return false;
         }
+        self.candidate_cache.clear();
         self.commands = Some(commands);
         self.updated_at = Some(now);
         true
@@ -209,6 +226,23 @@ impl SystemCommandCacheState {
         }
 
         RefreshDecision::StartBackground(self.next_background_scan_ticket(ticket))
+    }
+
+    fn plan_background(
+        &mut self,
+        ticket: &SystemCommandCacheTicket,
+    ) -> Option<SystemCommandScanTicket> {
+        if !self.is_current(ticket) || self.inflight_scan_id.is_some() {
+            return None;
+        }
+        if self.commands.is_some()
+            && self
+                .updated_at
+                .is_some_and(|at| at.elapsed() < GLOBAL_SYSTEM_COMMAND_CACHE_TTL)
+        {
+            return None;
+        }
+        Some(self.next_background_scan_ticket(ticket))
     }
 
     fn lookup_candidates(
@@ -248,12 +282,45 @@ pub(crate) fn activate_system_command_cache(paths: &[String]) -> SystemCommandCa
     // the write lock unless another activation won a race after the read.
     {
         let state = SYSTEM_COMMAND_CACHE.read();
-        if state.paths.as_slice() == paths {
+        if state.paths.as_slice() == paths && state.scan_paths.is_none() {
             return state.ticket();
         }
     }
 
     SYSTEM_COMMAND_CACHE.write().activate_paths(paths)
+}
+
+/// Publication identity for upper-level interactive caches. Captured before
+/// collection, so a concurrent publication cannot give partial results a new key.
+pub(crate) fn system_command_cache_revision() -> (u64, u64) {
+    let state = SYSTEM_COMMAND_CACHE.read();
+    (state.generation, state.last_published_scan_id)
+}
+
+/// Anchor relative and empty entries at the request boundary, before any worker
+/// starts. The resolved paths also distinguish caches for different cwd values.
+pub(crate) fn activate_system_command_cache_at(
+    paths: &[String],
+    filesystem: &super::filesystem::FileSystemContext,
+) -> SystemCommandCacheTicket {
+    if paths.iter().all(|path| Path::new(path).is_absolute()) {
+        return activate_system_command_cache(paths);
+    }
+    let scan_paths = Some(Arc::new(
+        paths
+            .iter()
+            .map(|path| filesystem.lookup_directory(path, false))
+            .collect(),
+    ));
+    {
+        let state = SYSTEM_COMMAND_CACHE.read();
+        if state.paths.as_slice() == paths && state.scan_paths == scan_paths {
+            return state.ticket();
+        }
+    }
+    SYSTEM_COMMAND_CACHE
+        .write()
+        .activate_paths_at(paths, scan_paths)
 }
 
 /// Start a live scan ordered within its PATH activation.
@@ -270,6 +337,17 @@ pub(crate) fn begin_background_system_command_scan(
     SYSTEM_COMMAND_CACHE
         .write()
         .next_background_scan_ticket(ticket)
+}
+
+/// Claim the existing worker slot without superseding an active worker.
+pub(crate) fn claim_background_system_command_scan(
+    ticket: &SystemCommandCacheTicket,
+) -> Option<SystemCommandScanTicket> {
+    let mut state = SYSTEM_COMMAND_CACHE.write();
+    if !state.is_current(ticket) || state.inflight_scan_id.is_some() {
+        return None;
+    }
+    Some(state.next_background_scan_ticket(ticket))
 }
 
 /// Publish a live scan only if its activation and start order are still current.
@@ -368,15 +446,21 @@ fn plan_refresh_if_stale(ticket: &SystemCommandCacheTicket) -> RefreshDecision {
         .plan_refresh_if_stale(ticket, now)
 }
 
+fn collect_ticket_commands(ticket: &SystemCommandCacheTicket) -> Vec<String> {
+    ticket.scan_paths.as_ref().map_or_else(
+        || crate::environment::collect_executables(&ticket.paths),
+        |paths| crate::environment::collect_executables_from_paths(paths),
+    )
+}
+
 fn spawn_refresh(ticket: SystemCommandScanTicket) {
     let worker_ticket = ticket.clone();
     let spawn_result = std::thread::Builder::new()
         .name("dsh-system-command-refresh".to_string())
         .spawn(move || {
-            let commands =
-                crate::environment::collect_executables(&worker_ticket.activation().paths)
-                    .into_iter()
-                    .collect();
+            let commands = collect_ticket_commands(worker_ticket.activation())
+                .into_iter()
+                .collect();
             publish_system_command_scan(&worker_ticket, commands);
         });
 
@@ -386,17 +470,34 @@ fn spawn_refresh(ticket: SystemCommandScanTicket) {
     }
 }
 
+fn append_explicit_command(
+    current_token: &str,
+    candidates: &mut Vec<CompletionCandidate>,
+    seen_names: &mut HashSet<String>,
+) {
+    if (current_token.starts_with('/') || current_token.starts_with("./"))
+        && Path::new(current_token).is_file()
+    {
+        candidates.push(CompletionCandidate::subcommand(
+            current_token.to_string(),
+            None,
+        ));
+        seen_names.insert(current_token.to_string());
+    }
+}
+
 fn append_command_candidates(
     commands: &BTreeSet<String>,
     current_token: &str,
     candidates: &mut Vec<CompletionCandidate>,
     seen_names: &mut HashSet<String>,
+    limit: usize,
 ) {
     for command in commands
         .iter()
         .filter(|command| fuzzy_match_score(command, current_token).is_some())
     {
-        if candidates.len() >= crate::completion::MAX_RESULT {
+        if candidates.len() >= limit {
             break;
         }
         if seen_names.insert(command.to_string()) {
@@ -410,6 +511,7 @@ fn append_cached_command_candidates(
     current_token: &str,
     candidates: &mut Vec<CompletionCandidate>,
     seen_names: &mut HashSet<String>,
+    limit: usize,
 ) {
     let state = SYSTEM_COMMAND_CACHE.read();
     if !state.is_current(ticket) {
@@ -419,7 +521,7 @@ fn append_cached_command_candidates(
         return;
     };
 
-    append_command_candidates(commands, current_token, candidates, seen_names);
+    append_command_candidates(commands, current_token, candidates, seen_names, limit);
 }
 
 /// Generates candidates from one explicit logical shell PATH activation.
@@ -436,6 +538,86 @@ impl SystemCommandGenerator {
         Self { ticket }
     }
 
+    /// Interactive requests borrow ready data and share the existing prewarm /
+    /// refresh slot. No filesystem enumeration is awaited on the input path.
+    pub(crate) fn generate_in_background(
+        &self,
+        current_token: &str,
+        runtime: Arc<crate::completion::dynamic::CompletionRuntime>,
+        limit: usize,
+    ) -> Vec<CompletionCandidate> {
+        self.generate_in_background_with(
+            current_token,
+            runtime,
+            limit,
+            crate::environment::collect_executables_from_paths,
+        )
+    }
+
+    fn generate_in_background_with<L>(
+        &self,
+        current_token: &str,
+        runtime: Arc<crate::completion::dynamic::CompletionRuntime>,
+        limit: usize,
+        loader: L,
+    ) -> Vec<CompletionCandidate>
+    where
+        L: FnOnce(&[PathBuf]) -> Vec<String> + Send + 'static,
+    {
+        let scan = SYSTEM_COMMAND_CACHE.write().plan_background(&self.ticket);
+        if let Some(ticket) = scan {
+            let worker_ticket = ticket.clone();
+            let spawn = std::thread::Builder::new()
+                .name("dsh-system-command-refresh".into())
+                .spawn(move || {
+                    let paths = worker_ticket.cache.scan_paths.clone().unwrap_or_else(|| {
+                        Arc::new(
+                            worker_ticket
+                                .cache
+                                .paths
+                                .iter()
+                                .map(PathBuf::from)
+                                .collect(),
+                        )
+                    });
+                    let commands = loader(&paths).into_iter().collect();
+                    if publish_system_command_scan(&worker_ticket, commands) {
+                        runtime.notify();
+                    }
+                });
+            if let Err(error) = spawn {
+                tracing::warn!("Failed to start system command cache refresh: {error}");
+                release_system_command_scan(&ticket);
+            }
+        }
+        let mut candidates = Vec::new();
+        let mut seen_names = HashSet::new();
+        append_explicit_command(current_token, &mut candidates, &mut seen_names);
+        append_cached_command_candidates(
+            &self.ticket,
+            current_token,
+            &mut candidates,
+            &mut seen_names,
+            limit,
+        );
+        candidates
+    }
+
+    pub(crate) fn generate_for_runtime(
+        &self,
+        current_token: &str,
+        runtime: Option<&Arc<crate::completion::dynamic::CompletionRuntime>>,
+    ) -> Result<Vec<CompletionCandidate>> {
+        match runtime {
+            Some(runtime) => Ok(self.generate_in_background(
+                current_token,
+                runtime.clone(),
+                crate::completion::MAX_RESULT,
+            )),
+            None => self.generate_candidates(current_token),
+        }
+    }
+
     pub fn generate_candidates(&self, current_token: &str) -> Result<Vec<CompletionCandidate>> {
         let ticket = &self.ticket;
         if let Some(hit) = lookup_candidates(ticket, current_token) {
@@ -445,17 +627,8 @@ impl SystemCommandGenerator {
         let mut candidates = Vec::with_capacity(32);
         let mut seen_names: HashSet<String> = HashSet::new();
 
-        // Absolute and relative explicit paths do not depend on PATH and keep
-        // their existing direct-file behavior.
-        if (current_token.starts_with('/') || current_token.starts_with("./"))
-            && Path::new(current_token).is_file()
-        {
-            candidates.push(CompletionCandidate::subcommand(
-                current_token.to_string(),
-                None,
-            ));
-            seen_names.insert(current_token.to_string());
-        }
+        // Explicit filenames retain their direct-file behavior in both modes.
+        append_explicit_command(current_token, &mut candidates, &mut seen_names);
 
         match plan_refresh_if_stale(ticket) {
             RefreshDecision::Fresh | RefreshDecision::UseStale => {
@@ -464,6 +637,7 @@ impl SystemCommandGenerator {
                     current_token,
                     &mut candidates,
                     &mut seen_names,
+                    crate::completion::MAX_RESULT,
                 );
             }
             RefreshDecision::StartBackground(scan_ticket) => {
@@ -475,21 +649,21 @@ impl SystemCommandGenerator {
                     current_token,
                     &mut candidates,
                     &mut seen_names,
+                    crate::completion::MAX_RESULT,
                 );
             }
             RefreshDecision::Cold(scan_ticket) => {
                 // Only a cold cache scans on the keypress path. The cache write
                 // lock and Environment lock are both absent during this I/O.
                 let commands: BTreeSet<String> =
-                    crate::environment::collect_executables(&ticket.paths)
-                        .into_iter()
-                        .collect();
+                    collect_ticket_commands(ticket).into_iter().collect();
                 let _ = publish_system_command_scan(&scan_ticket, commands.clone());
                 append_command_candidates(
                     &commands,
                     current_token,
                     &mut candidates,
                     &mut seen_names,
+                    crate::completion::MAX_RESULT,
                 );
             }
         }

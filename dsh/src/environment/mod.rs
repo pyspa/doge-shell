@@ -542,6 +542,9 @@ fn ensure_test_data_dir() {
 pub fn collect_executables(paths: &[String]) -> Vec<String> {
     scan_executables(paths, false).unwrap_or_default()
 }
+pub(crate) fn collect_executables_from_paths(paths: &[std::path::PathBuf]) -> Vec<String> {
+    scan_executables(paths, false).unwrap_or_default()
+}
 pub(crate) fn collect_executables_checked(paths: &[String]) -> Result<Vec<String>> {
     scan_executables(paths, true)
 }
@@ -577,7 +580,7 @@ fn scan_part<T>(
         }
     }
 }
-fn scan_executables(paths: &[String], strict: bool) -> Result<Vec<String>> {
+fn scan_executables(paths: &[impl AsRef<std::path::Path>], strict: bool) -> Result<Vec<String>> {
     use std::os::unix::fs::PermissionsExt;
     let mut names = HashSet::new();
     let mut failure = None;

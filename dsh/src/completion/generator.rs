@@ -5,7 +5,9 @@ use super::generators::argument::ArgumentGenerator;
 use super::generators::command::CommandGenerator;
 use super::generators::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::parser::{CompletionContext, ParsedCommandLine};
+use crate::completion::dynamic::CompletionRuntime;
 use anyhow::Result;
+use std::sync::Arc;
 
 #[cfg(test)]
 pub(crate) use super::generators::system::publish_system_command_scan;
@@ -27,15 +29,26 @@ pub struct CompletionGenerator<'a> {
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
     filesystem: Option<&'a FileSystemContext>,
+    refresh_runtime: Option<Arc<CompletionRuntime>>,
 }
 
 impl<'a> CompletionGenerator<'a> {
+    /// Use the existing completion runtime to notify interactive PATH refreshes.
+    pub(crate) fn with_background_refresh(
+        mut self,
+        runtime: Option<Arc<CompletionRuntime>>,
+    ) -> Self {
+        self.refresh_runtime = runtime;
+        self
+    }
+
     /// Create a generator for pure parsing/tests without runtime shell state.
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            refresh_runtime: None,
             filesystem: None,
         }
     }
@@ -62,6 +75,7 @@ impl<'a> CompletionGenerator<'a> {
             database,
             environment_names,
             system_command_ticket: Some(system_command_ticket),
+            refresh_runtime: None,
             filesystem: None,
         }
     }
@@ -99,7 +113,7 @@ impl<'a> CompletionGenerator<'a> {
                 crate::completion::generators::system::SystemCommandGenerator::from_activation(
                     ticket.clone(),
                 )
-                .generate_candidates(current_token)
+                .generate_for_runtime(current_token, self.refresh_runtime.as_ref())
                 .map_err(|e| GeneratorError::Other(anyhow::anyhow!(e)))?,
             );
         }
@@ -169,6 +183,7 @@ impl<'a> CompletionGenerator<'a> {
             self.environment_names,
             self.system_command_ticket.clone(),
         )
+        .with_background_refresh(self.refresh_runtime.clone())
     }
 
     fn argument_generator(&self) -> ArgumentGenerator<'_> {
@@ -177,6 +192,7 @@ impl<'a> CompletionGenerator<'a> {
             self.environment_names,
             self.system_command_ticket.clone(),
         )
+        .with_background_refresh(self.refresh_runtime.clone())
         .with_filesystem_context(self.filesystem)
     }
 }

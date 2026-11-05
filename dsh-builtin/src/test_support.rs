@@ -137,6 +137,7 @@ pub(crate) struct TestShellProxy {
     pub read_error: Option<String>,
     /// `set -o` option state for `ShellOptionCapability` tests.
     pub shell_options: ShellOptions,
+    pub effective_config: Option<crate::effective_config::EffectiveConfig>,
     /// Logical command search paths for task provider resolution in tests.
     /// Empty by default; set per-test to model PATH A vs PATH B without
     /// touching process-global `std::env::PATH`.
@@ -202,6 +203,7 @@ impl Default for TestShellProxy {
             read_status: None,
             read_error: None,
             shell_options: ShellOptions::default(),
+            effective_config: None,
             command_search_paths: Vec::new(),
         }
     }
@@ -903,4 +905,10 @@ pub(crate) fn test_runtime(
     Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
         task, store,
     )))
+}
+
+impl crate::shell_capabilities::EffectiveConfigCapability for TestShellProxy {
+    fn effective_config(&self) -> Option<crate::effective_config::EffectiveConfig> {
+        self.effective_config
+    }
 }

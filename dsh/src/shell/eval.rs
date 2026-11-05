@@ -1,7 +1,7 @@
 use crate::process::{Job, JobLaunchOutcome, ListOp, ProcessState};
 use crate::shell::{
     Shell,
-    authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
+    authorize::{AuthorizationDecision, is_authorization_cancelled},
     materialize::{MaterializeOutcome, materialize_job},
     parse::parse_execution_plan,
     plan::ListExecutionMode,
@@ -19,6 +19,7 @@ use tracing::debug;
 
 mod async_spawn;
 mod plan_eval;
+mod struct_pipe;
 mod subshell;
 use async_spawn::{spawn_async_list_job, spawn_whole_plan_background};
 pub(crate) use plan_eval::{PlanEvaluationEnvironment, evaluate_plan_in};
@@ -279,7 +280,14 @@ pub async fn eval_str(
             let mut job = materialized.job;
             let had_dynamic = materialized.had_dynamic_expansion;
             job.resources = materialized.resources;
-            match authorize_job(shell, &job, had_dynamic)? {
+            let (decision, schema_spec) = struct_pipe::authorize_struct_pipe_job(
+                shell,
+                &mut job,
+                had_dynamic,
+                crate::repl::confirmation::confirm_action,
+                crate::output_schema::lookup,
+            )?;
+            match decision {
                 AuthorizationDecision::Allow => {}
                 AuthorizationDecision::Deny => {
                     tracing::info!("Command execution cancelled by user");
@@ -383,20 +391,6 @@ pub async fn eval_str(
                     job.cmd,
                     job.struct_pipe_exprs.len()
                 );
-
-                // Declarative output schema for the pipeline's last external
-                // command: inject preferred machine-readable flags before the
-                // run, parse the captured output into a table after it.
-                let schema_spec = job
-                    .last_external_argv()
-                    .and_then(|argv| crate::output_schema::lookup(&argv));
-                if let Some(prefer) = schema_spec.as_ref().and_then(|spec| spec.prefer.as_ref()) {
-                    debug!(
-                        "Struct pipe: injecting schema args {:?}",
-                        prefer.inject_args
-                    );
-                    job.append_args_to_last_external(&prefer.inject_args);
-                }
 
                 // Execute command through regular job launch path and capture output.
                 let (exit_code, output, stderr_output) =

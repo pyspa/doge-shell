@@ -191,8 +191,11 @@ impl Environment {
                 };
                 let commands = result.iter().cloned().collect();
                 let mut notifier = None;
-                let accepted =
-                    generator::publish_system_command_scan_if(&worker_ticket, commands, || {
+                let accepted = generator::publish_system_command_scan_if(
+                    &worker_ticket,
+                    commands,
+                    !incomplete,
+                    || {
                         let mut state = projection.lock();
                         if state.ticket.as_ref() != Some(&worker_ticket) {
                             return false;
@@ -206,7 +209,8 @@ impl Environment {
                         }
                         notifier = state.notifier.clone();
                         true
-                    });
+                    },
+                );
                 if accepted {
                     if let Some(sender) = notifier {
                         let _ = sender.send(());

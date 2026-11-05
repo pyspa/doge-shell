@@ -67,6 +67,7 @@ struct SystemCommandCacheState {
     generation: u64,
     next_scan_id: u64,
     last_published_scan_id: u64,
+    last_publication_complete: bool,
     live_scan_started: bool,
     inflight_scan_id: Option<u64>,
     candidate_cache: CompletionCache<CompletionCandidate>,
@@ -82,6 +83,7 @@ impl SystemCommandCacheState {
             generation: 0,
             next_scan_id: 0,
             last_published_scan_id: 0,
+            last_publication_complete: false,
             live_scan_started: false,
             inflight_scan_id: None,
             candidate_cache: CompletionCache::new(SYSTEM_COMMAND_CACHE_TTL),
@@ -115,6 +117,7 @@ impl SystemCommandCacheState {
             self.commands = None;
             self.updated_at = None;
             self.last_published_scan_id = 0;
+            self.last_publication_complete = false;
             self.live_scan_started = false;
             self.inflight_scan_id = None;
             // The short-lived cache belongs to exactly one generation. Store
@@ -178,6 +181,7 @@ impl SystemCommandCacheState {
         self.commands = Some(commands);
         self.updated_at = Some(now);
         self.last_published_scan_id = ticket.scan_id;
+        self.last_publication_complete = true;
         if self.inflight_scan_id == Some(ticket.scan_id) {
             self.inflight_scan_id = None;
         }
@@ -290,6 +294,33 @@ pub(crate) fn activate_system_command_cache(paths: &[String]) -> SystemCommandCa
     SYSTEM_COMMAND_CACHE.write().activate_paths(paths)
 }
 
+/// Constant-size cache truth for request-scoped inline feedback. No paths or
+/// executable names leave the cache lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SystemCommandScanStatus {
+    pub(crate) generation: u64,
+    pub(crate) latest_scan: u64,
+    pub(crate) pending: Option<u64>,
+    pub(crate) published: u64,
+    pub(crate) complete: bool,
+}
+
+impl SystemCommandCacheState {
+    fn scan_status(&self) -> SystemCommandScanStatus {
+        SystemCommandScanStatus {
+            generation: self.generation,
+            latest_scan: self.next_scan_id,
+            pending: self.inflight_scan_id,
+            published: self.last_published_scan_id,
+            complete: self.last_publication_complete,
+        }
+    }
+}
+
+pub(crate) fn system_command_scan_status() -> SystemCommandScanStatus {
+    SYSTEM_COMMAND_CACHE.read().scan_status()
+}
+
 /// Publication identity for upper-level interactive caches. Captured before
 /// collection, so a concurrent publication cannot give partial results a new key.
 pub(crate) fn system_command_cache_revision() -> (u64, u64) {
@@ -360,9 +391,11 @@ pub(crate) fn publish_system_command_scan(
 
 /// Publish the local projection and global result under the same ownership check.
 /// The callback must be short, contain no I/O and follow state -> projection lock order.
+/// `complete = false` retains useful partial names without advertising scan readiness.
 pub(crate) fn publish_system_command_scan_if(
     ticket: &SystemCommandScanTicket,
     commands: BTreeSet<String>,
+    complete: bool,
     publish_projection: impl FnOnce() -> bool,
 ) -> bool {
     let mut state = SYSTEM_COMMAND_CACHE.write();
@@ -372,7 +405,11 @@ pub(crate) fn publish_system_command_scan_if(
     {
         return false;
     }
-    state.publish_live(ticket, commands)
+    let accepted = state.publish_live(ticket, commands);
+    if accepted {
+        state.last_publication_complete = complete;
+    }
+    accepted
 }
 
 /// Publish a persistent-cache snapshot only before any live scan has started.
@@ -564,7 +601,17 @@ impl SystemCommandGenerator {
     where
         L: FnOnce(&[PathBuf]) -> Vec<String> + Send + 'static,
     {
-        let scan = SYSTEM_COMMAND_CACHE.write().plan_background(&self.ticket);
+        let (scan, status) = {
+            let mut state = SYSTEM_COMMAND_CACHE.write();
+            let scan = state.plan_background(&self.ticket);
+            let status = state.is_current(&self.ticket).then(|| state.scan_status());
+            (scan, status)
+        };
+        // Capture ownership before spawning: even a fast/empty scan can settle
+        // before Tab returns. Both interactive completion routes use this runtime.
+        if let Some(status) = status.filter(|status| status.pending.is_some()) {
+            runtime.record_path_request(status);
+        }
         if let Some(ticket) = scan {
             let worker_ticket = ticket.clone();
             let spawn = std::thread::Builder::new()

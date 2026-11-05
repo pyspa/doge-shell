@@ -52,6 +52,7 @@ pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
 }
 
 pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
+    repl.completion_ui.path_feedback.clear();
     if let Some(comp) = repl.input.completion.take()
         && comp.starts_with(repl.input.as_str())
         && comp.len() > repl.input.as_str().len()
@@ -62,6 +63,7 @@ pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
 }
 
 pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
+    repl.completion_ui.path_feedback.clear();
     if repl.input.completion.is_some() || repl.ai_ui.suggestion_manager.active.is_some() {
         repl.completion_ui.completion.clear();
         repl.ai_ui.suggestion_manager.clear();
@@ -89,6 +91,9 @@ fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, smart_pipe
 }
 
 pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
+    repl.completion_ui.path_feedback.clear();
+    let runtime = repl.completion_ui.integrated_completion.runtime();
+    runtime.take_path_request();
     // Check for Smart Pipe Expansion (|? query)
     if let Some(smart_pipe_query) = repl.detect_smart_pipe() {
         match repl.expand_smart_pipe(smart_pipe_query).await {
@@ -343,13 +348,25 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     }
 
     if !completion_handled {
-        // Fallback: If we have an active suggestion, accept the next word of it.
+        // Preserve the existing explicit-Tab suggestion acceptance fallback.
         if repl.accept_suggestion(SuggestionAcceptMode::Word) {
             debug!("No standard completion, accepted suggestion word fallback");
-            // completion_handled = true;
+            completion_handled = true;
         } else {
             debug!("No completion selected and no suggestion to accept");
         }
+    }
+    if !completion_handled && let Some(receipt) = runtime.take_path_request() {
+        repl.completion_ui.path_feedback.request(
+            &input_text,
+            expected_cursor,
+            repl.shell
+                .environment
+                .read()
+                .completion_state
+                .path_generation,
+            receipt,
+        );
     }
 
     // Force a redraw after completion to update the display

@@ -65,6 +65,7 @@ pub(crate) mod keybind;
 pub(crate) mod last_arg;
 mod loop_handlers;
 pub(crate) mod notify;
+mod path_feedback;
 pub(crate) mod placeholder;
 mod prompt_refresh;
 mod render;
@@ -139,6 +140,7 @@ pub(crate) struct TerminalUiState {
 
 pub(crate) struct CompletionUiState {
     pub(crate) start_completion: bool,
+    pub(crate) path_feedback: path_feedback::PathFeedback,
     pub(crate) completion: Completion,
     pub(crate) integrated_completion: IntegratedCompletionEngine,
     pub(crate) cache: HistoryCache,
@@ -492,3 +494,6 @@ mod tests;
 
 #[cfg(test)]
 mod path_ghost_tests;
+
+#[cfg(test)]
+mod path_feedback_tests;

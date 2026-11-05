@@ -129,6 +129,7 @@ pub(crate) async fn handle_overtype_closing_bracket(
 }
 
 pub(crate) async fn handle_paste_event(repl: &mut Repl<'_>, text: &str) -> Result<()> {
+    repl.completion_ui.path_feedback.clear();
     // Safe Paste: normalize newlines and insert into buffer without execution
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     // We replace newlines with spaces or just keep them if the input supports multiline?

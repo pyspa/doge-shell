@@ -13,8 +13,8 @@
 
 use crate::process::child_exec::{
     ChildExecError, RawChildPlan, STAGE_CLOSE, STAGE_DUP2_STDERR, STAGE_DUP2_STDIN,
-    STAGE_DUP2_STDOUT, STAGE_EXECVE, STAGE_SETPGID, STAGE_SETSID, STAGE_SIGNAL,
-    exec_external_child,
+    STAGE_DUP2_STDOUT, STAGE_EXECVE, STAGE_FOREGROUND_GATE, STAGE_SETPGID, STAGE_SETSID,
+    STAGE_SIGNAL, exec_external_child,
 };
 use crate::process::io::{OutputMonitor, cloexec_pipe};
 use anyhow::{Context as _, Result};
@@ -118,6 +118,18 @@ pub(crate) fn fork_process(
         .prepare_execution(process.stage_environment.environment(&shell.environment))?
         .into_bundle();
 
+    let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
+    let gate = if ctx.interactive
+        && ctx.foreground
+        && !full_proxy_pty
+        && not_found.is_none()
+        && super::job_wait::can_handoff_terminal()
+    {
+        Some(super::foreground_gate::ForegroundGate::new().context("failed foreground gate pipe")?)
+    } else {
+        None
+    };
+
     // Exec-error pipe: CLOEXEC closes on exec success; unresolved commands
     // close it before writing their diagnostic (failure is already known
     // here). Other failures write one bounded ChildExecError record.
@@ -125,7 +137,6 @@ pub(crate) fn fork_process(
     let err_read_fd = err_read.into_raw_fd();
     let err_write_fd = err_write.into_raw_fd();
 
-    let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
     let pty_slave = pty.map(|pty| pty.slave).unwrap_or(-1);
     // setpgid(0, 0) makes the first child its own process-group leader.
     // Later pipeline stages receive the existing job PGID.
@@ -143,8 +154,15 @@ pub(crate) fn fork_process(
     match pid {
         ForkResult::Parent { child } => {
             debug!("FORK: Parent process - child pid: {}", child);
+            #[cfg(test)]
+            super::foreground_handoff_tests::record_child(child);
             // Drop the parent's writer before reading the launch handshake.
             unsafe { libc::close(err_write_fd) };
+            // The gate precedes the exec handshake: waiting for EOF first
+            // would deadlock against the child's pre-exec approval read.
+            if let Some(gate) = gate {
+                gate.release(child, job_pgid.unwrap_or(child));
+            }
             let reported_failure = drain_exec_error(
                 err_read_fd,
                 &process.cmd,
@@ -153,6 +171,8 @@ pub(crate) fn fork_process(
                 diagnostic_fallback,
             );
             unsafe { libc::close(err_read_fd) };
+            #[cfg(test)]
+            super::foreground_handoff_tests::after_exec_handshake(child);
             // The successful spawn hands parent writers to Job finalization.
             for writer in created_writes {
                 let _ = writer.into_raw_fd();
@@ -179,6 +199,8 @@ pub(crate) fn fork_process(
                 full_proxy_pty,
                 pty_slave,
                 exec_error_fd: err_write_fd,
+                foreground_gate_read: gate.as_ref().map_or(-1, |gate| gate.reader_fd()),
+                foreground_gate_write: gate.as_ref().map_or(-1, |gate| gate.writer_fd()),
                 pipeline_read_fd: pipeline_read.unwrap_or(-1),
                 not_found_msg,
                 not_found_len,
@@ -271,6 +293,7 @@ fn drain_exec_error_with_reader(
     let what = match record.stage {
         STAGE_SETPGID => "failed to join process group",
         STAGE_SETSID => "failed to create session",
+        STAGE_FOREGROUND_GATE => "failed foreground terminal handoff",
         STAGE_SIGNAL => "failed to reset signal handlers",
         STAGE_DUP2_STDIN => "failed to set up stdin",
         STAGE_DUP2_STDOUT => "failed to set up stdout",

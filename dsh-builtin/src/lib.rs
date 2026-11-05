@@ -73,6 +73,7 @@ pub mod comp_gen;
 pub mod completion_generation;
 pub mod dirstack;
 mod dmv;
+pub mod effective_config;
 mod fg;
 pub mod ga;
 mod gco;
@@ -212,6 +213,7 @@ pub trait ShellProxy:
     shell_capabilities::AgentCommandPolicy
     + shell_capabilities::AiJsonRequest
     + shell_capabilities::JobControlCapability
+    + shell_capabilities::EffectiveConfigCapability
     + shell_capabilities::ShellOptionCapability
     + shell_capabilities::ReadCapability
     + shell_capabilities::ProcessEnvironmentCapability

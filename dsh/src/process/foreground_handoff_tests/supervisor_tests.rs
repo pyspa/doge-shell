@@ -4,6 +4,7 @@
 //! pipe EOF it signals its OWN group with kill(0), so delivery never resolves a
 //! sampled PID/PGID. The shell worker and external job use separate groups.
 
+use super::pty_pump::{Outcome, PtyPump};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, BorrowedFd};
@@ -18,22 +19,77 @@ extern "C" fn request_cleanup(_: i32) {
 
 const PREFIX: &str = "process::foreground_handoff_tests::supervisor::";
 
-/// Only direct Child handles are signaled; none has been reaped on this path.
-/// Killing a supervisor closes both anchor controls, killing both owned groups.
-struct OwnedChild(Child);
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if !matches!(self.0.try_wait(), Ok(Some(_))) {
-            // The isolated supervisor handles TERM as an ordered cleanup
-            // request. Its handler is installed before creating any anchors.
+/// Owns the supervisor identity and keeps pumping the scratch master during
+/// cooperative cleanup and, only after that grace period, direct termination.
+struct OwnedChild {
+    child: Child,
+    pump: PtyPump,
+    mode: String,
+    log: std::path::PathBuf,
+    total_deadline: Instant,
+    status: Option<ExitStatus>,
+}
+
+impl OwnedChild {
+    fn partial_log(&self) {
+        let mut bytes = Vec::new();
+        if let Ok(file) = File::open(&self.log) {
+            let _ = file.take(16 * 1024).read_to_end(&mut bytes);
+        }
+        let mut stderr = std::io::stderr().lock();
+        let _ = writeln!(
+            stderr,
+            "handoff-harness case={} partial scratch log before teardown:",
+            self.mode
+        );
+        let _ = stderr.write_all(&bytes);
+    }
+
+    fn finish(&mut self, request_cleanup: bool) -> Option<ExitStatus> {
+        if self.status.is_some() {
+            return self.status;
+        }
+        if request_cleanup && !exited(&self.child) {
+            self.partial_log();
+            self.pump.live(&self.mode, "cleanup-request");
             let _ = nix::sys::signal::kill(
-                nix::unistd::Pid::from_raw(self.0.id() as i32),
+                nix::unistd::Pid::from_raw(self.child.id() as i32),
                 nix::sys::signal::Signal::SIGTERM,
             );
-            if !observe_until(&self.0, Instant::now() + Duration::from_secs(7)) {
-                let _ = self.0.kill();
+            let grace = (Instant::now() + Duration::from_secs(7))
+                .min(self.total_deadline - Duration::from_secs(1));
+            if let Outcome::IoError(_) = self.pump.until(grace, false, || exited(&self.child)) {
+                self.pump.live(&self.mode, "cleanup-io-error");
+                observe_until(&self.child, grace);
             }
-            let _ = self.0.wait();
+            if !exited(&self.child) {
+                self.pump.live(&self.mode, "cleanup-direct-kill");
+                let _ = self.child.kill(); // still-owned unreaped direct child
+                if let Outcome::IoError(_) = self
+                    .pump
+                    .until(self.total_deadline, false, || exited(&self.child))
+                {
+                    self.pump.live(&self.mode, "termination-io-error");
+                    observe_until(&self.child, self.total_deadline);
+                }
+            }
+        }
+        // No unconditional blocking Child::wait after an observation timeout.
+        if exited(&self.child) {
+            let _ = self.pump.until(Instant::now(), false, || true);
+            self.status = self.child.wait().ok();
+            self.pump.live(&self.mode, "cleanup-reaped");
+        } else {
+            self.pump.live(&self.mode, "cleanup-unconfirmed");
+        }
+        self.status
+    }
+}
+
+impl Drop for OwnedChild {
+    fn drop(&mut self) {
+        if self.status.is_none() {
+            let _ = self.finish(true);
         }
     }
 }
@@ -158,7 +214,7 @@ impl Drop for Supervisor {
 pub(super) fn run_scratch(mode: &str) {
     let root = tempfile::tempdir().unwrap();
     let pty = nix::pty::openpty(None, None).unwrap();
-    let mut master = File::from(pty.master);
+    let master = File::from(pty.master);
     let slave = File::from(pty.slave);
     let proof = root.path().join("proof");
     let log = root.path().join("log");
@@ -198,16 +254,33 @@ pub(super) fn run_scratch(mode: &str) {
             Ok(())
         });
     }
-    let mut supervisor = OwnedChild(command.spawn().unwrap());
-    master
-        .write_all(&b"foreground-ready\n".repeat(if mode == "fd-budget" { 96 } else { 1 }))
-        .unwrap();
+    // One absolute 20s bound reserves the existing 7s cooperative cleanup
+    // window plus 1s termination observation; feed never runs before it.
+    let total_deadline = Instant::now() + Duration::from_secs(20);
+    let pump = PtyPump::new(
+        master,
+        b"foreground-ready\n".repeat(if mode == "fd-budget" { 96 } else { 1 }),
+    )
+    .unwrap();
+    pump.live(mode, "spawn-start");
+    let child = command.spawn().unwrap();
+    let mut supervisor = OwnedChild {
+        child,
+        pump,
+        mode: mode.into(),
+        log: log.clone(),
+        total_deadline,
+        status: None,
+    };
+    supervisor.pump.live(mode, "spawned");
+    let run_deadline = total_deadline - Duration::from_secs(8);
+    let mut pump_failure = None;
     let status = if mode == "worker-parent-unwind" {
         let ready = root.path().join("fault-ready");
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while !ready.exists() && Instant::now() < deadline {
-            unsafe { libc::poll(std::ptr::null_mut(), 0, 2) };
-        }
+        let deadline = (Instant::now() + Duration::from_secs(3)).min(run_deadline);
+        let observed = supervisor.pump.until(deadline, true, || ready.exists());
+        supervisor.pump.live(mode, "parent-ready-observation");
+        assert_eq!(observed, Outcome::Ready);
         assert_eq!(std::fs::read(ready).unwrap(), b"forked");
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _supervisor = supervisor;
@@ -216,13 +289,32 @@ pub(super) fn run_scratch(mode: &str) {
         assert!(panicked.is_err());
         None
     } else {
-        let observed = observe_until(&supervisor.0, Instant::now() + Duration::from_secs(20));
-        let status = observed.then(|| supervisor.0.wait().unwrap());
+        let outcome = supervisor
+            .pump
+            .until(run_deadline, true, || exited(&supervisor.child));
+        supervisor.pump.live(
+            mode,
+            match outcome {
+                Outcome::Ready => "run-exited",
+                Outcome::Deadline => "run-deadline",
+                Outcome::IoError(_) => "run-io-error",
+            },
+        );
+        let failed = outcome != Outcome::Ready;
+        if failed {
+            pump_failure = Some(format!("{outcome:?}"));
+            supervisor.partial_log(); // emit bounded evidence BEFORE teardown
+        }
+        let status = supervisor.finish(failed);
         drop(supervisor);
         status
     };
     let output = std::fs::read_to_string(&log).unwrap();
     eprintln!("{output}");
+    assert!(
+        pump_failure.is_none(),
+        "{mode}: PTY pump failed: {pump_failure:?}"
+    );
     assert!(
         mode == "worker-parent-unwind" || status.is_some_and(|status| status.success()),
         "{mode}: {status:?}\n{output}"

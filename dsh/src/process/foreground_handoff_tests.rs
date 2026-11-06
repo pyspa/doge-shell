@@ -15,11 +15,34 @@ mod supervisor;
 use supervisor::run_scratch;
 
 thread_local! {
+    static ADMISSION_CHECKED: Cell<bool> = const { Cell::new(false) };
+    static PREEXEC_BEFORE_ACK: Cell<bool> = const { Cell::new(false) };
+    static PREEXEC_STAGE: Cell<usize> = const { Cell::new(0) };
+    static PREEXEC_FDS: Cell<(i32, i32)> = const { Cell::new((-1, -1)) };
     static CHILD_START_FD: Cell<i32> = const { Cell::new(-1) };
     static SCRATCH_TERMINAL: Cell<bool> = const { Cell::new(false) };
     static REJECT_HANDOFF: Cell<bool> = const { Cell::new(false) };
-    static OBSERVE_FIRST: Cell<bool> = const { Cell::new(false) };
-    static FIRST_EVENT: Cell<Option<(i32, i32)>> = const { Cell::new(None) };
+}
+
+pub(super) fn admission_ready_checkpoint() {
+    if !SCRATCH_TERMINAL.get() {
+        return;
+    }
+    let mode = std::env::var("DSH_HANDOFF_CASE").unwrap();
+    if mode == "normal" || mode == "handoff-abort" {
+        assert!(
+            !std::path::Path::new("exec-started").exists(),
+            "ready child crossed unreleased gate"
+        );
+        assert_eq!(
+            nix::unistd::tcgetpgrp(unsafe { BorrowedFd::borrow_raw(0) }).unwrap(),
+            getpgrp()
+        );
+        ADMISSION_CHECKED.set(true);
+        eprintln!(
+            "all stage readiness acknowledged; terminal still shell-owned; exec marker absent"
+        );
+    }
 }
 
 pub(super) fn scratch_terminal_enabled() -> bool {
@@ -28,6 +51,71 @@ pub(super) fn scratch_terminal_enabled() -> bool {
 
 pub(super) fn reject_handoff() -> bool {
     REJECT_HANDOFF.get()
+}
+
+pub(super) fn preexec_before_ack() -> bool {
+    PREEXEC_BEFORE_ACK.get()
+}
+
+pub(super) fn preexec_fds() -> (i32, i32) {
+    let stage = PREEXEC_STAGE.get();
+    if stage == 0 {
+        PREEXEC_FDS.replace((-1, -1))
+    } else {
+        PREEXEC_STAGE.set(stage - 1);
+        (-1, -1)
+    }
+}
+
+/// Raw-only child seam after signal defaults, before exec.
+/// # Safety
+/// Descriptors are prepared by the scratch supervisor before fork.
+pub(super) unsafe fn hold_before_exec(ready: i32, hold: i32) {
+    if ready < 0 {
+        return;
+    }
+    unsafe {
+        let pid = libc::getpid();
+        if libc::write(
+            ready,
+            (&pid as *const libc::pid_t).cast(),
+            std::mem::size_of::<libc::pid_t>(),
+        ) != std::mem::size_of::<libc::pid_t>() as isize
+        {
+            libc::_exit(98);
+        }
+        libc::close(ready);
+        let mut byte = 0u8;
+        loop {
+            let result = libc::read(hold, (&mut byte as *mut u8).cast(), 1);
+            if result == 0 {
+                break;
+            }
+            if result < 0 {
+                libc::_exit(98);
+            }
+        }
+        libc::close(hold);
+    }
+}
+
+#[test]
+fn preexec_direct_stop_after_release_stops_pipeline() {
+    for stage in ["first", "middle", "tail"] {
+        run_scratch(&format!("preexec-direct-{stage}"));
+    }
+}
+
+#[test]
+fn preexec_ctrl_z_returns_stopped_job() {
+    run_scratch("preexec-stop");
+}
+#[test]
+fn preexec_ctrl_z_stops_complete_pipeline() {
+    run_scratch("preexec-leader");
+    for stage in ["first", "middle", "tail"] {
+        run_scratch(&format!("preexec-pipeline-{stage}"));
+    }
 }
 
 pub(super) fn child_start_gate_fd() -> i32 {
@@ -75,41 +163,21 @@ pub(super) fn record_child(_child: Pid) {
     }
 }
 
-/// Delay only this parent's existing post-exec/pre-admission boundary. Never
-/// consume a status: the real Job waiter still owns every state transition.
-pub(super) fn after_exec_handshake(child: Pid) {
-    if !OBSERVE_FIRST.replace(false) {
-        return;
-    }
-    let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                child.as_raw() as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WSTOPPED | libc::WNOWAIT | libc::WNOHANG,
-            )
-        };
-        if result < 0 {
-            FIRST_EVENT.set(Some((
-                -1,
-                std::io::Error::last_os_error().raw_os_error().unwrap_or(0),
-            )));
-            return;
-        }
-        if unsafe { info.si_pid() } == child.as_raw() {
-            FIRST_EVENT.set(Some((info.si_code, unsafe { info.si_status() })));
-            return;
-        }
-        if Instant::now() >= deadline {
-            FIRST_EVENT.set(Some((-2, 0)));
-            return;
-        }
-        // Bounded observation polling, not sleep-based readiness.
-        unsafe { libc::poll(std::ptr::null_mut(), 0, 1) };
-    }
+#[test]
+fn preexec_admission_stop_resumes_fg_and_bg() {
+    run_scratch("preexec-admission-fg");
+    run_scratch("preexec-admission-bg");
+    run_scratch("preexec-admission-bg-read");
+    run_scratch("preexec-admission-helper");
+    run_scratch("preexec-detach-stop");
+}
+#[test]
+fn preexec_resume_preserves_failure_status_and_repeated_stop() {
+    run_scratch("preexec-denied");
+    run_scratch("preexec-missing");
+    run_scratch("preexec-repeat");
+    run_scratch("preexec-denied-redirect");
+    run_scratch("preexec-int");
 }
 
 #[test]
@@ -235,6 +303,26 @@ fn scratch_session() {
             .parse()
             .unwrap(),
     );
+    if mode.starts_with("preexec-") {
+        PREEXEC_BEFORE_ACK.set(mode.starts_with("preexec-admission"));
+        PREEXEC_STAGE.set(if mode.ends_with("middle") || mode == "preexec-leader" {
+            1
+        } else if mode.ends_with("tail") {
+            2
+        } else {
+            0
+        });
+        PREEXEC_FDS.set((
+            std::env::var("DSH_PREEXEC_READY_FD")
+                .unwrap()
+                .parse()
+                .unwrap(),
+            std::env::var("DSH_PREEXEC_HOLD_FD")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        ));
+    }
     SCRATCH_TERMINAL.set(true);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -257,11 +345,11 @@ fn scratch_session() {
             ctx.process_count,
         );
         let (program, args) = match mode.as_str() {
-            "exec-failure" => {
+            "exec-failure" | "preexec-denied" | "preexec-denied-redirect" => {
                 std::fs::write("denied", "not executable").unwrap();
                 ("./denied".to_owned(), vec!["./denied".to_owned()])
             }
-            "missing" => (
+            "missing" | "preexec-missing" => (
                 "dogesh-missing-handoff-fixture".to_owned(),
                 vec!["dogesh-missing-handoff-fixture".to_owned()],
             ),
@@ -271,9 +359,13 @@ fn scratch_session() {
                     "/bin/sh".into(),
                     "-c".into(),
                     if mode == "rollback" {
-                        format!(": >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready || exit 2; kill -STOP $$")
+                        format!(": > exec-started; : >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready || exit 2; kill -STOP $$")
+                    } else if mode == "preexec-admission-bg" || mode == "preexec-leader" {
+                        "exit 0".to_string()
+                    } else if mode == "preexec-repeat" {
+                        "kill -STOP $$; exit 0".to_string()
                     } else {
-                        format!(": >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready")
+                        format!(": > exec-started; : >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready")
                     },
                 ],
             ),
@@ -296,17 +388,83 @@ fn scratch_session() {
                 vec!["true".into(), "bad\0arg".into()],
             )));
         }
+        if mode.starts_with("preexec-pipeline") || mode.starts_with("preexec-direct") {
+            for _ in 0..2 { job.set_process(JobProcess::Command(Process::new("cat".into(), vec!["cat".into()]))); }
+        }
+        if mode == "preexec-denied-redirect"
+            && let Some(JobProcess::Command(process)) = job.process.as_deref_mut() {
+            process.redirects.push(super::Redirect::write(2, "diagnostic".into()));
+        }
+        if mode.contains("helper") {
+            let handler = dsh_builtin::get_handler("set").unwrap();
+            job.set_process(JobProcess::Builtin(super::builtin::BuiltinProcess::new_handler("set".into(), handler, vec!["set".into(), "-o".into(), "pipefail".into()])));
+        }
+        if mode == "preexec-leader" {
+            let command = job.process.take().unwrap();
+            job.set_process(JobProcess::Command(Process::new("true".into(), vec!["true".into()])));
+            job.set_process(*command);
+            job.set_process(JobProcess::Command(Process::new("cat".into(), vec!["cat".into()])));
+        }
         REJECT_HANDOFF.set(mode == "handoff-abort" || mode == "no-ctty");
-        OBSERVE_FIRST.set(true);
-        FIRST_EVENT.set(None);
         let result = job.launch(&mut ctx, &mut shell).await;
         let first = job.process.as_deref().unwrap().get_state();
-        let event = FIRST_EVENT.get();
-        eprintln!("case={mode} first_event={event:?} first_state={first:?} outcome={result:?}");
+        eprintln!("case={mode} first_state={first:?} outcome={result:?}");
+        if mode == "preexec-int" {
+            assert_eq!(job.final_exit_status(), Some(128 + libc::SIGINT));
+        } else if mode.starts_with("preexec-") {
+            assert!(job.is_fully_stopped(), "all admitted stages must stop: {:?}", job.process);
+            assert_eq!(job.final_exit_status(), None);
+            let stop_signal = if mode.starts_with("preexec-admission") || mode.starts_with("preexec-direct") { nix::sys::signal::Signal::SIGSTOP } else { nix::sys::signal::Signal::SIGTSTP };
+            assert!(matches!(job.state, ProcessState::Stopped(_, signal) if signal == stop_signal));
+            assert_eq!(job.has_unreleased_admission(), mode.starts_with("preexec-admission"));
+            assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
+            if mode == "preexec-detach-stop" {
+                job.foreground = false;
+                shell.track_async_job(job).unwrap();
+                assert!(shell.detach_known_async_jobs_for_normal_exit().is_err());
+                assert_eq!(shell.wait_jobs.len(), 1);
+                job = shell.wait_jobs.pop().unwrap();
+                assert!(!job.exec_reports.is_empty());
+            }
+            std::fs::write("launch-returned", b"stopped").unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !std::path::Path::new("preexec-released").exists() {
+                assert!(Instant::now() < deadline, "supervisor did not release test hold");
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            if mode.starts_with("preexec-admission-bg") {
+                job.signal(nix::sys::signal::Signal::SIGCONT).unwrap();
+                crate::proxy::finalize_background_resume(&mut shell, job, Ok(())).await.unwrap();
+                job = shell.wait_jobs.pop().unwrap();
+                if mode.ends_with("-read") {
+                    super::job_wait::wait_job(&mut job, false).await.unwrap();
+                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
+                    assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
+                    super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
+                } else {
+                    super::job_wait::wait_for_termination(&mut job).await.unwrap();
+                }
+                assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
+            } else {
+                super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
+                if mode == "preexec-repeat" {
+                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGSTOP)));
+                    assert_eq!(job.final_exit_status(), None);
+                    super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
+                }
+            }
+            let status = match mode.as_str() { "preexec-denied" | "preexec-denied-redirect" => 126, "preexec-missing" => 127, _ => 0 };
+            assert_eq!(job.final_exit_status(), Some(status));
+            assert!(job.exec_reports.is_empty());
+            if mode == "preexec-denied-redirect" {
+                let diagnostic = std::fs::read_to_string("diagnostic").unwrap();
+                assert_eq!(diagnostic.lines().filter(|line| line.contains("Permission denied")).count(), 1);
+            }
+        }
         // Clean up through the canonical owner before assertions even on RED.
         if !job.is_process_tree_completed() {
             job.signal(nix::sys::signal::Signal::SIGKILL).unwrap();
-            super::job_wait::wait_job(&mut job, false).await.unwrap();
+            super::job_wait::wait_for_termination(&mut job).await.unwrap();
             job.cleanup_pty_tasks().await;
         }
         if mode == "no-ctty" {
@@ -327,7 +485,8 @@ fn scratch_session() {
         );
         if mode == "rollback" {
             assert!(result.unwrap_err().to_string().contains("CString"));
-            assert_eq!(event, Some((libc::CLD_STOPPED, libc::SIGSTOP)));
+        } else if mode.starts_with("preexec-") {
+            result.unwrap();
         } else {
             result.unwrap();
             let status = match mode.as_str() {
@@ -336,13 +495,12 @@ fn scratch_session() {
                 "missing" => 127,
                 _ => 0,
             };
-            assert_eq!(
-                event,
-                Some((libc::CLD_EXITED, status)),
-                "reader must finish before parent admission"
-            );
             assert_eq!(first, ProcessState::Completed(status as u8, None));
             assert_eq!(job.final_exit_status(), Some(status));
+        }
+        if mode == "normal" || mode == "handoff-abort" {
+            assert!(ADMISSION_CHECKED.get(), "new admission fence must be exercised");
+            assert_eq!(std::path::Path::new("exec-started").exists(), mode == "normal");
         }
         assert!(job.is_process_tree_completed());
         let mut stage = job.process.as_deref();

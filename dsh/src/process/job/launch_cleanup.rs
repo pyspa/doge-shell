@@ -24,6 +24,7 @@ impl Job {
     pub(super) async fn abort_spawned_stages(&mut self) {
         if self.process.is_some() {
             let _ = self.signal(Signal::SIGKILL);
+            self.launch_admission = None;
             #[cfg(test)]
             if self.defer_abort_reap {
                 return;

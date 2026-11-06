@@ -37,6 +37,18 @@ pub struct Cli {
     /// Absent for helpers without a status channel (background builtins).
     #[arg(long = "__dsh-internal-status-fd", hide = true)]
     pub internal_status_fd: Option<i32>,
+    #[arg(
+        long = "__dsh-internal-launch-gate-fd",
+        hide = true,
+        requires = "internal_exec_fd"
+    )]
+    pub internal_launch_gate_fd: Option<i32>,
+    #[arg(
+        long = "__dsh-internal-launch-ready-fd",
+        hide = true,
+        requires = "internal_launch_gate_fd"
+    )]
+    pub internal_launch_ready_fd: Option<i32>,
 
     /// Internal log-free worker bootstrap; payload still requires the FD protocol.
     #[arg(
@@ -159,6 +171,8 @@ mod tests {
             notebook: None,
             internal_exec_fd: None,
             internal_status_fd: None,
+            internal_launch_gate_fd: None,
+            internal_launch_ready_fd: None,
             subcommand: None,
         };
         assert!(RunMode::from_cli(&base).needs_interactive_services());

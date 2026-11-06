@@ -33,6 +33,7 @@ routerが使えない・`repo-general` のときに該当節を検索する索�
   - Skill: `docs/ai/skills/doge-shell-process-pty/SKILL.md`
   - Read: `dsh/src/process/io.rs`, `dsh/src/process/job_pty.rs`, `dsh/src/process/pty.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
+  - Capture/EOF harness tests hold `common::serial_guard()` across child lifetime: concurrent spawns can inherit writers between macOS `pipe` and CLOEXEC setup, invalidating split-EOF assertions.
 - execution / pipeline / background jobs / wait / fg/bg / `$!` / ECHILD / process substitution / reexec / FD/PID/PGID ownership
   - Skill: `docs/ai/skills/doge-shell-execution-semantics/SKILL.md`
   - 先に読む: `docs/ai/skills/doge-shell-repo/references/invariants/execution.md`（lifecycle/ownership/harness）、`docs/ai/skills/doge-shell-repo/references/invariants/execution-background.md`（`$!`/`wait`/`fg`/`bg`）

@@ -10,6 +10,11 @@
 //! - partial output survives a timeout;
 //! - a stderr-only held pipe reports split EOF state;
 //! - large output never deadlocks the capture loop.
+//!
+//! Serialize the child-owning tests with the existing harness guard. On
+//! macOS, pipe creation and setting CLOEXEC are separate operations; a
+//! concurrent spawn can inherit another test's capture writer in between
+//! and keep it alive after that test's primary exits.
 
 mod common;
 
@@ -48,6 +53,7 @@ fn cleanup_helper(pid: Pid) {
 /// finally exits.
 #[test]
 fn held_pipe_after_primary_exit_is_output_eof_timeout() {
+    let _guard = common::serial_guard();
     let timeout = Duration::from_millis(500);
     let process = spawn_dsh_unlocked(
         ["-c".to_string(), "sleep 10 & echo PID:$!".to_string()],
@@ -93,6 +99,7 @@ fn held_pipe_after_primary_exit_is_output_eof_timeout() {
 /// must have its output collected. This forbids kill-on-primary-exit.
 #[test]
 fn legitimate_late_output_after_primary_exit_is_collected() {
+    let _guard = common::serial_guard();
     let process = spawn_dsh_unlocked(
         [
             "-c".to_string(),
@@ -125,6 +132,7 @@ fn legitimate_late_output_after_primary_exit_is_collected() {
 /// A timeout must keep what arrived before the deadline for diagnostics.
 #[test]
 fn timeout_preserves_partial_output() {
+    let _guard = common::serial_guard();
     let timeout = Duration::from_millis(500);
     let process = spawn_dsh_unlocked(
         [
@@ -172,6 +180,7 @@ fn timeout_preserves_partial_output() {
 /// still held — the macOS CI #131 shape.
 #[test]
 fn stderr_only_held_pipe_reports_split_eof() {
+    let _guard = common::serial_guard();
     let child = Command::new("/bin/sh")
         .arg("-c")
         .arg("echo READY; exec 1>&-; sleep 10 & echo $! >&2")
@@ -233,6 +242,7 @@ fn stderr_only_held_pipe_reports_split_eof() {
 /// capture loop deadlocking the child.
 #[test]
 fn large_output_does_not_deadlock() {
+    let _guard = common::serial_guard();
     let yes = common::yes_path().to_string();
     let head = common::head_path().to_string();
     let script = format!("{yes} | {head} -c 300000; {yes} | {head} -c 300000 1>&2; echo DONE");

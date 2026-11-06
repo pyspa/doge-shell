@@ -582,7 +582,7 @@ async fn capture_output_task_failure_cleans_up_tasks() {
     // awaiting the output task, so even when that await fails no proxy
     // task or PTY fd may be left behind for the next command.
     let mut job = Job::new("pty-test".to_string(), Pid::from_raw(1));
-    job.state = ProcessState::Completed(0, None);
+    job.set_lifecycle_state_for_test(ProcessState::Completed(0, None));
     job.pty = Some(Pty::new().expect("failed to create test pty"));
     job.pty_mode = Some(PtyMode::OutputOnly);
     job.pty_input_task = Some(tokio::spawn(std::future::pending::<()>()));
@@ -663,7 +663,7 @@ async fn cleanup_pty_tasks_awaits_aborted_input_proxy() {
 #[tokio::test]
 async fn capture_stops_pty_input_before_waiting_for_output_task() {
     let mut job = Job::new("pty-test".to_string(), Pid::from_raw(1));
-    job.state = ProcessState::Completed(0, None);
+    job.set_lifecycle_state_for_test(ProcessState::Completed(0, None));
     job.pty = Some(Pty::new().expect("failed to create test pty"));
     job.pty_mode = Some(PtyMode::OutputOnly);
 

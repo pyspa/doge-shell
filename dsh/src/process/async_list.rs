@@ -331,8 +331,7 @@ pub(crate) fn launch_async_list_process(
         anyhow::bail!("async list launcher called on a non-async process");
     };
     spawn_async_list(async_process, ctx, shell, job)?;
-    job.state = async_process.state;
-    job.set_process(process.to_owned());
+    job.record_launched_process(process.to_owned());
     Ok(super::launch_outcome::StageLaunchOutcome::Launched)
 }
 

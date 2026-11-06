@@ -295,7 +295,7 @@ mod tests {
         assert!(!job.is_process_tree_completed());
         assert!(job.final_exit_status().is_none());
         assert!(matches!(
-            job.state,
+            job.lifecycle_state(),
             ProcessState::Stopped(_, Signal::SIGSTOP)
         ));
         assert!(

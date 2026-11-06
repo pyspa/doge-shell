@@ -186,7 +186,7 @@ pub(crate) fn render_jobs_default(entries: &[JobListEntry<'_>]) -> String {
         .iter()
         .map(|entry| DefaultJobRow {
             job: format_job_label(entry.job.job_id, entry.marker),
-            state: format!("{}", entry.job.state),
+            state: format!("{}", entry.job.lifecycle_state()),
             command: entry.job.cmd.clone(),
         })
         .collect();
@@ -200,7 +200,7 @@ pub(crate) fn render_jobs_long(entries: &[JobListEntry<'_>]) -> String {
         .map(|entry| LongJobRow {
             job: format_job_label(entry.job.job_id, entry.marker),
             pid: entry.job.pid.map(|p| p.as_raw()).unwrap_or(-1),
-            state: format!("{}", entry.job.state),
+            state: format!("{}", entry.job.lifecycle_state()),
             command: entry.job.cmd.clone(),
         })
         .collect();

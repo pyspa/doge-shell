@@ -30,6 +30,8 @@ pub async fn run_shell() -> ExitCode {
     // of the parent session, not a new interactive agent.
     if let Some(exec_fd) = cli.internal_exec_fd {
         let fds = crate::process::reexec::InternalHelperFds {
+            launch_gate: cli.internal_launch_gate_fd,
+            launch_ready: cli.internal_launch_ready_fd,
             request: exec_fd,
             status: cli.internal_status_fd,
         };

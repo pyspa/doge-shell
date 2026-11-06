@@ -36,7 +36,9 @@ impl Shell {
             }
         }
         for &index in &candidates {
-            self.wait_jobs[index].update_status();
+            let job = &mut self.wait_jobs[index];
+            crate::process::job_wait::settle_startup_reports_for_detach(job)?;
+            job.update_status();
         }
         for &index in &candidates {
             validate_detach_safe(&self.wait_jobs[index])?;
@@ -85,6 +87,12 @@ fn validate_detach_safe(job: &crate::process::Job) -> Result<()> {
             "cannot detach async job {} ('{}'): has a stopped process; leaving it shell-owned for shutdown cleanup",
             job.job_id,
             job.cmd,
+        );
+    }
+    if !job.exec_reports.is_empty() || job.launch_admission.is_some() {
+        anyhow::bail!(
+            "cannot detach async job {}: still owns launch protocol",
+            job.job_id
         );
     }
     if !job.monitors.is_empty() {

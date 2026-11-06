@@ -161,7 +161,10 @@ where
                 "BG_CMD_SIGCONT: Sending SIGCONT to process group {} for job {}",
                 pgid, job.job_id
             );
-            send_cont(pgid)
+            crate::process::job_wait::continue_startup_fallback(
+                crate::process::job_wait::pending_full_proxy_stopped_pid(&job),
+                send_cont(pgid),
+            )
         }
         None => Err(anyhow::anyhow!("job {} has no process group", job.job_id)),
     };

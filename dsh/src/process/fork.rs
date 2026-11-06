@@ -20,6 +20,8 @@ use crate::process::io::{OutputMonitor, cloexec_pipe};
 use anyhow::{Context as _, Result};
 use nix::unistd::{ForkResult, Pid, fork};
 use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
+mod pending_report;
+pub(crate) use pending_report::PendingExecReport;
 use tracing::debug;
 
 use super::process::Process;
@@ -30,7 +32,8 @@ use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 
 /// Return the child and its monitors without consuming its wait status.
-/// The final flag records a reported launch-failure path, never completion.
+/// The flag records an already-known resolution failure, never completion.
+#[cfg(test)]
 pub(crate) fn fork_process(
     ctx: &Context,
     job_pgid: Option<Pid>,
@@ -39,7 +42,39 @@ pub(crate) fn fork_process(
     pty: Option<PtyChildConfig>,
     diagnostic_target: Option<ParentExecDiagnostic<'_>>,
     pipeline_read: Option<RawFd>,
-) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
+) -> Result<(Pid, Vec<OutputMonitor>, bool, PendingExecReport)> {
+    fork_process_admitted(
+        ctx,
+        job_pgid,
+        process,
+        shell,
+        pty,
+        diagnostic_target,
+        ForkLaunchOptions {
+            pipeline_read,
+            admission: None,
+        },
+    )
+}
+
+pub(crate) struct ForkLaunchOptions<'a> {
+    pub pipeline_read: Option<RawFd>,
+    pub admission: Option<&'a mut super::launch_admission::LaunchAdmission>,
+}
+
+pub(crate) fn fork_process_admitted(
+    ctx: &Context,
+    job_pgid: Option<Pid>,
+    process: &mut Process,
+    shell: &mut Shell,
+    pty: Option<PtyChildConfig>,
+    diagnostic_target: Option<ParentExecDiagnostic<'_>>,
+    options: ForkLaunchOptions<'_>,
+) -> Result<(Pid, Vec<OutputMonitor>, bool, PendingExecReport)> {
+    let ForkLaunchOptions {
+        pipeline_read,
+        admission,
+    } = options;
     debug!("FORK: Starting fork_process");
     debug!("FORK: pgid: {:?}, foreground: {}", job_pgid, ctx.foreground);
     debug!(
@@ -119,7 +154,12 @@ pub(crate) fn fork_process(
         .into_bundle();
 
     let full_proxy_pty = pty.is_some_and(|pty| pty.mode == PtyMode::FullProxy);
-    let gate = if ctx.interactive
+    let stage_admission = admission
+        .as_ref()
+        .map(|_| super::launch_admission::StageAdmission::new())
+        .transpose()?;
+    let gate = if admission.is_none()
+        && ctx.interactive
         && ctx.foreground
         && !full_proxy_pty
         && not_found.is_none()
@@ -134,7 +174,7 @@ pub(crate) fn fork_process(
     // close it before writing their diagnostic (failure is already known
     // here). Other failures write one bounded ChildExecError record.
     let (err_read, err_write) = cloexec_pipe().context("failed exec-error pipe")?;
-    let err_read_fd = err_read.into_raw_fd();
+    let mut report = PendingExecReport::new(err_read, process, diagnostic_target.as_ref())?;
     let err_write_fd = err_write.into_raw_fd();
 
     let pty_slave = pty.map(|pty| pty.slave).unwrap_or(-1);
@@ -144,10 +184,15 @@ pub(crate) fn fork_process(
 
     #[cfg(test)]
     let test_child_start_fd = super::foreground_handoff_tests::child_start_gate_fd();
+    #[cfg(test)]
+    let test_preexec_fds = super::foreground_handoff_tests::preexec_fds();
+    #[cfg(test)]
+    let test_preexec_before_ack = super::foreground_handoff_tests::preexec_before_ack();
+    #[cfg(test)]
+    let test_stop_before_setsid = super::preexec_full_proxy_tests::take_stop();
     let pid = match unsafe { fork().context("failed fork") } {
         Ok(pid) => pid,
         Err(err) => {
-            unsafe { libc::close(err_read_fd) };
             unsafe { libc::close(err_write_fd) };
             return Err(err);
         }
@@ -155,6 +200,7 @@ pub(crate) fn fork_process(
 
     match pid {
         ForkResult::Parent { child } => {
+            report.pid = Some(child);
             debug!("FORK: Parent process - child pid: {}", child);
             #[cfg(test)]
             super::foreground_handoff_tests::record_child(child);
@@ -165,21 +211,15 @@ pub(crate) fn fork_process(
             if let Some(gate) = gate {
                 gate.release(child, job_pgid.unwrap_or(child));
             }
-            let reported_failure = drain_exec_error(
-                err_read_fd,
-                &process.cmd,
-                process.stderr,
-                &process.argv,
-                diagnostic_target,
-            );
-            unsafe { libc::close(err_read_fd) };
-            #[cfg(test)]
-            super::foreground_handoff_tests::after_exec_handshake(child);
+            if let (Some(admission), Some(stage)) = (admission, stage_admission) {
+                admission.admit(child, stage);
+            }
+
             // The successful spawn hands parent writers to Job finalization.
             for writer in created_writes {
                 let _ = writer.into_raw_fd();
             }
-            Ok((child, monitors, reported_failure || not_found.is_some()))
+            Ok((child, monitors, not_found.is_some(), report))
         }
         ForkResult::Child => {
             #[cfg(test)]
@@ -194,6 +234,15 @@ pub(crate) fn fork_process(
                 None => (std::ptr::null(), 0),
             };
             let plan = RawChildPlan {
+                #[cfg(test)]
+                test_preexec_fds,
+                #[cfg(test)]
+                test_preexec_before_ack,
+                #[cfg(test)]
+                test_stop_before_setsid,
+                admission_fds: stage_admission
+                    .as_ref()
+                    .map_or([-1; 4], |stage| stage.raw()),
                 executable: bundle.executable_ptr(),
                 argv: bundle.argv_ptr(),
                 envp: bundle.envp_ptr(),
@@ -215,33 +264,6 @@ pub(crate) fn fork_process(
             unsafe { exec_external_child(&plan) }
         }
     }
-}
-
-/// Read the bounded exec-error handshake. Exec success closes via CLOEXEC;
-/// an already-known unresolved command closes before its diagnostic write.
-/// Other failures yield one ChildExecError for the parent to format.
-fn drain_exec_error(
-    err_read_fd: i32,
-    cmd: &str,
-    stderr_fd: i32,
-    argv: &[String],
-    diagnostic_target: Option<ParentExecDiagnostic<'_>>,
-) -> bool {
-    drain_exec_error_with_reader(
-        |buffer| {
-            let chunk =
-                unsafe { libc::read(err_read_fd, buffer.as_mut_ptr().cast(), buffer.len()) };
-            if chunk < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(chunk as usize)
-            }
-        },
-        cmd,
-        stderr_fd,
-        argv,
-        diagnostic_target,
-    )
 }
 
 fn drain_exec_error_with_reader(
@@ -333,8 +355,9 @@ fn drain_exec_error_with_reader(
 mod exec_error_tests;
 
 /// Parent-only delivery for the exact unredirected FullProxy stderr route.
-/// The caller descriptor is borrowed for this synchronous launch; only bytes
-/// outlive it. Display failure must not discard observer/history evidence.
+/// This borrowed route describes pre-fork destination ownership. PendingExecReport
+/// duplicates the caller before launch and reconstructs this view for delivery.
+/// Display failure must not discard observer/history evidence.
 pub(crate) struct ParentExecDiagnostic<'a> {
     caller: BorrowedFd<'a>,
     captured: &'a mut Vec<u8>,
@@ -645,13 +668,21 @@ mod tests {
         let mut shell = Shell::new(env);
         let mut process = Process::new(path.to_string(), vec![path.to_string(), "30".to_string()]);
 
-        let (child, monitors, terminal_launch_failure) =
+        let (child, monitors, terminal_launch_failure, mut report) =
             fork_process(&ctx, None, &mut process, &mut shell, None, None, None)
                 .expect("fork_process failed");
         assert!(monitors.is_empty());
         assert!(!terminal_launch_failure);
 
-        // `fork_process` drains the exec-error pipe, so return means the
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut exec_finished = report.drain(&mut Vec::new());
+        while !exec_finished && std::time::Instant::now() < deadline {
+            exec_finished = report.drain(&mut Vec::new());
+            unsafe {
+                libc::poll(std::ptr::null_mut(), 0, 1);
+            }
+        }
+        // Explicitly drain the exec-error pipe so completion means the
         // child already passed `setpgid` + `execve`. No timing sleep needed.
         let observed = getpgid(Some(child));
 
@@ -667,6 +698,7 @@ mod tests {
         let _ = nix::sys::signal::kill(child, nix::sys::signal::Signal::SIGKILL);
         let _ = nix::sys::wait::waitpid(child, None);
 
+        assert!(exec_finished, "exec report did not resolve before deadline");
         let observed_pgid = observed.expect("getpgid(child) failed: child likely failed setpgid");
         assert_eq!(
             observed_pgid, child,

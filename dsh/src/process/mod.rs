@@ -42,4 +42,11 @@ pub use redirect::Redirect;
 pub use state::{ListOp, ProcessState, SubshellType, signal_exit_status};
 pub use wait::{WaitPidObservation, wait_pid_job};
 
+pub(crate) mod launch_admission;
 pub(crate) mod stage_environment;
+
+#[cfg(test)]
+mod preexec_full_proxy_tests;
+
+#[cfg(test)]
+mod launch_admission_tests;

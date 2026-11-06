@@ -28,7 +28,7 @@ fn stopped_tree_job(job_id: usize, signal: NixSignal) -> ProcJob {
     proc.state = ProcessState::Stopped(pid, signal);
     job.set_process(JobProcess::Command(proc));
     // Simulate `fg`'s stale pre-wait summary.
-    job.state = ProcessState::Running;
+    job.set_lifecycle_state_for_test(ProcessState::Running);
     job
 }
 
@@ -46,7 +46,7 @@ fn completed_tree_job_with_status(job_id: usize, code: u8) -> ProcJob {
     proc.pid = Some(pid);
     proc.state = ProcessState::Completed(code, None);
     job.set_process(JobProcess::Command(proc));
-    job.state = ProcessState::Running;
+    job.set_lifecycle_state_for_test(ProcessState::Running);
     job
 }
 
@@ -60,7 +60,7 @@ fn running_tree_job(job_id: usize) -> ProcJob {
     proc.pid = Some(pid);
     proc.state = ProcessState::Running;
     job.set_process(JobProcess::Command(proc));
-    job.state = ProcessState::Running;
+    job.set_lifecycle_state_for_test(ProcessState::Running);
     job
 }
 
@@ -81,7 +81,7 @@ async fn fg_requeues_job_that_stops_again() {
     assert_eq!(requeued.job_id, job_id);
     assert_eq!(requeued.pid, Some(pid));
     assert_eq!(
-        requeued.state,
+        requeued.lifecycle_state(),
         ProcessState::Stopped(pid, NixSignal::SIGTSTP),
         "re-stopped job must keep its real observed stop state, not Running"
     );
@@ -104,7 +104,7 @@ async fn fg_requeues_job_stopped_by_sigstop() {
     );
     assert_eq!(shell.wait_jobs.len(), 1);
     assert_eq!(
-        shell.wait_jobs[0].state,
+        shell.wait_jobs[0].lifecycle_state(),
         ProcessState::Stopped(pid, NixSignal::SIGSTOP)
     );
 }
@@ -149,7 +149,7 @@ async fn fg_signal_completion_reports_128_plus_signal() {
     proc.pid = Some(pid);
     proc.state = ProcessState::signaled(NixSignal::SIGTERM);
     job.set_process(JobProcess::Command(proc));
-    job.state = ProcessState::Running;
+    job.set_lifecycle_state_for_test(ProcessState::Running);
 
     let status = finalize_foreground_job(&mut shell, job, Ok(()), &test_ctx())
         .await
@@ -173,7 +173,7 @@ async fn fg_running_with_successful_wait_is_infrastructure_error() {
     );
     assert_eq!(shell.wait_jobs.len(), 1, "job must be requeued first");
     assert_eq!(shell.wait_jobs[0].job_id, 34);
-    assert_eq!(shell.wait_jobs[0].state, ProcessState::Running);
+    assert_eq!(shell.wait_jobs[0].lifecycle_state(), ProcessState::Running);
 }
 
 #[tokio::test]
@@ -212,7 +212,7 @@ async fn fg_requeues_active_job_after_wait_error() {
         "active job must survive wait error"
     );
     assert_eq!(shell.wait_jobs[0].job_id, 9);
-    assert_eq!(shell.wait_jobs[0].state, ProcessState::Running);
+    assert_eq!(shell.wait_jobs[0].lifecycle_state(), ProcessState::Running);
 }
 
 #[tokio::test]
@@ -241,7 +241,7 @@ async fn bg_success_marks_stopped_process_tree_running() {
     assert_eq!(shell.wait_jobs.len(), 1);
     let requeued = &shell.wait_jobs[0];
     assert_eq!(requeued.job_id, 12);
-    assert_eq!(requeued.state, ProcessState::Running);
+    assert_eq!(requeued.lifecycle_state(), ProcessState::Running);
     assert_eq!(
         requeued.process.as_deref().map(JobProcess::get_state),
         Some(ProcessState::Running)
@@ -262,7 +262,7 @@ async fn bg_sigcont_error_requeues_stopped_job() {
     let requeued = &shell.wait_jobs[0];
     assert_eq!(requeued.job_id, 13);
     assert_eq!(
-        requeued.state,
+        requeued.lifecycle_state(),
         ProcessState::Stopped(pid, NixSignal::SIGTTIN)
     );
     assert_eq!(
@@ -321,7 +321,7 @@ fn bg_missing_pgid_keeps_job_stopped() {
     let requeued = &shell.wait_jobs[0];
     assert_eq!(requeued.job_id, 15);
     assert_eq!(
-        requeued.state,
+        requeued.lifecycle_state(),
         ProcessState::Stopped(pid, NixSignal::SIGTSTP)
     );
     assert_eq!(
@@ -335,7 +335,7 @@ fn bg_default_selection_uses_process_tree_not_stale_summary() {
     let mut shell = test_shell();
     let mut job = stopped_tree_job(16, NixSignal::SIGSTOP);
     job.pgid = None;
-    assert_eq!(job.state, ProcessState::Running);
+    assert_eq!(job.lifecycle_state(), ProcessState::Running);
     assert!(job.has_stopped_process());
     shell.wait_jobs.push(job);
     let ctx = test_ctx();
@@ -352,7 +352,10 @@ fn bg_default_selection_uses_process_tree_not_stale_summary() {
 fn bg_explicit_job_rejects_stale_stopped_summary_when_tree_is_running() {
     let mut shell = test_shell();
     let mut job = running_tree_job(17);
-    job.state = ProcessState::Stopped(Pid::from_raw(424244), NixSignal::SIGTSTP);
+    job.set_lifecycle_state_for_test(ProcessState::Stopped(
+        Pid::from_raw(424244),
+        NixSignal::SIGTSTP,
+    ));
     shell.wait_jobs.push(job);
     let ctx = test_ctx();
 
@@ -1635,8 +1638,8 @@ fn stopped_bg_job(job_id: usize, pid_raw: i32) -> ProcJob {
     proc.pid = Some(pid);
     proc.state = ProcessState::Stopped(pid, NixSignal::SIGTSTP);
     job.set_process(JobProcess::Command(proc));
-    // Stale summary on purpose: the tree, not `job.state`, decides.
-    job.state = ProcessState::Running;
+    // Stale summary on purpose: the tree, not `job.lifecycle_state()`, decides.
+    job.set_lifecycle_state_for_test(ProcessState::Running);
     job
 }
 
@@ -1758,7 +1761,7 @@ async fn bg_multi_target_resumes_every_stopped_job() {
         shell
             .wait_jobs
             .iter()
-            .all(|job| job.state == ProcessState::Running),
+            .all(|job| job.lifecycle_state() == ProcessState::Running),
         "both summaries must be running"
     );
 }
@@ -1956,9 +1959,9 @@ fn bg_default_selection_prefers_most_recent_stopped_tree() {
     shell.wait_jobs.push(stopped_bg_job(3, 426063));
     assert_eq!(default_bg_target(&shell.wait_jobs), Some(3));
 
-    // Stale `job.state` never decides: tree Stopped wins over the summary.
+    // Stale `job.lifecycle_state()` never decides: tree Stopped wins over the summary.
     let mut stale = stopped_bg_job(4, 426064);
-    stale.state = ProcessState::Stopped(Pid::from_raw(9), NixSignal::SIGSTOP);
+    stale.set_lifecycle_state_for_test(ProcessState::Stopped(Pid::from_raw(9), NixSignal::SIGSTOP));
     let mut shell = test_shell();
     shell.wait_jobs.push(stale);
     assert_eq!(default_bg_target(&shell.wait_jobs), Some(4));

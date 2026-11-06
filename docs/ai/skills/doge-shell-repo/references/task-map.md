@@ -33,6 +33,7 @@ routerが使えない・`repo-general` のときに該当節を検索する索�
   - Skill: `docs/ai/skills/doge-shell-process-pty/SKILL.md`
   - Read: `dsh/src/process/io.rs`, `dsh/src/process/job_pty.rs`, `dsh/src/process/pty.rs`, `dsh/src/terminal/`
   - Validate: `cargo test -p doge-shell`
+  - Capture/EOF harness tests hold `common::serial_guard()` across child lifetime: concurrent spawns can inherit writers between macOS `pipe` and CLOEXEC setup, invalidating split-EOF assertions.
 - execution / pipeline / background jobs / wait / fg/bg / `$!` / ECHILD / process substitution / reexec / FD/PID/PGID ownership
   - Skill: `docs/ai/skills/doge-shell-execution-semantics/SKILL.md`
   - 先に読む: `docs/ai/skills/doge-shell-repo/references/invariants/execution.md`（lifecycle/ownership/harness）、`docs/ai/skills/doge-shell-repo/references/invariants/execution-background.md`（`$!`/`wait`/`fg`/`bg`）
@@ -62,10 +63,12 @@ routerが使えない・`repo-general` のときに該当節を検索する索�
   - Read: `dsh-builtin/src/serve/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p dsh-types` only for shared wire-shape changes
 - builtin command / help / doctor outside chat/MCP
+  - Regression: `trigger` must POSIX-quote each argv item for the capture boundary and match watcher paths relative to the registered root with lossy string conversion for non-UTF-8 names; test through a real watcher with readiness acknowledgement.
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: command-specific files under `dsh-builtin/src/`, `dsh/src/proxy/builtin/`
   - Validate: `cargo test -p dsh-builtin`; add `cargo test -p doge-shell` when proxy builtin behavior changes; subprocess を spawn する変更は `scripts/check-runtime-authority.py` も通す（`dsh-types/src/process_runtime.rs` の snapshot 経由か、理由付き allowlist が要る）
 - GitHub builtins / PR notification / git helpers
+  - Regression: `ga` must parse NUL-delimited porcelain records, retain raw filename bytes, and pass literal absolute paths without changing snapshot cwd (relative `GIT_DIR`/`GIT_WORK_TREE` must keep working).
   - Skill: `docs/ai/skills/doge-shell-builtin-commands/SKILL.md`
   - Read: `dsh-builtin/src/g*.rs`, `dsh-builtin/src/github_client.rs`, `dsh-builtin/src/gh_notify.rs`, `dsh-builtin/src/commit_ai.rs`
   - Validate: `cargo test -p dsh-builtin`

@@ -7,6 +7,68 @@ use crate::input::{Input, InputConfig};
 use crate::repl::Repl;
 use crate::shell::Shell;
 
+#[tokio::test]
+async fn refreshed_analysis_clears_stale_completion_before_accepting() {
+    let mut shell = Shell::new(Environment::new());
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset("echo audit-unique-123".into());
+    for cached in [false, true] {
+        repl.input.completion = Some("echo".into());
+        let mut suffix = None;
+        if cached {
+            super::apply_cached_analysis(&mut repl, &mut suffix, None, None);
+        } else {
+            super::apply_fresh_analysis(
+                &mut repl,
+                &mut suffix,
+                super::InputAnalysis {
+                    completion_full: None,
+                    completion: None,
+                    color_ranges: None,
+                    can_execute: true,
+                },
+            );
+        }
+        assert!(repl.input.completion.is_none());
+        crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
+        assert_eq!(repl.input.as_str(), "echo audit-unique-123");
+    }
+}
+
+#[tokio::test]
+async fn accepting_stale_completion_preserves_current_input() {
+    let mut shell = Shell::new(Environment::new());
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset("echo audit-unique-123".into());
+    repl.input.completion = Some("echo".into());
+    crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
+    assert_eq!(repl.input.as_str(), "echo audit-unique-123");
+}
+
+#[tokio::test]
+async fn history_completion_remains_acceptable_after_fresh_and_cached_analysis() {
+    let mut shell = Shell::new(Environment::new());
+    let mut repl = Repl::new(&mut shell);
+    repl.input.reset("echo audit".into());
+    let suffix = "-history".to_string();
+    let analysis = repl.analyze_input("echo audit", Some(suffix.clone()));
+    let mut completion = Some(suffix);
+    super::apply_fresh_analysis(&mut repl, &mut completion, analysis);
+    assert_eq!(repl.input.completion.as_deref(), Some("echo audit-history"));
+    let cached = repl.ai_ui.last_analysis_result.as_ref().unwrap();
+    let (full, suffix) = (cached.completion_full.clone(), cached.completion.clone());
+    // Whether history is temporarily locked or reports another candidate,
+    // the cached displayed suffix and the accepted full value must agree.
+    for fresh_suffix in [None, Some("-different".into())] {
+        repl.input.reset("echo audit".into());
+        completion = fresh_suffix;
+        super::apply_cached_analysis(&mut repl, &mut completion, full.clone(), suffix.clone());
+        assert_eq!(completion.as_deref(), Some("-history"));
+        crate::repl::key_handlers::completion::handle_accept_completion(&mut repl);
+        assert_eq!(repl.input.as_str(), "echo audit-history");
+    }
+}
+
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
     haystack
         .windows(needle.len())

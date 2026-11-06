@@ -400,9 +400,36 @@ pub fn print_input(
         render_hint_if_room(repl, out, annotation, ghost_width);
     }
 
+    let path_hint = if repl.completion_ui.path_feedback.is_active() {
+        repl.completion_ui.path_feedback.text(
+            repl.input.as_str(),
+            repl.input.cursor(),
+            repl.shell
+                .environment
+                .read()
+                .completion_state
+                .path_generation,
+            crate::completion::generators::system::system_command_scan_status(),
+        )
+    } else {
+        None
+    };
     if let Some(hint) = input_hint(&input_string) {
         let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
         render_hint_if_room(repl, out, hint.text(), ghost_width);
+    } else if auto_fix.is_none()
+        && !ai_pending_now
+        && let Some(hint) = path_hint
+    {
+        // Completion/history suffixes are drawn after the cursor is restored;
+        // reserve their cells too. Multiline ghosts own their following rows.
+        let suffix = completion
+            .as_deref()
+            .or(ghost_suffix.as_deref())
+            .unwrap_or("");
+        if !input_string.contains('\n') && !suffix.contains('\n') {
+            render_hint_if_room(repl, out, hint, display_width(suffix));
+        }
     }
 
     if ai_pending_now {
@@ -443,12 +470,16 @@ fn apply_cached_analysis(
     completion_full: Option<String>,
     analysis_completion: Option<String>,
 ) {
-    if let Some(c) = completion_full {
-        repl.input.completion = Some(c);
-    }
     if let Some(suffix) = analysis_completion {
         *completion = Some(suffix);
     }
+    // Derive acceptance from the suffix that will actually be displayed,
+    // including cached history when the current history query could not lock.
+    repl.input.completion = completion_full.or_else(|| {
+        completion
+            .as_ref()
+            .map(|suffix| format!("{}{suffix}", repl.input.as_str()))
+    });
 }
 
 fn apply_fresh_analysis(
@@ -463,12 +494,12 @@ fn apply_fresh_analysis(
         can_execute,
     } = analysis;
 
-    if let Some(c) = completion_full.as_ref() {
-        repl.input.completion = Some(c.clone());
-    }
-    if let Some(suffix) = analysis_completion.as_ref() {
-        *completion = Some(suffix.clone());
-    }
+    apply_cached_analysis(
+        repl,
+        completion,
+        completion_full.clone(),
+        analysis_completion.clone(),
+    );
 
     repl.input.color_ranges = color_ranges;
     repl.input.can_execute = can_execute;

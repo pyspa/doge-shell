@@ -527,6 +527,8 @@
         "CLAUDE.md",
         "AIコーディングエージェントで開発",
         "AIコーディングエージェントのトークン使用効率",
+        "AIコーディングエージェントの実装",
+        "coding agent implementation",
         "開発ガイド"
       ],
       "exact_paths": [
@@ -535,7 +537,9 @@
         ".claude/settings.json",
         "docs/ai/agent-routing.json",
         "scripts/agent_routing.py",
-        "scripts/agent-context.py"
+        "scripts/agent-context.py",
+        "scripts/eval-agent-routing.py",
+        "scripts/check-agent-context-budget.py"
       ],
       "path_prefixes": [
         "docs/ai/skills/",

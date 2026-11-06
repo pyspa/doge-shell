@@ -8,7 +8,7 @@ doge-shell (dogesh) is a simple yet powerful shell that combines traditional she
 
 ## 💻 Supported Platforms
 
-dogesh targets **Linux** (x86_64 / aarch64) and **macOS** (Apple Silicon / Intel). Both are
+dogesh targets **Linux** (x86_64 / aarch64) and **macOS 13 or newer** (Apple Silicon / Intel). Both are
 first-class: the shell, its tests and its host-aware completions are expected to behave the
 same on either. Windows is not supported.
 
@@ -46,9 +46,9 @@ absent, so a Linux-only definition never gets in the way on macOS.
 
 ### Completion & UI
 
-- **Context-Aware Completion**: Intelligent tab completion for commands, files, and options
+- **Context-Aware Completion**: Intelligent tab completion for commands, files, and options. If command-name collection is still running, an inline `PATH scanning…` hint becomes `PATH ready · Tab again` when ready (including empty results). Press Tab again to request candidates; editing or Escape clears the hint. This works with the status line disabled and appears only when the row has room.
 - **Skim Integration**: Fuzzy finding interface for completion using [skim](https://github.com/lotabout/skim)
-- **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker
+- **History Search**: Interactive history search with Ctrl+R, seeded with the current input. Each candidate shows its exit status, duration, age and directory, and the scope (global / session / cwd / project), status and slow-command filters can be toggled live from inside the picker. Distinct commands remain the default; with the command ledger enabled, picker-only Ctrl+E switches to per-execution metadata and authors (stored output is never read). See [History Search](docs/usage.md#history-search) for snapshot and project-scope limits.
 - **Command Abbreviations**: Define and use abbreviations with `abbr` command
 - **AI-Powered Completion**: OpenAI-compatible integration for inline suggestions, error diagnosis and commit messages. Off by default — an API key alone sends nothing; see [AI Integration](#-ai-integration)
 - **Execution Status & Duration**: The prompt shows the exit status and elapsed time of the previous command

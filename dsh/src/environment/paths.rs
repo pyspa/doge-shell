@@ -276,54 +276,45 @@ impl Environment {
     /// Prewarm executable names from a logical PATH snapshot.
     ///
     /// Scan on a worker so callers may hold the Environment write lock while
-    /// PATH is being reloaded. Only the shared name vector crosses the thread;
-    /// the worker never acquires the Environment lock.
+    /// PATH is being reloaded. Workers share only projection state and never
+    /// acquire the Environment lock.
     pub fn prewarm_executables(&self) {
-        let paths = self.variable_state.paths.clone();
-        let activation = crate::completion::generator::activate_system_command_cache(&paths);
-        let scan_ticket =
-            crate::completion::generator::begin_background_system_command_scan(&activation);
-        let executable_names = std::sync::Arc::clone(&self.completion_state.executable_names);
-
-        // `activate_system_command_cache` cleared the previous generation. The
-        // local projection is cleared now as well; a generation-checked worker
-        // repopulates only the activation that still owns the cache.
-        executable_names.write().clear();
-
-        let worker_ticket = scan_ticket.clone();
-        let spawn_result = std::thread::Builder::new()
-            .name("dsh-environment-executable-prewarm".to_string())
-            .spawn(move || {
-                let names = crate::environment::collect_executables(&paths);
-                let executable_count = names.len();
-                let commands = names.iter().cloned().collect();
-                if crate::completion::generator::publish_system_command_scan(
-                    &worker_ticket,
-                    commands,
-                ) && crate::completion::generator::publish_environment_executable_names(
-                    worker_ticket.activation(),
-                    &executable_names,
-                    names,
-                ) {
-                    debug!("Prewarmed {executable_count} executable names");
-                }
-            });
-
-        if let Err(error) = spawn_result {
-            tracing::warn!("Failed to start executable name prewarm: {error}");
-            crate::completion::generator::release_system_command_scan(&scan_ticket);
+        if !self.isolated_projection && !path_lookup_is_cacheable(&self.variable_state.paths) {
+            crate::completion::generator::activate_system_command_cache(&self.variable_state.paths);
+            let mut state = self.completion_state.path_ghost.lock();
+            *state = super::path_ghost::PathGhost::uninitialized_for(
+                self.variable_state.paths.clone(),
+                state.take_notifier(),
+            );
+            self.completion_state.executable_names.write().clear();
+            return;
         }
+        self.start_path_ghost_refresh(super::collect_executables_checked);
     }
 
     /// Set the prewarmed executable names (called after background collection).
     pub fn set_executable_names(&mut self, names: Vec<String>) {
         debug!("Setting {} prewarmed executable names", names.len());
         *self.completion_state.executable_names.write() = names;
+        self.mark_path_ghost_ready();
     }
 
     /// Search for an executable name by prefix using the prewarmed cache.
     /// Returns the first matching executable name, or None if not found.
     pub fn search_prefix(&self, prefix: &str) -> Option<String> {
+        // Relative/empty PATH entries and explicit paths retain synchronous cwd semantics.
+        if !path_lookup_is_cacheable(&self.variable_state.paths) || command_contains_slash(prefix) {
+            return self.search(prefix);
+        }
+        if self.invocation.interactive && !self.isolated_projection {
+            self.ensure_path_ghost_scan();
+            let names = self.completion_state.executable_names.read();
+            let start = names.partition_point(|name| name.as_str() < prefix);
+            return names
+                .get(start)
+                .filter(|name| name.starts_with(prefix))
+                .cloned();
+        }
         let names = self.completion_state.executable_names.read();
         if !names.is_empty() {
             // Binary search for the first name >= prefix

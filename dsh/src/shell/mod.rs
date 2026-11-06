@@ -247,7 +247,15 @@ impl Shell {
             }
         }
 
-        eval::eval_str(self, ctx, input, force_background).await
+        let result = eval::eval_str(self, ctx, input, force_background).await;
+        // Generic evaluation errors may escape before any job publishes a
+        // status (for example, an ambiguous redirect during materialization).
+        // Preserve the error for the caller's diagnostic, but never leave `$?`
+        // describing an earlier evaluation. Cancellation remains Ok(130).
+        if result.is_err() {
+            eval::publish_exit_status(self, 1);
+        }
+        result
     }
 
     pub fn exit(&mut self) {
@@ -441,6 +449,8 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod eval_status_tests;
 
     static SHELL_PROCESS_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 

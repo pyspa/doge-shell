@@ -181,3 +181,91 @@ async fn test_analyze_input_suffix_calculation() {
         }
     }
 }
+
+#[tokio::test]
+async fn quote_closer_preserves_input_and_advances_character_cursor() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    for (prefix, input, cursor, quote) in [
+        ("", "echo ''", 6, '\''),
+        ("", "echo \"\"", 6, '"'),
+        ("", "echo '日本語' tail", 9, '\''),
+        ("echo \"first\n", "日本語\" tail", 3, '"'),
+    ] {
+        let environment = Environment::new();
+        environment.write().set_auto_pair_enabled(true);
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+        repl.state.multiline_buffer = prefix.to_string();
+        repl.input.reset(input.to_string());
+        repl.input.move_to_begin();
+        repl.input.move_by(cursor);
+        repl.handle_key_event(&KeyEvent::new(KeyCode::Char(quote), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(repl.input.as_str(), input);
+        assert_eq!(repl.input.cursor(), cursor as usize + 1);
+        assert_eq!(repl.state.multiline_buffer, prefix);
+    }
+}
+
+#[tokio::test]
+async fn quote_closer_round_trip_and_paired_backspace_preserve_existing_editing() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    for (open, close) in [('"', '"'), ('\'', '\''), ('(', ')'), ('[', ']'), ('{', '}')] {
+        let environment = Environment::new();
+        environment.write().set_auto_pair_enabled(true);
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+        repl.handle_key_event(&KeyEvent::new(KeyCode::Char(open), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(repl.input.as_str(), format!("{open}{close}"));
+        assert_eq!(repl.input.cursor(), 1);
+        repl.handle_key_event(&KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(repl.input.as_str(), "");
+        assert_eq!(repl.input.cursor(), 0);
+        for ch in [open, '日', close, 'x'] {
+            repl.handle_key_event(&KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+                .await
+                .unwrap();
+        }
+        assert_eq!(repl.input.as_str(), format!("{open}日{close}x"));
+        assert_eq!(repl.input.cursor(), 4);
+    }
+}
+
+#[tokio::test]
+async fn quote_closer_nested_substitution_preserves_literal_input_policy() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    for (prefix, marked, overtype) in [
+        ("", r#"echo "$(echo 'a|"b')""#, false),
+        ("", r#"echo "$(echo "a|")""#, true),
+        ("echo \"$(echo ", "'日本語|' )\"", true),
+        ("", r#"echo "$(echo "a|""#, false),
+    ] {
+        let (before, after) = marked.split_once('|').unwrap();
+        let input = format!("{before}{after}");
+        let quote = after.chars().next().unwrap();
+        let environment = Environment::new();
+        environment.write().set_auto_pair_enabled(true);
+        let mut shell = Shell::new(environment);
+        let mut repl = Repl::new(&mut shell);
+        repl.state.multiline_buffer = prefix.to_string();
+        repl.input.reset(input.clone());
+        repl.input.move_to_begin();
+        repl.input.move_by(before.chars().count() as isize);
+        repl.handle_key_event(&KeyEvent::new(KeyCode::Char(quote), KeyModifiers::NONE))
+            .await
+            .unwrap();
+        let expected = if overtype {
+            input
+        } else {
+            format!("{before}{quote}{quote}{after}")
+        };
+        assert_eq!(repl.input.as_str(), expected, "{marked}");
+        assert_eq!(repl.input.cursor(), before.chars().count() + 1);
+        assert_eq!(repl.state.multiline_buffer, prefix);
+    }
+}

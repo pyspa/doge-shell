@@ -203,7 +203,7 @@ mod tests {
         // logical status is the upstream failure.
         let mut job = job_with_codes(&[completed(1), completed(0)], true);
         job.refresh_lifecycle_state();
-        assert_eq!(job.state, ProcessState::Completed(0, None));
+        assert_eq!(job.lifecycle_state(), ProcessState::Completed(0, None));
         assert_eq!(job.final_exit_status(), Some(1));
     }
 

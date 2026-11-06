@@ -66,6 +66,50 @@ fn simple_assignment() {
 }
 
 #[test]
+fn simple_assignment_replaces_nonnumeric_values() {
+    for value in ["abc", "08", "1+2", "9223372036854775808"] {
+        let out = run_command(&format!("X={value}; echo $((X = 7)); echo \"$X\""));
+        assert_eq!(out.status.code(), Some(0), "{value}: {:?}", out.stderr);
+        assert_eq!(out.stdout, b"7\n7\n", "{value}");
+        assert!(out.stderr.is_empty(), "{value}: {:?}", out.stderr);
+    }
+}
+
+#[test]
+fn chained_assignment_replaces_text_and_evaluates_rhs_once() {
+    let out = run_command("A=abc; B=def; N=0; echo $((A = B = (N += 1))); echo \"$A/$B/$N\"");
+    assert_eq!(out.status.code(), Some(0), "{:?}", out.stderr);
+    assert_eq!(out.stdout, b"1\n1/1/1\n");
+    assert!(out.stderr.is_empty(), "{:?}", out.stderr);
+}
+
+#[test]
+fn simple_assignment_preserves_export_to_children() {
+    let out = run_command(
+        "export DOGESH_ARITH_EXPORT=abc; echo $((DOGESH_ARITH_EXPORT = 7)); printenv DOGESH_ARITH_EXPORT",
+    );
+    assert_eq!(out.status.code(), Some(0), "{:?}", out.stderr);
+    assert_eq!(out.stdout, b"7\n7\n");
+    assert!(out.stderr.is_empty(), "{:?}", out.stderr);
+}
+
+#[test]
+fn assignment_value_reads_remain_fatal_for_nonnumeric_text() {
+    for expression in ["X += 1", "X = X + 1"] {
+        let out = run_command(&format!(
+            "X=abc; echo $(({expression})) || echo FALLBACK; echo AFTER"
+        ));
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stdout.is_empty(), "{:?}", out.stdout);
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            error.contains("arithmetic expansion error") && error.contains("variable 'X'"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn compound_assignment() {
     let out = stdout_of("X=1; echo $((X += 2)); echo \"$X\"");
     let lines: Vec<&str> = out
@@ -245,4 +289,28 @@ fn dry_projection_does_not_run_marker_command() {
     let out = run_command("echo $((1 + 2))");
     assert!(out.status.success());
     assert!(victim.exists());
+}
+
+#[test]
+fn signed_variable_radix_public_values() {
+    for (value, expected) in [
+        ("-010", "-8"),
+        ("+010", "8"),
+        ("-0x10", "-16"),
+        ("+0X10", "16"),
+        ("-0x8000000000000000", "-9223372036854775808"),
+    ] {
+        let out = run_command(&format!("X={value}; echo $((Y = X)); echo \"$Y\""));
+        assert_eq!(out.status.code(), Some(0), "{value}: {:?}", out.stderr);
+        assert_eq!(out.stdout, format!("{expected}\n{expected}\n").as_bytes());
+        assert!(out.stderr.is_empty());
+    }
+    for value in ["-08", "+09", "-0xG", "-0x8000000000000001"] {
+        let out = run_command(&format!(
+            "X={value}; echo $((X)) || echo FALLBACK; echo AFTER"
+        ));
+        assert_eq!(out.status.code(), Some(1));
+        assert!(out.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("arithmetic expansion error"));
+    }
 }

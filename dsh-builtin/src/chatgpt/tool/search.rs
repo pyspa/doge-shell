@@ -227,7 +227,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
                 }
 
                 let file = if _proxy.agent_runtime().is_some() {
-                    crate::agent::files::open(entry.path(), false)
+                    crate::agent::files::open(entry.path())
                 } else {
                     fs::File::open(entry.path())
                 };

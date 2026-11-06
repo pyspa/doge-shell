@@ -37,15 +37,23 @@ use std::os::unix::io::RawFd;
 pub struct CommandFailure {
     pub exit_code: i32,
     pub message: String,
+    diagnostic_reported: bool,
 }
 
 impl CommandFailure {
+    pub(crate) fn report(&self, ctx: &Context) {
+        if !self.diagnostic_reported {
+            let _ = ctx.write_stderr(&self.message);
+        }
+    }
+
     /// Build the shared redirection-failure outcome. The `dsh: ` prefix is
-    /// attached exactly once, here, so every reporter prints the same text.
+    /// supplied by RedirectFailure, so every reporter uses the same text.
     pub(crate) fn redirect(failure: &RedirectFailure) -> Self {
         Self {
             exit_code: super::redirect::REDIRECTION_FAILURE_EXIT_CODE,
-            message: format!("dsh: {}", failure.message()),
+            message: failure.diagnostic(),
+            diagnostic_reported: failure.diagnostic_reported,
         }
     }
 }

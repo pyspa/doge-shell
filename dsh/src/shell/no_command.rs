@@ -66,8 +66,8 @@ pub fn execute_no_command(
             Err(err) => {
                 // `apply` already rolled `ctx` back on partial failure, so
                 // the shell stdio is intact; report and continue the list.
-                // The diagnostic prefix lives in `CommandFailure::redirect`,
-                // shared with the runnable path.
+                // CommandFailure retains whether apply already reported on
+                // a preceding stderr redirect, shared with the runnable path.
                 return NoCommandExecutionResult::Failed(CommandFailure::redirect(&err));
             }
         }

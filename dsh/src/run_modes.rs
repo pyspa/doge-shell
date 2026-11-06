@@ -30,6 +30,8 @@ pub async fn run_shell() -> ExitCode {
     // of the parent session, not a new interactive agent.
     if let Some(exec_fd) = cli.internal_exec_fd {
         let fds = crate::process::reexec::InternalHelperFds {
+            launch_gate: cli.internal_launch_gate_fd,
+            launch_ready: cli.internal_launch_ready_fd,
             request: exec_fd,
             status: cli.internal_status_fd,
         };
@@ -78,44 +80,19 @@ pub async fn run_shell() -> ExitCode {
 
     if run_mode.needs_interactive_services() {
         // Initialize command history (Async)
-        let cmd_history =
-            std::sync::Arc::new(parking_lot::Mutex::new(crate::history::History::new()));
+        let cmd_history = std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::history::History::new_for_startup(),
+        ));
         shell.cmd_history = Some(cmd_history.clone());
 
         startup_tasks.push_loader(std::thread::spawn(move || {
             match crate::history::History::from_file("dsh_cmd_history") {
                 Ok(mut history) => {
-                    // Preload recent history (fast, immediate)
-                    let min_timestamp = match history.load_recent(1000) {
-                        Ok(ts) => ts,
-                        Err(e) => {
-                            tracing::warn!("Failed to load recent history items: {}", e);
-                            0
-                        }
-                    };
-                    history.start_background_writer();
-
-                    // Swap shared history immediately so user has something
-                    {
-                        *cmd_history.lock() = history.clone();
-                    }
-
-                    // Load the rest of history in background (slower)
-                    if min_timestamp > 0 {
-                        match history.load_older_than(min_timestamp, 9000) {
-                            Ok(entries) => {
-                                if !entries.is_empty() {
-                                    let mut locked = cmd_history.lock();
-                                    locked.prepend(entries);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to load remaining history: {}", e);
-                            }
-                        }
-                    }
+                    let older = prepare_command_history(&mut history, 1000, 9000);
+                    publish_command_history(&cmd_history, &history, older);
                 }
                 Err(e) => {
+                    fail_command_history_initialization(&cmd_history);
                     tracing::warn!("Failed to load command history: {}", e);
                 }
             }
@@ -174,57 +151,15 @@ pub async fn run_shell() -> ExitCode {
         // Prewarm executable names in the background for command prefix search.
         // The ticket binds both disk and live scan results to the PATH snapshot
         // captured before the worker starts.
-        let (paths, names_arc) = {
-            let environment = shell.environment.read();
-            (
-                environment.variable_state.paths.clone(),
-                std::sync::Arc::clone(&environment.completion_state.executable_names),
-            )
-        };
+        let paths = shell.environment.read().variable_state.paths.clone();
         let activation = crate::completion::generator::activate_system_command_cache(&paths);
         if let Some(names) = crate::environment::load_cached_executables(&paths) {
-            let set: std::collections::BTreeSet<String> = names.iter().cloned().collect();
+            let set = names.iter().cloned().collect();
             if crate::completion::generator::publish_cached_system_commands(&activation, set) {
-                crate::completion::generator::publish_environment_executable_names(
-                    &activation,
-                    &names_arc,
-                    names,
-                );
+                shell.environment.write().set_executable_names(names);
             }
         }
-        let scan_ticket =
-            crate::completion::generator::begin_background_system_command_scan(&activation);
-        let worker_ticket = scan_ticket.clone();
-        let prewarm_thread = std::thread::Builder::new()
-            .name("dsh-executable-prewarm".to_string())
-            .spawn(move || {
-                // Capture the signature before scanning. If a directory changes
-                // after this point, the saved snapshot is invalidated next start
-                // instead of being labelled with the newer directory metadata.
-                let path_signature = crate::environment::executable_cache_signature(&paths);
-                let names = crate::environment::collect_executables(&paths);
-                let set: std::collections::BTreeSet<String> = names.iter().cloned().collect();
-                if crate::completion::generator::publish_system_command_scan(&worker_ticket, set)
-                    && crate::completion::generator::publish_environment_executable_names(
-                        worker_ticket.activation(),
-                        &names_arc,
-                        names.clone(),
-                    )
-                    && crate::completion::generator::system_command_scan_is_current(&worker_ticket)
-                {
-                    let _ = crate::environment::save_cached_executables_with_signature(
-                        &names,
-                        &path_signature,
-                    );
-                }
-            });
-        match prewarm_thread {
-            Ok(thread) => startup_tasks.push_loader(thread),
-            Err(err) => {
-                tracing::warn!("Failed to start executable prewarm thread: {err}");
-                crate::completion::generator::release_system_command_scan(&scan_ticket);
-            }
-        }
+        shell.environment.read().prewarm_executables();
     }
 
     let mut ctx = create_context(&shell);
@@ -596,4 +531,49 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         }
         ExitCode::from(0)
     }
+}
+
+// Publish both prepared baselines under one lock before reload can apply.
+pub(crate) fn publish_command_history(
+    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
+    loaded: &crate::history::History,
+    older: Vec<crate::history::Entry>,
+) {
+    shared.lock().install_startup_history(loaded, older);
+}
+
+/// Read both bounded database baselines before foreground writes can reach the
+/// writer. SQLite work stays on the startup loader, outside the shared lock.
+pub(crate) fn prepare_command_history(
+    history: &mut crate::history::History,
+    recent_limit: usize,
+    older_limit: usize,
+) -> Vec<crate::history::Entry> {
+    let min_timestamp = match history.load_recent(recent_limit) {
+        Ok(timestamp) => timestamp,
+        Err(error) => {
+            tracing::warn!("Failed to load recent history items: {}", error);
+            0
+        }
+    };
+    let older = if min_timestamp > 0 {
+        match history.load_older_than(min_timestamp, older_limit) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::warn!("Failed to load remaining history: {}", error);
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    history.start_background_writer();
+    older
+}
+
+// Terminal initialization failure has no retry owner.
+pub(crate) fn fail_command_history_initialization(
+    shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
+) {
+    shared.lock().end_startup_initialization();
 }

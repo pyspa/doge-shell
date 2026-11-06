@@ -12,30 +12,42 @@ impl History {
         limit: usize,
         failures_only: bool,
     ) -> Result<Vec<CommandEvent>> {
+        self.search_command_events(
+            author,
+            &HistoryQuery {
+                status: if failures_only {
+                    HistoryStatusFilter::Failure
+                } else {
+                    HistoryStatusFilter::Any
+                },
+                limit: Some(limit),
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Read ledger events newest first, applying every condition before the limit.
+    /// Project context is inferred from the current filesystem, since the ledger
+    /// stores cwd but no historical project marker. Cache each distinct cwd.
+    pub fn search_command_events(
+        &self,
+        author: Option<&str>,
+        query: &HistoryQuery,
+    ) -> Result<Vec<CommandEvent>> {
         let Some(db) = &self.db else {
             return Ok(Vec::new());
         };
+        if query.limit == Some(0) {
+            return Ok(Vec::new());
+        }
         let conn = db.get_connection();
         let author = author.filter(|author| *author != "all");
-        let sql = match (author.is_some(), failures_only) {
-            (true, true) => {
-                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-                 FROM command_events WHERE author = ?1 AND exit_code IS NOT NULL AND exit_code != 0
-                 ORDER BY started_at DESC, id DESC LIMIT ?2"
-            }
-            (true, false) => {
-                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-                 FROM command_events WHERE author = ?1 ORDER BY started_at DESC, id DESC LIMIT ?2"
-            }
-            (false, true) => {
-                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-                 FROM command_events WHERE exit_code IS NOT NULL AND exit_code != 0
-                 ORDER BY started_at DESC, id DESC LIMIT ?1"
-            }
-            (false, false) => {
-                "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-                 FROM command_events ORDER BY started_at DESC, id DESC LIMIT ?1"
-            }
+        let sql = if author.is_some() {
+            "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+             FROM command_events WHERE author = ?1 ORDER BY started_at DESC, id DESC"
+        } else {
+            "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
+             FROM command_events ORDER BY started_at DESC, id DESC"
         };
         let mut stmt = conn.prepare(sql)?;
         let map_row = |row: &rusqlite::Row<'_>| {
@@ -54,14 +66,37 @@ impl History {
                 output: row.get(9)?,
             })
         };
-        let rows = if let Some(author) = author {
-            stmt.query_map(rusqlite::params![author, limit as i64], map_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?
-        } else {
-            stmt.query_map(rusqlite::params![limit as i64], map_row)?
-                .collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        Ok(rows)
+        let rows = stmt.query_map(rusqlite::params_from_iter(author), map_row)?;
+        let matcher = EntryMatcher::new(query);
+        let mut projects = HashMap::new();
+        let mut matched = Vec::new();
+        // Stream rather than materializing the ledger: memory for event results
+        // is bounded by the requested limit, even when older events must be read.
+        for row in rows {
+            let event = row?;
+            let project = if query.scope == HistoryScope::Project {
+                event.cwd.as_deref().and_then(|cwd| {
+                    projects
+                        .entry(cwd.to_owned())
+                        .or_insert_with(|| {
+                            super::super::context::get_current_context_from(std::path::Path::new(
+                                cwd,
+                            ))
+                        })
+                        .as_deref()
+                })
+            } else {
+                None
+            };
+            if !matcher.matches_event(&event, project) {
+                continue;
+            }
+            matched.push(event);
+            if query.limit.is_some_and(|limit| matched.len() >= limit) {
+                break;
+            }
+        }
+        Ok(matched)
     }
 
     pub fn record_external_event(&mut self, event: CommandEvent) -> Result<()> {

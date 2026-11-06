@@ -29,6 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Minimum supported macOS; keep in sync with .cargo/config.toml.
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 

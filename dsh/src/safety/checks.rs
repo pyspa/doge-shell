@@ -13,11 +13,73 @@ impl SafetyGuard {
     }
 
     pub(super) fn check_git(args: &[String]) -> Option<String> {
+        // Git accepts global options before its subcommand. Skip their values
+        // too: in `git -C reset status`, `reset` is a directory, not a command.
+        let mut offset = 0;
+        while let Some(arg) = args.get(offset) {
+            match arg.as_str() {
+                "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env"
+                | "--super-prefix" | "--shallow-file" => offset += 2,
+                "--" => {
+                    offset += 1;
+                    break;
+                }
+                "-p"
+                | "--paginate"
+                | "-P"
+                | "--no-pager"
+                | "--bare"
+                | "--no-replace-objects"
+                | "--literal-pathspecs"
+                | "--glob-pathspecs"
+                | "--noglob-pathspecs"
+                | "--icase-pathspecs"
+                | "--no-optional-locks"
+                | "--no-lazy-fetch"
+                | "--no-advice"
+                | "--version"
+                | "-v"
+                | "--help"
+                | "-h"
+                | "--exec-path"
+                | "--html-path"
+                | "--man-path"
+                | "--info-path" => offset += 1,
+                _ if arg.starts_with("-C")
+                    || arg.starts_with("-c")
+                    || [
+                        "--git-dir=",
+                        "--work-tree=",
+                        "--namespace=",
+                        "--config-env=",
+                        "--super-prefix=",
+                        "--shallow-file=",
+                        "--exec-path=",
+                        "--list-cmds=",
+                    ]
+                    .iter()
+                    .any(|prefix| arg.starts_with(prefix)) =>
+                {
+                    offset += 1
+                }
+                _ if arg.starts_with('-') => {
+                    return Some(format!(
+                        "Unknown Git global option '{arg}'; cannot safely locate the subcommand. Proceed?"
+                    ));
+                }
+                _ => break,
+            }
+        }
+        let args = args.get(offset..).unwrap_or_default();
         if let Some(subcmd) = args.first() {
             match subcmd.as_str() {
                 "push" => {
                     for arg in args.iter().skip(1) {
-                        if arg == "--force" || arg == "-f" || arg == "--force-with-lease" {
+                        if arg == "--force"
+                            || arg == "-f"
+                            || arg == "--force-with-lease"
+                            || arg.starts_with("--force-with-lease=")
+                        {
                             return Some(
                                 "Git push force detected. This may rewrite history.".to_string(),
                             );

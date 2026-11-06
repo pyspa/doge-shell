@@ -3,7 +3,6 @@
 //! `--opt=value`/`-ovalue` option value embedded in the same token.
 use super::*;
 use crate::completion::parser;
-use crate::completion::shell_token::{self, SeparatorMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompletionReplacementRange {
@@ -35,13 +34,14 @@ pub(super) fn option_value_range_from_token(
     token_start: usize,
     option_name: &str,
 ) -> Option<CompletionReplacementRange> {
-    if option_name.starts_with("--") {
-        let prefix = format!("{option_name}=");
-        if token.starts_with(&prefix) {
-            let start = token_start + prefix.chars().count();
-            let end = token_start + token.chars().count();
-            return Some(CompletionReplacementRange { start, end });
-        }
+    if option_name.starts_with("--")
+        && let Some((raw_name, _)) = parser::split_inline_long_option(token)
+        && super::super::shell_path::decode_literal_word(raw_name) == option_name
+    {
+        return Some(CompletionReplacementRange {
+            start: token_start + raw_name.chars().count() + 1,
+            end: token_start + token.chars().count(),
+        });
     }
 
     if option_name.len() == 2 && !option_name.starts_with("--") && token.starts_with(option_name) {
@@ -56,16 +56,28 @@ pub(super) fn option_value_range_from_token(
     None
 }
 
-pub(super) fn token_range_at_cursor(
+pub(crate) fn token_range_at_cursor(
     input: &str,
     cursor_pos: usize,
 ) -> Option<CompletionReplacementRange> {
-    let token =
-        shell_token::token_at_char_cursor(input, cursor_pos, SeparatorMode::CompletionRange)?;
-    Some(CompletionReplacementRange {
-        start: token.char_start,
-        end: token.char_end,
-    })
+    let cursor_pos = cursor_pos.min(input.chars().count());
+    let cursor_byte = crate::completion::command_segment::char_to_byte(input, cursor_pos);
+    let parsed = parser::CommandLineParser::new().parse(input, cursor_byte);
+    let source = parsed.source?;
+    if source.suppressed {
+        return None;
+    }
+    // Share cursor ownership with provider dispatch, including adjacent redirect
+    // operators/targets and zero-width gaps. Never rediscover words by value.
+    let word = source.words.get(source.cursor_word)?;
+    let offset = input[..cursor_byte.saturating_sub(source.cursor)]
+        .chars()
+        .count();
+    let token_range = CompletionReplacementRange {
+        start: offset + word.char_start,
+        end: offset + word.char_end,
+    };
+    Some(token_range)
 }
 
 pub(super) fn slice_chars(input: &str, start: usize, end: usize) -> String {
@@ -105,10 +117,17 @@ pub(super) fn tilde_user_candidates(prefix: &str) -> Vec<EnhancedCandidate> {
     match generator.generate_candidates(prefix) {
         Ok(users) => users
             .into_iter()
+            .filter(|user| {
+                !user.text.is_empty()
+                    && user
+                        .text
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+            })
             .map(|user| EnhancedCandidate {
                 text: format!("~{}", user.text),
                 description: user.description,
-                candidate_type: CandidateType::Generic,
+                candidate_type: CandidateType::HomeReference,
                 priority: 140,
             })
             .collect(),

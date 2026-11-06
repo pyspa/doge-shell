@@ -244,15 +244,26 @@ impl ProcessSubstitutionRegistry {
     /// Best-effort group-kill of every still-registered helper. Called on
     /// abnormal shell shutdown so no helper outlives the session that
     /// spawned it. Both directions are cleanup targets here.
-    pub(crate) fn cleanup_process_substitution_groups(&self) {
+    ///
+    /// Runs on every `Shell` drop, so the SIGTERM grace period is only paid
+    /// for groups that were actually signalled. Returns that group count.
+    pub(crate) fn cleanup_process_substitution_groups(&self) -> usize {
         let entries = std::mem::take(&mut *self.inner.lock());
-        for entry in &entries {
-            nix::sys::signal::killpg(entry.pid, nix::sys::signal::Signal::SIGTERM).ok();
+        let signalled: Vec<Pid> = entries
+            .iter()
+            .filter(|entry| {
+                nix::sys::signal::killpg(entry.pid, nix::sys::signal::Signal::SIGTERM).is_ok()
+            })
+            .map(|entry| entry.pid)
+            .collect();
+        if signalled.is_empty() {
+            return 0;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
-        for entry in &entries {
-            nix::sys::signal::killpg(entry.pid, nix::sys::signal::Signal::SIGKILL).ok();
+        for pid in &signalled {
+            nix::sys::signal::killpg(*pid, nix::sys::signal::Signal::SIGKILL).ok();
         }
+        signalled.len()
     }
 
     /// Normal-exit release for `Write` consumers only: drop registry

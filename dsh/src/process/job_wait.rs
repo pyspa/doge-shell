@@ -19,8 +19,20 @@ use tracing::{debug, error};
 /// the developer's terminal on fd 0, so job control would retarget *their*
 /// terminal's foreground process group.
 fn owns_terminal() -> bool {
-    crate::terminal::terminal_control_enabled()
-        && isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false)
+    let enabled = crate::terminal::terminal_control_enabled();
+    // Only the isolated scratch-session test can opt in; ordinary unit tests
+    // retain the real-terminal prohibition.
+    #[cfg(test)]
+    let enabled = enabled || super::foreground_handoff_tests::scratch_terminal_enabled();
+    enabled && isatty(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).unwrap_or(false)
+}
+
+/// A tty descriptor can exist without being our controlling terminal (e.g.
+/// a caller used setsid without TIOCSCTTY). Preserve that caller's launch
+/// behavior: only a successful controlling-terminal query enables the gate.
+pub(crate) fn can_handoff_terminal() -> bool {
+    owns_terminal()
+        && nix::unistd::tcgetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }).is_ok()
 }
 
 /// Report a job that just stopped, in the same `[1]+  Stopped  cmd` format bash
@@ -110,7 +122,32 @@ impl WaitBackoff {
     }
 }
 
+/// Covers early handoff during launch, including downstream setup failure and
+/// rollback paths that never reach `put_in_foreground`.
+pub(crate) struct LaunchTerminalGuard(Option<Pid>);
+
+impl LaunchTerminalGuard {
+    pub(crate) fn new(job: &Job, ctx: &dsh_types::Context) -> Self {
+        Self(
+            (ctx.interactive
+                && ctx.foreground
+                && can_handoff_terminal()
+                && !crate::process::job_pty::uses_full_pty_proxy(job))
+            .then_some(job.shell_pgid),
+        )
+    }
+}
+
+impl Drop for LaunchTerminalGuard {
+    fn drop(&mut self) {
+        if let Some(pgid) = self.0 {
+            restore_shell_foreground(pgid);
+        }
+    }
+}
+
 pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Result<()> {
+    job.foreground = true;
     debug!(
         "put_in_foreground: id: {} pgid {:?} no_hang: {} cont: {}",
         job.id, job.pgid, no_hang, cont
@@ -120,6 +157,7 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
     // the owned job group regardless of how terminal I/O is routed.
     let handoff = owns_terminal() && !crate::process::job_pty::uses_full_pty_proxy(job);
     if handoff
+        && !job.has_unreleased_admission()
         && let Some(pgid) = job.pgid
         && let Err(err) = tcsetpgrp(unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) }, pgid)
     {
@@ -129,21 +167,32 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         );
     }
 
+    let startup_pid = pending_full_proxy_stopped_pid(job);
     if cont
         && let Err(err) = resume_job_with(job, |pgid| {
-            killpg(pgid, Signal::SIGCONT).context("failed to send SIGCONT to job process group")
+            continue_startup_fallback(
+                startup_pid,
+                killpg(pgid, Signal::SIGCONT).map_err(Into::into),
+            )
+            .context("failed to send SIGCONT to job process group")
         })
     {
         if handoff {
-            restore_shell_foreground(job);
+            restore_shell_foreground(job.shell_pgid);
         }
         return Err(err);
     }
 
+    if let Some(admission) = job.launch_admission.as_mut() {
+        admission.foreground_wait_active = true;
+    }
     let wait_result = wait_job(job, no_hang).await;
+    if let Some(admission) = job.launch_admission.as_mut() {
+        admission.foreground_wait_active = false;
+    }
     // Restore on both wait success and failure, without masking that result.
     if handoff {
-        restore_shell_foreground(job);
+        restore_shell_foreground(job.shell_pgid);
     }
 
     match &wait_result {
@@ -151,6 +200,47 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         Err(err) => debug!("put_in_foreground wait failed: {:?}", err),
     }
     wait_result
+}
+
+/// A single FullProxy child may stop before its first setsid. Its real
+/// stopped wait status and unreaped canonical PID keep the identity pinned;
+/// no other stage, completed child, or already-retired report qualifies.
+pub(crate) fn pending_full_proxy_stopped_pid(job: &Job) -> Option<Pid> {
+    if !super::job_pty::uses_full_pty_proxy(job) || job.exec_reports.len() != 1 {
+        return None;
+    }
+    let process = job.process.as_deref()?;
+    if process.stage_count() != 1 {
+        return None;
+    }
+    let ProcessState::Stopped(pid, _) = process.get_state() else {
+        return None;
+    };
+    (pid.as_raw() > 0
+        && pid != getpid()
+        && job.pid == Some(pid)
+        && job.exec_reports[0].pid == Some(pid)
+        && process.get_pid() == Some(pid)
+        && job.pgid == Some(pid))
+    .then_some(pid)
+}
+
+/// Called only during explicit fg/bg continuation, after group delivery.
+/// ESRCH alone permits the narrow pre-setsid fallback; all other errors stay errors.
+pub(crate) fn continue_startup_fallback(pid: Option<Pid>, result: Result<()>) -> Result<()> {
+    match result {
+        Err(error)
+            if error.downcast_ref::<nix::errno::Errno>() == Some(&nix::errno::Errno::ESRCH) =>
+        {
+            if let Some(pid) = pid {
+                nix::sys::signal::kill(pid, Signal::SIGCONT)
+                    .context("continue pending FullProxy child")
+            } else {
+                Err(error)
+            }
+        }
+        result => result,
+    }
 }
 
 /// Advance only stopped stages, and only after the entire owned group was
@@ -168,8 +258,7 @@ fn resume_job_with(job: &mut Job, send: impl FnOnce(Pid) -> Result<()>) -> Resul
     Ok(())
 }
 
-fn restore_shell_foreground(job: &Job) {
-    let shell_pgid = job.shell_pgid;
+fn restore_shell_foreground(shell_pgid: Pid) {
     debug!("Restoring shell process group {}", shell_pgid);
     if let Err(err) = tcsetpgrp(
         unsafe { BorrowedFd::borrow_raw(SHELL_TERMINAL) },
@@ -221,6 +310,35 @@ pub async fn wait_process_no_hang(job: &mut Job) -> Result<()> {
 /// not archived as exit statuses.
 pub async fn wait_for_termination(job: &mut Job) -> Result<JobWaitOutcome> {
     wait_loop(job, JobWaitPolicy::TerminationOnly).await
+}
+
+/// Normal-exit detachment resolves startup only; an exec'd long-running
+/// command is never waited to completion here. Missing wait authority is an
+/// error, not a synthetic state or an unbounded retry of ECHILD.
+pub(crate) fn settle_startup_reports_for_detach(job: &mut Job) -> Result<()> {
+    while !job.exec_reports.is_empty() {
+        job.drain_exec_reports();
+        if job.exec_reports.is_empty() || job.has_stopped_process() {
+            break;
+        }
+        match wait_known_pids(
+            &job_wait_pids(job),
+            WaitPidFlag::WUNTRACED | WaitPidFlag::WNOHANG,
+        )? {
+            KnownWaitResult::State(pid, state) => {
+                job.set_process_state(pid, state);
+                job.refresh_lifecycle_state();
+            }
+            KnownWaitResult::StillAlive => std::thread::sleep(Duration::from_millis(1)),
+            KnownWaitResult::NoWaitableChildren | KnownWaitResult::NoKnownPids => {
+                anyhow::bail!(
+                    "cannot detach job {}: pending startup report without wait authority",
+                    job.job_id
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcome> {
@@ -294,7 +412,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
                                 no_waitable,
                                 job.job_id,
                                 job.cmd,
-                                job.state,
+                                job.lifecycle_state(),
                                 wait_pids_for_error,
                             );
                         }
@@ -305,7 +423,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
                     no_waitable,
                     job.job_id,
                     job.cmd,
-                    job.state,
+                    job.lifecycle_state(),
                     wait_pids_for_error,
                 );
             }
@@ -325,6 +443,8 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
 
         drain_running_output_ready_now(job)?;
         job.set_process_state(pid, state);
+        #[cfg(test)]
+        super::foreground_handoff_tests::record_launch_wait(pid, state);
         backoff.reset();
 
         debug!("fin wait: pid:{:?} state:{:?}", pid, state);
@@ -431,6 +551,8 @@ fn collect_process_wait_pids(process: &JobProcess, current_pid: Pid, pids: &mut 
 /// (plus the monitors' pending fragments) is recovered, and a
 /// descendant-held pipe only yields `WouldBlock`, never a stall.
 pub fn finalize_ready_output(job: &mut Job) -> Result<()> {
+    job.drain_exec_reports();
+    job.progress_launch_admission()?;
     for monitor in &mut job.monitors {
         monitor.finalize_ready_now()?;
     }
@@ -438,6 +560,8 @@ pub fn finalize_ready_output(job: &mut Job) -> Result<()> {
 }
 
 pub fn drain_running_output_ready_now(job: &mut Job) -> Result<()> {
+    job.drain_exec_reports();
+    job.progress_launch_admission()?;
     debug!(
         "drain_running_output_ready_now: monitors.len() = {}",
         job.monitors.len()
@@ -453,6 +577,8 @@ pub fn drain_running_output_ready_now(job: &mut Job) -> Result<()> {
 }
 
 pub async fn drain_completed_output(job: &mut Job) -> Result<()> {
+    job.drain_exec_reports();
+    job.progress_launch_admission()?;
     debug!(
         "drain_completed_output: monitors.len() = {}",
         job.monitors.len()

@@ -14,6 +14,7 @@ pub mod path;
 pub mod selection;
 pub mod skim_adapter;
 
+pub(crate) mod command_segment;
 pub mod errors;
 pub mod framework;
 pub mod generator;
@@ -28,6 +29,8 @@ mod ui;
 
 #[cfg(test)]
 mod extra_tests;
+#[cfg(test)]
+pub(crate) mod isolation_tests;
 #[cfg(test)]
 mod wrapped_tests;
 #[cfg(test)]
@@ -146,3 +149,6 @@ impl Completion {
         }
     }
 }
+
+#[cfg(test)]
+mod insertion_tests;

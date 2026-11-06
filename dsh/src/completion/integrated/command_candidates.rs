@@ -2,13 +2,16 @@
 //! whatever the command is (`$VAR`, `~user`), plus the one-level unwrap that
 //! lets `sudo pacman -R <TAB>` reach pacman's own completion.
 use super::*;
-use crate::completion::generator::{SystemCommandCacheTicket, activate_system_command_cache};
+use crate::completion::generator::SystemCommandCacheTicket;
 
 impl IntegratedCompletionEngine {
     /// Capture all shell state used by JSON/system completion under one read
     /// lock, so one collection cannot mix variable names from before a mutation
     /// with executable paths from after it.
-    pub(super) fn runtime_completion_snapshot(&self) -> (Vec<String>, SystemCommandCacheTicket) {
+    pub(super) fn runtime_completion_snapshot(
+        &self,
+        current_dir: &Path,
+    ) -> (Vec<String>, SystemCommandCacheTicket, FileSystemContext) {
         let environment = self.environment.read();
         let names = environment
             .variable_state
@@ -16,13 +19,45 @@ impl IntegratedCompletionEngine {
             .keys()
             .cloned()
             .collect();
+        let filesystem = FileSystemContext::new(current_dir, environment.lookup_variable("HOME"));
         let system_command_ticket =
-            activate_system_command_cache(&environment.variable_state.paths);
-        (names, system_command_ticket)
+            crate::completion::generators::system::activate_system_command_cache_at(
+                &environment.variable_state.paths,
+                &filesystem,
+            );
+        (names, system_command_ticket, filesystem)
     }
 
-    pub(super) fn current_path_cache_scope(&self) -> u64 {
-        self.environment.read().completion_state.path_generation
+    pub(super) fn filesystem_context(&self, current_dir: &Path) -> FileSystemContext {
+        FileSystemContext::new(current_dir, self.environment.read().lookup_variable("HOME"))
+    }
+
+    pub(super) fn path_refresh_runtime(&self) -> Option<Arc<CompletionRuntime>> {
+        self.environment
+            .read()
+            .invocation
+            .interactive
+            .then(|| self.runtime.clone())
+    }
+
+    pub(super) fn current_cache_scope(&self, current_dir: &Path) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let environment = self.environment.read();
+        let mut scope = std::collections::hash_map::DefaultHasher::new();
+        environment
+            .completion_state
+            .path_generation
+            .hash(&mut scope);
+        if environment.invocation.interactive {
+            crate::completion::generators::system::system_command_cache_revision().hash(&mut scope);
+        }
+        environment.lookup_variable("HOME").hash(&mut scope);
+        aliases::alias_signature(&environment.variable_state.alias).hash(&mut scope);
+        if !current_dir.is_absolute() {
+            std::env::current_dir().ok().hash(&mut scope);
+        }
+        current_dir.hash(&mut scope);
+        scope.finish()
     }
 
     /// Collect candidates for "special" tokens that complete the same way
@@ -34,6 +69,11 @@ impl IntegratedCompletionEngine {
         &self,
         current_token: &str,
     ) -> Option<Vec<EnhancedCandidate>> {
+        // Variables expand inside double quotes, but single-quoted variables
+        // and any quoted tilde are literal filenames.
+        let home_reference = current_token.starts_with('~');
+        let current_token = current_token.strip_prefix('"').unwrap_or(current_token);
+        let current_token = current_token.trim_end_matches(['"', '\'']);
         if let Some(rest) = current_token.strip_prefix("${") {
             // Still typing the name inside `${...}` (no closing brace / path yet).
             if rest.contains('}') || rest.contains('/') {
@@ -49,7 +89,7 @@ impl IntegratedCompletionEngine {
             }
             return Some(self.variable_candidates(rest, |name| format!("${name}")));
         }
-        if let Some(rest) = current_token.strip_prefix('~') {
+        if home_reference && let Some(rest) = current_token.strip_prefix('~') {
             // `~user`. Once a `/` appears it is a path under the home directory.
             if rest.contains('/') {
                 return None;
@@ -76,11 +116,18 @@ impl IntegratedCompletionEngine {
 
         names
             .into_iter()
-            .filter(|name| prefix.is_empty() || name.starts_with(prefix))
+            .filter(|name| {
+                let mut chars = name.chars();
+                chars
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+                    && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+                    && (prefix.is_empty() || name.starts_with(prefix))
+            })
             .map(|name| EnhancedCandidate {
                 text: format_value(&name),
                 description: Some("environment variable".to_string()),
-                candidate_type: CandidateType::Generic,
+                candidate_type: CandidateType::VariableReference,
                 priority: 140,
             })
             .collect()
@@ -91,6 +138,8 @@ impl IntegratedCompletionEngine {
         request: &CompletionRequest,
         parsed_command_line: &parser::ParsedCommandLine,
     ) -> CandidateBatch {
+        let target = self.dynamic_provider_target(parsed_command_line);
+        let parsed_command_line = target.as_ref();
         if parsed_command_line.completion_context == parser::CompletionContext::Command {
             debug!("No completion context found - skipping JSON completion");
             return CandidateBatch::empty();
@@ -98,14 +147,17 @@ impl IntegratedCompletionEngine {
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
 
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(request.current_dir);
         let db_lock = self.command_completion.lock();
 
         let completion_generator = CompletionGenerator::with_runtime_environment_ticket(
             &db_lock,
             &environment_names,
             system_command_ticket.clone(),
-        );
+        )
+        .with_filesystem_context(&filesystem)
+        .with_background_refresh(self.path_refresh_runtime());
 
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(command_candidates) => {
@@ -143,7 +195,9 @@ impl IntegratedCompletionEngine {
                                     &db_lock,
                                     &environment_names,
                                     system_command_ticket.clone(),
-                                );
+                                )
+                                .with_filesystem_context(&filesystem)
+                                .with_background_refresh(self.path_refresh_runtime());
                             match completion_generator.generate_candidates(parsed_command_line) {
                                 Ok(candidates) => {
                                     let enhanced_candidates = candidates
@@ -179,7 +233,9 @@ impl IntegratedCompletionEngine {
                     &db_lock,
                     &environment_names,
                     system_command_ticket.clone(),
-                );
+                )
+                .with_filesystem_context(&filesystem)
+                .with_background_refresh(self.path_refresh_runtime());
                 if let Ok(candidates) = completion_generator
                     .generate_fallback_candidates(&parsed_command_line.current_token)
                 {
@@ -219,13 +275,29 @@ impl IntegratedCompletionEngine {
             let db_lock = self.command_completion.lock();
             let corrector = ContextCorrector::new(&db_lock);
             let (cmd_index, cmd_name) = corrector.find_command_with_args_arg(parsed)?;
-            if !cursor_follows_wrapped_command(parsed, &cmd_name) {
+            let follows = if let Some(source) = &parsed.source {
+                corrector
+                    .argument_raw_index(parsed, cmd_index)
+                    .is_some_and(|raw_index| {
+                        let offset = source.words.len().saturating_sub(parsed.raw_args.len());
+                        source.cursor_word > offset + raw_index
+                    })
+            } else {
+                cursor_follows_wrapped_command(parsed, &cmd_name)
+            };
+            if !follows {
                 return None;
             }
             corrector.reparse_inner_command(parsed, cmd_index, cmd_name)
         };
 
-        if inner.command.is_empty() || inner.command == parsed.command {
+        // Check that the wrapper was consumed before normalization: an alias
+        // can add fixed arguments, so its final argv need not be shorter.
+        let consumed_wrapper = match (&inner.source, &parsed.source) {
+            (Some(inner), Some(outer)) => inner.input.len() < outer.input.len(),
+            _ => inner.raw_args.len() < parsed.raw_args.len(),
+        };
+        if inner.command.is_empty() || !consumed_wrapper {
             return None;
         }
 

@@ -1,4 +1,4 @@
-use crate::completion::display::{Candidate, CompletionConfig};
+use crate::completion::display::{Candidate, CompletionConfig, display_text};
 use crate::completion::framework::{CompletionFrameworkKind, CompletionSelection};
 use crate::completion::subprocess::shell_quote;
 use skim::{ItemPreview, PreviewContext, SkimItem};
@@ -22,6 +22,12 @@ pub(crate) enum PreviewSpec {
 /// so pathological candidate text cannot inject shell commands.
 pub(crate) fn candidate_preview(candidate: &Candidate) -> PreviewSpec {
     match candidate {
+        Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+            candidate_preview(candidate)
+        }
+        Candidate::ShellSyntax { description, .. } => description
+            .clone()
+            .map_or(PreviewSpec::None, PreviewSpec::Text),
         Candidate::File { path, is_dir } => file_preview(path, *is_dir),
         Candidate::Path(path) => {
             let is_dir = path.ends_with('/');
@@ -68,6 +74,9 @@ fn file_preview(path: &str, is_dir: bool) -> PreviewSpec {
 impl SkimItem for Candidate {
     fn output(&self) -> Cow<'_, str> {
         match self {
+            Candidate::HomePath(candidate) => candidate.output(),
+            Candidate::Prepared { insertion, .. } => Cow::Borrowed(insertion),
+            Candidate::ShellSyntax { text, .. } => Cow::Borrowed(text),
             Candidate::Item(text, _) => Cow::Borrowed(text),
             Candidate::Path(path) => Cow::Borrowed(path),
             Candidate::Basic(text) => Cow::Borrowed(text),
@@ -81,7 +90,16 @@ impl SkimItem for Candidate {
     }
 
     fn text(&self) -> Cow<'_, str> {
-        match self {
+        let text: Cow<'_, str> = match self {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => {
+                candidate.text()
+            }
+            Candidate::ShellSyntax {
+                text, description, ..
+            } => match description {
+                Some(description) => Cow::Owned(format!("{text:<30} {description}")),
+                None => Cow::Borrowed(text),
+            },
             Candidate::Item(x, y) => {
                 let desc = format!("{x:<30} {y}");
                 Cow::Owned(desc)
@@ -123,13 +141,21 @@ impl SkimItem for Candidate {
                 let desc = format!("{icon} {pid:<8} {command}");
                 Cow::Owned(desc)
             }
+        };
+        if text
+            .chars()
+            .any(|ch| ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}'))
+        {
+            Cow::Owned(display_text(&text).into_owned())
+        } else {
+            text
         }
     }
 
     fn preview(&self, _context: PreviewContext) -> ItemPreview {
         match candidate_preview(self) {
             PreviewSpec::Command(cmd) => ItemPreview::Command(cmd),
-            PreviewSpec::Text(text) => ItemPreview::Text(text),
+            PreviewSpec::Text(text) => ItemPreview::Text(display_text(&text).into_owned()),
             PreviewSpec::None => ItemPreview::Global,
         }
     }

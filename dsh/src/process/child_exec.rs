@@ -18,13 +18,10 @@
 //!
 //! Anything else added here needs a comment explaining why it is fork-safe.
 //!
-//! Foreground terminal handoff (`tcsetpgrp`) is intentionally *not* here: the
-//! parent owns it through `job_wait::put_in_foreground`. A launch barrier was
-//! considered (child waits on a gate pipe until the parent finished
-//! `setpgid`+`tcsetpgrp`) but omitted on purpose — the pre-existing double
-//! `setpgid` (child here, parent in `job::launch_process`) is retained, and
-//! the wait path grants the terminal promptly, so a gate would add pipe
-//! lifetime complexity for no new ordering guarantee.
+//! The parent owns foreground terminal handoff. Applicable children wait on
+//! a preallocated pipe for an explicit approval token before exec; EOF aborts.
+//! The parent grants the terminal and releases the gate before reading the
+//! exec-error handshake, so neither side waits for the other's exec.
 
 use std::ffi::c_char;
 use std::os::unix::io::RawFd;
@@ -38,6 +35,7 @@ pub const STAGE_DUP2_STDOUT: u8 = 5;
 pub const STAGE_DUP2_STDERR: u8 = 6;
 pub const STAGE_CLOSE: u8 = 7;
 pub const STAGE_EXECVE: u8 = 8;
+pub const STAGE_FOREGROUND_GATE: u8 = 9;
 
 /// Failure record the child writes to the exec-error pipe before `_exit`.
 ///
@@ -57,6 +55,15 @@ pub struct ChildExecError {
 /// lives in parent-owned `CString`/byte buffers that outlive the `fork`;
 /// the child only reads through these pointers and never allocates.
 pub struct RawChildPlan {
+    #[cfg(test)]
+    pub test_stop_before_setsid: bool,
+    /// Gate reader/writer then readiness reader/writer; all -1 disables
+    /// whole-job admission. The child closes the two parent-only endpoints.
+    pub admission_fds: [RawFd; 4],
+    #[cfg(test)]
+    pub test_preexec_fds: (i32, i32),
+    #[cfg(test)]
+    pub test_preexec_before_ack: bool,
     pub executable: *const c_char,
     pub argv: *const *const c_char,
     pub envp: *const *const c_char,
@@ -77,6 +84,10 @@ pub struct RawChildPlan {
     pub pty_slave: RawFd,
     /// Write end of the exec-error pipe (`CLOEXEC`); `-1` disables reporting.
     pub exec_error_fd: RawFd,
+    /// Optional launch approval pipe; both are -1 outside shared-terminal
+    /// foreground launches. The child closes its writer before any gate read.
+    pub foreground_gate_read: RawFd,
+    pub foreground_gate_write: RawFd,
     /// Parent-owned next-stage reader. Only the child copy is discarded on
     /// the diagnostic-only path (there is no exec to enforce CLOEXEC).
     /// `-1` means this stage has no downstream pipe.
@@ -151,23 +162,8 @@ unsafe fn reset_signal(sig: libc::c_int) -> i32 {
 /// Never returns: `execve` replaces the image on success, `_exit` otherwise.
 pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
     unsafe {
-        // Unresolved command: the message goes to *this* process's stderr
-        // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
-        // other shell.
-        if !plan.not_found_msg.is_null() {
-            // Do not retain a reader for our own diagnostic pipe: if the
-            // consumer exits early, its close must make write return EPIPE.
-            if plan.pipeline_read_fd >= 0 {
-                libc::close(plan.pipeline_read_fd);
-            }
-            // The parent already knows resolution failed. Release its
-            // launch handshake before a potentially pipe-sized diagnostic:
-            // otherwise it cannot spawn the downstream reader while this
-            // child blocks writing to that reader's pipe. EOF here is not
-            // completion; the canonical waiter still reaps our exit 127.
-            libc::close(plan.exec_error_fd);
-            write_all(plan.not_found_fd, plan.not_found_msg, plan.not_found_len);
-            libc::_exit(127);
+        if plan.foreground_gate_write >= 0 {
+            libc::close(plan.foreground_gate_write);
         }
 
         if plan.interactive && !plan.full_proxy_pty {
@@ -176,6 +172,23 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
             if libc::setpgid(0, plan.pgid) != 0 {
                 let errno = last_errno();
                 report_error(plan.exec_error_fd, STAGE_SETPGID, errno);
+                libc::_exit(1);
+            }
+        }
+
+        if plan.foreground_gate_read >= 0 {
+            let mut token = 0u8;
+            let count = loop {
+                let count =
+                    libc::read(plan.foreground_gate_read, (&mut token as *mut u8).cast(), 1);
+                if count < 0 && last_errno() == libc::EINTR {
+                    continue;
+                }
+                break count;
+            };
+            libc::close(plan.foreground_gate_read);
+            if count != 1 || token != b'F' {
+                report_error(plan.exec_error_fd, STAGE_FOREGROUND_GATE, libc::ECANCELED);
                 libc::_exit(1);
             }
         }
@@ -207,6 +220,10 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
         }
 
         if plan.full_proxy_pty {
+            #[cfg(test)]
+            if plan.test_stop_before_setsid {
+                libc::raise(libc::SIGSTOP);
+            }
             if libc::setsid() == -1 {
                 let errno = last_errno();
                 report_error(plan.exec_error_fd, STAGE_SETSID, errno);
@@ -217,6 +234,74 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
                 // session is already the leader; the command still runs.
                 libc::ioctl(plan.pty_slave, libc::TIOCSCTTY as libc::c_ulong, 0);
             }
+        }
+
+        #[cfg(test)]
+        if plan.test_preexec_before_ack {
+            super::foreground_handoff_tests::hold_before_exec(
+                plan.test_preexec_fds.0,
+                plan.test_preexec_fds.1,
+            );
+        }
+        if plan.admission_fds[0] >= 0 {
+            libc::close(plan.admission_fds[1]);
+            libc::close(plan.admission_fds[2]);
+            let ready = b'R';
+            let sent = loop {
+                let n = libc::write(plan.admission_fds[3], (&ready as *const u8).cast(), 1);
+                if n < 0 && last_errno() == libc::EINTR {
+                    continue;
+                }
+                break n;
+            };
+            libc::close(plan.admission_fds[3]);
+            let mut token = 0u8;
+            let received = loop {
+                let n = libc::read(plan.admission_fds[0], (&mut token as *mut u8).cast(), 1);
+                if n < 0 && last_errno() == libc::EINTR {
+                    continue;
+                }
+                break n;
+            };
+            libc::close(plan.admission_fds[0]);
+            if sent != 1 || received != 1 || token != b'F' {
+                report_error(plan.exec_error_fd, STAGE_FOREGROUND_GATE, libc::ECANCELED);
+                libc::_exit(1);
+            }
+        }
+
+        #[cfg(test)]
+        if !plan.test_preexec_before_ack {
+            super::foreground_handoff_tests::hold_before_exec(
+                plan.test_preexec_fds.0,
+                plan.test_preexec_fds.1,
+            );
+        }
+
+        // Unresolved command: the message goes to *this* process's stderr
+        // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
+        // other shell.
+        if !plan.not_found_msg.is_null() {
+            // This diagnostic-only child always exits 127 and never execs.
+            // A closed downstream consumer must produce EPIPE, not change the
+            // missing-command status into SIGPIPE after job-control readiness.
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = libc::SIG_IGN;
+            libc::sigemptyset(&mut action.sa_mask);
+            libc::sigaction(libc::SIGPIPE, &action, std::ptr::null_mut());
+            // Do not retain a reader for our own diagnostic pipe: if the
+            // consumer exits early, its close must make write return EPIPE.
+            if plan.pipeline_read_fd >= 0 {
+                libc::close(plan.pipeline_read_fd);
+            }
+            // The parent already knows resolution failed. Release its
+            // launch handshake before a potentially pipe-sized diagnostic:
+            // otherwise it cannot spawn the downstream reader while this
+            // child blocks writing to that reader's pipe. EOF here is not
+            // completion; the canonical waiter still reaps our exit 127.
+            libc::close(plan.exec_error_fd);
+            write_all(plan.not_found_fd, plan.not_found_msg, plan.not_found_len);
+            libc::_exit(127);
         }
 
         // Stdio wiring. Aliasing (`cmd > file 2>&1`, `cmd 2>&1 > file`) is

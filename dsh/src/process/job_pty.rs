@@ -550,11 +550,13 @@ pub(crate) async fn settle_foreground_launch(
     if !job.foreground {
         debug!(
             "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-            job.job_id, job.state, job.foreground
+            job.job_id,
+            job.lifecycle_state(),
+            job.foreground
         );
         return Ok(JobLaunchOutcome::Process(ProcessState::Running));
     }
-    match job.state {
+    match job.lifecycle_state() {
         ProcessState::Completed(_, _) => {
             if let Err(err) = capture_completed_output_and_history(job, ctx, shell).await {
                 cleanup_pty_tasks(job).await;
@@ -562,17 +564,21 @@ pub(crate) async fn settle_foreground_launch(
             }
             debug!(
                 "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-                job.job_id, job.state, job.foreground
+                job.job_id,
+                job.lifecycle_state(),
+                job.foreground
             );
-            Ok(JobLaunchOutcome::Process(job.state))
+            Ok(JobLaunchOutcome::Process(job.lifecycle_state()))
         }
         ProcessState::Stopped(_, _) => {
             suspend_stopped_pty_input(job).await;
             debug!(
                 "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-                job.job_id, job.state, job.foreground
+                job.job_id,
+                job.lifecycle_state(),
+                job.foreground
             );
-            Ok(JobLaunchOutcome::Process(job.state))
+            Ok(JobLaunchOutcome::Process(job.lifecycle_state()))
         }
         ProcessState::Running => {
             if job.has_process() {
@@ -581,14 +587,16 @@ pub(crate) async fn settle_foreground_launch(
                     "foreground wait returned with active job {} ('{}', state: {:?})",
                     job.job_id,
                     job.cmd,
-                    job.state,
+                    job.lifecycle_state(),
                 );
             }
             debug!(
                 "JOB_LAUNCH_RESULT: Job {} launch result - state: {:?}, foreground: {}",
-                job.job_id, job.state, job.foreground
+                job.job_id,
+                job.lifecycle_state(),
+                job.foreground
             );
-            Ok(JobLaunchOutcome::Process(job.state))
+            Ok(JobLaunchOutcome::Process(job.lifecycle_state()))
         }
     }
 }
@@ -606,7 +614,7 @@ pub async fn capture_completed_output_and_history(
             "cannot finalize output for incomplete job {} ('{}', state: {:?})",
             job.job_id,
             job.cmd,
-            job.state,
+            job.lifecycle_state(),
         );
     }
     let mut stdout_cap = String::new();
@@ -644,6 +652,13 @@ pub async fn capture_completed_output_and_history(
             stderr_cap = monitor.captured_text_lossy().into_owned();
         }
     }
+
+    // These parent bytes bypassed the slave and were already observed at
+    // delivery. Consume only here, after the canonical completion gate, into
+    // FullProxy's existing merged stdout history projection.
+    stdout_cap.push_str(&String::from_utf8_lossy(&std::mem::take(
+        &mut job.parent_exec_diagnostics,
+    )));
 
     if (!stdout_cap.is_empty() || !stderr_cap.is_empty()) && ctx.foreground {
         use dsh_types::output_history::OutputEntry;

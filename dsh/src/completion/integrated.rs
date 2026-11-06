@@ -15,7 +15,7 @@ use super::dynamic::{CachePolicy, CompletionRuntime, DynamicCompletionProvider};
 use super::framework::CompletionFrameworkKind;
 
 use super::generator::CompletionGenerator;
-use crate::completion::generators::filesystem::FileSystemGenerator;
+use crate::completion::generators::filesystem::{FileSystemContext, FileSystemGenerator};
 
 use super::json_loader::JsonCompletionLoader;
 use super::parser::{self, CommandLineParser, ParsedCommandLine};
@@ -32,11 +32,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
+mod aliases;
 mod candidate;
 mod command_candidates;
 mod dynamic_dispatch;
 mod finalize;
 mod ghost;
+mod git_directory;
 mod predicates;
 mod providers;
 mod range;
@@ -49,6 +51,7 @@ pub(crate) use predicates::matches_prefix;
 use predicates::*;
 use providers::*;
 pub use range::CompletionReplacementRange;
+pub(crate) use range::token_range_at_cursor;
 use range::*;
 use scoring::*;
 use timing::*;
@@ -130,11 +133,21 @@ impl CandidateBatch {
 struct ParsedCommandLineCache {
     input: String,
     cursor_pos: usize,
+    alias_signature: u64,
     parsed: ParsedCommandLine,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionDisposition {
+    Allowed,
+    Suppressed,
+    /// A cold dynamic lookup is still being collected; do not use file fallback.
+    Pending,
 }
 
 #[derive(Debug)]
 pub struct CompletionResult {
+    pub disposition: CompletionDisposition,
     pub candidates: Vec<EnhancedCandidate>,
     pub framework: CompletionFrameworkKind,
     pub replacement_range: Option<CompletionReplacementRange>,
@@ -198,7 +211,10 @@ impl<'a> CandidateAggregator<'a> {
             && candidates.iter().all(|c| {
                 matches!(
                     c.candidate_type,
-                    CandidateType::File | CandidateType::Directory
+                    CandidateType::File
+                        | CandidateType::Directory
+                        | CandidateType::HomeFile
+                        | CandidateType::HomeDirectory
                 )
             });
 
@@ -210,6 +226,7 @@ impl<'a> CandidateAggregator<'a> {
         };
 
         CompletionResult {
+            disposition: CompletionDisposition::Allowed,
             candidates,
             framework,
             replacement_range: None,
@@ -232,7 +249,7 @@ pub struct IntegratedCompletionEngine {
 
     /// Dynamic completion registry
 
-    /// Short lived completion cache, scoped by the logical PATH generation.
+    /// Short lived completion cache, scoped by PATH generation, aliases, cwd and HOME.
     cache: CompletionCache<EnhancedCandidate>,
     framework_cache: RwLock<HashMap<(u64, String), CompletionFrameworkKind>>,
     shell_jobs: RwLock<Vec<(usize, String, String)>>,
@@ -303,19 +320,24 @@ impl IntegratedCompletionEngine {
 
     /// Convert ParsedCommand to ParsedCommandLine for dynamic completion
     fn convert_to_parsed_command_line(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
+        let alias_signature =
+            aliases::alias_signature(&self.environment.read().variable_state.alias);
         if let Some(cached) = self.parsed_cache.read().as_ref()
             && cached.input == input
             && cached.cursor_pos == cursor_pos
+            && cached.alias_signature == alias_signature
         {
             return cached.parsed.clone();
         }
 
-        let mut parsed = self.parser.parse(input, cursor_pos);
+        let cursor_byte = super::command_segment::char_to_byte(input, cursor_pos);
+        let mut parsed = self.parser.parse(input, cursor_byte);
         self.normalize_parsed_command_line(&mut parsed);
 
         *self.parsed_cache.write() = Some(ParsedCommandLineCache {
             input: input.to_string(),
             cursor_pos,
+            alias_signature,
             parsed: parsed.clone(),
         });
 
@@ -329,7 +351,14 @@ impl IntegratedCompletionEngine {
     /// command line (`pacman -R` inside `sudo pacman -R`) is normalized exactly
     /// like a line typed on its own.
     fn normalize_parsed_command_line(&self, parsed: &mut ParsedCommandLine) {
-        parsed.command = self.environment.read().resolve_alias(&parsed.command);
+        if parsed
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+        {
+            return;
+        }
+        self.expand_completion_alias(parsed);
 
         self.ensure_command_completion_loaded(&parsed.command);
         {
@@ -411,19 +440,43 @@ impl IntegratedCompletionEngine {
             input, cursor_pos, current_dir
         );
 
-        let request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
         let mut timing = CompletionTiming::start();
 
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
-        let replacement_range =
-            completion_replacement_range(input, cursor_pos, &parsed_command_line);
+        let completion_dir = self.completion_directory(&parsed_command_line, current_dir);
+        if parsed_command_line
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+            || completion_dir.is_none()
+        {
+            return CompletionResult {
+                disposition: CompletionDisposition::Suppressed,
+                candidates: Vec::new(),
+                framework: super::default_completion_framework(),
+                replacement_range: None,
+            };
+        }
+        let completion_dir = completion_dir.unwrap();
+        let source_request = CompletionRequest::new(input, current_dir, max_results, cursor_pos);
+        let request = CompletionRequest::new(input, &completion_dir, max_results, cursor_pos);
+        let replacement_range = completion_replacement_range(
+            input,
+            cursor_pos,
+            &self.dynamic_provider_target(&parsed_command_line),
+        );
         let dynamic_generation = self.dynamic.refresh_generation();
         // A request that starts while dynamic data is in flight stays
         // non-cacheable for its lifetime: the refresh may finish after this
         // request has already observed only part of the old/new state, so a
         // later "pending became false" is not proof that this request built a
         // stable snapshot. A later request may publish the settled result.
-        let mut cache_allowed = completion_cache_allowed(&parsed_command_line)
+        let mut cache_allowed = cursor_pos == input.chars().count()
+            && !parsed_command_line
+                .source
+                .as_ref()
+                .is_some_and(|source| source.multiple)
+            && completion_cache_allowed(&parsed_command_line)
             && !is_nx_project_task_completion(self, &parsed_command_line)
             && !self.dynamic.has_async_fallback()
             && !self.dynamic.has_pending_refresh();
@@ -438,21 +491,20 @@ impl IntegratedCompletionEngine {
         {
             timing.finish(request.input, "special_token");
             return CompletionResult {
+                disposition: CompletionDisposition::Allowed,
                 candidates,
                 framework: CompletionFrameworkKind::Skim,
                 replacement_range,
             };
         }
 
-        // Keep the top-level prefix/sliding cache, but scope every entry to the
-        // logical PATH generation. This preserves hot-keypress reuse without
-        // allowing any collector reached through a command argument to retain
-        // results from an older PATH activation.
-        let cache_scope = self.current_path_cache_scope();
+        // File and command candidates depend on the request's directory and
+        // logical shell environment, even when the input text is unchanged.
+        let cache_scope = self.current_cache_scope(request.current_dir);
 
         if cache_allowed
             && !request.input.is_empty()
-            && let Some(hit) = self.cache.lookup_scoped(cache_scope, request.input)
+            && let Some(hit) = self.cache.lookup_scoped_exact(cache_scope, request.input)
         {
             timing.mark("cache_lookup");
             debug!(
@@ -460,14 +512,18 @@ impl IntegratedCompletionEngine {
                 request.input, hit.key, hit.exact
             );
 
-            if hit.exact || !hit.candidates.is_empty() {
-                self.cache.extend_ttl_scoped(cache_scope, &hit.key);
+            // Prefixes may cross argument/subcommand boundaries (go -> go mod).
+            // Reuse only exact input snapshots; provider caches remain scoped separately.
+            if hit.exact {
+                // A hit must not postpone refresh indefinitely: filesystem
+                // and other source data can change while TAB is repeated.
                 let framework = self
                     .lookup_cached_framework(cache_scope, &hit.key)
                     .unwrap_or_else(super::default_completion_framework);
 
                 timing.finish(request.input, "cache_hit");
                 return CompletionResult {
+                    disposition: CompletionDisposition::Allowed,
                     candidates: hit.candidates,
                     framework,
                     replacement_range,
@@ -487,7 +543,30 @@ impl IntegratedCompletionEngine {
             CandidateAggregator::new(self, request.max_results, command_context.clone());
 
         // 1. Project-aware dynamic completion
-        let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        let (dynamic_batch, cold_pending) = DynamicCompletionProvider::observe_pending(|| {
+            self.collect_dynamic_candidates(&request, &parsed_command_line)
+        });
+        // Empty while loading is not a settled "no matches" result. Preserve
+        // that distinction through Tab selection, including a refresh that
+        // settles during collection (its notification will trigger a reread).
+        // Only declared dynamic arguments wait: optional dynamic subcommands
+        // (e.g. git aliases) must not hide the JSON subcommands that follow.
+        if dynamic_batch.candidates.is_empty()
+            && cold_pending
+            && matches!(
+                self.argument_type_for_completion_context(
+                    &self.dynamic_provider_target(&parsed_command_line)
+                ),
+                Some(ArgumentType::Dynamic { .. })
+            )
+        {
+            return CompletionResult {
+                disposition: CompletionDisposition::Pending,
+                candidates: Vec::new(),
+                framework: super::default_completion_framework(),
+                replacement_range,
+            };
+        }
         // The pre-collection `cache_allowed` is only ever narrowed here, never
         // widened: a refresh scheduled mid-collection means this result may be
         // an old/new mix, so it must not be published even if nothing is
@@ -532,7 +611,10 @@ impl IntegratedCompletionEngine {
         }
 
         // 3. External completer fallback
-        let external_batch = self.collect_external_candidates(&request, &parsed_command_line);
+        // External completers interpret the original input, including `-C`.
+        // Keep their cwd unchanged so they do not apply that option twice.
+        let external_batch =
+            self.collect_external_candidates(&source_request, &parsed_command_line);
         timing.mark("external");
         if !aggregator.extend(external_batch) {
             let mut results = aggregator.finalize(history);
@@ -553,7 +635,8 @@ impl IntegratedCompletionEngine {
         // 4. Optional fish-compatible fallback. This is deliberately lower priority than
         // project-aware dynamic and JSON completion, but it can supply broad fish-style
         // candidates for commands without built-in definitions.
-        let fish_batch = self.collect_fish_fallback_candidates(&request, &parsed_command_line);
+        let fish_batch =
+            self.collect_fish_fallback_candidates(&source_request, &parsed_command_line);
         timing.mark("fish");
         if !aggregator.extend(fish_batch) {
             let mut results = aggregator.finalize(history);
@@ -588,4 +671,33 @@ impl IntegratedCompletionEngine {
 }
 
 #[cfg(test)]
+mod cursor_tests;
+#[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cursor_context_tests;
+
+#[cfg(test)]
+mod identity_tests;
+
+#[cfg(test)]
+mod pm_name_tests;
+
+#[cfg(test)]
+mod filesystem_tests;
+
+#[cfg(test)]
+mod git_context_tests;
+
+#[cfg(test)]
+mod source_identity_tests;
+
+#[cfg(test)]
+mod alias_tests;
+
+#[cfg(test)]
+mod exact_cache_tests;
+
+#[cfg(test)]
+mod cold_path_tests;

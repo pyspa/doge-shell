@@ -314,6 +314,70 @@ fn redirected_input_and_failure_preserve_interactive_pipeline() {
     );
 }
 
+// A stop reports an invocation status while retaining an incomplete job.
+#[test]
+fn foreground_stop_publishes_observed_status_through_resume_and_completion() {
+    let _serial = common::serial_guard();
+    let mut s = Session::new();
+    let stopped_status = 128 + Signal::SIGSTOP as i32;
+    for (prior_command, prior_status, prefix) in
+        [("true", 0, ""), ("false", 1, ""), ("false", 1, "false; ")]
+    {
+        s.write_fixture("stop.sh", "echo $$ > child.pid\necho $PPID > child.parent\nkill -STOP $$\necho ready > ready\nread value\necho \"$value\" > input\nkill -STOP $$\nexit 7\n");
+        let prior = s.send(prior_command);
+        s.finished(prior, prior_status);
+        let first = s.send(&format!("{prefix}sh stop.sh; echo forbidden > after-stop"));
+        s.until(|s| s.contains(first, b"Stopped") && s.contains(first, b"\x1b]133;B"));
+        assert!(
+            s.contains(
+                first,
+                format!("\x1b]133;D;{stopped_status}\x1b\\").as_bytes()
+            ),
+            "first stop must publish observed signal status: {}",
+            String::from_utf8_lossy(&s.output[first..])
+        );
+        let status = s.send("echo $? > observed-status");
+        s.finished(status, 0);
+        assert_eq!(
+            fs::read_to_string(s.root.path().join("observed-status"))
+                .unwrap()
+                .trim(),
+            stopped_status.to_string()
+        );
+        assert!(!s.root.path().join("after-stop").exists());
+        let resumed = s.send("fg");
+        s.until(|s| s.root.path().join("ready").exists());
+        s.send("proxy-input");
+        s.until(|s| s.contains(resumed, b"Stopped") && s.contains(resumed, b"\x1b]133;B"));
+        s.finished(resumed, stopped_status);
+        let status = s.send("echo $? > observed-status");
+        s.finished(status, 0);
+        assert_eq!(
+            fs::read_to_string(s.root.path().join("observed-status"))
+                .unwrap()
+                .trim(),
+            stopped_status.to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(s.root.path().join("input"))
+                .unwrap()
+                .trim(),
+            "proxy-input"
+        );
+        let completed = s.send("fg");
+        s.finished(completed, 7);
+        let status = s.send("echo $? > observed-status");
+        s.finished(status, 0);
+        assert_eq!(
+            fs::read_to_string(s.root.path().join("observed-status"))
+                .unwrap()
+                .trim(),
+            "7"
+        );
+        fs::remove_file(s.root.path().join("ready")).unwrap();
+    }
+}
+
 #[test]
 fn full_proxy_resume_restops_and_restores_input() {
     let _serial = common::serial_guard();

@@ -6,11 +6,13 @@ use crate::completion::command::{
     Argument, ArgumentType, CommandCompletionDatabase, CompletionCandidate, SubCommand,
 };
 use crate::completion::context::ContextCorrector;
+use crate::completion::dynamic::CompletionRuntime;
 use crate::completion::errors::GeneratorError;
 use crate::completion::fuzzy_match_score;
 use crate::completion::parser::{CompletionContext, ParsedCommandLine};
+use std::sync::Arc;
 
-use super::filesystem::FileSystemGenerator;
+use super::filesystem::{FileSystemContext, FileSystemGenerator};
 use super::group::GroupGenerator;
 use super::interface::InterfaceGenerator;
 use super::option::OptionGenerator;
@@ -28,14 +30,26 @@ pub struct ArgumentGenerator<'a> {
     database: &'a CommandCompletionDatabase,
     environment_names: &'a [String],
     system_command_ticket: Option<SystemCommandCacheTicket>,
+    filesystem: Option<&'a FileSystemContext>,
+    refresh_runtime: Option<Arc<CompletionRuntime>>,
 }
 
 impl<'a> ArgumentGenerator<'a> {
+    pub(crate) fn with_background_refresh(
+        mut self,
+        runtime: Option<Arc<CompletionRuntime>>,
+    ) -> Self {
+        self.refresh_runtime = runtime;
+        self
+    }
+
     pub fn new(database: &'a CommandCompletionDatabase) -> Self {
         Self {
             database,
             environment_names: &[],
             system_command_ticket: None,
+            refresh_runtime: None,
+            filesystem: None,
         }
     }
 
@@ -60,7 +74,17 @@ impl<'a> ArgumentGenerator<'a> {
             database,
             environment_names,
             system_command_ticket,
+            refresh_runtime: None,
+            filesystem: None,
         }
+    }
+
+    pub(crate) fn with_filesystem_context(
+        mut self,
+        context: Option<&'a FileSystemContext>,
+    ) -> Self {
+        self.filesystem = context;
+        self
     }
 
     /// Generate argument completion candidates
@@ -111,8 +135,12 @@ impl<'a> ArgumentGenerator<'a> {
             // Default to file completion if no candidates generated yet
             if candidates.is_empty() && resolved_arg_type.is_none() {
                 candidates.extend(
-                    FileSystemGenerator::generate_file_candidates(&parsed.current_token)
-                        .map_err(GeneratorError::Other)?,
+                    FileSystemGenerator::file_candidates(
+                        &parsed.current_token,
+                        None,
+                        self.filesystem,
+                    )
+                    .map_err(GeneratorError::Other)?,
                 );
             }
         }
@@ -178,7 +206,7 @@ impl<'a> ArgumentGenerator<'a> {
         // Fallback: file completion
         if candidates.is_empty() && actual_value_type.is_none() {
             candidates.extend(
-                FileSystemGenerator::generate_file_candidates(&parsed.current_token)
+                FileSystemGenerator::file_candidates(&parsed.current_token, None, self.filesystem)
                     .map_err(GeneratorError::Other)?,
             );
         }
@@ -259,7 +287,7 @@ impl<'a> ArgumentGenerator<'a> {
             .as_ref()
             .map(|ticket| {
                 SystemCommandGenerator::from_activation(ticket.clone())
-                    .generate_candidates(current_token)
+                    .generate_for_runtime(current_token, self.refresh_runtime.as_ref())
             })
             .transpose()?
             .unwrap_or_default())
@@ -271,26 +299,26 @@ impl<'a> ArgumentGenerator<'a> {
         arg_type: &ArgumentType,
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
+        let query = parsed.completion_query();
         match arg_type {
-            ArgumentType::File { extensions } => {
-                FileSystemGenerator::generate_file_candidates_with_filter(
-                    &parsed.current_token,
-                    extensions.as_ref(),
-                )
-            }
+            ArgumentType::File { extensions } => FileSystemGenerator::file_candidates(
+                &parsed.current_token,
+                extensions.as_ref(),
+                self.filesystem,
+            ),
             ArgumentType::Directory => {
-                FileSystemGenerator::generate_directory_candidates(&parsed.current_token)
+                FileSystemGenerator::directory_candidates(&parsed.current_token, self.filesystem)
             }
             ArgumentType::Choice(choices) => Ok(choices
                 .iter()
-                .filter(|choice| fuzzy_match_score(choice, &parsed.current_token).is_some())
+                .filter(|choice| fuzzy_match_score(choice, &query).is_some())
                 .map(|choice| CompletionCandidate::argument(choice.clone(), None))
                 .collect()),
-            ArgumentType::Command => self.generate_system_command_candidates(&parsed.current_token),
+            ArgumentType::Command => self.generate_system_command_candidates(&query),
             ArgumentType::Environment => {
                 let mut candidates = Vec::with_capacity(32);
                 for key in self.environment_names {
-                    if fuzzy_match_score(key, &parsed.current_token).is_some() {
+                    if fuzzy_match_score(key, &query).is_some() {
                         candidates.push(CompletionCandidate::argument(key.clone(), None));
                     }
                 }
@@ -300,20 +328,12 @@ impl<'a> ArgumentGenerator<'a> {
                 ScriptGenerator::default().generate_script_candidates(command, parsed)
             }
             ArgumentType::Dynamic { .. } => Ok(Vec::new()),
-            ArgumentType::Process => {
-                ProcessGenerator::new().generate_candidates(&parsed.current_token)
-            }
-            ArgumentType::CommandWithArgs => {
-                self.generate_system_command_candidates(&parsed.current_token)
-            }
-            ArgumentType::User => UserGenerator::new().generate_candidates(&parsed.current_token),
-            ArgumentType::Group => GroupGenerator::new().generate_candidates(&parsed.current_token),
-            ArgumentType::Signal => {
-                SignalGenerator::new().generate_candidates(&parsed.current_token)
-            }
-            ArgumentType::Interface => {
-                InterfaceGenerator::new().generate_candidates(&parsed.current_token)
-            }
+            ArgumentType::Process => ProcessGenerator::new().generate_candidates(&query),
+            ArgumentType::CommandWithArgs => self.generate_system_command_candidates(&query),
+            ArgumentType::User => UserGenerator::new().generate_candidates(&query),
+            ArgumentType::Group => GroupGenerator::new().generate_candidates(&query),
+            ArgumentType::Signal => SignalGenerator::new().generate_candidates(&query),
+            ArgumentType::Interface => InterfaceGenerator::new().generate_candidates(&query),
             _ => Ok(Vec::new()),
         }
     }
@@ -358,6 +378,7 @@ mod tests {
             specified_options: vec![],
             specified_arguments: vec![],
             cursor_index: 0,
+            source: None,
         }
     }
 

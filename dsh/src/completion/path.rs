@@ -1,17 +1,62 @@
+//! Directory listings retain the request's lookup location and source spelling.
+//! Cache entries describe one exact directory, never a parent-prefix result.
+use crate::completion::Candidate;
 use crate::completion::cache::CompletionCache;
 use crate::completion::fuzzy::fuzzy_rank;
+use crate::completion::generators::filesystem::FileSystemContext;
 #[cfg(not(test))]
 use crate::completion::notify_completion_update;
 use crate::completion::shell_path::{format_path_for_token, normalize_path_token};
-use crate::completion::{Candidate, MAX_RESULT};
 use anyhow::Result;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 static PATH_COMPLETION_CACHE: LazyLock<CompletionCache<Candidate>> =
     LazyLock::new(|| CompletionCache::new(Duration::from_millis(2000)));
+
+#[cfg(test)]
+mod membership_tests;
+#[cfg(test)]
+mod shared_tests;
+
+struct DirectoryRequest {
+    key: String,
+    lookup: PathBuf,
+    display: PathBuf,
+}
+
+impl DirectoryRequest {
+    fn new(path: PathBuf) -> Result<Self> {
+        Self::with_context(path, None)
+    }
+
+    fn with_context(path: PathBuf, context: Option<&FileSystemContext>) -> Result<Self> {
+        let spelling = path.to_string_lossy();
+        let expanded = context.map_or_else(
+            || PathBuf::from(shellexpand::tilde(&spelling).as_ref()),
+            |context| {
+                context.lookup_directory(&spelling, spelling == "~" || spelling.starts_with("~/"))
+            },
+        );
+        // Resolve before background work is queued: a later cd must neither
+        // change the scan target nor reuse relative results from another cwd.
+        let lookup = if expanded.is_absolute() {
+            expanded
+        } else {
+            std::env::current_dir()?.join(expanded)
+        };
+        // The same directory can be requested as '.', './', an absolute path,
+        // or '~/...'. Keep display provenance separate from lookup identity.
+        let key = format!("{spelling}\0{}", lookup.display());
+        Ok(Self {
+            key,
+            lookup,
+            display: path,
+        })
+    }
+}
 
 pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
     let pbuf = PathBuf::from(input);
@@ -84,107 +129,82 @@ pub fn path_completion_prefix(input: &str) -> Result<Option<String>> {
 }
 
 pub fn path_completion_prefix_strict(input: &str, only_dirs: bool) -> Result<Option<String>> {
-    let pbuf = PathBuf::from(input);
-    let absolute = pbuf.is_absolute();
-    let _file_name = pbuf.file_name();
-    let parent = pbuf.parent();
+    path_completion_prefix_strict_with_context(input, only_dirs, None)
+}
 
-    // If input is empty or just a dot, suggest from current dir?
-    // For ghost text, usually we have some letters.
-    // If input ends with '/', parent is the input itself.
-
-    let paths = if absolute {
-        let dir = if let Some(f) = parent {
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                input.to_string()
-            } else {
-                f.to_string_lossy().to_string()
-            }
-        } else {
-            // Root?
-            input.to_string()
-        };
-        path_completion_path(PathBuf::from(dir))?
-    } else if let Some(dir) = parent {
-        let dir_str = dir.display().to_string();
-        if dir_str.is_empty() {
-            path_completion_path(PathBuf::from("."))?
-        } else {
-            // if input ends with separator, we should list contents of directory
-            if input.ends_with(std::path::MAIN_SEPARATOR) {
-                path_completion_path(PathBuf::from(input))?
-            } else {
-                path_completion_path(PathBuf::from(dir))?
-            }
-        }
+fn path_completion_prefix_strict_with_context(
+    input: &str,
+    only_dirs: bool,
+    context: Option<&FileSystemContext>,
+) -> Result<Option<String>> {
+    let path = Path::new(input);
+    // Path::parent("dir/") is empty. A trailing separator means list the
+    // directory itself, before considering a parent or the cwd fallback.
+    let directory = if input.ends_with(std::path::MAIN_SEPARATOR) {
+        path
     } else {
-        path_completion()?
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
     };
+    let paths = path_completion_path_with_context(directory.to_path_buf(), context)?;
 
-    let mut candidates: Vec<String> = Vec::new();
-    let search = input.to_string();
-
-    for cand in paths.iter() {
-        if let Candidate::Path(path) = cand {
-            let path_str = path.to_string();
-
-            // Filter by prefix strictly
-            if !path_str.starts_with(&search) {
-                // Try handling "./" prefix if input doesn't have it but path does
-                if let Ok(stripped) = PathBuf::from(path).strip_prefix("./") {
-                    let stripped_str = stripped.display().to_string();
-                    if !stripped_str.starts_with(&search) {
-                        continue;
-                    }
-                    // Use striped version? path_completion_path returns relative paths often with ./ ?
-                    // Actually path_completion_path implementation joins with dir.
-                } else {
-                    continue;
-                }
+    // Read the shared listing once and retain only a borrowed winner. Ghost
+    // completion runs on every keystroke: cloning all paths and sorting the
+    // matches makes even a warm cache expensive in large directories.
+    let best = paths
+        .iter()
+        .filter_map(|candidate| {
+            let Candidate::Path(path) = candidate else {
+                return None;
+            };
+            if only_dirs && !path.ends_with(std::path::MAIN_SEPARATOR) {
+                return None;
             }
-
-            // Filter for directories if requested
-            if only_dirs {
-                // Candidate::Path doesn't store is_dir directly?
-                // Wait, path_completion implementation adds trailing slash for dirs!
-                // Let's rely on trailing slash convention used in path_completion_path.
-                if !path_str.ends_with(std::path::MAIN_SEPARATOR) {
-                    continue;
-                }
+            if path.starts_with(input) {
+                Some(path.as_str())
+            } else {
+                // A bare 'fo' is listed as './foo'; preserve the spelling that
+                // matched so the result can be appended to the user's input.
+                path.strip_prefix("./")
+                    .filter(|path| path.starts_with(input))
             }
+        })
+        .min_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
 
-            candidates.push(path_str);
-        }
-    }
-
-    // Sort candidates
-    // 1. Length (shorter is better/more likely next step)
-    // 2. Alphabetical
-    // (Frecency integration is omitted for simplicity in this step, relying on default path order or sort)
-
-    candidates.sort_by(|a, b| {
-        let len_ord = a.len().cmp(&b.len());
-        if len_ord != std::cmp::Ordering::Equal {
-            len_ord
-        } else {
-            a.cmp(b)
-        }
-    });
-
-    Ok(candidates.first().cloned())
+    Ok(best.map(str::to_owned))
 }
 
 pub(crate) fn path_completion_prefix_for_shell_token(
     raw_token: &str,
     only_dirs: bool,
+    context: Option<&FileSystemContext>,
 ) -> Result<Option<String>> {
     if raw_token.is_empty() {
         return Ok(None);
     }
 
     let normalized = normalize_path_token(raw_token);
-    let Some(candidate) = path_completion_prefix_strict(&normalized, only_dirs)? else {
+    // Preserve source provenance before the listing cache expands an unquoted
+    // home prefix. A quoted/escaped tilde names a local directory instead.
+    let literal_home =
+        !raw_token.starts_with("~/") && (normalized == "~" || normalized.starts_with("~/"));
+    let lookup = if literal_home {
+        format!("./{normalized}")
+    } else {
+        normalized.clone()
+    };
+    let Some(candidate) = path_completion_prefix_strict_with_context(&lookup, only_dirs, context)?
+    else {
         return Ok(None);
+    };
+    let candidate = if literal_home {
+        candidate
+            .strip_prefix("./")
+            .unwrap_or(&candidate)
+            .to_string()
+    } else {
+        candidate
     };
 
     if candidate.len() <= normalized.len() || !candidate.starts_with(&normalized) {
@@ -194,18 +214,13 @@ pub(crate) fn path_completion_prefix_for_shell_token(
     Ok(Some(format_path_for_token(&candidate, raw_token)))
 }
 
-fn path_is_dir(path: &PathBuf) -> Result<bool> {
-    if let Ok(mut metadata) = path.metadata() {
-        if metadata.is_symlink() {
-            let link = std::fs::read_link(path)?;
-            let relative = link.is_relative();
-            if relative {
-                metadata = path.join(&link).metadata()?;
-            }
-        }
-        Ok(metadata.is_dir())
-    } else {
-        Ok(false)
+fn entry_is_dir(entry: &std::fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(file_type) if !file_type.is_symlink() => file_type.is_dir(),
+        // Follow links just as Path::metadata did, including relative links.
+        // A dangling link or inaccessible target stays a
+        // non-directory candidate rather than failing the whole listing.
+        _ => entry.path().is_dir(),
     }
 }
 
@@ -215,40 +230,47 @@ pub fn path_completion() -> Result<Vec<Candidate>> {
 }
 
 pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
+    Ok(path_completion_path_with_context(path, None)?
+        .as_ref()
+        .clone())
+}
+
+fn path_completion_path_with_context(
+    path: PathBuf,
+    context: Option<&FileSystemContext>,
+) -> Result<Arc<Vec<Candidate>>> {
+    let request = DirectoryRequest::with_context(path, context)?;
 
     // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        return Ok(candidates);
     }
 
     #[cfg(test)]
     {
         // For tests, run synchronously to avoid "no reactor" panic and ensure results are returned immediately
-        let candidates = scan_dir_candidates(path.clone())?;
-        PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
-        Ok(candidates)
+        let key = request.key.clone();
+        let candidates = scan_dir_candidates(request)?;
+        PATH_COMPLETION_CACHE.set(key, candidates.clone());
+        Ok(Arc::new(candidates))
     }
 
     #[cfg(not(test))]
     {
         // Check if pending to avoid duplicate loaded
-        if PATH_COMPLETION_CACHE.is_pending(&path_str) {
+        if !PATH_COMPLETION_CACHE.mark_pending(request.key.clone()) {
             // If pending, return empty for now (UI will refresh when ready)
-            return Ok(Vec::new());
+            return Ok(Arc::default());
         }
 
         // Trigger background load
         // Note: We need to clone path_str for the closure
-        let path_str_clone = path_str.clone();
-        let path_buf = path.clone();
-
-        PATH_COMPLETION_CACHE.mark_pending(path_str.clone());
+        let path_str_clone = request.key.clone();
 
         // We assume we are running in a tokio runtime (dsh is tokio::main)
         tokio::spawn(async move {
             // Use spawn_blocking for IO-heavy directory scanning
-            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(path_buf)).await;
+            let result = tokio::task::spawn_blocking(move || scan_dir_candidates(request)).await;
 
             match result {
                 Ok(Ok(candidates)) => {
@@ -272,24 +294,27 @@ pub fn path_completion_path(path: PathBuf) -> Result<Vec<Candidate>> {
         });
 
         // Return empty immediately
-        Ok(Vec::new())
+        Ok(Arc::default())
     }
 }
 
 /// Synchronous variant of path_completion_path for explicit user actions (TAB completion).
 /// Always returns results immediately, either from cache or by scanning synchronously.
 pub fn path_completion_path_sync(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
+    path_completion_path_sync_shared(path).map(|candidates| candidates.as_ref().clone())
+}
 
-    // Check cache first
-    if let Some(hit) = PATH_COMPLETION_CACHE.lookup(&path_str) {
-        return Ok(hit.candidates);
+/// Borrow the full listing for internal filtering without copying every path.
+/// Cache hits retain the original expiry and exact request spelling.
+pub(crate) fn path_completion_path_sync_shared(path: PathBuf) -> Result<Arc<Vec<Candidate>>> {
+    let request = DirectoryRequest::new(path)?;
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        return Ok(candidates);
     }
 
-    // Scan synchronously and cache
-    let candidates = scan_dir_candidates(path)?;
-    PATH_COMPLETION_CACHE.set(path_str, candidates.clone());
-    Ok(candidates)
+    let key = request.key.clone();
+    let candidates = scan_dir_candidates(request)?;
+    Ok(PATH_COMPLETION_CACHE.set_shared(key, candidates))
 }
 
 /// Check if a path exists in the completion cache without triggering a background scan.
@@ -301,28 +326,47 @@ pub fn is_path_cached(path: &Path) -> bool {
         None => return false,
     };
 
-    let parent_str = parent.display().to_string();
+    let Ok(request) = DirectoryRequest::new(parent) else {
+        return false;
+    };
 
     // Only check cache, don't trigger background load.
     //
     // `get_entry` rather than `lookup`: this is a membership test, and `lookup`
     // both walks every byte prefix of the key and clones the whole candidate Vec
-    // (up to MAX_RESULT Strings). This runs once per argument-ish highlight range
+    // (one String per directory entry). This runs once per argument-ish highlight range
     // on every keystroke, so the clone is the dominant cost. The prefix walk is
     // also wrong for directory keys — it can match an unrelated directory whose
     // path happens to be a prefix of this one (`/home/ma` vs `/home/ma2`).
-    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&parent_str) {
-        let path_str = path.display().to_string();
-        let search = path_str.trim_end_matches(std::path::MAIN_SEPARATOR);
-
-        for cand in candidates.iter() {
-            if let Candidate::Path(p) = cand {
-                let p_clean = p.trim_end_matches(std::path::MAIN_SEPARATOR);
-                if p_clean == search {
-                    return true;
-                }
-            }
+    if let Some(candidates) = PATH_COMPLETION_CACHE.get_entry(&request.key) {
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+        // A bare 'foo' is listed under '.' as './foo'. Compare in the
+        // listing's display spelling rather than losing that provenance.
+        let path_str = request.display.join(name).display().to_string();
+        // Preserve the linear lookup's cheap first hit and single-entry miss.
+        // This equality check does not impose an ordering on trimmed paths.
+        if let Some(Candidate::Path(first)) = candidates.first()
+            && first.trim_end_matches(std::path::MAIN_SEPARATOR) == path_str
+        {
+            return true;
         }
+        if candidates.len() <= 1 {
+            return false;
+        }
+        // scan_dir_candidates publishes only raw Candidate::Path values sorted
+        // by Candidate::Ord. Search that same order: trimming directory suffixes
+        // in the comparator would move "a/" before "a!" and break binary search.
+        // Joining file_name above leaves no trailing separator in this needle.
+        let mut needle = Candidate::Path(path_str);
+        if candidates.binary_search(&needle).is_ok() {
+            return true;
+        }
+        if let Candidate::Path(raw) = &mut needle {
+            raw.push(std::path::MAIN_SEPARATOR);
+        }
+        return candidates.binary_search(&needle).is_ok();
     }
 
     false
@@ -342,45 +386,33 @@ pub(crate) fn is_path_cached_for_shell_token(raw_token: &str) -> bool {
 }
 
 // Synchronous helper moved out for clarity and reuse in background task
-fn scan_dir_candidates(path: PathBuf) -> Result<Vec<Candidate>> {
-    let path_str = path.display().to_string();
-    let exp_str = shellexpand::tilde(&path_str).to_string();
-    let expand = path_str != exp_str;
-
-    let home = std::env::var("HOME")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .ok_or_else(|| anyhow::Error::msg("HOME environment variable not set"))?;
-    let path = PathBuf::from(exp_str);
-
-    let dir = read_dir(&path)?;
+fn scan_dir_candidates(request: DirectoryRequest) -> Result<Vec<Candidate>> {
+    let dir = read_dir(&request.lookup)?;
+    // Reading names does not require search permission. Resolving `.` does:
+    // without it, preserve metadata's error-as-file classification instead of
+    // exposing directory types from dirents that cannot be searched.
+    let searchable = request.lookup.join(".").metadata().is_ok();
     let mut files: Vec<Candidate> = Vec::new();
 
     for entry in dir.flatten() {
-        let entry_path = entry.path();
-        let is_dir = path_is_dir(&entry_path)?;
-        if expand {
-            if let Ok(part) = entry_path.strip_prefix(&home) {
-                let mut pb = PathBuf::new();
-                pb.push("~/");
-                pb.push(part);
-                let mut path = pb.display().to_string();
-                if is_dir {
-                    path += "/";
-                }
-                files.push(Candidate::Path(path));
-            }
+        let is_dir = if searchable {
+            entry_is_dir(&entry)
         } else {
-            let mut path = entry_path.display().to_string();
-            if is_dir {
-                path += "/";
-            }
-            files.push(Candidate::Path(path));
+            entry.path().is_dir()
+        };
+        let mut path = request
+            .display
+            .join(entry.file_name())
+            .display()
+            .to_string();
+        if is_dir {
+            path += "/";
         }
-        if files.len() >= MAX_RESULT {
-            break;
-        }
+        files.push(Candidate::Path(path));
+        // Keep the complete listing: callers filter by name/type first, and
+        // the integrated engine limits the ranked matches, not arbitrary entries.
     }
+    // Membership checks binary-search these raw Path values, including directory suffixes.
     files.sort();
     Ok(files)
 }
@@ -442,7 +474,7 @@ mod tests {
         let expected = format!("{}/dir\\ with\\ space/foo.txt", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, false, None).unwrap(),
             Some(expected)
         );
     }
@@ -458,7 +490,7 @@ mod tests {
         let expected = format!("\"{}/dir with space/foo.txt", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, false).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, false, None).unwrap(),
             Some(expected)
         );
     }
@@ -475,7 +507,7 @@ mod tests {
         let expected = format!("'{}/dir with space/foodir/", dir.path().display());
 
         assert_eq!(
-            path_completion_prefix_for_shell_token(&raw_prefix, true).unwrap(),
+            path_completion_prefix_for_shell_token(&raw_prefix, true, None).unwrap(),
             Some(expected)
         );
     }
@@ -501,3 +533,6 @@ mod tests {
         assert!(!is_path_cached_for_shell_token(&missing));
     }
 }
+
+#[cfg(test)]
+mod relative_tests;

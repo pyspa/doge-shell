@@ -10,61 +10,72 @@ impl ContextCorrector<'_> {
         options: &[&CommandOption],
     ) -> (Vec<String>, usize) {
         let current_index = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
-        let mut arguments = Vec::new();
-        let mut arg_index = 0;
-        let mut raw_index = start_index;
-        let mut skip_next_redirect_target = false;
-        let mut end_of_options = false;
+        let indices = Self::positional_raw_indices(parsed, start_index, options);
+        let arg_index = indices
+            .iter()
+            .filter(|&&index| index < current_index)
+            .count();
+        (
+            indices
+                .into_iter()
+                .map(|index| parsed.raw_args[index].clone())
+                .collect(),
+            arg_index,
+        )
+    }
 
-        while raw_index < parsed.raw_args.len() {
-            let token = parsed.raw_args[raw_index].as_str();
-
-            if skip_next_redirect_target {
-                skip_next_redirect_target = false;
-                raw_index += 1;
+    pub(super) fn positional_raw_indices(
+        parsed: &ParsedCommandLine,
+        start_index: usize,
+        options: &[&CommandOption],
+    ) -> Vec<usize> {
+        let mut indices = Vec::new();
+        let mut index = start_index;
+        let mut end_options = false;
+        while let Some(token) = parsed.raw_args.get(index) {
+            // Redirections belong to the shell, including after argv's `--`.
+            if Self::is_redirect_operator(token) {
+                index += 2;
                 continue;
             }
-
-            if !end_of_options && Self::is_redirect_operator(token) {
-                skip_next_redirect_target = true;
-                raw_index += 1;
+            if !end_options && super::super::shell_path::decode_literal_word(token) == "--" {
+                end_options = true;
+                index += 1;
                 continue;
             }
-
-            if !end_of_options && token == "--" {
-                end_of_options = true;
-                raw_index += 1;
+            if !end_options
+                && (Self::is_inline_long_option_value(token, options)
+                    || split_attached_short_option_value(token, options).is_some())
+            {
+                index += 1;
                 continue;
             }
-
-            if !end_of_options && Self::is_inline_long_option_value(token, options) {
-                raw_index += 1;
+            if !end_options && is_separate_value_option(token, options) {
+                index = Self::next_argv_index(&parsed.raw_args, index + 1) + 1;
                 continue;
             }
-
-            if !end_of_options && split_attached_short_option_value(token, options).is_some() {
-                raw_index += 1;
+            if !end_options && Self::looks_like_known_option(token, options) {
+                index += 1;
                 continue;
             }
-
-            if !end_of_options && is_separate_value_option(token, options) {
-                raw_index = (raw_index + 2).min(parsed.raw_args.len());
+            // env assignments precede the wrapped command. Inspect spelling
+            // only: never evaluate a value or apply its environment/cwd changes.
+            if parsed.command == "env"
+                && indices.is_empty()
+                && token.split_once('=').is_some_and(|(name, _)| {
+                    !name.is_empty()
+                        && name.chars().enumerate().all(|(i, c)| {
+                            c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit())
+                        })
+                })
+            {
+                index += 1;
                 continue;
             }
-
-            if !end_of_options && Self::looks_like_known_option(token, options) {
-                raw_index += 1;
-                continue;
-            }
-
-            if raw_index < current_index {
-                arg_index += 1;
-            }
-            arguments.push(token.to_string());
-            raw_index += 1;
+            indices.push(index);
+            index += 1;
         }
-
-        (arguments, arg_index)
+        indices
     }
 
     pub(super) fn correct_option_value_context(
@@ -73,17 +84,27 @@ impl ContextCorrector<'_> {
         command_completion: &CommandCompletion,
     ) -> Option<ParsedCommandLine> {
         let options = self.collect_available_options(command_completion, &parsed.subcommand_path);
+        let current = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
+        if parsed
+            .raw_args
+            .iter()
+            .take(current)
+            .any(|token| super::super::shell_path::decode_literal_word(token) == "--")
+        {
+            return None;
+        }
 
         if let Some(raw_token) = Self::current_raw_token(parsed)
             && let Some((option_name, value)) = split_inline_long_option(raw_token)
         {
+            let option_name = super::super::shell_path::decode_literal_word(option_name);
             let mut corrected = parsed.clone();
             corrected.current_token = value.to_string();
             corrected.current_arg = Some(corrected.current_token.clone());
 
             if let Some(option) = options
                 .iter()
-                .find(|option| option.matches_name(option_name))
+                .find(|option| option.matches_name(&option_name))
             {
                 if option.expects_value() {
                     corrected.completion_context = CompletionContext::OptionValue {
@@ -93,7 +114,7 @@ impl ContextCorrector<'_> {
                     corrected.specified_options = normalize_specified_option(
                         &corrected.specified_options,
                         raw_token,
-                        option_name,
+                        &option_name,
                     );
                     corrected.options = corrected.specified_options.clone();
                     return Some(corrected);
@@ -127,10 +148,11 @@ impl ContextCorrector<'_> {
             return None;
         }
 
-        let previous = Self::previous_raw_token(parsed)?;
+        let previous =
+            super::super::shell_path::decode_literal_word(Self::previous_argv_token(parsed)?);
         let option = options
             .into_iter()
-            .find(|option| option.matches_name(previous) && option.expects_value())?;
+            .find(|option| option.matches_name(&previous) && option.expects_value())?;
 
         let mut corrected = parsed.clone();
         corrected.completion_context = CompletionContext::OptionValue {
@@ -162,6 +184,12 @@ impl ContextCorrector<'_> {
         parsed: &ParsedCommandLine,
         options: &[&CommandOption],
     ) -> Vec<String> {
+        if let Some(source) = &parsed.source {
+            return Self::positional_raw_indices(parsed, source.argument_start, options)
+                .into_iter()
+                .map(|index| parsed.raw_args[index].clone())
+                .collect();
+        }
         let mut rebuilt = Vec::with_capacity(parsed.specified_arguments.len());
         let mut specified_index = 0;
         let mut raw_index = 0;
@@ -183,7 +211,7 @@ impl ContextCorrector<'_> {
                 continue;
             }
 
-            if !end_of_options && token == "--" {
+            if !end_of_options && super::super::shell_path::decode_literal_word(token) == "--" {
                 end_of_options = true;
                 raw_index += 1;
                 continue;

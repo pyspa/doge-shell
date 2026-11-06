@@ -76,6 +76,7 @@ fn test_generate_subcommand_candidates() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -147,6 +148,7 @@ fn test_recursive_command_correction() {
         specified_options: vec![],
         specified_arguments: vec!["pacman".to_string(), "-S".to_string()],
         cursor_index: 0,
+        source: None,
     };
 
     // When generating candidates, it should eventually delegate to pacman
@@ -177,6 +179,7 @@ fn test_recursive_command_correction() {
         specified_options: vec![],
         specified_arguments: vec!["pacman".to_string(), "-S".to_string(), "-".to_string()],
         cursor_index: 0,
+        source: None,
     };
 
     // The generator should recursively call generate for "pacman -S "
@@ -192,6 +195,7 @@ fn test_recursive_command_correction() {
     let mut db2 = db.clone();
     let mut pacman = db2.get_command("pacman").unwrap().clone();
     pacman.subcommands[0].options.push(CommandOption {
+        multiple: false,
         short: None,
         long: Some("--unique-flag".to_string()),
         description: None,
@@ -329,6 +333,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: None,
@@ -337,6 +342,7 @@ fn test_short_and_long_options_generated_for_single_dash() {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
@@ -434,6 +440,7 @@ fn test_git_add_completion_options_with_single_dash() {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-A".to_string()),
                     long: Some("--all".to_string()),
                     description: None,
@@ -442,6 +449,7 @@ fn test_git_add_completion_options_with_single_dash() {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-u".to_string()),
                     long: Some("--update".to_string()),
                     description: None,
@@ -536,6 +544,7 @@ fn test_cd_completion_logic() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -609,6 +618,7 @@ fn test_subcommand_and_file_completion() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -682,6 +692,7 @@ fn test_subcommand_and_file_completion_empty_token() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -729,6 +740,7 @@ fn test_script_execution() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator
@@ -779,6 +791,7 @@ fn dynamic_argument_resolved_from_json_does_not_fallback_to_files() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -824,6 +837,7 @@ fn test_script_execution_variable_substitution() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     let _candidates = generator
@@ -850,7 +864,7 @@ fn test_script_execution_variable_substitution() {
             description: None,
             multiple: false,
             arg_type: Some(ArgumentType::Script(
-                "echo $CURRENT_TOKEN_suffix".to_string(),
+                "echo $CURRENT_TOKEN'_suffix'".to_string(),
             )),
         }],
     };
@@ -873,6 +887,7 @@ fn test_option_completion_guard() {
         command: "mycmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: Some("-o".to_string()),
             long: Some("--option".to_string()),
             description: None,
@@ -900,6 +915,7 @@ fn test_option_completion_guard() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
     let candidates = generator.generate_candidates(&parsed_empty).unwrap();
     let texts: Vec<String> = candidates.into_iter().map(|c| c.text).collect();
@@ -925,6 +941,7 @@ fn test_option_completion_guard() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
     let candidates_dash = generator.generate_candidates(&parsed_dash).unwrap();
     let texts_dash: Vec<String> = candidates_dash.into_iter().map(|c| c.text).collect();
@@ -950,6 +967,7 @@ fn subcommand_option_value_uses_value_type_choice() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: Some("Package to test".to_string()),
@@ -990,6 +1008,7 @@ fn subcommand_option_value_uses_value_type_script() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: Some("-s".to_string()),
                 long: Some("--source".to_string()),
                 description: Some("Restore source".to_string()),
@@ -1270,6 +1289,7 @@ fn test_argument_correction_unit() {
             specified_arguments: vec![],
             raw_args: vec![],
             cursor_index: 0,
+            source: None,
         };
         let corrected = generator.correct_parsed_command_line(&parsed);
         if let CompletionContext::Argument { arg_index, .. } = corrected.completion_context {
@@ -1313,6 +1333,7 @@ fn test_unknown_command_completion() {
         specified_arguments: vec![],
         raw_args: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     // generate_candidates should return MissingCommand for unknown commands
@@ -1366,6 +1387,7 @@ fn test_multiple_argument_reuses_last_definition() {
         specified_options: vec![],
         specified_arguments: vec!["installed".to_string(), "__pkg".to_string()],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -1411,6 +1433,7 @@ fn test_non_multiple_argument_does_not_reuse_last_definition() {
         specified_options: vec![],
         specified_arguments: vec!["installed".to_string(), "__single".to_string()],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -1455,6 +1478,7 @@ fn test_multiple_script_argument_reuses_last_definition() {
         specified_options: vec![],
         specified_arguments: vec!["pkg-alpha".to_string(), "pkg".to_string()],
         cursor_index: 0,
+        source: None,
     };
 
     let candidates = generator.generate_candidates(&parsed).unwrap();
@@ -1510,6 +1534,7 @@ fn runtime_system_paths_reach_every_system_command_generator_route() {
         specified_options: vec![],
         specified_arguments: vec!["zz-".to_string()],
         cursor_index: 0,
+        source: None,
     };
     for argument_type in [ArgumentType::Command, ArgumentType::CommandWithArgs] {
         let candidates =
@@ -1551,6 +1576,7 @@ fn environment_names_are_injected_without_process_fallback() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
 
     // Injected shell names appear.
@@ -1606,6 +1632,7 @@ fn stale_process_env_does_not_enter_environment_completion() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
     let system_paths = Vec::new();
     let candidates =

@@ -74,7 +74,7 @@ pub(super) async fn spawn_async_list_job(
         JobLaunchOutcome::CommandFailed(failure) => {
             // Spawn-level failure (never a body result): report it like an
             // ordinary command failure.
-            let _ = ctx.write_stderr(&failure.message);
+            failure.report(ctx);
             Ok(failure.exit_code)
         }
     }
@@ -126,7 +126,7 @@ pub(super) async fn spawn_whole_plan_background(
             Ok(0)
         }
         JobLaunchOutcome::CommandFailed(failure) => {
-            let _ = ctx.write_stderr(&failure.message);
+            failure.report(ctx);
             Ok(failure.exit_code)
         }
     }

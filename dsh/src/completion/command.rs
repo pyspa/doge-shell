@@ -52,6 +52,9 @@ pub struct CommandOption {
     /// Whether this option expects a following value.
     #[serde(default)]
     pub takes_value: bool,
+    /// Whether this option may be specified more than once (JSON `multiple`).
+    #[serde(default)]
+    pub multiple: bool,
     /// Option value type used by JSON completion definitions.
     #[serde(default)]
     pub value_type: Option<ArgumentType>,
@@ -209,6 +212,9 @@ pub enum CompletionType {
     File,
     /// Directory
     Directory,
+    /// Filesystem paths generated from an unquoted `~/` source prefix.
+    HomeFile,
+    HomeDirectory,
     /// Process
     Process,
 }

@@ -62,8 +62,9 @@ pub(crate) fn spawn_no_command_process(
     ctx: &mut dsh_types::Context,
     shell: &crate::shell::Shell,
     process: &mut NoCommandProcess,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> anyhow::Result<nix::unistd::Pid> {
-    let child = super::reexec::spawn_no_command(ctx, shell, process)?;
+    let child = super::reexec::spawn_no_command(ctx, shell, process, admission)?;
     process.pid = Some(child);
     Ok(child)
 }

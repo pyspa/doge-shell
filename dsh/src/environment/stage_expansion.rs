@@ -72,6 +72,9 @@ impl Environment {
                     input_preferences: parent.completion_state.input_preferences,
                     command_cache: RwLock::new(HashMap::new()),
                     executable_names: Arc::new(RwLock::new(Vec::new())),
+                    path_ghost: Arc::new(parking_lot::Mutex::new(
+                        super::path_ghost::PathGhost::default(),
+                    )),
                     path_generation: 0,
                 },
             )

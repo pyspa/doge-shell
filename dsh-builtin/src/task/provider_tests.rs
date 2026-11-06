@@ -48,13 +48,34 @@ fn capture_script(script: &str) -> Result<std::process::Output> {
     let dir = tempdir().unwrap();
     let path = dir.path().join("provider");
     executable(&path, script);
+    capture_script_path(&path, dir.path())
+}
+
+fn capture_script_path(path: &Path, cwd: &Path) -> Result<std::process::Output> {
+    // A concurrent fork can inherit a freshly written script's writable FD
+    // until exec. Run the stable interpreter, not that inode, to avoid ETXTBSY.
     command_output_with_timeout(
-        &path,
-        &[],
-        dir.path(),
+        Path::new("/bin/sh"),
+        &[path.to_string_lossy().as_ref()],
+        cwd,
         Duration::from_millis(1500),
         &Default::default(),
     )
+}
+
+#[test]
+fn capture_fixture_runs_while_script_writer_is_open() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("provider script");
+    executable(&path, "#!/bin/sh\nprintf out\nprintf err >&2\nexit 7\n");
+    // Model a writer inherited by another test's concurrent fork. It remains
+    // open through capture; no scheduling race or arbitrary sleep is needed.
+    let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+    let output = capture_script_path(&path, dir.path()).unwrap();
+    assert_eq!(output.status.code(), Some(7));
+    assert_eq!(output.stdout, b"out");
+    assert_eq!(output.stderr, b"err");
+    drop(writer);
 }
 
 #[test]

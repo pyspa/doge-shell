@@ -114,7 +114,7 @@ pub async fn execute_with_capture(
     // stderr, which would bypass `|>` / `|:`), then fall through to the
     // normal reader join so the caller sees `(1, stdout, stderr)`.
     if let Ok(JobLaunchOutcome::CommandFailed(failure)) = &launch_result {
-        let _ = capture_ctx.write_stderr(&failure.message);
+        failure.report(&capture_ctx);
     }
 
     // Ensure writer ends are closed in parent so reader threads can finish.

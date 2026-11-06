@@ -153,7 +153,11 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     for (i, job) in shell.wait_jobs.iter_mut().enumerate() {
         debug!(
             "CHECK_JOB_STATE_CHECKING: Checking job {} (index: {}, pid: {:?}, state: {:?}, foreground: {})",
-            job.job_id, i, job.pid, job.state, job.foreground
+            job.job_id,
+            i,
+            job.pid,
+            job.lifecycle_state(),
+            job.foreground
         );
 
         job.update_status();
@@ -209,7 +213,8 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     for job in &completed_jobs {
         debug!(
             "CHECK_JOB_STATE_COMPLETED: Job {} completed (final state: {:?})",
-            job.job_id, job.state
+            job.job_id,
+            job.lifecycle_state()
         );
     }
 
@@ -315,7 +320,7 @@ pub(crate) async fn finalize_completed_job(
             "cannot finalize active job {} ('{}', state: {:?})",
             job.job_id,
             job.cmd,
-            job.state,
+            job.lifecycle_state(),
         );
     }
     let status = final_exit_status(&job);
@@ -347,10 +352,50 @@ pub(crate) async fn finalize_completed_job(
 }
 
 pub fn kill_wait_jobs(shell: &mut Shell) -> Result<()> {
-    let mut i = 0;
-    while i < shell.wait_jobs.len() {
-        shell.wait_jobs[i].kill()?;
-        i += 1;
+    use crate::process::{ProcessState, WaitPidObservation, wait_pid_job};
+    use std::time::{Duration, Instant};
+    // Signal the entire table first, then reap only its owned live stages.
+    // SIGKILL delivery is asynchronous: returning immediately can orphan a
+    // stopped child before the kernel has finished terminating it.
+    for job in &mut shell.wait_jobs {
+        job.kill()?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for job in &mut shell.wait_jobs {
+        let mut pending = Vec::new();
+        let mut current = job.process.as_deref();
+        while let Some(node) = current {
+            if let Some(pid) = node.get_pid()
+                && pid != shell.pid
+                && !matches!(node.get_state(), ProcessState::Completed(_, _))
+            {
+                pending.push(pid);
+            }
+            current = node.next_process();
+        }
+        while !pending.is_empty() {
+            pending.retain(|pid| match wait_pid_job(*pid, true) {
+                Ok(WaitPidObservation::State(observed, state)) => {
+                    job.set_process_state(observed, state);
+                    !matches!(state, ProcessState::Completed(_, _))
+                }
+                // Already reaped/not our child: never invent a final status.
+                Ok(WaitPidObservation::NoChild) => false,
+                Ok(WaitPidObservation::StillAlive) | Err(nix::errno::Errno::EINTR) => true,
+                Err(err) => {
+                    warn!("shutdown wait for {pid} failed: {err}");
+                    false
+                }
+            });
+            if pending.is_empty() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("shutdown child reap timed out: {pending:?}");
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        job.refresh_lifecycle_state();
     }
     Ok(())
 }
@@ -364,6 +409,33 @@ mod tests {
     use crate::shell::Shell;
     use dsh_types::observed_output::ObservedStream;
     use std::io::Write as _;
+
+    #[test]
+    fn shutdown_reaps_its_stopped_child_before_returning() {
+        use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+        use nix::unistd::Pid;
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "kill -STOP $$"])
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        assert!(matches!(
+            waitpid(pid, Some(WaitPidFlag::WUNTRACED)).unwrap(),
+            WaitStatus::Stopped(_, _)
+        ));
+        let mut shell = test_shell();
+        let mut job = Job::new("shutdown child".into(), shell.pgid);
+        let mut process = Process::new("/bin/sh".into(), vec![]);
+        process.pid = Some(pid);
+        process.state = ProcessState::Stopped(pid, nix::sys::signal::Signal::SIGSTOP);
+        job.set_process(JobProcess::Command(process));
+        shell.wait_jobs.push(job);
+        shell.kill_wait_jobs().unwrap();
+        let observation = waitpid(pid, Some(WaitPidFlag::WNOHANG));
+        // Also clean up the baseline, which only sends a signal.
+        let _ = child.wait();
+        assert_eq!(observation, Err(nix::errno::Errno::ECHILD));
+    }
 
     fn test_shell() -> Shell {
         Shell::new(Environment::new())

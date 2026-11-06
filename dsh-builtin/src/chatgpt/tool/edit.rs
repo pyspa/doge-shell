@@ -2,7 +2,6 @@ use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use anyhow::Result;
 use serde_json::{Value, json};
-use std::fs;
 
 pub(crate) const NAME: &str = "edit";
 
@@ -78,23 +77,37 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     // diff against nothing.
     let restricted_io =
         proxy.agent_runtime().is_some() || proxy.background_task_context().is_some();
-    let previous = if restricted_io {
-        crate::agent::files::read(&normalized_abs_path)
-    } else {
-        fs::read_to_string(&normalized_abs_path)
-    };
+    let target = crate::agent::files::WriteTarget::prepare(&normalized_abs_path, restricted_io)
+        .map_err(|err| format!("chat: failed to prepare file `{path_value}`: {err}"))?;
+    let previous = target.previous();
     if let Some(background) = proxy.background_task_context()
         && let Ok(previous_contents) = &previous
         && !background.read_result_authorized(&normalized_abs_path, previous_contents)
     {
         return Err("chat: file contents changed before background edit preview".into());
     }
-    let change = crate::diff::preview(previous.ok().as_deref(), contents);
+    let unavailable = target.exists() && previous.is_err();
+    let change = if unavailable {
+        let proposed = crate::diff::preview(Some(""), contents);
+        crate::diff::Change {
+            added: proposed.added,
+            removed: 0,
+            body: format!(
+                "(existing content unavailable; proposed full replacement, not a verified diff)\n{}",
+                proposed.body
+            ),
+        }
+    } else {
+        crate::diff::preview(previous.as_ref().ok().map(String::as_str), contents)
+    };
+    let summary = if unavailable {
+        "existing content unavailable; diff not verified".to_owned()
+    } else {
+        change.summary()
+    };
     let confirm_msg = format!(
         "AI wants to write to file: `{}` ({}).{}",
-        path_value,
-        change.summary(),
-        sensitive_note
+        path_value, summary, sensitive_note
     );
     if !super::confirm_agent_action_with_preview(
         proxy,
@@ -110,15 +123,9 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
     {
         return Err("chat: admitted write target or preimage changed before writing".into());
     }
-    if restricted_io {
-        crate::agent::files::write(&normalized_abs_path, contents)
-    } else {
-        if let Some(parent) = normalized_abs_path.parent() {
-            fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-        fs::write(&normalized_abs_path, contents)
-    }
-    .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
+    target
+        .write(contents)
+        .map_err(|err| format!("chat: failed to write file `{path_value}`: {err}"))?;
 
     Ok(format!(
         "edit completed: wrote {} bytes to {}",
@@ -130,6 +137,7 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{
         Arc,
@@ -374,3 +382,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "edit/security_tests.rs"]
+mod security_tests;

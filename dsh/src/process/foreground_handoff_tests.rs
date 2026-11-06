@@ -296,11 +296,12 @@ pub(super) fn record_child(_child: Pid) {
     }
     let mode = std::env::var("DSH_HANDOFF_CASE").unwrap();
     if mode.starts_with("worker-") || mode == "supervisor-panic" {
-        std::fs::write(
-            std::env::var_os("DSH_HANDOFF_FAULT_READY").unwrap(),
-            b"forked",
-        )
-        .unwrap();
+        let ready = std::path::PathBuf::from(std::env::var_os("DSH_HANDOFF_FAULT_READY").unwrap());
+        let pending = ready.with_extension("pending");
+        // Existence is the supervisor's readiness signal: publish only
+        // after the complete payload is written, never an empty new file.
+        std::fs::write(&pending, b"forked").unwrap();
+        std::fs::rename(pending, ready).unwrap();
         match mode.as_str() {
             "worker-panic" => panic!("injected panic after real external fork before admission"),
             "worker-abort" => std::process::abort(),

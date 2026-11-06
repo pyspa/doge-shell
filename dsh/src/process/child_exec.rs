@@ -18,13 +18,10 @@
 //!
 //! Anything else added here needs a comment explaining why it is fork-safe.
 //!
-//! Foreground terminal handoff (`tcsetpgrp`) is intentionally *not* here: the
-//! parent owns it through `job_wait::put_in_foreground`. A launch barrier was
-//! considered (child waits on a gate pipe until the parent finished
-//! `setpgid`+`tcsetpgrp`) but omitted on purpose — the pre-existing double
-//! `setpgid` (child here, parent in `job::launch_process`) is retained, and
-//! the wait path grants the terminal promptly, so a gate would add pipe
-//! lifetime complexity for no new ordering guarantee.
+//! The parent owns foreground terminal handoff. Applicable children wait on
+//! a preallocated pipe for an explicit approval token before exec; EOF aborts.
+//! The parent grants the terminal and releases the gate before reading the
+//! exec-error handshake, so neither side waits for the other's exec.
 
 use std::ffi::c_char;
 use std::os::unix::io::RawFd;
@@ -38,6 +35,7 @@ pub const STAGE_DUP2_STDOUT: u8 = 5;
 pub const STAGE_DUP2_STDERR: u8 = 6;
 pub const STAGE_CLOSE: u8 = 7;
 pub const STAGE_EXECVE: u8 = 8;
+pub const STAGE_FOREGROUND_GATE: u8 = 9;
 
 /// Failure record the child writes to the exec-error pipe before `_exit`.
 ///
@@ -77,6 +75,10 @@ pub struct RawChildPlan {
     pub pty_slave: RawFd,
     /// Write end of the exec-error pipe (`CLOEXEC`); `-1` disables reporting.
     pub exec_error_fd: RawFd,
+    /// Optional launch approval pipe; both are -1 outside shared-terminal
+    /// foreground launches. The child closes its writer before any gate read.
+    pub foreground_gate_read: RawFd,
+    pub foreground_gate_write: RawFd,
     /// Parent-owned next-stage reader. Only the child copy is discarded on
     /// the diagnostic-only path (there is no exec to enforce CLOEXEC).
     /// `-1` means this stage has no downstream pipe.
@@ -151,6 +153,9 @@ unsafe fn reset_signal(sig: libc::c_int) -> i32 {
 /// Never returns: `execve` replaces the image on success, `_exit` otherwise.
 pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
     unsafe {
+        if plan.foreground_gate_write >= 0 {
+            libc::close(plan.foreground_gate_write);
+        }
         // Unresolved command: the message goes to *this* process's stderr
         // target (so `typo 2>/dev/null` is quiet), then exit 127 like every
         // other shell.
@@ -176,6 +181,23 @@ pub unsafe fn exec_external_child(plan: &RawChildPlan) -> ! {
             if libc::setpgid(0, plan.pgid) != 0 {
                 let errno = last_errno();
                 report_error(plan.exec_error_fd, STAGE_SETPGID, errno);
+                libc::_exit(1);
+            }
+        }
+
+        if plan.foreground_gate_read >= 0 {
+            let mut token = 0u8;
+            let count = loop {
+                let count =
+                    libc::read(plan.foreground_gate_read, (&mut token as *mut u8).cast(), 1);
+                if count < 0 && last_errno() == libc::EINTR {
+                    continue;
+                }
+                break count;
+            };
+            libc::close(plan.foreground_gate_read);
+            if count != 1 || token != b'F' {
+                report_error(plan.exec_error_fd, STAGE_FOREGROUND_GATE, libc::ECANCELED);
                 libc::_exit(1);
             }
         }

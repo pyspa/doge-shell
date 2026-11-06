@@ -11,7 +11,7 @@ use tracing::debug;
 
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::builtin_execution_placement;
-use super::fork::fork_process;
+use super::fork::{ParentExecDiagnostic, fork_process};
 use super::io::{ConcurrentOutputDrain, OutputMonitor, cloexec_pipe, default_output_wiring};
 use super::job_process::{JobProcess, ProcessLaunchOutcome, apply_pty_stdio};
 use super::launch_outcome::CommandFailure;
@@ -197,6 +197,7 @@ impl JobProcess {
         let current_pid = getpid();
 
         let mut terminal_launch_failure = false;
+        let mut parent_exec_diagnostics = Vec::new();
         let launched: Result<Pid> = async {
             Ok(match self {
                 JobProcess::Builtin(process) => {
@@ -236,22 +237,23 @@ impl JobProcess {
                     // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
-                    // Explicit redirects stay authoritative. Only an unredirected
-                    // FullProxy diagnostic may fall back from its revoked slave.
-                    let diagnostic_fallback = pty
-                        .filter(|pty| {
-                            pty.mode == super::pty::PtyMode::FullProxy
-                                && !has_redirect
-                                && process.stderr == pty.slave
-                        })
-                        .map(|_| entry_errfile);
+                    // Borrow the entry destination only for the synchronous
+                    // parent handshake; stage/job results carry bytes, not fds.
+                    let diagnostic_target = ParentExecDiagnostic::for_stage(
+                        pty,
+                        has_redirect,
+                        process.stderr,
+                        unsafe { std::os::fd::BorrowedFd::borrow_raw(entry_errfile) },
+                        &mut parent_exec_diagnostics,
+                        ctx.output_observer.as_ref(),
+                    );
                     let (child, fork_monitors, reported_failure) = fork_process(
                         ctx,
                         ctx.pgid,
                         process,
                         shell,
                         pty,
-                        diagnostic_fallback,
+                        diagnostic_target,
                         pipe_out.as_ref().map(AsRawFd::as_raw_fd),
                     )?;
                     terminal_launch_failure = reported_failure;
@@ -332,6 +334,7 @@ impl JobProcess {
         Ok(ProcessLaunchOutcome::Launched {
             pid,
             terminal_launch_failure,
+            parent_exec_diagnostics,
             next_process,
             redirects: applied,
             monitors,

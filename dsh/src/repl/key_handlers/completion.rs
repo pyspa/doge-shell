@@ -1,5 +1,4 @@
 use crate::completion;
-use crate::completion::MAX_RESULT;
 use crate::completion::integrated::{
     CompletionDisposition, CompletionReplacementRange, CompletionResult,
 };
@@ -9,6 +8,10 @@ use crate::repl::state::{ReplControlFlow, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use tracing::{debug, warn};
+
+#[cfg(test)]
+#[path = "completion_cold_tests.rs"]
+mod cold_tests;
 
 pub(crate) fn handle_accept_suggestion_word(repl: &mut Repl<'_>) -> bool {
     if repl.accept_suggestion(SuggestionAcceptMode::Word) {
@@ -164,25 +167,17 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
 
     repl.sync_completion_jobs();
 
-    // Cold dynamic providers only schedule work on their dedicated workers.
-    // The initial TAB therefore returns static/cached candidates immediately;
-    // the completion notifier asks the REPL to refresh when dynamic data lands.
+    // Keep the first Tab request alive while cold dynamic data is collected.
+    // Editing and cancellation interrupt the wait without entering fallback.
     let CompletionResult {
         disposition,
         candidates: engine_candidates,
         framework: completion_framework,
         replacement_range,
-    } = repl
-        .completion_ui
-        .integrated_completion
-        .complete(
-            input_text.as_str(),
-            cursor_pos,
-            current_dir.as_path(),
-            MAX_RESULT,
-            repl.shell.cmd_history.as_ref(),
-        )
-        .await;
+    } = match super::completion_wait::collect(repl, &input_text, cursor_pos, &current_dir).await {
+        Ok(result) => result,
+        Err(flow) => return Ok(flow),
+    };
 
     if disposition == CompletionDisposition::Suppressed {
         return Ok(ReplControlFlow::Continue);

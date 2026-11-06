@@ -141,6 +141,8 @@ struct ParsedCommandLineCache {
 pub enum CompletionDisposition {
     Allowed,
     Suppressed,
+    /// A cold dynamic lookup is still being collected; do not use file fallback.
+    Pending,
 }
 
 #[derive(Debug)]
@@ -541,7 +543,30 @@ impl IntegratedCompletionEngine {
             CandidateAggregator::new(self, request.max_results, command_context.clone());
 
         // 1. Project-aware dynamic completion
-        let dynamic_batch = self.collect_dynamic_candidates(&request, &parsed_command_line);
+        let (dynamic_batch, cold_pending) = DynamicCompletionProvider::observe_pending(|| {
+            self.collect_dynamic_candidates(&request, &parsed_command_line)
+        });
+        // Empty while loading is not a settled "no matches" result. Preserve
+        // that distinction through Tab selection, including a refresh that
+        // settles during collection (its notification will trigger a reread).
+        // Only declared dynamic arguments wait: optional dynamic subcommands
+        // (e.g. git aliases) must not hide the JSON subcommands that follow.
+        if dynamic_batch.candidates.is_empty()
+            && cold_pending
+            && matches!(
+                self.argument_type_for_completion_context(
+                    &self.dynamic_provider_target(&parsed_command_line)
+                ),
+                Some(ArgumentType::Dynamic { .. })
+            )
+        {
+            return CompletionResult {
+                disposition: CompletionDisposition::Pending,
+                candidates: Vec::new(),
+                framework: super::default_completion_framework(),
+                replacement_range,
+            };
+        }
         // The pre-collection `cache_allowed` is only ever narrowed here, never
         // widened: a refresh scheduled mid-collection means this result may be
         // an old/new mix, so it must not be published even if nothing is

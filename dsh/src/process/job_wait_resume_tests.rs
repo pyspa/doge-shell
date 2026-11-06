@@ -36,7 +36,7 @@ fn success_continues_stopped_stages_and_preserves_completed_and_running() {
         .unwrap();
         assert_eq!(calls, 1);
         assert!(!job.has_stopped_process());
-        assert_eq!(job.state, ProcessState::Running);
+        assert_eq!(job.lifecycle_state(), ProcessState::Running);
         let mut stage = job.process.clone();
         for before in states {
             let process = stage.take().unwrap();
@@ -59,11 +59,11 @@ fn failed_delivery_preserves_every_canonical_state() {
     ];
     let mut job = pipeline(&states);
     let before = job.process.clone();
-    let summary = job.state;
+    let summary = job.lifecycle_state();
     let error = resume_job_with(&mut job, |_| Err(anyhow::anyhow!("injected ESRCH"))).unwrap_err();
     assert!(error.to_string().contains("ESRCH"));
     assert_eq!(job.process, before);
-    assert_eq!(job.state, summary);
+    assert_eq!(job.lifecycle_state(), summary);
 }
 
 #[test]
@@ -160,7 +160,7 @@ async fn foreground_resume_without_terminal_continues_owned_group() {
                  pid={pid}, pgid={:?}, os_pgid={:?}, state={:?}, tree={:?}",
                 job.pgid,
                 nix::unistd::getpgid(Some(pid)),
-                job.state,
+                job.lifecycle_state(),
                 job.process,
             )
         })

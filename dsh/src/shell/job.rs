@@ -153,7 +153,11 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     for (i, job) in shell.wait_jobs.iter_mut().enumerate() {
         debug!(
             "CHECK_JOB_STATE_CHECKING: Checking job {} (index: {}, pid: {:?}, state: {:?}, foreground: {})",
-            job.job_id, i, job.pid, job.state, job.foreground
+            job.job_id,
+            i,
+            job.pid,
+            job.lifecycle_state(),
+            job.foreground
         );
 
         job.update_status();
@@ -209,7 +213,8 @@ pub async fn check_job_state(shell: &mut Shell) -> Result<Vec<Job>> {
     for job in &completed_jobs {
         debug!(
             "CHECK_JOB_STATE_COMPLETED: Job {} completed (final state: {:?})",
-            job.job_id, job.state
+            job.job_id,
+            job.lifecycle_state()
         );
     }
 
@@ -315,7 +320,7 @@ pub(crate) async fn finalize_completed_job(
             "cannot finalize active job {} ('{}', state: {:?})",
             job.job_id,
             job.cmd,
-            job.state,
+            job.lifecycle_state(),
         );
     }
     let status = final_exit_status(&job);

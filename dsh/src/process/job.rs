@@ -1,3 +1,7 @@
+//! Job construction and launch ownership. Lifecycle summary updates stay in
+//! this module; observers use `Job::lifecycle_state` and final status uses
+//! `Job::final_exit_status`.
+
 use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{Signal, killpg};
@@ -28,6 +32,16 @@ mod lifecycle_property_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 
+/// A job owns its process tree and cached lifecycle summary.
+///
+/// Callers may observe the summary but cannot overwrite it independently of
+/// the process lifecycle:
+///
+/// ```compile_fail,E0616
+/// use doge_shell::process::{Job, ProcessState};
+/// let mut job = Job::new_with_process("true".into(), "true".into(), vec!["true".into()]);
+/// job.state = ProcessState::Completed(0, None);
+/// ```
 #[derive(Debug)]
 pub struct Job {
     pub id: String,
@@ -47,7 +61,7 @@ pub struct Job {
     pub env_overrides: Vec<(String, String)>,
     pub list_op: ListOp,
     pub job_id: usize,
-    pub state: ProcessState,
+    state: ProcessState,
     /// Frozen pipeline status policy snapshotted at `launch` time.
     ///
     /// `Job.state` stays the lifecycle summary (tail stage on completion);
@@ -484,9 +498,7 @@ impl Job {
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
-        self.state = process.get_state();
-
-        self.set_process(process.to_owned());
+        self.record_launched_process(process.to_owned());
 
         let (stdin, stdout, stderr) = process.get_io();
         let pty_slave = pty.map(|pty| pty.slave);

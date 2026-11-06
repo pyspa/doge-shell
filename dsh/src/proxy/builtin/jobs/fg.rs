@@ -44,7 +44,12 @@ pub fn execute_fg(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result
     for (i, job) in shell.wait_jobs.iter().enumerate() {
         debug!(
             "FG_CMD_JOB[{}]: id={}, pid={:?}, state={:?}, foreground={}, cmd='{}'",
-            i, job.job_id, job.pid, job.state, job.foreground, job.cmd
+            i,
+            job.job_id,
+            job.pid,
+            job.lifecycle_state(),
+            job.foreground,
+            job.cmd
         );
     }
 
@@ -139,7 +144,9 @@ pub(crate) async fn foreground_selected_job(
     );
     debug!(
         "FG_CMD_JOB_DETAILS: Job details before fg - state: {:?}, pgid: {:?}, pid: {:?}",
-        job.state, job.pgid, job.pid
+        job.lifecycle_state(),
+        job.pgid,
+        job.pid
     );
 
     ctx.write_stdout(&format!(
@@ -149,7 +156,7 @@ pub(crate) async fn foreground_selected_job(
     .ok();
 
     // Any stopped stage needs SIGCONT; the canonical tree (not the cached
-    // `job.state` summary) decides so stale summaries cannot interfere.
+    // `job.lifecycle_state()` summary) decides so stale summaries cannot interfere.
     let cont = job.has_stopped_process();
     if cont {
         debug!(
@@ -159,7 +166,8 @@ pub(crate) async fn foreground_selected_job(
     } else {
         debug!(
             "FG_CMD_NOT_STOPPED: Job {} is not stopped, no SIGCONT needed (state: {:?})",
-            job.job_id, job.state
+            job.job_id,
+            job.lifecycle_state()
         );
     }
 
@@ -178,14 +186,10 @@ pub(crate) async fn foreground_selected_job(
     // restore on guard drop (after finalization below).
     let _pty_raw_guard = crate::process::job_pty::ForegroundPtyRawModeGuard::for_resume(&job);
 
-    let old_state = job.state;
     // `job.foreground` stays `false`: it records background provenance, not
     // temporary foreground ownership during this resume.
-    job.state = ProcessState::Running;
-    debug!(
-        "FG_CMD_STATE_CHANGE: Set job {} state from {:?} to Running",
-        job.job_id, old_state
-    );
+    // The wait authority marks stopped stages running only after SIGCONT
+    // succeeds. Do not overwrite the cached summary before that transition.
 
     debug!(
         "FG_CMD_FOREGROUND_CALL: About to call put_in_foreground for job {} with no_hang=true, cont={}",
@@ -258,12 +262,13 @@ pub(crate) async fn finalize_foreground_job(
         }
         debug!(
             "FG_CMD_REQUEUE: Job {} still active after foreground wait (state: {:?}), returning to job table",
-            job.job_id, job.state
+            job.job_id,
+            job.lifecycle_state()
         );
         // The invocation status of a re-stopped job is the observed stop
         // signal (`128 + signal`), never a final `Job` status: a stopped
         // tree has no logical final status by design.
-        let command_status = match job.state {
+        let command_status = match job.lifecycle_state() {
             ProcessState::Stopped(_, signal) => Some(crate::process::signal_exit_status(signal)),
             ProcessState::Running => None,
             ProcessState::Completed(_, _) => None,
@@ -345,7 +350,8 @@ pub(crate) async fn finalize_background_resume(
     if !job.is_process_tree_completed() {
         debug!(
             "BG_CMD_REQUEUE: Job {} remains active after resume attempt (state: {:?})",
-            job.job_id, job.state
+            job.job_id,
+            job.lifecycle_state()
         );
         shell.wait_jobs.push(job);
     } else {

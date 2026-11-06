@@ -4,6 +4,20 @@ use crate::process::{Job, JobProcess, state::ProcessState};
 use tracing::debug;
 
 impl Job {
+    /// The most recently reconciled lifecycle summary of the process tree.
+    ///
+    /// This is a read-only snapshot, not a wait or a logical pipeline exit
+    /// status. Use [`Self::final_exit_status`] for completion and pipefail.
+    pub fn lifecycle_state(&self) -> ProcessState {
+        self.state
+    }
+
+    /// Record a stage at the launch boundary, before wait reconciliation.
+    pub(in crate::process) fn record_launched_process(&mut self, process: JobProcess) {
+        self.state = process.get_state();
+        self.set_process(process);
+    }
+
     /// Whether every stage in the canonical process tree has completed.
     pub(crate) fn is_process_tree_completed(&self) -> bool {
         self.process.as_deref().is_none_or(JobProcess::is_completed)

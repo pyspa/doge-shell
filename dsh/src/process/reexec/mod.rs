@@ -6,16 +6,16 @@
 //! ```text
 //! parent shell
 //!   → snapshot state (plain data, no live objects)
+//!   → prefill and rewind an anonymous request file
 //!   → reserve collision-free protocol descriptors from the kernel
 //!   → posix_spawn(current_exe, --__dsh-internal-exec-fd=<N> [--__dsh-internal-status-fd=<M>])
-//!   → write JSON request to the pipe, close
 //! child: fresh dogesh image
 //!   → read request to EOF (size-capped)
 //!   → fresh Tokio runtime, fresh Environment + Shell
 //!   → run the already-materialized builtin argv, exit with its status
 //! ```
 //!
-//! The request travels on a dedicated pipe duplicated to a dynamically
+//! The request travels in an anonymous file duplicated to a dynamically
 //! reserved descriptor (see [`fd_layout`]), never on the command line
 //! (process-list and secret exposure) or in the environment (size limits,
 //! inheritance). Internal protocol descriptors have no fixed numbers: their
@@ -24,8 +24,8 @@
 //! completes. Internal protocol descriptors must never overwrite inherited
 //! descriptors such as process-substitution `/dev/fd/N` handles.
 //!
-//! The parent writes only after `posix_spawn` returns, so no `pre_exec` fork
-//! hazard exists; the child blocks on `read` until the payload arrives.
+//! Delivery finishes before `posix_spawn`: a stopped helper cannot block the
+//! parent on pipe capacity. No writer thread or post-spawn delivery wait exists.
 //!
 //! `config.lisp` is never re-run in the helper: the snapshot is
 //! authoritative, so aliases and variables cannot drift or double-apply side
@@ -181,11 +181,9 @@ fn helper_executable() -> Result<std::path::PathBuf> {
 /// helper pid; the caller owns reaping it through the normal wait machinery,
 /// which maps signal deaths to `128 + signal` without any duplicated logic.
 ///
-/// If the request payload cannot be fully delivered after a successful
-/// spawn, the already-running helper is reaped synchronously and `Err` is
-/// returned instead of a pid: the helper would otherwise exit on the
-/// truncated request and surface as empty output, hiding the delivery
-/// failure.
+/// The payload is written and rewound before spawn. Delivery errors therefore
+/// leave no child to reap, and an externally stopped helper cannot block its
+/// parent's launch on a full request pipe.
 pub fn spawn_internal_helper(
     stdin: RawFd,
     stdout: RawFd,
@@ -242,8 +240,14 @@ fn spawn_internal_helper_admitted(
         })
         .transpose()?;
 
-    let (req_read, req_write) =
-        crate::process::io::cloexec_pipe().context("failed request pipe")?;
+    use std::io::{Seek as _, Write as _};
+    let mut req_read = tempfile::tempfile().context("failed anonymous request file")?;
+    req_read
+        .write_all(request_bytes)
+        .context("failed to write internal request")?;
+    req_read
+        .rewind()
+        .context("failed to rewind internal request")?;
     // Reserve collision-free targets while every source and auxiliary
     // descriptor is still open. `layout` stays alive until `posix_spawn`
     // returns: dropping it earlier would recycle the numbers.
@@ -376,28 +380,15 @@ fn spawn_internal_helper_admitted(
     let child = match posix_spawn(&exe, &actions, &attr, &argv, &envp) {
         Ok(child) => child,
         Err(err) => {
-            // Every temporary descriptor is `OwnedFd` (`req_read`,
-            // `req_write`, and the `layout` reservations), so they drop
+            // The request file and `layout` reservations own their fds and drop
             // here with no manual cleanup branch.
             return Err(anyhow::anyhow!(err).context("failed to posix_spawn helper"));
         }
     };
     // The reservation served its purpose once spawn returned.
     drop(layout);
-    // The child owns its read end via the file actions; closing ours lets it
-    // see EOF after delivery.
+    // The child owns its duplicate; the parent's copy is no longer needed.
     drop(req_read);
-
-    // Deliver the payload, then close: the helper reads to EOF.
-    if let Err(err) = fd_layout::write_all(req_write.as_fd(), request_bytes) {
-        // The helper is already running: closing our write end lets it see
-        // EOF (and exit on the truncated request) instead of hanging, then
-        // reap it so no zombie is left behind.
-        drop(req_write);
-        let _ = crate::process::wait_pid_job(child, false);
-        return Err(err);
-    }
-    drop(req_write);
     if let (Some(admission), Some(stage)) = (admission, stage_admission) {
         admission.admit(child, stage);
     }

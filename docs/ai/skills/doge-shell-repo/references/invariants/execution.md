@@ -120,3 +120,5 @@
 
 - Re-exec request は匿名ファイルへ全量書込み・rewind してから spawn する。spawn 後の同期 pipe 送信は、helper の外部 SIGSTOP と大きな snapshot が重なると親を停止させる。request/status の collision-free FD 予約は維持する。
 - Redirect の途中失敗は、それまでの stderr へ rollback 前に一度だけ診断する。未起動 downstream の stdout pipe 由来なら dup chain を追跡して早期出力を避け、元 stderr へ fallback する（失敗 stage が後段を起動しない既存仕様）。Context の出力は借用 FD をエラー時にも閉じない。
+
+- Shell shutdown は SIGKILL 送信だけで戻らず、wait_jobs の未完了・非self PID だけを既存 wait_pid_job で期限付き回収する。signal delivery と回収は別。ECHILD は所有終了の観測であり synthetic completion にしない。正常 detach 済み async job と無関係な子には触れない。

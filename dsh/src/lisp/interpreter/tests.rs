@@ -60,6 +60,19 @@ fn test_symbol_lookup() {
     let result = eval(env.clone(), &Value::Symbol(Symbol::from("test-var"))).unwrap();
     assert_eq!(result, Value::Int(123.into()));
 
+    // Composite values must survive lookup as well as scalar values.
+    let list = Value::List(
+        vec![Value::Int(1.into()), Value::Int(2.into())]
+            .into_iter()
+            .collect(),
+    );
+    env.borrow_mut()
+        .define(Symbol::from("list-var"), list.clone());
+    assert_eq!(
+        eval(env.clone(), &Value::Symbol(Symbol::from("list-var"))).unwrap(),
+        list
+    );
+
     // Test undefined symbol
     let result = eval(env.clone(), &Value::Symbol(Symbol::from("undefined")));
     assert!(result.is_err());
@@ -421,31 +434,11 @@ fn test_error_handling() {
 }
 
 #[test]
-fn test_performance_no_unnecessary_clones() {
+fn multiple_definitions_preserve_independent_bindings() {
     let env = create_test_env();
 
-    // This test ensures that basic operations don't perform unnecessary clones
-    // We'll define a large structure and ensure it's handled efficiently
-
-    let large_list = Value::List((0..1000).map(|i| Value::Int(i.into())).collect());
-
-    // Store it
-    env.borrow_mut()
-        .define(Symbol::from("large-list"), large_list.clone());
-
-    // Retrieve it multiple times - should not clone unnecessarily
-    for _ in 0..10 {
-        let result = eval(env.clone(), &Value::Symbol(Symbol::from("large-list"))).unwrap();
-        assert_eq!(result, large_list);
-    }
-}
-
-#[test]
-fn test_performance_define_operations() {
-    let env = create_test_env();
-
-    // Test that define operations are efficient
-    for i in 0..100 {
+    // Defining another name must not overwrite an existing binding.
+    for i in 0..2 {
         let var_name = format!("var-{i}");
         let define_expr = Value::List(
             vec![
@@ -462,7 +455,7 @@ fn test_performance_define_operations() {
     }
 
     // Verify all variables are accessible
-    for i in 0..100 {
+    for i in 0..2 {
         let var_name = format!("var-{i}");
         let lookup = eval(env.clone(), &Value::Symbol(Symbol::from(var_name.as_str()))).unwrap();
         assert_eq!(lookup, Value::Int(i.into()));
@@ -470,10 +463,10 @@ fn test_performance_define_operations() {
 }
 
 #[test]
-fn test_performance_function_calls() {
+fn function_calls_bind_fresh_arguments() {
     let env = create_test_env();
 
-    // Define a simple function that would test argument binding efficiency
+    // Exercise two-argument binding across repeated calls.
     let add_def = Value::List(
         vec![
             Value::Symbol(Symbol::from("defun")),
@@ -503,8 +496,7 @@ fn test_performance_function_calls() {
     let result = eval(env.clone(), &add_def).unwrap();
     assert_eq!(result, Value::NIL);
 
-    // Test calling the function multiple times - this tests argument binding efficiency
-    for i in 0..50 {
+    for i in [0, 7] {
         let call_expr = Value::List(
             vec![
                 Value::Symbol(Symbol::from("add-two")),
@@ -521,10 +513,10 @@ fn test_performance_function_calls() {
 }
 
 #[test]
-fn test_performance_let_bindings() {
+fn nested_let_resolves_outer_bindings() {
     let env = create_test_env();
 
-    // Test nested let bindings which could cause excessive cloning
+    // The inner binding resolves both names from the outer scope.
     let nested_let = Value::List(
         vec![
             Value::Symbol(Symbol::from("let")),

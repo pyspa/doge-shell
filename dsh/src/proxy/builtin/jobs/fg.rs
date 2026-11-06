@@ -333,8 +333,11 @@ pub(crate) async fn finalize_background_resume(
     mut job: crate::process::Job,
     resume_result: Result<()>,
 ) -> Result<()> {
+    let mut resume_result = resume_result;
     if resume_result.is_ok() {
+        job.foreground = false;
         job.mark_stopped_processes_running();
+        resume_result = job.progress_launch_admission();
     } else {
         job.refresh_lifecycle_state();
     }

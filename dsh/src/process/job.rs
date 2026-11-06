@@ -57,6 +57,8 @@ pub struct Job {
     pub(crate) monitors: Vec<OutputMonitor>,
     /// FullProxy parent diagnostics awaiting completed history capture.
     pub(crate) parent_exec_diagnostics: Vec<u8>,
+    pub(crate) launch_admission: Option<super::launch_admission::LaunchAdmission>,
+    pub(crate) exec_reports: Vec<super::fork::PendingExecReport>,
     pub(crate) shell_pgid: Pid,
     /// Whether to capture output for $OUT variable
     pub capture_output: bool,
@@ -120,6 +122,8 @@ impl Job {
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
             parent_exec_diagnostics: Vec::new(),
+            exec_reports: Vec::new(),
+            launch_admission: None,
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -158,6 +162,8 @@ impl Job {
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
             parent_exec_diagnostics: Vec::new(),
+            exec_reports: Vec::new(),
+            launch_admission: None,
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -349,6 +355,13 @@ impl Job {
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
         let _terminal_guard = job_wait::LaunchTerminalGuard::new(self, ctx);
 
+        if ctx.interactive
+            && ctx.foreground
+            && job_wait::can_handoff_terminal()
+            && pty_child.is_none_or(|pty| pty.mode != PtyMode::FullProxy)
+        {
+            self.launch_admission = Some(Default::default());
+        }
         // 2. Launch processes
         if let Some(mut process) = self.process.take() {
             debug!(
@@ -431,7 +444,14 @@ impl Job {
         }
         let previous_infile = ctx.infile;
         let (pid, mut next_process, applied_redirects, terminal_launch_failure) = match process
-            .launch(ctx, shell, self.stdout, pty, pipeline_context)
+            .launch_admitted(
+                ctx,
+                shell,
+                self.stdout,
+                pty,
+                pipeline_context,
+                self.launch_admission.as_mut(),
+            )
             .await
         {
             Ok(ProcessLaunchOutcome::Launched {
@@ -441,10 +461,12 @@ impl Job {
                 monitors,
                 terminal_launch_failure,
                 parent_exec_diagnostics,
+                exec_report,
             }) => {
                 // The child exists: move monitors and parent diagnostic bytes
                 // into job ownership exactly once, before stage finalization.
                 self.monitors.extend(monitors);
+                self.exec_reports.extend(exec_report);
                 self.parent_exec_diagnostics.extend(parent_exec_diagnostics);
                 (pid, next_process, redirects, terminal_launch_failure)
             }
@@ -730,66 +752,6 @@ impl Job {
 
     pub fn kill(&mut self) -> Result<()> {
         self.signal(Signal::SIGKILL)
-    }
-
-    pub fn update_status(&mut self) -> bool {
-        let old_state = self.state;
-
-        // Poll individual process states, then re-derive the job summary
-        // from the whole tree. The root stage's returned state must not be
-        // copied directly: it is order-dependent for pipelines.
-        if let Some(process) = self.process.as_mut() {
-            let _ = process.update_state();
-        }
-        self.refresh_lifecycle_state();
-
-        if old_state != self.state {
-            debug!(
-                "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
-                self.job_id, old_state, self.state, self.pid, self.pgid
-            );
-
-            match (&old_state, &self.state) {
-                (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
-                    debug!(
-                        "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
-                        self.job_id, signal, pid
-                    );
-                }
-                (ProcessState::Stopped(_, _), ProcessState::Running) => {
-                    debug!(
-                        "JOB_RESUMED: Job {} resumed from stopped state",
-                        self.job_id
-                    );
-                }
-                (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
-                    debug!(
-                        "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
-                        self.job_id, exit_code, signal
-                    );
-                }
-                (ProcessState::Stopped(_, _), ProcessState::Completed(exit_code, signal)) => {
-                    debug!(
-                        "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
-                        self.job_id, exit_code, signal
-                    );
-                }
-                _ => {
-                    debug!(
-                        "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
-                        self.job_id, old_state, self.state
-                    );
-                }
-            }
-        }
-
-        let is_completed = self.is_process_tree_completed();
-        debug!(
-            "JOB_COMPLETION_CHECK: Job {} completion check result: {} (current state: {:?})",
-            self.job_id, is_completed, self.state
-        );
-
-        is_completed
     }
 }
 

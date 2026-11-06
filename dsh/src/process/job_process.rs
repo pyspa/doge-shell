@@ -108,11 +108,12 @@ fn strip_argv0<'a>(program: &str, argv: &'a [String]) -> &'a [String] {
 pub(crate) enum ProcessLaunchOutcome {
     Launched {
         pid: Pid,
-        /// The raw child reported a terminal launch failure; its real status
-        /// still belongs to the canonical process tree and existing wait path.
+        /// Command resolution already failed. Deferred child reports and all
+        /// real statuses still belong to Job and the canonical wait path.
         terminal_launch_failure: bool,
         /// Parent FullProxy diagnostics already displayed and observed.
         parent_exec_diagnostics: Vec<u8>,
+        exec_report: Option<super::fork::PendingExecReport>,
         next_process: Option<Box<JobProcess>>,
         redirects: AppliedRedirects,
         monitors: Vec<super::io::OutputMonitor>,

@@ -62,6 +62,10 @@ impl PtyPump {
         })
     }
 
+    pub(super) fn control_byte(&mut self, byte: u8) {
+        self.master.write_all(&[byte]).unwrap();
+    }
+
     pub(super) fn live(&self, mode: &str, phase: &str) {
         // An explicit stderr writer bypasses libtest's thread-local capture.
         let _ = writeln!(

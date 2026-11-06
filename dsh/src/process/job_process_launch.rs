@@ -11,7 +11,7 @@ use tracing::debug;
 
 use super::builtin::BuiltinExecutionPlacement;
 use super::builtin::builtin_execution_placement;
-use super::fork::{ParentExecDiagnostic, fork_process};
+use super::fork::ParentExecDiagnostic;
 use super::io::{ConcurrentOutputDrain, OutputMonitor, cloexec_pipe, default_output_wiring};
 use super::job_process::{JobProcess, ProcessLaunchOutcome, apply_pty_stdio};
 use super::launch_outcome::CommandFailure;
@@ -23,17 +23,18 @@ use dsh_types::Context;
 use dsh_types::observed_output::ObservedStream;
 
 impl JobProcess {
-    pub(crate) async fn launch(
+    pub(crate) async fn launch_admitted(
         &mut self,
         ctx: &mut Context,
         shell: &mut Shell,
         stdout: RawFd,
         pty: Option<PtyChildConfig>,
         pipeline_context: bool,
+        admission: Option<&mut super::launch_admission::LaunchAdmission>,
     ) -> Result<ProcessLaunchOutcome> {
         let entry = (ctx.infile, ctx.outfile, ctx.errfile);
         let result = self
-            .launch_stage(ctx, shell, stdout, pty, pipeline_context)
+            .launch_stage(ctx, shell, stdout, pty, pipeline_context, admission)
             .await;
         if result.is_err() {
             (ctx.infile, ctx.outfile, ctx.errfile) = entry;
@@ -48,6 +49,7 @@ impl JobProcess {
         stdout: RawFd,
         pty: Option<PtyChildConfig>,
         pipeline_context: bool,
+        admission: Option<&mut super::launch_admission::LaunchAdmission>,
     ) -> Result<ProcessLaunchOutcome> {
         // has pipelines process ?
         let next_process = self.take_next();
@@ -198,6 +200,7 @@ impl JobProcess {
 
         let mut terminal_launch_failure = false;
         let mut parent_exec_diagnostics = Vec::new();
+        let mut exec_report = None;
         let launched: Result<Pid> = async {
             Ok(match self {
                 JobProcess::Builtin(process) => {
@@ -222,7 +225,7 @@ impl JobProcess {
                             // Pipeline members and background builtins share
                             // the isolated re-exec helper path.
                             let child_pid = if ctx.foreground && pipeline_context {
-                                spawn_isolated_builtin(ctx, process, shell)?
+                                spawn_isolated_builtin(ctx, process, shell, admission)?
                             } else {
                                 spawn_background_builtin(ctx, process, shell)?
                             };
@@ -237,8 +240,9 @@ impl JobProcess {
                     // caller's entry value on return.
                     ctx.process_count += 1;
                     // fork
-                    // Borrow the entry destination only for the synchronous
-                    // parent handshake; stage/job results carry bytes, not fds.
+                    // Snapshot the original display route before stage redirection
+                    // owners drop. The pending report moves its unique owned copy
+                    // through the launch result into Job, never into Process.
                     let diagnostic_target = ParentExecDiagnostic::for_stage(
                         pty,
                         has_redirect,
@@ -247,24 +251,31 @@ impl JobProcess {
                         &mut parent_exec_diagnostics,
                         ctx.output_observer.as_ref(),
                     );
-                    let (child, fork_monitors, reported_failure) = fork_process(
-                        ctx,
-                        ctx.pgid,
-                        process,
-                        shell,
-                        pty,
-                        diagnostic_target,
-                        pipe_out.as_ref().map(AsRawFd::as_raw_fd),
-                    )?;
+                    let (child, fork_monitors, reported_failure, report) =
+                        super::fork::fork_process_admitted(
+                            ctx,
+                            ctx.pgid,
+                            process,
+                            shell,
+                            pty,
+                            diagnostic_target,
+                            super::fork::ForkLaunchOptions {
+                                pipeline_read: pipe_out.as_ref().map(AsRawFd::as_raw_fd),
+                                admission,
+                            },
+                        )?;
                     terminal_launch_failure = reported_failure;
+                    exec_report = Some(report);
                     monitors.extend(fork_monitors);
                     child
                 }
                 JobProcess::SyntheticSource(process) => {
-                    super::pipeline_source::spawn_synthetic_source(ctx, shell, process)?
+                    super::pipeline_source::spawn_synthetic_source(ctx, shell, process, admission)?
                 }
                 JobProcess::NoCommand(process) => {
-                    super::no_command_process::spawn_no_command_process(ctx, shell, process)?
+                    super::no_command_process::spawn_no_command_process(
+                        ctx, shell, process, admission,
+                    )?
                 }
                 JobProcess::AsyncList(_) => {
                     // Async lists never launch through the per-stage path:
@@ -335,6 +346,7 @@ impl JobProcess {
             pid,
             terminal_launch_failure,
             parent_exec_diagnostics,
+            exec_report,
             next_process,
             redirects: applied,
             monitors,

@@ -443,6 +443,8 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
 
         drain_running_output_ready_now(job)?;
         job.set_process_state(pid, state);
+        #[cfg(test)]
+        super::foreground_handoff_tests::record_launch_wait(pid, state);
         backoff.reset();
 
         debug!("fin wait: pid:{:?} state:{:?}", pid, state);

@@ -1284,3 +1284,33 @@ fn synthetic_source_is_skipped_but_downstream_is_judged() {
         "synthetic source plus benign tail must stay allowed"
     );
 }
+
+#[test]
+fn git_global_options_do_not_hide_destructive_subcommands() {
+    let guard = SafetyGuard::new();
+    for source in [
+        "git -C repo reset --hard",
+        "git --shallow-file /dev/null reset --hard",
+        "git --future-global-option value reset --hard",
+        "git -Crepo -c core.pager=cat reset --hard",
+        "git --git-dir repo/.git --work-tree=repo push --force",
+        "git --no-pager -c key=value clean -fdx",
+        "git --config-env key=VAR push --force-with-lease",
+        "git --namespace=test push --force-with-lease=refs/heads/main:deadbeef",
+        "git -C reset status --hard",
+    ] {
+        let result = guard.check_jobs(&[mock_job(source)], &SafetyLevel::Normal, &[]);
+        if source.ends_with("status --hard") {
+            assert_eq!(
+                result,
+                SafetyResult::Allowed,
+                "option values are not subcommands: {source}"
+            );
+        } else {
+            assert!(
+                matches!(result, SafetyResult::Confirm(_)),
+                "{source}: {result:?}"
+            );
+        }
+    }
+}

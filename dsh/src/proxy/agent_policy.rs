@@ -108,18 +108,41 @@ impl AgentCommandPolicy for Shell {
             }
         }
 
-        // Parse the whole line, so a pipeline is judged as a pipeline. This is
-        // pure planning plus static materialization: no substitution runs and
-        // no shell state changes, matching the interactive parser boundary.
-        // Execution planning is strict, so any non-whitespace unparsed tail is
-        // an error here and the line is refused fail closed.
-        let jobs = match crate::shell::eval::get_jobs(self, command) {
-            Ok(jobs) if !jobs.is_empty() => jobs,
+        // /bin/sh executes the original source, not dsh's rewritten aliases
+        // or its current dry-expanded argv. Do not authorize a different line.
+        match crate::parser::rewrite_aliases(command, self.environment.clone()) {
+            Ok(rewritten) if rewritten.as_ref() == command => {}
             Ok(_) => {
-                return AgentCommandVerdict::Denied("command is empty".to_string());
+                return AgentCommandVerdict::Denied(
+                    "dsh aliases are not available to /bin/sh; use the literal command".into(),
+                );
             }
+            Err(err) => return AgentCommandVerdict::Denied(format!("alias check failed: {err}")),
+        }
+        let plan =
+            match crate::shell::parse::parse_execution_plan(command, self.environment.clone()) {
+                Ok(plan) => plan,
+                Err(err) => {
+                    return AgentCommandVerdict::Denied(format!(
+                        "command could not be parsed: {err}"
+                    ));
+                }
+            };
+        // A later assignment, cd, glob, or sh environment can change expansion
+        // after this check. Until execution shares the plan, require literal
+        // arguments (including redirect targets), before grants/allowlists.
+        if plan.iter_jobs().any(|job| job.contains_dynamic_expansion()) {
+            return AgentCommandVerdict::Denied(
+                "runtime shell expansion cannot be judged before /bin/sh runs; use literal arguments".into(),
+            );
+        }
+        let jobs = match crate::shell::dry_materialize::dry_materialize_plan(&plan, self) {
+            Ok(jobs) if !jobs.is_empty() => jobs,
+            Ok(_) => return AgentCommandVerdict::Denied("command is empty".into()),
             Err(err) => {
-                return AgentCommandVerdict::Denied(format!("command could not be parsed: {err}"));
+                return AgentCommandVerdict::Denied(format!(
+                    "command could not be materialized: {err}"
+                ));
             }
         };
 
@@ -352,6 +375,71 @@ mod agent_policy_tests {
             shell.evaluate_agent_command("echo $(echo if)"),
             AgentCommandVerdict::Denied(_)
         ));
+    }
+
+    #[test]
+    fn runtime_expansion_is_refused_before_raw_source_allowlists() {
+        use dsh_types::safety_policy::SafetyLevel;
+        for level in [SafetyLevel::Normal, SafetyLevel::Strict, SafetyLevel::Loose] {
+            let mut shell = shell();
+            *shell.environment.read().policy_state.safety_level.write() = level;
+            for input in [
+                "TARGET=/; rm -rf $TARGET",
+                "COMMAND=rm; $COMMAND -rf /",
+                "export TARGET=/; rm -rf \"$TARGET\"",
+                "cd /; rm -rf *",
+                "rm -rf ~/documents",
+                "echo ${MISSING:=value}",
+                "echo hello > $DESTINATION",
+            ] {
+                shell
+                    .environment
+                    .read()
+                    .policy_state
+                    .execute_allowlist
+                    .write()
+                    .push(input.into());
+                assert!(
+                    matches!(
+                        shell.evaluate_agent_command(input),
+                        AgentCommandVerdict::Denied(_)
+                    ),
+                    "{level:?}: {input} must not trust a dry expansion"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn aliases_cannot_change_the_command_judged_for_sh_execution() {
+        let mut shell = shell();
+        shell
+            .environment
+            .write()
+            .variable_state
+            .alias
+            .insert("rm".into(), "echo".into());
+        assert!(matches!(
+            shell.evaluate_agent_command("rm -rf /"),
+            AgentCommandVerdict::Denied(_)
+        ));
+    }
+
+    #[test]
+    fn quoted_and_escaped_expansion_characters_are_literal() {
+        let mut shell = shell();
+        for input in [
+            "echo '$TARGET * ~'",
+            r"echo \$TARGET",
+            "FOO=value echo literal",
+            "echo first && echo second",
+        ] {
+            assert_eq!(
+                shell.evaluate_agent_command(input),
+                AgentCommandVerdict::Allowed,
+                "{input}"
+            );
+        }
     }
 
     /// Path A resolves the same atomic snapshot as Path B: with no binding

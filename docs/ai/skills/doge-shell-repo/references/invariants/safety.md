@@ -21,3 +21,6 @@
 - `Path::join` は空パスを与えると区切りを足す。`PathBuf::new()` から接尾辞を積むと `notes.txt/` になり、`fs::write` が ENOENT で落ちる（`resolve_with_existing_ancestor`、`edit` が新規ファイルを作れなかった）。
 
 - Background承認表示は原文上の既知秘密値と汎用秘密検出の範囲を統合してからマスクする。先に片方を置換するともう片方の検出用ラベルを壊す。制御/Cf文字とliteral backslashはlossless escapeで区別し、mask・切詰・lossy表示はCLI/shortcut双方でapprove不可（deny可）。加工済み表示をOperation/tokenへ戻さず、ID不一致の応答で別pendingを変更しない。
+
+- Agent execute は raw source を `/bin/sh` へ渡すため、dsh alias 書換えと `contains_dynamic_expansion()` を grants/allowlist より前に拒否する。dry materialization の変数値を後続 `sh` 実行の値として信用しない（同一行の代入と後続参照も含む）。引用済み literal は維持する。
+- Git checker は global option の値を飛ばしてから subcommand を読む（`-C reset` の `reset` はディレクトリ）。未知の global option は確認へ倒し、新しい値付き option がチェックを隠さないようにする。

@@ -129,7 +129,7 @@ async fn evaluate_foreground_list(
                         last_exit_code = code;
                     }
                     NoCommandExecutionResult::Failed(failure) => {
-                        let _ = ctx.write_stderr(&failure.message);
+                        failure.report(ctx);
                         last_exit_code = failure.exit_code;
                     }
                 }
@@ -194,7 +194,7 @@ async fn evaluate_foreground_list(
                 last_exit_code = super::super::job::completed_job_status(&job, state)?;
             }
             JobLaunchOutcome::CommandFailed(failure) => {
-                let _ = ctx.write_stderr(&failure.message);
+                failure.report(ctx);
                 last_exit_code = failure.exit_code;
             }
         }
@@ -240,7 +240,7 @@ async fn spawn_nested_async_list(
         // A spawn-level failure is an ordinary command failure, like the
         // top-level paths: report it without touching `$!` or the ledger.
         crate::process::JobLaunchOutcome::CommandFailed(failure) => {
-            let _ = ctx.write_stderr(&failure.message);
+            failure.report(ctx);
         }
     }
     Ok(())

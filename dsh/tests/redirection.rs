@@ -566,3 +566,18 @@ fn many_consecutive_failures_keep_pipes_and_redirects_working() {
         );
     }
 }
+
+#[test]
+fn failed_pipeline_redirect_does_not_write_into_an_unstarted_pipe() {
+    // Below exec argv limits on Linux/macOS, but larger than their pipe
+    // capacities. The command fails before downstream is ever launched.
+    let path = format!("missing-directory/{}", "x".repeat(100_000));
+    for wiring in ["2>&1", "0>&1 2>&0"] {
+        let output = common::run_command(&format!(
+            "echo NEVER {wiring} > {path} | cat; echo AFTER:$?"
+        ));
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "AFTER:1\n");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("failed to create redirect file"));
+    }
+}

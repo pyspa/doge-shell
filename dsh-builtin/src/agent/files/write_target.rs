@@ -210,12 +210,12 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn has_open_handle(identity: Identity) -> bool {
+    fn open_handle_count(identity: Identity) -> usize {
         // Both supported Unix systems expose this process's open descriptors.
         fs::read_dir("/dev/fd")
             .unwrap()
             .filter_map(Result::ok)
-            .any(|entry| {
+            .filter(|entry| {
                 let Ok(fd) = entry.file_name().to_string_lossy().parse::<i32>() else {
                     return false;
                 };
@@ -224,6 +224,7 @@ mod tests {
                 (unsafe { libc::fstat(fd, stat.as_mut_ptr()) }) == 0
                     && Identity::from_stat(&unsafe { stat.assume_init() }) == identity
             })
+            .count()
     }
 
     #[test]
@@ -231,20 +232,23 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().canonicalize().unwrap().join("file");
         fs::write(&path, "original").unwrap();
-        let source = File::open(&path).unwrap();
-        let identity = Identity::of(&source).unwrap();
-        drop(source);
+        // Keep the inode alive through both scans. Otherwise, after target is
+        // dropped, an unrelated parallel test can reuse its dev/ino identity.
+        let witness = File::open(&path).unwrap();
+        let identity = Identity::of(&witness).unwrap();
         let target = WriteTarget::prepare(&path, false).unwrap();
         fs::remove_file(&path).unwrap();
         assert!(target.exists());
         assert!(
-            has_open_handle(identity),
-            "the approved inode must remain alive so it cannot be recycled"
+            open_handle_count(identity) > 1,
+            "the approval snapshot must pin the unlinked inode independently of the witness"
         );
         drop(target);
-        assert!(
-            !has_open_handle(identity),
-            "the approval snapshot must release its inode afterwards"
+        assert_eq!(
+            open_handle_count(identity),
+            1,
+            "only the witness must remain after dropping the approval snapshot"
         );
+        drop(witness);
     }
 }

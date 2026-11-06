@@ -111,6 +111,8 @@ pub(crate) enum ProcessLaunchOutcome {
         /// The raw child reported a terminal launch failure; its real status
         /// still belongs to the canonical process tree and existing wait path.
         terminal_launch_failure: bool,
+        /// Parent FullProxy diagnostics already displayed and observed.
+        parent_exec_diagnostics: Vec<u8>,
         next_process: Option<Box<JobProcess>>,
         redirects: AppliedRedirects,
         monitors: Vec<super::io::OutputMonitor>,

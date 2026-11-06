@@ -55,6 +55,8 @@ pub struct Job {
     /// `final_exit_status()`. Finalization never reads live shell options.
     pub(crate) pipeline_status_policy: PipelineStatusPolicy,
     pub(crate) monitors: Vec<OutputMonitor>,
+    /// FullProxy parent diagnostics awaiting completed history capture.
+    pub(crate) parent_exec_diagnostics: Vec<u8>,
     pub(crate) shell_pgid: Pid,
     /// Whether to capture output for $OUT variable
     pub capture_output: bool,
@@ -117,6 +119,7 @@ impl Job {
             state: ProcessState::Running,
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
+            parent_exec_diagnostics: Vec::new(),
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -154,6 +157,7 @@ impl Job {
             state: ProcessState::Running,
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
+            parent_exec_diagnostics: Vec::new(),
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -343,6 +347,7 @@ impl Job {
         // source of truth for the committed `job.pty_mode` (no side channel).
         let pty_child = self.setup_pty(ctx).await?;
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
+        let _terminal_guard = job_wait::LaunchTerminalGuard::new(self, ctx);
 
         // 2. Launch processes
         if let Some(mut process) = self.process.take() {
@@ -425,46 +430,40 @@ impl Job {
             return super::async_list::launch_async_list_process(self, ctx, shell, process);
         }
         let previous_infile = ctx.infile;
-        // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_redirects, launched_monitors, terminal_launch_failure) =
-            match process
-                .launch(ctx, shell, self.stdout, pty, pipeline_context)
-                .await
-            {
-                Ok(ProcessLaunchOutcome::Launched {
-                    pid,
-                    next_process,
-                    redirects,
-                    monitors,
-                    terminal_launch_failure,
-                }) => (
-                    pid,
-                    next_process,
-                    redirects,
-                    monitors,
-                    terminal_launch_failure,
-                ),
-                // The stage never spawned and its own wiring is already unwound:
-                // stop upstream stages and
-                // report the command failure.
-                Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
-                    self.close_failed_stage_input(ctx, previous_infile);
-                    self.abort_spawned_stages().await;
-                    return Ok(StageLaunchOutcome::CommandFailed(failure));
-                }
-                Err(err) => {
-                    self.close_failed_stage_input(ctx, previous_infile);
-                    return Err(err);
-                }
-            };
+        let (pid, mut next_process, applied_redirects, terminal_launch_failure) = match process
+            .launch(ctx, shell, self.stdout, pty, pipeline_context)
+            .await
+        {
+            Ok(ProcessLaunchOutcome::Launched {
+                pid,
+                next_process,
+                redirects,
+                monitors,
+                terminal_launch_failure,
+                parent_exec_diagnostics,
+            }) => {
+                // The child exists: move monitors and parent diagnostic bytes
+                // into job ownership exactly once, before stage finalization.
+                self.monitors.extend(monitors);
+                self.parent_exec_diagnostics.extend(parent_exec_diagnostics);
+                (pid, next_process, redirects, terminal_launch_failure)
+            }
+            // The stage never spawned and its own wiring is already unwound.
+            Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
+                self.close_failed_stage_input(ctx, previous_infile);
+                self.abort_spawned_stages().await;
+                return Ok(StageLaunchOutcome::CommandFailed(failure));
+            }
+            Err(err) => {
+                self.close_failed_stage_input(ctx, previous_infile);
+                return Err(err);
+            }
+        };
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
         self.state = process.get_state();
 
-        // The child exists now: move the pre-spawn capture monitors into
-        // job ownership exactly once. No raw-fd reader stays on the process.
-        self.monitors.extend(launched_monitors);
         self.set_process(process.to_owned());
 
         let (stdin, stdout, stderr) = process.get_io();

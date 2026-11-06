@@ -9,6 +9,9 @@ pub(crate) struct LaunchAdmission {
     stages: Vec<AdmittedStage>,
     stop_requested: bool,
     released: bool,
+    // Foreground intent alone is insufficient after a stopped launch returns
+    // to the prompt. Only an active foreground wait may hand off the terminal.
+    pub(crate) foreground_wait_active: bool,
 }
 #[derive(Debug)]
 struct AdmittedStage {
@@ -168,7 +171,10 @@ impl Job {
             }
             #[cfg(test)]
             super::foreground_handoff_tests::admission_ready_checkpoint();
-            if self.foreground && super::job_wait::can_handoff_terminal() {
+            if self.foreground
+                && admission.foreground_wait_active
+                && super::job_wait::can_handoff_terminal()
+            {
                 #[cfg(test)]
                 if super::foreground_handoff_tests::reject_handoff() {
                     return Ok(true);

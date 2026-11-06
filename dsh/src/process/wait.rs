@@ -34,11 +34,10 @@ pub fn is_job_completed(job: &Job) -> bool {
 /// converted into a synthetic `ProcessState`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaitPidObservation {
-    /// `waitpid` reported a real state change: exited, signaled, or stopped.
+    /// `waitpid` reported a real state change: exited, signaled, stopped, or continued.
     State(Pid, ProcessState),
     /// The child exists but has no state change for this caller to consume
-    /// right now (`StillAlive`, or `Continued` which carries no lifecycle
-    /// transition this shell tracks).
+    /// right now (`StillAlive`).
     StillAlive,
     /// `waitpid` returned `ECHILD`: the pid is not currently waitable by
     /// this caller (not our child, or its status was already consumed
@@ -52,7 +51,9 @@ pub enum WaitPidObservation {
 /// `job_wait`, so both layers agree on `ECHILD`/`EINTR`/unexpected-status
 /// handling instead of drifting apart.
 pub(crate) fn observe_pid(pid: Pid, flags: WaitPidFlag) -> nix::Result<WaitPidObservation> {
-    match waitpid(pid, Some(flags)) {
+    // Every canonical observer must see external continuation, including
+    // background reconciliation and startup gates awaiting a resumed child.
+    match waitpid(pid, Some(flags | WaitPidFlag::WCONTINUED)) {
         Ok(WaitStatus::Exited(waited_pid, status)) => {
             debug!(
                 "WAIT_PID_EXITED: Process {} exited normally with status: {}",
@@ -88,11 +89,8 @@ pub(crate) fn observe_pid(pid: Pid, flags: WaitPidFlag) -> nix::Result<WaitPidOb
             Ok(WaitPidObservation::StillAlive)
         }
         Ok(WaitStatus::Continued(waited_pid)) => {
-            // No `WCONTINUED` lifecycle is tracked: without `WCONTINUED` in
-            // the requested flags this is defensive only. Report no state
-            // change rather than inventing a `Running` transition.
             debug!("WAIT_PID_CONTINUED: Process {} continued", waited_pid);
-            Ok(WaitPidObservation::StillAlive)
+            Ok(WaitPidObservation::State(waited_pid, ProcessState::Running))
         }
         Err(nix::errno::Errno::ECHILD) => {
             debug!(
@@ -319,6 +317,64 @@ mod tests {
                 "process-tree completion for {:?}",
                 states,
             );
+        }
+    }
+
+    /// External continuation enters the canonical tree through the same
+    /// nonblocking observer as job reconciliation. A completed sibling stays
+    /// terminal while the stopped live child becomes Running.
+    #[test]
+    fn external_continued_updates_live_stage_preserving_completed_head() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+        let mut owner = super::super::preexec_full_proxy_tests::OwnedJob(Job::new(
+            "completed | sleeper".into(),
+            getpgrp(),
+        ));
+        let mut completed = Process::new("completed".into(), vec![]);
+        completed.state = ProcessState::exited(7);
+        owner.0.set_process(JobProcess::Command(completed));
+        let child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = Pid::from_raw(child.id() as i32);
+        let mut process = Process::new("sleeper".into(), vec![]);
+        process.pid = Some(pid);
+        owner.0.pgid = Some(pid);
+        owner.0.set_process(JobProcess::Command(process));
+        drop(child); // The guarded canonical tree owns the only wait authority.
+        nix::sys::signal::kill(pid, Signal::SIGSTOP).unwrap();
+        for stopped in [true, false] {
+            if !stopped {
+                nix::sys::signal::kill(pid, Signal::SIGCONT).unwrap();
+            }
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                owner.0.update_status();
+                let head = owner.0.process.as_deref().unwrap();
+                assert_eq!(head.get_state(), ProcessState::exited(7));
+                let expected = if stopped {
+                    ProcessState::Stopped(pid, Signal::SIGSTOP)
+                } else {
+                    ProcessState::Running
+                };
+                if head.next_process().unwrap().get_state() == expected {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "missing real stop/continued observation"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(owner.0.is_fully_stopped(), stopped);
+            assert_eq!(owner.0.final_exit_status(), None);
         }
     }
 

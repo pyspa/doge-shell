@@ -29,6 +29,7 @@
 - `Completed` stage は terminal。`Completed -> Running/Stopped` の遷移を作らない。
 - `ECHILD` は wait の観測であって合成 `ProcessState` ではない。実ステータスを消費したコードだけが tree に記録する。後続の ECHILD 観測が exit code を捏造しない。
 - `mark_stopped_processes_running` は `Stopped -> Running` のみ。`Completed` は触らない。
+- canonical known-PID wait は `WCONTINUED` の実観測を `Running` として記録する。外部 `SIGCONT` 後の startup gate も通常 reconcile で進める。admission の terminal handoff は active foreground wait 区間だけに許可し、prompt へ戻った後の外部再開では端末を奪わない。
 
 ## Foreground stop / PTY ownership
 

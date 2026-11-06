@@ -109,8 +109,9 @@ fn helper_consumed_ack_ends_startup_stop_propagation() {
         owner.0.launch_admission.is_some(),
         "unconsumed token must retain startup owner"
     );
-    owner.0.signal(Signal::SIGCONT).unwrap(); // Explicit fixture resume.
-    owner.0.mark_stopped_processes_running();
+    // External continuation: canonical update_status must observe Continued,
+    // without fg/bg's successful-resume state update helping the fixture.
+    owner.0.signal(Signal::SIGCONT).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         owner.0.update_status();

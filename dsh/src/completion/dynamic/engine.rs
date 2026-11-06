@@ -5,7 +5,24 @@
 //! the next lookup cheap.
 use super::*;
 
+thread_local! {
+    // Collection is synchronous. A thread-local revision isolates this query
+    // from other workers/requests without changing every collector's Vec API.
+    static COLD_LOOKUP_REVISION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn record_cold_lookup() {
+    COLD_LOOKUP_REVISION.with(|revision| revision.set(revision.get().wrapping_add(1)));
+}
+
 impl DynamicCompletionProvider {
+    /// Observe cold command lookups only during this synchronous collection.
+    pub(crate) fn observe_pending<T>(collect: impl FnOnce() -> T) -> (T, bool) {
+        let before = COLD_LOOKUP_REVISION.get();
+        let result = collect();
+        (result, before != COLD_LOOKUP_REVISION.get())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn collect_cached_value_candidates<F>(
         &self,
@@ -324,6 +341,7 @@ impl DynamicCompletionProvider {
             }
 
             if !cache.command_pending.insert(cache_key.clone()) {
+                record_cold_lookup();
                 update_diagnostics_from_cache(&self.runtime, &cache, None);
                 return Vec::new();
             }
@@ -331,7 +349,9 @@ impl DynamicCompletionProvider {
         }
 
         self.mark_refresh_scheduled();
-        spawn_command_refresh(self.runtime.clone(), self.cache.clone(), cache_key, loader);
+        if spawn_command_refresh(self.runtime.clone(), self.cache.clone(), cache_key, loader) {
+            record_cold_lookup();
+        }
         Vec::new()
     }
 

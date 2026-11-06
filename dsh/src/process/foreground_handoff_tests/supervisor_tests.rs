@@ -256,6 +256,14 @@ pub(super) fn run_scratch(mode: &str) {
     }
     // One absolute 20s bound reserves the existing 7s cooperative cleanup
     // window plus 1s termination observation; feed never runs before it.
+    if mode.starts_with("preexec-") {
+        let mut modes = nix::sys::termios::tcgetattr(&master).unwrap();
+        modes
+            .local_flags
+            .insert(nix::sys::termios::LocalFlags::ISIG);
+        modes.control_chars[nix::sys::termios::SpecialCharacterIndices::VSUSP as usize] = 26;
+        nix::sys::termios::tcsetattr(&master, nix::sys::termios::SetArg::TCSANOW, &modes).unwrap();
+    }
     let total_deadline = Instant::now() + Duration::from_secs(20);
     let pump = PtyPump::new(
         master,
@@ -275,6 +283,35 @@ pub(super) fn run_scratch(mode: &str) {
     supervisor.pump.live(mode, "spawned");
     let run_deadline = total_deadline - Duration::from_secs(8);
     let mut pump_failure = None;
+    if mode.starts_with("preexec-") {
+        let ready = root.path().join("preexec-ready");
+        let observed = supervisor
+            .pump
+            .until(run_deadline, false, || ready.exists());
+        if observed != Outcome::Ready {
+            supervisor.partial_log();
+        }
+        assert_eq!(
+            observed,
+            Outcome::Ready,
+            "child must reach raw preexec seam"
+        );
+        if !mode.starts_with("preexec-admission") && !mode.starts_with("preexec-direct") {
+            supervisor
+                .pump
+                .control_byte(if mode == "preexec-int" { 3 } else { 26 });
+        }
+        eprintln!(
+            "preexec child ready; signal action: {}",
+            if mode.starts_with("preexec-admission") || mode.starts_with("preexec-direct") {
+                "SIGSTOP to ready owned child"
+            } else if mode == "preexec-int" {
+                "real terminal Ctrl-C"
+            } else {
+                "real terminal Ctrl-Z"
+            }
+        );
+    }
     let status = if mode == "worker-parent-unwind" {
         let ready = root.path().join("fault-ready");
         let deadline = (Instant::now() + Duration::from_secs(3)).min(run_deadline);
@@ -360,6 +397,10 @@ fn scratch_anchor() {
         return;
     }
     assert_eq!(nix::unistd::getpgrp(), nix::unistd::getpid());
+    // Pin the supervisor-owned group identity through the Ctrl-C fixture.
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+    }
     // No writer exists in this process. The supervisor's CLOEXEC ChildStdin
     // is not inherited across worker exec. On EOF, our own membership pins the
     // signal target through kernel delivery, even if the supervisor died.
@@ -453,6 +494,15 @@ fn scratch_supervisor() {
         None
     };
     let start_fd = child_start_reader.as_ref().map_or(-1, AsRawFd::as_raw_fd);
+    let preexec = if mode.starts_with("preexec-") {
+        let (ready_read, ready_write) = super::super::io::cloexec_pipe().unwrap();
+        let (hold_read, hold_write) = super::super::io::cloexec_pipe().unwrap();
+        Some((ready_read, ready_write, hold_read, hold_write))
+    } else {
+        None
+    };
+    let ready_fd = preexec.as_ref().map_or(-1, |p| p.1.as_raw_fd());
+    let hold_fd = preexec.as_ref().map_or(-1, |p| p.2.as_raw_fd());
     let stdin = unsafe { BorrowedFd::borrow_raw(0) }
         .try_clone_to_owned()
         .unwrap();
@@ -464,6 +514,8 @@ fn scratch_supervisor() {
             "--nocapture",
         ])
         .env("DSH_HANDOFF_ROLE", "worker")
+        .env("DSH_PREEXEC_READY_FD", ready_fd.to_string())
+        .env("DSH_PREEXEC_HOLD_FD", hold_fd.to_string())
         .env("DSH_HANDOFF_SUPERVISOR", std::process::id().to_string())
         .env("DSH_HANDOFF_JOB_GROUP", job_group.to_string())
         .env("DSH_HANDOFF_LIFETIME_FD", lifetime_fd.to_string())
@@ -475,6 +527,14 @@ fn scratch_supervisor() {
         command.pre_exec(move || {
             if libc::setpgid(0, shell_group) < 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            for fd in [ready_fd, hold_fd] {
+                if fd >= 0 {
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
             }
             if start_fd >= 0 {
                 let flags = libc::fcntl(start_fd, libc::F_GETFD);
@@ -491,6 +551,40 @@ fn scratch_supervisor() {
         });
     }
     owner.worker = Some(command.spawn().unwrap());
+    let mut preexec_hold = preexec.map(|(read, write, hold_read, hold_write)| {
+        drop(write);
+        drop(hold_read);
+        let mut ready = File::from(read);
+        super::pty_pump::nonblocking(&ready).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut bytes = [0; std::mem::size_of::<libc::pid_t>()];
+        let mut filled = 0;
+        loop {
+            match ready.read(&mut bytes[filled..]) {
+                Ok(count) if count > 0 => {
+                    filled += count;
+                    if filled == bytes.len() {
+                        break;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                result => panic!("preexec readiness: {result:?}"),
+            }
+            assert!(Instant::now() < deadline, "raw preexec readiness deadline");
+            unsafe {
+                libc::poll(std::ptr::null_mut(), 0, 1);
+            }
+        }
+        if mode.starts_with("preexec-admission") || mode.starts_with("preexec-direct") {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(libc::pid_t::from_ne_bytes(bytes)),
+                nix::sys::signal::Signal::SIGSTOP,
+            )
+            .unwrap();
+        }
+        std::fs::write("preexec-ready", b"ready").unwrap();
+        hold_write
+    });
     drop(child_start_reader);
     drop(writer); // Only worker + its real fork/exec children own writers now.
     if mode == "supervisor-panic" {
@@ -522,6 +616,10 @@ fn scratch_supervisor() {
     };
     let deadline = Instant::now() + timeout;
     let timed_out = loop {
+        if preexec_hold.is_some() && std::path::Path::new("launch-returned").exists() {
+            drop(preexec_hold.take());
+            std::fs::write("preexec-released", b"released").unwrap();
+        }
         if exited(owner.worker.as_ref().unwrap()) {
             break false;
         }

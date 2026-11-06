@@ -152,7 +152,7 @@ fn closed_stdout_probe() {
     process.stdout = ctx.outfile;
     process.stderr = ctx.errfile;
     // Exercise the production launcher and its actual child dup2-skip path.
-    let (pid, monitors, failed) =
+    let (pid, monitors, failed, _report) =
         fork_process(&ctx, None, &mut process, &mut shell, None, None, None).unwrap();
     process.pid = Some(pid);
     let mut child = NativeChild(&mut process);
@@ -224,7 +224,7 @@ fn stopped_native_child_is_reaped_on_deadline_and_unwind() {
         process.stdin = ctx.infile;
         process.stdout = ctx.outfile;
         process.stderr = ctx.errfile;
-        let (pid, monitors, failed) =
+        let (pid, monitors, failed, _report) =
             fork_process(&ctx, None, &mut process, &mut shell, None, None, None).unwrap();
         process.pid = Some(pid);
         let mut child = NativeChild(&mut process);

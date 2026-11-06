@@ -29,6 +29,7 @@
 - `Completed` stage は terminal。`Completed -> Running/Stopped` の遷移を作らない。
 - `ECHILD` は wait の観測であって合成 `ProcessState` ではない。実ステータスを消費したコードだけが tree に記録する。後続の ECHILD 観測が exit code を捏造しない。
 - `mark_stopped_processes_running` は `Stopped -> Running` のみ。`Completed` は触らない。
+- canonical known-PID wait は `WCONTINUED` の実観測を `Running` として記録する。外部 `SIGCONT` 後の startup gate も通常 reconcile で進める。admission の terminal handoff は active foreground wait 区間だけに許可し、prompt へ戻った後の外部再開では端末を奪わない。
 
 ## Foreground stop / PTY ownership
 
@@ -107,3 +108,12 @@
 ## 1件の execution / process bug を直すときの5点
 
 1. Minimal reproducer 2. Opposite case 3. Adjacent execution context（`FOO=bar` builtin を直すなら external env prefix・assignment-only・pipeline・`&&`/`||`・`$?` まで見る） 4. Resource / lifecycle invariant 5. Regression sibling。
+
+## Startup reports and job-wide admission
+
+- `Job.exec_reports` uniquely owns each nonblocking exec-error reader, partial record and diagnostic destination. Move it via `ProcessLaunchOutcome`; never put an active descriptor in cloneable `Process`. EOF/record retires the reader and retained destination; stopped jobs keep both until explicit resume or cleanup.
+- Shared-terminal foreground jobs admit every external/builtin/source/no-command stage before handoff. Raw children acknowledge only after signal defaults; reexec helpers acknowledge after their signal policy is applied. No stage evaluates before its approval token. Helper gate/ready descriptors are paired, validated, collision-free argv metadata and closed before evaluation.
+- Before release, a real stopped stage causes real SIGSTOP delivery to the admitted job. After release, only a real Stopped PID with an unresolved external exec report or helper consumed-token acknowledgement can propagate that stop. Ready-now protocol drain precedes this decision. Canonical known-PID observations establish every state. `fg`/`bg` alone continue; `bg` releases without taking the shell terminal. Ordinary post-startup partial stops retain existing semantics.
+- Rollback sends SIGKILL and retires admission before polling status, so cleanup cannot hand the terminal back to a dying job. LaunchTerminalGuard restores terminal ownership on success, stop and failure.
+- Normal-exit known-async detach settles startup reports only, never waits for running command completion; actual stopped candidates retain Job/report ownership and fail closed. The existing synchronous helper request delivery before readiness is not made interruptible by this protocol.
+- A FullProxy child can stop before its first `setsid`. Explicit fg/bg may fall back from group SIGCONT `ESRCH` to the canonical PID only for a real Stopped, single-stage FullProxy child with one pending exec report and matching job/tree PID/PGID. Its unconsumed termination status pins identity. Other errors, completed/running/unknown identities, multi-stage jobs and retired reports never authorize the fallback.

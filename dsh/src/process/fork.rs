@@ -26,7 +26,7 @@ use super::process::Process;
 use super::pty::{PtyChildConfig, PtyMode};
 use crate::shell::Shell;
 use dsh_types::Context;
-use dsh_types::observed_output::ObservedStream;
+use dsh_types::observed_output::{ObservedStream, SharedOutputObserver};
 use libc::{STDERR_FILENO, STDOUT_FILENO};
 
 /// Return the child and its monitors without consuming its wait status.
@@ -37,7 +37,7 @@ pub(crate) fn fork_process(
     process: &mut Process,
     shell: &mut Shell,
     pty: Option<PtyChildConfig>,
-    diagnostic_fallback: Option<RawFd>,
+    diagnostic_target: Option<ParentExecDiagnostic<'_>>,
     pipeline_read: Option<RawFd>,
 ) -> Result<(Pid, Vec<OutputMonitor>, bool)> {
     debug!("FORK: Starting fork_process");
@@ -170,7 +170,7 @@ pub(crate) fn fork_process(
                 &process.cmd,
                 process.stderr,
                 &process.argv,
-                diagnostic_fallback,
+                diagnostic_target,
             );
             unsafe { libc::close(err_read_fd) };
             #[cfg(test)]
@@ -225,7 +225,7 @@ fn drain_exec_error(
     cmd: &str,
     stderr_fd: i32,
     argv: &[String],
-    diagnostic_fallback: Option<RawFd>,
+    diagnostic_target: Option<ParentExecDiagnostic<'_>>,
 ) -> bool {
     drain_exec_error_with_reader(
         |buffer| {
@@ -240,7 +240,7 @@ fn drain_exec_error(
         cmd,
         stderr_fd,
         argv,
-        diagnostic_fallback,
+        diagnostic_target,
     )
 }
 
@@ -249,7 +249,7 @@ fn drain_exec_error_with_reader(
     cmd: &str,
     stderr_fd: i32,
     argv: &[String],
-    diagnostic_fallback: Option<RawFd>,
+    mut diagnostic_target: Option<ParentExecDiagnostic<'_>>,
 ) -> bool {
     // A single small record; a short read loop tolerates partial delivery.
     let mut bytes = [0u8; std::mem::size_of::<ChildExecError>()];
@@ -261,9 +261,9 @@ fn drain_exec_error_with_reader(
             Ok(chunk) => filled += chunk,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(error) => {
-                write_process_stderr_with_fallback(
+                write_exec_diagnostic(
                     stderr_fd,
-                    diagnostic_fallback,
+                    diagnostic_target.as_mut(),
                     format!("dsh: {cmd}: failed to read exec-error report: {error}\r\n").as_bytes(),
                 );
                 // A parent-side read error is not evidence that the child
@@ -279,9 +279,9 @@ fn drain_exec_error_with_reader(
         return false;
     }
     if filled != size {
-        write_process_stderr_with_fallback(
+        write_exec_diagnostic(
             stderr_fd,
-            diagnostic_fallback,
+            diagnostic_target.as_mut(),
             format!("dsh: {cmd}: failed to start (short exec-error report)\r\n").as_bytes(),
         );
         return true;
@@ -309,9 +309,9 @@ fn drain_exec_error_with_reader(
             // Keep the historical hint for the most common case.
             let _ = argv;
             if record.errno == libc::EACCES {
-                write_process_stderr_with_fallback(
+                write_exec_diagnostic(
                     stderr_fd,
-                    diagnostic_fallback,
+                    diagnostic_target.as_mut(),
                     format!("dsh: {cmd}: Permission denied ({detail}). chmod(1) may help.\r\n")
                         .as_bytes(),
                 );
@@ -321,9 +321,9 @@ fn drain_exec_error_with_reader(
         }
         _ => "failed to start",
     };
-    write_process_stderr_with_fallback(
+    write_exec_diagnostic(
         stderr_fd,
-        diagnostic_fallback,
+        diagnostic_target.as_mut(),
         format!("dsh: {cmd}: {what}: {detail}\r\n").as_bytes(),
     );
     true
@@ -332,18 +332,56 @@ fn drain_exec_error_with_reader(
 #[cfg(test)]
 mod exec_error_tests;
 
-pub(crate) fn write_process_stderr(fd: i32, bytes: &[u8]) {
-    write_process_stderr_with_fallback(fd, None, bytes);
+/// Parent-only delivery for the exact unredirected FullProxy stderr route.
+/// The caller descriptor is borrowed for this synchronous launch; only bytes
+/// outlive it. Display failure must not discard observer/history evidence.
+pub(crate) struct ParentExecDiagnostic<'a> {
+    caller: BorrowedFd<'a>,
+    captured: &'a mut Vec<u8>,
+    observer: Option<&'a SharedOutputObserver>,
 }
 
-/// A failed FullProxy child can revoke its PTY before its parent writes the
-/// exec diagnostic. Only that stage supplies the original stderr as fallback.
-/// Preserve partial-write progress and never redirect errors other than EIO.
-fn write_process_stderr_with_fallback(
-    mut fd: RawFd,
-    mut fallback: Option<RawFd>,
-    mut bytes: &[u8],
+impl<'a> ParentExecDiagnostic<'a> {
+    pub(crate) fn for_stage(
+        pty: Option<PtyChildConfig>,
+        has_redirect: bool,
+        stderr: RawFd,
+        caller: BorrowedFd<'a>,
+        captured: &'a mut Vec<u8>,
+        observer: Option<&'a SharedOutputObserver>,
+    ) -> Option<Self> {
+        pty.filter(|pty| pty.mode == PtyMode::FullProxy && !has_redirect && stderr == pty.slave)
+            .map(|_| Self {
+                caller,
+                captured,
+                observer,
+            })
+    }
+}
+
+fn write_exec_diagnostic(
+    stderr: RawFd,
+    target: Option<&mut ParentExecDiagnostic<'_>>,
+    bytes: &[u8],
 ) {
+    if let Some(target) = target {
+        // Never send these bytes through the slave: even a successful write
+        // cannot guarantee the proxy will still drain them after child exit.
+        target.captured.extend_from_slice(bytes);
+        if let Some(observer) = target.observer
+            && let Ok(mut observer) = observer.lock()
+        {
+            observer.append(ObservedStream::Stdout, &String::from_utf8_lossy(bytes));
+        }
+        write_process_stderr(target.caller.as_raw_fd(), bytes);
+    } else {
+        // Explicit redirects and all other destinations remain authoritative
+        // and keep their existing monitor-based capture.
+        write_process_stderr(stderr, bytes);
+    }
+}
+
+pub(crate) fn write_process_stderr(fd: i32, mut bytes: &[u8]) {
     if fd < 0 {
         return;
     }
@@ -353,11 +391,6 @@ fn write_process_stderr_with_fallback(
             Ok(0) => break,
             Ok(n) => bytes = &bytes[n..],
             Err(nix::errno::Errno::EINTR) => continue,
-            Err(nix::errno::Errno::EIO)
-                if fallback.is_some_and(|target| target >= 0 && target != fd) =>
-            {
-                fd = fallback.take().unwrap();
-            }
             Err(error) => {
                 tracing::warn!(fd, ?error, "process diagnostic write failed");
                 break;
@@ -446,39 +479,6 @@ mod tests {
     use crate::environment::Environment;
     use crate::shell::Shell;
     use nix::unistd::{getpgid, getpgrp, getpid};
-
-    #[test]
-    fn revoked_pty_diagnostic_uses_fallback_without_retargeting_other_errors() {
-        use std::os::fd::AsRawFd;
-        let pty = nix::pty::openpty(None, None).unwrap();
-        drop(pty.master);
-        let fallback = tempfile::NamedTempFile::new().unwrap();
-        let message = b"launch diagnostic\r\n";
-        write_process_stderr_with_fallback(
-            pty.slave.as_raw_fd(),
-            Some(fallback.as_raw_fd()),
-            message,
-        );
-        assert_eq!(std::fs::read(fallback.path()).unwrap(), message);
-
-        let source = tempfile::NamedTempFile::new().unwrap();
-        let read_only = std::fs::File::open(source.path()).unwrap();
-        let untouched = tempfile::NamedTempFile::new().unwrap();
-        write_process_stderr_with_fallback(
-            read_only.as_raw_fd(),
-            Some(untouched.as_raw_fd()),
-            message,
-        );
-        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
-
-        write_process_stderr_with_fallback(
-            source.as_raw_fd(),
-            Some(untouched.as_raw_fd()),
-            message,
-        );
-        assert_eq!(std::fs::read(source.path()).unwrap(), message);
-        assert!(std::fs::read(untouched.path()).unwrap().is_empty());
-    }
 
     #[tokio::test]
     async fn denied_path_candidate_does_not_invoke_command_not_found_hook() {

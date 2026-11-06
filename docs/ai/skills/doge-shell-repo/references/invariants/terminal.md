@@ -19,7 +19,7 @@
 - `setup_pty()` が返す `PtyChildConfig.mode` が effective mode の唯一の真実であり、`job.pty_mode` と必ず一致させる。`unwrap_or(FullProxy)` のような fail-open default で推測しない。
 - Job への PTY 状態反映は prepare-then-commit の一括反映のみ。途中で `job.pty*` を逐次代入しない。
 - PTY setup 後の error return は spawned proxy task を残さない。`JoinHandle` は Drop で abort されないため、`manage_execution` / `capture` の Err 経路では `cleanup_pty_tasks` で回収する。
-- 未redirectの FullProxy 外部コマンドの親側 exec 診断だけは、slave write が EIO（子session終了でPTYが失効）なら PTY 適用前の stderr へ残りのbytesを出す。明示redirect・他errno・通常出力へfallbackを広げず、fd所有権も移動しない。
+- 未redirectかつ stderr が設定済みslaveと一致する FullProxy 外部コマンドの親側 exec 診断だけは、slaveを経由せず借用した PTY 適用前の stderr へ出す。表示writeの成否に依存せず生bytesを保持し、observerと完了時OutputHistoryの既存merged Stdoutへ各一度だけ加える。明示redirect・OutputOnly・別stderr・通常出力には広げず、fd所有権も移動しない。
 - tests は real terminal を使用しない。input proxy の `open_input` は scratch PTY からの handle を注入し、OutputOnly/downgrade/failure 経路では opener を呼ばずに捨てる。
 
 ## テストと実端末

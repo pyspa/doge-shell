@@ -645,6 +645,13 @@ pub async fn capture_completed_output_and_history(
         }
     }
 
+    // These parent bytes bypassed the slave and were already observed at
+    // delivery. Consume only here, after the canonical completion gate, into
+    // FullProxy's existing merged stdout history projection.
+    stdout_cap.push_str(&String::from_utf8_lossy(&std::mem::take(
+        &mut job.parent_exec_diagnostics,
+    )));
+
     if (!stdout_cap.is_empty() || !stderr_cap.is_empty()) && ctx.foreground {
         use dsh_types::output_history::OutputEntry;
         let stdout_stripped = console::strip_ansi_codes(&stdout_cap).to_string();

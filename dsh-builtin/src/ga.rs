@@ -4,6 +4,9 @@ use dsh_types::{Context, ExitStatus};
 use skim::prelude::*;
 use skim::{SkimItemReceiver, SkimItemSender};
 use std::borrow::Cow;
+use std::ffi::OsString;
+use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -20,7 +23,8 @@ const GA_SKIM_BINDINGS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 struct GitFileItem {
-    path: String,
+    path: PathBuf,
+    root: PathBuf,
     display: String,
     index: usize,
     /// The one immutable runtime of this `ga` invocation, so the preview
@@ -35,7 +39,7 @@ impl SkimItem for GitFileItem {
     }
 
     fn output(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.path)
+        Cow::Owned(self.index.to_string())
     }
 
     fn preview(&self, _context: PreviewContext) -> ItemPreview {
@@ -44,7 +48,8 @@ impl SkimItem for GitFileItem {
             .std_command("git")
             .and_then(|mut command| {
                 command
-                    .args(["diff", "--color=always", "--", &self.path])
+                    .args(["--literal-pathspecs", "diff", "--color=always", "--"])
+                    .arg(self.root.join(&self.path))
                     .output()
                     .ok()
             })
@@ -85,7 +90,8 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
 
     // Prepare items with index
     let skim_items: Vec<Arc<dyn SkimItem>> = files
-        .into_iter()
+        .iter()
+        .cloned()
         .enumerate()
         .map(|(i, mut f)| {
             f.index = i;
@@ -119,23 +125,18 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
 
     let mut added_files = Vec::new();
     for item in selected {
-        let path = item.output().to_string();
-        added_files.push(path);
+        if let Ok(index) = item.output().parse::<usize>()
+            && let Some(file) = files.get(index)
+        {
+            added_files.push(file.path.clone());
+        }
     }
 
     if added_files.is_empty() {
         return ExitStatus::ExitedWith(0);
     }
 
-    // Run git add
-    let mut args = vec!["add"];
-    args.extend(added_files.iter().map(|s| s.as_str()));
-
-    match runtime
-        .std_command("git")
-        .ok_or_else(|| std::io::Error::other("command not found: git"))
-        .and_then(|mut command| command.args(&args).output())
-    {
+    match stage_files(&runtime, &added_files) {
         Ok(output) => {
             if output.status.success() {
                 ctx.write_stdout(&format!("Added {} files.", added_files.len()))
@@ -154,6 +155,20 @@ pub fn command(ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) ->
             ExitStatus::ExitedWith(1)
         }
     }
+}
+
+fn stage_files(
+    runtime: &CommandRuntimeSnapshot,
+    paths: &[PathBuf],
+) -> std::io::Result<std::process::Output> {
+    // Keep cwd unchanged: relative GIT_DIR/GIT_WORK_TREE belong to the snapshot.
+    let root = repository_root(runtime)?;
+    runtime
+        .std_command("git")
+        .ok_or_else(|| std::io::Error::other("command not found: git"))?
+        .args(["--literal-pathspecs", "add", "--"])
+        .args(paths.iter().map(|path| root.join(path)))
+        .output()
 }
 
 fn build_ga_skim_options() -> Result<SkimOptions, String> {
@@ -187,11 +202,26 @@ fn is_git_repository(runtime: &CommandRuntimeSnapshot) -> bool {
         .unwrap_or(false)
 }
 
+fn repository_root(runtime: &CommandRuntimeSnapshot) -> std::io::Result<PathBuf> {
+    let output = runtime
+        .std_command("git")
+        .ok_or_else(|| std::io::Error::other("command not found: git"))?
+        .args(["rev-parse", "--show-toplevel"])
+        .output()?;
+    if !output.status.success() {
+        return Err(std::io::Error::other("not a working tree"));
+    }
+    // Remove only Git's record terminator, not whitespace belonging to the path.
+    let bytes = output.stdout.strip_suffix(b"\n").unwrap_or(&output.stdout);
+    Ok(PathBuf::from(OsString::from_vec(bytes.to_vec())))
+}
+
 fn get_git_status(runtime: &CommandRuntimeSnapshot) -> Result<Vec<GitFileItem>, String> {
+    let root = repository_root(runtime).map_err(|e| e.to_string())?;
     let output = runtime
         .std_command("git")
         .ok_or_else(|| "command not found: git".to_string())?
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain=v1", "-z"])
         .output()
         .map_err(|e| format!("{}", e))?;
 
@@ -199,19 +229,28 @@ fn get_git_status(runtime: &CommandRuntimeSnapshot) -> Result<Vec<GitFileItem>, 
         return Err("git status failed".to_string());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut records = output.stdout.split(|byte| *byte == 0);
     let mut entries = Vec::new();
-
-    for line in stdout.lines() {
-        if line.len() < 4 {
+    while let Some(record) = records.next() {
+        if record.is_empty() {
             continue;
         }
-        let path = &line[3..];
-
+        if record.len() < 4 || record[2] != b' ' {
+            return Err("invalid git status record".into());
+        }
+        let path = PathBuf::from(OsString::from_vec(record[3..].to_vec()));
+        // In -z format a rename/copy lists the destination first, then the source.
+        if record[..2].iter().any(|b| matches!(b, b'R' | b'C')) {
+            records
+                .next()
+                .filter(|r| !r.is_empty())
+                .ok_or_else(|| "missing rename source".to_string())?;
+        }
         entries.push(GitFileItem {
-            path: path.to_string(),
-            display: line.to_string(),
-            index: 0, // Will be set later
+            display: format!("{} {:?}", String::from_utf8_lossy(&record[..2]), path),
+            path,
+            root: root.clone(),
+            index: entries.len(),
             runtime: runtime.clone(),
         });
     }
@@ -258,3 +297,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "ga/regression_tests.rs"]
+mod regression_tests;

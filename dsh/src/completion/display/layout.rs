@@ -15,11 +15,11 @@ impl CompletionDisplay {
         let mut max_total_width = 0;
 
         for c in &self.candidates {
-            let name_width = unicode_display_width(c.get_display_name());
+            let name_width = unicode_display_width(&display_text(c.get_display_name()));
             let type_char_width = c.get_type_char().width().unwrap_or(2);
             let desc = c.get_description();
             let desc_width = if let Some(d) = desc {
-                unicode_display_width(d) + 2 // +2 for spacing/separator
+                unicode_display_width(&display_text(d)) + 2 // +2 for spacing/separator
             } else {
                 0
             };
@@ -62,7 +62,7 @@ impl CompletionDisplay {
             let available_width = terminal_width.saturating_sub(4); // Reserve margin
             let total_spacing = (items_per_row.saturating_sub(1)) * inter_column_spacing;
             let width_for_content = available_width.saturating_sub(total_spacing);
-            width_for_content.max(1) / items_per_row.max(1)
+            (width_for_content / items_per_row.max(1)).min(terminal_width.saturating_sub(1))
         } else {
             terminal_width.saturating_sub(4)
         };

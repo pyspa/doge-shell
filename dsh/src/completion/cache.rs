@@ -1,3 +1,4 @@
+//! Candidate snapshots with fixed TTLs; prefix and exact-only lookups remain separate.
 use super::command::CompletionCandidate;
 use super::display::Candidate;
 use super::integrated::EnhancedCandidate;
@@ -71,6 +72,15 @@ pub struct CompletionCache<T: CacheableCandidate> {
 }
 
 impl<T: CacheableCandidate> CompletionCache<T> {
+    #[cfg(test)]
+    pub(super) fn scoped_expiration(&self, scope: u64, key: &str) -> Option<Instant> {
+        self.scoped_entries
+            .read()
+            .get(&scope)?
+            .get(key)
+            .map(|entry| entry.expires_at)
+    }
+
     pub fn new(default_ttl: Duration) -> Self {
         Self {
             entries: RwLock::new(HashMap::new()),
@@ -81,10 +91,18 @@ impl<T: CacheableCandidate> CompletionCache<T> {
     }
 
     pub fn set(&self, key: String, candidates: Vec<T>) {
+        self.set_shared(key, candidates);
+    }
+
+    /// Insert and retain the same buffer even if another thread clears the cache.
+    pub(crate) fn set_shared(&self, key: String, candidates: Vec<T>) -> Arc<Vec<T>> {
         let mut guard = self.entries.write();
         Self::purge_expired_locked(&mut guard);
         debug!("cache set for '{}'. len: {}", key, candidates.len());
-        guard.insert(key, CacheEntry::new(candidates, self.default_ttl));
+        let entry = CacheEntry::new(candidates, self.default_ttl);
+        let candidates = Arc::clone(&entry.candidates);
+        guard.insert(key, entry);
+        candidates
     }
 
     pub fn set_scoped(&self, scope: u64, key: String, candidates: Vec<T>) {
@@ -190,6 +208,23 @@ impl<T: CacheableCandidate> CompletionCache<T> {
 
         drop(guard);
         result
+    }
+
+    /// Return only a live snapshot of this exact scoped input.
+    /// Misses never inspect candidate text or copy prefix candidates, and hits
+    /// retain the insertion deadline rather than extending the TTL.
+    pub fn lookup_scoped_exact(&self, scope: u64, input: &str) -> Option<CacheLookup<T>> {
+        let now = Instant::now();
+        let guard = self.scoped_entries.read();
+        let entry = guard.get(&scope)?.get(input)?;
+        if entry.is_expired(now) {
+            return None;
+        }
+        Some(CacheLookup {
+            key: input.to_string(),
+            candidates: entry.candidates.as_ref().clone(),
+            exact: true,
+        })
     }
 
     pub fn lookup_scoped(&self, scope: u64, input: &str) -> Option<CacheLookup<T>> {
@@ -377,3 +412,6 @@ mod tests {
         assert_eq!(result.candidates[0].get_display_name(), "abc");
     }
 }
+
+#[cfg(test)]
+mod exact_tests;

@@ -213,7 +213,7 @@ fn unquoted_at_performs_pathname_expansion_per_parameter() {
 fn option_looking_command_names_are_not_shell_options() {
     for name in ["--help", "-l", "-c", "--notebook"] {
         assert_eq!(
-            invoke(r#"printf "%s:%s\n" "$0" "$1""#, &[name, "value"]),
+            invoke(r#"echo "$0:$1""#, &[name, "value"]),
             format!("{name}:value\n")
         );
     }

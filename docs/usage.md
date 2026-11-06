@@ -153,6 +153,17 @@ Focused doctor calls keep the same envelope and add section-specific `details`;
 for example, `doctor safety --json` reports safety configuration while
 `doctor validate --json` reports the selected validation commands.
 
+`doctor config` keeps the config-file and runtime-skills diagnostics and reports
+current runtime preferences. In `doctor config --json`, `details.effective`
+contains exactly `suggestion_mode` (`off`/`ghost`), `transient_prompt`, `auto_pair`,
+`status_line`, `failure_hint`, `auto_notify_enabled`, `auto_notify_threshold`
+(integer seconds), `command_ledger_mode` (`off`/`metadata`/`output`), and `pipefail`.
+The other six values are booleans. These values describe current state, including
+changes made after startup; they do not claim which file set a preference.
+The full JSON report includes the same config object at `details.config`.
+If runtime state is unavailable, `effective` is null with
+`effective_error: "runtime-config-unavailable"`.
+
 Run as `blocks tui` there is no input buffer to fill, so `Enter` prints the
 command and `r` runs it. From `Ctrl+O` and the command palette, both put it in
 the buffer for you to confirm.
@@ -538,20 +549,49 @@ The filters that the `history` command exposes as flags are available as live to
 - `Ctrl+R` - cycle scope: `global` → `session` → `cwd` → `project`
 - `Ctrl+S` - cycle status: `any` → `failure` → `success`
 - `Ctrl+T` - show only commands that took a second or more
+- `Ctrl+E` - switch between distinct commands and executions when the command ledger is enabled
 - `Up` / `Down`, `Ctrl+P` / `Ctrl+N`, `PageUp` / `PageDown`, `Home` / `End` - move the selection
 - `Ctrl+U` - clear the query
 - `Enter` - put the command in the input buffer (it is never executed for you)
 - `Esc`, `Ctrl+C`, `Ctrl+G` - cancel and leave the input untouched
 
 The status line reports the active filters and how many entries match, e.g.
-`scope:cwd  status:failure  slow:off  (12/5000, last run)`.
+`commands  scope:cwd  status:failure  slow:off  (12/5000, last run)`.
 
 **`last run`**: history is stored one row per distinct command string, carrying only the
 metadata of its most recent execution. `scope:cwd` therefore means "commands whose *last*
 run was in this directory", not "every command ever run here", and the exit status and
 duration shown are those of that last run.
 
+Distinct commands remain the initial source. With `(pref-command-ledger "metadata")`
+or the existing `"output"` opt-in enabled, `Ctrl+E` switches to the newest 5000 recorded
+executions, preserving repeated commands and each run's time, status, duration, cwd,
+session and author. The footer identifies the source and selected execution's author;
+wide terminals also show authors in the rows. Switching sources preserves the query
+and filters and resets the selection. The picker reads metadata only, never stored output.
+With the current ledger preference `"off"`, it does not read or offer old execution data.
+If the execution snapshot cannot be read, the footer reports it as unavailable and
+distinct-command search remains usable.
+
+Execution project scope resolves the stored cwd against **current filesystem** repository
+markers the first time that scope is needed, then caches it for the picker session.
+Moved or deleted repositories and changed markers can therefore differ from the original
+execution's project. Both sources use bounded snapshots; older matching rows may fall
+outside the newest 5000 entries.
+
 Set `DOGESH_HISTORY_PICKER=skim` to fall back to the previous skim-based interface.
+
+### Completion Selection
+
+In the inline completion chooser, Home/End select the first/last displayed
+candidate and PageUp/PageDown move by a screen-sized step. Shift-Tab moves
+backward. Esc or Ctrl-C closes the chooser without starting another completion
+source. Pasting or using an editing shortcut such as Ctrl-A closes the chooser
+and applies that original input to the command line.
+
+Command-backed Lisp completions use the shell's exported environment and current
+directory, with a 1.5-second timeout and a 1 MiB stdout limit. While waiting,
+Esc/Ctrl-C cancels the helper; other input cancels it and returns to normal editing.
 
 ### Fish Completion Fallback
 
@@ -560,6 +600,14 @@ TAB completion calls `fish -c 'complete -C ...'` automatically when `fish` is av
 Built-in dynamic providers also complete live resource identifiers for supported tools such as `gh`, `glab`, `argocd`, cloud CLIs, Vault, Nomad, Terraform/OpenTofu, rclone, and restic. They invoke only read-only listing commands, run off the prompt thread, use a five-second command timeout and a 30-second cache, and quietly return no candidates when a CLI is missing, unauthenticated, or unavailable. Provider diagnostics report cache age and errors but never include tokens, passwords, or fetched secret contents. Additional providers cover 1Password (`op item get/edit/delete`), Vagrant installed boxes (`vagrant box remove/repackage`, `vagrant init`), and `.envrc` files plus their containing directories discovered from the working directory chain for `direnv allow/deny/edit`.
 
 Linux operations use the same dynamic completion path for systemd units and machines, journal identifiers, network namespaces and links, firewall profiles, storage resources, processes, kernel modules, audit keys, SELinux modules and booleans, wireless devices, device subsystems, and the login shells listed in `/etc/shells`. Arch Linux definitions cover `yay`, `paru`, `paccache`, `pacdiff`, `pactree`, `pacman-conf`, `pacman-key`, `pkgctl`, repository database tools, devtools chroot commands, `namcap`, and `snapper`. `yay` and `paru` deliberately reuse only the local pacman databases: sync operations complete repository packages, removal operations complete installed packages, and completion never performs an AUR network search. Snapper configurations and snapshots, pacman repositories, and mkinitcpio presets are discovered with read-only local probes. A `systemctl.unit` provider scope narrows candidates to a single unit type, so `systemd-run --slice` offers slices rather than every unit. Candidates reflect the current host while read-only probes remain cached and run outside the prompt thread.
+
+Custom JSON `Script` completion templates receive `COMMAND`, `CURRENT_TOKEN`,
+`SUBCOMMAND`, and `ARG_0`, `ARG_1`, etc. as environment variables in `/bin/sh`.
+Use `"$ARG_0"` or `"$CURRENT_TOKEN"` to preserve spaces and wildcard characters.
+Single quotes (for example, `'$ARG_0'`) produce literal text. This replaces the
+older textual placeholder substitution: templates that depended on expansion
+inside single quotes must switch to double quotes. Values retain their source
+spelling and are never inserted into the template as executable shell code.
 
 Developer toolchains are covered as well: `rustup` components and targets, crates installed with `cargo install`, `cargo` test and bench targets, `cargo nextest`, `cargo watch`, `sccache`, `bacon`, Jujutsu (`jj`), PDM, Pipenv, Pyright, Biome, golangci-lint, GoReleaser, Delve, Meson, watchexec, and ghq, in addition to the existing language and editor tools. Dynamic candidates include Jujutsu bookmarks, revisions, and workspaces; Meson targets; golangci-lint linters; ghq repositories; and scripts or jobs declared by bacon, PDM, and Pipenv. Definitions that live in project files — `bacon.toml` jobs, `pyproject.toml` PDM scripts, `Pipfile` scripts, `noxfile.py` sessions, `tox` environments, `hatch` environments, `pre-commit` hook ids, and `just` recipes and `make` targets through the shared project task provider — are parsed directly, so completion never imports or evaluates project code. Local CLI probes use a one-second cache and two-second error backoff; missing tools, permission failures, timeouts, and malformed output safely produce no dynamic candidates.
 

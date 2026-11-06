@@ -32,6 +32,7 @@ pub mod quick_fix;
 pub mod safety_policy;
 pub mod schedule;
 pub mod shell_options;
+pub mod shell_variable;
 pub mod snippet;
 pub mod text;
 pub use project::Project;
@@ -192,9 +193,9 @@ impl Context {
             observer.append(observed_output::ObservedStream::Stdout, msg);
             observer.append(observed_output::ObservedStream::Stdout, "\n");
         }
-        let mut file = unsafe { File::from_raw_fd(self.outfile) };
-        writeln!(&mut file, "{msg}")?;
-        mem::forget(file);
+        // Context borrows this descriptor, including when writing fails.
+        let mut file = mem::ManuallyDrop::new(unsafe { File::from_raw_fd(self.outfile) });
+        writeln!(&mut *file, "{msg}")?;
         Ok(())
     }
 
@@ -205,9 +206,9 @@ impl Context {
             observer.append(observed_output::ObservedStream::Stderr, msg);
             observer.append(observed_output::ObservedStream::Stderr, "\n");
         }
-        let mut file = unsafe { File::from_raw_fd(self.errfile) };
-        writeln!(&mut file, "{msg}")?;
-        mem::forget(file);
+        // Context borrows this descriptor, including when writing fails.
+        let mut file = mem::ManuallyDrop::new(unsafe { File::from_raw_fd(self.errfile) });
+        writeln!(&mut *file, "{msg}")?;
         Ok(())
     }
 
@@ -272,5 +273,41 @@ mod context_job_control_tests {
     #[test]
     fn interactive_tty_capable_context_enables_job_control() {
         assert!(tty_capable_context(true).supports_job_control());
+    }
+}
+
+#[cfg(test)]
+mod context_write_tests {
+    use super::*;
+    use std::os::fd::{BorrowedFd, IntoRawFd};
+
+    #[test]
+    fn failed_output_does_not_close_the_borrowed_descriptor() {
+        for stderr in [false, true] {
+            // Transfer ownership to a raw fd so the failing baseline can be
+            // inspected without a second close from File::drop.
+            let fd = File::open("/dev/null").unwrap().into_raw_fd();
+            let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), false);
+            ctx.errfile = fd;
+            ctx.outfile = fd;
+            let result = if stderr {
+                ctx.write_stderr("message")
+            } else {
+                ctx.write_stdout("message")
+            };
+            assert!(result.is_err(), "read-only output must fail");
+            let open = nix::fcntl::fcntl(
+                unsafe { BorrowedFd::borrow_raw(fd) },
+                nix::fcntl::FcntlArg::F_GETFD,
+            )
+            .is_ok();
+            if open {
+                nix::unistd::close(fd).unwrap();
+            }
+            assert!(
+                open,
+                "failed write closed caller-owned fd (stderr={stderr})"
+            );
+        }
     }
 }

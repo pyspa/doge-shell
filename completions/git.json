@@ -13,11 +13,21 @@
     },
     {
       "short": "-C",
-      "description": "Run as if git was started in <path>"
+      "description": "Run as if git was started in <path>",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
     },
     {
       "short": "-c",
-      "description": "Pass a configuration parameter to command"
+      "description": "Pass a configuration parameter to command",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
     },
     {
       "long": "--exec-path",
@@ -82,7 +92,8 @@
           "takes_value": true,
           "value_type": {
             "type": "String"
-          }
+          },
+          "multiple": true
         },
         {
           "long": "--amend",

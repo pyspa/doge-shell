@@ -15,10 +15,21 @@ impl IntegratedCompletionEngine {
             return None;
         }
 
-        let request = CompletionRequest::new(input, current_dir, 10, cursor_pos);
         let parsed_command_line = self.convert_to_parsed_command_line(input, cursor_pos);
-        let replacement_range =
-            completion_replacement_range(input, cursor_pos, &parsed_command_line)?;
+        let completion_dir = self.completion_directory(&parsed_command_line, current_dir)?;
+        let request = CompletionRequest::new(input, &completion_dir, 10, cursor_pos);
+        if parsed_command_line
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+        {
+            return None;
+        }
+        let replacement_range = completion_replacement_range(
+            input,
+            cursor_pos,
+            &self.dynamic_provider_target(&parsed_command_line),
+        )?;
 
         // Variable / user-home references: predict the first matching candidate.
         if let Some(candidates) =
@@ -29,7 +40,7 @@ impl IntegratedCompletionEngine {
                 input,
                 replacement_range.start,
                 replacement_range.end,
-                &candidate.text,
+                &ghost_insertion(candidate, input, replacement_range),
             );
             if full == input || !full.starts_with(input) {
                 return None;
@@ -54,7 +65,7 @@ impl IntegratedCompletionEngine {
             input,
             replacement_range.start,
             replacement_range.end,
-            &candidate.text,
+            &ghost_insertion(candidate, input, replacement_range),
         );
 
         if full == input || !full.starts_with(input) {
@@ -69,6 +80,8 @@ impl IntegratedCompletionEngine {
         parsed_command_line: &parser::ParsedCommandLine,
         current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
+        let target = self.dynamic_provider_target(parsed_command_line);
+        let parsed_command_line = target.as_ref();
         match parsed_command_line.completion_context {
             parser::CompletionContext::SubCommand
             | parser::CompletionContext::ShortOption
@@ -82,7 +95,8 @@ impl IntegratedCompletionEngine {
         }
 
         self.ensure_command_completion_loaded(&parsed_command_line.command);
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(current_dir);
         let db_lock = self.command_completion.lock();
         if db_lock.get_command(&parsed_command_line.command).is_none() {
             return Vec::new();
@@ -92,7 +106,8 @@ impl IntegratedCompletionEngine {
             &db_lock,
             &environment_names,
             system_command_ticket,
-        );
+        )
+        .with_filesystem_context(&filesystem);
         match completion_generator.generate_candidates(parsed_command_line) {
             Ok(candidates) => candidates
                 .into_iter()
@@ -135,12 +150,14 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         }
 
-        let (environment_names, system_command_ticket) = self.runtime_completion_snapshot();
+        let (environment_names, system_command_ticket, filesystem) =
+            self.runtime_completion_snapshot(current_dir);
         let generator = ArgumentGenerator::with_runtime_environment_ticket(
             &db_lock,
             &environment_names,
             Some(system_command_ticket),
-        );
+        )
+        .with_filesystem_context(Some(&filesystem));
         generator
             .generate_candidates_for_type(&arg_type, parsed_command_line)
             .map(|candidates| {
@@ -151,4 +168,19 @@ impl IntegratedCompletionEngine {
             })
             .unwrap_or_default()
     }
+}
+
+fn ghost_insertion(
+    candidate: &EnhancedCandidate,
+    input: &str,
+    range: CompletionReplacementRange,
+) -> String {
+    use skim::SkimItem;
+    crate::completion::shell_path::format_candidates_for_range(
+        vec![candidate.to_candidate()],
+        input,
+        range,
+    )[0]
+    .output()
+    .to_string()
 }

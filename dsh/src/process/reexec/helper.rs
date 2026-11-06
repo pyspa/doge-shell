@@ -14,6 +14,7 @@ use super::protocol::{
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
+use std::os::fd::AsRawFd;
 use std::os::unix::io::RawFd;
 
 /// Run one helper request to completion inside the fresh process.
@@ -50,6 +51,11 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
     inherit_async_signal_environment();
     if let InternalExecKind::Plan(plan_request) = &request.kind {
         apply_plan_signal_policy(plan_request)?;
+    }
+    // All signal policy is committed. Acknowledge readiness and wait for
+    // whole-job admission before environment construction or evaluation.
+    if let (Some(gate), Some(ready)) = (fds.launch_gate, fds.launch_ready) {
+        await_launch_admission(gate, ready)?;
     }
     // The status fd arrives non-CLOEXEC (`dup2` clears the flag on its
     // target): mark it close-on-exec here so nested external children and
@@ -96,6 +102,28 @@ async fn run_internal_helper_inner(fds: InternalHelperFds) -> Result<u8> {
             run_helper_no_command(&mut shell, no_command).await
         }
     }
+}
+
+/// Consume and retire the private startup channels before evaluation.
+pub(crate) fn await_launch_admission(gate: RawFd, ready: RawFd) -> Result<()> {
+    use std::os::fd::{BorrowedFd, FromRawFd, OwnedFd};
+    let gate = unsafe { OwnedFd::from_raw_fd(gate) };
+    let ready = unsafe { OwnedFd::from_raw_fd(ready) };
+    super::fd_layout::write_all(unsafe { BorrowedFd::borrow_raw(ready.as_raw_fd()) }, b"R")?;
+    #[cfg(test)]
+    super::super::launch_admission_tests::stop_helper_after_ready()?;
+    let mut token = [0];
+    loop {
+        match nix::unistd::read(&gate, &mut token) {
+            Err(nix::errno::Errno::EINTR) => continue,
+            Ok(1) if token[0] == b'F' => break,
+            _ => anyhow::bail!("launch admission cancelled"),
+        }
+    }
+    drop(gate);
+    super::fd_layout::write_all(unsafe { BorrowedFd::borrow_raw(ready.as_raw_fd()) }, b"C")?;
+    drop(ready);
+    Ok(())
 }
 
 /// Inherit the async no-job-control environment when this helper was itself
@@ -456,6 +484,8 @@ mod tests {
         let request = builtin_request("cd", vec!["cd".to_string(), "/dsh-no-such-dir".to_string()]);
         let fd = pipe_with_request(&request);
         let fds = InternalHelperFds {
+            launch_gate: None,
+            launch_ready: None,
             request: fd,
             status: None,
         };
@@ -471,6 +501,8 @@ mod tests {
         );
         let fd = pipe_with_request(&request);
         let fds = InternalHelperFds {
+            launch_gate: None,
+            launch_ready: None,
             request: fd,
             status: None,
         };
@@ -585,6 +617,8 @@ mod tests {
             let request = plan_request_for_test(mode, PlanSignalPolicy::IgnoreInterruptAndQuit);
             let fd = pipe_with_request(&request);
             let fds = InternalHelperFds {
+                launch_gate: None,
+                launch_ready: None,
                 request: fd,
                 status: None,
             };
@@ -605,11 +639,15 @@ mod tests {
         let request = builtin_request("cd", vec!["cd".to_string()]);
         let fd = pipe_with_request(&request);
         let fds = InternalHelperFds {
+            launch_gate: None,
+            launch_ready: None,
             request: 1,
             status: None,
         };
         assert!(run_internal_helper_inner(fds).await.is_err());
         let fds = InternalHelperFds {
+            launch_gate: None,
+            launch_ready: None,
             request: fd,
             status: Some(fd),
         };

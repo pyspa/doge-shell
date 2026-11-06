@@ -1,15 +1,21 @@
+//! Byte-coordinate completion parsing within the invocation selected by the
+//! tolerant lexical source view. Source identity survives context correction.
 use super::command::ArgumentType;
-use super::shell_token::{self, SeparatorMode, ShellTokenSpan};
+pub use super::command_segment::CommandSource;
+use super::command_segment::{self, floor_byte};
+use super::shell_path::decode_literal_word;
+use super::shell_token::ShellTokenSpan;
 use std::collections::VecDeque;
+mod prefix;
 
 #[inline]
 fn is_option_token(token: &str) -> bool {
-    token.starts_with('-')
+    decode_literal_word(token).starts_with('-')
 }
 
 #[inline]
 fn is_long_option_token(token: &str) -> bool {
-    token.starts_with("--")
+    decode_literal_word(token).starts_with("--")
 }
 
 pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
@@ -18,7 +24,7 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
     }
 
     let (name, value) = token.split_once('=')?;
-    if name.len() <= 2 {
+    if decode_literal_word(name).len() <= 2 {
         return None;
     }
 
@@ -28,6 +34,10 @@ pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
 /// Command line parsing result for dynamic completion
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedCommandLine {
+    /// Invocation source used for completion semantics, including fixed alias
+    /// arguments after normalization. Public provider/insertion coordinates
+    /// continue to use the original request.
+    pub source: Option<CommandSource>,
     /// Main command name
     pub command: String,
     /// Subcommand path (e.g., ["remote", "add"])
@@ -48,8 +58,33 @@ pub struct ParsedCommandLine {
     pub specified_options: Vec<String>,
     /// Already specified arguments
     pub specified_arguments: Vec<String>,
-    /// Cursor index
+    /// Byte cursor index in the original input.
     pub cursor_index: usize,
+}
+
+impl ParsedCommandLine {
+    /// Internal literal search prefix. `current_token`/`current_arg`, source
+    /// spans and provider INPUT/CURSOR remain raw source for compatibility.
+    pub(crate) fn completion_query(&self) -> String {
+        super::shell_path::decode_literal_word(&self.matching_source())
+    }
+
+    /// Matching-only source view for an inline value whose quote starts in the
+    /// option name. Raw current_token/current_arg/provider metadata stay intact.
+    pub(crate) fn matching_source(&self) -> std::borrow::Cow<'_, str> {
+        if matches!(
+            self.completion_context,
+            CompletionContext::OptionValue { .. }
+        ) && let Some(source) = &self.source
+            && let Some(word) = source.words.get(source.cursor_word)
+            && let Some(prefix) = source.input[word.byte_start..source.cursor.min(word.byte_end)]
+                .strip_suffix(&self.current_token)
+            && let Some(quote) = super::shell_path::quote_at_end(prefix)
+        {
+            return std::borrow::Cow::Owned(format!("{quote}{}", self.current_token));
+        }
+        std::borrow::Cow::Borrowed(&self.current_token)
+    }
 }
 
 /// Parameters for determining completion context
@@ -98,18 +133,24 @@ impl CommandLineParser {
         Self
     }
 
-    /// Parse command line
+    /// Parse the command at a byte cursor; invalid UTF-8 boundaries round down.
     pub fn parse(&self, input: &str, cursor_pos: usize) -> ParsedCommandLine {
-        let spans = self.tokenize_with_positions(input);
+        let cursor_pos = floor_byte(input, cursor_pos);
+        let segment = command_segment::command_segment_at_cursor(input, cursor_pos);
+        let source_input = &input[segment.range.clone()];
+        let local_cursor = cursor_pos
+            .saturating_sub(segment.range.start)
+            .min(source_input.len());
+        let mut spans = self.tokenize_with_positions(source_input);
         let mut tokens: Vec<String> = spans.iter().map(|s| s.raw.clone()).collect();
         let (cursor_token_index, is_inside_token) =
-            self.find_cursor_token_index(&spans, cursor_pos);
+            self.find_cursor_token_index(&spans, local_cursor);
 
         // Adjust tokens based on cursor position
         if is_inside_token {
             if cursor_token_index < tokens.len() {
                 let span = &spans[cursor_token_index];
-                let relative_pos = cursor_pos.saturating_sub(span.byte_start);
+                let relative_pos = local_cursor.saturating_sub(span.byte_start);
                 if relative_pos < span.raw.len() {
                     // Start from relative_pos and backtrack to find a valid char boundary
                     // This handles cases where cursor is in the middle of a multibyte char
@@ -124,10 +165,67 @@ impl CommandLineParser {
             // Insert empty token at cursor position (gap)
             if cursor_token_index <= tokens.len() {
                 tokens.insert(cursor_token_index, String::new());
+                spans.insert(
+                    cursor_token_index,
+                    command_segment::word_span(source_input, local_cursor..local_cursor),
+                );
             }
         }
 
-        self.analyze_tokens(tokens, cursor_token_index, input, cursor_pos)
+        // Redirect operators are shell syntax, not completable argv words.
+        // FD duplication targets are descriptor numbers (or `-`), never paths.
+        // Mark these regions before any provider or legacy TAB hook is reached.
+        let (command_word, malformed_prefix) = prefix::command_word(&spans);
+        let redirect_target = cursor_token_index
+            .checked_sub(1)
+            .and_then(|index| spans.get(index))
+            .is_some_and(|word| Self::is_redirect_operator(&word.raw));
+        let suppressed = segment.suppressed
+            || malformed_prefix
+            || (cursor_token_index < command_word && !redirect_target)
+            || spans
+                .get(cursor_token_index)
+                .is_some_and(|word| Self::is_redirect_operator(&word.raw))
+            || cursor_token_index
+                .checked_sub(1)
+                .and_then(|i| spans.get(i))
+                .is_some_and(|word| {
+                    Self::is_redirect_operator(&word.raw)
+                        && (word.raw.ends_with(">&") || word.raw.ends_with("<&"))
+                });
+        let command_start = spans
+            .get(command_word)
+            .map_or(source_input.len(), |word| word.byte_start);
+        let current_token = tokens.get(cursor_token_index).cloned().unwrap_or_default();
+        let mut parsed = self.analyze_tokens(
+            tokens.into_iter().skip(command_word).collect(),
+            cursor_token_index.saturating_sub(command_word),
+            &source_input[command_start..],
+            local_cursor.saturating_sub(command_start),
+        );
+        if redirect_target && cursor_token_index < command_word {
+            parsed.current_token = current_token.clone();
+            parsed.current_arg = Some(current_token);
+            parsed.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            };
+        }
+        parsed.cursor_index = cursor_pos;
+        parsed.source = Some(CommandSource {
+            input: source_input.to_string(),
+            cursor: local_cursor,
+            words: spans,
+            cursor_word: cursor_token_index,
+            command_word,
+            argument_start: 0,
+            multiple: segment.multiple,
+            suppressed,
+        });
+        if suppressed {
+            parsed.completion_context = CompletionContext::Unknown;
+        }
+        parsed
     }
 
     /// Split input string into tokens
@@ -141,7 +239,7 @@ impl CommandLineParser {
             .collect()
     }
 
-    /// Return the complete token under the cursor and the cursor offset inside it.
+    /// Return the complete token at a byte cursor and its byte offset.
     pub(crate) fn token_at_cursor(
         &self,
         input: &str,
@@ -159,7 +257,7 @@ impl CommandLineParser {
 
     /// Split input string into tokens and keep their character spans.
     fn tokenize_with_positions(&self, input: &str) -> Vec<ShellTokenSpan> {
-        shell_token::tokenize(input, SeparatorMode::Parser)
+        command_segment::words(input)
     }
 
     /// Find token index corresponding to cursor position (byte index).
@@ -173,6 +271,16 @@ impl CommandLineParser {
     ) -> (usize, bool) {
         for (i, span) in spans.iter().enumerate() {
             if cursor_pos <= span.byte_end {
+                if cursor_pos == span.byte_end && Self::is_redirect_operator(&span.raw) {
+                    // `>¦out` begins the target, not a prefix of `>`.
+                    // A gap after the operator gets its own empty source span.
+                    return (
+                        i + 1,
+                        spans
+                            .get(i + 1)
+                            .is_some_and(|next| next.byte_start == cursor_pos),
+                    );
+                }
                 if cursor_pos >= span.byte_start {
                     // Inside or at the end of this token
                     return (i, true);
@@ -196,6 +304,7 @@ impl CommandLineParser {
     ) -> ParsedCommandLine {
         if tokens.is_empty() {
             return ParsedCommandLine {
+                source: None,
                 command: String::new(),
                 subcommand_path: Vec::new(),
                 raw_args: Vec::new(),
@@ -210,17 +319,22 @@ impl CommandLineParser {
             };
         }
 
-        let command = tokens[0].clone();
+        let raw_command = tokens[0].clone();
+        let command = decode_literal_word(&raw_command);
         let mut subcommand_path = Vec::new();
         let mut specified_options = Vec::new();
         let mut specified_arguments = Vec::new();
         let mut tokens_queue: VecDeque<String> = tokens.into_iter().skip(1).collect();
 
         // Check if there's a space after the command
-        let has_space_after_command = self.has_space_after_command(input, &command);
+        let has_space_after_command = self.has_space_after_command(input, &raw_command);
 
         // Parse subcommands
         while let Some(token) = tokens_queue.front() {
+            // A word to the right of the cursor cannot be a parent subcommand.
+            if subcommand_path.len() + 1 > cursor_token_index {
+                break;
+            }
             if is_option_token(token) {
                 break; // End subcommand parsing when options start
             }
@@ -257,6 +371,11 @@ impl CommandLineParser {
                 continue;
             }
 
+            if Self::is_redirect_operator(token) {
+                skip_next_redirect_target = true;
+                continue;
+            }
+
             if end_of_options {
                 specified_arguments.push(token.clone());
                 continue;
@@ -267,16 +386,11 @@ impl CommandLineParser {
                 continue;
             }
 
-            if Self::is_redirect_operator(token) {
-                skip_next_redirect_target = true;
-                continue;
-            }
-
             if is_option_token(token) {
                 let option_name = split_inline_long_option(token)
                     .map(|(name, _)| name)
                     .unwrap_or(token);
-                specified_options.push(option_name.to_string());
+                specified_options.push(decode_literal_word(option_name));
 
                 // Check if next token is option value
                 if split_inline_long_option(token).is_none()
@@ -295,9 +409,9 @@ impl CommandLineParser {
 
         // Determine current token and completion context
         let (current_token, completion_context) = if cursor_token_index == 0 {
-            (command.clone(), CompletionContext::Command)
+            (raw_command.clone(), CompletionContext::Command)
         } else {
-            let all_tokens: Vec<String> = std::iter::once(command.clone())
+            let all_tokens: Vec<String> = std::iter::once(raw_command.clone())
                 .chain(subcommand_path.iter().cloned())
                 .chain(tokens_queue.iter().cloned())
                 .collect();
@@ -310,7 +424,7 @@ impl CommandLineParser {
             let after_end_of_options = all_tokens
                 .iter()
                 .take(cursor_token_index)
-                .any(|token| token == "--");
+                .any(|token| decode_literal_word(token) == "--");
 
             let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
@@ -342,8 +456,12 @@ impl CommandLineParser {
         options.extend(specified_options.clone());
 
         ParsedCommandLine {
+            source: None,
             command: command.clone(),
-            subcommand_path: subcommand_path.clone(),
+            subcommand_path: subcommand_path
+                .iter()
+                .map(|word| decode_literal_word(word))
+                .collect(),
             raw_args,
             args,
             options,
@@ -459,7 +577,7 @@ impl CommandLineParser {
 
         if let Some((option_name, _)) = split_inline_long_option(params.current_token) {
             return CompletionContext::OptionValue {
-                option_name: option_name.to_string(),
+                option_name: decode_literal_word(option_name),
                 value_type: None,
             };
         }
@@ -560,7 +678,7 @@ impl CommandLineParser {
     }
 
     /// Determine if option takes a value (simplified version)
-    fn option_takes_value(&self, option: &str) -> bool {
+    pub(crate) fn option_takes_value(&self, option: &str) -> bool {
         // Options that commonly take values
         matches!(
             option,
@@ -582,20 +700,15 @@ impl CommandLineParser {
     }
 
     /// Determine if token represents a redirect operator
-    fn is_redirect_operator(token: &str) -> bool {
-        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
+    pub(crate) fn is_redirect_operator(token: &str) -> bool {
+        if matches!(token, "&>" | "&>>") {
             return true;
         }
-
-        if let Some(prefix) = token.strip_suffix(">>") {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        if let Some(prefix) = token.strip_suffix('>') {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
-        }
-
-        false
+        [">&", "<&", ">>", ">", "<"].iter().any(|suffix| {
+            token
+                .strip_suffix(suffix)
+                .is_some_and(|prefix| prefix.bytes().all(|c| c.is_ascii_digit()))
+        })
     }
 }
 

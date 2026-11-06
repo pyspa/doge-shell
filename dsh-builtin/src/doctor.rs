@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 mod ai;
 mod config;
+#[cfg(test)]
+mod config_tests;
 mod dev;
 mod hooks;
 mod json;
@@ -84,7 +86,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
 
     if show_section(section, "config") {
         print_header(ctx, "config");
-        check_config(ctx);
+        check_config(ctx, proxy);
     }
     if show_section(section, "ai") {
         print_header(ctx, "ai");

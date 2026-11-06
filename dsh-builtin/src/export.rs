@@ -19,7 +19,14 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     }
 
     // Case 2: `export VAR=value` or `export VAR`
+    let mut failed = false;
     for arg in &argv[1..] {
+        let name = arg.split_once('=').map_or(arg.as_str(), |(name, _)| name);
+        if !dsh_types::shell_variable::is_valid_shell_var_name(name) {
+            let _ = ctx.write_stderr(&format!("export: invalid variable name: {name:?}"));
+            failed = true;
+            continue;
+        }
         if let Some((var, value)) = arg.split_once('=') {
             // `export VAR=value`
             proxy.set_and_export_var(var.to_string(), value.to_string());
@@ -29,7 +36,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     }
 
-    ExitStatus::ExitedWith(0)
+    ExitStatus::ExitedWith(i32::from(failed))
 }
 
 pub fn description() -> &'static str {

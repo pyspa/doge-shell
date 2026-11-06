@@ -48,13 +48,17 @@ impl IntegratedCompletionEngine {
                     priority: 150,
                 }),
         );
-        candidates.retain(|candidate| matches_prefix(current_token, &candidate.text));
+        // Both TAB and cached-only ghost pass raw cursor source. Decode for
+        // matching only; job names and provider metadata remain literal words.
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        candidates.retain(|candidate| matches_prefix(&query, &candidate.text));
         candidates
     }
 
     pub(super) fn collect_pm_candidates(
         &self,
         parsed_command_line: &ParsedCommandLine,
+        current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
         use parser::CompletionContext;
 
@@ -67,7 +71,7 @@ impl IntegratedCompletionEngine {
                 };
                 match subcommand.as_str() {
                     "add" => match arg_index {
-                        0 => self.collect_directory_candidates(current_token),
+                        0 => self.collect_directory_candidates(current_token, current_dir),
                         1 => self.collect_project_name_candidates_from_path(
                             parsed_command_line,
                             current_token,
@@ -137,7 +141,10 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        let trimmed = path.trim_end_matches(&['/', '\\'][..]);
+        // Parser arguments retain shell source. Decode once before treating the
+        // value as a path; a literal backslash is filename data on Linux/macOS.
+        let decoded = crate::completion::shell_path::decode_literal_word(path);
+        let trimmed = decoded.trim_end_matches('/');
         let Some(name) = std::path::Path::new(trimmed)
             .file_name()
             .and_then(|s| s.to_str())
@@ -145,7 +152,8 @@ impl IntegratedCompletionEngine {
             return Vec::new();
         };
 
-        if !matches_prefix(current_token, name) {
+        let query = crate::completion::shell_path::decode_literal_word(current_token);
+        if !matches_prefix(&query, name) {
             return Vec::new();
         }
 
@@ -160,8 +168,12 @@ impl IntegratedCompletionEngine {
     pub(super) fn collect_directory_candidates(
         &self,
         current_token: &str,
+        current_dir: &Path,
     ) -> Vec<EnhancedCandidate> {
-        match FileSystemGenerator::generate_directory_candidates(current_token) {
+        match FileSystemGenerator::directory_candidates(
+            current_token,
+            Some(&self.filesystem_context(current_dir)),
+        ) {
             Ok(candidates) => candidates
                 .into_iter()
                 .map(|candidate| self.convert_to_enhanced_candidate(candidate))

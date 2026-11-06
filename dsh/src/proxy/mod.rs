@@ -7,6 +7,9 @@ mod builtin;
 mod external;
 
 mod agent_policy;
+mod effective_config;
+#[cfg(test)]
+mod effective_config_tests;
 mod process_environment;
 mod shell_options;
 mod shell_proxy;
@@ -81,3 +84,9 @@ fn to_wire_snippet(snippet: crate::snippet::Snippet) -> dsh_types::snippet::Snip
 pub use builtin::jobs::parse_job_spec;
 pub use builtin::reload::format_reload_error;
 pub use builtin::z::parse_z_args;
+
+#[cfg(test)]
+pub(crate) use builtin::jobs::finalize_background_resume;
+
+#[cfg(test)]
+pub(crate) use builtin::jobs::resume_background_job_with;

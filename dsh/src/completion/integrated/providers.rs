@@ -188,14 +188,14 @@ pub(super) fn collect_task_dynamic_candidates(
 
 pub(super) fn collect_pm_dynamic_candidates(
     engine: &IntegratedCompletionEngine,
-    _request: &CompletionRequest<'_>,
+    request: &CompletionRequest<'_>,
     parsed: &ParsedCommandLine,
     cache_policy: CachePolicy,
 ) -> Vec<EnhancedCandidate> {
     if cache_policy.is_cached_only() {
         Vec::new()
     } else {
-        engine.collect_pm_candidates(parsed)
+        engine.collect_pm_candidates(parsed, request.current_dir)
     }
 }
 

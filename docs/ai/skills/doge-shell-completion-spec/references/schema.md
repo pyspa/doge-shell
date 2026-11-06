@@ -9,6 +9,7 @@
 ## option
 - `short` は `-` 1 個で始まる（`-v`, `-f <FILE>`）。`long` は `-` か `+` で始まる（`--verbose`, `-Xmx`, `+short`）。裸の `-` / `--` は不可。
 - 値を取るなら `takes_value: true` と `value_type` をセットで書く。
+- 繰り返し指定できるoptionは `multiple: true`。省略時はfalseで、使用済みならshort/longの両表記を候補から除外する。ただしglobal/subcommand間で名前が衝突する場合は別名まで除外しない。argumentの `multiple` とは別の指定。
 
 ## argument
 - `type` キーで型を書く（Rust 側のフィールド名は `arg_type` だが JSON では `type`）。

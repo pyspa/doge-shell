@@ -1,3 +1,7 @@
+//! Cursor-aware interpretation of completion definitions over lexical source.
+//! Resolve subcommand parents, option values, redirect targets and positional
+//! indexes without evaluating shell syntax. Source identity survives repeated
+//! correction and wrapper dispatch; raw provider metadata remains unchanged.
 use super::command::{
     ArgumentType, CommandCompletion, CommandCompletionDatabase, CommandOption, SubCommand,
 };
@@ -48,9 +52,10 @@ fn split_attached_short_option_value<'a>(
 }
 
 fn is_separate_value_option(raw_token: &str, options: &[&CommandOption]) -> bool {
-    options
-        .iter()
-        .any(|option| option.matches_name(raw_token) && option.expects_value())
+    options.iter().any(|option| {
+        option.matches_name(&super::shell_path::decode_literal_word(raw_token))
+            && option.expects_value()
+    })
 }
 
 /// Responsible for correcting parsed command line based on completion database
@@ -65,6 +70,52 @@ impl<'a> ContextCorrector<'a> {
 
     /// Correct the parsed command line if the parser incorrectly identified arguments as subcommands.
     pub fn correct_parsed_command_line(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
+        if parsed
+            .source
+            .as_ref()
+            .is_some_and(|source| source.suppressed)
+            || parsed.completion_context == CompletionContext::Command
+        {
+            return parsed.clone();
+        }
+        if let Some(source) = &parsed.source
+            && let Some(previous) = source
+                .cursor_word
+                .checked_sub(1)
+                .and_then(|index| source.words.get(index))
+            && Self::is_redirect_operator(&previous.raw)
+        {
+            let mut target = parsed.clone();
+            target.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: Some(ArgumentType::File { extensions: None }),
+            };
+            return target;
+        }
+        let mut corrected = self.correct_inner(parsed);
+        if corrected.source.is_some()
+            && matches!(
+                corrected.completion_context,
+                CompletionContext::Argument { .. }
+            )
+            && let Some(definition) = self.database.get_command(&corrected.command)
+        {
+            let options = self.collect_available_options(definition, &corrected.subcommand_path);
+            let start = corrected
+                .source
+                .as_ref()
+                .map_or(0, |source| source.argument_start);
+            let (_, index) =
+                Self::positional_arguments_after_raw_index(&corrected, start, &options);
+            if let CompletionContext::Argument { arg_index, .. } = &mut corrected.completion_context
+            {
+                *arg_index = index;
+            }
+        }
+        corrected
+    }
+
+    fn correct_inner(&self, parsed: &ParsedCommandLine) -> ParsedCommandLine {
         let Some(command_completion) = self.database.get_command(&parsed.command) else {
             return parsed.clone();
         };
@@ -76,6 +127,14 @@ impl<'a> ContextCorrector<'a> {
 
         // 1. Identify valid subcommand chain
         for (idx, sub_name) in parsed.subcommand_path.iter().enumerate() {
+            if parsed
+                .source
+                .as_ref()
+                .is_some_and(|source| source.cursor_word == source.command_word + idx + 1)
+            {
+                split_index = idx;
+                break;
+            }
             if let Some(sub) = Self::find_matching_subcommand(current_subcommands, sub_name) {
                 valid_subcommands.push(sub.name.clone());
                 current_subcommands = &sub.subcommands;
@@ -89,12 +148,32 @@ impl<'a> ContextCorrector<'a> {
         // If we consumed everything, or stopped at the last token
         if split_index < parsed.subcommand_path.len() {
             // We have some invalid subcommands.
-            let invalid_tokens = &parsed.subcommand_path[split_index..];
+            let invalid_tokens: Vec<String> = parsed.subcommand_path[split_index..]
+                .iter()
+                .enumerate()
+                .map(|(offset, word)| {
+                    let Some(source) = &parsed.source else {
+                        return word.clone();
+                    };
+                    let index = source.command_word + split_index + offset + 1;
+                    if index == source.cursor_word {
+                        parsed.current_token.clone()
+                    } else {
+                        source
+                            .words
+                            .get(index)
+                            .map_or_else(|| word.clone(), |span| span.raw.clone())
+                    }
+                })
+                .collect();
             let first_invalid = &invalid_tokens[0];
             let is_last_token = split_index + 1 == parsed.subcommand_path.len();
-            let is_completion_target = first_invalid == &parsed.current_token;
+            let is_completion_target = parsed.source.as_ref().map_or(
+                is_last_token && first_invalid == &parsed.current_token,
+                |source| source.cursor_word == source.command_word + split_index + 1,
+            );
 
-            if is_last_token && is_completion_target {
+            if is_completion_target {
                 // The cursor is on this token.
                 // Check if it is a partial subcommand match
                 let is_partial_subcommand = current_subcommands
@@ -106,6 +185,11 @@ impl<'a> ContextCorrector<'a> {
 
                 if is_partial_subcommand && !is_option {
                     // Treat as SubCommand completion
+                    // Keep the cursor word in raw_args so a second correction
+                    // retains its source identity and cannot consume suffix words.
+                    let mut raw = invalid_tokens.to_vec();
+                    raw.extend(new_parsed.raw_args);
+                    new_parsed.raw_args = raw;
                     new_parsed.subcommand_path = valid_subcommands;
                     // We don't push the partial token to valid_subcommands for the path,
                     // but we do want the context to be SubCommand.
@@ -168,6 +252,20 @@ impl<'a> ContextCorrector<'a> {
         if let Some(corrected) = self.correct_option_value_context(&new_parsed, command_completion)
         {
             return corrected;
+        }
+
+        // Quotes/escapes are source style, not part of a subcommand prefix.
+        // A nonmatching word belongs to arguments even when the parser guessed
+        // SubCommand because its subcommand_path was empty.
+        if new_parsed.completion_context == CompletionContext::SubCommand
+            && !current_subcommands
+                .iter()
+                .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
+        {
+            new_parsed.completion_context = CompletionContext::Argument {
+                arg_index: 0,
+                arg_type: None,
+            };
         }
 
         // Special Case: Context is SubCommand (from parser heuristic), but the matched command
@@ -235,7 +333,7 @@ impl<'a> ContextCorrector<'a> {
             if !current_subcommands.is_empty()
                 && current_subcommands
                     .iter()
-                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.current_token))
+                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
             {
                 new_parsed.completion_context = CompletionContext::SubCommand;
             }
@@ -248,10 +346,19 @@ impl<'a> ContextCorrector<'a> {
         let mut subcommands_found = false;
 
         while tokens_consumed < parsed.raw_args.len() {
-            let token = &parsed.raw_args[tokens_consumed];
+            let raw_token = &parsed.raw_args[tokens_consumed];
+            let logical_token = super::shell_path::decode_literal_word(raw_token);
+            let token = logical_token.as_str();
+            // Shell redirections do not interrupt Git/global-option argv
+            // scanning. A cursor on their target was handled above.
+            if Self::is_redirect_operator(raw_token) {
+                tokens_consumed += 2;
+                continue;
+            }
             // If this token is the current one being typed, don't consume it as a parent
             // But if it IS a valid subcommand, we should set context to SubCommand
-            let is_current = token == &new_parsed.current_token;
+            let is_current =
+                Self::current_raw_index(&new_parsed).is_some_and(|index| index == tokens_consumed);
 
             if let Some(sub) = Self::find_matching_subcommand(current_subcommands, token) {
                 if is_current {
@@ -281,8 +388,8 @@ impl<'a> ContextCorrector<'a> {
                 let available_options =
                     self.collect_available_options(command_completion, &valid_subcommands);
 
-                if Self::is_inline_long_option_value(token, &available_options)
-                    || split_attached_short_option_value(token, &available_options).is_some()
+                if Self::is_inline_long_option_value(raw_token, &available_options)
+                    || split_attached_short_option_value(raw_token, &available_options).is_some()
                 {
                     tokens_consumed += 1;
                     continue;
@@ -294,7 +401,8 @@ impl<'a> ContextCorrector<'a> {
                 {
                     tokens_consumed += 1;
                     if option.expects_value() && tokens_consumed < parsed.raw_args.len() {
-                        tokens_consumed += 1;
+                        tokens_consumed =
+                            Self::next_argv_index(&parsed.raw_args, tokens_consumed) + 1;
                     }
                     continue;
                 }
@@ -307,6 +415,9 @@ impl<'a> ContextCorrector<'a> {
         }
 
         if subcommands_found {
+            if let Some(source) = &mut new_parsed.source {
+                source.argument_start = tokens_consumed;
+            }
             new_parsed.subcommand_path = valid_subcommands;
             let available_options =
                 self.collect_available_options(command_completion, &new_parsed.subcommand_path);

@@ -690,3 +690,176 @@ fn approval_limits_apply_after_lossless_escape_and_identical_masks_still_block()
         }
     }
 }
+
+#[test]
+fn task_notices_deduplicate_outcomes_and_preserve_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = handle(dir.path());
+    assert!(old.take_notices().is_empty());
+    {
+        let mut inner = old.shared.inner.lock();
+        inner.task.complete(1);
+        inner.completed_ok = Some(true);
+    }
+    let next = handle(dir.path());
+    next.inherit_notices(&old);
+    assert_eq!(next.take_notices(), ["[AI task test-task] completed"]);
+    assert!(next.take_notices().is_empty());
+    assert!(old.take_notices().is_empty());
+}
+
+#[test]
+fn task_notices_observe_distinct_pending_identity_without_exposing_operation() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = handle(dir.path());
+    let operation = Operation {
+        tool: "execute".into(),
+        args: json!({"command":"credential-value"}),
+        canonical_targets: vec![dir.path().into()],
+        preimage_digest: None,
+        content_digest: None,
+    };
+    for _ in 0..2 {
+        {
+            let mut inner = task.shared.inner.lock();
+            let request = inner
+                .task
+                .request_manual_approval(operation.clone(), 0)
+                .unwrap();
+            inner.pending = Some(Pending {
+                request,
+                guidance: false,
+                decision: None,
+            });
+        }
+        assert_eq!(
+            task.take_notices(),
+            ["[AI task test-task] approval_waiting"]
+        );
+        assert!(task.take_notices().is_empty());
+        let mut inner = task.shared.inner.lock();
+        assert!(inner.task.pending().is_some());
+        assert!(inner.pending.as_ref().unwrap().decision.is_none());
+        inner.task.deny_approval();
+        inner.pending = None;
+    }
+    // An answered request is obsolete, even if the worker has not consumed it.
+    let mut inner = task.shared.inner.lock();
+    let request = inner.task.request_manual_approval(operation, 0).unwrap();
+    inner.pending = Some(Pending {
+        request,
+        guidance: false,
+        decision: Some(false),
+    });
+    drop(inner);
+    assert!(task.take_notices().is_empty());
+}
+
+#[test]
+fn task_notices_terminal_failure_states_and_explicit_cancel() {
+    let dir = tempfile::tempdir().unwrap();
+    for mode in 0..5 {
+        let mut task = handle(dir.path());
+        {
+            let mut inner = task.shared.inner.lock();
+            match mode {
+                0 => {
+                    inner.task.complete(1);
+                    inner.completed_ok = Some(false);
+                }
+                1 => inner.task.check_deadline(10_000),
+                2 => inner.task.record_usage(100, 0, 0, 0),
+                _ => {}
+            }
+        }
+        if mode == 3 {
+            // The real abnormal-exit guard produces a failure observation.
+            drop(WorkerGuard(task.shared.clone()));
+        } else if mode == 4 {
+            task.cancel();
+            // Worker teardown may still report false after explicit cancel.
+            task.shared.inner.lock().completed_ok = Some(false);
+            assert!(task.take_notices().is_empty());
+            continue;
+        }
+        let expected = match mode {
+            1 => "[AI task test-task] failed (timed_out)",
+            2 => "[AI task test-task] failed (budget_exhausted)",
+            _ => "[AI task test-task] failed",
+        };
+        assert_eq!(task.take_notices(), [expected]);
+        assert!(task.take_notices().is_empty());
+    }
+}
+
+#[test]
+fn task_notices_retired_queue_is_bounded_without_crowding_out_current_safety() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut current = handle(dir.path());
+    for _ in 0..40 {
+        {
+            let mut inner = current.shared.inner.lock();
+            inner.task.complete(0);
+            inner.completed_ok = Some(true);
+        }
+        let next = handle(dir.path());
+        next.inherit_notices(&current);
+        current = next;
+    }
+    let operation = Operation {
+        tool: "execute".into(),
+        args: json!({"command":"credential-value"}),
+        canonical_targets: vec![dir.path().into()],
+        preimage_digest: None,
+        content_digest: None,
+    };
+    pending_preview(&current, operation, false);
+    let lines = current.take_notices();
+    assert_eq!(lines.len(), 33);
+    assert_eq!(
+        lines.last().unwrap(),
+        "[AI task test-task] approval_waiting"
+    );
+    assert!(current.shared.inner.lock().task.pending().is_some());
+    assert!(current.take_notices().is_empty());
+}
+
+#[tokio::test]
+async fn task_notices_renderer_preserves_wrapped_unicode_input_and_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = handle(dir.path());
+    {
+        let mut inner = task.shared.inner.lock();
+        inner.task.complete(0);
+        inner.completed_ok = Some(true);
+    }
+    let mut shell = Shell::new(Environment::new_isolated());
+    shell.background_task = Some(task);
+    let mut repl = crate::repl::Repl::new(&mut shell);
+    repl.input
+        .reset("printf 日本語🙂\nkeep this input unchanged".into());
+    repl.input.move_to_begin();
+    let cursor = repl.input.cursor();
+    let mut output = Vec::new();
+    // Unsized/nonterminal renderers do not consume the pending notice.
+    repl.terminal_ui.columns = 0;
+    repl.print_task_notices(&mut output);
+    assert!(output.is_empty());
+    repl.terminal_ui.columns = 20;
+    repl.terminal_ui.prompt_mark_cache = "> ".into();
+    repl.terminal_ui.prompt_mark_width = 2;
+    repl.print_task_notices(&mut output);
+    assert_eq!(
+        repl.input.as_str(),
+        "printf 日本語🙂\nkeep this input unchanged"
+    );
+    assert_eq!(repl.input.cursor(), cursor);
+    let rendered = String::from_utf8(output.clone()).unwrap();
+    assert_eq!(rendered.matches("[AI task test-task] completed").count(), 1);
+    assert!(!rendered.contains("\x1b]133;A"));
+    assert!(rendered.contains("日本語🙂"));
+    assert!(!rendered.contains("credential-value"));
+    output.clear();
+    repl.print_task_notices(&mut output);
+    assert!(output.is_empty());
+}

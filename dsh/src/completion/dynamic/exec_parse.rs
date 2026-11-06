@@ -7,6 +7,15 @@ use super::*;
 pub(super) fn run_external_completer_for_key(
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
+    let command = external_completer_command(key);
+    let lines = collect_command_lines(command)?;
+    Ok(lines
+        .into_iter()
+        .filter_map(|line| external::parse_line(&line, &key.current_token))
+        .collect())
+}
+
+fn external_completer_command(key: &ExternalCompletionCacheKey) -> std::process::Command {
     let mut command = runner::shell_command(&key.command_template);
     command
         .current_dir(&key.current_dir)
@@ -16,17 +25,25 @@ pub(super) fn run_external_completer_for_key(
         .env("DOGESH_COMPLETION_CURRENT_TOKEN", &key.current_token)
         .env("DOGESH_COMPLETION_SUBCOMMAND_PATH", &key.subcommand_path);
 
-    let lines = collect_command_lines(command)?;
-    Ok(lines
-        .into_iter()
-        .filter_map(|line| external::parse_line(&line, &key.current_token))
-        .collect())
+    command
 }
 
 pub(super) fn run_fish_completer_for_key(
     command_path: &str,
     key: &ExternalCompletionCacheKey,
 ) -> Result<Vec<EnhancedCandidate>> {
+    let command = fish_completer_command(command_path, key);
+    let lines = collect_command_lines(command)?;
+    Ok(lines
+        .into_iter()
+        .filter_map(|line| external::parse_fish_line(&line, &key.current_token))
+        .collect())
+}
+
+fn fish_completer_command(
+    command_path: &str,
+    key: &ExternalCompletionCacheKey,
+) -> std::process::Command {
     let mut command = runner::command(command_path);
     command
         .arg("-c")
@@ -35,11 +52,7 @@ pub(super) fn run_fish_completer_for_key(
         .arg(&key.input)
         .current_dir(&key.current_dir);
 
-    let lines = collect_command_lines(command)?;
-    Ok(lines
-        .into_iter()
-        .filter_map(|line| external::parse_fish_line(&line, &key.current_token))
-        .collect())
+    command
 }
 
 pub(super) fn run_command_stdout(
@@ -182,4 +195,53 @@ pub(super) fn parse_networkctl_links(lines: &[String]) -> Vec<String> {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod command_contract_tests {
+    use super::*;
+    #[test]
+    fn external_and_fish_preserve_full_input_and_character_cursor() {
+        let input = "echo 日本語 && git checkout ma later";
+        let cursor = "echo 日本語 && git checkout ma".chars().count();
+        let parsed = crate::completion::parser::CommandLineParser::new().parse(
+            input,
+            crate::completion::command_segment::char_to_byte(input, cursor),
+        );
+        let key = ExternalCompletionCacheKey {
+            command_template: "fixed-helper".into(),
+            current_dir: std::env::temp_dir(),
+            input: input.into(),
+            cursor_pos: cursor,
+            command: parsed.command,
+            current_token: parsed.current_token,
+            subcommand_path: parsed.subcommand_path.join(" "),
+        };
+        let external = external_completer_command(&key);
+        let vars: std::collections::HashMap<_, _> = external
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(vars["DOGESH_COMPLETION_INPUT"], input);
+        assert_eq!(vars["DOGESH_COMPLETION_CURSOR"], cursor.to_string());
+        assert_eq!(vars["DOGESH_COMPLETION_COMMAND"], "git");
+        assert_eq!(vars["DOGESH_COMPLETION_CURRENT_TOKEN"], "ma");
+        assert_eq!(external.get_current_dir(), Some(key.current_dir.as_path()));
+        let mut fish_key = key;
+        fish_key.input = input.chars().take(cursor).collect();
+        let fish = fish_completer_command("fixed-fish", &fish_key);
+        let args: Vec<_> = fish
+            .get_args()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            ["-c", "complete -C \"$argv[1]\"", "--", &fish_key.input]
+        );
+    }
 }

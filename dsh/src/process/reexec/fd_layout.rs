@@ -29,6 +29,8 @@ pub const INTERNAL_FD_MIN: RawFd = 10;
 /// the request payload itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InternalHelperFds {
+    pub launch_gate: Option<RawFd>,
+    pub launch_ready: Option<RawFd>,
     pub request: RawFd,
     pub status: Option<RawFd>,
 }
@@ -39,6 +41,25 @@ impl InternalHelperFds {
     /// hidden flags are a trust boundary a user can hand-invoke.
     pub fn validate(&self) -> Result<()> {
         validate_protocol_fd(self.request, "internal exec")?;
+        anyhow::ensure!(
+            self.launch_gate.is_some() == self.launch_ready.is_some(),
+            "launch gate and ready must be paired"
+        );
+        let fds = [
+            Some(self.request),
+            self.status,
+            self.launch_gate,
+            self.launch_ready,
+        ];
+        for (index, fd) in fds.iter().enumerate() {
+            if let Some(fd) = fd {
+                validate_protocol_fd(*fd, "internal channel")?;
+                anyhow::ensure!(
+                    !fds[..index].contains(&Some(*fd)),
+                    "internal channels must differ"
+                );
+            }
+        }
         if let Some(status) = self.status {
             validate_protocol_fd(status, "internal status")?;
             if status == self.request {
@@ -287,6 +308,8 @@ mod tests {
         let request = read.as_raw_fd();
         let status = write.as_raw_fd();
         InternalHelperFds {
+            launch_gate: None,
+            launch_ready: None,
             request,
             status: Some(status),
         }
@@ -296,6 +319,8 @@ mod tests {
         for std in [0, 1, 2] {
             assert!(
                 InternalHelperFds {
+                    launch_gate: None,
+                    launch_ready: None,
                     request: std,
                     status: None,
                 }
@@ -304,6 +329,8 @@ mod tests {
             );
             assert!(
                 InternalHelperFds {
+                    launch_gate: None,
+                    launch_ready: None,
                     request,
                     status: Some(std),
                 }
@@ -314,6 +341,8 @@ mod tests {
         // Aliased channels, closed fds, and negatives fail closed.
         assert!(
             InternalHelperFds {
+                launch_gate: None,
+                launch_ready: None,
                 request,
                 status: Some(request),
             }
@@ -328,6 +357,8 @@ mod tests {
         for closed in [997_333, -1] {
             assert!(
                 InternalHelperFds {
+                    launch_gate: None,
+                    launch_ready: None,
                     request: closed,
                     status: None,
                 }

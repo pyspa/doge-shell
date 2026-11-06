@@ -484,6 +484,48 @@ fn abnormal_drop_cleans_both_directions_per_shell() {
     registry_b.cleanup_process_substitution_groups();
 }
 
+/// Every `Shell` drop runs cleanup, so the SIGTERM grace period must only
+/// be paid when a group was actually signalled. An empty registry or an
+/// already-gone group exits immediately instead of sleeping.
+#[test]
+fn cleanup_skips_grace_period_without_live_groups() {
+    use super::ProcessSubstitutionDirection::Read;
+    use std::os::unix::process::CommandExt as _;
+
+    let empty = ProcessSubstitutionRegistry::default();
+    assert_eq!(empty.cleanup_process_substitution_groups(), 0);
+
+    // A reaped group leader: its pgid no longer exists, so SIGTERM is ESRCH.
+    let mut child = std::process::Command::new("true")
+        .process_group(0)
+        .spawn()
+        .expect("spawn true");
+    let pid = Pid::from_raw(child.id() as i32);
+    child.wait().expect("reap true");
+    let gone = ProcessSubstitutionRegistry::default();
+    gone.register(pid, Read);
+    assert_eq!(gone.cleanup_process_substitution_groups(), 0);
+    assert!(gone.is_empty(), "gone helper is still released");
+}
+
+/// A live helper group is still signalled and killed.
+#[test]
+fn cleanup_kills_live_group() {
+    use super::ProcessSubstitutionDirection::Read;
+    use std::os::unix::process::CommandExt as _;
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .expect("spawn sleep");
+    let registry = ProcessSubstitutionRegistry::default();
+    registry.register(Pid::from_raw(child.id() as i32), Read);
+    assert_eq!(registry.cleanup_process_substitution_groups(), 1);
+    let status = child.wait().expect("reap sleep");
+    assert!(!status.success(), "live helper must be terminated");
+}
+
 /// Large-output drain: pipe-buffer-sized payloads must not lose tail
 /// bytes to an early consumer kill. Several hundred KiB through
 /// `>(consumer)` round-trips byte-exact.

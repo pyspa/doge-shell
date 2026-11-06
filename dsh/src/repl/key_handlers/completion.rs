@@ -1,12 +1,17 @@
 use crate::completion;
-use crate::completion::MAX_RESULT;
-use crate::completion::integrated::{CompletionReplacementRange, CompletionResult};
+use crate::completion::integrated::{
+    CompletionDisposition, CompletionReplacementRange, CompletionResult,
+};
 use crate::input::Input;
 use crate::repl::Repl;
 use crate::repl::state::{ReplControlFlow, SuggestionAcceptMode};
 use crate::terminal::renderer::TerminalRenderer;
 use anyhow::Result;
 use tracing::{debug, warn};
+
+#[cfg(test)]
+#[path = "completion_cold_tests.rs"]
+mod cold_tests;
 
 pub(crate) fn handle_accept_suggestion_word(repl: &mut Repl<'_>) -> bool {
     if repl.accept_suggestion(SuggestionAcceptMode::Word) {
@@ -50,13 +55,18 @@ pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
 }
 
 pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
-    if let Some(comp) = &repl.input.completion.take() {
-        repl.input.reset(comp.to_string());
+    repl.completion_ui.path_feedback.clear();
+    if let Some(comp) = repl.input.completion.take()
+        && comp.starts_with(repl.input.as_str())
+        && comp.len() > repl.input.as_str().len()
+    {
+        repl.input.reset(comp);
     }
     repl.completion_ui.completion.clear();
 }
 
 pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
+    repl.completion_ui.path_feedback.clear();
     if repl.input.completion.is_some() || repl.ai_ui.suggestion_manager.active.is_some() {
         repl.completion_ui.completion.clear();
         repl.ai_ui.suggestion_manager.clear();
@@ -71,7 +81,8 @@ pub(crate) fn handle_cancel_completion(repl: &mut Repl<'_>) {
 fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, smart_pipe: bool) {
     let Some(expanded) = expanded else { return };
     let replacement = if smart_pipe {
-        let Some(idx) = repl.input.as_str().rfind("|?") else {
+        let Some(idx) = crate::completion::command_segment::smart_pipe_marker(repl.input.as_str())
+        else {
             return;
         };
         format!("{}| {expanded}", &repl.input.as_str()[..idx])
@@ -83,6 +94,9 @@ fn apply_ai_completion(repl: &mut Repl<'_>, expanded: Option<String>, smart_pipe
 }
 
 pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<ReplControlFlow> {
+    repl.completion_ui.path_feedback.clear();
+    let runtime = repl.completion_ui.integrated_completion.runtime();
+    runtime.take_path_request();
     // Check for Smart Pipe Expansion (|? query)
     if let Some(smart_pipe_query) = repl.detect_smart_pipe() {
         match repl.expand_smart_pipe(smart_pipe_query).await {
@@ -111,6 +125,14 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         }
     }
 
+    // Classify before hooks, providers, legacy fallback and suggestions. An
+    // empty allowed word has a zero-width range; suppressed syntax has none.
+    let Some(lexical_range) =
+        completion::integrated::token_range_at_cursor(repl.input.as_str(), repl.input.cursor())
+    else {
+        return Ok(ReplControlFlow::Continue);
+    };
+
     // The inline grid measures the terminal and draws at its bottom edge, so
     // the reserved status row has to come back first.
     let _status_pause =
@@ -119,9 +141,6 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     // Extract the current word at cursor position for completion query
     let completion_query_owned = completion_query_for_input(&repl.input);
     let completion_query = completion_query_owned.as_deref();
-    let removal_len = completion_query_owned
-        .as_ref()
-        .map(|query| query.chars().count());
 
     // Get the current prompt text and input text for completion display context
     let prompt_text = repl.terminal_ui.prompt.read().mark.clone();
@@ -148,24 +167,23 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
 
     repl.sync_completion_jobs();
 
-    // Cold dynamic providers only schedule work on their dedicated workers.
-    // The initial TAB therefore returns static/cached candidates immediately;
-    // the completion notifier asks the REPL to refresh when dynamic data lands.
+    // Keep the first Tab request alive while cold dynamic data is collected.
+    // Editing and cancellation interrupt the wait without entering fallback.
     let CompletionResult {
+        disposition,
         candidates: engine_candidates,
         framework: completion_framework,
         replacement_range,
-    } = repl
-        .completion_ui
-        .integrated_completion
-        .complete(
-            input_text.as_str(),
-            cursor_pos,
-            current_dir.as_path(),
-            MAX_RESULT,
-            repl.shell.cmd_history.as_ref(),
-        )
-        .await;
+    } = match super::completion_wait::collect(repl, &input_text, cursor_pos, &current_dir).await {
+        Ok(result) => result,
+        Err(flow) => return Ok(flow),
+    };
+
+    if disposition == CompletionDisposition::Suppressed {
+        return Ok(ReplControlFlow::Continue);
+    }
+    let replacement_range = replacement_range.or(Some(lexical_range));
+    let expected_cursor = cursor_pos;
 
     debug!(
         "IntegratedCompletionEngine returned {} candidates (framework: {:?})",
@@ -176,17 +194,24 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     // Attempt to get completion result
     // First try with integrated engine
     if !engine_candidates.is_empty() {
-        let replacement_query_owned = replacement_range.map(|range| range_text(&input_text, range));
-        let selection_query = replacement_query_owned.as_deref().or(completion_query);
+        let selection_query_owned = replacement_range.map(|range| {
+            completion::shell_path::query_for_range(
+                &input_text,
+                range.start,
+                expected_cursor.min(range.end),
+            )
+        });
+        let selection_query = selection_query_owned.as_deref().or(completion_query);
 
         // If integrated engine returned candidates, show them with skim selector
         let completion_candidates: Vec<completion::Candidate> = repl
             .completion_ui
             .integrated_completion
             .to_candidates(engine_candidates);
-        let completion_candidates = completion::shell_path::format_candidates_for_token(
+        let completion_candidates = completion::shell_path::format_candidates_for_range(
             completion_candidates,
-            selection_query,
+            &input_text,
+            replacement_range.expect("allowed completion has a source range"),
         );
 
         let res = completion::select_completion_items_with_framework(
@@ -199,16 +224,25 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
         );
 
         match res {
+            completion::CompletionSelection::Cancelled => {
+                repl.completion_ui.start_completion = true;
+                return Ok(ReplControlFlow::Continue);
+            }
+            completion::CompletionSelection::Event(event) => {
+                repl.completion_ui.start_completion = true;
+                return Ok(ReplControlFlow::ReplayInput(event));
+            }
             completion::CompletionSelection::Selected(val) => {
                 debug!("Completion selected: '{}'", val);
                 if let Some(range) = replacement_range {
-                    repl.input
-                        .replace_range_chars(range.start, range.end, val.as_str());
-                } else {
-                    if let Some(len) = removal_len {
-                        repl.input.backspacen(len);
-                    }
-                    repl.input.insert_str(val.as_str());
+                    crate::repl::state::apply_completion_range(
+                        &mut repl.input,
+                        &input_text,
+                        expected_cursor,
+                        range.start,
+                        range.end,
+                        &val,
+                    );
                 }
                 repl.completion_ui.start_completion = true;
                 return Ok(ReplControlFlow::Continue);
@@ -220,8 +254,20 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
                 return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
                     use crate::completion::framework::SkimCompletionFramework;
                     let result = SkimCompletionFramework::run_with_skim(candidates, Some(query));
-                    Ok(result.map(|text| completion_action(text, replacement_range, removal_len)))
+                    Ok(result.map(|text| {
+                        completion_action(
+                            text,
+                            replacement_range,
+                            input_text.clone(),
+                            expected_cursor,
+                        )
+                    }))
                 })));
+            }
+            completion::CompletionSelection::Input(text) => {
+                apply_inline_input(&mut repl.input, &input_text, expected_cursor, &text);
+                repl.completion_ui.start_completion = true;
+                return Ok(ReplControlFlow::Continue);
             }
             completion::CompletionSelection::None => {
                 // Fallthrough to legacy completion below
@@ -231,10 +277,22 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
 
     // If no candidates from integrated engine, fall back to legacy completion system
     debug!("No candidates from IntegratedCompletionEngine, falling back to legacy completion");
+    let legacy_query = replacement_range.map(|range| {
+        range_text(
+            &input_text,
+            CompletionReplacementRange {
+                start: range.start,
+                end: expected_cursor.min(range.end),
+            },
+        )
+    });
+    let completion_query = legacy_query.as_deref().or(completion_query);
+    let raw_token = replacement_range.map(|range| range_text(&input_text, range));
     let completion_result = completion::input_completion(
         &repl.input,
         repl,
         completion_query,
+        raw_token.as_deref(),
         &prompt_text,
         &input_text,
     )
@@ -243,13 +301,26 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     // Process the completion result
     let mut completion_handled = false;
     match completion_result {
+        completion::CompletionSelection::Cancelled => {
+            repl.completion_ui.start_completion = true;
+            return Ok(ReplControlFlow::Continue);
+        }
+        completion::CompletionSelection::Event(event) => {
+            repl.completion_ui.start_completion = true;
+            return Ok(ReplControlFlow::ReplayInput(event));
+        }
         completion::CompletionSelection::Selected(val) => {
             debug!("Completion selected: '{}'", val);
-            // Replace the query part with the selected value.
-            if let Some(len) = removal_len {
-                repl.input.backspacen(len); // Remove the original query text
+            if let Some(range) = replacement_range {
+                crate::repl::state::apply_completion_range(
+                    &mut repl.input,
+                    &input_text,
+                    expected_cursor,
+                    range.start,
+                    range.end,
+                    &val,
+                );
             }
-            repl.input.insert_str(val.as_str()); // Insert the completion
             completion_handled = true;
         }
         completion::CompletionSelection::Interactive(items, query) => {
@@ -257,13 +328,14 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
             return Ok(ReplControlFlow::RunInteractive(Box::new(move || {
                 use crate::completion::framework::SkimCompletionFramework;
                 let result = SkimCompletionFramework::run_with_skim(items, Some(query));
-                Ok(
-                    result.map(|text| crate::repl::state::InteractiveAction::Patch {
-                        text,
-                        backspace_count: removal_len.unwrap_or(0),
-                    }),
-                )
+                Ok(result.map(|text| {
+                    completion_action(text, replacement_range, input_text.clone(), expected_cursor)
+                }))
             })));
+        }
+        completion::CompletionSelection::Input(text) => {
+            apply_inline_input(&mut repl.input, &input_text, expected_cursor, &text);
+            completion_handled = true;
         }
         completion::CompletionSelection::None => {
             // No completion found
@@ -271,13 +343,25 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     }
 
     if !completion_handled {
-        // Fallback: If we have an active suggestion, accept the next word of it.
+        // Preserve the existing explicit-Tab suggestion acceptance fallback.
         if repl.accept_suggestion(SuggestionAcceptMode::Word) {
             debug!("No standard completion, accepted suggestion word fallback");
-            // completion_handled = true;
+            completion_handled = true;
         } else {
             debug!("No completion selected and no suggestion to accept");
         }
+    }
+    if !completion_handled && let Some(receipt) = runtime.take_path_request() {
+        repl.completion_ui.path_feedback.request(
+            &input_text,
+            expected_cursor,
+            repl.shell
+                .environment
+                .read()
+                .completion_state
+                .path_generation,
+            receipt,
+        );
     }
 
     // Force a redraw after completion to update the display
@@ -285,30 +369,37 @@ pub(crate) async fn handle_trigger_completion(repl: &mut Repl<'_>) -> Result<Rep
     Ok(ReplControlFlow::Continue)
 }
 
+fn apply_inline_input(input: &mut Input, expected_input: &str, expected_cursor: usize, text: &str) {
+    if input.as_str() == expected_input && input.cursor() == expected_cursor {
+        input.insert_str(text);
+    }
+}
+
 fn completion_action(
     text: String,
     replacement_range: Option<CompletionReplacementRange>,
-    removal_len: Option<usize>,
+    expected_input: String,
+    expected_cursor: usize,
 ) -> crate::repl::state::InteractiveAction {
-    if let Some(range) = replacement_range {
-        crate::repl::state::InteractiveAction::ReplaceRange {
-            start: range.start,
-            end: range.end,
-            text,
-        }
-    } else {
-        crate::repl::state::InteractiveAction::Patch {
-            text,
-            backspace_count: removal_len.unwrap_or(0),
-        }
+    let range = replacement_range.expect("allowed completion always has a source range");
+    crate::repl::state::InteractiveAction::ReplaceRange {
+        expected_input,
+        expected_cursor,
+        start: range.start,
+        end: range.end,
+        text,
     }
 }
 
 fn completion_query_for_input(input: &Input) -> Option<String> {
-    match input.get_cursor_word() {
-        Ok(Some((_rule, span))) => Some(span.as_str().to_string()),
-        _ => input.get_completion_word_fallback(),
-    }
+    let range = completion::integrated::token_range_at_cursor(input.as_str(), input.cursor())?;
+    Some(range_text(
+        input.as_str(),
+        CompletionReplacementRange {
+            start: range.start,
+            end: input.cursor().min(range.end),
+        },
+    ))
 }
 
 fn range_text(input: &str, range: CompletionReplacementRange) -> String {
@@ -343,12 +434,158 @@ mod tests {
         state
     }
 
+    #[tokio::test]
+    async fn tab_preserves_suppressed_regions_and_replaces_middle_legacy_word() {
+        use crate::{environment::Environment, repl::Repl, shell::Shell};
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture
+            .path()
+            .join("界e\u{301}-audit-unique-completion.txt");
+        std::fs::write(&path, "fixture").unwrap();
+        let prefix = path.to_string_lossy().trim_end_matches(".txt").to_string();
+        for before in [
+            format!("echo # {prefix}"),
+            format!("echo |: select {prefix}"),
+            format!("echo |> {prefix}"),
+            format!("echo |:\n select {prefix}"),
+        ] {
+            let env = Environment::new_synthetic();
+            env.write().variable_state.paths.clear();
+            let mut shell = Shell::new(env);
+            let mut repl = Repl::new(&mut shell);
+            repl.input.reset(before.clone());
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            assert_eq!(repl.input.as_str(), before);
+        }
+        let env = Environment::new_synthetic();
+        env.write().variable_state.paths.clear();
+        let mut shell = Shell::new(env);
+        let mut repl = Repl::new(&mut shell);
+        let before = format!("git switch {prefix}.txt tail");
+        repl.input.reset(before.clone());
+        repl.input
+            .move_to(format!("git switch {prefix}").chars().count());
+        super::handle_trigger_completion(&mut repl).await.unwrap();
+        assert_eq!(repl.input.as_str(), before);
+    }
+
+    #[test]
+    fn inline_typing_inserts_source_at_middle_cursor_without_reencoding() {
+        for (marked, expected) in [
+            (r"echo dir\ with\ space/fo§", r"echo dir\ with\ space/fox"),
+            ("probe ol§d tail", "probe olxd tail"),
+            ("echo 界e§\u{301} tail", "echo 界ex\u{301} tail"),
+            ("echo \"dir with space/fo§", "echo \"dir with space/fox"),
+            ("echo 'dir with space/fo§", "echo 'dir with space/fox"),
+            ("echo | fo§", "echo | fox"),
+            ("echo | §", "echo | x"),
+        ] {
+            let cursor = marked[..marked.find('§').unwrap()].chars().count();
+            let before = &marked.replace('§', "");
+            let mut input = input_state(before);
+            input.move_to(cursor);
+            super::apply_inline_input(&mut input, before, cursor, "x");
+            assert_eq!(input.as_str(), expected);
+        }
+    }
+
+    #[test]
+    fn inline_typing_rejects_stale_input_and_cursor() {
+        for (new_input, cursor) in [("echo newer", 7), ("echo old", 8)] {
+            let mut input = input_state(new_input);
+            input.move_to(cursor);
+            super::apply_inline_input(&mut input, "echo old", 7, "x");
+            assert_eq!(input.as_str(), new_input);
+            assert_eq!(input.cursor(), cursor);
+        }
+    }
+
+    #[test]
+    fn delayed_and_inline_completion_only_apply_to_original_editor_snapshot() {
+        use crate::completion::{
+            display::Candidate, framework::SkimCompletionFramework,
+            shell_path::format_candidates_for_token,
+        };
+        use skim::SkimItem;
+        let before = "echo 界 old tail";
+        let candidates =
+            format_candidates_for_token(vec![Candidate::Basic("hello world".into())], None);
+        // Inline uses the displayed candidate's output; Skim's deterministic
+        // single-result path shares its production output contract.
+        for text in [
+            candidates[0].output().to_string(),
+            SkimCompletionFramework::run_with_skim(candidates.clone(), None).unwrap(),
+        ] {
+            let action = completion_action(
+                text,
+                Some(CompletionReplacementRange { start: 7, end: 10 }),
+                before.into(),
+                8,
+            );
+            let InteractiveAction::ReplaceRange {
+                expected_input,
+                expected_cursor,
+                start,
+                end,
+                text,
+            } = action
+            else {
+                panic!("range action required")
+            };
+            for (new_input, new_cursor, applies) in [
+                (before, 8, true),
+                (before, 9, false),
+                ("echo newer text", 8, false),
+            ] {
+                let mut input = input_state(new_input);
+                input.move_to(new_cursor);
+                let applied = crate::repl::state::apply_completion_range(
+                    &mut input,
+                    &expected_input,
+                    expected_cursor,
+                    start,
+                    end,
+                    &text,
+                );
+                assert_eq!(applied, applies);
+                assert_eq!(
+                    input.as_str(),
+                    if applies {
+                        "echo 界 hello\\ world tail"
+                    } else {
+                        new_input
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn smart_pipe_marker_is_only_top_level_and_ai_query_remains_opaque() {
+        use crate::completion::command_segment::smart_pipe_marker;
+        for input in [
+            "echo # |? ignored",
+            "echo '|? ignored'",
+            "echo \\|?ignored",
+            "echo $(printf '|?')",
+            "echo |: select x |? ignored",
+            "echo |> x |? ignored",
+        ] {
+            assert_eq!(smart_pipe_marker(input), None, "{input:?}");
+        }
+        assert_eq!(
+            smart_pipe_marker("echo |? summarize # text |? remains query"),
+            Some(5)
+        );
+    }
+
     #[test]
     fn integrated_replacement_range_creates_replace_range_action() {
         let action = completion_action(
             "dev-cluster".to_string(),
             Some(CompletionReplacementRange { start: 18, end: 20 }),
-            Some(12),
+            "original".to_string(),
+            12,
         );
 
         assert!(matches!(
@@ -356,21 +593,8 @@ mod tests {
             InteractiveAction::ReplaceRange {
                 start: 18,
                 end: 20,
-                text
+                text, ..
             } if text == "dev-cluster"
-        ));
-    }
-
-    #[test]
-    fn legacy_completion_creates_patch_action() {
-        let action = completion_action("status".to_string(), None, Some(2));
-
-        assert!(matches!(
-            action,
-            InteractiveAction::Patch {
-                backspace_count: 2,
-                text
-            } if text == "status"
         ));
     }
 
@@ -489,5 +713,62 @@ mod tests {
             assert_eq!(repl.input.as_str().replace("\"echo\"", "echo"), expected);
         }
         assert_eq!(service.0.load(Ordering::SeqCst), 3);
+    }
+}
+
+#[cfg(test)]
+mod cursor_context_tests {
+    #[tokio::test]
+    async fn actual_tab_uses_files_for_redirect_targets_at_middle_cursor() {
+        use crate::{environment::Environment, repl::Repl, shell::Shell};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("界é audit.txt");
+        std::fs::write(&path, "fixture").unwrap();
+        let prefix = path
+            .to_string_lossy()
+            .trim_end_matches("it.txt")
+            .to_string();
+        for left in ["bg > ", "bg >", "bg >>", "echo ok && bg > ", "bg -- > "] {
+            let environment = Environment::new_synthetic();
+            environment.write().variable_state.paths.clear();
+            let mut shell = Shell::new(environment);
+            let mut repl = Repl::new(&mut shell);
+            let before = format!("{left}\"{prefix}wrong\" tail");
+            repl.input.reset(before);
+            repl.input
+                .move_to(format!("{left}\"{prefix}").chars().count());
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            assert_eq!(
+                repl.input.as_str(),
+                format!("{left}\"{}\" tail", path.display())
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tab_tests {
+    #[tokio::test]
+    async fn tab_preserves_descriptor_targets_and_operator_interiors() {
+        use crate::{environment::Environment, repl::Repl, shell::Shell};
+        for marked in [
+            "bg 2>&12345§",
+            "bg 2>&§1",
+            "unknown 2<&0§",
+            "echo 日 && bg 2>§&1",
+            "bg >§>out",
+        ] {
+            let cursor = marked[..marked.find('§').unwrap()].chars().count();
+            let before = marked.replace('§', "");
+            let env = Environment::new_synthetic();
+            env.write().variable_state.paths.clear();
+            let mut shell = Shell::new(env);
+            let mut repl = Repl::new(&mut shell);
+            repl.input.reset(before.clone());
+            repl.input.move_to(cursor);
+            super::handle_trigger_completion(&mut repl).await.unwrap();
+            assert_eq!(repl.input.as_str(), before, "{marked}");
+            assert_eq!(repl.input.cursor(), cursor, "{marked}");
+        }
     }
 }

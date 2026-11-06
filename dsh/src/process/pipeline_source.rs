@@ -66,6 +66,7 @@ pub(crate) fn spawn_synthetic_source(
     ctx: &mut dsh_types::Context,
     shell: &crate::shell::Shell,
     process: &mut PipelineSourceProcess,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> anyhow::Result<nix::unistd::Pid> {
     // `spawn_pipeline_source` copies into JSON once; no clone needed here.
     let child = super::reexec::spawn_pipeline_source(
@@ -75,6 +76,7 @@ pub(crate) fn spawn_synthetic_source(
         process.stdout,
         process.stderr,
         &process.data,
+        admission,
     )?;
     process.pid = Some(child);
     Ok(child)

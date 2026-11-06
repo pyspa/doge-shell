@@ -103,6 +103,13 @@ pub fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
 
     for candidate in items {
         let (name, _description) = match &candidate {
+            Candidate::HomePath(candidate) | Candidate::Prepared { candidate, .. } => (
+                candidate.get_display_name().to_string(),
+                candidate.get_description().unwrap_or_default().to_string(),
+            ),
+            Candidate::ShellSyntax {
+                text, description, ..
+            } => (text.clone(), description.clone().unwrap_or_default()),
             Candidate::Item(name, desc) => (name.clone(), desc.clone()),
             Candidate::Path(name) => (name.clone(), "(path)".to_string()),
             Candidate::Basic(name) => (name.clone(), "(basic)".to_string()),
@@ -121,7 +128,8 @@ pub fn deduplicate_candidates(items: Vec<Candidate>) -> Vec<Candidate> {
         // Trim a trailing separator first so directory names ending in `/`
         // (path.rs's convention) don't have `rfind('/')` match that trailing
         // slash itself and collapse `base_name` to an empty string.
-        let trimmed_name = name.trim_end_matches(['/', '\\']);
+        // On Linux/macOS a backslash is literal filename data.
+        let trimmed_name = name.trim_end_matches('/');
         let base_name = if let Some(pos) = trimmed_name.rfind('/') {
             &trimmed_name[pos + 1..]
         } else {

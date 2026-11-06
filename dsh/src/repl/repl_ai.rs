@@ -180,14 +180,21 @@ impl<'a> Repl<'a> {
             }
         }
 
-        if candidates.is_empty()
-            && let Some(extra) = super::completion::completion_suggestion(
-                &self.input,
-                current_input.as_str(),
-                &self.shell.environment,
-            )
-        {
-            candidates.push(extra);
+        if candidates.is_empty() {
+            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
+            if let Some(filesystem) = self
+                .completion_ui
+                .integrated_completion
+                .filesystem_context_for_input(&current_input, cursor_pos, &current_dir)
+                && let Some(extra) = super::completion::completion_suggestion(
+                    &self.input,
+                    current_input.as_str(),
+                    &self.shell.environment,
+                    &filesystem,
+                )
+            {
+                candidates.push(extra);
+            }
         }
 
         // If no deterministic candidates are available, try AI with full context.
@@ -197,6 +204,7 @@ impl<'a> Repl<'a> {
         // suggestions but stops a request per character.
         if candidates.is_empty()
             && self.ai_ui.input_preferences.ai_backfill
+            && !self.shell.environment.read().path_ghost_pending()
             && self.ai_ui.last_input_change_time.elapsed() >= AI_BACKFILL_DEBOUNCE
         {
             let (cwd, files) = {
@@ -230,6 +238,11 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) async fn force_ai_suggestion(&mut self) -> bool {
+        // Hold the current shared service before collecting any user context.
+        // The holders exist even when their shared client slot is unavailable.
+        let Some(service) = self.ai_service() else {
+            return false;
+        };
         self.completion_ui.completion.clear();
         self.ai_ui.suggestion_manager.clear();
 
@@ -267,7 +280,6 @@ impl<'a> Repl<'a> {
 
         let start = std::time::Instant::now();
         let timeout = std::time::Duration::from_secs(15);
-        let service = self.ai_service();
         let last_status = self.state.last_status;
         let engine = &self.ai_ui.suggestion_manager.engine;
 
@@ -297,15 +309,8 @@ impl<'a> Repl<'a> {
             }
         };
 
-        let outcome = match &service {
-            Some(service) => {
-                crate::ai_features::await_with_progress("🤖 Thinking...", service.as_ref(), poll)
-                    .await
-            }
-            // Without a service there is nothing to cancel and nothing to
-            // wait for; the poll falls through to its timeout immediately.
-            None => Some(poll.await),
-        };
+        let outcome =
+            crate::ai_features::await_with_progress("🤖 Thinking...", service.as_ref(), poll).await;
 
         match outcome {
             Some(Some(state)) => {
@@ -368,7 +373,7 @@ impl<'a> Repl<'a> {
 
     pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
         let input = self.input.as_str();
-        if let Some(idx) = input.rfind("|?") {
+        if let Some(idx) = crate::completion::command_segment::smart_pipe_marker(input) {
             let query = input[idx + 2..].trim();
             if !query.is_empty() {
                 return Some(query.to_string());

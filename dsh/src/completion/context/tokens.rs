@@ -7,38 +7,51 @@ use super::*;
 impl ContextCorrector<'_> {
     pub(super) fn is_inline_long_option_value(token: &str, options: &[&CommandOption]) -> bool {
         if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options
-                .iter()
-                .any(|option| option.matches_name(option_name) && option.expects_value());
+            return options.iter().any(|option| {
+                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
+                    && option.expects_value()
+            });
         }
         false
     }
 
     pub(super) fn looks_like_known_option(token: &str, options: &[&CommandOption]) -> bool {
         if let Some((option_name, _)) = split_inline_long_option(token) {
-            return options
-                .iter()
-                .any(|option| option.matches_name(option_name));
+            return options.iter().any(|option| {
+                option.matches_name(&super::super::shell_path::decode_literal_word(option_name))
+            });
         }
 
-        options.iter().any(|option| option.matches_name(token))
-            || split_attached_short_option_value(token, options).is_some()
+        options.iter().any(|option| {
+            option.matches_name(&super::super::shell_path::decode_literal_word(token))
+        }) || split_attached_short_option_value(token, options).is_some()
     }
 
     pub(super) fn is_redirect_operator(token: &str) -> bool {
-        if matches!(token, ">" | ">>" | "<" | "&>" | "&>>") {
-            return true;
-        }
+        CommandLineParser::is_redirect_operator(token)
+    }
 
-        if let Some(prefix) = token.strip_suffix(">>") {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+    /// The next argv word, retaining raw indexes for cursor/replacement spans.
+    /// Shell redirections may also occur between an option and its value.
+    pub(super) fn next_argv_index(args: &[String], mut index: usize) -> usize {
+        while args
+            .get(index)
+            .is_some_and(|token| Self::is_redirect_operator(token))
+        {
+            index += 2;
         }
+        index.min(args.len())
+    }
 
-        if let Some(prefix) = token.strip_suffix('>') {
-            return prefix.is_empty() || prefix.chars().all(|c| c.is_ascii_digit());
+    pub(super) fn previous_argv_token(parsed: &ParsedCommandLine) -> Option<&str> {
+        let current = Self::current_raw_index(parsed)?;
+        let mut index = Self::next_argv_index(&parsed.raw_args, 0);
+        let mut previous = None;
+        while index < current {
+            previous = parsed.raw_args.get(index).map(String::as_str);
+            index = Self::next_argv_index(&parsed.raw_args, index + 1);
         }
-
-        false
+        previous
     }
 
     pub(super) fn remove_current_value_from_arguments(parsed: &mut ParsedCommandLine) {
@@ -84,6 +97,9 @@ impl ContextCorrector<'_> {
         if parsed.raw_args.is_empty() {
             return None;
         }
+        if let Some(source) = &parsed.source {
+            return source.raw_index(parsed.raw_args.len());
+        }
 
         if parsed.current_token.is_empty()
             && let Some(index) = parsed.raw_args.iter().rposition(|token| {
@@ -110,19 +126,6 @@ impl ContextCorrector<'_> {
         }
 
         Some(parsed.raw_args.len())
-    }
-
-    pub(super) fn previous_raw_token(parsed: &ParsedCommandLine) -> Option<&str> {
-        if parsed.raw_args.is_empty() {
-            return None;
-        }
-
-        let current_index = Self::current_raw_index(parsed).unwrap_or(parsed.raw_args.len());
-
-        parsed
-            .raw_args
-            .get(current_index.checked_sub(1)?)
-            .map(String::as_str)
     }
 
     pub(super) fn collect_available_options<'b>(
@@ -185,12 +188,39 @@ impl ContextCorrector<'_> {
         None
     }
 
+    pub(crate) fn argument_raw_index(
+        &self,
+        parsed: &ParsedCommandLine,
+        wanted: usize,
+    ) -> Option<usize> {
+        let definition = self.database.get_command(&parsed.command)?;
+        let options = self.collect_available_options(definition, &parsed.subcommand_path);
+        let start = parsed
+            .source
+            .as_ref()
+            .map_or(0, |source| source.argument_start);
+        Self::positional_raw_indices(parsed, start, &options)
+            .get(wanted)
+            .copied()
+    }
+
     pub fn reparse_inner_command(
         &self,
         parsed: &ParsedCommandLine,
         cmd_index: usize,
         cmd_name: String,
     ) -> ParsedCommandLine {
+        if let Some(source) = &parsed.source
+            && let Some(raw_index) = self.argument_raw_index(parsed, cmd_index)
+        {
+            let offset = source.words.len().saturating_sub(parsed.raw_args.len());
+            if let Some(word) = source.words.get(offset + raw_index) {
+                return CommandLineParser::new().parse(
+                    &source.input[word.byte_start..],
+                    source.cursor.saturating_sub(word.byte_start),
+                );
+            }
+        }
         let mut input_parts = Vec::new();
         input_parts.push(cmd_name);
 

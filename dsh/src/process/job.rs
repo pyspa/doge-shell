@@ -1,3 +1,7 @@
+//! Job construction and launch ownership. Lifecycle summary updates stay in
+//! this module; observers use `Job::lifecycle_state` and final status uses
+//! `Job::final_exit_status`.
+
 use anyhow::Result;
 use libc::{STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use nix::sys::signal::{Signal, killpg};
@@ -28,6 +32,16 @@ mod lifecycle_property_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 
+/// A job owns its process tree and cached lifecycle summary.
+///
+/// Callers may observe the summary but cannot overwrite it independently of
+/// the process lifecycle:
+///
+/// ```compile_fail,E0616
+/// use doge_shell::process::{Job, ProcessState};
+/// let mut job = Job::new_with_process("true".into(), "true".into(), vec!["true".into()]);
+/// job.state = ProcessState::Completed(0, None);
+/// ```
 #[derive(Debug)]
 pub struct Job {
     pub id: String,
@@ -47,7 +61,7 @@ pub struct Job {
     pub env_overrides: Vec<(String, String)>,
     pub list_op: ListOp,
     pub job_id: usize,
-    pub state: ProcessState,
+    state: ProcessState,
     /// Frozen pipeline status policy snapshotted at `launch` time.
     ///
     /// `Job.state` stays the lifecycle summary (tail stage on completion);
@@ -55,6 +69,10 @@ pub struct Job {
     /// `final_exit_status()`. Finalization never reads live shell options.
     pub(crate) pipeline_status_policy: PipelineStatusPolicy,
     pub(crate) monitors: Vec<OutputMonitor>,
+    /// FullProxy parent diagnostics awaiting completed history capture.
+    pub(crate) parent_exec_diagnostics: Vec<u8>,
+    pub(crate) launch_admission: Option<super::launch_admission::LaunchAdmission>,
+    pub(crate) exec_reports: Vec<super::fork::PendingExecReport>,
     pub(crate) shell_pgid: Pid,
     /// Whether to capture output for $OUT variable
     pub capture_output: bool,
@@ -117,6 +135,9 @@ impl Job {
             state: ProcessState::Running,
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
+            parent_exec_diagnostics: Vec::new(),
+            exec_reports: Vec::new(),
+            launch_admission: None,
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -154,6 +175,9 @@ impl Job {
             state: ProcessState::Running,
             pipeline_status_policy: PipelineStatusPolicy::default(),
             monitors: Vec::new(),
+            parent_exec_diagnostics: Vec::new(),
+            exec_reports: Vec::new(),
+            launch_admission: None,
             shell_pgid,
             capture_output: false,
             pty: None,
@@ -343,7 +367,15 @@ impl Job {
         // source of truth for the committed `job.pty_mode` (no side channel).
         let pty_child = self.setup_pty(ctx).await?;
         let _pty_raw_mode_guard = job_pty::ForegroundPtyRawModeGuard::new(self, ctx);
+        let _terminal_guard = job_wait::LaunchTerminalGuard::new(self, ctx);
 
+        if ctx.interactive
+            && ctx.foreground
+            && job_wait::can_handoff_terminal()
+            && pty_child.is_none_or(|pty| pty.mode != PtyMode::FullProxy)
+        {
+            self.launch_admission = Some(Default::default());
+        }
         // 2. Launch processes
         if let Some(mut process) = self.process.take() {
             debug!(
@@ -425,47 +457,48 @@ impl Job {
             return super::async_list::launch_async_list_process(self, ctx, shell, process);
         }
         let previous_infile = ctx.infile;
-        // Use launch for automatic capture (modified internal logic)
-        let (pid, mut next_process, applied_redirects, launched_monitors, terminal_launch_failure) =
-            match process
-                .launch(ctx, shell, self.stdout, pty, pipeline_context)
-                .await
-            {
-                Ok(ProcessLaunchOutcome::Launched {
-                    pid,
-                    next_process,
-                    redirects,
-                    monitors,
-                    terminal_launch_failure,
-                }) => (
-                    pid,
-                    next_process,
-                    redirects,
-                    monitors,
-                    terminal_launch_failure,
-                ),
-                // The stage never spawned and its own wiring is already unwound:
-                // stop upstream stages and
-                // report the command failure.
-                Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
-                    self.close_failed_stage_input(ctx, previous_infile);
-                    self.abort_spawned_stages().await;
-                    return Ok(StageLaunchOutcome::CommandFailed(failure));
-                }
-                Err(err) => {
-                    self.close_failed_stage_input(ctx, previous_infile);
-                    return Err(err);
-                }
-            };
+        let (pid, mut next_process, applied_redirects, terminal_launch_failure) = match process
+            .launch_admitted(
+                ctx,
+                shell,
+                self.stdout,
+                pty,
+                pipeline_context,
+                self.launch_admission.as_mut(),
+            )
+            .await
+        {
+            Ok(ProcessLaunchOutcome::Launched {
+                pid,
+                next_process,
+                redirects,
+                monitors,
+                terminal_launch_failure,
+                parent_exec_diagnostics,
+                exec_report,
+            }) => {
+                // The child exists: move monitors and parent diagnostic bytes
+                // into job ownership exactly once, before stage finalization.
+                self.monitors.extend(monitors);
+                self.exec_reports.extend(exec_report);
+                self.parent_exec_diagnostics.extend(parent_exec_diagnostics);
+                (pid, next_process, redirects, terminal_launch_failure)
+            }
+            // The stage never spawned and its own wiring is already unwound.
+            Ok(ProcessLaunchOutcome::CommandFailed(failure)) => {
+                self.close_failed_stage_input(ctx, previous_infile);
+                self.abort_spawned_stages().await;
+                return Ok(StageLaunchOutcome::CommandFailed(failure));
+            }
+            Err(err) => {
+                self.close_failed_stage_input(ctx, previous_infile);
+                return Err(err);
+            }
+        };
         if self.pid.is_none() {
             self.pid = Some(pid); // set process pid
         }
-        self.state = process.get_state();
-
-        // The child exists now: move the pre-spawn capture monitors into
-        // job ownership exactly once. No raw-fd reader stays on the process.
-        self.monitors.extend(launched_monitors);
-        self.set_process(process.to_owned());
+        self.record_launched_process(process.to_owned());
 
         let (stdin, stdout, stderr) = process.get_io();
         let pty_slave = pty.map(|pty| pty.slave);
@@ -731,66 +764,6 @@ impl Job {
 
     pub fn kill(&mut self) -> Result<()> {
         self.signal(Signal::SIGKILL)
-    }
-
-    pub fn update_status(&mut self) -> bool {
-        let old_state = self.state;
-
-        // Poll individual process states, then re-derive the job summary
-        // from the whole tree. The root stage's returned state must not be
-        // copied directly: it is order-dependent for pipelines.
-        if let Some(process) = self.process.as_mut() {
-            let _ = process.update_state();
-        }
-        self.refresh_lifecycle_state();
-
-        if old_state != self.state {
-            debug!(
-                "JOB_STATE_CHANGE: Job {} state changed: {:?} -> {:?} (pid: {:?}, pgid: {:?})",
-                self.job_id, old_state, self.state, self.pid, self.pgid
-            );
-
-            match (&old_state, &self.state) {
-                (ProcessState::Running, ProcessState::Stopped(pid, signal)) => {
-                    debug!(
-                        "JOB_STOPPED: Job {} stopped by signal {:?} (pid: {:?})",
-                        self.job_id, signal, pid
-                    );
-                }
-                (ProcessState::Stopped(_, _), ProcessState::Running) => {
-                    debug!(
-                        "JOB_RESUMED: Job {} resumed from stopped state",
-                        self.job_id
-                    );
-                }
-                (ProcessState::Running, ProcessState::Completed(exit_code, signal)) => {
-                    debug!(
-                        "JOB_COMPLETED: Job {} completed with exit_code: {}, signal: {:?}",
-                        self.job_id, exit_code, signal
-                    );
-                }
-                (ProcessState::Stopped(_, _), ProcessState::Completed(exit_code, signal)) => {
-                    debug!(
-                        "JOB_COMPLETED_FROM_STOP: Job {} completed from stopped state with exit_code: {}, signal: {:?}",
-                        self.job_id, exit_code, signal
-                    );
-                }
-                _ => {
-                    debug!(
-                        "JOB_STATE_OTHER: Job {} other state transition: {:?} -> {:?}",
-                        self.job_id, old_state, self.state
-                    );
-                }
-            }
-        }
-
-        let is_completed = self.is_process_tree_completed();
-        debug!(
-            "JOB_COMPLETION_CHECK: Job {} completion check result: {} (current state: {:?})",
-            self.job_id, is_completed, self.state
-        );
-
-        is_completed
     }
 }
 

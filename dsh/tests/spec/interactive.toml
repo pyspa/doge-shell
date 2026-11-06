@@ -1,5 +1,16 @@
 version = 1
 
+[[case]]
+id = "interactive.foreground-chat-error-status"
+class = "dogesh"
+mode = "interactive"
+script = "PRIOR=success\n!\necho CHAT_STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CHAT_STATUS:1"]
+stderr_contains = ["chat: message content required"]
+
 # Interactive mode (`dogesh` reading lines from stdin): same semantics,
 # prompt-wrapped output, so only containment assertions are used.
 
@@ -52,3 +63,26 @@ script = "!& literal 'broken $(echo unexpected) |! text &"
 [case.expect]
 status = 1
 stderr_contains = ["!& requires an interactive input/output TTY"]
+
+[[case]]
+id = "interactive.generic-eval-error-status-and-recovery"
+class = "dogesh"
+mode = "interactive"
+script = "touch status-a status-b\necho hidden > status-* || echo should-not-run\necho ERROR_STATUS:$?\nRECOVERED=yes\necho RECOVERY_STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["ERROR_STATUS:1", "RECOVERY_STATUS:0"]
+stdout_not_contains = ["should-not-run"]
+stderr_contains = ["ambiguous redirect"]
+
+[[case]]
+id = "interactive.authorization-cancellation-keeps-status"
+class = "dogesh"
+mode = "interactive"
+script = "rm -rf nonexistent-status-victim ; echo should-not-run\necho CANCEL_STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["CANCEL_STATUS:130"]
+stdout_not_contains = ["should-not-run"]

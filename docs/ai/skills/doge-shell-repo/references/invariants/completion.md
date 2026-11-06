@@ -3,6 +3,17 @@
 [../invariants.md](../invariants.md) の索引から。短いが破りやすいルール。
 
 - subcommand補正後の引数位置は既存の `positional_arguments_after_raw_index` で数える。`specified_arguments.len()` はcursor後方の引数も含むため、task_idの後にrequest_idがあると別引数の補完になる。
+- ファイル補完は要求のcwdと論理HOMEを参照し、上位の結果キャッシュも両方を区別する。TABと入力中のパス候補で参照先を変えない。件数制限は名前・拡張子・種別の絞り込み後に行い、ディレクトリ列挙を先に打ち切らない。
+- 入力ごとのゴースト補完は共有キャッシュを借用して最良候補だけを選ぶ。全件の複製・候補Vecの構築・再ソートを行わず、返す1件だけを文字列化する。全件キャッシュを維持する変更では、大規模ディレクトリのキャッシュヒット時も計測する。
+- ファイル候補の先頭 `-` は挿入時に `./` で保護する。引用符だけではCLIのオプション解釈を防げない。表示名は保ち、通常のオプション候補には適用しない。単一引用符内の `$` と引用符内の `~` はファイル名として扱う。
+- 統合結果キャッシュのhitで期限を延長しない。繰り返しTABを押しても、作成時点の期限後にはファイル等の変更を取得する。
+- 旧方式のキャッシュもcwd・論理HOME・PATH値/世代を区別し、収集とキーに同じsnapshotを使う。hitで期限を延長しない。
+- ゴースト候補は解析結果がNoneなら失効させ、履歴候補は今回取得したsuffixから再構築する。確定時も現在の入力の継続であることを確認する。
+- 一覧のCancelledを候補なしへ変換しない。編集キー・Paste・Resizeは元のEventのままREPLへ返す。移動テストはmockへの呼出しだけでなく実表示クラスの選択位置を検証する。
+- aliasの固定引数はparserのargv0書換authorityで内部sourceに反映する。解析/候補cacheはalias変更を区別し、公開置換範囲と外部provider入力は元の入力座標を保つ。
+- 旧Lispのcommand補完も共有subprocess authorityで時間/出力を制限する。非同期待機の取消・drop時はworkerへ通知し、子process groupを終了/回収する。
+- Gitの `-C` はcursorより前のglobal optionだけを順に解決し、TAB・cached ghost・ファイル候補で同じcwdを使う。リダイレクトと対象はargvから除外し、リダイレクト先の補完にはシェルのcwdを使う。入力をそのまま解釈する外部/Fish補完には元のcwdを渡し、二重適用を避ける。
+- GitのNUL区切りパスは空白だけの名前も含めて保持する。porcelainのパスはリポジトリルート基準なので、cwd相対へ変換してから照合する。変換済み候補のキャッシュはcwd単位とし、削除済みファイルの変換にcanonicalizeを要求しない。
 
 - 埋め込み元は `completions/` ただ 1 つ（`dsh/src/completion/json_loader.rs` の `#[folder = "../completions/"]`）。ディレクトリを増やさない。以前は `dsh/completions/` との二重管理で、root にだけ足した 4 ファイルが出荷バイナリに載っていなかった。
 - provider 名のタイポは**どのテストも落ちない**。loader は `provider` をただの `String` として通し、`DynamicProviderId::parse` が `None` を返して候補が静かに 0 件になるだけ。`json_loader.rs` の `embedded_completion_definitions_are_valid` が唯一の防波堤なので、ここを弱めない。
@@ -25,3 +36,4 @@
 - command refresh success and command refresh error both emit one settlement notification after cache state is committed.
 - queue-rejection/external-refresh notification policy is separate; do not create notification retry loops.
 - dynamic refresh tests synchronize on notifier events rather than arbitrary sleep-based polling where a notifier exists.
+- A cold command-backed dynamic lookup must report pending separately from a settled empty result, scoped to the current synchronous collection (not other providers' pending work). Tab subscribes before collection, retries on settlement within a bounded wait, and preserves edit/paste/resize events or cancellation instead of opening filesystem fallback while pending. Test the actual first Tab with cold providers, including command wrappers.

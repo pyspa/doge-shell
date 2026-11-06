@@ -10,6 +10,13 @@ use nix::sys::termios::tcgetattr;
 use nix::unistd::{Pid, getpgrp, getpid, isatty};
 use std::os::fd::BorrowedFd;
 
+impl Job {
+    /// Inject a stale summary for regressions that must trust the tree instead.
+    pub(crate) fn set_lifecycle_state_for_test(&mut self, state: ProcessState) {
+        self.state = state;
+    }
+}
+
 fn init() {
     let _ = tracing_subscriber::fmt::try_init();
 }

@@ -30,13 +30,9 @@ no-doc	dsh-openai/src/client.rs
 no-doc	dsh-openai/src/config.rs
 no-doc	dsh-types/src/safety_policy.rs
 no-doc	dsh/src/completion/commands.rs
-no-doc	dsh/src/completion/display.rs
 no-doc	dsh/src/completion/dynamic.rs
 no-doc	dsh/src/completion/dynamic/platform.rs
 no-doc	dsh/src/completion/json_loader.rs
-no-doc	dsh/src/completion/parser.rs
-no-doc	dsh/src/completion/path.rs
-no-doc	dsh/src/completion/selection.rs
 no-doc	dsh/src/input/editor.rs
 no-doc	dsh/src/lisp/default_environment.rs
 no-doc	dsh/src/lisp/interpreter.rs
@@ -44,7 +40,6 @@ no-doc	dsh/src/lisp/mod.rs
 no-doc	dsh/src/lisp/model/value.rs
 no-doc	dsh/src/lisp/stdlib/table.rs
 no-doc	dsh/src/perf_probes.rs
-no-doc	dsh/src/process/job.rs
 no-doc	dsh/src/process/job_process.rs
 no-doc	dsh/src/process/job_wait.rs
 no-doc	dsh/src/process/process.rs

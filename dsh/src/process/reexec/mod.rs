@@ -6,16 +6,16 @@
 //! ```text
 //! parent shell
 //!   → snapshot state (plain data, no live objects)
+//!   → prefill and rewind an anonymous request file
 //!   → reserve collision-free protocol descriptors from the kernel
 //!   → posix_spawn(current_exe, --__dsh-internal-exec-fd=<N> [--__dsh-internal-status-fd=<M>])
-//!   → write JSON request to the pipe, close
 //! child: fresh dogesh image
 //!   → read request to EOF (size-capped)
 //!   → fresh Tokio runtime, fresh Environment + Shell
 //!   → run the already-materialized builtin argv, exit with its status
 //! ```
 //!
-//! The request travels on a dedicated pipe duplicated to a dynamically
+//! The request travels in an anonymous file duplicated to a dynamically
 //! reserved descriptor (see [`fd_layout`]), never on the command line
 //! (process-list and secret exposure) or in the environment (size limits,
 //! inheritance). Internal protocol descriptors have no fixed numbers: their
@@ -24,8 +24,8 @@
 //! completes. Internal protocol descriptors must never overwrite inherited
 //! descriptors such as process-substitution `/dev/fd/N` handles.
 //!
-//! The parent writes only after `posix_spawn` returns, so no `pre_exec` fork
-//! hazard exists; the child blocks on `read` until the payload arrives.
+//! Delivery finishes before `posix_spawn`: a stopped helper cannot block the
+//! parent on pipe capacity. No writer thread or post-spawn delivery wait exists.
 //!
 //! `config.lisp` is never re-run in the helper: the snapshot is
 //! authoritative, so aliases and variables cannot drift or double-apply side
@@ -181,11 +181,9 @@ fn helper_executable() -> Result<std::path::PathBuf> {
 /// helper pid; the caller owns reaping it through the normal wait machinery,
 /// which maps signal deaths to `128 + signal` without any duplicated logic.
 ///
-/// If the request payload cannot be fully delivered after a successful
-/// spawn, the already-running helper is reaped synchronously and `Err` is
-/// returned instead of a pid: the helper would otherwise exit on the
-/// truncated request and surface as empty output, hiding the delivery
-/// failure.
+/// The payload is written and rewound before spawn. Delivery errors therefore
+/// leave no child to reap, and an externally stopped helper cannot block its
+/// parent's launch on a full request pipe.
 pub fn spawn_internal_helper(
     stdin: RawFd,
     stdout: RawFd,
@@ -195,15 +193,61 @@ pub fn spawn_internal_helper(
     status_write: Option<RawFd>,
     signal_policy: HelperSpawnSignalPolicy,
 ) -> Result<Pid> {
+    spawn_internal_helper_admitted(
+        ChildStdio {
+            stdin,
+            stdout,
+            stderr,
+        },
+        request_bytes,
+        pgroup,
+        status_write,
+        signal_policy,
+        None,
+    )
+}
+
+fn spawn_internal_helper_admitted(
+    stdio: ChildStdio,
+    request_bytes: &[u8],
+    pgroup: Pid,
+    status_write: Option<RawFd>,
+    signal_policy: HelperSpawnSignalPolicy,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
+) -> Result<Pid> {
+    let ChildStdio {
+        stdin,
+        stdout,
+        stderr,
+    } = stdio;
     use nix::spawn::{PosixSpawnAttr, PosixSpawnFileActions, PosixSpawnFlags, posix_spawn};
 
     if request_bytes.len() > MAX_INTERNAL_EXEC_REQUEST {
         anyhow::bail!("internal exec request exceeds size limit");
     }
     let exe = helper_executable()?;
+    let stage_admission = admission
+        .as_ref()
+        .map(|_| super::launch_admission::StageAdmission::for_helper())
+        .transpose()?;
+    let launch_targets = stage_admission
+        .as_ref()
+        .map(|stage| -> Result<_> {
+            Ok((
+                fd_layout::reserve_spawn_fd(stage.gate_read.as_fd(), INTERNAL_FD_MIN)?,
+                fd_layout::reserve_spawn_fd(stage.ready_write.as_fd(), INTERNAL_FD_MIN)?,
+            ))
+        })
+        .transpose()?;
 
-    let (req_read, req_write) =
-        crate::process::io::cloexec_pipe().context("failed request pipe")?;
+    use std::io::{Seek as _, Write as _};
+    let mut req_read = tempfile::tempfile().context("failed anonymous request file")?;
+    req_read
+        .write_all(request_bytes)
+        .context("failed to write internal request")?;
+    req_read
+        .rewind()
+        .context("failed to rewind internal request")?;
     // Reserve collision-free targets while every source and auxiliary
     // descriptor is still open. `layout` stays alive until `posix_spawn`
     // returns: dropping it earlier would recycle the numbers.
@@ -235,6 +279,16 @@ pub fn spawn_internal_helper(
         );
     }
 
+    if let Some((gate, ready)) = &launch_targets {
+        argv.push(CString::new(format!(
+            "--__dsh-internal-launch-gate-fd={}",
+            gate.as_raw_fd()
+        ))?);
+        argv.push(CString::new(format!(
+            "--__dsh-internal-launch-ready-fd={}",
+            ready.as_raw_fd()
+        ))?);
+    }
     let background_snapshot = serde_json::from_slice::<InternalExecRequest>(request_bytes)
         .ok()
         .filter(|request| matches!(request.kind, InternalExecKind::ChatTask(_)))
@@ -299,6 +353,10 @@ pub fn spawn_internal_helper(
             .context("failed to build spawn file actions")?;
     }
 
+    if let (Some(stage), Some((gate, ready))) = (&stage_admission, &launch_targets) {
+        actions.add_dup2(stage.gate_read.as_raw_fd(), gate.as_raw_fd())?;
+        actions.add_dup2(stage.ready_write.as_raw_fd(), ready.as_raw_fd())?;
+    }
     let mut attr = PosixSpawnAttr::init().context("spawn attr")?;
     let mut spawn_flags = PosixSpawnFlags::empty();
     spawn_flags.insert(PosixSpawnFlags::POSIX_SPAWN_SETPGROUP);
@@ -322,28 +380,18 @@ pub fn spawn_internal_helper(
     let child = match posix_spawn(&exe, &actions, &attr, &argv, &envp) {
         Ok(child) => child,
         Err(err) => {
-            // Every temporary descriptor is `OwnedFd` (`req_read`,
-            // `req_write`, and the `layout` reservations), so they drop
+            // The request file and `layout` reservations own their fds and drop
             // here with no manual cleanup branch.
             return Err(anyhow::anyhow!(err).context("failed to posix_spawn helper"));
         }
     };
     // The reservation served its purpose once spawn returned.
     drop(layout);
-    // The child owns its read end via the file actions; closing ours lets it
-    // see EOF after delivery.
+    // The child owns its duplicate; the parent's copy is no longer needed.
     drop(req_read);
-
-    // Deliver the payload, then close: the helper reads to EOF.
-    if let Err(err) = fd_layout::write_all(req_write.as_fd(), request_bytes) {
-        // The helper is already running: closing our write end lets it see
-        // EOF (and exit on the truncated request) instead of hanging, then
-        // reap it so no zombie is left behind.
-        drop(req_write);
-        let _ = crate::process::wait_pid_job(child, false);
-        return Err(err);
+    if let (Some(admission), Some(stage)) = (admission, stage_admission) {
+        admission.admit(child, stage);
     }
-    drop(req_write);
     Ok(child)
 }
 
@@ -354,6 +402,7 @@ fn spawn_reexec_builtin_helper(
     ctx: &Context,
     process: &BuiltinProcess,
     shell: &Shell,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
@@ -367,14 +416,17 @@ fn spawn_reexec_builtin_helper(
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     // First pipeline stage starts a new group; later stages join the job's.
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    spawn_internal_helper(
-        process.stdin,
-        process.stdout,
-        process.stderr,
+    spawn_internal_helper_admitted(
+        ChildStdio {
+            stdin: process.stdin,
+            stdout: process.stdout,
+            stderr: process.stderr,
+        },
         &bytes,
         pgroup,
         None,
         HelperSpawnSignalPolicy::Normal,
+        admission,
     )
 }
 
@@ -401,7 +453,7 @@ pub(crate) fn spawn_background_builtin(
         anyhow::bail!("{} cannot run in background", process.name);
     }
 
-    let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
+    let child = spawn_reexec_builtin_helper(ctx, process, shell, None)?;
     process.pid = Some(child);
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
@@ -420,6 +472,7 @@ pub(crate) fn spawn_isolated_builtin(
     ctx: &mut Context,
     process: &mut BuiltinProcess,
     shell: &mut Shell,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> Result<Pid> {
     let background_mode = dsh_builtin::background_builtin_mode(&process.name)
         .ok_or_else(|| anyhow::anyhow!("unknown builtin isolation policy: {}", process.name))?;
@@ -433,7 +486,7 @@ pub(crate) fn spawn_isolated_builtin(
         super::fork::write_process_stderr(process.stderr, message.as_bytes());
         anyhow::bail!("{} cannot run in a pipeline", process.name);
     }
-    let child = spawn_reexec_builtin_helper(ctx, process, shell)?;
+    let child = spawn_reexec_builtin_helper(ctx, process, shell, admission)?;
     process.pid = Some(child);
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
@@ -452,6 +505,7 @@ pub(crate) fn spawn_no_command(
     ctx: &mut Context,
     shell: &Shell,
     process: &super::NoCommandProcess,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
@@ -463,14 +517,17 @@ pub(crate) fn spawn_no_command(
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    let child = spawn_internal_helper(
-        process.stdin,
-        process.stdout,
-        process.stderr,
+    let child = spawn_internal_helper_admitted(
+        ChildStdio {
+            stdin: process.stdin,
+            stdout: process.stdout,
+            stderr: process.stderr,
+        },
         &bytes,
         pgroup,
         None,
         HelperSpawnSignalPolicy::Normal,
+        admission,
     )?;
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
@@ -487,6 +544,7 @@ pub(crate) fn spawn_pipeline_source(
     stdout: RawFd,
     stderr: RawFd,
     data: &str,
+    admission: Option<&mut super::launch_admission::LaunchAdmission>,
 ) -> Result<Pid> {
     let request = InternalExecRequest {
         version: PROTOCOL_VERSION,
@@ -497,14 +555,17 @@ pub(crate) fn spawn_pipeline_source(
     };
     let bytes = serde_json::to_vec(&request).context("encode internal request")?;
     let pgroup = ctx.pgid.unwrap_or(Pid::from_raw(0));
-    let child = spawn_internal_helper(
-        stdin,
-        stdout,
-        stderr,
+    let child = spawn_internal_helper_admitted(
+        ChildStdio {
+            stdin,
+            stdout,
+            stderr,
+        },
         &bytes,
         pgroup,
         None,
         HelperSpawnSignalPolicy::Normal,
+        admission,
     )?;
     // Bookkeeping for the current launch scope.
     // `Job::launch` restores `ctx.process_count` to the caller's entry
@@ -570,159 +631,7 @@ pub fn spawn_plan_helper(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) use helper::await_launch_admission;
 
-    /// An inherited auxiliary fd referenced as `/dev/fd/N` survives an
-    /// internal helper spawn: the protocol's dynamically reserved targets
-    /// must never overwrite it.
-    #[test]
-    fn plan_helper_preserves_inherited_aux_fd() {
-        use std::io::{Read as _, Write as _};
-        use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
-
-        // Auxiliary pipe in the `<(...)` shape: non-CLOEXEC read end, so the
-        // helper inherits it across `posix_spawn` like a consumer would.
-        let mut aux = [0 as RawFd; 2];
-        assert_eq!(unsafe { libc::pipe(aux.as_mut_ptr()) }, 0, "pipe failed");
-        // SAFETY: `pipe` succeeded, so both fds are owned exactly once.
-        let aux_read = unsafe { OwnedFd::from_raw_fd(aux[0]) };
-        let mut aux_write = unsafe { std::fs::File::from_raw_fd(aux[1]) };
-        aux_write
-            .write_all(b"FD-COLLISION-MARKER")
-            .expect("write marker");
-        drop(aux_write);
-        let aux_number = aux_read.as_raw_fd();
-
-        // `/bin/cat` exists on both Linux and macOS (unlike some other
-        // coreutils, which live only under `/usr/bin` on macOS).
-        let cat = "/bin/cat";
-        let env_arc = crate::environment::Environment::new();
-        let plan = crate::shell::parse::parse_execution_plan(
-            &format!("{cat} /dev/fd/{aux_number}"),
-            env_arc.clone(),
-        )
-        .expect("parse helper plan");
-        let snapshot = ChildShellSnapshot::capture(&env_arc.read());
-
-        let (cap_read, cap_write) = crate::process::io::cloexec_pipe().expect("capture pipe");
-        let (status_read, status_write) = crate::process::io::cloexec_pipe().expect("status pipe");
-        let null_in = std::fs::File::open("/dev/null").expect("open /dev/null");
-        let null_err = std::fs::File::open("/dev/null").expect("open /dev/null");
-        let producer = match spawn_plan_helper(
-            &snapshot,
-            &plan,
-            PlanExecMode::CommandSubstitution,
-            PlanSignalPolicy::Normal,
-            ChildStdio {
-                stdin: null_in.as_raw_fd(),
-                stdout: cap_write.as_raw_fd(),
-                stderr: null_err.as_raw_fd(),
-            },
-            Pid::from_raw(0),
-            Some(status_write.as_raw_fd()),
-        ) {
-            Ok(pid) => pid,
-            // No silent skip: a missing helper binary means the test
-            // invocation never built `dogesh` (run `cargo test -p doge-shell`
-            // so the sibling binary exists). Passing vacuously would hide
-            // the fd-collision regression this test guards.
-            Err(err) => panic!("dogesh helper binary missing for re-exec test: {err:#}"),
-        };
-        drop(cap_write);
-        drop(status_write);
-
-        let mut output = Vec::new();
-        std::fs::File::from(cap_read)
-            .read_to_end(&mut output)
-            .expect("read helper output");
-        let _ = crate::process::wait_pid_job(producer, false);
-        let mut verdict = [0u8; 1];
-        let verdict_len = std::fs::File::from(status_read)
-            .read(&mut verdict)
-            .unwrap_or(0);
-        assert_eq!(verdict_len, 1, "helper must report one status byte");
-        assert_eq!(verdict[0], b'A', "helper plan must run to completion");
-        assert_eq!(
-            String::from_utf8_lossy(&output),
-            "FD-COLLISION-MARKER",
-            "aux fd /dev/fd/{aux_number} must survive the helper spawn"
-        );
-    }
-
-    #[test]
-    fn background_spawn_refuses_session_bound_builtins() {
-        use nix::unistd::Pid;
-        let env_arc = crate::environment::Environment::new();
-        let mut shell = Shell::new(env_arc);
-        let mut ctx = Context::new_safe(Pid::from_raw(1), Pid::from_raw(1), false);
-        let handler = dsh_builtin::get_handler("jobs").expect("jobs builtin");
-        let mut process =
-            BuiltinProcess::new_handler("jobs".to_string(), handler, vec!["jobs".to_string()]);
-        let err = spawn_background_builtin(&mut ctx, &mut process, &mut shell)
-            .expect_err("jobs must not re-exec");
-        assert!(err.to_string().contains("cannot run in background"));
-    }
-
-    #[test]
-    fn normal_spawn_mask_does_not_block_int_or_quit() {
-        // The historical spawn posture: helpers start with an empty mask.
-        // No real process is spawned; this pins the race-free structure.
-        let mask = spawn_sigmask(HelperSpawnSignalPolicy::Normal);
-        assert!(!mask.contains(Signal::SIGINT));
-        assert!(!mask.contains(Signal::SIGQUIT));
-        assert!(!mask.contains(Signal::SIGTERM));
-        assert_eq!(mask, SigSet::empty());
-    }
-
-    #[test]
-    fn async_no_job_control_spawn_mask_blocks_int_and_quit() {
-        // The race closure: an async no-job-control helper starts with
-        // SIGINT/SIGQUIT blocked, installs `SIG_IGN`, then unblocks — so no
-        // `SIG_DFL` delivery window exists after spawn. Nothing else is
-        // blocked: SIGTERM in particular must stay deliverable.
-        let mask = spawn_sigmask(HelperSpawnSignalPolicy::BlockInterruptAndQuitDuringInit);
-        assert!(mask.contains(Signal::SIGINT));
-        assert!(mask.contains(Signal::SIGQUIT));
-        assert!(!mask.contains(Signal::SIGTERM));
-        assert!(!mask.contains(Signal::SIGTSTP));
-        assert!(!mask.contains(Signal::SIGCHLD));
-    }
-
-    #[test]
-    fn spawn_sigdefault_resets_job_control_set_without_preservation() {
-        // Top-level and `Normal` spawns: the full job-control set reverts to
-        // default so helpers never inherit the shell's ignored dispositions.
-        let set = spawn_sigdefault(false);
-        for sig in [
-            Signal::SIGINT,
-            Signal::SIGQUIT,
-            Signal::SIGTSTP,
-            Signal::SIGTTIN,
-            Signal::SIGTTOU,
-            Signal::SIGCHLD,
-            Signal::SIGPIPE,
-        ] {
-            assert!(set.contains(sig), "{sig:?} must reset to default");
-        }
-        assert!(!set.contains(Signal::SIGTERM));
-    }
-
-    #[test]
-    fn spawn_sigdefault_preserves_int_quit_inside_async_environment() {
-        // Nested helpers spawned inside an async no-job-control helper keep
-        // the inherited ignore; every other disposition still resets.
-        let set = spawn_sigdefault(true);
-        assert!(!set.contains(Signal::SIGINT));
-        assert!(!set.contains(Signal::SIGQUIT));
-        for sig in [
-            Signal::SIGTSTP,
-            Signal::SIGTTIN,
-            Signal::SIGTTOU,
-            Signal::SIGCHLD,
-            Signal::SIGPIPE,
-        ] {
-            assert!(set.contains(sig), "{sig:?} must still reset to default");
-        }
-    }
-}
+#[cfg(test)]
+mod tests;

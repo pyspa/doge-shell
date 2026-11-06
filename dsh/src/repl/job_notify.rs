@@ -108,7 +108,7 @@ pub(crate) fn notice_state_from(state: &ProcessState) -> JobNoticeState {
 
 /// Map a whole `Job` to the notice state using the logical pipeline status.
 ///
-/// `job.state` alone is the tail lifecycle summary, so pipefail ON can make
+/// `job.lifecycle_state()` alone is the tail lifecycle summary, so pipefail ON can make
 /// it disagree with what `wait PID` reports (`Done` notice vs `wait` → 1).
 /// This helper resolves the same frozen [`Job::final_exit_status`] every
 /// other consumer uses: zero → `Done`, non-zero → `Exit N`. The tail's own
@@ -116,7 +116,7 @@ pub(crate) fn notice_state_from(state: &ProcessState) -> JobNoticeState {
 /// decided the logical status; an upstream signal surfacing through pipefail
 /// is reported as `Exit 128+N`.
 pub(crate) fn notice_state_from_job(job: &crate::process::Job) -> JobNoticeState {
-    let tail_state = notice_state_from(&job.state);
+    let tail_state = notice_state_from(&job.lifecycle_state());
     let Some(logical) = job.final_exit_status() else {
         return tail_state;
     };
@@ -125,10 +125,10 @@ pub(crate) fn notice_state_from_job(job: &crate::process::Job) -> JobNoticeState
     }
     // Preserve Terminated/Killed only when the tail itself died that way
     // and its status decided the pipeline status.
-    match (&job.state, tail_state) {
+    match (&job.lifecycle_state(), tail_state) {
         (ProcessState::Completed(_, Some(Signal::SIGTERM)), JobNoticeState::Terminated)
         | (ProcessState::Completed(_, Some(Signal::SIGKILL)), JobNoticeState::Killed)
-            if job.state.shell_exit_code() == Some(logical) =>
+            if job.lifecycle_state().shell_exit_code() == Some(logical) =>
         {
             tail_state
         }

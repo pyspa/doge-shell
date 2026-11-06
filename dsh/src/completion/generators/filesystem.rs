@@ -1,10 +1,46 @@
-use crate::completion::command::CompletionCandidate;
+//! File and directory candidates retain shell spelling while resolving lookups
+//! against the request's cwd and logical HOME before filtering and ranking.
+use crate::completion::command::{CompletionCandidate, CompletionType};
 use crate::completion::shell_path::normalize_path_token;
-use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync};
+use crate::completion::{Candidate, fuzzy_rank, path_completion_path_sync_shared};
 use anyhow::Result;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 
 pub struct FileSystemGenerator;
+
+/// Request-local filesystem state. Resolve lookup paths against this snapshot
+/// while retaining the user's relative/tilde spelling in candidate text.
+pub(crate) struct FileSystemContext {
+    current_dir: PathBuf,
+    home: Option<String>,
+}
+
+impl FileSystemContext {
+    pub(crate) fn new(current_dir: &Path, home: Option<String>) -> Self {
+        Self {
+            current_dir: if current_dir.is_absolute() {
+                current_dir.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join(current_dir)
+            },
+            home,
+        }
+    }
+
+    pub(crate) fn lookup_directory(&self, dir: &str, home_expansion: bool) -> PathBuf {
+        let expanded = if home_expansion {
+            match &self.home {
+                Some(home) => format!("{home}/{}", dir.strip_prefix("~/").unwrap_or("")),
+                None => shellexpand::tilde(dir).into_owned(),
+            }
+        } else {
+            dir.to_string()
+        };
+        self.current_dir.join(expanded)
+    }
+}
 
 impl FileSystemGenerator {
     /// Generate file completion candidates
@@ -17,6 +53,14 @@ impl FileSystemGenerator {
         current_token: &str,
         extensions: Option<&Vec<String>>,
     ) -> Result<Vec<CompletionCandidate>> {
+        Self::file_candidates(current_token, extensions, None)
+    }
+
+    pub(crate) fn file_candidates(
+        current_token: &str,
+        extensions: Option<&Vec<String>>,
+        context: Option<&FileSystemContext>,
+    ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(32);
         let normalized_extensions =
             extensions.map(|extensions| normalize_extension_filters(extensions));
@@ -25,18 +69,21 @@ impl FileSystemGenerator {
         let (dir_path, file_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
         // Reuse legacy path listing cache for better performance.
-        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
+        let home_expansion = current_token.starts_with("~/");
+        let lookup_dir = context.map_or_else(
+            || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
+            |context| context.lookup_directory(&dir_path, home_expansion),
+        );
+        let listing = path_completion_path_sync_shared(lookup_dir).unwrap_or_default();
 
-        for cand in listing {
+        for cand in listing.iter() {
             let Candidate::Path(path_str) = cand else {
                 continue;
             };
 
-            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
-                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
-                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR);
 
-            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let trimmed = path_str.trim_end_matches(MAIN_SEPARATOR);
             let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
@@ -65,6 +112,13 @@ impl FileSystemGenerator {
             } else {
                 CompletionCandidate::file(full_path)
             };
+            if home_expansion {
+                cand.completion_type = if is_dir {
+                    CompletionType::HomeDirectory
+                } else {
+                    CompletionType::HomeFile
+                };
+            }
             cand.priority = cand.priority.saturating_add(score_bonus);
             candidates.push(cand);
         }
@@ -74,27 +128,37 @@ impl FileSystemGenerator {
 
     /// Generate directory completion candidates
     pub fn generate_directory_candidates(current_token: &str) -> Result<Vec<CompletionCandidate>> {
+        Self::directory_candidates(current_token, None)
+    }
+
+    pub(crate) fn directory_candidates(
+        current_token: &str,
+        context: Option<&FileSystemContext>,
+    ) -> Result<Vec<CompletionCandidate>> {
         let mut candidates = Vec::with_capacity(16);
 
         let normalized_token = normalize_path_token(current_token);
         let (dir_path, dir_prefix) = Self::split_dir_and_prefix(&normalized_token);
 
-        let listing = path_completion_path_sync(PathBuf::from(&dir_path)).unwrap_or_default();
+        let home_expansion = current_token.starts_with("~/");
+        let lookup_dir = context.map_or_else(
+            || PathBuf::from(lookup_directory(&dir_path, home_expansion)),
+            |context| context.lookup_directory(&dir_path, home_expansion),
+        );
+        let listing = path_completion_path_sync_shared(lookup_dir).unwrap_or_default();
 
-        for cand in listing {
+        for cand in listing.iter() {
             let Candidate::Path(path_str) = cand else {
                 continue;
             };
 
-            let is_dir = path_str.ends_with(MAIN_SEPARATOR)
-                || (MAIN_SEPARATOR != '/' && path_str.ends_with('/'))
-                || (MAIN_SEPARATOR != '\\' && path_str.ends_with('\\'));
+            let is_dir = path_str.ends_with(MAIN_SEPARATOR);
 
             if !is_dir {
                 continue;
             }
 
-            let trimmed = path_str.trim_end_matches(&['/', '\\'][..]);
+            let trimmed = path_str.trim_end_matches(MAIN_SEPARATOR);
             let Some(file_name) = Path::new(trimmed).file_name().and_then(|s| s.to_str()) else {
                 continue;
             };
@@ -112,6 +176,9 @@ impl FileSystemGenerator {
 
             let full_path = Self::build_candidate_path(&dir_path, file_name);
             let mut cand = CompletionCandidate::directory(full_path);
+            if home_expansion {
+                cand.completion_type = CompletionType::HomeDirectory;
+            }
             cand.priority = cand.priority.saturating_add(score_bonus);
             candidates.push(cand);
         }
@@ -147,8 +214,6 @@ impl FileSystemGenerator {
 
     pub fn ends_with_path_separator(token: &str) -> bool {
         token.ends_with(MAIN_SEPARATOR)
-            || (MAIN_SEPARATOR != '/' && token.ends_with('/'))
-            || (MAIN_SEPARATOR != '\\' && token.ends_with('\\'))
     }
 
     pub fn normalize_dir_path(path: &Path) -> String {
@@ -168,6 +233,15 @@ impl FileSystemGenerator {
             .join(file_name)
             .to_string_lossy()
             .to_string()
+    }
+}
+
+fn lookup_directory(dir: &str, home_expansion: bool) -> String {
+    // Quoted/escaped tilde is literal: keep the cache scanner from expanding it.
+    if !home_expansion && (dir == "~" || dir.starts_with("~/")) {
+        format!("./{dir}")
+    } else {
+        dir.to_string()
     }
 }
 

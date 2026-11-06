@@ -1,7 +1,7 @@
 use crate::process::{Job, JobLaunchOutcome, ListOp, ProcessState};
 use crate::shell::{
     Shell,
-    authorize::{AuthorizationDecision, authorize_job, is_authorization_cancelled},
+    authorize::{AuthorizationDecision, is_authorization_cancelled},
     materialize::{MaterializeOutcome, materialize_job},
     parse::parse_execution_plan,
     plan::ListExecutionMode,
@@ -19,6 +19,7 @@ use tracing::debug;
 
 mod async_spawn;
 mod plan_eval;
+mod struct_pipe;
 mod subshell;
 use async_spawn::{spawn_async_list_job, spawn_whole_plan_background};
 pub(crate) use plan_eval::{PlanEvaluationEnvironment, evaluate_plan_in};
@@ -128,6 +129,7 @@ pub async fn eval_str(
             ExitStatus::Running(_) => 0,
             ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => 0,
         };
+        publish_exit_status(shell, code);
         // Only re-enable raw mode in interactive context
         if ctx.interactive {
             enable_raw_mode().ok();
@@ -244,7 +246,7 @@ pub async fn eval_str(
                             last_exit_code = code;
                         }
                         crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
-                            let _ = ctx.write_stderr(&failure.message);
+                            failure.report(ctx);
                             last_exit_code = failure.exit_code;
                         }
                     }
@@ -279,7 +281,14 @@ pub async fn eval_str(
             let mut job = materialized.job;
             let had_dynamic = materialized.had_dynamic_expansion;
             job.resources = materialized.resources;
-            match authorize_job(shell, &job, had_dynamic)? {
+            let (decision, schema_spec) = struct_pipe::authorize_struct_pipe_job(
+                shell,
+                &mut job,
+                had_dynamic,
+                crate::repl::confirmation::confirm_action,
+                crate::output_schema::lookup,
+            )?;
+            match decision {
                 AuthorizationDecision::Allow => {}
                 AuthorizationDecision::Deny => {
                     tracing::info!("Command execution cancelled by user");
@@ -383,20 +392,6 @@ pub async fn eval_str(
                     job.cmd,
                     job.struct_pipe_exprs.len()
                 );
-
-                // Declarative output schema for the pipeline's last external
-                // command: inject preferred machine-readable flags before the
-                // run, parse the captured output into a table after it.
-                let schema_spec = job
-                    .last_external_argv()
-                    .and_then(|argv| crate::output_schema::lookup(&argv));
-                if let Some(prefer) = schema_spec.as_ref().and_then(|spec| spec.prefer.as_ref()) {
-                    debug!(
-                        "Struct pipe: injecting schema args {:?}",
-                        prefer.inject_args
-                    );
-                    job.append_args_to_last_external(&prefer.inject_args);
-                }
 
                 // Execute command through regular job launch path and capture output.
                 let (exit_code, output, stderr_output) =
@@ -510,8 +505,10 @@ pub async fn eval_str(
                     // Background jobs are considered successfully started.
                     last_exit_code = 0;
                 }
-                Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, _signal))) => {
+                Ok(JobLaunchOutcome::Process(ProcessState::Stopped(pid, signal))) => {
                     debug!("job '{}' stopped pid: {:?}", job.cmd, pid);
+                    // Invocation status only: the stopped tree has no final status.
+                    last_exit_code = crate::process::signal_exit_status(signal);
                     shell.wait_jobs.push(job);
                     // If a job is stopped, we return control to the user and do not continue
                     // evaluating the rest of the command list.
@@ -533,12 +530,13 @@ pub async fn eval_str(
                     }
                 }
                 // A redirection setup failure is an ordinary command failure:
-                // report it on the shell's stderr, publish status 1 for `&&` /
+                // report it if not already emitted on redirected stderr,
+                // publish status 1 for `&&` /
                 // `||` / `$?`, and continue the list. The pre-exec hook already
                 // ran, so the post-exec hook runs too, exactly like a normal
                 // completion.
                 Ok(JobLaunchOutcome::CommandFailed(failure)) => {
-                    let _ = ctx.write_stderr(&failure.message);
+                    failure.report(ctx);
                     last_exit_code = failure.exit_code;
                     if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
                         debug!("Error executing post-exec hooks: {}", e);
@@ -581,9 +579,9 @@ pub async fn eval_str(
 
 /// Record the status `$?` should report.
 ///
-/// Every exit from `eval_str` goes through here, refusals and cancellations
-/// included: a line that was blocked still happened, and leaving the previous
-/// line's status in place would tell the user it succeeded.
+/// Job results, refusals, cancellations, and public evaluation errors are
+/// published here: a line that was blocked still happened, and leaving the
+/// previous line's status in place would tell the user it succeeded.
 ///
 /// `publish_exit_status` updates after each job completes, so later jobs on
 /// the same line resolve `$?` during their own materialization.

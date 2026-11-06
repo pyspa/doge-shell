@@ -37,6 +37,7 @@ impl ArgumentExplainer {
             return None;
         }
 
+        let cursor = crate::completion::command_segment::char_to_byte(input, cursor);
         let parsed = self.parser.parse(input, cursor);
         let cmd_name = &parsed.command;
 
@@ -177,6 +178,7 @@ mod tests {
             aliases: vec![],
             options: vec![
                 CommandOption {
+                    multiple: false,
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: Some("Stage all modified files".to_string()),
@@ -185,6 +187,7 @@ mod tests {
                     argument: None,
                 },
                 CommandOption {
+                    multiple: false,
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: Some("Commit message".to_string()),
@@ -202,6 +205,7 @@ mod tests {
             description: Some("Version control".to_string()),
             subcommands: vec![commit],
             global_options: vec![CommandOption {
+                multiple: false,
                 short: Some("-v".to_string()),
                 long: Some("--version".to_string()),
                 description: Some("Show version".to_string()),
@@ -266,5 +270,14 @@ mod tests {
         let cursor = 12;
         let expl = explainer.get_explanation(input, cursor);
         assert_eq!(expl, Some("Commit message".to_string()));
+    }
+    #[test]
+    fn explanation_uses_character_cursor_in_active_command() {
+        let explainer = ArgumentExplainer::with_db(make_git_db().into());
+        let input = "echo 日本語 && git commit -a";
+        assert_eq!(
+            explainer.get_explanation(input, input.chars().count() - 1),
+            Some("Stage all modified files".into())
+        );
     }
 }

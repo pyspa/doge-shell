@@ -152,6 +152,7 @@ pub(crate) async fn handle_key_event(
     repl: &mut Repl<'_>,
     ev: &KeyEvent,
 ) -> Result<ReplControlFlow> {
+    repl.completion_ui.path_feedback.clear();
     // DEBUG: Log all key events to trace the issue
     debug!(
         "KEY_EVENT_RECEIVED: code={:?}, modifiers={:?}, kind={:?}",
@@ -216,6 +217,17 @@ pub(crate) async fn handle_key_event(
         completion_mode: repl.completion_ui.completion.completion_mode(),
         cursor_at_start: repl.input.cursor() == 0,
         next_char: repl.input.char_at(repl.input.cursor()),
+        closing_quote: if repl.ai_ui.input_preferences.auto_pair
+            && matches!(ev.code, KeyCode::Char('\'' | '"'))
+        {
+            super::key_action::closing_quote_at_cursor(
+                repl.input.as_str(),
+                repl.input.cursor(),
+                &repl.state.multiline_buffer,
+            )
+        } else {
+            None
+        },
         auto_pair: repl.ai_ui.input_preferences.auto_pair,
         multiline_active: !repl.state.multiline_buffer.is_empty(),
     };

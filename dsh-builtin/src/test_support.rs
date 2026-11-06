@@ -56,6 +56,9 @@ pub(crate) struct TestShellProxy {
     pub mcp_manager: Arc<RwLock<crate::chatgpt::McpManager>>,
     /// Overrides `confirm_result` so a test can exercise the "always" answer.
     pub approval_decision: Option<ApprovalDecision>,
+    /// Runs inside the approval prompt, allowing deterministic concurrent-edit tests.
+    pub approval_callback: Option<Box<dyn FnMut() + Send + Sync>>,
+    pub approval_messages: Vec<String>,
     /// Present when the test is exercising the persistent-task path, where
     /// nothing may prompt and every refusal has to be an error.
     pub agent_runtime: Option<Arc<parking_lot::Mutex<crate::agent::AgentRuntime>>>,
@@ -134,6 +137,7 @@ pub(crate) struct TestShellProxy {
     pub read_error: Option<String>,
     /// `set -o` option state for `ShellOptionCapability` tests.
     pub shell_options: ShellOptions,
+    pub effective_config: Option<crate::effective_config::EffectiveConfig>,
     /// Logical command search paths for task provider resolution in tests.
     /// Empty by default; set per-test to model PATH A vs PATH B without
     /// touching process-global `std::env::PATH`.
@@ -163,6 +167,8 @@ impl Default for TestShellProxy {
             agent_session_allowlist: Vec::new(),
             mcp_manager: Arc::new(RwLock::new(crate::chatgpt::McpManager::default())),
             approval_decision: None,
+            approval_callback: None,
+            approval_messages: Vec::new(),
             agent_runtime: None,
             background_context: None,
             vars: HashMap::new(),
@@ -197,6 +203,7 @@ impl Default for TestShellProxy {
             read_status: None,
             read_error: None,
             shell_options: ShellOptions::default(),
+            effective_config: None,
             command_search_paths: Vec::new(),
         }
     }
@@ -576,10 +583,14 @@ impl AgentCommandPolicy for TestShellProxy {
         self.agent_verdict.clone()
     }
 
-    fn request_agent_approval(&mut self, _message: &str) -> Result<ApprovalDecision> {
+    fn request_agent_approval(&mut self, message: &str) -> Result<ApprovalDecision> {
         self.confirm_calls += 1;
         if let Some(counter) = &self.confirm_counter {
             counter.fetch_add(1, Ordering::SeqCst);
+        }
+        self.approval_messages.push(message.to_owned());
+        if let Some(callback) = &mut self.approval_callback {
+            callback();
         }
         Ok(self.approval_decision.unwrap_or({
             if self.confirm_result {
@@ -894,4 +905,10 @@ pub(crate) fn test_runtime(
     Arc::new(parking_lot::Mutex::new(crate::agent::AgentRuntime::new(
         task, store,
     )))
+}
+
+impl crate::shell_capabilities::EffectiveConfigCapability for TestShellProxy {
+    fn effective_config(&self) -> Option<crate::effective_config::EffectiveConfig> {
+        self.effective_config
+    }
 }

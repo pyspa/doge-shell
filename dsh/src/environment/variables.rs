@@ -24,24 +24,7 @@ pub(crate) fn canonical_shell_var_name(key: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// Whether `name` is a valid simple shell-variable assignment target.
-///
-/// Shared by:
-/// - `read NAME`
-/// - `wait -p NAME`
-///
-/// Minimum contract shared with parser assignment names:
-/// `[A-Za-z_][A-Za-z0-9_]*`. Legacy `set`/`export` keep their own
-/// compatibility behavior; this is enforced only on the `read`/`wait -p`
-/// paths.
-pub(crate) fn is_valid_shell_var_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-}
+pub(crate) use dsh_types::shell_variable::is_valid_shell_var_name;
 
 /// Logical shell variable state for reversible overlays.
 ///

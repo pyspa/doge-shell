@@ -155,8 +155,18 @@ impl<'a> Repl<'a> {
         Ok(true)
     }
 
-    async fn apply_repl_control_flow(&mut self, control_flow: ReplControlFlow) -> bool {
+    async fn apply_repl_control_flow(&mut self, mut control_flow: ReplControlFlow) -> bool {
+        while let ReplControlFlow::ReplayInput(event) = control_flow {
+            control_flow = match self.handle_event(ShellEvent::Input(event)).await {
+                Ok(flow) => flow,
+                Err(error) => {
+                    self.shell.print_error(format!("Error: {error:?}\r"));
+                    return false;
+                }
+            };
+        }
         match control_flow {
+            ReplControlFlow::ReplayInput(_) => unreachable!("replayed above"),
             ReplControlFlow::Continue => true,
             ReplControlFlow::ExecuteCurrentInput => {
                 self.event_loop.pause_input();
@@ -214,8 +224,21 @@ impl<'a> Repl<'a> {
                                 }
                                 self.input.insert_str(&text);
                             }
-                            InteractiveAction::ReplaceRange { start, end, text } => {
-                                self.input.replace_range_chars(start, end, &text);
+                            InteractiveAction::ReplaceRange {
+                                expected_input,
+                                expected_cursor,
+                                start,
+                                end,
+                                text,
+                            } => {
+                                crate::repl::state::apply_completion_range(
+                                    &mut self.input,
+                                    &expected_input,
+                                    expected_cursor,
+                                    start,
+                                    end,
+                                    &text,
+                                );
                             }
                             InteractiveAction::ReplaceAll { text } => self.input.reset(text),
                             InteractiveAction::ReplaceAllAndExecute { text } => {
@@ -306,10 +329,27 @@ impl<'a> Repl<'a> {
         true
     }
 
+    /// The event loop owns the inline prompt here, never a picker or foreground job.
+    pub(crate) fn print_task_notices(&mut self, out: &mut impl std::io::Write) {
+        if self.terminal_ui.columns == 0 {
+            return;
+        }
+        if let Some(task) = &self.shell.background_task {
+            let lines = task.take_notices();
+            render::print_above_prompt(self, out, &lines);
+        }
+    }
+
     async fn handle_background_tick(&mut self) -> Result<()> {
+        self.shell.environment.read().ensure_path_ghost_scan();
         self.save_history_periodic();
         self.schedule_command_timing_save();
         self.check_background_jobs(true).await?;
+        {
+            let mut renderer = TerminalRenderer::new();
+            self.print_task_notices(&mut renderer);
+            renderer.flush().ok();
+        }
 
         if self.background_tasks.history_sync_last_check.elapsed() > Duration::from_secs(30) {
             self.background_tasks.io.schedule_history_sync(
@@ -493,12 +533,14 @@ impl<'a> Repl<'a> {
         });
     }
 
-    fn handle_completion_refresh(&mut self) {
-        if self.input.completion.is_none() && self.refresh_inline_suggestion() {
-            let mut renderer = TerminalRenderer::new();
-            self.print_input(&mut renderer, false, false);
-            renderer.flush().ok();
-        }
+    pub(crate) fn handle_completion_refresh(&mut self) {
+        // A ready PATH (including empty) changes analysis even without a keystroke.
+        // Recompute from current text/history; never accept a stale worker's input.
+        self.ai_ui.last_analyzed_input.clear();
+        self.ai_ui.last_analysis_result = None;
+        let mut renderer = TerminalRenderer::new();
+        self.print_input(&mut renderer, false, true);
+        renderer.flush().ok();
     }
 
     fn handle_ai_event(&mut self, event: AiEvent) {
@@ -528,5 +570,43 @@ impl<'a> Repl<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_replay_tests {
+    use super::*;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    #[tokio::test]
+    async fn chooser_replays_paste_and_edit_keys_through_normal_editor() {
+        let mut shell = Shell::new(crate::environment::Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("cat al".into());
+        assert!(
+            repl.apply_repl_control_flow(
+                ReplControlFlow::ReplayInput(Event::Paste("pine".into()),)
+            )
+            .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpine");
+        assert!(
+            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL
+            )),))
+                .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpine");
+        assert_eq!(repl.input.cursor(), 0);
+        repl.input.move_to_end();
+        assert!(
+            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+                KeyCode::Backspace,
+                KeyModifiers::NONE
+            )),))
+                .await
+        );
+        assert_eq!(repl.input.as_str(), "cat alpin");
     }
 }

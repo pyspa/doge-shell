@@ -13,6 +13,7 @@ fn ctx_default() -> KeyContext {
         completion_mode: false,
         cursor_at_start: false,
         next_char: None,
+        closing_quote: None,
         auto_pair: false,
         multiline_active: false,
     }
@@ -676,4 +677,121 @@ fn test_alt_w_is_ai_watch_current_input() {
         determine_key_action(&k, &ctx_default()),
         KeyAction::AiWatchCurrentInput
     );
+}
+
+#[test]
+fn quote_closer_overtypes_instead_of_inserting_another_pair() {
+    for quote in ['\'', '"'] {
+        let ctx = KeyContext {
+            auto_pair: true,
+            next_char: Some(quote),
+            closing_quote: Some(quote),
+            ..ctx_default()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), NONE), &ctx),
+            KeyAction::OvertypeClosingBracket(quote)
+        );
+    }
+}
+
+#[test]
+fn quote_closer_discrimination_preserves_literal_and_opening_controls() {
+    // A marker denotes the character cursor, never a byte offset.
+    for (marked, quote, closes) in [
+        ("echo '|'", '\'', true),
+        (r#"echo "|""#, '"', true),
+        (r#"echo "a\|""#, '"', false),
+        (r#"echo "a\\|""#, '"', true),
+        (r#"echo "a\\\|""#, '"', false),
+        (r#"echo "a\\\\|""#, '"', true),
+        (r#"echo 'a\|'"#, '\'', false),
+        // Single quotes only escape a following quote in doge's grammar.
+        (r#"echo 'a\\|'"#, '\'', false),
+        (r#"echo 'a\'b|'"#, '\'', true),
+        (r#"echo "a\"b|""#, '"', true),
+        (r#"echo 'a|"b'"#, '"', false),
+        (r#"echo "a|'b""#, '\'', false),
+        (r#"echo |"next""#, '"', false),
+        (r#"echo \'|''"#, '\'', false),
+        (r#"echo |"#, '\'', false),
+        (r#"echo '日本語|' tail"#, '\'', true),
+    ] {
+        let (before, after) = marked.split_once('|').unwrap();
+        let input = format!("{before}{after}");
+        let ctx = KeyContext {
+            auto_pair: true,
+            next_char: after.chars().next(),
+            closing_quote: closing_quote_at_cursor(&input, before.chars().count(), ""),
+            ..ctx_default()
+        };
+        let expected = if closes {
+            KeyAction::OvertypeClosingBracket(quote)
+        } else {
+            // Preserve existing auto-pair opener semantics in literal contexts.
+            KeyAction::InsertPairedChar {
+                open: quote,
+                close: quote,
+            }
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), NONE), &ctx),
+            expected,
+            "{marked}"
+        );
+        let off = KeyContext {
+            auto_pair: false,
+            ..ctx.clone()
+        };
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), NONE), &off),
+            KeyAction::InsertChar(quote)
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), SHIFT), &ctx),
+            KeyAction::InsertChar(quote)
+        );
+    }
+}
+
+#[test]
+fn quote_closer_nested_substitution_uses_inner_quote_context() {
+    for (marked, expected) in [
+        (r#"echo "$(echo 'a|"b')""#, None),
+        (r#"echo "$(echo "a|")""#, Some('"')),
+        (r#"echo "$(echo '日本語|')""#, Some('\'')),
+        (r#"echo "$(echo "$(echo "a|")")""#, Some('"')),
+        (r#"echo "$(echo 'a\|'b')""#, None),
+        (
+            r#"echo "$(echo a # |" comment
+)""#,
+            None,
+        ),
+        // Incomplete nested syntax is uncertain: retain pair insertion.
+        (r#"echo "$(echo "a|""#, None),
+    ] {
+        let (before, after) = marked.split_once('|').unwrap();
+        let input = format!("{before}{after}");
+        let quote = after.chars().next().unwrap();
+        let actual = closing_quote_at_cursor(&input, before.chars().count(), "");
+        assert_eq!(actual, expected, "{marked}");
+        let ctx = KeyContext {
+            auto_pair: true,
+            next_char: Some(quote),
+            closing_quote: actual,
+            ..ctx_default()
+        };
+        let action = expected.map_or(
+            KeyAction::InsertPairedChar {
+                open: quote,
+                close: quote,
+            },
+            KeyAction::OvertypeClosingBracket,
+        );
+        assert_eq!(
+            determine_key_action(&key(KeyCode::Char(quote), NONE), &ctx),
+            action,
+            "{marked}"
+        );
+    }
 }

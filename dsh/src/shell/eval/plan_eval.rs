@@ -24,6 +24,7 @@ use super::super::plan::{ExecutionPlan, ListExecutionMode, PlannedAndOrList};
 use crate::process::JobLaunchOutcome;
 use anyhow::Result;
 use dsh_types::Context;
+use std::ops::ControlFlow;
 use tracing::debug;
 
 /// Which isolated body is being evaluated: only an async-list helper must
@@ -36,9 +37,9 @@ pub(crate) enum PlanEvaluationEnvironment {
     AsyncList,
 }
 
-/// Run every selected list of `plan` to completion in `env`. Returns the
-/// last exit status. A nested denial aborts with `AuthorizationCancelled`,
-/// exactly like the top-level loop.
+/// Run selected lists of `plan` in `env` until completion or a foreground
+/// stop. Returns the last invocation status. A nested denial aborts with
+/// `AuthorizationCancelled`, exactly like the top-level loop.
 ///
 /// Jobs run sequentially and each completion steers the next gate, so inner
 /// `&&`/`||` behave exactly as on the top level. An infinite producer tail
@@ -60,7 +61,15 @@ pub(crate) async fn evaluate_plan_in(
     for list in &plan.lists {
         match list.execution {
             ListExecutionMode::Foreground => {
-                last_exit_code = evaluate_foreground_list(shell, ctx, list, confirm, env).await?;
+                match evaluate_foreground_list(shell, ctx, list, confirm, env).await? {
+                    ControlFlow::Continue(status) => last_exit_code = status,
+                    ControlFlow::Break(status) => {
+                        // Like the interactive evaluator, a stop aborts the whole
+                        // plan, including later semicolon-separated lists.
+                        super::publish_exit_status(shell, status);
+                        return Ok(status);
+                    }
+                }
             }
             ListExecutionMode::Asynchronous => {
                 // A nested async list (e.g. inside `$(...)`): spawn a nested
@@ -85,7 +94,7 @@ async fn evaluate_foreground_list(
     list: &PlannedAndOrList,
     confirm: ConfirmFn,
     env: PlanEvaluationEnvironment,
-) -> Result<i32> {
+) -> Result<ControlFlow<i32, i32>> {
     use crate::process::ListOp;
     use crate::process::ProcessState;
 
@@ -120,7 +129,7 @@ async fn evaluate_foreground_list(
                         last_exit_code = code;
                     }
                     NoCommandExecutionResult::Failed(failure) => {
-                        let _ = ctx.write_stderr(&failure.message);
+                        failure.report(ctx);
                         last_exit_code = failure.exit_code;
                     }
                 }
@@ -171,9 +180,13 @@ async fn evaluate_foreground_list(
                 shell.wait_jobs.push(job);
                 last_exit_code = 0;
             }
-            JobLaunchOutcome::Process(ProcessState::Stopped(_, _)) => {
+            JobLaunchOutcome::Process(ProcessState::Stopped(_, signal)) => {
+                // Preserve incomplete-job ownership; only this invocation has
+                // a status, derived from the observed stop rather than completion.
                 shell.wait_jobs.push(job);
-                break;
+                return Ok(ControlFlow::Break(crate::process::signal_exit_status(
+                    signal,
+                )));
             }
             JobLaunchOutcome::Process(state @ ProcessState::Completed(_, _)) => {
                 // Same frozen-policy status as the top-level loop; the tail
@@ -181,7 +194,7 @@ async fn evaluate_foreground_list(
                 last_exit_code = super::super::job::completed_job_status(&job, state)?;
             }
             JobLaunchOutcome::CommandFailed(failure) => {
-                let _ = ctx.write_stderr(&failure.message);
+                failure.report(ctx);
                 last_exit_code = failure.exit_code;
             }
         }
@@ -189,7 +202,7 @@ async fn evaluate_foreground_list(
         gate_op = next_gate_op;
     }
     super::publish_exit_status(shell, last_exit_code);
-    Ok(last_exit_code)
+    Ok(ControlFlow::Continue(last_exit_code))
 }
 
 /// Spawn one nested async list from inside a helper.
@@ -227,8 +240,71 @@ async fn spawn_nested_async_list(
         // A spawn-level failure is an ordinary command failure, like the
         // top-level paths: report it without touching `$!` or the ledger.
         crate::process::JobLaunchOutcome::CommandFailed(failure) => {
-            let _ = ctx.write_stderr(&failure.message);
+            failure.report(ctx);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::environment::Environment;
+    use crate::process::{ProcessState, signal_exit_status};
+    use nix::sys::signal::Signal;
+
+    #[tokio::test]
+    async fn helper_stop_publishes_status_and_aborts_remaining_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let script = root.path().join("stop.sh");
+        let skipped = root.path().join("skipped");
+        std::fs::write(&script, "kill -STOP $$\n").unwrap();
+        let mut shell = Shell::new(Environment::new());
+        *shell.environment.read().policy_state.safety_level.write() =
+            crate::safety::SafetyLevel::Loose;
+        let mut ctx = Context::new_safe(shell.pid, shell.pgid, true);
+        ctx.interactive = false;
+        let plan = super::super::parse_plan_with_smart_pipe(
+            &format!(
+                "false; sh '{}'; echo forbidden > '{}'",
+                script.display(),
+                skipped.display()
+            ),
+            shell.environment.clone(),
+        )
+        .unwrap();
+        let status = evaluate_plan_in(
+            &mut shell,
+            &mut ctx,
+            &plan,
+            |_| Ok(crate::repl::confirmation::ConfirmationAction::Yes),
+            PlanEvaluationEnvironment::Isolated,
+        )
+        .await
+        .unwrap();
+        let expected = signal_exit_status(Signal::SIGSTOP);
+        assert_eq!(status, expected);
+        assert_eq!(
+            shell.environment.read().get_var("?"),
+            Some(expected.to_string())
+        );
+        assert!(!skipped.exists(), "a stop must abort later lists too");
+        assert_eq!(shell.wait_jobs.len(), 1);
+        let job = &shell.wait_jobs[0];
+        assert!(job.is_fully_stopped());
+        assert!(!job.is_process_tree_completed());
+        assert!(job.final_exit_status().is_none());
+        assert!(matches!(
+            job.lifecycle_state(),
+            ProcessState::Stopped(_, Signal::SIGSTOP)
+        ));
+        assert!(
+            shell
+                .environment
+                .read()
+                .session_output_state
+                .output_history
+                .is_empty()
+        );
+    }
 }

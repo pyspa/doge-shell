@@ -12,6 +12,7 @@ async fn test_context_switching_logic() {
         command: "mock".to_string(),
         description: None,
         global_options: vec![CommandOption {
+            multiple: false,
             short: None,
             long: Some("--global".to_string()),
             description: None,
@@ -24,6 +25,7 @@ async fn test_context_switching_logic() {
             description: None,
             aliases: vec![],
             options: vec![CommandOption {
+                multiple: false,
                 short: None,
                 long: Some("--local".to_string()),
                 description: None,

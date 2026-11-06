@@ -45,6 +45,7 @@ mod tests {
                     aliases: vec![],
                     options: vec![
                         CommandOption {
+                            multiple: false,
                             short: Some("-m".to_string()),
                             long: Some("--message".to_string()),
                             description: None,
@@ -53,6 +54,7 @@ mod tests {
                             argument: None,
                         },
                         CommandOption {
+                            multiple: false,
                             short: Some("-a".to_string()),
                             long: Some("--all".to_string()),
                             description: None,

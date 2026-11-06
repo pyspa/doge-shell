@@ -16,13 +16,16 @@ use std::path::{Path, PathBuf};
 /// repository: a `.git` directory, or a `.git` file (worktree/submodule
 /// pointer). Pure filesystem lookup — no subprocess, no environment reads.
 pub fn find_marker_root(cwd: &Path) -> Option<PathBuf> {
+    find_marker_root_with(cwd, |dir| {
+        let marker = dir.join(".git");
+        marker.is_dir() || marker.is_file()
+    })
+}
+
+fn find_marker_root_with(cwd: &Path, mut has_marker: impl FnMut(&Path) -> bool) -> Option<PathBuf> {
     let mut current = Some(cwd);
     while let Some(dir) = current {
-        let marker = dir.join(".git");
-        if marker.is_dir() {
-            return Some(dir.to_path_buf());
-        }
-        if marker.is_file() {
+        if has_marker(dir) {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();
@@ -37,6 +40,7 @@ mod tests {
     #[test]
     fn nested_dir_resolves_to_repo_root() {
         let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
         let repo = root.path().join("repo");
         let nested = repo.join("a").join("b");
         std::fs::create_dir_all(nested.clone()).unwrap();
@@ -56,6 +60,22 @@ mod tests {
     #[test]
     fn no_marker_yields_none() {
         let root = tempfile::tempdir().unwrap();
-        assert_eq!(find_marker_root(root.path()), None);
+        // A real tempdir's ancestors may be repositories. Control the marker
+        // predicate while checking that the walk still visits every ancestor.
+        let mut visited = Vec::new();
+        assert_eq!(
+            find_marker_root_with(root.path(), |dir| {
+                visited.push(dir.to_path_buf());
+                false
+            }),
+            None
+        );
+        assert_eq!(
+            visited,
+            root.path()
+                .ancestors()
+                .map(Path::to_path_buf)
+                .collect::<Vec<_>>()
+        );
     }
 }

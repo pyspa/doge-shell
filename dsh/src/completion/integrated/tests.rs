@@ -1,4 +1,5 @@
 use super::*;
+use skim::SkimItem;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::ffi::OsStrExt;
@@ -8,8 +9,9 @@ use tempfile::tempdir;
 fn top_level_cache_lookup(
     engine: &IntegratedCompletionEngine,
     input: &str,
+    cwd: &Path,
 ) -> Option<crate::completion::cache::CacheLookup<EnhancedCandidate>> {
-    let scope = engine.current_path_cache_scope();
+    let scope = engine.current_cache_scope(cwd);
     engine.cache.lookup_scoped(scope, input)
 }
 
@@ -66,7 +68,7 @@ async fn wait_for_candidate_and_exact_cache(
             .candidates
             .iter()
             .any(|candidate| candidate.text == expected);
-        let cached = top_level_cache_lookup(engine, input);
+        let cached = top_level_cache_lookup(engine, input, cwd);
         let cache_ready = cached.as_ref().is_some_and(|cached| {
             cached.exact
                 && cached
@@ -760,13 +762,8 @@ fn shell_token_range_supplies_raw_token_for_path_formatting() {
     let formatted =
         crate::completion::shell_path::format_candidates_for_token(candidates, Some(&raw_token));
 
-    assert_eq!(
-        formatted[0],
-        Candidate::File {
-            path: r#""dir with space/foo"#.to_string(),
-            is_dir: false,
-        }
-    );
+    assert_eq!(formatted[0].output(), r#""dir with space/foo"#);
+    assert_eq!(formatted[0].get_display_name(), "dir with space/foo");
 }
 
 #[tokio::test]
@@ -805,11 +802,8 @@ async fn quoted_path_completion_generates_and_formats_candidate() {
 
     assert!(
         formatted.iter().any(|candidate| {
-            matches!(
-                candidate,
-                Candidate::File { path, is_dir: false }
-                    if path == &format!("\"{expected}")
-            )
+            candidate.output() == format!("\"{expected}")
+                && candidate.get_display_name() == expected
         }),
         "expected quoted display candidate in {:?}",
         formatted
@@ -857,10 +851,7 @@ async fn escaped_path_completion_generates_and_formats_candidate() {
 
     assert!(
         formatted.iter().any(|candidate| {
-            matches!(
-                candidate,
-                Candidate::File { path, is_dir: false } if path == &escaped_expected
-            )
+            candidate.output() == escaped_expected && candidate.get_display_name() == expected
         }),
         "expected escaped display candidate in {:?}",
         formatted
@@ -1017,7 +1008,7 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
         "cold result must not publish dynamic alias data before refresh completion"
     );
     assert!(
-        top_level_cache_lookup(&engine, input).is_none(),
+        top_level_cache_lookup(&engine, input, dir.path()).is_none(),
         "a cold dynamic refresh must keep the partial result out of the top-level cache"
     );
 
@@ -1028,7 +1019,7 @@ async fn dynamic_command_static_subcommand_caches_after_refresh_settles() {
     let second =
         wait_for_candidate_and_exact_cache(&engine, &mut notify_rx, input, dir.path(), "cheat")
             .await;
-    let cached = top_level_cache_lookup(&engine, input)
+    let cached = top_level_cache_lookup(&engine, input, dir.path())
         .expect("the complete result should become cacheable after the dynamic refresh settles");
     assert!(cached.exact);
     assert!(
@@ -1098,7 +1089,7 @@ async fn dynamic_command_argument_does_not_use_completion_cache() {
     let _ = wait_for_candidate(&engine, input, dir.path(), "feature/test-branch").await;
 
     assert!(
-        top_level_cache_lookup(&engine, input).is_none(),
+        top_level_cache_lookup(&engine, input, dir.path()).is_none(),
         "dynamic argument values must stay out of the top-level completion cache"
     );
 }
@@ -1115,7 +1106,7 @@ async fn system_command_top_level_cache_is_path_generation_scoped() {
 
     let engine = engine_with_path(&path_a);
     let input = "sudo command zz-";
-    let scope_a = engine.current_path_cache_scope();
+    let scope_a = engine.current_cache_scope(dir.path());
     let first = engine
         .complete(input, input.len(), dir.path(), 50, None)
         .await;
@@ -1141,7 +1132,7 @@ async fn system_command_top_level_cache_is_path_generation_scoped() {
         .environment
         .write()
         .set_and_export_shell_var("PATH".to_string(), path_b.display().to_string());
-    let scope_b = engine.current_path_cache_scope();
+    let scope_b = engine.current_cache_scope(dir.path());
     assert!(
         engine.cache.lookup_scoped(scope_b, input).is_none(),
         "PATH switch must not reuse the previous generation's top-level entry"
@@ -1179,7 +1170,7 @@ async fn system_command_top_level_cache_is_path_generation_scoped() {
         .environment
         .write()
         .set_and_export_shell_var("PATH".to_string(), path_a.display().to_string());
-    let scope_a2 = engine.current_path_cache_scope();
+    let scope_a2 = engine.current_cache_scope(dir.path());
     assert!(
         engine.cache.lookup_scoped(scope_a2, input).is_none(),
         "A -> B -> A must still allocate a fresh top-level cache scope"
@@ -1250,7 +1241,7 @@ async fn git_dynamic_value_candidates_skip_fallback_collectors() {
         "external fallback should not run for exclusive git dynamic value completion"
     );
     assert!(
-        top_level_cache_lookup(&engine, input).is_none(),
+        top_level_cache_lookup(&engine, input, dir.path()).is_none(),
         "exclusive dynamic argument values must stay out of the top-level completion cache"
     );
 }
@@ -1272,6 +1263,7 @@ fn git_subcommand_accepts_paths_detects_checkout_and_restore() {
         specified_options: vec![],
         specified_arguments: vec![],
         cursor_index: 0,
+        source: None,
     };
     assert!(git_subcommand_accepts_paths(&make("git", "checkout")));
     assert!(git_subcommand_accepts_paths(&make("git", "restore")));
@@ -1782,7 +1774,7 @@ async fn ghost_completion_uses_cached_json_declared_dynamic_values_only() {
 
     assert_eq!(
         engine.ghost_completion(input, input.len(), dir.path(), None),
-        Some("git stash pop stash@{0}".to_string())
+        Some(r"git stash pop stash@\{0\}".to_string())
     );
 }
 
@@ -3211,7 +3203,7 @@ fn nx_cli_first_completion_returns_before_provider_release_and_reuses_result() {
             .any(|candidate| candidate.text == "api:build")
     );
     assert_eq!(fs::read_to_string(&invocations).unwrap().lines().count(), 2);
-    assert!(top_level_cache_lookup(&engine, "nx run api:").is_none());
+    assert!(top_level_cache_lookup(&engine, "nx run api:", dir.path()).is_none());
     assert!(
         notify_rx.try_recv().is_err(),
         "one settlement should emit one notification"

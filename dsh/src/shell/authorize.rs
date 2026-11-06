@@ -48,7 +48,7 @@ pub fn authorize_job_with(
     shell: &mut Shell,
     job: &crate::process::Job,
     had_dynamic: bool,
-    confirm: ConfirmFn,
+    confirm: impl Fn(&str) -> Result<ConfirmationAction>,
 ) -> Result<AuthorizationDecision> {
     let (level, allowlist) = {
         let env = shell.environment.read();
@@ -78,7 +78,7 @@ pub fn authorize_job_with(
         SafetyResult::Confirm(reason) => match confirm(&reason) {
             Ok(ConfirmationAction::Yes) => Ok(AuthorizationDecision::Allow),
             Ok(ConfirmationAction::AlwaysAllow) => {
-                // A dynamic source can resolve differently next time.
+                // Expansion or schema injection can resolve differently next time.
                 if !had_dynamic {
                     shell
                         .environment

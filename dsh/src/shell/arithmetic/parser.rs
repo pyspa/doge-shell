@@ -454,22 +454,35 @@ fn parse_primary(cursor: &mut Cursor) -> Result<ArithmeticExpr, ArithmeticExpans
 /// Leading `0` selects octal (digits `8`/`9` are an error); `0x`/`0X`
 /// selects hexadecimal. Overflow is an error, never wrapping.
 pub(crate) fn parse_integer_literal(text: &str) -> Result<i64, String> {
-    if text.len() > 2 && (text.starts_with("0x") || text.starts_with("0X")) {
-        let digits = &text[2..];
+    // Signs belong to unary AST nodes for source literals, but variable values
+    // arrive here as signed text. Detect the radix after that optional sign.
+    let (sign, unsigned) = if let Some(digits) = text.strip_prefix('-') {
+        ("-", digits)
+    } else if let Some(digits) = text.strip_prefix('+') {
+        ("+", digits)
+    } else {
+        ("", text)
+    };
+    let (radix, digits) = if unsigned.starts_with("0x") || unsigned.starts_with("0X") {
+        let digits = &unsigned[2..];
         if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(format!("invalid hexadecimal literal '{text}'"));
         }
-        return i64::from_str_radix(digits, 16)
-            .map_err(|_| format!("integer literal '{text}' out of range"));
-    }
-    if text.len() > 1 && text.starts_with('0') {
-        if !text.chars().all(|c| matches!(c, '0'..='7')) {
+        (16, digits)
+    } else if unsigned.len() > 1 && unsigned.starts_with('0') {
+        if !unsigned.chars().all(|c| matches!(c, '0'..='7')) {
             return Err(format!("invalid octal literal '{text}'"));
         }
-        return i64::from_str_radix(text, 8)
-            .map_err(|_| format!("integer literal '{text}' out of range"));
-    }
-    text.parse::<i64>()
+        (8, unsigned)
+    } else {
+        // Reject another sign rather than accepting it as part of the digits.
+        if unsigned.is_empty() || !unsigned.chars().all(|c| c.is_ascii_digit()) {
+            return Err(format!("integer literal '{text}' out of range"));
+        }
+        (10, unsigned)
+    };
+    // Parse with the sign present: MIN's positive magnitude does not fit i64.
+    i64::from_str_radix(&format!("{sign}{digits}"), radix)
         .map_err(|_| format!("integer literal '{text}' out of range"))
 }
 

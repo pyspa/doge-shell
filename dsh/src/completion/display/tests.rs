@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn real_grid_jump_and_page_navigation_keeps_selection_on_candidates() {
+    let mut display = CompletionDisplay::new_with_config(
+        (0..12)
+            .map(|i| Candidate::Basic(format!("item{i:02}")))
+            .collect(),
+        "",
+        "",
+        CompletionConfig {
+            max_items: 10,
+            ..CompletionConfig::default()
+        },
+    );
+    display.force_layout(30);
+    CompletionUi::move_end(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item09");
+    CompletionUi::move_home(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+    CompletionUi::move_page_down(&mut display);
+    assert!(display.selected_index > 0);
+    assert!(display.get_selected().is_some());
+    CompletionUi::move_page_up(&mut display);
+    assert_eq!(display.get_selected().unwrap().get_display_name(), "item00");
+}
+
+#[test]
 fn detail_line_text_combines_name_and_description() {
     let candidate = Candidate::Command {
         name: "git".to_string(),
@@ -420,4 +445,126 @@ fn test_multicolumn_file_rows_keep_stable_cell_widths() {
             }
         }
     }
+}
+
+#[test]
+fn completion_display_data_cannot_emit_terminal_controls() {
+    use skim::SkimItem;
+    let raw = "界\n\r\t\x1b[2J\x07\u{009b}31m";
+    let candidates = [
+        Candidate::Basic(raw.into()),
+        Candidate::File {
+            path: raw.into(),
+            is_dir: false,
+        },
+        Candidate::Item(raw.into(), raw.into()),
+        Candidate::Command {
+            name: raw.into(),
+            description: raw.into(),
+        },
+        Candidate::Option {
+            name: raw.into(),
+            description: raw.into(),
+        },
+        Candidate::Process {
+            pid: raw.into(),
+            command: raw.into(),
+        },
+        Candidate::History {
+            command: raw.into(),
+            frequency: 1,
+            last_used: 0,
+        },
+        Candidate::GitBranch {
+            name: raw.into(),
+            is_current: false,
+        },
+        Candidate::ShellSyntax {
+            kind: ShellSyntaxKind::Variable,
+            text: raw.into(),
+            description: Some(raw.into()),
+        },
+        Candidate::HomePath(Box::new(Candidate::Basic(raw.into()))),
+        Candidate::Prepared {
+            candidate: Box::new(Candidate::Item(raw.into(), raw.into())),
+            insertion: raw.into(),
+        },
+    ];
+    for candidate in candidates {
+        let original = candidate.output().into_owned();
+        let (name, description) = candidate.get_formatted_display(120, 45);
+        assert!(!name.chars().any(char::is_control), "{name:?}");
+        assert!(
+            !description
+                .unwrap_or_default()
+                .chars()
+                .any(char::is_control)
+        );
+        assert!(!candidate.text().chars().any(char::is_control));
+        assert!(
+            !detail_line_text(&candidate)
+                .unwrap_or_default()
+                .chars()
+                .any(char::is_control)
+        );
+        assert_eq!(candidate.output(), original);
+        assert_eq!(candidate.get_display_name(), raw);
+    }
+}
+
+#[test]
+fn completion_cells_fit_every_small_width() {
+    for candidate in [
+        Candidate::Basic("界e\u{301}long".into()),
+        Candidate::Command {
+            name: "界e\u{301}long".into(),
+            description: "details".into(),
+        },
+        Candidate::Item("\n界".into(), "\tmore".into()),
+    ] {
+        for width in 0..=16 {
+            for alignment in [0, 1, 20] {
+                let (name, desc) = candidate.get_formatted_display(width, alignment);
+                assert_eq!(
+                    unicode_display_width(&name)
+                        + desc.as_deref().map(unicode_display_width).unwrap_or(0),
+                    width
+                );
+            }
+            let mut display = CompletionDisplay::new(vec![candidate.clone()], "".into(), "".into());
+            let layout = display.force_layout(width);
+            assert!(
+                layout.column_width < width || width == 0,
+                "width={width}, {layout:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn audit_control_characters_are_display_only() {
+    let raw = "name\x1b[2J\n\r\t";
+    let candidate = Candidate::Path(raw.into());
+    let (shown, _) = candidate.get_formatted_display(80, 0);
+    assert!(!shown.chars().any(char::is_control));
+    assert_eq!(candidate.get_display_name(), raw);
+}
+
+#[test]
+fn audit_description_and_skim_are_safe_without_changing_output() {
+    use skim::SkimItem;
+    let candidate = Candidate::Command {
+        name: "na\x1b[2Jme".into(),
+        description: "first\nsecond\r\t\x1b[2J".into(),
+    };
+    let (_, description) = candidate.get_formatted_display(100, 24);
+    assert!(!description.unwrap().chars().any(char::is_control));
+    assert!(
+        !detail_line_text(&candidate)
+            .unwrap()
+            .chars()
+            .any(char::is_control)
+    );
+    assert!(!candidate.text().chars().any(char::is_control));
+    assert_eq!(candidate.output(), "na\x1b[2Jme");
 }

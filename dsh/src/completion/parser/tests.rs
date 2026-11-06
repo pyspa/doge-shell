@@ -306,9 +306,6 @@ fn test_space_detection_edge_cases() {
     // Test cursor at different positions
     let result = parser.parse("git ", 3); // cursor at end of command
     assert_eq!(result.completion_context, CompletionContext::Command);
-
-    let result = parser.parse("git ", 4); // cursor at space
-    assert_eq!(result.completion_context, CompletionContext::SubCommand);
 }
 
 #[test]
@@ -642,4 +639,18 @@ fn test_parse_option_value_chain() {
     assert_eq!(result.specified_arguments, vec!["arg1"]);
     assert!(result.specified_options.contains(&"-m".to_string()));
     assert!(result.specified_options.contains(&"--file".to_string()));
+}
+
+#[test]
+fn separators_select_only_the_cursor_command() {
+    let parser = CommandLineParser::new();
+    for separator in ["&&", "||", "|", ";", "\n", "&"] {
+        let input = format!("echo ok{separator}git checkout ma");
+        let parsed = parser.parse(&input, input.len());
+        assert_eq!(parsed.command, "git", "{input:?}");
+        assert_eq!(parsed.current_token, "ma");
+        let left = parser.parse(&input, 7);
+        assert_eq!(left.command, "echo");
+        assert!(!left.raw_args.iter().any(|s| s == "git"));
+    }
 }

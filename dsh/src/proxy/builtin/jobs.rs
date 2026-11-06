@@ -113,3 +113,6 @@ impl dsh_builtin::shell_capabilities::JobControlCapability for crate::shell::She
         fg::execute_fg(self, ctx, argv)
     }
 }
+
+#[cfg(test)]
+pub(crate) use bg::resume_background_job_with;

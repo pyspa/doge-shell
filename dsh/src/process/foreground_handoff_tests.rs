@@ -4,7 +4,7 @@ use super::{Job, JobProcess, Process, ProcessState};
 use crate::{environment::Environment, shell::Shell};
 use dsh_types::Context;
 use nix::unistd::{Pid, getpgrp};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::os::fd::BorrowedFd;
 use std::time::{Duration, Instant};
 
@@ -14,7 +14,14 @@ mod pty_pump;
 mod supervisor;
 use supervisor::run_scratch;
 
+#[derive(Debug)]
+enum LaunchObservation {
+    Wait(Pid, ProcessState),
+    StartupStop,
+}
+
 thread_local! {
+    static LAUNCH_OBSERVATIONS: RefCell<Vec<LaunchObservation>> = const { RefCell::new(Vec::new()) };
     static ADMISSION_CHECKED: Cell<bool> = const { Cell::new(false) };
     static PREEXEC_BEFORE_ACK: Cell<bool> = const { Cell::new(false) };
     static PREEXEC_STAGE: Cell<usize> = const { Cell::new(0) };
@@ -22,6 +29,148 @@ thread_local! {
     static CHILD_START_FD: Cell<i32> = const { Cell::new(-1) };
     static SCRATCH_TERMINAL: Cell<bool> = const { Cell::new(false) };
     static REJECT_HANDOFF: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Record the existing known-PID wait result, without waiting or changing it.
+/// This runs in the parent, never in the raw fork child.
+pub(super) fn record_launch_wait(pid: Pid, state: ProcessState) {
+    if SCRATCH_TERMINAL.get() {
+        LAUNCH_OBSERVATIONS
+            .with_borrow_mut(|events| events.push(LaunchObservation::Wait(pid, state)));
+    }
+}
+
+/// Called only after the actual startup SIGSTOP propagation operation.
+pub(super) fn record_startup_stop() {
+    if SCRATCH_TERMINAL.get() {
+        LAUNCH_OBSERVATIONS.with_borrow_mut(|events| events.push(LaunchObservation::StartupStop));
+    }
+}
+
+fn assert_launch_stop_evidence(job: &Job, trigger: nix::sys::signal::Signal) {
+    use nix::sys::signal::Signal;
+    LAUNCH_OBSERVATIONS.with_borrow(|events| {
+        eprintln!("canonical launch observations: {events:?}");
+        let mut first_stop = None;
+        let mut propagated = false;
+        let mut observed = std::collections::HashMap::new();
+        for event in events {
+            match *event {
+                LaunchObservation::Wait(pid, state) => {
+                    if let ProcessState::Stopped(stopped_pid, signal) = state {
+                        assert_eq!(pid, stopped_pid);
+                        if first_stop.is_none() {
+                            assert_eq!(
+                                signal, trigger,
+                                "first real stop must match the injected signal"
+                            );
+                            first_stop = Some(state);
+                        }
+                        // A terminal Ctrl-Z starts with TSTP; later STOP is
+                        // valid only after recorded startup propagation.
+                        assert!(
+                            signal == trigger || (signal == Signal::SIGSTOP && propagated),
+                            "unexplained stop signal: {state:?}, events={events:?}"
+                        );
+                    }
+                    observed.insert(pid, state);
+                }
+                LaunchObservation::StartupStop => {
+                    assert!(
+                        first_stop.is_some(),
+                        "propagation must follow a real stop observation"
+                    );
+                    propagated = true;
+                }
+            }
+        }
+        assert!(first_stop.is_some(), "no actual stop observed");
+        let mut stage = job.process.as_deref();
+        let mut first_stopped = None;
+        while let Some(process) = stage {
+            let pid = process.get_pid().unwrap();
+            let state = process.get_state();
+            assert_eq!(
+                observed.get(&pid),
+                Some(&state),
+                "canonical state differs from real wait for {pid}"
+            );
+            match state {
+                ProcessState::Stopped(..) => {
+                    first_stopped.get_or_insert(state);
+                }
+                ProcessState::Completed(..) => {} // An already-exited leader is neutral.
+                ProcessState::Running => panic!("live stage {pid} did not stop"),
+            }
+            stage = process.next_process();
+        }
+        assert_eq!(
+            Some(job.state),
+            first_stopped,
+            "summary must be the first real stopped stage"
+        );
+        assert!(job.is_fully_stopped());
+        assert_eq!(job.final_exit_status(), None);
+    });
+}
+
+/// Pure oracle controls: the CI ordering (middle TSTP, propagation, head
+/// STOP) is valid, but missing cause/propagation or a fabricated summary is
+/// not. These fixtures do not send signals or stand in for the real PTY test.
+#[test]
+fn stop_oracle_requires_real_trigger_propagation_and_matching_summary() {
+    use nix::sys::signal::Signal::{SIGSTOP, SIGTSTP, SIGTTIN};
+    let head = Pid::from_raw(11);
+    let middle = Pid::from_raw(12);
+    let stopped_head = ProcessState::Stopped(head, SIGSTOP);
+    let stopped_middle = ProcessState::Stopped(middle, SIGTSTP);
+    let mut job = Job::new("oracle fixture".into(), getpgrp());
+    for (pid, state) in [(head, stopped_head), (middle, stopped_middle)] {
+        let mut process = Process::new("fixture".into(), vec![]);
+        process.pid = Some(pid);
+        process.state = state;
+        job.set_process(JobProcess::Command(process));
+    }
+    job.refresh_lifecycle_state();
+    let valid = || {
+        vec![
+            LaunchObservation::Wait(middle, stopped_middle),
+            LaunchObservation::StartupStop,
+            LaunchObservation::Wait(head, stopped_head),
+        ]
+    };
+    LAUNCH_OBSERVATIONS.set(valid());
+    assert_launch_stop_evidence(&job, SIGTSTP);
+    for events in [
+        vec![
+            LaunchObservation::StartupStop,
+            LaunchObservation::Wait(head, stopped_head),
+        ],
+        vec![
+            LaunchObservation::Wait(middle, stopped_middle),
+            LaunchObservation::Wait(head, stopped_head),
+        ],
+        vec![LaunchObservation::Wait(
+            middle,
+            ProcessState::Stopped(middle, SIGTTIN),
+        )],
+    ] {
+        LAUNCH_OBSERVATIONS.set(events);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                assert_launch_stop_evidence(&job, SIGTSTP);
+            }))
+            .is_err()
+        );
+    }
+    LAUNCH_OBSERVATIONS.set(valid());
+    job.state = stopped_middle; // Wrong summary despite a valid observed tree.
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_launch_stop_evidence(&job, SIGTSTP);
+        }))
+        .is_err()
+    );
 }
 
 pub(super) fn admission_ready_checkpoint() {
@@ -422,7 +571,9 @@ fn scratch_session() {
             assert!(job.is_fully_stopped(), "all admitted stages must stop: {:?}", job.process);
             assert_eq!(job.final_exit_status(), None);
             let stop_signal = if mode.starts_with("preexec-admission") || mode.starts_with("preexec-direct") { nix::sys::signal::Signal::SIGSTOP } else { nix::sys::signal::Signal::SIGTSTP };
-            assert!(matches!(job.state, ProcessState::Stopped(_, signal) if signal == stop_signal));
+            assert_launch_stop_evidence(&job, stop_signal);
+            assert!(matches!(&result, Ok(super::launch_outcome::JobLaunchOutcome::Process(state)) if *state == job.state),
+                "launch outcome must preserve the canonical summary: {result:?}");
             assert_eq!(job.has_unreleased_admission(), mode.starts_with("preexec-admission"));
             assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
             if mode == "preexec-detach-stop" {

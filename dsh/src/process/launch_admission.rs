@@ -156,6 +156,8 @@ impl Job {
             if (!admission.released && self.has_stopped_process()) || stopped_startup {
                 if !admission.stop_requested {
                     self.signal(nix::sys::signal::Signal::SIGSTOP)?;
+                    #[cfg(test)]
+                    super::foreground_handoff_tests::record_startup_stop();
                     admission.stop_requested = true;
                 }
                 return Ok(false);

@@ -177,7 +177,8 @@ impl JobProcess {
         // error: unwind this call's pipe/capture wiring (the shell lives on,
         // so a leak here would be a persistent session leak) and report it
         // without the `?` operator.
-        let applied = match redirect::apply(&redirects, ctx) {
+        let applied = match redirect::apply_with_unstarted_stdout(&redirects, ctx, has_next_process)
+        {
             Ok(applied) => applied,
             Err(failure) => {
                 self.abort_stage_wiring(

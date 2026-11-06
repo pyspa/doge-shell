@@ -117,3 +117,6 @@
 - Rollback sends SIGKILL and retires admission before polling status, so cleanup cannot hand the terminal back to a dying job. LaunchTerminalGuard restores terminal ownership on success, stop and failure.
 - Normal-exit known-async detach settles startup reports only, never waits for running command completion; actual stopped candidates retain Job/report ownership and fail closed. The existing synchronous helper request delivery before readiness is not made interruptible by this protocol.
 - A FullProxy child can stop before its first `setsid`. Explicit fg/bg may fall back from group SIGCONT `ESRCH` to the canonical PID only for a real Stopped, single-stage FullProxy child with one pending exec report and matching job/tree PID/PGID. Its unconsumed termination status pins identity. Other errors, completed/running/unknown identities, multi-stage jobs and retired reports never authorize the fallback.
+
+- Re-exec request は匿名ファイルへ全量書込み・rewind してから spawn する。spawn 後の同期 pipe 送信は、helper の外部 SIGSTOP と大きな snapshot が重なると親を停止させる。request/status の collision-free FD 予約は維持する。
+- Redirect の途中失敗は、それまでの stderr へ rollback 前に一度だけ診断する。未起動 downstream の stdout pipe 由来なら dup chain を追跡して早期出力を避け、元 stderr へ fallback する（失敗 stage が後段を起動しない既存仕様）。Context の出力は借用 FD をエラー時にも閉じない。

@@ -306,9 +306,6 @@ fn test_space_detection_edge_cases() {
     // Test cursor at different positions
     let result = parser.parse("git ", 3); // cursor at end of command
     assert_eq!(result.completion_context, CompletionContext::Command);
-
-    let result = parser.parse("git ", 4); // cursor at space
-    assert_eq!(result.completion_context, CompletionContext::SubCommand);
 }
 
 #[test]

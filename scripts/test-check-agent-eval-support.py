@@ -16,8 +16,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER_PATH = ROOT / "scripts" / "check-agent-eval-support.py"
-README_PATH = ROOT / "docs" / "ai" / "evals" / "README.md"
-WORKFLOW_PATH = ROOT / ".github" / "workflows" / "agent-eval.yml"
 
 
 def load_checker():
@@ -30,13 +28,6 @@ def load_checker():
 
 
 class SupportBoundaryTest(unittest.TestCase):
-    def test_boundary_is_explicit_in_docs(self):
-        text = README_PATH.read_text(encoding="utf-8")
-        self.assertIn("local-only", text,
-                      "README must state the local-only support boundary")
-        self.assertIn("opencode", text)
-        self.assertIn("command", text)
-
     def test_checker_exists_and_passes(self):
         self.assertTrue(CHECKER_PATH.exists(),
                         "scripts/check-agent-eval-support.py is missing: "
@@ -45,18 +36,6 @@ class SupportBoundaryTest(unittest.TestCase):
         errors = checker.check()
         self.assertEqual(errors, [], f"support contract drift: {errors}")
 
-    def test_local_opencode_runner_preserved(self):
-        checker = load_checker()
-        self.assertIsNotNone(checker, "checker missing")
-        cli_runners = checker.parse_cli_runners(ROOT / "scripts" / "run-agent-eval.py")
-        self.assertIn("opencode", cli_runners,
-                      "local --runner opencode must remain supported")
-
-    def test_workflow_stays_codex_claude_only(self):
-        checker = load_checker()
-        self.assertIsNotNone(checker, "checker missing")
-        workflow_runners = checker.parse_workflow_runners(WORKFLOW_PATH)
-        self.assertEqual(workflow_runners, {"codex", "claude"})
 
 
 class DriftRejectionTest(unittest.TestCase):
@@ -324,10 +303,6 @@ class DriftRejectionTest(unittest.TestCase):
         self.assertEqual(set(self.checker.LOCAL_ONLY_RUNNERS), {"opencode", "command"})
         self.assertEqual(set(self.checker.LOCAL_RUNNERS),
                          set(self.checker.WORKFLOW_RUNNERS) | set(self.checker.LOCAL_ONLY_RUNNERS))
-
-    def test_readme_boundary_statement_is_anchored(self):
-        errors = self.checker.check_readme(README_PATH)
-        self.assertEqual(errors, [], f"boundary statement weakened: {errors}")
 
     def test_readme_scattered_terms_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:

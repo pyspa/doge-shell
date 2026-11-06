@@ -40,7 +40,6 @@ no-doc	dsh/src/lisp/mod.rs
 no-doc	dsh/src/lisp/model/value.rs
 no-doc	dsh/src/lisp/stdlib/table.rs
 no-doc	dsh/src/perf_probes.rs
-no-doc	dsh/src/process/job.rs
 no-doc	dsh/src/process/job_process.rs
 no-doc	dsh/src/process/job_wait.rs
 no-doc	dsh/src/process/process.rs

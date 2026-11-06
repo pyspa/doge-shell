@@ -20,7 +20,9 @@ pub fn is_job_completed(job: &Job) -> bool {
     let job_completed = job.is_process_tree_completed();
     debug!(
         "JOB_COMPLETION_CHECK_RESULT: Job {} completion result: {} (state: {:?})",
-        job.job_id, job_completed, job.state
+        job.job_id,
+        job_completed,
+        job.lifecycle_state()
     );
     job_completed
 }

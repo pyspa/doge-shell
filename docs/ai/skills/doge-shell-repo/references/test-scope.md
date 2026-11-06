@@ -42,6 +42,9 @@ The `dsh/` directory uses the Cargo package name `doge-shell`, so prefer package
 
 Do not start with workspace-wide tests unless the change clearly crosses crate boundaries.
 
+補完キャッシュや project Skill のテストが一時ディレクトリで失敗したら、祖先の `.git` 等も確認する。
+`/tmp/.git` があると project root の探索結果が変わる。変更前の HEAD でも再現するか切り分け、共有の印は削除せず、project marker のない `TMPDIR`（例: `/var/tmp`）で再検証する。
+
 `--message-format short` を付けると clippy / rustc の 1 診断が 8 行から 1 行になる。clippy は CI と同じく必ず `--all-targets` を付ける: `cargo clippy -p <package> --all-targets --message-format short -- -D warnings`。
 
 ## CI をローカルで再現する最小セット

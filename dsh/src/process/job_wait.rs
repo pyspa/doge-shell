@@ -412,7 +412,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
                                 no_waitable,
                                 job.job_id,
                                 job.cmd,
-                                job.state,
+                                job.lifecycle_state(),
                                 wait_pids_for_error,
                             );
                         }
@@ -423,7 +423,7 @@ async fn wait_loop(job: &mut Job, policy: JobWaitPolicy) -> Result<JobWaitOutcom
                     no_waitable,
                     job.job_id,
                     job.cmd,
-                    job.state,
+                    job.lifecycle_state(),
                     wait_pids_for_error,
                 );
             }

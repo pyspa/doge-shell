@@ -173,7 +173,7 @@ mod tests {
         let mut process = Process::new("sleep".to_string(), vec!["sleep".to_string()]);
         process.pid = Some(pid);
         job.set_process(JobProcess::Command(process));
-        job.state = ProcessState::Running;
+        job.set_lifecycle_state_for_test(ProcessState::Running);
         job.subshell = SubshellType::None;
         shell
             .track_async_job(job)
@@ -268,7 +268,7 @@ mod tests {
         process.pid = Some(pid);
         process.state = ProcessState::Stopped(pid, Signal::SIGTSTP);
         job.set_process(JobProcess::Command(process));
-        job.state = ProcessState::Running;
+        job.set_lifecycle_state_for_test(ProcessState::Running);
         shell
             .track_async_job(job)
             .expect("register stopped-test job");

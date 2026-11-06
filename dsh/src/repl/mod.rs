@@ -337,7 +337,13 @@ impl<'a> Repl<'a> {
             self.shell
                 .wait_jobs
                 .iter()
-                .map(|job| (job.job_id, job.cmd.clone(), job.state.to_string()))
+                .map(|job| {
+                    (
+                        job.job_id,
+                        job.cmd.clone(),
+                        job.lifecycle_state().to_string(),
+                    )
+                })
                 .collect(),
         );
     }

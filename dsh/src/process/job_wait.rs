@@ -183,7 +183,13 @@ pub async fn put_in_foreground(job: &mut Job, no_hang: bool, cont: bool) -> Resu
         return Err(err);
     }
 
+    if let Some(admission) = job.launch_admission.as_mut() {
+        admission.foreground_wait_active = true;
+    }
     let wait_result = wait_job(job, no_hang).await;
+    if let Some(admission) = job.launch_admission.as_mut() {
+        admission.foreground_wait_active = false;
+    }
     // Restore on both wait success and failure, without masking that result.
     if handoff {
         restore_shell_foreground(job.shell_pgid);

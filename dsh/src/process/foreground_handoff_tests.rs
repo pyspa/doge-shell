@@ -164,6 +164,13 @@ pub(super) fn record_child(_child: Pid) {
 }
 
 #[test]
+fn preexec_external_cont_reconciles_without_terminal_handoff() {
+    for suffix in ["complete", "read", "helper"] {
+        run_scratch(&format!("preexec-admission-external-cont-{suffix}"));
+    }
+}
+
+#[test]
 fn preexec_admission_stop_resumes_fg_and_bg() {
     run_scratch("preexec-admission-fg");
     run_scratch("preexec-admission-bg");
@@ -360,7 +367,7 @@ fn scratch_session() {
                     "-c".into(),
                     if mode == "rollback" {
                         format!(": > exec-started; : >&{lifetime_fd} || exit 3; read -r line; test \"$line\" = foreground-ready || exit 2; kill -STOP $$")
-                    } else if mode == "preexec-admission-bg" || mode == "preexec-leader" {
+                    } else if mode == "preexec-admission-bg" || mode == "preexec-leader" || (mode.starts_with("preexec-admission-external-cont") && !mode.ends_with("-read")) {
                         "exit 0".to_string()
                     } else if mode == "preexec-repeat" {
                         "kill -STOP $$; exit 0".to_string()
@@ -432,7 +439,34 @@ fn scratch_session() {
                 assert!(Instant::now() < deadline, "supervisor did not release test hold");
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
-            if mode.starts_with("preexec-admission-bg") {
+            if mode.starts_with("preexec-admission-external-cont") {
+                // Simulate an external actor: no fg/bg or local state mutation.
+                nix::sys::signal::killpg(job_group, nix::sys::signal::Signal::SIGCONT).unwrap();
+                eprintln!("external group SIGCONT only; reconciling real stopped Job");
+                let deadline = Instant::now() + Duration::from_secs(2);
+                shell.wait_jobs.push(job);
+                job = loop {
+                    let mut completed = shell.check_job_state().await.unwrap();
+                    assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid,
+                        "external continuation must not take the shell terminal");
+                    if let Some(done) = completed.pop() {
+                        assert!(completed.is_empty() && shell.wait_jobs.is_empty());
+                        break done;
+                    }
+                    let active = shell.wait_jobs.last().unwrap();
+                    if matches!(active.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)) {
+                        break shell.wait_jobs.pop().unwrap();
+                    }
+                    assert!(Instant::now() < deadline,
+                        "external continuation did not progress admission: {:?}", active.state);
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                };
+                if mode.ends_with("-read") {
+                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
+                    assert_eq!(job.final_exit_status(), None);
+                    super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
+                }
+            } else if mode.starts_with("preexec-admission-bg") {
                 job.signal(nix::sys::signal::Signal::SIGCONT).unwrap();
                 crate::proxy::finalize_background_resume(&mut shell, job, Ok(())).await.unwrap();
                 job = shell.wait_jobs.pop().unwrap();

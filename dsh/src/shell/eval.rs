@@ -246,7 +246,7 @@ pub async fn eval_str(
                             last_exit_code = code;
                         }
                         crate::shell::no_command::NoCommandExecutionResult::Failed(failure) => {
-                            let _ = ctx.write_stderr(&failure.message);
+                            failure.report(ctx);
                             last_exit_code = failure.exit_code;
                         }
                     }
@@ -530,12 +530,13 @@ pub async fn eval_str(
                     }
                 }
                 // A redirection setup failure is an ordinary command failure:
-                // report it on the shell's stderr, publish status 1 for `&&` /
+                // report it if not already emitted on redirected stderr,
+                // publish status 1 for `&&` /
                 // `||` / `$?`, and continue the list. The pre-exec hook already
                 // ran, so the post-exec hook runs too, exactly like a normal
                 // completion.
                 Ok(JobLaunchOutcome::CommandFailed(failure)) => {
-                    let _ = ctx.write_stderr(&failure.message);
+                    failure.report(ctx);
                     last_exit_code = failure.exit_code;
                     if let Err(e) = shell.exec_post_exec_hooks(&job.cmd, failure.exit_code) {
                         debug!("Error executing post-exec hooks: {}", e);

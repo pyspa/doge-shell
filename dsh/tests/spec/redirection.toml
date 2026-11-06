@@ -223,8 +223,8 @@ script = "{{TRUE}} 2>&1 > /doge-shell-no-such-dir-xyz/out; echo NEXT"
 
 [case.expect]
 status = 0
-stdout_contains = ["NEXT"]
-stderr_contains = ["failed to create redirect file"]
+stdout_contains = ["NEXT", "failed to create redirect file"]
+stderr_exact = ""
 
 # Repeated failures keep the shell usable: pipes and redirects still work.
 [[case]]
@@ -377,3 +377,104 @@ status = 0
 stdout_contains = ["STATUS:1", "recovered", "capture-recovered"]
 stderr_contains = ["failed to create redirect file"]
 stderr_not_contains = ["failed to open input redirect file"]
+
+# A later open failure is diagnosed using stderr as redirected so far.
+[[case]]
+id = "redirection.failure-follows-earlier-stderr-builtin"
+class = "posix"
+mode = "command"
+script = "echo NEVER 2> errors.txt > missing-directory/out; echo AFTER:$?; cat errors.txt"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.failure-follows-earlier-stderr-external"
+class = "posix"
+mode = "command"
+script = "/bin/echo NEVER 2> errors.txt > missing-directory/out; echo AFTER:$?; cat errors.txt"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.failure-follows-earlier-stderr-no-command"
+class = "posix"
+mode = "command"
+script = "2> errors.txt > missing-directory/out; echo AFTER:$?; cat errors.txt"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.failure-after-stderr-close"
+class = "posix"
+mode = "command"
+script = "echo NEVER 2>&- > missing-directory/out; echo AFTER:$?"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.failure-follows-earlier-dup"
+class = "posix"
+mode = "command"
+script = "echo NEVER 2>&1 > missing-directory/out; echo AFTER:$?"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.failure-follows-earlier-stderr-capture"
+class = "dogesh"
+mode = "command"
+script = "echo NEVER 2> errors.txt > missing-directory/out |>; echo AFTER:$?; cat errors.txt"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+[[case]]
+id = "redirection.unwritable-diagnostic-preserves-descriptor-ownership"
+class = "posix"
+mode = "command"
+script = "echo NEVER < /dev/null 2>&0 > missing-directory/out; echo AFTER:$?"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""
+
+# Failed stages currently abort the rest of the pipeline. Its unread pipe
+# cannot receive diagnostics: retain the original stderr fallback instead.
+[[case]]
+id = "redirection.failed-stage-unstarted-pipe-diagnostic-fallback"
+class = "dogesh"
+mode = "command"
+script = "echo NEVER 0>&1 2>&0 > missing-directory/out | cat; echo AFTER:$?"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1"]
+stdout_not_contains = ["NEVER"]
+stderr_contains = ["missing-directory/out"]
+
+[[case]]
+id = "redirection.failed-stage-named-stderr-keeps-destination"
+class = "dogesh"
+mode = "command"
+script = "echo NEVER 2> errors.txt > missing-directory/out | cat; echo AFTER:$?; cat errors.txt"
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1", "missing-directory/out"]
+stdout_not_contains = ["NEVER"]
+stderr_exact = ""

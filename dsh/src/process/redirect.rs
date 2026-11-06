@@ -29,22 +29,26 @@ pub(crate) const REDIRECTION_FAILURE_EXIT_CODE: i32 = 1;
 /// This is an *expected command-level failure*, not a runtime infrastructure
 /// error: the command fails with [`REDIRECTION_FAILURE_EXIT_CODE`] while the
 /// shell stays alive. The message is the user-facing diagnostic (without the
-/// `dsh: ` prefix; the caller that reports it owns the prefix). Callers must
+/// `dsh: ` prefix; `diagnostic()` adds it exactly once). Callers must
 /// match on this type, never on the message text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RedirectFailure {
     message: String,
+    pub(crate) diagnostic_reported: bool,
 }
 
 impl RedirectFailure {
     pub(crate) fn new(message: String) -> Self {
-        Self { message }
+        Self {
+            message,
+            diagnostic_reported: false,
+        }
     }
 
     /// The user-facing diagnostic, e.g.
-    /// `failed to create redirect file '/x': Permission denied (os error 13)`.
-    pub(crate) fn message(&self) -> &str {
-        &self.message
+    /// `dsh: failed to create redirect file '/x': Permission denied (os error 13)`.
+    pub(crate) fn diagnostic(&self) -> String {
+        format!("dsh: {}", self.message)
     }
 }
 
@@ -173,12 +177,22 @@ impl AppliedRedirects {
 /// A `RedirectFailure` leaves `ctx` exactly as it was: unsupported slots are
 /// rejected before anything is applied, and a mid-list open failure rolls
 /// back the earlier entries first. The caller reports the failure as an
-/// ordinary command failure; this layer never prints anything itself because
-/// the stderr destination differs per execution path (normal, capture,
-/// struct pipe, helper).
+/// ordinary command failure. If stderr has already been redirected, its
+/// diagnostic is emitted before rollback while that destination is alive;
+/// `diagnostic_reported` prevents the caller from printing it a second time.
 pub(crate) fn apply(
     redirects: &[Redirect],
     ctx: &mut Context,
+) -> Result<AppliedRedirects, RedirectFailure> {
+    apply_with_unstarted_stdout(redirects, ctx, false)
+}
+
+/// A failed pipeline stage never launches downstream. Preserve the original
+/// stderr fallback when its failing-prefix stderr points into that unread pipe.
+pub(crate) fn apply_with_unstarted_stdout(
+    redirects: &[Redirect],
+    ctx: &mut Context,
+    unstarted_stdout: bool,
 ) -> Result<AppliedRedirects, RedirectFailure> {
     // Reject unsupported slots before touching anything: these are a mistake in
     // the command, not a runtime failure, so they should not half-apply the
@@ -210,6 +224,10 @@ pub(crate) fn apply(
         changed_stdin: false,
     };
 
+    let mut stderr_redirected = false;
+    // Provenance survives dup chains such as `0>&1 2>&0` and is cleared
+    // when a slot is redirected to a file or /dev/null instead.
+    let mut unstarted_pipe = [false, unstarted_stdout, false];
     for redirect in redirects {
         // Every arm below can fail, and by then earlier redirects have already
         // been written into `ctx`. Returning straight away dropped their files —
@@ -219,7 +237,14 @@ pub(crate) fn apply(
         // So roll `ctx` back before the files go out of scope.
         let source = match open_redirect_source(redirect, ctx, &mut applied._files) {
             Ok(source) => source,
-            Err(err) => {
+            Err(mut err) => {
+                if stderr_redirected && !unstarted_pipe[STDERR_FILENO as usize] {
+                    // Report before rollback closes the earlier stderr file
+                    // or duplication. A closed stderr (/dev/null in Context)
+                    // also suppresses fallback to the shell's original stderr.
+                    let _ = ctx.write_stderr(&err.diagnostic());
+                    err.diagnostic_reported = true;
+                }
                 applied.restore(ctx);
                 return Err(err);
             }
@@ -228,7 +253,13 @@ pub(crate) fn apply(
         applied
             .saved
             .push((redirect.fd, current_slot(ctx, redirect.fd)));
+        let from_unstarted_pipe = match redirect.op {
+            RedirectOp::DupFrom(from) => unstarted_pipe[from as usize],
+            _ => false,
+        };
+        unstarted_pipe[redirect.fd as usize] = from_unstarted_pipe;
         set_slot(ctx, redirect.fd, source);
+        stderr_redirected |= redirect.fd == STDERR_FILENO;
         applied.changed_stdin |= redirect.is_stdin();
     }
 
@@ -464,7 +495,7 @@ mod tests {
                 Err(err) => err,
             };
             assert!(
-                err.message().contains(category),
+                err.diagnostic().contains(category),
                 "{redirect:?}: {err:?} does not carry {category:?}"
             );
         }

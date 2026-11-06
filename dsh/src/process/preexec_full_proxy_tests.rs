@@ -54,7 +54,7 @@ async fn check_resume(background: bool) {
         .unwrap();
     assert_eq!(owner.0.pty_mode, Some(super::pty::PtyMode::FullProxy));
     assert!(matches!(
-        owner.0.state,
+        owner.0.lifecycle_state(),
         ProcessState::Stopped(_, Signal::SIGSTOP)
     ));
     let pid = owner.0.pid.unwrap();

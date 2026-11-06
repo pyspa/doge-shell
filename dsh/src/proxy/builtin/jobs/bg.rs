@@ -112,7 +112,7 @@ pub(crate) fn resolve_bg_targets(
 }
 
 /// Select the default `bg` target: the most recent job whose canonical
-/// process tree holds a stopped process. The stale `job.state` summary
+/// process tree holds a stopped process. The stale `job.lifecycle_state()` summary
 /// never decides; [`crate::process::Job::has_stopped_process`] is authority.
 pub(crate) fn default_bg_target(wait_jobs: &[crate::process::Job]) -> Option<usize> {
     wait_jobs
@@ -150,7 +150,9 @@ where
     let job = shell.wait_jobs.remove(index);
     debug!(
         "BG_CMD_JOB_DETAILS: Job details before bg - state: {:?}, pgid: {:?}, pid: {:?}",
-        job.state, job.pgid, job.pid
+        job.lifecycle_state(),
+        job.pgid,
+        job.pid
     );
 
     let job_id = job.job_id;
@@ -290,7 +292,7 @@ mod tests {
         process.pid = Some(pid);
         process.state = ProcessState::Stopped(pid, signal);
         job.set_process(JobProcess::Command(process));
-        job.state = ProcessState::Running;
+        job.set_lifecycle_state_for_test(ProcessState::Running);
         job
     }
 
@@ -312,7 +314,7 @@ mod tests {
 
         job.pid = Some(producer_pid);
         job.pgid = Some(producer_pid);
-        job.state = ProcessState::Stopped(producer_pid, Signal::SIGTSTP);
+        job.set_lifecycle_state_for_test(ProcessState::Stopped(producer_pid, Signal::SIGTSTP));
         job
     }
 
@@ -328,7 +330,7 @@ mod tests {
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
         assert_eq!(requeued.job_id, 18);
-        assert_eq!(requeued.state, ProcessState::Running);
+        assert_eq!(requeued.lifecycle_state(), ProcessState::Running);
         let producer = requeued.process.as_deref().expect("producer");
         assert_eq!(producer.get_state(), ProcessState::Running);
         assert_eq!(
@@ -388,7 +390,7 @@ mod tests {
                 job.pgid = Some(pid);
             }
         }
-        job.state = ProcessState::Running;
+        job.set_lifecycle_state_for_test(ProcessState::Running);
         job
     }
 
@@ -408,7 +410,7 @@ mod tests {
         assert_eq!(shell.wait_jobs.len(), 1);
         let requeued = &shell.wait_jobs[0];
         assert!(!requeued.is_process_tree_completed());
-        assert_eq!(requeued.state, ProcessState::Running);
+        assert_eq!(requeued.lifecycle_state(), ProcessState::Running);
     }
 
     #[tokio::test]
@@ -436,7 +438,7 @@ mod tests {
         let requeued = &shell.wait_jobs[0];
         assert!(!requeued.is_process_tree_completed());
         assert_eq!(
-            requeued.state,
+            requeued.lifecycle_state(),
             ProcessState::Stopped(stopped_pid, Signal::SIGTSTP),
             "stopped producer must keep its real observed stop state"
         );

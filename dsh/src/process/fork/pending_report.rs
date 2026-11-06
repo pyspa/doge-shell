@@ -178,7 +178,7 @@ mod tests {
         let error =
             crate::process::job_wait::settle_startup_reports_for_detach(&mut job).unwrap_err();
         assert!(error.to_string().contains("without wait authority"));
-        assert_eq!(job.state, crate::process::ProcessState::Running);
+        assert_eq!(job.lifecycle_state(), crate::process::ProcessState::Running);
         assert_eq!(job.final_exit_status(), None);
         assert_eq!(job.exec_reports.len(), 1);
     }

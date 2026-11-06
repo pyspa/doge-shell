@@ -105,7 +105,7 @@ fn assert_launch_stop_evidence(job: &Job, trigger: nix::sys::signal::Signal) {
             stage = process.next_process();
         }
         assert_eq!(
-            Some(job.state),
+            Some(job.lifecycle_state()),
             first_stopped,
             "summary must be the first real stopped stage"
         );
@@ -164,7 +164,7 @@ fn stop_oracle_requires_real_trigger_propagation_and_matching_summary() {
         );
     }
     LAUNCH_OBSERVATIONS.set(valid());
-    job.state = stopped_middle; // Wrong summary despite a valid observed tree.
+    job.set_lifecycle_state_for_test(stopped_middle); // Wrong summary despite a valid observed tree.
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             assert_launch_stop_evidence(&job, SIGTSTP);
@@ -572,7 +572,7 @@ fn scratch_session() {
             assert_eq!(job.final_exit_status(), None);
             let stop_signal = if mode.starts_with("preexec-admission") || mode.starts_with("preexec-direct") { nix::sys::signal::Signal::SIGSTOP } else { nix::sys::signal::Signal::SIGTSTP };
             assert_launch_stop_evidence(&job, stop_signal);
-            assert!(matches!(&result, Ok(super::launch_outcome::JobLaunchOutcome::Process(state)) if *state == job.state),
+            assert!(matches!(&result, Ok(super::launch_outcome::JobLaunchOutcome::Process(state)) if *state == job.lifecycle_state()),
                 "launch outcome must preserve the canonical summary: {result:?}");
             assert_eq!(job.has_unreleased_admission(), mode.starts_with("preexec-admission"));
             assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
@@ -605,15 +605,15 @@ fn scratch_session() {
                         break done;
                     }
                     let active = shell.wait_jobs.last().unwrap();
-                    if matches!(active.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)) {
+                    if matches!(active.lifecycle_state(), ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)) {
                         break shell.wait_jobs.pop().unwrap();
                     }
                     assert!(Instant::now() < deadline,
-                        "external continuation did not progress admission: {:?}", active.state);
+                        "external continuation did not progress admission: {:?}", active.lifecycle_state());
                     tokio::time::sleep(Duration::from_millis(1)).await;
                 };
                 if mode.ends_with("-read") {
-                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
+                    assert!(matches!(job.lifecycle_state(), ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
                     assert_eq!(job.final_exit_status(), None);
                     super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
                 }
@@ -623,7 +623,7 @@ fn scratch_session() {
                 job = shell.wait_jobs.pop().unwrap();
                 if mode.ends_with("-read") {
                     super::job_wait::wait_job(&mut job, false).await.unwrap();
-                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
+                    assert!(matches!(job.lifecycle_state(), ProcessState::Stopped(_, nix::sys::signal::Signal::SIGTTIN)));
                     assert_eq!(nix::unistd::tcgetpgrp(stdin).unwrap(), shell.pgid);
                     super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
                 } else {
@@ -633,7 +633,7 @@ fn scratch_session() {
             } else {
                 super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
                 if mode == "preexec-repeat" {
-                    assert!(matches!(job.state, ProcessState::Stopped(_, nix::sys::signal::Signal::SIGSTOP)));
+                    assert!(matches!(job.lifecycle_state(), ProcessState::Stopped(_, nix::sys::signal::Signal::SIGSTOP)));
                     assert_eq!(job.final_exit_status(), None);
                     super::job_wait::put_in_foreground(&mut job, false, true).await.unwrap();
                 }

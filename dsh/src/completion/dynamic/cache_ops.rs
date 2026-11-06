@@ -17,7 +17,8 @@ pub(super) fn spawn_command_refresh<F>(
     cache: Arc<RwLock<ProjectDynamicCache>>,
     cache_key: DynamicCommandCacheKey,
     loader: F,
-) where
+) -> bool
+where
     F: FnOnce() -> Result<Vec<String>> + Send + 'static,
 {
     let rejected_cache = cache.clone();
@@ -72,7 +73,9 @@ pub(super) fn spawn_command_refresh<F>(
         cache.command_pending.remove(&rejected_key);
         runtime.record_queue_drop("dynamic command");
         update_diagnostics_from_cache(&runtime, &cache, None);
+        return false;
     }
+    true
 }
 
 pub(super) fn spawn_external_refresh<F>(

@@ -40,6 +40,7 @@ pub(crate) struct CompletionRuntime {
     external_workers: OnceLock<CompletionWorkerPool>,
     fish_workers: OnceLock<CompletionWorkerPool>,
     notifier: RwLock<Option<UnboundedSender<()>>>,
+    refresh_tx: tokio::sync::watch::Sender<u64>,
     path_request: RwLock<Option<crate::completion::generators::system::SystemCommandScanStatus>>,
     pub(super) diagnostics: RwLock<super::DynamicCompletionDiagnostics>,
 }
@@ -56,6 +57,7 @@ impl CompletionRuntime {
             external_workers: OnceLock::new(),
             fish_workers: OnceLock::new(),
             notifier: RwLock::new(None),
+            refresh_tx: tokio::sync::watch::channel(0).0,
             path_request: RwLock::new(None),
             diagnostics: RwLock::new(super::DynamicCompletionDiagnostics::default()),
         }
@@ -79,9 +81,16 @@ impl CompletionRuntime {
     }
 
     pub(crate) fn notify(&self) {
+        self.refresh_tx
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
         if let Some(sender) = self.notifier.read().as_ref() {
             let _ = sender.send(());
         }
+    }
+
+    /// Subscribe before collecting so even a fast worker cannot lose its wakeup.
+    pub(crate) fn subscribe_refresh(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.refresh_tx.subscribe()
     }
 
     pub(crate) fn diagnostics_lines(&self) -> Vec<String> {

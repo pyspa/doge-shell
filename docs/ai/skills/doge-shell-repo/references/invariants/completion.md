@@ -36,3 +36,4 @@
 - command refresh success and command refresh error both emit one settlement notification after cache state is committed.
 - queue-rejection/external-refresh notification policy is separate; do not create notification retry loops.
 - dynamic refresh tests synchronize on notifier events rather than arbitrary sleep-based polling where a notifier exists.
+- A cold command-backed dynamic lookup must report pending separately from a settled empty result, scoped to the current synchronous collection (not other providers' pending work). Tab subscribes before collection, retries on settlement within a bounded wait, and preserves edit/paste/resize events or cancellation instead of opening filesystem fallback while pending. Test the actual first Tab with cold providers, including command wrappers.

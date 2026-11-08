@@ -64,11 +64,13 @@ script = "!& literal 'broken $(echo unexpected) |! text &"
 status = 1
 stderr_contains = ["!& requires an interactive input/output TTY"]
 
+# The error line must be complete: an open quote would continue onto the
+# following lines, as in `sh`.
 [[case]]
 id = "interactive.generic-eval-error-status-and-recovery"
 class = "dogesh"
 mode = "interactive"
-script = "echo 'unterminated || echo should-not-run\necho ERROR_STATUS:$?\nRECOVERED=yes\necho RECOVERY_STATUS:$?"
+script = "echo a && && echo should-not-run\necho ERROR_STATUS:$?\nRECOVERED=yes\necho RECOVERY_STATUS:$?"
 
 [case.expect]
 status = 0
@@ -98,3 +100,37 @@ script = "rm -rf nonexistent-status-victim ; echo should-not-run\necho CANCEL_ST
 status = 0
 stdout_contains = ["CANCEL_STATUS:130"]
 stdout_not_contains = ["should-not-run"]
+
+# Piped input is read as a script: a line that is still incomplete (trailing
+# `&&`/`|`, open quote) continues on the next line instead of being run alone.
+
+[[case]]
+id = "interactive.trailing-and-continues-on-next-line"
+class = "posix"
+mode = "interactive"
+script = "{{FALSE}} &&\necho SHOULD_NOT_RUN\necho DONE:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["DONE:1"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]
+
+[[case]]
+id = "interactive.trailing-pipe-continues-on-next-line"
+class = "posix"
+mode = "interactive"
+script = "echo hello |\n{{TR}} a-z A-Z"
+
+[case.expect]
+status = 0
+stdout_contains = ["HELLO"]
+
+[[case]]
+id = "interactive.open-double-quote-spans-lines"
+class = "posix"
+mode = "interactive"
+script = "echo \"first\n  second\" END"
+
+[case.expect]
+status = 0
+stdout_contains = ["first\n  second END"]

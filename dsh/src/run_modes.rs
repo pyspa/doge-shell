@@ -516,12 +516,23 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
             match line {
                 Ok(line) => {
                     if pending.is_empty() {
-                        pending.push_str(line.trim());
+                        // Only leading space: trailing space may sit inside
+                        // a quote that continues on the next line.
+                        pending.push_str(line.trim_start());
                     } else {
                         pending.push('\n');
                         pending.push_str(&line);
                     }
-                    if pending.is_empty() || crate::parser::is_incomplete_input(&pending) {
+                    if pending.trim_end().is_empty() {
+                        pending.clear();
+                        continue;
+                    }
+                    // `!&` takes the rest of its line as literal task text
+                    // (the REPL makes the same exception), so a quote in it
+                    // never continues onto the next line.
+                    if crate::ai_task_input::classify(&pending).is_none()
+                        && crate::parser::is_incomplete_input(&pending)
+                    {
                         continue;
                     }
                     let input = std::mem::take(&mut pending);

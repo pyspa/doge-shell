@@ -12,7 +12,8 @@ use super::parse::planned_to_concrete;
 use super::plan::{PlannedCommand, PlannedJob, PlannedRedirectOp};
 use super::process_substitution::ExecutionResources;
 use super::word_expand::{
-    ExpansionTrace, expand_argument_word, expand_assignment_value, expand_redirect_target,
+    AmbiguousRedirectError, ExpansionTrace, expand_argument_word, expand_assignment_value,
+    expand_redirect_target,
 };
 use crate::process::{BuiltinProcess, Job, JobProcess, Process, Redirect};
 use crate::shell::Shell;
@@ -60,6 +61,13 @@ impl CommandMaterializationFailure {
             exit_code: BUILTIN_ENV_PREFIX_EXIT_CODE,
             // No trailing newline: `Context::write_stderr` appends exactly one.
             message: format!("dsh: {cmd}: a NAME=value prefix is not supported for builtins"),
+        }
+    }
+
+    fn ambiguous_redirect(err: &AmbiguousRedirectError) -> Self {
+        Self {
+            exit_code: 1,
+            message: format!("dsh: {err}"),
         }
     }
 
@@ -341,9 +349,19 @@ pub fn materialize_job<'a>(
                 None => shell.environment.clone(),
             };
             let mut host = super::expansion_host::StageExpansionHost::new(shell, environment);
-            expanded.push(
-                expand_stage(&mut host, ctx, stage, confirm, &mut resources, isolated).await?,
-            );
+            match expand_stage(&mut host, ctx, stage, confirm, &mut resources, isolated).await {
+                Ok(stage) => expanded.push(stage),
+                // An ambiguous redirect fails this command only; the list
+                // continues like any other redirect failure.
+                Err(err) => match err.downcast_ref::<AmbiguousRedirectError>() {
+                    Some(ambiguous) => {
+                        return Ok(MaterializeOutcome::Rejected(
+                            CommandMaterializationFailure::ambiguous_redirect(ambiguous),
+                        ));
+                    }
+                    None => return Err(err),
+                },
+            }
         }
         // A synthetic source never forms a no-command job on its own: with
         // a single empty downstream the job is a two-stage pipeline

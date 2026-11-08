@@ -1156,7 +1156,6 @@ dependencies = [
  "anyhow",
  "arboard",
  "async-trait",
- "cfg-if",
  "chrono",
  "clap",
  "console",
@@ -1167,10 +1166,7 @@ dependencies = [
  "dsh-frecency",
  "dsh-openai",
  "dsh-types",
- "easy_reader",
- "file-lock",
  "futures",
- "futures-timer",
  "fuzzy-matcher",
  "glob",
  "globmatch",
@@ -1179,12 +1175,10 @@ dependencies = [
  "nix 0.31.3",
  "notify",
  "notify-rust",
- "num-traits",
  "parking_lot",
  "pest",
  "pest_derive",
  "proptest",
- "pulldown-cmark",
  "ratatui",
  "regex",
  "reqwest",
@@ -1199,8 +1193,6 @@ dependencies = [
  "sysinfo",
  "tabled",
  "tempfile",
- "term_size",
- "termion",
  "termios",
  "tokio",
  "toml",
@@ -1259,7 +1251,6 @@ dependencies = [
  "tokio-util",
  "toml",
  "tower",
- "tower-http 0.7.1",
  "tracing",
  "uuid",
  "wait-timeout",
@@ -1271,12 +1262,9 @@ dependencies = [
 name = "dsh-frecency"
 version = "0.1.0"
 dependencies = [
- "cfg-if",
  "crossterm",
  "serde",
- "serde_json",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1285,7 +1273,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "cfg-if",
  "futures",
  "jsonschema",
  "jsonwebtoken",
@@ -1299,7 +1286,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -1308,7 +1294,6 @@ name = "dsh-types"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "cfg-if",
  "libc",
  "nix 0.31.3",
  "pulldown-cmark",
@@ -1318,7 +1303,6 @@ dependencies = [
  "shell-words",
  "tempfile",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -1333,16 +1317,6 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
-
-[[package]]
-name = "easy_reader"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5ce6d7f6b0c1a6330fb8450f49a8423b78e30d04132146938c35baab3877eb"
-dependencies = [
- "fnv",
- "rand 0.8.8",
-]
 
 [[package]]
 name = "either"
@@ -1506,16 +1480,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
-]
-
-[[package]]
-name = "file-lock"
-version = "2.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "040b48f80a749da50292d0f47a1e2d5bf1d772f52836c07f64bfccc62ba6e664"
-dependencies = [
- "cc",
- "libc",
 ]
 
 [[package]]
@@ -1698,12 +1662,6 @@ name = "futures-task"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
-
-[[package]]
-name = "futures-timer"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af43fadb8a98512d547e37b4e92e0ced13e205c061b87b4623eff01d918d6968"
 
 [[package]]
 name = "futures-util"
@@ -1933,12 +1891,6 @@ dependencies = [
  "http-body",
  "pin-project-lite",
 ]
-
-[[package]]
-name = "http-range-header"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9171a2ea8a68358193d15dd5d70c1c10a2afc3e7e4c5bc92bc9f025cebd7359c"
 
 [[package]]
 name = "httparse"
@@ -2944,12 +2896,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "numtoa"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aa2c4e539b869820a2b82e1aef6ff40aa85e65decdd5185e83fb4b1249cd00f"
-
-[[package]]
 name = "objc2"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3836,7 +3782,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -4667,16 +4613,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "term_size"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e4129646ca0ed8f45d09b929036bafad5377103edd06e50bf574b353d2b08d9"
-dependencies = [
- "libc",
- "winapi",
-]
-
-[[package]]
 name = "termina"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4699,16 +4635,6 @@ dependencies = [
  "nom 7.1.3",
  "phf",
  "phf_codegen",
-]
-
-[[package]]
-name = "termion"
-version = "4.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f44138a9ae08f0f502f24104d82517ef4da7330c35acd638f1f29d3cd5475ecb"
-dependencies = [
- "libc",
- "numtoa",
 ]
 
 [[package]]
@@ -5016,31 +4942,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "url",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
-dependencies = [
- "bitflags 2.13.2",
- "bytes",
- "futures-core",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "http-range-header",
- "httpdate",
- "mime",
- "mime_guess",
- "percent-encoding",
- "pin-project-lite",
- "tokio",
- "tokio-util",
- "tower-layer",
- "tower-service",
 ]
 
 [[package]]

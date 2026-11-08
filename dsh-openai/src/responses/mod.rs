@@ -280,12 +280,9 @@ impl ResponsesTransport {
         )
         .await?;
         let status = response.status();
-        let retry_after = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(Duration::from_secs);
+        // Shared with chat/completions: clamped, so a huge value cannot park
+        // the retry loop, and never a panic on a malformed header.
+        let retry_after = crate::client::parse_retry_after(response.headers());
         if !status.is_success() {
             let message = if wire.is_subscription() {
                 auth::checked_json(response)

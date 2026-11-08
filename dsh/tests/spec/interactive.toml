@@ -134,3 +134,26 @@ script = "echo \"first\n  second\" END"
 [case.expect]
 status = 0
 stdout_contains = ["first\n  second END"]
+
+[[case]]
+id = "interactive.open-quote-keeps-first-line-trailing-spaces"
+class = "posix"
+mode = "interactive"
+script = "echo \"a  \nb\" END"
+
+[case.expect]
+status = 0
+stdout_contains = ["a  \nb END"]
+
+# `!&` takes the rest of the line as literal task text, as in the REPL, so
+# an apostrophe in it does not swallow the following lines.
+[[case]]
+id = "interactive.ai-task-line-does-not-continue"
+class = "dogesh"
+mode = "interactive"
+script = "!& fix what's broken\necho NEXT_LINE_RAN"
+
+[case.expect]
+status = 0
+stdout_contains = ["NEXT_LINE_RAN"]
+stderr_contains = ["!& requires an interactive input/output TTY"]

@@ -147,3 +147,25 @@ script = "echo BEFORE\nexit 4\necho AFTER"
 status = 4
 stdout_contains = ["BEFORE"]
 stdout_not_contains = ["AFTER"]
+
+# A bare `exit` on piped input is the builtin too, so it reports `$?`.
+[[case]]
+id = "simple-command.bare-exit-on-interactive-input-uses-last-status"
+class = "posix"
+mode = "interactive"
+script = "{{FALSE}}\nexit\necho AFTER"
+
+[case.expect]
+status = 1
+stdout_not_contains = ["AFTER"]
+
+# End of piped input exits with the last command's status, like `sh < file`.
+[[case]]
+id = "simple-command.end-of-interactive-input-uses-last-status"
+class = "posix"
+mode = "interactive"
+script = "echo BEFORE\n{{FALSE}}"
+
+[case.expect]
+status = 1
+stdout_contains = ["BEFORE"]

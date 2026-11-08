@@ -1,3 +1,4 @@
+use crate::lisp::model::value::{ArithError, checked_int_div};
 use crate::lisp::model::{Env, IntType, RuntimeError, Symbol, Value};
 use crate::lisp::utils::{require_arg, require_typed_arg};
 
@@ -20,7 +21,7 @@ pub fn register(env: &mut Env) {
     env.define(
         Symbol::from("+"),
         Value::NativeFunc(|_env, args| {
-            let first_arg = require_arg("+", &args, 1)?;
+            let first_arg = require_arg("+", &args, 0)?;
 
             let mut total = match first_arg {
                 Value::Int(_) => Ok(Value::Int(IntType::default())),
@@ -34,10 +35,12 @@ pub fn register(env: &mut Env) {
             }?;
 
             for arg in args {
-                total = (&total + &arg).map_err(|_| RuntimeError {
-                    msg: format!(
-                        "Function \"+\" requires arguments to be numbers or strings; found {arg}"
-                    ),
+                total = (&total + &arg).map_err(|err| {
+                    arith_error("+", err, || {
+                        format!(
+                            "Function \"+\" requires arguments to be numbers or strings; found {arg}"
+                        )
+                    })
                 })?;
             }
 
@@ -51,8 +54,10 @@ pub fn register(env: &mut Env) {
             let a = require_arg("-", &args, 0)?;
             let b = require_arg("-", &args, 1)?;
 
-            (a - b).map_err(|_| RuntimeError {
-                msg: String::from("Function \"-\" requires arguments to be numbers"),
+            (a - b).map_err(|err| {
+                arith_error("-", err, || {
+                    String::from("Function \"-\" requires arguments to be numbers")
+                })
             })
         }),
     );
@@ -63,8 +68,10 @@ pub fn register(env: &mut Env) {
             let mut product = Value::Int(IntType::from(1));
 
             for arg in args {
-                product = (&product * &arg).map_err(|_| RuntimeError {
-                    msg: format!("Function \"*\" requires arguments to be numbers; found {arg}"),
+                product = (&product * &arg).map_err(|err| {
+                    arith_error("*", err, || {
+                        format!("Function \"*\" requires arguments to be numbers; found {arg}")
+                    })
                 })?;
             }
 
@@ -78,8 +85,10 @@ pub fn register(env: &mut Env) {
             let a = require_arg("/", &args, 0)?;
             let b = require_arg("/", &args, 1)?;
 
-            (a / b).map_err(|_| RuntimeError {
-                msg: String::from("Function \"/\" requires arguments to be numbers"),
+            (a / b).map_err(|err| {
+                arith_error("/", err, || {
+                    String::from("Function \"/\" requires arguments to be numbers")
+                })
             })
         }),
     );
@@ -94,7 +103,11 @@ pub fn register(env: &mut Env) {
                 TryInto::<IntType>::try_into(a),
                 TryInto::<IntType>::try_into(b),
             ) {
-                return Ok(Value::Int(a / b));
+                return checked_int_div(a, b).map(Value::Int).map_err(|err| {
+                    arith_error("truncate", err, || {
+                        String::from("Function \"truncate\" requires arguments to be integers")
+                    })
+                });
             }
 
             Err(RuntimeError {
@@ -109,21 +122,20 @@ pub fn register(env: &mut Env) {
             let start = require_typed_arg::<IntType>("range", &args, 0)?;
             let end = require_typed_arg::<IntType>("range", &args, 1)?;
 
-            let mut current = start;
-
-            Ok(Value::List(
-                std::iter::from_fn(move || {
-                    if current == end {
-                        None
-                    } else {
-                        let res = Some(current);
-                        current += IntType::from(1);
-                        res
-                    }
-                })
-                .map(Value::from)
-                .collect(),
-            ))
+            // An empty range when start >= end, like Rust's `start..end`;
+            // stepping until `current == end` never terminated otherwise.
+            Ok(Value::List((start..end).map(Value::from).collect()))
         }),
     );
+}
+
+/// Turn an `ArithError` into the user-facing error, keeping each builtin's
+/// own wording for operand type errors.
+fn arith_error(name: &str, err: ArithError, type_message: impl FnOnce() -> String) -> RuntimeError {
+    let msg = match err {
+        ArithError::Type => type_message(),
+        ArithError::Overflow => format!("Function \"{name}\": integer overflow"),
+        ArithError::DivideByZero => format!("Function \"{name}\": division by zero"),
+    };
+    RuntimeError { msg }
 }

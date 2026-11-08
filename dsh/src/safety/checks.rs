@@ -203,17 +203,35 @@ impl SafetyGuard {
 
     pub(super) fn check_curl_exfiltration(args: &[String]) -> Option<String> {
         const MESSAGE: &str = "Potential data exfiltration detected (data upload). Proceed?";
-        for arg in args {
+        let mut args = args.iter().map(String::as_str).peekable();
+        while let Some(arg) = args.next() {
             if arg == "--" {
                 break;
             }
+            // curl 8.3+ `--expand-<option>` is `<option>` with `{{var}}`
+            // expansion: `--expand-data` uploads just like `--data`.
+            let unexpanded = arg
+                .strip_prefix("--expand-")
+                .map(|rest| format!("--{rest}"));
+            let option = unexpanded.as_deref().unwrap_or(arg);
             if Self::long_option_matches(
-                arg,
+                option,
                 Self::CURL_UPLOAD_LONG,
                 Self::CURL_NON_UPLOAD_PREFIXES,
             ) || Self::reads_file_for_curl(arg)
             {
                 return Some(MESSAGE.to_string());
+            }
+            // `--variable name@file` loads a file into a variable that any
+            // `--expand-*` option (even `--expand-url`) can then send.
+            if Self::long_option_matches(option, &["variable"], &[]) {
+                let value = match option.split_once('=') {
+                    Some((_, value)) => Some(value),
+                    None => args.peek().copied(),
+                };
+                if value.is_some_and(|value| value.contains('@')) {
+                    return Some(MESSAGE.to_string());
+                }
             }
             if arg.starts_with("--") {
                 if let Some((_, value)) = arg.split_once('=')

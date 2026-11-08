@@ -83,6 +83,16 @@ pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
             }
             parts.push(current_part);
 
+            if parts.len() < 2 {
+                // Bash expands a brace pair only when it has a top-level
+                // comma: `{}`, `{a}` and `HEAD@{1}` stay literal. Keep this
+                // `{` as text and rescan after it, so a nested pair such as
+                // `{a{b,c}}` still expands.
+                i = start + 1;
+                stack.clear();
+                continue;
+            }
+
             for part in parts {
                 let new_pattern = format!("{}{}{}", prefix, part, suffix);
                 result.extend(expand_braces(&new_pattern));

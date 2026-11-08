@@ -95,6 +95,8 @@ impl SafetyGuard {
             "node",
             "pwsh",
             "powershell",
+            // `env -S '<line>'` runs its value as a command line.
+            "env",
         ] {
             // The checker only sees the arguments, but which flag means "here
             // is some code" depends on the interpreter, so capture its name.

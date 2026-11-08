@@ -587,6 +587,43 @@ fn run_rejects_string_eval_flags() {
     }
 }
 
+/// `env -S '<line>'` splits the string into a whole new command line and
+/// runs it. The guard and this tool classified `env` (a wrapper) and a
+/// "program" named `rm -rf …` that has no rule, so the line ran unasked.
+#[test]
+fn run_rejects_env_split_string() {
+    let _lock = env_lock();
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        ..TestProxy::default()
+    };
+
+    for command in [
+        "env -S 'echo pwned'",
+        "env -iS 'echo pwned'",
+        "env -S'echo pwned'",
+        "env -u HOME -S 'echo pwned'",
+        "env --split-string='echo pwned'",
+        "env --split-string 'echo pwned'",
+        "env --split 'echo pwned'",
+        "sudo env -S 'echo pwned'",
+    ] {
+        let err = run(&json!({ "command": command }).to_string(), &mut proxy)
+            .expect_err("env -S must be refused");
+        assert!(
+            err.contains("hands it a string to execute"),
+            "{command}: {err}"
+        );
+    }
+
+    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // Options end at the first operand: this `-S` belongs to `ls`.
+    assert_eq!(string_eval_flag("env", &args(&["FOO=1", "ls", "-S"])), None);
+    assert_eq!(string_eval_flag("env", &args(&["-i", "ls"])), None);
+    assert_eq!(string_eval_flag("env", &args(&["-u", "S", "ls"])), None);
+}
+
 /// Every spelling of "here is some code" has to be caught, and nothing else.
 #[test]
 fn string_eval_flags_are_recognised_in_every_spelling() {

@@ -141,7 +141,15 @@ fd_dup_target                       = { (fd_number | "-") ~ &(sp | NEWLINE | ";"
 fd_dup_out                          = { fd_number? ~ ">&" ~ fd_dup_target }
 fd_dup_in                           = { fd_number? ~ "<&" ~ fd_dup_target }
 fd_dup                              = { fd_dup_out | fd_dup_in }
-redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ !"#" ~ span }
+// `N>file`, `N>>file`, `N<file` for any other fd number (`1>f`, `0<f`).
+// Tried after the dedicated `2>`/`2>>` rules and before the bare forms, so
+// the number is the redirected slot instead of an extra argument.
+// Unsupported slots fail closed when the redirect is applied.
+fd_redirect_append                  = { ">>" }
+fd_redirect_out                     = { ">" ~ !"(" }
+fd_redirect_in                      = { "<" ~ !"(" }
+fd_redirect_direction               = { fd_number ~ (fd_redirect_append | fd_redirect_out | fd_redirect_in) }
+redirect                            = { fd_dup | (stdouterr_redirect_direction | stderr_redirect_direction | fd_redirect_direction | stdout_redirect_direction | stdin_redirect_direction) ~ sp* ~ !"#" ~ span }
 word_part                           = _{ arithmetic_expansion | parameter_expansion | quoted | command_subst | proc_subst | subshell | invocation_parameter
     | variable | glob_word | brace_word | word }
 span                                = { word_part+ }

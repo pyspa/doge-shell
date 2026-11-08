@@ -1,3 +1,9 @@
+//! Reader for the embedded Lisp: turns source text into `Value` trees.
+//!
+//! A hand-written recursive-descent parser over byte offsets. Every helper
+//! returns offsets that sit on char boundaries, so multibyte strings,
+//! symbols and comments slice safely.
+
 use crate::{
     lisp,
     lisp::model::{FloatType, IntType, List, Symbol, Value},

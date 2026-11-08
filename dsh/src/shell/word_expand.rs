@@ -272,12 +272,13 @@ fn finish_split_fields(fields: &[SplitField], cwd: &std::path::Path) -> Vec<Stri
 
 /// Per-stage trace of runtime expansion, kept in stage order.
 ///
-/// Only `PlannedSubstitutionKind::Command` updates
-/// `last_command_substitution_status`. Process substitution (`<(...)` /
-/// `>(...)`) and subshell groups (`( ... )`) have different semantics and
-/// must never feed this status. The value is consumed only when runtime
-/// expansion leaves no command name (Bash `3.7.1 Simple Command Expansion`);
-/// a surviving command reports its own execution status instead.
+/// Command substitution (`$(...)`) and subshell groups (`( ... )`) update
+/// `last_command_substitution_status`; process substitution (`<(...)` /
+/// `>(...)`) never does. The value is consumed only when runtime expansion
+/// leaves no command name (Bash `3.7.1 Simple Command Expansion`); a
+/// surviving command reports its own execution status instead. That is how
+/// `(false); echo $?` reports 1: the group prints nothing, so no command is
+/// left and the group's status becomes the status.
 #[derive(Debug, Default)]
 pub struct ExpansionTrace {
     pub last_command_substitution_status: Option<i32>,
@@ -344,9 +345,7 @@ pub(crate) fn expand_word_segments<'a>(
                                 confirm,
                             )
                             .await?;
-                            if substitution.kind == PlannedSubstitutionKind::Command {
-                                trace.last_command_substitution_status = Some(captured.exit_code);
-                            }
+                            trace.last_command_substitution_status = Some(captured.exit_code);
                             let value = trim_substitution_output(&captured.stdout);
                             segments.push(dynamic_text_segment(value, quoted, context));
                         }
@@ -526,9 +525,7 @@ pub async fn expand_redirect_target(
                             confirm,
                         )
                         .await?;
-                        if substitution.kind == PlannedSubstitutionKind::Command {
-                            trace.last_command_substitution_status = Some(captured.exit_code);
-                        }
+                        trace.last_command_substitution_status = Some(captured.exit_code);
                         let value = trim_substitution_output(&captured.stdout);
                         text.push_str(&value);
                         pattern.push_str(&escape_glob_metacharacters(&value));
@@ -621,9 +618,7 @@ async fn expand_scalar_word(
                     let captured =
                         capture_subshell_plan_stdout(shell, ctx, &substitution.plan, mode, confirm)
                             .await?;
-                    if substitution.kind == PlannedSubstitutionKind::Command {
-                        trace.last_command_substitution_status = Some(captured.exit_code);
-                    }
+                    trace.last_command_substitution_status = Some(captured.exit_code);
                     // Scalar context never splits; keep newlines except trailing.
                     out.push_str(&trim_substitution_output(&captured.stdout));
                 }

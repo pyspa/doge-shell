@@ -9,6 +9,7 @@ use crate::{
     },
 };
 use parking_lot::RwLock;
+use std::cmp::Ordering;
 use std::sync::Arc;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
@@ -516,7 +517,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let a = require_arg("<", &args, 0)?;
             let b = require_arg("<", &args, 1)?;
 
-            Ok(Value::from(a < b))
+            Ok(Value::from(matches!(a.compare(b), Some(Ordering::Less))))
         }),
     );
 
@@ -526,7 +527,10 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let a = require_arg("<=", &args, 0)?;
             let b = require_arg("<=", &args, 1)?;
 
-            Ok(Value::from(a <= b))
+            Ok(Value::from(matches!(
+                a.compare(b),
+                Some(Ordering::Less | Ordering::Equal)
+            )))
         }),
     );
 
@@ -536,7 +540,7 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let a = require_arg(">", &args, 0)?;
             let b = require_arg(">", &args, 1)?;
 
-            Ok(Value::from(a > b))
+            Ok(Value::from(matches!(a.compare(b), Some(Ordering::Greater))))
         }),
     );
 
@@ -546,7 +550,10 @@ pub fn default_env(environment: Arc<RwLock<Environment>>) -> Env {
             let a = require_arg(">=", &args, 0)?;
             let b = require_arg(">=", &args, 1)?;
 
-            Ok(Value::from(a >= b))
+            Ok(Value::from(matches!(
+                a.compare(b),
+                Some(Ordering::Greater | Ordering::Equal)
+            )))
         }),
     );
 

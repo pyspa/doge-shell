@@ -26,7 +26,7 @@ use crate::parser::expansion::{
 };
 use crate::process::reexec::PlanExecMode;
 use crate::shell::expansion_host::ExpansionHost;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use dsh_types::Context;
 use std::future::Future;
 use std::path::PathBuf;
@@ -410,6 +410,37 @@ pub async fn expand_assignment_value(
     expand_scalar_word(shell, ctx, word, confirm, resources, trace).await
 }
 
+/// A redirect target that did not expand to exactly one field.
+///
+/// Typed so materialization turns it into an ordinary failure of that one
+/// command (status 1) instead of aborting the whole list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AmbiguousRedirectError {
+    source: String,
+    fields: usize,
+}
+
+impl AmbiguousRedirectError {
+    fn new(source: &str, fields: usize) -> Self {
+        Self {
+            source: source.to_string(),
+            fields,
+        }
+    }
+}
+
+impl std::fmt::Display for AmbiguousRedirectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "ambiguous redirect: '{}' expands to {} fields",
+            self.source, self.fields
+        )
+    }
+}
+
+impl std::error::Error for AmbiguousRedirectError {}
+
 /// Expand a redirect target into exactly one path.
 ///
 /// Scalar for IFS splitting (a variable containing spaces stays one
@@ -521,7 +552,7 @@ pub async fn expand_redirect_target(
         first_part = false;
     }
     if word.parts.is_empty() {
-        bail!("ambiguous redirect: '{}' expands to 0 fields", word.source);
+        return Err(AmbiguousRedirectError::new(&word.source, 0).into());
     }
     // Single scalar field; run the existing brace/glob path so `*.txt`
     // matching several files still reports ambiguous.
@@ -535,11 +566,7 @@ pub async fn expand_redirect_target(
     let cwd = cwd_for_expansion();
     let fields = finish_split_fields(std::slice::from_ref(&field), &cwd);
     if fields.len() != 1 {
-        bail!(
-            "ambiguous redirect: '{}' expands to {} fields",
-            word.source,
-            fields.len()
-        );
+        return Err(AmbiguousRedirectError::new(&word.source, fields.len()).into());
     }
     Ok(fields.into_iter().next().expect("one field"))
 }

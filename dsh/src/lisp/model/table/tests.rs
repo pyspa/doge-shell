@@ -263,6 +263,27 @@ fn test_table_order_by_mixed_int_and_float_cells() {
 }
 
 #[test]
+fn test_table_order_by_groups_mixed_kinds_consistently() {
+    // Numbers and strings in one column used to compare `Equal` across
+    // kinds while comparing strictly within a kind, which is not a total
+    // order. Numbers now sort before strings, each group in its own order.
+    let json = r#"[{"n": "b"}, {"n": 2}, {"n": "a"}, {"n": 1}]"#;
+    let table = Table::from_json(json).unwrap();
+
+    let asc = table.order_by("n", true);
+    let cells: Vec<_> = asc.rows.iter().map(|row| row.get("n").cloned()).collect();
+    assert_eq!(
+        cells,
+        vec![
+            Some(Value::Int(IntType::from(1))),
+            Some(Value::Int(IntType::from(2))),
+            Some(Value::String("a".into())),
+            Some(Value::String("b".into())),
+        ]
+    );
+}
+
+#[test]
 fn test_resolve_column_is_case_insensitive() {
     let json = r#"[{"cpu": 1}]"#;
     let table = Table::from_json(json).unwrap();

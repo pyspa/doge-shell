@@ -99,3 +99,25 @@ script = "export =value; echo EMPTY:$?; export 1BAD=value; echo DIGIT:$?; export
 status = 0
 stdout_contains = ["EMPTY:1", "DIGIT:1", "DASH:1", "MIXED:1 GOOD:before AFTER:after"]
 stderr_contains = ["export:", "invalid variable name"]
+
+# Assignments in one assignment-only command apply left to right.
+[[case]]
+id = "assignment.sequential-in-one-command"
+class = "posix"
+mode = "command"
+script = "X=a Y=$X; echo VAL:$Y"
+
+[case.expect]
+status = 0
+stdout_exact = "VAL:a\n"
+
+# Prefix assignments also expand left to right, without persisting.
+[[case]]
+id = "assignment.sequential-prefix-visible-to-external"
+class = "posix"
+mode = "command"
+script = "printf 'echo Y:$Y\\n' > showy.sh; X=old; X=new Y=$X {{SH}} showy.sh; echo X:$X"
+
+[case.expect]
+status = 0
+stdout_exact = "Y:new\nX:old\n"

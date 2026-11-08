@@ -235,7 +235,7 @@ impl InstructionContext {
                 if name == "read_file"
                     && let Some(base) = args["skill_path"].as_str()
                 {
-                    let expanded = shellexpand::full(base).ok()?;
+                    let expanded = tool::expand_tool_path(base);
                     let base = proxy.get_current_dir().ok()?.join(expanded.as_ref());
                     target = base.parent()?.join(&target).to_string_lossy().into_owned();
                 }

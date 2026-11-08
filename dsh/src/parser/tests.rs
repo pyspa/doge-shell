@@ -1014,7 +1014,7 @@ fn test_brace_expansion_unit() -> Result<()> {
     // covered by shell word expansion tests.
     use super::expansion::expand_braces;
     assert_eq!(expand_braces("{a,b,c}"), vec!["a", "b", "c"]);
-    assert_eq!(expand_braces("{a}"), vec!["a"]);
+    assert_eq!(expand_braces("{a}"), vec!["{a}"]);
 
     Ok(())
 }
@@ -1073,6 +1073,15 @@ fn glob_patterns_expand_against_the_current_directory() -> Result<()> {
             pattern: "sub/*.rs",
             expected_len: 1,
             contains: &["sub", "test.rs"],
+            absent: &[],
+        },
+        GlobCase {
+            what: "a subdirectory star never yields the directory itself",
+            dirs: &["sub"],
+            files: &["sub/test.rs"],
+            pattern: "sub/*",
+            expected_len: 1,
+            contains: &["sub/test.rs"],
             absent: &[],
         },
         GlobCase {
@@ -1376,6 +1385,15 @@ fn test_expand_braces() {
         expand_braces("a{b,c}d{e,f}g"),
         vec!["abdeg", "abdfg", "acdeg", "acdfg"]
     );
+
+    // Without a top-level comma braces stay literal (`find -exec cmd {}`,
+    // git `HEAD@{1}` / `@{u}`), but nested comma pairs still expand.
+    assert_eq!(expand_braces("{}"), vec!["{}"]);
+    assert_eq!(expand_braces("HEAD@{1}"), vec!["HEAD@{1}"]);
+    assert_eq!(expand_braces("@{u}"), vec!["@{u}"]);
+    assert_eq!(expand_braces("{a\\,b}"), vec!["{a\\,b}"]);
+    assert_eq!(expand_braces("{a}{b,c}"), vec!["{a}b", "{a}c"]);
+    assert_eq!(expand_braces("{a{b,c}}"), vec!["{ab}", "{ac}"]);
 
     // Complex nested and consecutive braces
     assert_eq!(

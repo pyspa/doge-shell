@@ -20,12 +20,25 @@ use std::thread;
 enum FrecencyMsg {
     Save(Arc<FrecencyStore>),
     LogVisit(String, i64, Option<String>), // path, timestamp, context
+    Delete(Vec<String>),
     Reload {
         base_revision: u64,
         base_store: Arc<FrecencyStore>,
         complete: FrecencyReloadCallback,
     },
 }
+
+/// Rows of `directory_visits` kept after each insert. Nothing reads the log
+/// yet, so it only has to stay bounded.
+const MAX_DIRECTORY_VISITS: i64 = 10_000;
+
+/// `last_accessed` is saved as absolute epoch seconds. Builds before that
+/// saved a session-relative offset, which cannot be restored; such small
+/// values are left at the load time, as before.
+const MIN_ABSOLUTE_ACCESS_TIME: f64 = 1_000_000_000.0;
+
+const SNAPSHOT_SELECT: &str =
+    "SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot";
 
 type FrecencyReloadCallback = Box<dyn FnOnce(Result<FrecencyReloadSnapshot>) + Send + 'static>;
 
@@ -99,35 +112,20 @@ impl FrecencyHistory {
     /// Create a frecency history from a database file.
     pub fn from_file(name: &str) -> Result<Self> {
         let file_path = environment::get_data_file(format!("{}.db", name).as_str())?;
-        let matcher = SkimMatcherV2::default();
+        Self::from_db(Db::new(file_path)?)
+    }
 
-        let db = Db::new(file_path)?;
+    /// Create a frecency history backed by an open database.
+    pub(crate) fn from_db(db: Db) -> Result<Self> {
+        let matcher = SkimMatcherV2::default();
         let mut store = FrecencyStore::default();
 
         // Load from DB snapshot
-        let conn = db.get_connection();
-        if let Ok(mut stmt) = conn.prepare("SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot") {
-             let rows = stmt.query_map([], |row| {
-                let path: String = row.get(0)?;
-                let score: f64 = row.get(1)?;
-                let _last_accessed: i64 = row.get(2)?;
-                let _access_count: i64 = row.get(3)?;
-                let half_life: f64 = row.get(4)?;
-                let context: Option<String> = row.get(5)?;
-
-                let mut item = ItemStats::new(&path, store.reference_time, half_life as f32, context);
-                item.set_frecency(score as f32);
-                Ok(item)
-            });
-
-            if let Ok(iter) = rows {
-                for item in iter.flatten() {
-                    store.items.push(item);
-                }
-            }
+        match read_snapshot_items(&db.get_connection(), &store) {
+            Ok(items) => store.items = items,
+            Err(err) => tracing::warn!("frecency: failed to load directory snapshot: {err}"),
         }
 
-        drop(conn);
         // Rows come back in rowid order, and `INSERT OR REPLACE` reassigns
         // rowids on every save, so re-sort by name to restore the invariant
         // `FrecencyStore::get` / `search_prefix_range` rely on (see
@@ -156,18 +154,24 @@ impl FrecencyHistory {
             self.sender = Some(tx);
 
             thread::spawn(move || {
-                let mut db = db_clone;
+                let db = db_clone;
                 while let Ok(msg) = rx.recv() {
                     match msg {
                         FrecencyMsg::Save(store) => {
-                            let _ = Self::save_sync(&mut db, &store);
+                            let _ = Self::write_snapshot(&db, &store);
                         }
                         FrecencyMsg::LogVisit(path, timestamp, context) => {
                             let conn = db.get_connection();
-                            let _ = conn.execute(
-                                 "INSERT INTO directory_visits (path, timestamp, context) VALUES (?1, ?2, ?3)",
-                                 rusqlite::params![path, timestamp, context],
-                             );
+                            log_visit(
+                                &conn,
+                                &path,
+                                timestamp,
+                                context.as_deref(),
+                                MAX_DIRECTORY_VISITS,
+                            );
+                        }
+                        FrecencyMsg::Delete(paths) => {
+                            let _ = Self::delete_snapshot_paths(&db, &paths);
                         }
                         FrecencyMsg::Reload {
                             base_revision,
@@ -182,26 +186,41 @@ impl FrecencyHistory {
         }
     }
 
-    fn save_sync(db: &mut Db, store: &FrecencyStore) -> Result<()> {
+    /// Write the store as of now: scores are the current (decayed) values
+    /// and `last_accessed` is absolute, so a later load needs no session
+    /// reference time.
+    fn write_snapshot(db: &Db, store: &FrecencyStore) -> Result<()> {
         let mut conn = db.get_connection();
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
-                 "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context) 
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
-             )?;
+                "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
 
             for item in &store.items {
-                let serializer = dsh_frecency::ItemStatsSerializer::from(item);
-                let half_life = 12.0 * 3600.0;
+                let num_accesses = item.num_accesses();
                 stmt.execute(rusqlite::params![
-                    serializer.item,
-                    serializer.frecency,
-                    serializer.last_accessed,
-                    serializer.num_accesses,
-                    half_life,
-                    serializer.context,
+                    item.item,
+                    f64::from(finite_score(item.get_frecency(), num_accesses)),
+                    item.last_accessed_time(),
+                    num_accesses,
+                    f64::from(store.half_life),
+                    item.context,
                 ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn delete_snapshot_paths(db: &Db, paths: &[String]) -> Result<()> {
+        let mut conn = db.get_connection();
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM directory_snapshot WHERE path = ?1")?;
+            for path in paths {
+                stmt.execute([path])?;
             }
         }
         tx.commit()?;
@@ -247,30 +266,7 @@ impl FrecencyHistory {
             && let Some(ref mut store) = self.store
             && store.changed
         {
-            let mut conn = db.get_connection();
-            let tx = conn.transaction()?;
-
-            {
-                let mut stmt = tx.prepare(
-                    "INSERT OR REPLACE INTO directory_snapshot (path, score, last_accessed, access_count, half_life, context) 
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
-                )?;
-
-                for item in &store.items {
-                    let serializer = dsh_frecency::ItemStatsSerializer::from(item);
-                    let half_life = 12.0 * 3600.0;
-                    stmt.execute(rusqlite::params![
-                        serializer.item,
-                        serializer.frecency,
-                        serializer.last_accessed,
-                        serializer.num_accesses,
-                        half_life,
-                        serializer.context,
-                    ])?;
-                }
-            }
-
-            tx.commit()?;
+            Self::write_snapshot(db, store)?;
 
             let store_mut = Arc::make_mut(store);
             store_mut.changed = false;
@@ -309,31 +305,15 @@ impl FrecencyHistory {
         base_revision: u64,
         base_store: Arc<FrecencyStore>,
     ) -> Result<FrecencyReloadSnapshot> {
-        let conn = db.get_connection();
-        let mut stmt = conn.prepare("SELECT path, score, last_accessed, access_count, half_life, context FROM directory_snapshot")?;
-
-        let rows = stmt.query_map([], |row| {
-            let path: String = row.get(0)?;
-            let score: f64 = row.get(1)?;
-            let last_accessed: f64 = row.get(2)?;
-            let access_count: i64 = row.get(3)?;
-            let half_life: f64 = row.get(4)?;
-            let context: Option<String> = row.get(5)?;
-            Ok((path, score, last_accessed, access_count, half_life, context))
-        })?;
-
         let mut store = (*base_store).clone();
+        let loaded = read_snapshot_items(&db.get_connection(), &store)?;
 
-        for row in rows {
-            let (path, score, _last_accessed, _access_count, half_life, context) = row?;
-            match store.items.binary_search_by(|item| item.item.cmp(&path)) {
-                Ok(_) => {}
-                Err(index) => {
-                    let mut item =
-                        ItemStats::new(&path, store.reference_time, half_life as f32, context);
-                    item.set_frecency(score as f32);
-                    store.items.insert(index, item);
-                }
+        for item in loaded {
+            if let Err(index) = store
+                .items
+                .binary_search_by(|existing| existing.item.cmp(&item.item))
+            {
+                store.items.insert(index, item);
             }
         }
         store.size = store.items.len();
@@ -412,10 +392,7 @@ impl FrecencyHistory {
             } else if let Some(db) = &self.db {
                 let conn = db.get_connection();
                 let now = Local::now().timestamp();
-                let _ = conn.execute(
-                    "INSERT INTO directory_visits (path, timestamp, context) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![history, now, ctx],
-                );
+                log_visit(&conn, history, now, ctx.as_deref(), MAX_DIRECTORY_VISITS);
             }
             self.bump_revision();
         }
@@ -436,14 +413,37 @@ impl FrecencyHistory {
         }
     }
 
-    /// Prune old entries from the store.
+    /// Prune entries whose directory no longer exists, in memory and in the
+    /// database: saves only upsert, so a row left behind would come back on
+    /// the next load or reload.
     pub fn prune(&mut self) {
-        if let Some(ref mut store) = self.store {
-            let before = store.items.len();
-            Arc::make_mut(store).prune();
-            if store.items.len() != before {
-                self.bump_revision();
-            }
+        let Some(ref mut store) = self.store else {
+            return;
+        };
+        let store = Arc::make_mut(store);
+        let before: Vec<String> = store.items.iter().map(|item| item.item.clone()).collect();
+        store.prune();
+        let removed: Vec<String> = before
+            .into_iter()
+            .filter(|path| {
+                store
+                    .items
+                    .binary_search_by(|item| item.item.as_str().cmp(path))
+                    .is_err()
+            })
+            .collect();
+        if removed.is_empty() {
+            return;
+        }
+        self.bump_revision();
+        // Through the writer when there is one, so a queued save of the old
+        // store cannot re-insert the rows after they are deleted.
+        if let Some(sender) = &self.sender {
+            let _ = sender.send(FrecencyMsg::Delete(removed));
+        } else if let Some(db) = &self.db
+            && let Err(err) = Self::delete_snapshot_paths(db, &removed)
+        {
+            tracing::warn!("frecency: failed to delete pruned paths: {err}");
         }
     }
 
@@ -516,6 +516,96 @@ impl FrecencyHistory {
         }
     }
 }
+
+/// Read every snapshot row as an item relative to `store`'s reference time.
+/// A row that cannot be decoded is skipped rather than failing the load.
+fn read_snapshot_items(
+    conn: &rusqlite::Connection,
+    store: &FrecencyStore,
+) -> rusqlite::Result<Vec<ItemStats>> {
+    let mut stmt = conn.prepare(SNAPSHOT_SELECT)?;
+    let rows = stmt.query_map([], |row| {
+        // `last_accessed` is REAL in practice despite the INTEGER column
+        // affinity; reading it as f64 accepts both storage classes.
+        let path: String = row.get(0)?;
+        let score: f64 = row.get(1)?;
+        let last_accessed: f64 = row.get(2)?;
+        let access_count: i64 = row.get(3)?;
+        let half_life: f64 = row.get(4)?;
+        let context: Option<String> = row.get(5)?;
+
+        let half_life = if half_life.is_finite() && half_life > 0.0 {
+            half_life as f32
+        } else {
+            store.half_life
+        };
+        let access_count = i32::try_from(access_count.max(0)).unwrap_or(i32::MAX);
+        let mut item = ItemStats::new(&path, store.reference_time, half_life, context);
+        item.update_num_accesses(access_count);
+        let current_format = last_accessed.is_finite() && last_accessed >= MIN_ABSOLUTE_ACCESS_TIME;
+        if current_format {
+            item.update_last_access(last_accessed);
+        }
+        let score = finite_score(score as f32, access_count);
+        // A legacy row's score is inflated by 2^(session age / half-life).
+        // A current score never exceeds the access count (each access adds
+        // at most 1 and then decays), so cap it there instead of letting old
+        // directories outrank every fresh visit until they decay.
+        let score = if current_format {
+            score
+        } else {
+            score.min(access_count.max(1) as f32)
+        };
+        item.set_frecency(score);
+        Ok(item)
+    })?;
+
+    let mut items = Vec::new();
+    for row in rows {
+        match row {
+            Ok(item) => items.push(item),
+            Err(err) => tracing::warn!("frecency: skipping unreadable snapshot row: {err}"),
+        }
+    }
+    Ok(items)
+}
+
+/// Older builds saved the time-scaled internal score, which grew on every
+/// restart until it overflowed. Fall back to the access count for a score
+/// that is not a finite, non-negative number.
+fn finite_score(score: f32, access_count: i32) -> f32 {
+    if score.is_finite() && score >= 0.0 {
+        score
+    } else {
+        access_count.max(1) as f32
+    }
+}
+
+/// Append a visit and drop all but the latest `keep` rows. Ids are
+/// AUTOINCREMENT, so they only grow and the cut-off is a primary-key range.
+fn log_visit(
+    conn: &rusqlite::Connection,
+    path: &str,
+    timestamp: i64,
+    context: Option<&str>,
+    keep: i64,
+) {
+    let inserted = conn.execute(
+        "INSERT INTO directory_visits (path, timestamp, context) VALUES (?1, ?2, ?3)",
+        rusqlite::params![path, timestamp, context],
+    );
+    if let Err(err) = inserted {
+        tracing::debug!("frecency: failed to log directory visit: {err}");
+        return;
+    }
+    let _ = conn.execute(
+        "DELETE FROM directory_visits WHERE id <= last_insert_rowid() - ?1",
+        [keep],
+    );
+}
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod background_reload_tests {

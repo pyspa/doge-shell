@@ -682,16 +682,21 @@ fn unsupported_field(
     })
 }
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    headers
+/// `Retry-After` in seconds, clamped to [`MAX_RETRY_DELAY`].
+///
+/// This runs on every response, so it must not panic on whatever a server
+/// sends: `Duration::from_secs_f64` does for `inf` or `1e20`. Clamp first,
+/// then convert fallibly; `NaN` and negatives are ignored.
+pub(crate) fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    let secs = headers
         .get(reqwest::header::RETRY_AFTER)?
         .to_str()
         .ok()?
         .trim()
         .parse::<f64>()
         .ok()
-        .filter(|secs| *secs >= 0.0)
-        .map(Duration::from_secs_f64)
+        .filter(|secs| *secs >= 0.0)?;
+    Duration::try_from_secs_f64(secs.min(MAX_RETRY_DELAY.as_secs_f64())).ok()
 }
 
 fn error_message_from_value(data: &Value) -> Option<String> {

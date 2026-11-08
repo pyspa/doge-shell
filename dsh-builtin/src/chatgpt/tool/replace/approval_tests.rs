@@ -138,3 +138,20 @@ fn existing_in_workspace_symlink_remains_supported() {
             .is_symlink()
     );
 }
+
+#[test]
+fn foreground_replacement_refuses_files_over_the_shared_cap() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("a.txt");
+    let file = fs::File::create(&path).unwrap();
+    file.set_len(crate::agent::files::MAX_TEXT_FILE_BYTES as u64 + 1)
+        .unwrap();
+    let mut proxy = TestShellProxy {
+        current_dir: dir.path().to_path_buf(),
+        confirm_result: true,
+        ..TestShellProxy::default()
+    };
+    let err = run(ARGS, &mut proxy).unwrap_err();
+    assert!(err.contains("16 MiB"), "{err}");
+    assert_eq!(proxy.confirm_calls, 0);
+}

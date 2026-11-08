@@ -1195,6 +1195,7 @@ dependencies = [
  "shell-words",
  "shellexpand",
  "skim",
+ "stacker",
  "sysinfo",
  "tabled",
  "tempfile",

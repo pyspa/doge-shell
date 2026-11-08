@@ -499,3 +499,20 @@ fn invocation_parameters_parse_in_operands_and_arithmetic() {
         );
     }
 }
+
+/// `""` plans as one empty double-quoted literal, so it survives as a field.
+#[test]
+fn empty_double_quotes_plan_one_empty_literal() {
+    use super::super::plan::QuoteMode;
+
+    let plan = parse_execution_plan("echo a \"\" b", test_env()).expect("plan");
+    let argv = &plan.lists[0].jobs[0].stages[0].argv;
+    assert_eq!(argv.len(), 4, "{argv:?}");
+    match argv[2].parts.as_slice() {
+        [WordPart::Literal(literal)] => {
+            assert_eq!(literal.text, "");
+            assert_eq!(literal.quote, QuoteMode::Double);
+        }
+        other => panic!("expected one empty literal, got {other:?}"),
+    }
+}

@@ -59,6 +59,10 @@ pub(crate) async fn evaluate_plan_in(
 ) -> Result<i32> {
     let mut last_exit_code = 0_i32;
     for list in &plan.lists {
+        // `exit` ends this execution environment's evaluation.
+        if shell.exited.is_some() {
+            break;
+        }
         match list.execution {
             ListExecutionMode::Foreground => {
                 match evaluate_foreground_list(shell, ctx, list, confirm, env).await? {
@@ -101,6 +105,9 @@ async fn evaluate_foreground_list(
     let mut last_exit_code = 0_i32;
     let mut gate_op = ListOp::None;
     for planned in &list.jobs {
+        if shell.exited.is_some() {
+            break;
+        }
         let next_gate_op = planned.list_op.clone();
         let should_run = match gate_op {
             ListOp::None => true,

@@ -83,6 +83,16 @@ pub(crate) fn expand_braces(pattern: &str) -> Vec<String> {
             }
             parts.push(current_part);
 
+            if parts.len() < 2 {
+                // Bash expands a brace pair only when it has a top-level
+                // comma: `{}`, `{a}` and `HEAD@{1}` stay literal. Keep this
+                // `{` as text and rescan after it, so a nested pair such as
+                // `{a{b,c}}` still expands.
+                i = start + 1;
+                stack.clear();
+                continue;
+            }
+
             for part in parts {
                 let new_pattern = format!("{}{}{}", prefix, part, suffix);
                 result.extend(expand_braces(&new_pattern));
@@ -143,7 +153,10 @@ pub(crate) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<Stri
                         if pat.starts_with("./") && !display_string.starts_with("./") {
                             display_string.insert_str(0, "./");
                         }
-                        out.push(display_string);
+                        // Callers unescape every result to turn a no-match
+                        // pattern back into text; escape real names first so
+                        // a file called `a\*b` survives that round trip.
+                        out.push(escape_glob_metacharacters(&display_string));
                     }
                 }
             }
@@ -203,7 +216,8 @@ fn hit_level_allows_hidden(components: &[&str], has_doublestar: bool, depth: usi
 /// sort them deterministically.
 ///
 /// Drops the root itself (globset `*` matches the empty relative path),
-/// drops hidden entries unless the corresponding pattern component
+/// drops hits whose depth differs from the pattern's component count when
+/// the pattern has no `**`, drops hidden entries unless the corresponding pattern component
 /// explicitly starts with a dot, and sorts so output does not depend on
 /// filesystem iteration order.
 fn filter_and_sort_glob_hits(
@@ -222,6 +236,12 @@ fn filter_and_sort_glob_hits(
             Ok(rel) if !rel.as_os_str().is_empty() => {
                 let rel_parts = rel_check_parts(rel);
                 if rel_parts.is_empty() {
+                    continue;
+                }
+                // Without `**` every pattern component names exactly one
+                // path level, so a shallower hit (`d` for `d/*`) is not a
+                // match even though globmatch reports it.
+                if !has_doublestar && rel_parts.len() != components.len() {
                     continue;
                 }
                 let mut excluded = false;
@@ -307,7 +327,10 @@ pub(crate) fn unescape_glob_metacharacters(value: &str) -> String {
         if c == '\\'
             && let Some(next) = chars.next()
         {
-            if !matches!(next, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            // `,` too: an escaped comma (`{a\,b}`) only stops brace
+            // splitting and must not survive into the word. The escapers
+            // always double a real backslash, so `\,` is never one.
+            if !matches!(next, '*' | '?' | '[' | ']' | '{' | '}' | '\\' | ',') {
                 out.push('\\');
             }
             out.push(next);

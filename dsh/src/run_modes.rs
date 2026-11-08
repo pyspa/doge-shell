@@ -482,6 +482,9 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         // Interactive mode
         debug!("Running in interactive mode");
         match repl.run_interactive().await {
+            // `exit [N]` ends the session with its status; other normal
+            // endings (Ctrl+D, Ctrl+C twice) keep reporting success.
+            Ok(()) if repl.shell.exited.is_some() => last_status_exit_code(repl.shell),
             Ok(()) => ExitCode::from(0),
             Err(err) => {
                 // Don't display error message for normal exit
@@ -511,9 +514,6 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     if input.is_empty() {
                         continue;
                     }
-                    if input == "exit" {
-                        break;
-                    }
                     debug!("Processing pipe input: {}", input);
                     match repl.shell.eval_str(ctx, input.to_string(), false).await {
                         Ok(_) => {}
@@ -522,6 +522,10 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                             display_user_error(&err, true);
                         }
                     }
+                    // `exit [N]` stops reading input and becomes the status.
+                    if repl.shell.exited.is_some() {
+                        return last_status_exit_code(repl.shell);
+                    }
                 }
                 Err(err) => {
                     eprintln!("Error reading input: {err}");
@@ -529,8 +533,14 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                 }
             }
         }
-        ExitCode::from(0)
+        // End of input: like `sh < script`, the status of the last command.
+        last_status_exit_code(repl.shell)
     }
+}
+
+fn last_status_exit_code(shell: &Shell) -> ExitCode {
+    let status = shell.environment.read().last_exit_status;
+    ExitCode::from(status.clamp(0, 255) as u8)
 }
 
 // Publish both prepared baselines under one lock before reload can apply.

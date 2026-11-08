@@ -156,27 +156,16 @@ impl Table {
             let a_val = a.get(column);
             let b_val = b.get(column);
 
-            // Int/Float mix (a `%CPU` column holding both `3` and `3.5`, say)
-            // used to fall through the catch-all as `Equal`, so two rows
-            // never swapped even when one was clearly bigger. Route it
-            // through the same cross-type comparison `where_cmp` uses.
+            // `Value::cmp` is a total order (Int/Float compare numerically,
+            // NaN and mixed kinds still get a consistent position). The old
+            // ad-hoc match returned `Equal` for those, which is not
+            // transitive and can make `sort_by` panic. Missing cells sort
+            // last.
             let cmp = match (a_val, b_val) {
-                (Some(Value::Int(a)), Some(Value::Int(b))) => a.cmp(b),
-                (Some(Value::Float(a)), Some(Value::Float(b))) => {
-                    a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
-                }
-                (Some(Value::Int(a)), Some(Value::Float(b))) => {
-                    crate::lisp::model::value::int_type_to_float_type(a)
-                        .partial_cmp(b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                }
-                (Some(Value::Float(a)), Some(Value::Int(b))) => a
-                    .partial_cmp(&crate::lisp::model::value::int_type_to_float_type(b))
-                    .unwrap_or(std::cmp::Ordering::Equal),
-                (Some(Value::String(a)), Some(Value::String(b))) => a.cmp(b),
+                (Some(a), Some(b)) => a.cmp(b),
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (Some(_), None) => std::cmp::Ordering::Less,
-                _ => std::cmp::Ordering::Equal,
+                (None, None) => std::cmp::Ordering::Equal,
             };
 
             if ascending { cmp } else { cmp.reverse() }

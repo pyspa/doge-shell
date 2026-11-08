@@ -90,7 +90,15 @@ pub fn authorize_job_with(
                 }
                 Ok(AuthorizationDecision::Allow)
             }
-            Ok(ConfirmationAction::No) | Err(_) => Ok(AuthorizationDecision::Deny),
+            Ok(ConfirmationAction::No) => Ok(AuthorizationDecision::Deny),
+            Err(err) => {
+                // No prompt could be shown (e.g. `dogesh -c` without a
+                // terminal). Still deny, but say why instead of exiting 130
+                // with no output.
+                let reason = reason.trim_end().trim_end_matches("Proceed?").trim_end();
+                eprintln!("dsh: safety guard denied command: {reason} ({err})");
+                Ok(AuthorizationDecision::Deny)
+            }
         },
     }
 }
@@ -111,6 +119,22 @@ mod tests {
 
     fn always_all(_: &str) -> Result<ConfirmationAction> {
         Ok(ConfirmationAction::AlwaysAllow)
+    }
+
+    fn no_terminal(_: &str) -> Result<ConfirmationAction> {
+        Err(anyhow::anyhow!("no terminal"))
+    }
+
+    /// Without a terminal to prompt on (`dogesh -c`), a job that needs
+    /// confirmation is denied rather than run.
+    #[test]
+    fn a_prompt_that_cannot_be_shown_denies_authorization() {
+        let mut shell = shell();
+        let job = concrete_job("sh -c 'echo hi'", &["sh", "-c", "echo hi"]);
+        assert_eq!(
+            authorize_job_with(&mut shell, &job, false, no_terminal).unwrap(),
+            AuthorizationDecision::Deny
+        );
     }
 
     fn shell() -> Shell {

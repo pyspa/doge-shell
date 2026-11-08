@@ -494,6 +494,7 @@ fn parse_word_part(
 /// Double-quoted content shared by top-level words and parameter operands.
 ///
 /// Every part carries `QuoteMode::Double`; nested `${...}` stays structured.
+/// Empty quotes yield one empty literal so the word keeps its field.
 pub(super) fn parse_double_quoted_parts(
     d_quoted: Pair<Rule>,
     ctx: &ParseContext,
@@ -546,6 +547,17 @@ pub(super) fn parse_double_quoted_parts(
                 }));
             }
         }
+    }
+    if parts.is_empty() {
+        // `""` is an explicit empty field, not the absence of a word.
+        parts.push(WordPart::Literal(PlannedLiteral {
+            text: String::new(),
+            raw: String::new(),
+            quote: QuoteMode::Double,
+            pattern_active: false,
+            brace_active: false,
+            tilde_candidate: false,
+        }));
     }
     Ok(parts)
 }

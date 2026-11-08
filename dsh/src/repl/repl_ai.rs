@@ -420,12 +420,7 @@ impl<'a> Repl<'a> {
         drop(raw_mode_pause);
         // Always consume the flag, even when the child exited normally.
         let got_sigint = crate::process::signal::check_and_clear_sigint();
-        let interrupted = got_sigint
-            || output.as_ref().is_ok_and(|out| {
-                std::os::unix::process::ExitStatusExt::signal(&out.status)
-                    == Some(nix::libc::SIGINT)
-            });
-        if interrupted {
+        if super::ai_pipe::was_interrupted(got_sigint, output.as_ref().ok()) {
             queue!(
                 renderer,
                 Print("\r\n⚠️ Interrupted; nothing sent to AI\r\n")

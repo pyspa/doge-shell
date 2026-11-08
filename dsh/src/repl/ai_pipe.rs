@@ -48,6 +48,13 @@ pub(super) fn capture(mut command: Command, limit: usize) -> std::io::Result<AiP
     })
 }
 
+/// Whether the user stopped a `|!` capture with Ctrl-C: the shell saw
+/// SIGINT, or the child died of it. Either way nothing is sent to the AI.
+pub(super) fn was_interrupted(got_sigint: bool, capture: Option<&AiPipeCapture>) -> bool {
+    use std::os::unix::process::ExitStatusExt as _;
+    got_sigint || capture.is_some_and(|capture| capture.status.signal() == Some(nix::libc::SIGINT))
+}
+
 fn read_head_tail(mut reader: impl Read, limit: usize) -> Vec<u8> {
     let half = limit / 2;
     let mut head = Vec::new();
@@ -134,6 +141,20 @@ mod tests {
         assert!(out.stdout.ends_with("TAIL"));
         assert!(out.stdout.contains("[output truncated]"));
         assert!(out.stdout.len() <= 1000 + TRUNCATION_MARKER.len());
+    }
+
+    #[test]
+    fn a_child_killed_by_ctrl_c_counts_as_interrupted() {
+        let killed = capture(sh("printf partial; kill -INT $$"), 1024).unwrap();
+        assert_eq!(killed.stdout, "partial");
+        assert!(was_interrupted(false, Some(&killed)));
+
+        let finished = capture(sh("exit 130"), 1024).unwrap();
+        assert!(!was_interrupted(false, Some(&finished)));
+        // The shell's own SIGINT flag wins even when the child ignored it.
+        assert!(was_interrupted(true, Some(&finished)));
+        assert!(was_interrupted(true, None));
+        assert!(!was_interrupted(false, None));
     }
 
     #[test]

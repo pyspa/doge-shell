@@ -70,20 +70,29 @@ impl TokenUsage {
     /// Callers that need a figure for their own turn must accumulate locally:
     /// the process-wide totals also move when a background request finishes.
     pub fn add_response(&mut self, response: &Value) {
-        self.requests += 1;
+        // Saturating throughout: the counts come from the server, and a
+        // wrapped total would reset the figure a turn budget is checked
+        // against.
+        self.requests = self.requests.saturating_add(1);
         if let Some(usage) = Self::from_response(response) {
-            self.prompt_tokens += usage.prompt_tokens;
-            self.cached_prompt_tokens += usage.cached_prompt_tokens;
-            self.completion_tokens += usage.completion_tokens;
-            self.unknown_cached_requests += usage.unknown_cached_requests;
+            self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
+            self.cached_prompt_tokens = self
+                .cached_prompt_tokens
+                .saturating_add(usage.cached_prompt_tokens);
+            self.completion_tokens = self
+                .completion_tokens
+                .saturating_add(usage.completion_tokens);
+            self.unknown_cached_requests = self
+                .unknown_cached_requests
+                .saturating_add(usage.unknown_cached_requests);
         } else {
-            self.unknown_usage_requests += 1;
-            self.unknown_cached_requests += 1;
+            self.unknown_usage_requests = self.unknown_usage_requests.saturating_add(1);
+            self.unknown_cached_requests = self.unknown_cached_requests.saturating_add(1);
         }
     }
 
     pub fn total_tokens(&self) -> u64 {
-        self.prompt_tokens + self.completion_tokens
+        self.prompt_tokens.saturating_add(self.completion_tokens)
     }
 
     /// Prompt tokens the provider did not serve from its prefix cache.
@@ -153,14 +162,30 @@ static COMPLETION_TOKENS: AtomicU64 = AtomicU64::new(0);
 static UNKNOWN_USAGE: AtomicU64 = AtomicU64::new(0);
 static UNKNOWN_CACHED: AtomicU64 = AtomicU64::new(0);
 
+/// `fetch_add` that sticks at `u64::MAX` instead of wrapping to a small total.
+fn saturating_fetch_add(counter: &AtomicU64, value: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        match counter.compare_exchange_weak(
+            current,
+            current.saturating_add(value),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// Add `usage` to the process-wide totals.
 pub fn record(usage: TokenUsage) {
-    UNKNOWN_USAGE.fetch_add(usage.unknown_usage_requests, Ordering::Relaxed);
-    UNKNOWN_CACHED.fetch_add(usage.unknown_cached_requests, Ordering::Relaxed);
-    REQUESTS.fetch_add(usage.requests, Ordering::Relaxed);
-    PROMPT_TOKENS.fetch_add(usage.prompt_tokens, Ordering::Relaxed);
-    CACHED_PROMPT_TOKENS.fetch_add(usage.cached_prompt_tokens, Ordering::Relaxed);
-    COMPLETION_TOKENS.fetch_add(usage.completion_tokens, Ordering::Relaxed);
+    saturating_fetch_add(&UNKNOWN_USAGE, usage.unknown_usage_requests);
+    saturating_fetch_add(&UNKNOWN_CACHED, usage.unknown_cached_requests);
+    saturating_fetch_add(&REQUESTS, usage.requests);
+    saturating_fetch_add(&PROMPT_TOKENS, usage.prompt_tokens);
+    saturating_fetch_add(&CACHED_PROMPT_TOKENS, usage.cached_prompt_tokens);
+    saturating_fetch_add(&COMPLETION_TOKENS, usage.completion_tokens);
 }
 
 /// Count one completed request and any usage it reported.
@@ -260,6 +285,53 @@ mod tests {
         assert_eq!(delta.cached_prompt_tokens, 200);
         assert_eq!(delta.completion_tokens, 25);
         assert_eq!(delta.summary_line(), "3 req / in 250 (cached 200) / out 25");
+    }
+
+    /// A hostile or broken server can report any u64. Summing it with `+`
+    /// panicked in debug and wrapped in release, which reset the tally a
+    /// turn budget is checked against.
+    #[test]
+    fn huge_server_token_counts_saturate_instead_of_overflowing() {
+        let huge = json!({
+            "usage": {
+                "prompt_tokens": u64::MAX,
+                "completion_tokens": u64::MAX,
+                "prompt_tokens_details": { "cached_tokens": u64::MAX }
+            }
+        });
+        let mut total = TokenUsage::default();
+        total.add_response(&huge);
+        total.add_response(&huge);
+        assert_eq!(total.prompt_tokens, u64::MAX);
+        assert_eq!(total.cached_prompt_tokens, u64::MAX);
+        assert_eq!(total.completion_tokens, u64::MAX);
+        assert_eq!(total.total_tokens(), u64::MAX);
+
+        let mut counts = TokenUsage {
+            requests: u64::MAX,
+            unknown_usage_requests: u64::MAX,
+            unknown_cached_requests: u64::MAX,
+            ..Default::default()
+        };
+        counts.add_response(&json!({}));
+        assert_eq!(counts.requests, u64::MAX);
+        assert_eq!(counts.unknown_usage_requests, u64::MAX);
+        assert_eq!(counts.unknown_cached_requests, u64::MAX);
+    }
+
+    /// The process-wide totals saturate the same way (tested on a local
+    /// atomic: the real statics are shared with every other test).
+    #[test]
+    fn the_process_wide_counters_saturate() {
+        let counter = AtomicU64::new(u64::MAX - 1);
+        saturating_fetch_add(&counter, 5);
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+        saturating_fetch_add(&counter, u64::MAX);
+        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
+
+        let counter = AtomicU64::new(3);
+        saturating_fetch_add(&counter, 4);
+        assert_eq!(counter.load(Ordering::Relaxed), 7);
     }
 
     #[test]

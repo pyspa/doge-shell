@@ -199,7 +199,12 @@ impl OpenAiConfig {
             .map(PathBuf::from)
             .or_else(|| getter("HOME").map(|v| PathBuf::from(v).join(".config")))
             .map(|v| v.join("dogesh").join("subscription-auth"));
-        let api_key = API_KEY_ENV_VARS.iter().find_map(|key| getter(key));
+        // Blank values are skipped here, not just dropped later by `new`:
+        // otherwise `AI_CHAT_API_KEY=""` would win the lookup and hide a real
+        // `OPENAI_API_KEY`. Same rule as the OpenCode key lookup below.
+        let api_key = API_KEY_ENV_VARS
+            .iter()
+            .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
 
         let base_url = getter("AI_CHAT_BASE_URL").or_else(|| getter("OPENAI_BASE_URL"));
 
@@ -526,6 +531,20 @@ mod tests {
         assert_eq!(cfg.api_key(), Some("primary"));
         assert_eq!(cfg.base_url(), "https://example.com/api");
         assert_eq!(cfg.default_model(), "primary-model");
+    }
+
+    /// `AI_CHAT_API_KEY=""` (or whitespace) is not a key and must not hide a
+    /// real `OPENAI_API_KEY` behind it.
+    #[test]
+    fn from_getter_skips_a_blank_primary_key() {
+        for blank in ["", "   "] {
+            let cfg = OpenAiConfig::from_getter(|key| match key {
+                "AI_CHAT_API_KEY" => Some(blank.to_string()),
+                "OPENAI_API_KEY" => Some("legacy".to_string()),
+                _ => None,
+            });
+            assert_eq!(cfg.api_key(), Some("legacy"), "{blank:?}");
+        }
     }
 
     #[test]

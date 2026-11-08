@@ -203,7 +203,8 @@ fn hit_level_allows_hidden(components: &[&str], has_doublestar: bool, depth: usi
 /// sort them deterministically.
 ///
 /// Drops the root itself (globset `*` matches the empty relative path),
-/// drops hidden entries unless the corresponding pattern component
+/// drops hits whose depth differs from the pattern's component count when
+/// the pattern has no `**`, drops hidden entries unless the corresponding pattern component
 /// explicitly starts with a dot, and sorts so output does not depend on
 /// filesystem iteration order.
 fn filter_and_sort_glob_hits(
@@ -222,6 +223,12 @@ fn filter_and_sort_glob_hits(
             Ok(rel) if !rel.as_os_str().is_empty() => {
                 let rel_parts = rel_check_parts(rel);
                 if rel_parts.is_empty() {
+                    continue;
+                }
+                // Without `**` every pattern component names exactly one
+                // path level, so a shallower hit (`d` for `d/*`) is not a
+                // match even though globmatch reports it.
+                if !has_doublestar && rel_parts.len() != components.len() {
                     continue;
                 }
                 let mut excluded = false;

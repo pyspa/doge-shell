@@ -137,6 +137,9 @@ pub(crate) struct TerminalUiState {
     pub(crate) last_preprompt_plain: Option<String>,
     /// Optional bottom-row status line. Disabled by default.
     pub(crate) status_line: status_line::SharedStatusLine,
+    /// `setup` turned on bracketed paste, so `Drop` must turn it off. Pipe
+    /// mode never runs `setup`, and its stdout must stay free of escapes.
+    pub(crate) bracketed_paste_enabled: bool,
 }
 
 pub(crate) struct CompletionUiState {
@@ -212,7 +215,9 @@ impl<'a> Drop for Repl<'a> {
                 .status_line
                 .borrow_mut()
                 .disarm(&mut renderer);
-            queue!(renderer, crossterm::event::DisableBracketedPaste).ok();
+            if self.terminal_ui.bracketed_paste_enabled {
+                queue!(renderer, crossterm::event::DisableBracketedPaste).ok();
+            }
             renderer.flush().ok();
 
             disable_raw_mode().ok();
@@ -321,6 +326,7 @@ impl<'a> Repl<'a> {
         let mut renderer = TerminalRenderer::new();
         queue!(renderer, EnableBracketedPaste).ok();
         renderer.flush().ok();
+        self.terminal_ui.bracketed_paste_enabled = true;
     }
 
     pub(crate) async fn check_background_jobs(&mut self, output: bool) -> Result<()> {

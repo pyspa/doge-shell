@@ -112,3 +112,15 @@ fn repeated_parent_builtin_capture_releases_fds_and_keeps_parent_state() {
     assert_eq!(output.stdout, expected.as_bytes());
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
 }
+
+#[test]
+fn piped_input_mode_writes_no_terminal_control_sequences() {
+    let _guard = common::serial_guard();
+    let output = spawn_dsh_unlocked(Vec::<String>::new(), Some("echo hi\n"))
+        .wait(DEFAULT_CASE_TIMEOUT)
+        .expect("bounded piped-input completion");
+    assert!(output.status.success(), "{output:?}");
+    // Pipe mode never enables bracketed paste, so it must not disable it
+    // either: the escape would end up in whatever consumes stdout.
+    assert_eq!(output.stdout, b"hi\n");
+}

@@ -609,9 +609,12 @@ fn stopped_producer_with_completed_consumer_stays_stopped() {
         after_marker.display()
     );
     let output = run_interactive(&[line.as_str()]);
-    assert!(
-        output.status.success(),
-        "shell must return to the prompt and exit without hanging. stderr:\n{}",
+    // The harness panics on a hang. Its trailing bare `exit` reports `$?`,
+    // which is the stopped pipeline's 128+SIGSTOP.
+    assert_eq!(
+        output.status.code(),
+        Some(128 + nix::sys::signal::Signal::SIGSTOP as i32),
+        "shell must return to the prompt and exit with the stopped status. stderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(

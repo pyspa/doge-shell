@@ -1033,6 +1033,24 @@ fn parse_retry_after_reads_seconds() {
     assert_eq!(parse_retry_after(&empty), None);
 }
 
+/// Runs on every response, so a hostile or broken `Retry-After` must never
+/// panic `Duration::from_secs_f64` (it did for `inf` and `1e20`).
+#[test]
+fn parse_retry_after_never_panics_and_clamps_to_the_max_delay() {
+    let parse = |value: &str| {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, value.parse().unwrap());
+        parse_retry_after(&headers)
+    };
+    for huge in ["inf", "+inf", "infinity", "1e20", "1e300", "100000"] {
+        assert_eq!(parse(huge), Some(MAX_RETRY_DELAY), "{huge}");
+    }
+    for invalid in ["NaN", "-inf", "-1", "soon"] {
+        assert_eq!(parse(invalid), None, "{invalid}");
+    }
+    assert_eq!(parse("0.5"), Some(Duration::from_millis(500)));
+}
+
 #[test]
 fn api_key_provider_defaults_to_responses_and_chat_completions_is_opt_in() {
     let config = |api: Option<&'static str>| {
@@ -1051,4 +1069,49 @@ fn api_key_provider_defaults_to_responses_and_chat_completions_is_opt_in() {
     assert!(compat.responses.is_none());
     assert_ne!(default.cache_scope(), compat.cache_scope());
     assert!(ChatGptClient::try_from_config(&config(Some("typo"))).is_err());
+}
+
+/// A chat/completions stream that never sends a newline (or never closes an
+/// event) used to grow the splitter's buffer without bound; the Responses
+/// transport already stopped at 16 MiB.
+#[test]
+fn a_streamed_event_over_the_size_cap_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        use std::io::Write;
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: ",
+        );
+        let block = vec![b'x'; 64 * 1024];
+        for _ in 0..(crate::stream::MAX_SSE_BUFFER_BYTES / block.len() + 2) {
+            if stream.write_all(&block).is_err() {
+                break;
+            }
+        }
+    });
+
+    let config = OpenAiConfig::from_getter(move |key| match key {
+        "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+        "AI_CHAT_MODEL" => Some("local-model".to_string()),
+        "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
+        "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
+        "AI_CHAT_TIMEOUT_SECS" => Some("10".to_string()),
+        "AI_CHAT_API" => Some("chat_completions".to_string()),
+        _ => None,
+    });
+    let client = ChatGptClient::try_from_config(&config).expect("client should initialize");
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    server.join().expect("fixture server thread panicked");
+    let error = result.expect_err("an oversized event must fail the stream");
+    assert!(error.to_string().contains("16 MiB"), "{error:#}");
 }

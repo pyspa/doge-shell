@@ -18,6 +18,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{cell::RefCell, rc::Rc};
 
+#[cfg(test)]
+mod arith_tests;
 mod builtin;
 mod command_palette;
 mod cron;

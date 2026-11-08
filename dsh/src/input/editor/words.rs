@@ -5,8 +5,10 @@
 use super::*;
 
 impl Input {
+    // The parser helpers compare the position against pest spans, which are
+    // byte offsets, while `self.cursor` counts chars: pass `byte_index()`.
     pub fn get_cursor_word(&self) -> Result<Option<(Rule, Span<'_>)>> {
-        parser::get_pos_word(self.input.as_str(), self.cursor)
+        parser::get_pos_word(self.input.as_str(), self.byte_index())
     }
 
     /// Fallback computation for completion word when parser cannot identify it (e.g. after redirects)
@@ -112,10 +114,10 @@ impl Input {
     }
 
     pub fn get_words(&self) -> Result<Vec<(Rule, Span<'_>, bool)>> {
-        parser::get_words(self.input.as_str(), self.cursor)
+        parser::get_words(self.input.as_str(), self.byte_index())
     }
 
     pub fn get_words_from_pairs<'a>(&self, pairs: Pairs<'a, Rule>) -> Vec<(Rule, Span<'a>, bool)> {
-        parser::get_words_from_pairs(pairs, self.cursor)
+        parser::get_words_from_pairs(pairs, self.byte_index())
     }
 }

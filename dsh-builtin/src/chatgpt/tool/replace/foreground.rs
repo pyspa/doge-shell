@@ -20,8 +20,7 @@ impl Preimage {
         if !file.metadata()?.is_file() {
             return Err(io::Error::other("replacement requires a regular file"));
         }
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)?;
+        let contents = crate::agent::files::read_capped_text(&mut file)?;
         Ok(Self {
             file,
             target,
@@ -53,8 +52,11 @@ impl Preimage {
         if !same_file(&target.metadata()?) {
             return Err(io::Error::other("file identity changed"));
         }
+        // One byte past the cap is enough to see the file grew beyond it.
         let mut current = Vec::new();
-        target.read_to_end(&mut current)?;
+        (&mut target)
+            .take(crate::agent::files::MAX_TEXT_FILE_BYTES as u64 + 1)
+            .read_to_end(&mut current)?;
         if current != self.contents.as_bytes() || !same_file(&fs::symlink_metadata(path)?) {
             return Err(io::Error::other("file contents or identity changed"));
         }

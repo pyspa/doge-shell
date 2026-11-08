@@ -249,7 +249,7 @@ impl Shell {
 
         let result = eval::eval_str(self, ctx, input, force_background).await;
         // Generic evaluation errors may escape before any job publishes a
-        // status (for example, an ambiguous redirect during materialization).
+        // status (for example, an infrastructure failure during materialization).
         // Preserve the error for the caller's diagnostic, but never leave `$?`
         // describing an earlier evaluation. Cancellation remains Ok(130).
         if result.is_err() {

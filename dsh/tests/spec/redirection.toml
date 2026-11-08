@@ -478,3 +478,38 @@ status = 0
 stdout_contains = ["AFTER:1", "missing-directory/out"]
 stdout_not_contains = ["NEVER"]
 stderr_exact = ""
+
+# An ambiguous redirect target fails only that command (status 1).
+[[case]]
+id = "redirection.ambiguous-glob-target-continues-list"
+class = "posix"
+mode = "command"
+script = "touch oa ob; echo x > o*; echo AFTER:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["AFTER:1"]
+stderr_contains = ["ambiguous redirect"]
+
+[[case]]
+id = "redirection.ambiguous-target-activates-or"
+class = "posix"
+mode = "command"
+script = "touch oa ob; echo x > o* || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_contains = ["ambiguous redirect"]
+
+# `> ""` is an open failure on the empty path, not an ambiguous redirect.
+[[case]]
+id = "redirection.empty-quoted-target-is-open-failure"
+class = "posix"
+mode = "command"
+script = "echo x > \"\" || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_not_contains = ["ambiguous"]

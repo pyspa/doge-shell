@@ -177,6 +177,10 @@ pub async fn eval_str(
     }
 
     'lists: for list in &plan.lists {
+        // `exit` ends evaluation: nothing after it on the line runs.
+        if shell.exited.is_some() {
+            break 'lists;
+        }
         ctx.infile = base_infile;
         ctx.outfile = base_outfile;
         ctx.errfile = base_errfile;
@@ -195,6 +199,9 @@ pub async fn eval_str(
         // The gate resets per AND-OR list: `;`/`&` never carry `&&`/`||` forward.
         let mut gate_op = ListOp::None;
         for planned in &list.jobs {
+            if shell.exited.is_some() {
+                break 'lists;
+            }
             // `list_op` is stored on the *previous* job by the parser.
             // We keep it here before moving `job` into wait_jobs.
             let next_gate_op = planned.list_op.clone();

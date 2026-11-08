@@ -56,15 +56,27 @@ pub(crate) fn open(path: &Path) -> io::Result<File> {
     Err(io::Error::other("task file required"))
 }
 
-pub fn read(path: &Path) -> io::Result<String> {
-    let mut text = String::new();
-    open(path)?
-        .take(16 * 1024 * 1024 + 1)
-        .read_to_string(&mut text)?;
-    if text.len() > 16 * 1024 * 1024 {
-        return Err(io::Error::other("task file exceeds 16 MiB"));
+/// Largest text file a file tool loads into memory, for task and interactive
+/// tools alike.
+pub(crate) const MAX_TEXT_FILE_BYTES: usize = 16 * 1024 * 1024;
+
+/// Read UTF-8 text, refusing (not truncating) anything over
+/// [`MAX_TEXT_FILE_BYTES`]. The size check precedes UTF-8 validation so a cut
+/// through a multibyte character still reports the size, not bad encoding.
+pub(crate) fn read_capped_text(reader: impl Read) -> io::Result<String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_TEXT_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_TEXT_FILE_BYTES {
+        return Err(io::Error::other("file exceeds the 16 MiB read limit"));
     }
-    Ok(text)
+    String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "file is not valid UTF-8"))
+}
+
+pub fn read(path: &Path) -> io::Result<String> {
+    read_capped_text(open(path)?)
 }
 pub fn write(path: &Path, contents: &str) -> io::Result<()> {
     WriteTarget::prepare(path, true)?.write(contents)

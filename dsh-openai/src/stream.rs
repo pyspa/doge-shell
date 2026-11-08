@@ -41,8 +41,14 @@ const MAX_TOOL_CALL_INDEX: usize = 128;
 pub struct SseFrameSplitter {
     pending: Vec<u8>,
     current_data_lines: Vec<String>,
+    /// Bytes in `current_data_lines`, kept so the size check is O(1).
+    current_data_bytes: usize,
     saw_any_data_line: bool,
 }
+
+/// The most SSE bytes held in memory at once: one event still waiting for
+/// its boundary on chat/completions, the whole stream on Responses.
+pub const MAX_SSE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 
 impl SseFrameSplitter {
     pub fn new() -> Self {
@@ -58,10 +64,15 @@ impl SseFrameSplitter {
     /// (`event:`, `id:`, `retry:`) are ignored: this protocol only uses
     /// `data:`.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<String> {
+        // Bytes already in `pending` were scanned on an earlier push and hold
+        // no newline; rescanning them made a newline-free stream quadratic.
+        let mut search_from = self.pending.len();
         self.pending.extend_from_slice(bytes);
         let mut events = Vec::new();
 
-        while let Some(pos) = self.pending.iter().position(|&b| b == b'\n') {
+        while let Some(offset) = self.pending[search_from..].iter().position(|&b| b == b'\n') {
+            let pos = search_from + offset;
+            search_from = 0;
             let mut line_bytes: Vec<u8> = self.pending.drain(..=pos).collect();
             line_bytes.pop(); // the '\n' itself
             if line_bytes.last() == Some(&b'\r') {
@@ -78,6 +89,7 @@ impl SseFrameSplitter {
 
             if let Some(rest) = line.strip_prefix("data:") {
                 let value = rest.strip_prefix(' ').unwrap_or(rest);
+                self.current_data_bytes += value.len();
                 self.current_data_lines.push(value.to_string());
                 self.saw_any_data_line = true;
             }
@@ -86,6 +98,14 @@ impl SseFrameSplitter {
         }
 
         events
+    }
+
+    /// Bytes held for an event that has not completed yet: the unterminated
+    /// line plus the open event's `data:` lines. A server that never sends a
+    /// newline or a blank line grows this, so callers bound it with
+    /// [`MAX_SSE_BUFFER_BYTES`].
+    pub fn buffered_len(&self) -> usize {
+        self.pending.len() + self.current_data_bytes
     }
 
     /// Flush a final event that never received a trailing blank line.
@@ -103,6 +123,7 @@ impl SseFrameSplitter {
         }
         let payload = self.current_data_lines.join("\n");
         self.current_data_lines.clear();
+        self.current_data_bytes = 0;
         self.saw_any_data_line = false;
         Some(payload)
     }
@@ -489,5 +510,16 @@ mod tests {
             }
             other => panic!("expected a cut, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn buffered_len_counts_an_unterminated_line_and_an_open_event() {
+        let mut splitter = SseFrameSplitter::new();
+        assert!(splitter.push(b"data: abc\n").is_empty());
+        assert!(splitter.push(b"data: de").is_empty());
+        // "abc" is held as an open event's data line, "data: de" as a partial line.
+        assert_eq!(splitter.buffered_len(), 3 + 8);
+        assert_eq!(splitter.push(b"\n\n"), vec!["abc\nde".to_string()]);
+        assert_eq!(splitter.buffered_len(), 0);
     }
 }

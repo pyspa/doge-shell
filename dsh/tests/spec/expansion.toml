@@ -502,3 +502,118 @@ script = 'X=-010; echo $((X)); X=+010; echo $((X)); X=-0x10; echo $((X))'
 status = 0
 stdout_exact = "-8\n8\n-16\n"
 stderr_exact = ""
+
+# A glob without `**` matches exactly as many path components as it has:
+# `d/*` must not also yield the directory `d` itself.
+[[case]]
+id = "expansion.glob-subdir-star-excludes-parent"
+class = "posix"
+mode = "command"
+script = "mkdir d; touch d/x; printf '[%s]\\n' d/*"
+
+[case.expect]
+status = 0
+stdout_exact = "[d/x]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.glob-middle-component-depth"
+class = "posix"
+mode = "command"
+script = "mkdir -p d/e; touch d/e/y d/z; printf '[%s]\\n' d/*/y"
+
+[case.expect]
+status = 0
+stdout_exact = "[d/e/y]\n"
+stderr_exact = ""
+
+# Quoted empty strings are kept as one empty field.
+[[case]]
+id = "expansion.empty-double-quoted-arg-is-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a \"\" b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.empty-double-quoted-test-operand"
+class = "posix"
+mode = "command"
+script = "[ -n \"\" ]; echo ST:$?"
+
+[case.expect]
+status = 0
+stdout_exact = "ST:1\n"
+
+[[case]]
+id = "expansion.adjacent-empty-double-quotes-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a \"\"\"\" b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.default-word-empty-double-quotes-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a ${DOGESH_SPEC_NEVER_SET-\"\"} b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""
+
+# Brace expansion needs a top-level comma; otherwise braces stay literal.
+[[case]]
+id = "expansion.brace-without-comma-is-literal"
+class = "bash"
+mode = "command"
+script = "printf '[%s]\\n' {} {a} HEAD@{1} @{u}"
+
+[case.expect]
+status = 0
+stdout_exact = "[{}]\n[{a}]\n[HEAD@{1}]\n[@{u}]\n"
+stderr_exact = ""
+
+# An escaped comma only stops brace splitting; the backslash goes away.
+[[case]]
+id = "expansion.brace-escaped-comma-is-removed"
+class = "bash"
+mode = "command"
+script = "printf '[%s]\\n' {a,b\\,c} x{a\\,b}y"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[b,c]\n[x{a,b}y]\n"
+stderr_exact = ""
+
+# Glob matches are real file names: backslashes in them are kept.
+[[case]]
+id = "expansion.glob-match-keeps-backslashes-in-names"
+class = "posix"
+mode = "command"
+script = "touch 'a\\*b' 'c\\,d'; printf '[%s]\\n' *"
+
+[case.expect]
+status = 0
+stdout_exact = "[a\\*b]\n[c\\,d]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.brace-with-comma-expands"
+class = "bash"
+mode = "command"
+script = "printf '[%s]\\n' a{b,c}d"
+
+[case.expect]
+status = 0
+stdout_exact = "[abd]\n[acd]\n"
+stderr_exact = ""

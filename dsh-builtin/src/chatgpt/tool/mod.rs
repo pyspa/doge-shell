@@ -33,8 +33,8 @@ pub(crate) mod tool_search;
 #[cfg(test)]
 pub(crate) use paths::is_path_within_tool_roots;
 pub(crate) use paths::{
-    canonicalize_or_normalize, normalize_path, resolve_tool_path, resolve_with_existing_ancestor,
-    workspace_root,
+    canonicalize_or_normalize, expand_tool_path, normalize_path, resolve_tool_path,
+    resolve_with_existing_ancestor, workspace_root,
 };
 pub(crate) use safety_gates::{
     agent_write_granted, confirm_agent_action, confirm_agent_action_with_preview,

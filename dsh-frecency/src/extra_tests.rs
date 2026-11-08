@@ -85,4 +85,22 @@ mod tests {
         // "b" should definitely be there
         assert!(store.items.iter().any(|i| i.item == "b"));
     }
+
+    #[test]
+    fn last_accessed_time_is_absolute_across_reference_times() {
+        let mut store = FrecencyStore {
+            // An hour-old session; the relative offset is an f32.
+            reference_time: crate::current_time_secs() - 3_600.0,
+            ..FrecencyStore::default()
+        };
+        store.add("a", None);
+        store.add("a", None);
+        let item = &store.items[0];
+        assert_eq!(item.num_accesses(), 2);
+        let accessed = item.last_accessed_time();
+        assert!((accessed - crate::current_time_secs()).abs() < 5.0);
+
+        store.reset_time();
+        assert!((store.items[0].last_accessed_time() - accessed).abs() < 1.0);
+    }
 }

@@ -3,7 +3,6 @@ use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
 use std::fs;
-use std::io::Read;
 use std::os::unix::fs::OpenOptionsExt;
 
 pub(crate) const NAME: &str = "read_file";
@@ -19,16 +18,14 @@ const MAX_READ_BYTES: usize = 6144;
 /// Check the opened descriptor, rather than a path metadata check that can
 /// race with replacement of the file. Path and sensitive-access gates run first.
 fn read_regular_file(path: &std::path::Path) -> std::io::Result<String> {
-    let mut file = fs::OpenOptions::new()
+    let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(nix::libc::O_NONBLOCK)
         .open(path)?;
     if !file.metadata()?.is_file() {
         return Err(std::io::Error::other("read_file requires a regular file"));
     }
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)?;
-    Ok(contents)
+    crate::agent::files::read_capped_text(file)
 }
 
 pub(crate) fn definition() -> Value {
@@ -146,7 +143,7 @@ pub(super) fn resolve_read_path(
     };
     let base = base.as_str().ok_or("skill_path must be a string")?;
     let cwd = proxy.get_current_dir().map_err(|err| err.to_string())?;
-    let expanded = shellexpand::full(base).map_err(|err| err.to_string())?;
+    let expanded = super::expand_tool_path(base);
     let lexical = cwd.join(expanded.as_ref());
     if lexical.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
         return Err(
@@ -481,6 +478,18 @@ mod tests {
                 assert!(next.contains("next line"));
             }
         }
+    }
+
+    #[test]
+    fn read_file_refuses_files_over_the_shared_cap() {
+        let dir = tempdir().unwrap();
+        let file = fs::File::create(dir.path().join("huge.txt")).unwrap();
+        file.set_len(crate::agent::files::MAX_TEXT_FILE_BYTES as u64 + 1)
+            .unwrap();
+        let mut proxy = proxy(dir.path());
+
+        let err = run(r#"{"path": "huge.txt"}"#, &mut proxy).unwrap_err();
+        assert!(err.contains("16 MiB"), "{err}");
     }
 
     #[test]

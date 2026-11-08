@@ -506,24 +506,26 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         debug!("Running in pipe mode");
         let stdin = io::stdin();
         let reader = BufReader::new(stdin);
+        // Lines of a command that is not complete yet (trailing `&&`/`|`,
+        // open quote, ...). Running each physical line alone would let
+        // `false &&` fail as a syntax error and then run the next line
+        // unconditionally.
+        let mut pending = String::new();
 
         for line in reader.lines() {
             match line {
-                Ok(input) => {
-                    let input = input.trim();
-                    if input.is_empty() {
+                Ok(line) => {
+                    if pending.is_empty() {
+                        pending.push_str(line.trim());
+                    } else {
+                        pending.push('\n');
+                        pending.push_str(&line);
+                    }
+                    if pending.is_empty() || crate::parser::is_incomplete_input(&pending) {
                         continue;
                     }
-                    debug!("Processing pipe input: {}", input);
-                    match repl.shell.eval_str(ctx, input.to_string(), false).await {
-                        Ok(_) => {}
-                        Err(err) => {
-                            eprint!("Error executing '{input}': ");
-                            display_user_error(&err, true);
-                        }
-                    }
-                    // `exit [N]` stops reading input and becomes the status.
-                    if repl.shell.exited.is_some() {
+                    let input = std::mem::take(&mut pending);
+                    if run_piped_command(&mut repl, ctx, input.trim_end()).await {
                         return last_status_exit_code(repl.shell);
                     }
                 }
@@ -533,9 +535,25 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                 }
             }
         }
+        // Input ended mid-command: run it anyway so the syntax error is
+        // reported, as `sh` reports an unexpected end of file.
+        if !pending.trim().is_empty() {
+            run_piped_command(&mut repl, ctx, pending.trim_end()).await;
+        }
         // End of input: like `sh < script`, the status of the last command.
         last_status_exit_code(repl.shell)
     }
+}
+
+/// Evaluates one complete command read from piped stdin. Returns true when
+/// `exit [N]` ran, which stops reading input and becomes the status.
+async fn run_piped_command(repl: &mut Repl<'_>, ctx: &mut Context, input: &str) -> bool {
+    debug!("Processing pipe input: {}", input);
+    if let Err(err) = repl.shell.eval_str(ctx, input.to_string(), false).await {
+        eprint!("Error executing '{input}': ");
+        display_user_error(&err, true);
+    }
+    repl.shell.exited.is_some()
 }
 
 fn last_status_exit_code(shell: &Shell) -> ExitCode {

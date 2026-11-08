@@ -63,3 +63,23 @@ fn from_getter_refuses_an_insecure_base_url() {
     });
     assert!(cfg.validate().is_err());
 }
+
+/// A blank `AI_CHAT_BASE_URL` used to win the lookup and then fall back
+/// to api.openai.com, sending the key meant for `OPENAI_BASE_URL`'s
+/// server to OpenAI.
+#[test]
+fn from_getter_skips_a_blank_primary_base_url() {
+    for blank in ["", "   "] {
+        let cfg = OpenAiConfig::from_getter(|key| match key {
+            "AI_CHAT_BASE_URL" => Some(blank.to_string()),
+            "OPENAI_BASE_URL" => Some("https://api.groq.com/openai/v1".to_string()),
+            "OPENAI_API_KEY" => Some("groq-key".to_string()),
+            _ => None,
+        });
+        assert_eq!(
+            cfg.base_url(),
+            "https://api.groq.com/openai/v1",
+            "{blank:?}"
+        );
+    }
+}

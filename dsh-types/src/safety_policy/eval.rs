@@ -25,9 +25,10 @@ pub struct EvalFlags {
 
 fn eval_flags(name: &str) -> Option<EvalFlags> {
     let flags = match name {
+        // `-o`/`-O` take an option name (`-o errexit`, `-O extglob`).
         "sh" | "bash" | "zsh" | "ksh" | "dash" => EvalFlags {
             eval: &['c'],
-            value: &['o'],
+            value: &['o', 'O'],
             long: &["command"],
             long_prefix: false,
         },
@@ -112,16 +113,18 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
         }
 
         if let Some(long) = arg.strip_prefix("--") {
-            let long = long.split('=').next().unwrap_or(long);
-            let matches = |name: &&str| {
-                if flags.long_prefix {
-                    !long.is_empty() && name.starts_with(long)
-                } else {
-                    *name == long
-                }
+            let (long, inline_value) = match long.split_once('=') {
+                Some((long, _)) => (long, true),
+                None => (long, false),
             };
+            let matches = |name: &&str| long_option_names(long, name, flags.long_prefix);
             if flags.long.iter().any(matches) {
                 return Some(arg.clone());
+            }
+            // `env --chdir /tmp -S '…'`: the value is not the command, and
+            // stopping at it would hide the `-S` after it.
+            if !inline_value && value_long_options(&name).iter().any(matches) {
+                args.next();
             }
             continue;
         }
@@ -150,35 +153,63 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
     None
 }
 
-/// Long options that take the next word as their value, so that word is not
-/// the script operand.
+/// Whether the long option spelled `long` names `name`: exactly, or as an
+/// unambiguous prefix for `getopt_long` programs.
+fn long_option_names(long: &str, name: &str, long_prefix: bool) -> bool {
+    if long_prefix {
+        !long.is_empty() && name.starts_with(long)
+    } else {
+        name == long
+    }
+}
+
+/// Long options that take the next word as their value, so that word is
+/// neither the script operand nor the command.
 fn value_long_options(name: &str) -> &'static [&'static str] {
     match name {
         "sh" | "bash" | "zsh" | "ksh" | "dash" => &["rcfile", "init-file"],
         "python" | "python3" => &["check-hash-based-pycs"],
+        // GNU env (macOS env has no long options).
+        "env" => &["chdir", "unset", "argv0"],
         _ => &[],
     }
 }
 
-/// The operand an interpreter reads its program from, if it has one.
+/// Where an interpreter takes its program from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptOperand<'a> {
+    /// A script path (which may itself name stdin, like `/dev/stdin`).
+    Path(&'a str),
+    /// No script operand: the interpreter reads its program from stdin
+    /// (`bash -o errexit`, `sh -s arg`).
+    Stdin,
+    /// A module run (`python3 -m json.tool`) takes no script.
+    Module,
+}
+
+/// The operand an interpreter reads its program from.
 ///
 /// Skips options and the values of the options that take one (`bash -o
-/// errexit script`), honours `--`, and returns `None` for a module run
-/// (`python3 -m json.tool`), which has no script operand.
-pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
+/// errexit script`) and honours `--`. With no operand left, or with the sh
+/// family's `-s` (whose operands are positional parameters), the program
+/// comes from standard input.
+pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> ScriptOperand<'a> {
     let name = program_name(program);
     let flags = eval_flags(&name);
     let value_long = value_long_options(&name);
     let python = matches!(name.as_str(), "python" | "python3");
+    let sh_family = matches!(name.as_str(), "sh" | "bash" | "zsh" | "ksh" | "dash");
 
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         if arg == "--" {
-            return args.next().map(String::as_str);
+            return args
+                .next()
+                .map_or(ScriptOperand::Stdin, |arg| ScriptOperand::Path(arg));
         }
         // `-` alone is an operand: it names standard input.
         if arg == "-" || !(arg.starts_with('-') || arg.starts_with('+')) {
-            return Some(arg.as_str());
+            return ScriptOperand::Path(arg.as_str());
         }
         if let Some(long) = arg.strip_prefix("--") {
             if !long.contains('=') && value_long.contains(&long) {
@@ -192,7 +223,10 @@ pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> Opti
         let cluster = &arg[1..];
         for (index, letter) in cluster.char_indices() {
             if python && letter == 'm' {
-                return None;
+                return ScriptOperand::Module;
+            }
+            if sh_family && letter == 's' && arg.starts_with('-') {
+                return ScriptOperand::Stdin;
             }
             if flags.value.contains(&letter) {
                 if index + letter.len_utf8() == cluster.len() {
@@ -202,7 +236,7 @@ pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> Opti
             }
         }
     }
-    None
+    ScriptOperand::Stdin
 }
 
 /// Whether a path names the reading process's standard input or one of its
@@ -238,22 +272,17 @@ pub fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str
         return Some("`eval` runs a string that cannot be inspected first");
     }
 
-    // A shell with no script operand reads its program from stdin.
-    if is_code_execution_command(&name)
-        && name != "sudo"
-        && args.iter().all(|arg| arg.starts_with('-'))
-    {
-        return Some("it reads the code to run from standard input");
-    }
-
-    // `printf '…' | bash /dev/stdin` has a script operand, so the rule above
-    // does not hold, but the operand is standard input (or an inherited
-    // descriptor) and the code it reads is just as unreadable.
-    if is_code_execution_command(&name)
-        && name != "sudo"
-        && interpreter_script_operand(program, args).is_some_and(names_inherited_descriptor)
-    {
-        return Some("it reads the code to run from standard input");
+    // An interpreter with no script operand reads its program from stdin
+    // (`printf '…' | bash -o errexit`), and so does one whose operand names
+    // stdin or an inherited descriptor (`… | bash /dev/stdin`).
+    if is_code_execution_command(&name) && name != "sudo" {
+        match interpreter_script_operand(program, args) {
+            ScriptOperand::Stdin => return Some("it reads the code to run from standard input"),
+            ScriptOperand::Path(path) if names_inherited_descriptor(path) => {
+                return Some("it reads the code to run from standard input");
+            }
+            ScriptOperand::Path(_) | ScriptOperand::Module => {}
+        }
     }
 
     // `bash < script.sh` is the same hole with a redirection instead of a pipe:

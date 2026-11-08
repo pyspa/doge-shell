@@ -320,6 +320,7 @@ fn env_split_string_is_confirmed() {
         vec!["-S", "rm -rf /home/u/proj"],
         vec!["-iS", "rm -rf /home/u/proj"],
         vec!["--split-string=rm -rf /home/u/proj"],
+        vec!["--chdir", "/tmp", "-S", "rm -rf /home/u/proj"],
     ] {
         let args: Vec<String> = args.into_iter().map(str::to_string).collect();
         assert!(

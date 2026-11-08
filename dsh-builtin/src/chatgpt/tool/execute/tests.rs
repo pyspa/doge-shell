@@ -127,6 +127,16 @@ fn a_script_operand_naming_stdin_is_refused() {
         ("bash", vec!["/proc/self/fd/0"]),
         ("node", vec!["/proc/123/fd/4"]),
         ("zsh", vec!["/proc/thread-self/fd/0"]),
+        // No script operand once option values are skipped: still stdin.
+        ("bash", vec!["-o", "errexit"]),
+        ("bash", vec!["-O", "extglob"]),
+        ("bash", vec!["--rcfile", "/dev/null"]),
+        ("python3", vec!["-W", "ignore"]),
+        ("python3", vec!["-X", "dev"]),
+        ("bash", vec!["+x"]),
+        // `-s` reads the script from stdin; operands are positional params.
+        ("sh", vec!["-s", "anything"]),
+        ("bash", vec!["-es", "a", "b"]),
     ] {
         assert!(
             hidden_code_source(program, &args(&operands)).is_some(),
@@ -644,6 +654,11 @@ fn run_rejects_env_split_string() {
         "env --split-string 'echo pwned'",
         "env --split 'echo pwned'",
         "sudo env -S 'echo pwned'",
+        // GNU env's spaced long options take the next word as their value.
+        "env --chdir /tmp -S 'echo pwned'",
+        "env --unset X -S 'echo pwned'",
+        "env --argv0 x -S 'echo pwned'",
+        "env --ch /tmp -S 'echo pwned'",
     ] {
         let err = run(&json!({ "command": command }).to_string(), &mut proxy)
             .expect_err("env -S must be refused");
@@ -658,6 +673,10 @@ fn run_rejects_env_split_string() {
     assert_eq!(string_eval_flag("env", &args(&["FOO=1", "ls", "-S"])), None);
     assert_eq!(string_eval_flag("env", &args(&["-i", "ls"])), None);
     assert_eq!(string_eval_flag("env", &args(&["-u", "S", "ls"])), None);
+    assert_eq!(
+        string_eval_flag("env", &args(&["--unset", "S", "ls", "-S"])),
+        None
+    );
 }
 
 /// Every spelling of "here is some code" has to be caught, and nothing else.

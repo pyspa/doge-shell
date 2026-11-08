@@ -84,6 +84,24 @@ fn non_finite_scores_are_neither_loaded_nor_saved() {
 }
 
 #[test]
+fn legacy_inflated_scores_are_capped_at_the_access_count() {
+    let (_dir, db) = temp_db();
+    // Older builds wrote a session-relative `last_accessed` and the
+    // time-scaled score, e.g. 2^20 after a long session.
+    db.get_connection()
+        .execute(
+            "INSERT INTO directory_snapshot \
+             (path, score, last_accessed, access_count, half_life, context) \
+             VALUES ('/frecency/legacy', 1048576.0, 3600.5, 4, 43200.0, NULL)",
+            [],
+        )
+        .unwrap();
+
+    let history = FrecencyHistory::from_db(db.clone()).unwrap();
+    assert_eq!(score(&history, "/frecency/legacy"), 4.0);
+}
+
+#[test]
 fn recent_visits_survive_a_restart_with_their_access_stats() {
     let (_dir, db) = temp_db();
     let mut history = FrecencyHistory::from_db(db.clone()).unwrap();

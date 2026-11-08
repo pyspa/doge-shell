@@ -542,10 +542,21 @@ fn read_snapshot_items(
         let access_count = i32::try_from(access_count.max(0)).unwrap_or(i32::MAX);
         let mut item = ItemStats::new(&path, store.reference_time, half_life, context);
         item.update_num_accesses(access_count);
-        if last_accessed.is_finite() && last_accessed >= MIN_ABSOLUTE_ACCESS_TIME {
+        let current_format = last_accessed.is_finite() && last_accessed >= MIN_ABSOLUTE_ACCESS_TIME;
+        if current_format {
             item.update_last_access(last_accessed);
         }
-        item.set_frecency(finite_score(score as f32, access_count));
+        let score = finite_score(score as f32, access_count);
+        // A legacy row's score is inflated by 2^(session age / half-life).
+        // A current score never exceeds the access count (each access adds
+        // at most 1 and then decays), so cap it there instead of letting old
+        // directories outrank every fresh visit until they decay.
+        let score = if current_format {
+            score
+        } else {
+            score.min(access_count.max(1) as f32)
+        };
+        item.set_frecency(score);
         Ok(item)
     })?;
 

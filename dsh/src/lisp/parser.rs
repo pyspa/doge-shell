@@ -212,51 +212,38 @@ fn parse_true(code: &str, index: usize) -> ParseResult {
 }
 
 fn parse_number(code: &str, index: usize) -> ParseResult {
-    let (front_last_index, front_last_char) = consume_while(code, index, |(index, ch)| {
+    let (front_end, front_last_char) = consume_while(code, index, |(index, ch)| {
         (index == 0 && ch == '-') || ch.is_numeric()
     })?;
 
     if front_last_char.is_numeric() {
-        let front_last_index = front_last_index + 1;
-
-        let back_end = consume_while(code, front_last_index, |(index, ch)| {
+        let back = consume_while(code, front_end, |(index, ch)| {
             (index == 0 && ch == '.') || ch.is_numeric()
         });
 
-        if let Some((back_last_index, _)) = back_end {
-            let back_last_index = back_last_index + 1;
-
-            if back_last_index >= front_last_index + 2 {
-                if next_char_is_break(code, back_last_index)
-                    && let Ok(float) = code
-                        .get(index..back_last_index)
-                        .unwrap_or("")
-                        .parse::<FloatType>()
+        if let Some((back_end, _)) = back {
+            if back_end >= front_end + 2 {
+                if next_char_is_break(code, back_end)
+                    && let Ok(float) = code.get(index..back_end).unwrap_or("").parse::<FloatType>()
                 {
                     return Some(Ok(ParsedAndIndex {
                         parsed: ParseTree::Atom(Value::Float(float)),
-                        index: back_last_index,
+                        index: back_end,
                     }));
                 }
-            } else if code.as_bytes().get(back_last_index - 1) == Some(&b'.') {
+            } else if code.as_bytes().get(back_end - 1) == Some(&b'.') {
                 return Some(Err(ParseError {
-                    msg: format!(
-                        "Expected decimal value after '.' at index {}",
-                        back_last_index - 1
-                    ),
+                    msg: format!("Expected decimal value after '.' at index {}", back_end - 1),
                 }));
             }
         }
 
-        if next_char_is_break(code, front_last_index)
-            && let Ok(int) = code
-                .get(index..front_last_index)
-                .unwrap_or("")
-                .parse::<IntType>()
+        if next_char_is_break(code, front_end)
+            && let Ok(int) = code.get(index..front_end).unwrap_or("").parse::<IntType>()
         {
             return Some(Ok(ParsedAndIndex {
                 parsed: ParseTree::Atom(Value::Int(int)),
-                index: front_last_index,
+                index: front_end,
             }));
         }
     }
@@ -265,21 +252,22 @@ fn parse_number(code: &str, index: usize) -> ParseResult {
 }
 
 fn parse_string(code: &str, index: usize) -> ParseResult {
-    let (last_index, _) = consume_while(code, index, |(index, ch)| {
+    // `end` is the byte just past the last character inside the quotes.
+    let (end, _) = consume_while(code, index, |(index, ch)| {
         (index == 0 && ch == '"') || (index > 0 && ch != '"')
     })?;
 
-    if last_index > index {
-        if code.as_bytes().get(last_index + 1) == Some(&b'"') {
+    if end > index + 1 {
+        if code.as_bytes().get(end) == Some(&b'"') {
             Some(Ok(ParsedAndIndex {
                 parsed: ParseTree::Atom(Value::String(
-                    code.get(index + 1..last_index + 1).unwrap_or("").to_owned(),
+                    code.get(index + 1..end).unwrap_or("").to_owned(),
                 )),
-                index: last_index + 2,
+                index: end + 1,
             }))
         } else {
             Some(Err(ParseError {
-                msg: format!("Unclosed string at index {last_index}"),
+                msg: format!("Unclosed string at index {end}"),
             }))
         }
     } else {
@@ -291,7 +279,6 @@ fn parse_symbol(code: &str, index: usize) -> ParseResult {
     let (last_index, _) = consume_while(code, index, |(index, ch)| {
         (index == 0 && is_symbol_start(ch)) || (index > 0 && is_symbolic(ch))
     })?;
-    let last_index = last_index + 1;
 
     if last_index > index {
         Some(Ok(ParsedAndIndex {
@@ -332,10 +319,14 @@ fn consume_whitespace_and_comments(code: &str, index: usize) -> usize {
 
         ch.is_whitespace() || ch == ';' || semicolons >= 2
     })
-    .map(|(index, _)| index + 1)
+    .map(|(end, _)| end)
     .unwrap_or(index)
 }
 
+/// Consumes characters from `index` while `pred` holds and returns the byte
+/// offset just past the last consumed character, together with that
+/// character. The offset is a char boundary even when the last character is
+/// multibyte, so callers can slice `code` with it directly.
 fn consume_while<F: FnMut((usize, char)) -> bool>(
     code: &str,
     index: usize,
@@ -346,7 +337,7 @@ fn consume_while<F: FnMut((usize, char)) -> bool>(
         .char_indices()
         .take_while(|(i, c)| pred((*i, *c)))
         .last()
-        .map(|(last_index, ch)| (last_index + index, ch))
+        .map(|(last_index, ch)| (last_index + index + ch.len_utf8(), ch))
 }
 
 fn is_symbol_start(c: char) -> bool {
@@ -385,5 +376,39 @@ mod tests {
         let res = second.unwrap();
         assert!(res.is_err());
         assert_eq!(res.unwrap_err().msg, "Unexpected token at index 8");
+    }
+
+    fn parse_all(code: &str) -> Vec<Value> {
+        parse(code)
+            .map(|r| r.unwrap_or_else(|e| panic!("parse error for {code:?}: {}", e.msg)))
+            .collect()
+    }
+
+    #[test]
+    fn parses_strings_ending_in_multibyte_characters() {
+        assert_eq!(parse_all("\"あ\""), vec![Value::String("あ".into())]);
+        assert_eq!(parse_all("\"aあ\""), vec![Value::String("aあ".into())]);
+        assert_eq!(
+            parse_all("\"あb\" 1"),
+            vec![Value::String("あb".into()), Value::Int(1)]
+        );
+    }
+
+    #[test]
+    fn parses_multibyte_symbols_and_separators() {
+        assert_eq!(
+            parse_all("名前"),
+            vec![Value::Symbol(Symbol("名前".into()))]
+        );
+        // U+3000 IDEOGRAPHIC SPACE is whitespace and separates list items.
+        let parsed = parse_all("(a\u{3000}b)");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].to_string(), "(a b)");
+    }
+
+    #[test]
+    fn trailing_multibyte_comment_without_newline_is_ignored() {
+        assert_eq!(parse_all("1 ;; 設定"), vec![Value::Int(1)]);
+        assert_eq!(parse_all("1.5 ;; 設定"), vec![Value::Float(1.5)]);
     }
 }

@@ -134,13 +134,18 @@ pub(crate) fn is_path_within_tool_roots(path: &Path, current_dir: &Path) -> bool
     let roots = allowed_tool_roots(current_dir);
     roots.iter().any(|root| path.starts_with(root))
 }
+/// The only expansion a tool path argument gets: a leading `~`. Never `$VAR`.
+pub(crate) fn expand_tool_path(path_str: &str) -> std::borrow::Cow<'_, str> {
+    shellexpand::tilde(path_str)
+}
 pub(crate) fn resolve_tool_path(
     path_str: &str,
     proxy: &mut dyn ChatToolHost,
 ) -> Result<std::path::PathBuf, String> {
-    // Use shellexpand to handle ~
-    let expanded = shellexpand::full(path_str)
-        .map_err(|e| format!("chat: failed to expand path `{path_str}`: {e}"))?;
+    // Only `~` is expanded. A model-chosen `$VAR` must stay literal: expanding
+    // it read the process environment without approval, and the expanded value
+    // came back to the model in error strings (`Cargo.toml/$TOKEN` -> ENOTDIR).
+    let expanded = expand_tool_path(path_str);
     let path = Path::new(expanded.as_ref());
     let current_dir = proxy
         .get_current_dir()

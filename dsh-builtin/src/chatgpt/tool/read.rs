@@ -146,7 +146,7 @@ pub(super) fn resolve_read_path(
     };
     let base = base.as_str().ok_or("skill_path must be a string")?;
     let cwd = proxy.get_current_dir().map_err(|err| err.to_string())?;
-    let expanded = shellexpand::full(base).map_err(|err| err.to_string())?;
+    let expanded = super::expand_tool_path(base);
     let lexical = cwd.join(expanded.as_ref());
     if lexical.file_name().and_then(|name| name.to_str()) != Some("SKILL.md") {
         return Err(

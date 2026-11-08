@@ -759,6 +759,28 @@ fn resolve_tool_path_rejects_symlink_escape() {
     assert!(result.is_err());
 }
 
+/// A model-supplied path must never expand `$VAR`: the expanded value used to
+/// come back verbatim in error strings (and so to the model) without any
+/// approval, e.g. `Cargo.toml/$GITHUB_TOKEN` failing with ENOTDIR.
+#[test]
+fn resolve_tool_path_does_not_expand_environment_variables() {
+    let dir = tempdir().unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+    let mut proxy = CwdProxy {
+        current_dir: dir.path().to_path_buf(),
+        ..CwdProxy::default()
+    };
+    let secret = std::env::var("PATH").expect("PATH is set for the test runner");
+
+    let err = resolve_tool_path("Cargo.toml/$PATH", &mut proxy).unwrap_err();
+    assert!(!err.contains(&secret), "{err}");
+    assert!(err.contains("$PATH"), "{err}");
+
+    let literal = resolve_tool_path("$PATH", &mut proxy).unwrap();
+    assert_eq!(literal.file_name().unwrap(), "$PATH");
+    assert!(literal.starts_with(dir.path().canonicalize().unwrap()));
+}
+
 /// The job tools are the half of the task toolbox an interactive turn needs:
 /// a `!` chat starts managed commands too, and without these it could start
 /// one and never hear how it went.

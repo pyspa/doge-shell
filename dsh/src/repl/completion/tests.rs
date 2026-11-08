@@ -39,6 +39,25 @@ fn git_path_ghost_uses_the_same_directory_as_tab() {
 }
 
 #[test]
+fn path_ghost_completes_the_last_word_after_a_multibyte_word() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("audit_mb_target"), "").unwrap();
+    // Long enough that the multibyte word's byte span reaches past the char
+    // cursor at end of line; a char cursor would mark it current instead.
+    let multibyte = "日本語".repeat(40);
+    let input = format!("cat {multibyte} {}/audit_mb_", dir.path().display());
+    let state = completion_input(&input);
+    let environment = Environment::new_isolated();
+    let suggestion = completion_suggestion(
+        &state,
+        &input,
+        &environment,
+        &file_context(&input, &environment),
+    );
+    assert_eq!(suggestion.map(|s| s.full), Some(format!("{input}target")));
+}
+
+#[test]
 fn path_suggestion_follows_logical_home_changes() {
     let dir = tempfile::tempdir().unwrap();
     let environment = Environment::new_isolated();

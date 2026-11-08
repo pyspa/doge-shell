@@ -583,6 +583,30 @@ status = 0
 stdout_exact = "[{}]\n[{a}]\n[HEAD@{1}]\n[@{u}]\n"
 stderr_exact = ""
 
+# An escaped comma only stops brace splitting; the backslash goes away.
+[[case]]
+id = "expansion.brace-escaped-comma-is-removed"
+class = "bash"
+mode = "command"
+script = "printf '[%s]\\n' {a,b\\,c} x{a\\,b}y"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[b,c]\n[x{a,b}y]\n"
+stderr_exact = ""
+
+# Glob matches are real file names: backslashes in them are kept.
+[[case]]
+id = "expansion.glob-match-keeps-backslashes-in-names"
+class = "posix"
+mode = "command"
+script = "touch 'a\\*b' 'c\\,d'; printf '[%s]\\n' *"
+
+[case.expect]
+status = 0
+stdout_exact = "[a\\*b]\n[c\\,d]\n"
+stderr_exact = ""
+
 [[case]]
 id = "expansion.brace-with-comma-expands"
 class = "bash"

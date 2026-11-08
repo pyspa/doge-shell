@@ -153,7 +153,10 @@ pub(crate) fn expand_glob_pattern(pattern: &str, current_dir: &Path) -> Vec<Stri
                         if pat.starts_with("./") && !display_string.starts_with("./") {
                             display_string.insert_str(0, "./");
                         }
-                        out.push(display_string);
+                        // Callers unescape every result to turn a no-match
+                        // pattern back into text; escape real names first so
+                        // a file called `a\*b` survives that round trip.
+                        out.push(escape_glob_metacharacters(&display_string));
                     }
                 }
             }
@@ -324,7 +327,10 @@ pub(crate) fn unescape_glob_metacharacters(value: &str) -> String {
         if c == '\\'
             && let Some(next) = chars.next()
         {
-            if !matches!(next, '*' | '?' | '[' | ']' | '{' | '}' | '\\') {
+            // `,` too: an escaped comma (`{a\,b}`) only stops brace
+            // splitting and must not survive into the word. The escapers
+            // always double a real backslash, so `\,` is never one.
+            if !matches!(next, '*' | '?' | '[' | ']' | '{' | '}' | '\\' | ',') {
                 out.push('\\');
             }
             out.push(next);

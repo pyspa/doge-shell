@@ -583,7 +583,7 @@ fn has_generative_query(input: &str) -> bool {
 }
 
 fn has_ai_pipe_query(input: &str) -> bool {
-    super::repl_ai::parse_ai_pipe(input).is_some()
+    super::ai_pipe::parse_ai_pipe(input).is_some()
 }
 
 /// Draw a right-aligned DarkGrey hint when it fits. `ghost_width` is the

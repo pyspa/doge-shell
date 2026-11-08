@@ -75,6 +75,7 @@ pub(crate) mod status_line;
 mod suggestion_manager;
 pub(crate) mod terminal_state;
 
+mod ai_pipe;
 pub mod completion;
 mod input_analysis;
 pub mod macro_utils;

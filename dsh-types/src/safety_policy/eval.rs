@@ -2,7 +2,9 @@
 //! short/long option tables that make `bash -ic` and `python3 -Ec` read as
 //! `-c` (`EvalFlags`/`string_eval_flag`), and the textual scan for `$(...)`,
 //! backticks and process substitution that runs before the parser
-//! (`substitution_construct`).
+//! (`substitution_construct`), interpreters reading code no argument shows
+//! (`hidden_code_source`), and all of them together for a raw shell line
+//! (`unjudgeable_command_construct`).
 use super::*;
 
 /// Which short letters and long names hand an interpreter code to run.
@@ -220,6 +222,107 @@ pub fn names_inherited_descriptor(path: &str) -> bool {
         return (process == "self" || process == "thread-self" || digits(process)) && digits(fd);
     }
     false
+}
+
+/// Ways of feeding an interpreter code that no check can read.
+///
+/// `string_eval_flag` covers `sh -c '…'`, but a shell reading its script from
+/// standard input (`printf '…' | sh`) carries no flag at all, and `eval` is not
+/// an interpreter invocation the flag table describes. Both end with the guard
+/// having classified `printf` or `eval` while `sh` runs something else - the
+/// same hole the flag refusal exists to close.
+pub fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
+    let name = program_name(program);
+
+    if name == "eval" {
+        return Some("`eval` runs a string that cannot be inspected first");
+    }
+
+    // A shell with no script operand reads its program from stdin.
+    if is_code_execution_command(&name)
+        && name != "sudo"
+        && args.iter().all(|arg| arg.starts_with('-'))
+    {
+        return Some("it reads the code to run from standard input");
+    }
+
+    // `printf '…' | bash /dev/stdin` has a script operand, so the rule above
+    // does not hold, but the operand is standard input (or an inherited
+    // descriptor) and the code it reads is just as unreadable.
+    if is_code_execution_command(&name)
+        && name != "sudo"
+        && interpreter_script_operand(program, args).is_some_and(names_inherited_descriptor)
+    {
+        return Some("it reads the code to run from standard input");
+    }
+
+    // `bash < script.sh` is the same hole with a redirection instead of a pipe:
+    // every argument the guard reads is a flag or a filename, the interpreter
+    // is classified as itself, and the file it executes is never looked at.
+    // `all(starts_with('-'))` above does not hold here because `<` and the
+    // filename are ordinary tokens.
+    if is_code_execution_command(&name)
+        && name != "sudo"
+        && args.iter().any(|arg| reads_stdin_from_file(arg))
+    {
+        return Some("it reads the code to run from a redirected file");
+    }
+
+    None
+}
+
+/// Whether this token opens standard input from a file.
+///
+/// `shell_words::split` leaves the redirection as its own token (`<`) when it
+/// is spaced and glued to the path (`<script.sh`) when it is not, and a
+/// descriptor may lead it (`0<`).
+fn reads_stdin_from_file(token: &str) -> bool {
+    let rest = token.strip_prefix('0').unwrap_or(token);
+    rest.starts_with('<')
+}
+
+/// Why a shell command line cannot be judged by classifying the programs it
+/// names, if it cannot.
+///
+/// The pre-checks the agent `execute` tool applies before its guard, in one
+/// place for every other caller that hands raw text to a real shell (an MCP
+/// server's shell tool). Each construct hides what actually runs from a
+/// program-by-program classifier: command substitution runs a body the
+/// classifier never sees, a compound statement parses as a command named `{`
+/// or `if`, a string-eval flag hands an interpreter a string, and an
+/// interpreter reading stdin, a redirected file or `eval` runs code no
+/// argument shows. A line that cannot be tokenized is reported too, rather
+/// than approved.
+pub fn unjudgeable_command_construct(command: &str) -> Option<String> {
+    if let Some(construct) = substitution_construct(command) {
+        return Some(format!("{construct} cannot be evaluated safely"));
+    }
+
+    for segment in split_command_segments(command) {
+        let tokens = match shell_words::split(&segment) {
+            Ok(tokens) => tokens,
+            Err(err) => return Some(format!("the command could not be parsed ({err})")),
+        };
+        if let Some(keyword) = tokens
+            .first()
+            .and_then(|leading| compound_statement_keyword(leading))
+        {
+            return Some(format!(
+                "`{keyword}` starts a compound statement, and the commands inside one \
+                 cannot be judged before it runs"
+            ));
+        }
+        for (program, args) in command_candidates(&tokens) {
+            if let Some(flag) = string_eval_flag(&program, &args) {
+                return Some(format!("`{flag}` hands `{program}` a string to execute"));
+            }
+            if let Some(reason) = hidden_code_source(&program, &args) {
+                return Some(format!("`{program}` cannot be judged because {reason}"));
+            }
+        }
+    }
+
+    None
 }
 
 /// Name the substitution construct in `command`, if it has one.

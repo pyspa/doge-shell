@@ -450,6 +450,52 @@ fn an_mcp_command_execution_tool_cannot_hide_behind_a_separator() {
     }
 }
 
+/// A trusted server's shell tool runs its `command` through a real shell,
+/// so the constructs the `execute` tool refuses before classifying - command
+/// substitution, compound statements, string-eval flags and code read from
+/// stdin - hide what runs from the classifier here too. They used to be
+/// Allowed at the default level because the classifier saw `echo`, `{` or
+/// `printf`, none of which has a rule.
+#[test]
+fn an_mcp_command_execution_tool_cannot_hide_code_from_the_classifier() {
+    let guard = SafetyGuard::new();
+
+    for command in [
+        "echo $(rm -rf /x)",
+        "echo `rm -rf /x`",
+        "{ rm -rf /x; }",
+        "if true; then rm -rf /x; fi",
+        "printf 'rm -rf /x' | sh",
+        "printf 'rm -rf /x' | bash /dev/stdin",
+        "bash < /tmp/evil.sh",
+        "eval 'rm -rf /x'",
+        "dash -c 'rm -rf /x'",
+    ] {
+        let args = serde_json::json!({ "command": command }).to_string();
+        match guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
+            &SafetyLevel::Normal,
+            &[],
+        ) {
+            SafetyResult::Confirm(msg) => {
+                assert!(msg.contains("mcp__ops__bash"), "{command}: {msg}");
+                assert!(!msg.contains("Proceed?"), "{command}: {msg}");
+            }
+            other => panic!("`{command}` should have been confirmed, got {other:?}"),
+        }
+    }
+
+    let args = serde_json::json!({ "command": "ls -la | grep foo" }).to_string();
+    assert_eq!(
+        guard.check_mcp_tool(
+            trusted_call("mcp__ops__bash", "ops", "bash", &args, None),
+            &SafetyLevel::Normal,
+            &[],
+        ),
+        SafetyResult::Allowed
+    );
+}
+
 /// Same wrapper bypass, reached through the Lisp `(command ...)` builtin
 /// instead of an MCP tool: `sudo` must not hide `rm` there either.
 ///

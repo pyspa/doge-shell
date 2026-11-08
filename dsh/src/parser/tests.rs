@@ -1076,6 +1076,15 @@ fn glob_patterns_expand_against_the_current_directory() -> Result<()> {
             absent: &[],
         },
         GlobCase {
+            what: "a subdirectory star never yields the directory itself",
+            dirs: &["sub"],
+            files: &["sub/test.rs"],
+            pattern: "sub/*",
+            expected_len: 1,
+            contains: &["sub/test.rs"],
+            absent: &[],
+        },
+        GlobCase {
             what: "** descends through every subdirectory",
             dirs: &["sub", "sub/nested"],
             files: &["root.rs", "sub/sub.rs", "sub/nested/deep.rs"],

@@ -94,3 +94,21 @@ fn plus_takes_result_kind_from_first_argument() {
     assert_eq!(eval_ok("(+ 5)"), Value::from(5 as IntType));
     assert_eq!(eval_ok(r#"(+ "a" 1)"#), Value::String("a1".into()));
 }
+
+#[test]
+fn runaway_recursion_is_an_error_not_a_crash() {
+    let err = eval_err("(defun loop-forever (n) (+ 1 (loop-forever n))) (loop-forever 0)");
+    assert!(err.contains("recursion depth"), "{err}");
+}
+
+#[test]
+fn deep_finite_recursion_does_not_overflow_the_stack() {
+    // Non-tail recursion this deep overflowed the native stack before
+    // `eval_inner` started growing it on demand.
+    assert_eq!(
+        eval_ok(
+            "(defun count-down (n) (if (== n 0) 0 (+ 1 (count-down (- n 1))))) (count-down 2000)"
+        ),
+        Value::from(2000 as IntType)
+    );
+}

@@ -115,7 +115,55 @@ fn eval_block_inner(
 /// factor out function calls in, say, the conditional slot, which are not
 /// eligible to be the tail-call based on their position. A future refactor hopes
 /// to make things a little more semantic.
+/// Nesting limit for `eval_inner`. Deep but finite recursion is kept off
+/// the native stack by `stacker`; this bound turns runaway recursion in a
+/// config or `lisp` command into a `RuntimeError` instead of exhausting the
+/// stack (which aborts the whole shell) or the heap.
+const MAX_EVAL_DEPTH: usize = 50_000;
+/// Grow onto a fresh heap-allocated stack segment when less than this much
+/// native stack remains.
+const STACK_RED_ZONE: usize = 128 * 1024;
+const STACK_GROWTH: usize = 2 * 1024 * 1024;
+
+thread_local! {
+    static EVAL_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct EvalDepthGuard;
+
+impl EvalDepthGuard {
+    fn enter() -> Result<Self, RuntimeError> {
+        EVAL_DEPTH.with(|depth| {
+            let next = depth.get() + 1;
+            if next > MAX_EVAL_DEPTH {
+                return Err(RuntimeError {
+                    msg: format!("Maximum recursion depth ({MAX_EVAL_DEPTH}) exceeded"),
+                });
+            }
+            depth.set(next);
+            Ok(EvalDepthGuard)
+        })
+    }
+}
+
+impl Drop for EvalDepthGuard {
+    fn drop(&mut self) {
+        EVAL_DEPTH.with(|depth| depth.set(depth.get() - 1));
+    }
+}
+
 fn eval_inner(
+    env: Rc<RefCell<Env>>,
+    expression: &Value,
+    context: Context,
+) -> Result<Value, RuntimeError> {
+    let _depth = EvalDepthGuard::enter()?;
+    stacker::maybe_grow(STACK_RED_ZONE, STACK_GROWTH, || {
+        eval_inner_unguarded(env, expression, context)
+    })
+}
+
+fn eval_inner_unguarded(
     env: Rc<RefCell<Env>>,
     expression: &Value,
     context: Context,

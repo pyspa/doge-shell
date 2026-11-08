@@ -20,6 +20,7 @@ dsh-types = { path = "../dsh-types" }
 dsh-frecency = { path = "../dsh-frecency" }
 dsh-builtin = { path = "../dsh-builtin" }
 dsh-openai = { path = "../dsh-openai" }
+stacker = "0.1"
 
 anyhow = { workspace = true }
 libc = { workspace = true }

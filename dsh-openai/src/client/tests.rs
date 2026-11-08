@@ -1203,3 +1203,135 @@ fn a_stream_error_body_that_never_ends_times_out_at_the_request_timeout() {
     assert!(error.to_string().contains("timed out"), "{error:#}");
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
+
+/// Write `head`, then `count` copies of `block`, then `tail`, ignoring a
+/// client that hangs up early (it is expected to, once over the cap).
+fn write_oversized(
+    stream: &mut std::net::TcpStream,
+    head: &[u8],
+    block: &[u8],
+    count: usize,
+    tail: &[u8],
+) {
+    use std::io::Write;
+    if stream.write_all(head).is_err() {
+        return;
+    }
+    for _ in 0..count {
+        if stream.write_all(block).is_err() {
+            return;
+        }
+    }
+    let _ = stream.write_all(tail);
+}
+
+/// Enough 64 KiB blocks to go past the 16 MiB cap.
+const OVERSIZED_BLOCKS: usize = crate::stream::MAX_SSE_BUFFER_BYTES / (64 * 1024) + 2;
+
+/// Each event is under the per-event cap, but together they carry more text
+/// than the Responses transport would ever hold: the aggregated reply must be
+/// capped too, not just the one event waiting for its boundary.
+#[test]
+fn a_streamed_reply_over_the_cumulative_size_cap_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let event = format!(
+            "data: {}\n\n",
+            json!({ "choices": [{ "delta": { "content": "x".repeat(64 * 1024) } }] })
+        );
+        let done =
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
+        write_oversized(
+            &mut stream,
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            event.as_bytes(),
+            OVERSIZED_BLOCKS,
+            done.as_bytes(),
+        );
+    });
+
+    let client = local_stream_client(addr, Duration::from_secs(10));
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    drop(client);
+    server.join().expect("fixture server thread panicked");
+    let error = result.expect_err("an oversized reply must fail the stream");
+    assert!(error.to_string().contains("16 MiB"), "{error:#}");
+}
+
+/// Tool-call arguments accumulate the same way as text.
+#[test]
+fn the_cumulative_cap_counts_tool_call_arguments_and_names() {
+    let mut aggregator = DeltaAggregator::new();
+    aggregator.apply(&json!({ "choices": [{ "delta": { "content": "abc" } }] }));
+    aggregator.apply(&json!({ "choices": [{ "delta": { "tool_calls": [{
+        "index": 0, "function": { "name": "exec", "arguments": "{\"a\":1}" }
+    }] } }] }));
+    assert_eq!(aggregator.accumulated_bytes(), 3 + 4 + 7);
+}
+
+/// A non-streaming reply is read through the same cap instead of an
+/// unbounded `response.text()`.
+#[test]
+fn a_non_streaming_reply_over_the_size_cap_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        write_oversized(
+            &mut stream,
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"",
+            &vec![b'x'; 64 * 1024],
+            OVERSIZED_BLOCKS,
+            b"\"},\"finish_reason\":\"stop\"}]}",
+        );
+    });
+
+    let client = local_stream_client(addr, Duration::from_secs(10));
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let result = client.send_chat(&messages, &ChatRequestOptions::new(), None);
+    drop(client);
+    server.join().expect("fixture server thread panicked");
+    let error = result.expect_err("an oversized body must be refused");
+    assert!(error.to_string().contains("16 MiB"), "{error:#}");
+}
+
+/// The error body of a failed streaming request is capped as well.
+#[test]
+fn a_streaming_error_body_over_the_size_cap_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        write_oversized(
+            &mut stream,
+            b"HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n",
+            &vec![b'x'; 64 * 1024],
+            OVERSIZED_BLOCKS,
+            b"",
+        );
+    });
+
+    let client = local_stream_client(addr, Duration::from_secs(10));
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    drop(client);
+    server.join().expect("fixture server thread panicked");
+    let error = result.expect_err("an oversized error body must be refused");
+    assert!(error.to_string().contains("16 MiB"), "{error:#}");
+}

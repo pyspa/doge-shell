@@ -47,7 +47,9 @@ pub struct SseFrameSplitter {
 }
 
 /// The most SSE bytes held in memory at once: one event still waiting for
-/// its boundary on chat/completions, the whole stream on Responses.
+/// its boundary on chat/completions, the whole stream on Responses. It also
+/// caps a chat/completions reply's aggregated text and tool calls, and any
+/// response body the client reads whole.
 pub const MAX_SSE_BUFFER_BYTES: usize = 16 * 1024 * 1024;
 
 impl SseFrameSplitter {
@@ -159,6 +161,7 @@ pub struct DeltaAggregator {
     tool_calls: Vec<ToolCallAccumulator>,
     finish_reason: Option<String>,
     usage: Option<Value>,
+    accumulated_bytes: usize,
 }
 
 impl DeltaAggregator {
@@ -188,6 +191,7 @@ impl DeltaAggregator {
         }
 
         let text_delta = delta.get("content").and_then(Value::as_str).map(|text| {
+            self.accumulated_bytes = self.accumulated_bytes.saturating_add(text.len());
             self.content.push_str(text);
             text.to_string()
         });
@@ -220,12 +224,23 @@ impl DeltaAggregator {
         }
         if let Some(function) = tool_call.get("function") {
             if let Some(name) = function.get("name").and_then(Value::as_str) {
+                self.accumulated_bytes = self.accumulated_bytes.saturating_add(name.len());
                 acc.name.get_or_insert_with(String::new).push_str(name);
             }
             if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                self.accumulated_bytes = self.accumulated_bytes.saturating_add(arguments.len());
                 acc.arguments.push_str(arguments);
             }
         }
+    }
+
+    /// Bytes of text, tool-call names, and tool-call arguments collected so
+    /// far. The client refuses the stream once this passes
+    /// [`MAX_SSE_BUFFER_BYTES`], the same cap the Responses transport keeps:
+    /// the per-event buffer cap alone let many small events grow the reply
+    /// without bound.
+    pub fn accumulated_bytes(&self) -> usize {
+        self.accumulated_bytes
     }
 
     /// Whether a `finish_reason` has arrived yet.

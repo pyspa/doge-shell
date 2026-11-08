@@ -129,6 +129,7 @@ fn collect_highlight_from_pair(
             }
         }
         Rule::fd_dup
+        | Rule::fd_redirect_direction
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
         | Rule::stdouterr_redirect_direction
@@ -232,5 +233,19 @@ mod invocation_tests {
             .map(|token| &source[token.start..token.end])
             .collect();
         assert_eq!(variables, ["$1", "${10}", "$#", "$@", "$*"]);
+    }
+
+    #[test]
+    fn numbered_file_redirects_are_highlighted_as_redirects() {
+        let source = "cat 0<in 1>out 2>err";
+        let pairs = ShellParser::parse(Rule::commands, source).unwrap();
+        let result = collect_highlight_tokens_from_pairs(pairs, source.len());
+        let redirects: Vec<_> = result
+            .tokens
+            .iter()
+            .filter(|token| token.kind == HighlightKind::Redirect)
+            .map(|token| &source[token.start..token.end])
+            .collect();
+        assert_eq!(redirects, ["0<", "1>", "2>"]);
     }
 }

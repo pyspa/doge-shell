@@ -146,22 +146,126 @@ impl SafetyGuard {
         None
     }
 
-    pub(super) fn check_data_exfiltration(args: &[String]) -> Option<String> {
-        for arg in args {
-            // curl data exfiltration flags
-            if arg == "-d"
-                || arg == "--data"
-                || arg == "-F"
-                || arg == "--form"
-                || arg == "-T"
-                || arg == "--upload-file"
-            {
-                return Some(
-                    "Potential data exfiltration detected (data upload). Proceed?".to_string(),
-                );
+    /// `curl` options that send a body, a form or a file.
+    ///
+    /// Matched as long-option prefixes, because curl (like getopt_long)
+    /// accepts any unambiguous abbreviation: `--upl` is `--upload-file`.
+    const CURL_UPLOAD_LONG: &'static [&'static str] = &[
+        "data",
+        "data-ascii",
+        "data-binary",
+        "data-raw",
+        "data-urlencode",
+        "json",
+        "form",
+        "form-string",
+        "upload-file",
+        "url-query",
+    ];
+    /// `curl` short options that send data: `-d`, `-F`, `-T`.
+    const CURL_UPLOAD_SHORT: &'static [char] = &['d', 'F', 'T'];
+    /// `curl` short options that swallow the rest of their token (or the next
+    /// word) as a value, which ends a cluster: in `-HContent-Type` the `T` is
+    /// part of the header, not `-T`.
+    const CURL_VALUE_SHORT: &'static [char] = &[
+        'A', 'b', 'c', 'C', 'D', 'e', 'E', 'H', 'K', 'm', 'o', 'P', 'Q', 'r', 't', 'u', 'U', 'w',
+        'x', 'X', 'y', 'Y', 'z',
+    ];
+    /// `wget` options that send a request body.
+    const WGET_UPLOAD_LONG: &'static [&'static str] =
+        &["post-data", "post-file", "body-data", "body-file"];
+
+    /// `curl` options whose full name is a prefix of an upload option
+    /// (`--url` vs `--url-query`). An exact name is never an abbreviation.
+    const CURL_NON_UPLOAD_PREFIXES: &'static [&'static str] = &["url"];
+
+    /// Whether `arg` is a long option naming (an unambiguous prefix of) one
+    /// of `names`, in either the `--name value` or `--name=value` form.
+    /// `exact_others` are complete option names that merely look like such
+    /// a prefix.
+    fn long_option_matches(arg: &str, names: &[&str], exact_others: &[&str]) -> bool {
+        let Some(long) = arg.strip_prefix("--") else {
+            return false;
+        };
+        let long = long.split('=').next().unwrap_or(long);
+        !long.is_empty()
+            && !exact_others.contains(&long)
+            && names.iter().any(|name| name.starts_with(long))
+    }
+
+    /// Whether a curl argument reads a file to send: `@path` is curl's
+    /// "read this file" marker for `-d`, `-F name=@path`, `-H @path`,
+    /// `--url-query @path`, ... A URL with credentials (`user@host`) does
+    /// not start with `@` and is left alone.
+    fn reads_file_for_curl(arg: &str) -> bool {
+        arg.starts_with('@') || (!arg.contains("://") && arg.contains("=@"))
+    }
+
+    pub(super) fn check_curl_exfiltration(args: &[String]) -> Option<String> {
+        const MESSAGE: &str = "Potential data exfiltration detected (data upload). Proceed?";
+        let mut args = args.iter().map(String::as_str).peekable();
+        while let Some(arg) = args.next() {
+            if arg == "--" {
+                break;
             }
-            // wget post flags
-            if arg == "--post-data" || arg == "--post-file" {
+            // curl 8.3+ `--expand-<option>` is `<option>` with `{{var}}`
+            // expansion: `--expand-data` uploads just like `--data`.
+            let unexpanded = arg
+                .strip_prefix("--expand-")
+                .map(|rest| format!("--{rest}"));
+            let option = unexpanded.as_deref().unwrap_or(arg);
+            if Self::long_option_matches(
+                option,
+                Self::CURL_UPLOAD_LONG,
+                Self::CURL_NON_UPLOAD_PREFIXES,
+            ) || Self::reads_file_for_curl(arg)
+            {
+                return Some(MESSAGE.to_string());
+            }
+            // `--variable name@file` loads a file into a variable that any
+            // `--expand-*` option (even `--expand-url`) can then send.
+            if Self::long_option_matches(option, &["variable"], &[]) {
+                let value = match option.split_once('=') {
+                    Some((_, value)) => Some(value),
+                    None => args.peek().copied(),
+                };
+                if value.is_some_and(|value| value.contains('@')) {
+                    return Some(MESSAGE.to_string());
+                }
+            }
+            if arg.starts_with("--") {
+                if let Some((_, value)) = arg.split_once('=')
+                    && Self::reads_file_for_curl(value)
+                {
+                    return Some(MESSAGE.to_string());
+                }
+                continue;
+            }
+            // A short-option cluster: `-sSd`, `-d@file`, `-Tx`, `-H@file`.
+            let Some(cluster) = arg.strip_prefix('-') else {
+                continue;
+            };
+            for (index, letter) in cluster.char_indices() {
+                if Self::CURL_UPLOAD_SHORT.contains(&letter) {
+                    return Some(MESSAGE.to_string());
+                }
+                if Self::CURL_VALUE_SHORT.contains(&letter) {
+                    if Self::reads_file_for_curl(&cluster[index + letter.len_utf8()..]) {
+                        return Some(MESSAGE.to_string());
+                    }
+                    break;
+                }
+            }
+        }
+        None
+    }
+
+    pub(super) fn check_wget_exfiltration(args: &[String]) -> Option<String> {
+        for arg in args {
+            if arg == "--" {
+                break;
+            }
+            if Self::long_option_matches(arg, Self::WGET_UPLOAD_LONG, &[]) {
                 return Some(
                     "Potential data exfiltration detected (POST data). Proceed?".to_string(),
                 );

@@ -63,9 +63,17 @@ impl ChatGptClient {
             // enforces its own no-data timeout instead.
             .timeout(Duration::from_secs(config::MAX_TIMEOUT_SECS));
 
-        let response = Self::await_with_cancel(builder.send(), cancel_check)
-            .await
-            .map_err(StreamError::BeforeFirstDelta)?;
+        // Waiting for the headers is not streaming yet: a server that accepts
+        // the connection and never answers must give up at the operator's
+        // budget, not the 30-minute stream cap above. The headers and any
+        // error or degraded body that follows share that one budget.
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
+        let response = self
+            .within_request_timeout(
+                deadline,
+                Self::await_with_cancel(builder.send(), cancel_check),
+            )
+            .await?;
 
         let status = response.status();
         let retry_after = parse_retry_after(response.headers());
@@ -76,9 +84,12 @@ impl ChatGptClient {
             .is_some_and(|value| value.starts_with("text/event-stream"));
 
         if !status.is_success() {
-            let text = Self::await_with_cancel(response.text(), cancel_check)
-                .await
-                .map_err(StreamError::BeforeFirstDelta)?;
+            let text = self
+                .within_request_timeout(
+                    deadline,
+                    Self::await_with_cancel(read_capped_text(response), cancel_check),
+                )
+                .await?;
             return Err(StreamError::BeforeFirstDelta(
                 ApiError {
                     status: Some(status.as_u16()),
@@ -97,18 +108,12 @@ impl ChatGptClient {
             // degraded reply is an ordinary non-streaming turn, and leaving
             // it under `MAX_TIMEOUT_SECS` silently disabled
             // `AI_CHAT_TIMEOUT_SECS` for every such endpoint.
-            let text = tokio::time::timeout(
-                self.request_timeout,
-                Self::await_with_cancel(response.text(), cancel_check),
-            )
-            .await
-            .map_err(|_| {
-                StreamError::BeforeFirstDelta(anyhow!(
-                    "the OpenAI request timed out after {:?}",
-                    self.request_timeout
-                ))
-            })?
-            .map_err(StreamError::BeforeFirstDelta)?;
+            let text = self
+                .within_request_timeout(
+                    deadline,
+                    Self::await_with_cancel(read_capped_text(response), cancel_check),
+                )
+                .await?;
             let data: Value = serde_json::from_str(&text).map_err(|err| {
                 StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
             })?;
@@ -128,6 +133,26 @@ impl ChatGptClient {
 
         self.consume_event_stream(response, cancel_check, on_delta)
             .await
+    }
+
+    /// Run one pre-stream step (headers, an error body, a degraded JSON
+    /// reply) before `deadline`, which is the configured request timeout
+    /// counted from the request start. Not retried by `retry_delay`: a
+    /// timeout already spent the whole budget.
+    async fn within_request_timeout<T>(
+        &self,
+        deadline: tokio::time::Instant,
+        step: impl std::future::Future<Output = Result<T>>,
+    ) -> Result<T, StreamError> {
+        tokio::time::timeout_at(deadline, step)
+            .await
+            .map_err(|_| {
+                StreamError::BeforeFirstDelta(anyhow!(
+                    "the OpenAI request timed out after {:?}",
+                    self.request_timeout
+                ))
+            })?
+            .map_err(StreamError::BeforeFirstDelta)
     }
 
     /// Read one SSE response to completion, aggregating it into the same
@@ -246,6 +271,12 @@ impl ChatGptClient {
                     return Ok(value);
                 }
                 self.apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
+                if aggregator.accumulated_bytes() > crate::stream::MAX_SSE_BUFFER_BYTES {
+                    return Err(Self::wrap_stream_error(
+                        anyhow!("the OpenAI stream sent a reply larger than the 16 MiB limit"),
+                        delta_sent,
+                    ));
+                }
             }
         }
     }

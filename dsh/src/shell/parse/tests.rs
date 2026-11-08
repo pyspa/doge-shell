@@ -1,5 +1,6 @@
 use super::*;
 use crate::environment::Environment;
+use crate::shell::plan::PlannedRedirectOp;
 
 fn test_env() -> Arc<RwLock<Environment>> {
     Environment::new()

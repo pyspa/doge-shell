@@ -396,26 +396,7 @@ impl<'a> Repl<'a> {
     /// Detect AI Output Pipe pattern: `command |! "query"`
     /// Returns (command, query) if pattern is found
     pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
-        let input = self.input.as_str();
-        if let Some(idx) = input.rfind("|!") {
-            let command = input[..idx].trim().to_string();
-            let query_part = input[idx + 2..].trim();
-
-            // Extract query from quotes or as plain text
-            let query = if (query_part.starts_with('"') && query_part.ends_with('"')
-                || query_part.starts_with('\'') && query_part.ends_with('\''))
-                && query_part.len() > 1
-            {
-                query_part[1..query_part.len() - 1].to_string()
-            } else {
-                query_part.to_string()
-            };
-
-            if !command.is_empty() && !query.is_empty() {
-                return Some((command, query));
-            }
-        }
-        None
+        super::ai_pipe::parse_ai_pipe(self.input.as_str())
     }
 
     /// Execute command, capture output, and send to AI for analysis
@@ -428,15 +409,30 @@ impl<'a> Repl<'a> {
         // before spawning: the child sees only `child_process_env()` via
         // `env_clear`, never the process-global environment.
         let child_env = self.shell.environment.read().child_process_env();
-        let output = crate::process::isolated_shell::command(&command, &child_env).output();
+        // Cooked mode for the capture: with raw mode on, ISIG is off and a
+        // Ctrl-C never becomes SIGINT, so a command that does not exit on its
+        // own (`tail -f log |! x`) would freeze the REPL.
+        let raw_mode_pause = terminal_state::RawModePause::new();
+        let output = super::ai_pipe::capture(
+            crate::process::isolated_shell::command(&command, &child_env),
+            super::ai_pipe::AI_PIPE_CAPTURE_BYTES,
+        );
+        drop(raw_mode_pause);
+        // Always consume the flag, even when the child exited normally.
+        let got_sigint = crate::process::signal::check_and_clear_sigint();
+        if super::ai_pipe::was_interrupted(got_sigint, output.as_ref().ok()) {
+            queue!(
+                renderer,
+                Print("\r\n⚠️ Interrupted; nothing sent to AI\r\n")
+            )
+            .ok();
+            self.print_prompt(&mut renderer);
+            renderer.flush().ok();
+            return Ok(());
+        }
 
         let (stdout, stderr, exit_code) = match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let exit_code = out.status.code().unwrap_or(-1);
-                (stdout, stderr, exit_code)
-            }
+            Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
             Err(e) => {
                 queue!(
                     renderer,
@@ -478,8 +474,8 @@ impl<'a> Repl<'a> {
         queue!(renderer, Print("\r")).ok();
         queue!(renderer, Clear(ClearType::CurrentLine)).ok();
 
-        // The captured output is unbounded; keep both ends so an error at the
-        // tail of a long log still reaches the model.
+        // Keep both ends so an error at the tail of a long log still reaches
+        // the model.
         let bounded_output =
             dsh_openai::turn::truncate_middle(&combined_output, AI_PIPE_OUTPUT_CHARS);
         let message = format!(

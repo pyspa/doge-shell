@@ -427,35 +427,41 @@ fn report_status_byte(status_fd: Option<RawFd>, byte: u8) {
 /// The interactive `confirm_action` draws on stdout with keypress input —
 /// unusable here because stdout is captured data and the helper shares the
 /// terminal with a blocked parent. This asks one line on `/dev/tty`
-/// instead, and answers `No` (fail closed) when no terminal is available, so
-/// `$(rm -rf ...)` in a pipeline can never self-approve.
+/// instead, and fails closed when no terminal is available, so
+/// `$(rm -rf ...)` in a pipeline can never self-approve. A prompt that cannot
+/// be shown is an error rather than a `No`, so the authorization funnel
+/// prints why the command was denied instead of exiting 130 silently.
 ///
 /// An `AlwaysAllow` answer only touches the helper's own allowlist, which
 /// dies with it; nothing is persisted into the parent session.
 fn helper_confirm(message: &str) -> Result<crate::repl::confirmation::ConfirmationAction> {
+    helper_confirm_on(message, || {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+    })
+}
+
+fn helper_confirm_on(
+    message: &str,
+    open_tty: impl FnOnce() -> std::io::Result<std::fs::File>,
+) -> Result<crate::repl::confirmation::ConfirmationAction> {
     use crate::repl::confirmation::ConfirmationAction;
+    use anyhow::Context as _;
     use std::io::{BufRead, Write};
 
-    let tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty");
-    let Ok(mut tty) = tty else {
-        return Ok(ConfirmationAction::No);
-    };
-    if writeln!(
+    let mut tty = open_tty().context("no terminal to ask for confirmation")?;
+    writeln!(
         tty,
         "SAFETY GUARD (background task): {message}\r\nProceed? [y/N/a(Always for this task)]: "
     )
-    .is_err()
-    {
-        return Ok(ConfirmationAction::No);
-    }
+    .context("could not write the confirmation prompt")?;
     let mut line = String::new();
     let mut reader = std::io::BufReader::new(tty.try_clone().map_err(|err| anyhow::anyhow!(err))?);
-    if reader.read_line(&mut line).is_err() {
-        return Ok(ConfirmationAction::No);
-    }
+    reader
+        .read_line(&mut line)
+        .context("could not read the confirmation answer")?;
     Ok(match line.trim().to_lowercase().as_str() {
         "y" | "yes" => ConfirmationAction::Yes,
         "a" | "always" => ConfirmationAction::AlwaysAllow,
@@ -475,6 +481,15 @@ fn exit_code_of(status: dsh_types::ExitStatus) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn helper_confirm_without_a_terminal_is_an_error_not_a_silent_no() {
+        let result = super::helper_confirm_on("rm -rf x", || {
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no tty"))
+        });
+        let err = result.expect_err("a prompt that cannot be shown must be reported");
+        assert!(format!("{err:#}").contains("no terminal"), "{err:#}");
+    }
+
     use super::super::protocol::{builtin_request, pipe_with_request};
     use super::*;
     #[tokio::test]

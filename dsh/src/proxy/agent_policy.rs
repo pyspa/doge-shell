@@ -136,6 +136,18 @@ impl AgentCommandPolicy for Shell {
                 "runtime shell expansion cannot be judged before /bin/sh runs; use literal arguments".into(),
             );
         }
+        // `|:` and `|>` are dsh syntax. The text after `|:` becomes a Lisp
+        // expression no check reads, while /bin/sh runs it as `| : ...`, a
+        // pipeline with unjudged stages.
+        if plan
+            .iter_jobs()
+            .any(|job| job.capture_output || !job.struct_pipe_exprs.is_empty())
+        {
+            return AgentCommandVerdict::Denied(
+                "dsh `|:` / `|>` pipes are not available to /bin/sh; use an ordinary pipeline"
+                    .into(),
+            );
+        }
         let jobs = match crate::shell::dry_materialize::dry_materialize_plan(&plan, self) {
             Ok(jobs) if !jobs.is_empty() => jobs,
             Ok(_) => return AgentCommandVerdict::Denied("command is empty".into()),
@@ -439,6 +451,39 @@ mod agent_policy_tests {
                 AgentCommandVerdict::Allowed,
                 "{input}"
             );
+        }
+    }
+
+    /// `|:` (struct pipe) and `|>` (capture) are dsh syntax. dsh files the
+    /// text after `|:` as a Lisp expression the guard never reads, while
+    /// `/bin/sh` runs `true | : x | rm -f *` - a pipeline whose last stage
+    /// went unjudged.
+    #[test]
+    fn dsh_only_pipe_syntax_is_denied_before_allowlists() {
+        use dsh_types::safety_policy::SafetyLevel;
+        for level in [SafetyLevel::Normal, SafetyLevel::Strict, SafetyLevel::Loose] {
+            let mut shell = shell();
+            *shell.environment.read().policy_state.safety_level.write() = level;
+            for input in [
+                "true |: x | rm -f *",
+                "echo hi |: (lambda (x) x)",
+                "echo hi |>",
+            ] {
+                shell
+                    .environment
+                    .read()
+                    .policy_state
+                    .execute_allowlist
+                    .write()
+                    .push(input.into());
+                assert!(
+                    matches!(
+                        shell.evaluate_agent_command(input),
+                        AgentCommandVerdict::Denied(_)
+                    ),
+                    "{level:?}: {input} must be refused"
+                );
+            }
         }
     }
 

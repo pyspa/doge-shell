@@ -362,6 +362,17 @@ fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
         return Some("it reads the code to run from standard input");
     }
 
+    // `printf '…' | bash /dev/stdin` has a script operand, so the rule above
+    // does not hold, but the operand is standard input (or an inherited
+    // descriptor) and the code it reads is just as unreadable.
+    if dsh_types::safety_policy::is_code_execution_command(&name)
+        && name != "sudo"
+        && dsh_types::safety_policy::interpreter_script_operand(program, args)
+            .is_some_and(dsh_types::safety_policy::names_inherited_descriptor)
+    {
+        return Some("it reads the code to run from standard input");
+    }
+
     // `bash < script.sh` is the same hole with a redirection instead of a pipe:
     // every argument the guard reads is a flag or a filename, the interpreter
     // is classified as itself, and the file it executes is never looked at.

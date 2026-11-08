@@ -109,6 +109,56 @@ fn a_redirected_script_is_refused() {
     assert!(hidden_code_source("sort", &args(&["<", "names.txt"])).is_none());
 }
 
+/// `printf '…' | bash /dev/stdin` is `printf '…' | bash` with a script
+/// operand that names standard input. The "every argument is a flag" rule saw
+/// an operand and let it through, so the piped string ran unclassified.
+#[test]
+fn a_script_operand_naming_stdin_is_refused() {
+    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+    for (program, operands) in [
+        ("bash", vec!["/dev/stdin"]),
+        ("sh", vec!["-"]),
+        ("bash", vec!["-e", "/dev/stdin"]),
+        ("bash", vec!["-o", "errexit", "/dev/stdin"]),
+        ("bash", vec!["--", "/dev/stdin"]),
+        ("python3", vec!["/dev/fd/0"]),
+        ("perl", vec!["/dev/fd/3"]),
+        ("bash", vec!["/proc/self/fd/0"]),
+        ("node", vec!["/proc/123/fd/4"]),
+        ("zsh", vec!["/proc/thread-self/fd/0"]),
+    ] {
+        assert!(
+            hidden_code_source(program, &args(&operands)).is_some(),
+            "{program} {operands:?} was allowed through"
+        );
+    }
+
+    // A real script whose own argument happens to be stdin reads data, not
+    // code; and a module run has no script operand at all.
+    assert!(hidden_code_source("bash", &args(&["build.sh", "/dev/stdin"])).is_none());
+    assert!(hidden_code_source("python3", &args(&["-m", "json.tool", "/dev/stdin"])).is_none());
+    assert!(hidden_code_source("cat", &args(&["/dev/stdin"])).is_none());
+}
+
+#[test]
+fn run_refuses_an_interpreter_reading_its_script_from_dev_stdin() {
+    let _lock = env_lock();
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        ..TestProxy::default()
+    };
+
+    let err = run(
+        // Harmless payload: before the fix this line really ran.
+        &json!({ "command": "printf 'echo pwned' | bash /dev/stdin" }).to_string(),
+        &mut proxy,
+    )
+    .expect_err("a script read from /dev/stdin must be refused");
+    assert!(err.contains("standard input"), "{err}");
+}
+
 #[test]
 fn a_redirected_script_is_refused_end_to_end() {
     let mut proxy = TestProxy::default();

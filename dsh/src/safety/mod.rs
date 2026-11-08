@@ -69,8 +69,8 @@ impl SafetyGuard {
         guard.register_checker("chmod", Self::check_recursive);
         guard.register_checker("chown", Self::check_recursive);
         guard.register_checker("cp", Self::check_cp);
-        guard.register_checker("curl", Self::check_data_exfiltration);
-        guard.register_checker("wget", Self::check_data_exfiltration);
+        guard.register_checker("curl", Self::check_curl_exfiltration);
+        guard.register_checker("wget", Self::check_wget_exfiltration);
 
         // Sensitive file readers
         for cmd in &["cat", "less", "more", "head", "tail", "grep", "awk", "sed"] {
@@ -95,6 +95,8 @@ impl SafetyGuard {
             "node",
             "pwsh",
             "powershell",
+            // `env -S '<line>'` runs its value as a command line.
+            "env",
         ] {
             // The checker only sees the arguments, but which flag means "here
             // is some code" depends on the interpreter, so capture its name.

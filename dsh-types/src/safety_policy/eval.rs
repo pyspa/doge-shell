@@ -2,7 +2,9 @@
 //! short/long option tables that make `bash -ic` and `python3 -Ec` read as
 //! `-c` (`EvalFlags`/`string_eval_flag`), and the textual scan for `$(...)`,
 //! backticks and process substitution that runs before the parser
-//! (`substitution_construct`).
+//! (`substitution_construct`), interpreters reading code no argument shows
+//! (`hidden_code_source`), and all of them together for a raw shell line
+//! (`unjudgeable_command_construct`).
 use super::*;
 
 /// Which short letters and long names hand an interpreter code to run.
@@ -16,25 +18,32 @@ pub struct EvalFlags {
     eval: &'static [char],
     value: &'static [char],
     long: &'static [&'static str],
+    /// The program parses long options with `getopt_long`, which accepts any
+    /// unambiguous prefix (`env --split` is `--split-string`).
+    long_prefix: bool,
 }
 
 fn eval_flags(name: &str) -> Option<EvalFlags> {
     let flags = match name {
+        // `-o`/`-O` take an option name (`-o errexit`, `-O extglob`).
         "sh" | "bash" | "zsh" | "ksh" | "dash" => EvalFlags {
             eval: &['c'],
-            value: &['o'],
+            value: &['o', 'O'],
             long: &["command"],
+            long_prefix: false,
         },
         // `-C`/`--init-command` runs commands before the shell starts.
         "fish" => EvalFlags {
             eval: &['c', 'C'],
             value: &[],
             long: &["command", "init-command"],
+            long_prefix: false,
         },
         "python" | "python3" => EvalFlags {
             eval: &['c'],
             value: &['m', 'W', 'X', 'Q'],
             long: &[],
+            long_prefix: false,
         },
         // `-l` and `-n` combine with `-e`, so only the letters that always take
         // a value stop the scan.
@@ -42,18 +51,31 @@ fn eval_flags(name: &str) -> Option<EvalFlags> {
             eval: &['e', 'E'],
             value: &['M', 'I', 'F'],
             long: &[],
+            long_prefix: false,
         },
         // Lowercase `-e` evaluates; uppercase `-E` sets the encoding.
         "ruby" => EvalFlags {
             eval: &['e'],
             value: &['I', 'r', 'E', 'C', 'F'],
             long: &[],
+            long_prefix: false,
         },
         // `-p` is `-e` with the result printed.
         "node" | "nodejs" | "deno" | "bun" => EvalFlags {
             eval: &['e', 'p'],
             value: &['r'],
             long: &["eval", "print"],
+            long_prefix: false,
+        },
+        // `-S`/`--split-string` splits its value into a whole new command
+        // line and runs it - `sh -c` without the shell. `-u`, `-C`, `-P` and
+        // `-a` take a value. Options end at the first operand (the command),
+        // which the scan below already honours.
+        "env" => EvalFlags {
+            eval: &['S'],
+            value: &['u', 'C', 'P', 'a'],
+            long: &["split-string"],
+            long_prefix: true,
         },
         _ => return None,
     };
@@ -91,9 +113,18 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
         }
 
         if let Some(long) = arg.strip_prefix("--") {
-            let long = long.split('=').next().unwrap_or(long);
-            if flags.long.contains(&long) {
+            let (long, inline_value) = match long.split_once('=') {
+                Some((long, _)) => (long, true),
+                None => (long, false),
+            };
+            let matches = |name: &&str| long_option_names(long, name, flags.long_prefix);
+            if flags.long.iter().any(matches) {
                 return Some(arg.clone());
+            }
+            // `env --chdir /tmp -S '…'`: the value is not the command, and
+            // stopping at it would hide the `-S` after it.
+            if !inline_value && value_long_options(&name).iter().any(matches) {
+                args.next();
             }
             continue;
         }
@@ -115,6 +146,207 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
                     args.next();
                 }
                 break;
+            }
+        }
+    }
+
+    None
+}
+
+/// Whether the long option spelled `long` names `name`: exactly, or as an
+/// unambiguous prefix for `getopt_long` programs.
+fn long_option_names(long: &str, name: &str, long_prefix: bool) -> bool {
+    if long_prefix {
+        !long.is_empty() && name.starts_with(long)
+    } else {
+        name == long
+    }
+}
+
+/// Long options that take the next word as their value, so that word is
+/// neither the script operand nor the command.
+fn value_long_options(name: &str) -> &'static [&'static str] {
+    match name {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" => &["rcfile", "init-file"],
+        "python" | "python3" => &["check-hash-based-pycs"],
+        // GNU env (macOS env has no long options).
+        "env" => &["chdir", "unset", "argv0"],
+        _ => &[],
+    }
+}
+
+/// Where an interpreter takes its program from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptOperand<'a> {
+    /// A script path (which may itself name stdin, like `/dev/stdin`).
+    Path(&'a str),
+    /// No script operand: the interpreter reads its program from stdin
+    /// (`bash -o errexit`, `sh -s arg`).
+    Stdin,
+    /// A module run (`python3 -m json.tool`) takes no script.
+    Module,
+}
+
+/// The operand an interpreter reads its program from.
+///
+/// Skips options and the values of the options that take one (`bash -o
+/// errexit script`) and honours `--`. With no operand left, or with the sh
+/// family's `-s` (whose operands are positional parameters), the program
+/// comes from standard input.
+pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> ScriptOperand<'a> {
+    let name = program_name(program);
+    let flags = eval_flags(&name);
+    let value_long = value_long_options(&name);
+    let python = matches!(name.as_str(), "python" | "python3");
+    let sh_family = matches!(name.as_str(), "sh" | "bash" | "zsh" | "ksh" | "dash");
+
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args
+                .next()
+                .map_or(ScriptOperand::Stdin, |arg| ScriptOperand::Path(arg));
+        }
+        // `-` alone is an operand: it names standard input.
+        if arg == "-" || !(arg.starts_with('-') || arg.starts_with('+')) {
+            return ScriptOperand::Path(arg.as_str());
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            if !long.contains('=') && value_long.contains(&long) {
+                args.next();
+            }
+            continue;
+        }
+        let Some(flags) = flags.as_ref() else {
+            continue;
+        };
+        let cluster = &arg[1..];
+        for (index, letter) in cluster.char_indices() {
+            if python && letter == 'm' {
+                return ScriptOperand::Module;
+            }
+            if sh_family && letter == 's' && arg.starts_with('-') {
+                return ScriptOperand::Stdin;
+            }
+            if flags.value.contains(&letter) {
+                if index + letter.len_utf8() == cluster.len() {
+                    args.next();
+                }
+                break;
+            }
+        }
+    }
+    ScriptOperand::Stdin
+}
+
+/// Whether a path names the reading process's standard input or one of its
+/// inherited descriptors: `-`, `/dev/stdin`, `/dev/fd/N`, `/proc/self/fd/N`,
+/// `/proc/thread-self/fd/N` or `/proc/<pid>/fd/N`.
+pub fn names_inherited_descriptor(path: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if path == "-" || path == "/dev/stdin" {
+        return true;
+    }
+    if let Some(fd) = path.strip_prefix("/dev/fd/") {
+        return digits(fd);
+    }
+    if let Some(rest) = path.strip_prefix("/proc/")
+        && let Some((process, fd)) = rest.split_once("/fd/")
+    {
+        return (process == "self" || process == "thread-self" || digits(process)) && digits(fd);
+    }
+    false
+}
+
+/// Ways of feeding an interpreter code that no check can read.
+///
+/// `string_eval_flag` covers `sh -c '…'`, but a shell reading its script from
+/// standard input (`printf '…' | sh`) carries no flag at all, and `eval` is not
+/// an interpreter invocation the flag table describes. Both end with the guard
+/// having classified `printf` or `eval` while `sh` runs something else - the
+/// same hole the flag refusal exists to close.
+pub fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
+    let name = program_name(program);
+
+    if name == "eval" {
+        return Some("`eval` runs a string that cannot be inspected first");
+    }
+
+    // An interpreter with no script operand reads its program from stdin
+    // (`printf '…' | bash -o errexit`), and so does one whose operand names
+    // stdin or an inherited descriptor (`… | bash /dev/stdin`).
+    if is_code_execution_command(&name) && name != "sudo" {
+        match interpreter_script_operand(program, args) {
+            ScriptOperand::Stdin => return Some("it reads the code to run from standard input"),
+            ScriptOperand::Path(path) if names_inherited_descriptor(path) => {
+                return Some("it reads the code to run from standard input");
+            }
+            ScriptOperand::Path(_) | ScriptOperand::Module => {}
+        }
+    }
+
+    // `bash < script.sh` is the same hole with a redirection instead of a pipe:
+    // every argument the guard reads is a flag or a filename, the interpreter
+    // is classified as itself, and the file it executes is never looked at.
+    // `all(starts_with('-'))` above does not hold here because `<` and the
+    // filename are ordinary tokens.
+    if is_code_execution_command(&name)
+        && name != "sudo"
+        && args.iter().any(|arg| reads_stdin_from_file(arg))
+    {
+        return Some("it reads the code to run from a redirected file");
+    }
+
+    None
+}
+
+/// Whether this token opens standard input from a file.
+///
+/// `shell_words::split` leaves the redirection as its own token (`<`) when it
+/// is spaced and glued to the path (`<script.sh`) when it is not, and a
+/// descriptor may lead it (`0<`).
+fn reads_stdin_from_file(token: &str) -> bool {
+    let rest = token.strip_prefix('0').unwrap_or(token);
+    rest.starts_with('<')
+}
+
+/// Why a shell command line cannot be judged by classifying the programs it
+/// names, if it cannot.
+///
+/// The pre-checks the agent `execute` tool applies before its guard, in one
+/// place for every other caller that hands raw text to a real shell (an MCP
+/// server's shell tool). Each construct hides what actually runs from a
+/// program-by-program classifier: command substitution runs a body the
+/// classifier never sees, a compound statement parses as a command named `{`
+/// or `if`, a string-eval flag hands an interpreter a string, and an
+/// interpreter reading stdin, a redirected file or `eval` runs code no
+/// argument shows. A line that cannot be tokenized is reported too, rather
+/// than approved.
+pub fn unjudgeable_command_construct(command: &str) -> Option<String> {
+    if let Some(construct) = substitution_construct(command) {
+        return Some(format!("{construct} cannot be evaluated safely"));
+    }
+
+    for segment in split_command_segments(command) {
+        let tokens = match shell_words::split(&segment) {
+            Ok(tokens) => tokens,
+            Err(err) => return Some(format!("the command could not be parsed ({err})")),
+        };
+        if let Some(keyword) = tokens
+            .first()
+            .and_then(|leading| compound_statement_keyword(leading))
+        {
+            return Some(format!(
+                "`{keyword}` starts a compound statement, and the commands inside one \
+                 cannot be judged before it runs"
+            ));
+        }
+        for (program, args) in command_candidates(&tokens) {
+            if let Some(flag) = string_eval_flag(&program, &args) {
+                return Some(format!("`{flag}` hands `{program}` a string to execute"));
+            }
+            if let Some(reason) = hidden_code_source(&program, &args) {
+                return Some(format!("`{program}` cannot be judged because {reason}"));
             }
         }
     }

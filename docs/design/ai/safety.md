@@ -70,7 +70,7 @@
 - セッション承認のキーは接頭辞で区別する。いずれも完全一致。
   | キー | 意味 |
   |---|---|
-  | 素のコマンド行 | `execute` がその行を再確認しない |
+  | 素のコマンド行 | `execute` がその行を再確認しない。`[a-z_-]+:` で始まる行は他の名前空間と衝突するので記憶も照合もしない（`is_namespaced_approval_key`） |
   | `mcp:<function_name>:<args>` | その MCP 呼び出しを再確認しない |
   | `write:<canonical path>` | `edit` / `str_replace` がそのファイルを再確認しない |
   | `sensitive:<action>:<canonical path>` | 機微パスの read / list / search を再確認しない |

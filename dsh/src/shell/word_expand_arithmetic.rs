@@ -113,9 +113,7 @@ fn expand_body_scalar<'a>(
                             confirm,
                         )
                         .await?;
-                        if substitution.kind == PlannedSubstitutionKind::Command {
-                            trace.last_command_substitution_status = Some(captured.exit_code);
-                        }
+                        trace.last_command_substitution_status = Some(captured.exit_code);
                         out.push_str(&trim_substitution_output(&captured.stdout));
                     }
                     PlannedSubstitutionKind::Process(direction) => {

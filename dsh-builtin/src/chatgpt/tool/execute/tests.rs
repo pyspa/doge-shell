@@ -109,6 +109,66 @@ fn a_redirected_script_is_refused() {
     assert!(hidden_code_source("sort", &args(&["<", "names.txt"])).is_none());
 }
 
+/// `printf '…' | bash /dev/stdin` is `printf '…' | bash` with a script
+/// operand that names standard input. The "every argument is a flag" rule saw
+/// an operand and let it through, so the piped string ran unclassified.
+#[test]
+fn a_script_operand_naming_stdin_is_refused() {
+    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+
+    for (program, operands) in [
+        ("bash", vec!["/dev/stdin"]),
+        ("sh", vec!["-"]),
+        ("bash", vec!["-e", "/dev/stdin"]),
+        ("bash", vec!["-o", "errexit", "/dev/stdin"]),
+        ("bash", vec!["--", "/dev/stdin"]),
+        ("python3", vec!["/dev/fd/0"]),
+        ("perl", vec!["/dev/fd/3"]),
+        ("bash", vec!["/proc/self/fd/0"]),
+        ("node", vec!["/proc/123/fd/4"]),
+        ("zsh", vec!["/proc/thread-self/fd/0"]),
+        // No script operand once option values are skipped: still stdin.
+        ("bash", vec!["-o", "errexit"]),
+        ("bash", vec!["-O", "extglob"]),
+        ("bash", vec!["--rcfile", "/dev/null"]),
+        ("python3", vec!["-W", "ignore"]),
+        ("python3", vec!["-X", "dev"]),
+        ("bash", vec!["+x"]),
+        // `-s` reads the script from stdin; operands are positional params.
+        ("sh", vec!["-s", "anything"]),
+        ("bash", vec!["-es", "a", "b"]),
+    ] {
+        assert!(
+            hidden_code_source(program, &args(&operands)).is_some(),
+            "{program} {operands:?} was allowed through"
+        );
+    }
+
+    // A real script whose own argument happens to be stdin reads data, not
+    // code; and a module run has no script operand at all.
+    assert!(hidden_code_source("bash", &args(&["build.sh", "/dev/stdin"])).is_none());
+    assert!(hidden_code_source("python3", &args(&["-m", "json.tool", "/dev/stdin"])).is_none());
+    assert!(hidden_code_source("cat", &args(&["/dev/stdin"])).is_none());
+}
+
+#[test]
+fn run_refuses_an_interpreter_reading_its_script_from_dev_stdin() {
+    let _lock = env_lock();
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        ..TestProxy::default()
+    };
+
+    let err = run(
+        // Harmless payload: before the fix this line really ran.
+        &json!({ "command": "printf 'echo pwned' | bash /dev/stdin" }).to_string(),
+        &mut proxy,
+    )
+    .expect_err("a script read from /dev/stdin must be refused");
+    assert!(err.contains("standard input"), "{err}");
+}
+
 #[test]
 fn a_redirected_script_is_refused_end_to_end() {
     let mut proxy = TestProxy::default();
@@ -241,6 +301,42 @@ fn run_remembers_an_always_approval_for_the_session() {
     run("{\"command\":\"true\"}", &mut proxy).unwrap();
 
     assert_eq!(proxy.agent_session_allowlist, vec!["true".to_string()]);
+}
+
+/// Command approvals share one exact-match list with `write:<path>`,
+/// `mcp:<tool>`, ... keys. A model that `execute`s the literal string
+/// `write:/repo/.git/hooks/pre-commit` and gets an "always" would have
+/// silently approved every later write to that file.
+#[test]
+fn a_command_spelled_like_another_approval_key_is_never_remembered() {
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+    let command = "write:/nonexistent-dogesh-test/.git/hooks/pre-commit";
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Confirm("unknown command".to_string()),
+        approval_decision: Some(ApprovalDecision::AllowAlways),
+        ..TestProxy::default()
+    };
+
+    let _ = run(&json!({ "command": command }).to_string(), &mut proxy);
+    assert!(
+        proxy.agent_session_allowlist.is_empty(),
+        "{:?}",
+        proxy.agent_session_allowlist
+    );
+
+    // Nor does an existing key of that shape count as approving the command.
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Confirm("unknown command".to_string()),
+        agent_session_allowlist: vec![command.to_string()],
+        confirm_result: false,
+        ..TestProxy::default()
+    };
+    let result = run(&json!({ "command": command }).to_string(), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 1);
+    assert!(result.contains("cancelled by user"), "{result}");
 }
 
 /// Pipelines run now. Refusing them outright meant `cargo test | tail`
@@ -535,6 +631,52 @@ fn run_rejects_string_eval_flags() {
             "unexpected refusal for {command}"
         );
     }
+}
+
+/// `env -S '<line>'` splits the string into a whole new command line and
+/// runs it. The guard and this tool classified `env` (a wrapper) and a
+/// "program" named `rm -rf …` that has no rule, so the line ran unasked.
+#[test]
+fn run_rejects_env_split_string() {
+    let _lock = env_lock();
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Allowed,
+        ..TestProxy::default()
+    };
+
+    for command in [
+        "env -S 'echo pwned'",
+        "env -iS 'echo pwned'",
+        "env -S'echo pwned'",
+        "env -u HOME -S 'echo pwned'",
+        "env --split-string='echo pwned'",
+        "env --split-string 'echo pwned'",
+        "env --split 'echo pwned'",
+        "sudo env -S 'echo pwned'",
+        // GNU env's spaced long options take the next word as their value.
+        "env --chdir /tmp -S 'echo pwned'",
+        "env --unset X -S 'echo pwned'",
+        "env --argv0 x -S 'echo pwned'",
+        "env --ch /tmp -S 'echo pwned'",
+    ] {
+        let err = run(&json!({ "command": command }).to_string(), &mut proxy)
+            .expect_err("env -S must be refused");
+        assert!(
+            err.contains("hands it a string to execute"),
+            "{command}: {err}"
+        );
+    }
+
+    let args = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // Options end at the first operand: this `-S` belongs to `ls`.
+    assert_eq!(string_eval_flag("env", &args(&["FOO=1", "ls", "-S"])), None);
+    assert_eq!(string_eval_flag("env", &args(&["-i", "ls"])), None);
+    assert_eq!(string_eval_flag("env", &args(&["-u", "S", "ls"])), None);
+    assert_eq!(
+        string_eval_flag("env", &args(&["--unset", "S", "ls", "-S"])),
+        None
+    );
 }
 
 /// Every spelling of "here is some code" has to be caught, and nothing else.

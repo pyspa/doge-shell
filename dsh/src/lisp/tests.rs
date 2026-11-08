@@ -141,6 +141,15 @@ fn test_apply_fn() {
     assert!(res.is_ok());
 }
 
+#[test]
+fn lambda_with_multibyte_body_formats_without_panicking() {
+    init();
+    let env = Environment::new();
+    let engine = LispEngine::new(env);
+    let func = engine.borrow().run("(lambda (x) \"aあb\")").unwrap();
+    assert_eq!(func.to_string(), "<func:(lambda (x) aあb)>");
+}
+
 #[tokio::test]
 #[ignore = "requires shell execution context"]
 async fn test_call_fn() {

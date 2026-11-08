@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const PROVIDER_ENV: &str = "AI_CHAT_PROVIDER";
@@ -161,7 +160,7 @@ impl OpenAiConfig {
                 "1" | "true" | "yes" | "on"
             )
         });
-        let base_url = sanitize_base_url(base_url, allow_insecure_http);
+        let (base_url, configuration_error) = sanitize_base_url(base_url, allow_insecure_http);
         let default_model = default_model
             .filter(|model| !model.trim().is_empty())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
@@ -169,7 +168,7 @@ impl OpenAiConfig {
         Self {
             provider: AiProvider::ApiKey,
             auth_dir: None,
-            configuration_error: None,
+            configuration_error,
             // A blank key is not a key. Callers used to each re-check this and
             // `doctor` disagreed with the chat runtime about whether
             // `AI_CHAT_API_KEY=""` counted as configured.
@@ -183,8 +182,8 @@ impl OpenAiConfig {
             // reach into the process environment for it - only `from_getter`
             // does (via `REASONING_EFFORT_ENV`). `allow_http` above is the one
             // exception, because `sanitize_base_url` needs a same-call answer
-            // to decide whether to silently replace an `http://` URL - a
-            // security-relevant transform this constructor can't defer to a
+            // to decide whether an `http://` URL is refused - a
+            // security-relevant decision this constructor can't defer to a
             // caller who might not call `with_reasoning_effort` at all.
             reasoning_effort: None,
             api_protocol: ApiProtocol::Responses,
@@ -200,9 +199,18 @@ impl OpenAiConfig {
             .map(PathBuf::from)
             .or_else(|| getter("HOME").map(|v| PathBuf::from(v).join(".config")))
             .map(|v| v.join("dogesh").join("subscription-auth"));
-        let api_key = API_KEY_ENV_VARS.iter().find_map(|key| getter(key));
+        // Blank values are skipped here, not just dropped later by `new`:
+        // otherwise `AI_CHAT_API_KEY=""` would win the lookup and hide a real
+        // `OPENAI_API_KEY`. Same rule as the OpenCode key lookup below.
+        let api_key = API_KEY_ENV_VARS
+            .iter()
+            .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
 
-        let base_url = getter("AI_CHAT_BASE_URL").or_else(|| getter("OPENAI_BASE_URL"));
+        // Same rule for the base URL: a blank `AI_CHAT_BASE_URL` must not hide
+        // `OPENAI_BASE_URL` and send that server's key to the default endpoint.
+        let base_url = ["AI_CHAT_BASE_URL", "OPENAI_BASE_URL"]
+            .iter()
+            .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
 
         let default_model = getter("AI_CHAT_MODEL").or_else(|| getter("OPENAI_MODEL"));
 
@@ -395,52 +403,42 @@ impl OpenAiConfig {
     }
 }
 
-fn sanitize_base_url(base_url: Option<String>, allow_insecure_http: bool) -> String {
-    let sanitized = base_url
-        .and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.trim_end_matches('/').to_string())
-            }
-        })
-        .unwrap_or_else(|| DEFAULT_BASE_URL.trim_end_matches('/').to_string());
-
-    if allow_insecure_http || sanitized.starts_with("https://") {
-        return sanitized;
-    }
-
-    let fallback = DEFAULT_BASE_URL.trim_end_matches('/').to_string();
-    // Replacing the configured endpoint in silence is how a local `http://`
-    // server turns into requests against api.openai.com: the key is accepted,
-    // the answers come back, and nothing says the traffic left the machine.
-    if sanitized != fallback {
-        warn_insecure_base_url_replaced(&sanitized);
-    }
-    fallback
-}
-
-/// Announce the replacement once per process, on stderr and in the log.
+/// Normalize the configured base URL, or explain why it cannot be used.
 ///
-/// This runs on every config load - once per agent turn - so repeating it would
-/// bury the shell's own output.
-fn warn_insecure_base_url_replaced(configured: &str) {
-    static WARNED: AtomicBool = AtomicBool::new(false);
+/// An unusable URL is never swapped for [`DEFAULT_BASE_URL`]: the API key was
+/// configured for *that* server, and quietly sending it to api.openai.com as a
+/// bearer token would hand a third-party or local key to OpenAI. The caller
+/// records the error so `validate()` refuses the config instead.
+fn sanitize_base_url(
+    base_url: Option<String>,
+    allow_insecure_http: bool,
+) -> (String, Option<String>) {
+    let Some(configured) = base_url
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return (DEFAULT_BASE_URL.trim_end_matches('/').to_string(), None);
+    };
 
-    tracing::warn!(
-        configured_base_url = %configured,
-        "base URL is not https; falling back to {DEFAULT_BASE_URL}"
-    );
-
-    if WARNED.swap(true, Ordering::Relaxed) {
-        return;
+    let scheme_end = configured.find("://");
+    let scheme = scheme_end.map(|end| configured[..end].to_ascii_lowercase());
+    let normalized = |end: usize, scheme: &str| format!("{scheme}{}", &configured[end..]);
+    match (scheme_end, scheme.as_deref()) {
+        (Some(end), Some("https")) => (normalized(end, "https"), None),
+        (Some(end), Some("http")) if allow_insecure_http => (normalized(end, "http"), None),
+        (Some(_), Some("http")) => (
+            configured.clone(),
+            Some(format!(
+                "AI base URL `{configured}` is not https. Use an https:// URL, or set {ALLOW_INSECURE_HTTP_ENV}=1 to send requests (and the API key) over plain http."
+            )),
+        ),
+        _ => (
+            configured.clone(),
+            Some(format!(
+                "AI base URL `{configured}` must start with https:// (or http:// with {ALLOW_INSECURE_HTTP_ENV}=1)."
+            )),
+        ),
     }
-
-    eprintln!(
-        "dsh: AI base URL `{configured}` is not https, so requests go to {DEFAULT_BASE_URL} instead. \
-         Set {ALLOW_INSECURE_HTTP_ENV}=1 to use it as configured."
-    );
 }
 
 fn build_chat_endpoint(base_url: &str) -> String {
@@ -537,6 +535,20 @@ mod tests {
         assert_eq!(cfg.api_key(), Some("primary"));
         assert_eq!(cfg.base_url(), "https://example.com/api");
         assert_eq!(cfg.default_model(), "primary-model");
+    }
+
+    /// `AI_CHAT_API_KEY=""` (or whitespace) is not a key and must not hide a
+    /// real `OPENAI_API_KEY` behind it.
+    #[test]
+    fn from_getter_skips_a_blank_primary_key() {
+        for blank in ["", "   "] {
+            let cfg = OpenAiConfig::from_getter(|key| match key {
+                "AI_CHAT_API_KEY" => Some(blank.to_string()),
+                "OPENAI_API_KEY" => Some("legacy".to_string()),
+                _ => None,
+            });
+            assert_eq!(cfg.api_key(), Some("legacy"), "{blank:?}");
+        }
     }
 
     #[test]
@@ -649,8 +661,16 @@ mod tests {
     fn sanitize_base_url_rejects_insecure_http_by_default() {
         let _lock = ENV_LOCK.lock().unwrap();
         let _guard = EnvGuard::set(ALLOW_INSECURE_HTTP_ENV, "false");
-        let cfg = OpenAiConfig::new(None, Some("http://localhost:8080/v1".to_string()), None);
-        assert_eq!(cfg.base_url(), "https://api.openai.com/v1");
+        let cfg = OpenAiConfig::new(
+            Some("local-key".into()),
+            Some("http://localhost:8080/v1".to_string()),
+            None,
+        );
+        // The key belongs to the configured server; sending it to OpenAI
+        // instead would leak it, so the config must refuse to run.
+        assert_ne!(cfg.base_url(), "https://api.openai.com/v1");
+        let error = cfg.validate().unwrap_err().to_string();
+        assert!(error.contains(ALLOW_INSECURE_HTTP_ENV), "{error}");
     }
 
     #[test]
@@ -760,3 +780,6 @@ mod subscription_tests {
 
 #[cfg(test)]
 mod protocol_tests;
+
+#[cfg(test)]
+mod base_url_tests;

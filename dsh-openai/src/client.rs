@@ -363,7 +363,7 @@ impl ChatGptClient {
         let response = Self::await_with_cancel(builder.send(), cancel_check).await?;
         let status = response.status();
         let retry_after = parse_retry_after(response.headers());
-        let text = Self::await_with_cancel(response.text(), cancel_check).await?;
+        let text = Self::await_with_cancel(read_capped_text(response), cancel_check).await?;
 
         if !status.is_success() {
             return Err(ApiError {
@@ -522,6 +522,28 @@ fn family_matches(model: &str, prefix: &str) -> bool {
         return false;
     };
     rest.is_empty() || rest.starts_with('-') || rest.starts_with('.')
+}
+
+/// Read a whole response body, refusing one larger than
+/// [`crate::stream::MAX_SSE_BUFFER_BYTES`] - the cap the streaming paths keep -
+/// instead of buffering whatever the server sends.
+async fn read_capped_text(mut response: reqwest::Response) -> Result<String> {
+    const LIMIT: usize = crate::stream::MAX_SSE_BUFFER_BYTES;
+    let too_large = || anyhow!("the OpenAI response exceeded the 16 MiB limit");
+    if response
+        .content_length()
+        .is_some_and(|len| len > LIMIT as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > LIMIT {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
 }
 
 async fn sleep_with_cancel(delay: Duration, cancel_check: Option<&dyn Fn() -> bool>) -> Result<()> {

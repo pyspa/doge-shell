@@ -90,6 +90,15 @@ fn range_is_empty_when_start_is_not_below_end() {
 }
 
 #[test]
+fn oversized_range_is_an_error_not_an_allocation() {
+    let err = eval_err("(range 0 99999999999)");
+    assert!(err.contains("too many elements"), "{err}");
+    // The width is computed without overflowing IntType.
+    let err = eval_err("(range (- 0 9223372036854775807) 9223372036854775807)");
+    assert!(err.contains("too many elements"), "{err}");
+}
+
+#[test]
 fn plus_takes_result_kind_from_first_argument() {
     assert_eq!(eval_ok("(+ 5)"), Value::from(5 as IntType));
     assert_eq!(eval_ok(r#"(+ "a" 1)"#), Value::String("a1".into()));

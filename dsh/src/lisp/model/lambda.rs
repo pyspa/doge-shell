@@ -41,7 +41,10 @@ impl std::fmt::Display for Lambda {
                 .map(|sym| sym.0.as_str())
                 .collect::<Vec<&str>>()
                 .join(" "),
-            &body_str[1..body_str.chars().count() - 1]
+            body_str
+                .strip_prefix('(')
+                .and_then(|s| s.strip_suffix(')'))
+                .unwrap_or(&body_str)
         )
     }
 }

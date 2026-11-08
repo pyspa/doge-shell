@@ -513,3 +513,37 @@ script = "echo x > \"\" || echo RECOVERED"
 status = 0
 stdout_contains = ["RECOVERED"]
 stderr_not_contains = ["ambiguous"]
+
+# An explicit fd number on a file redirect names the slot; it is never an
+# extra argument (`rm x 1>/dev/null` must not also remove a file named `1`).
+
+[[case]]
+id = "redirection.numbered-stdout-write-and-append"
+class = "posix"
+mode = "command"
+script = "echo a 1>out.txt; echo b 1>>out.txt; cat out.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "a\nb\n"
+
+[[case]]
+id = "redirection.numbered-stdin"
+class = "posix"
+mode = "command"
+script = "echo payload > in.txt; cat 0<in.txt"
+
+[case.expect]
+status = 0
+stdout_exact = "payload\n"
+
+[[case]]
+id = "redirection.numbered-unsupported-slot-fails-closed"
+class = "dogesh"
+mode = "command"
+script = "echo a 3>out.txt; echo STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["STATUS:1"]
+stderr_contains = ["file descriptor 3 is not supported"]

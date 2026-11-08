@@ -195,6 +195,22 @@ fn timed_context(
     )
 }
 
+/// Server-reported counts can be anything; the total must not overflow.
+#[test]
+fn the_loop_token_total_saturates() {
+    let ctx = HookContext::disabled();
+    ctx.note_loop(LoopState {
+        iteration: 1,
+        max_iterations: 100,
+        prompt_tokens: u64::MAX,
+        completion_tokens: 1,
+        turn_token_budget: Some(50_000),
+    });
+
+    let payload = ctx.payload(HookEvent::PreToolUse, json!({}));
+    assert_eq!(payload["loop"]["tokens"]["total"], u64::MAX);
+}
+
 #[test]
 fn the_payload_carries_the_loop_state() {
     let ctx = HookContext::disabled();

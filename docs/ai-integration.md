@@ -85,7 +85,7 @@ To use the API-key provider:
    | `AI_SUMMARY_MODEL` | chat model | Model used to summarize a long conversation |
    | `AI_CHAT_BASE_URL` | `https://api.openai.com/v1/` | Base URL; requests go to `{base}/responses` (or `{base}/chat/completions` with `AI_CHAT_API=chat_completions`) |
    | `AI_CHAT_API` | `responses` | Wire API. The OpenAI Responses API is the default; set `chat_completions` (alias `compat`) to use the older Chat Completions-compatible API, e.g. for a local or gateway server that has no `/responses` |
-   | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models) |
+   | `AI_CHAT_ALLOW_INSECURE_HTTP` | off | Allow an `http://` base URL (local models). Without it an `http://` or scheme-less base URL is a configuration error; it is never replaced with the OpenAI endpoint |
    | `AI_CHAT_TIMEOUT_SECS` | `180` | Total per-request timeout |
    | `AI_CHAT_REASONING_EFFORT` | unset (provider default; on `chat_completions`, `none` on `tools` requests to a `gpt-5`/`gpt-6`/`o1`/`o3`/`o4` model) | Reasoning effort (`reasoning.effort` on Responses, `reasoning_effort` on Chat Completions) sent with every request, e.g. `none`/`minimal`/`low`/`medium`/`high` (provider-dependent). Set explicitly and it is sent on every request, including JSON generation (`safe-run`'s risk check, comp-gen), so `none` trades reasoning quality there too |
    | `AI_CHAT_SESSION_TTL_SECS` | `1800` | Idle timeout for the carried conversation; the clock restarts on each turn that finishes (a rewound failed turn does not restart it). `0` disables carrying it forward |

@@ -54,7 +54,9 @@ pub(crate) struct LoopState {
 
 impl LoopState {
     fn total_tokens(&self) -> u64 {
-        self.prompt_tokens + self.completion_tokens
+        // The counts come from the server; a wrapped sum would hide a
+        // runaway from the hook meant to catch it.
+        self.prompt_tokens.saturating_add(self.completion_tokens)
     }
 }
 

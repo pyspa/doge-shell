@@ -86,3 +86,26 @@ script = "$({{FALSE}}) || echo RECOVERED"
 [case.expect]
 status = 0
 stdout_contains = ["RECOVERED"]
+
+# A `( list )` group's exit status gates `&&`/`||` and becomes `$?`.
+
+[[case]]
+id = "list.subshell-group-status-becomes-status"
+class = "posix"
+mode = "command"
+script = "({{FALSE}}); echo S1:$?; (exit 3); echo S3:$?; ({{TRUE}}); echo S0:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["S1:1", "S3:3", "S0:0"]
+
+[[case]]
+id = "list.subshell-group-status-gates-and-or"
+class = "posix"
+mode = "command"
+script = "({{FALSE}}) && echo SHOULD_NOT_RUN; ({{FALSE}}) || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stdout_not_contains = ["SHOULD_NOT_RUN"]

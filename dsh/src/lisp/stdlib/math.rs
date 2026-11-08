@@ -124,10 +124,23 @@ pub fn register(env: &mut Env) {
 
             // An empty range when start >= end, like Rust's `start..end`;
             // stepping until `current == end` never terminated otherwise.
+            // A huge width would allocate until the shell is killed, so it
+            // is refused up front (computed in i128 so it cannot overflow).
+            let width = i128::from(end) - i128::from(start);
+            if width > MAX_RANGE_LEN {
+                return Err(RuntimeError {
+                    msg: format!(
+                        "Function \"range\": too many elements ({width}, limit {MAX_RANGE_LEN})"
+                    ),
+                });
+            }
             Ok(Value::List((start..end).map(Value::from).collect()))
         }),
     );
 }
+
+/// Largest list `range` builds.
+const MAX_RANGE_LEN: i128 = 1_000_000;
 
 /// Turn an `ArithError` into the user-facing error, keeping each builtin's
 /// own wording for operand type errors.

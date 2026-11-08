@@ -45,7 +45,6 @@ ignore = "0.4"
 # HTTP server dependencies for serve command
 axum.workspace = true
 tower.workspace = true
-tower-http.workspace = true
 mime_guess.workspace = true
 chrono.workspace = true
 tokio.workspace = true

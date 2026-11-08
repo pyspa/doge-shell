@@ -11,12 +11,11 @@ compile_error!("doge-shell supports Linux and macOS only");
 
 use anyhow::Result;
 use dsh_types::{
-    Context, ExitStatus, command_block::CommandBlock, mcp::McpServerConfig,
-    output_history::OutputEntry, safety_policy::SafetyLevel,
+    Context, command_block::CommandBlock, mcp::McpServerConfig, output_history::OutputEntry,
+    safety_policy::SafetyLevel,
 };
 use std::future::Future;
 use std::pin::Pin;
-use tracing::debug;
 
 // Builtin command modules
 mod abbr;
@@ -39,6 +38,7 @@ pub(crate) mod diff;
 mod doctor;
 mod eproject;
 mod eview;
+mod exit;
 mod export;
 mod include;
 mod interactive_input;
@@ -440,18 +440,7 @@ pub(crate) fn dispatch_shell_command<P: shell_capabilities::ShellExecution + ?Si
     proxy.dispatch(ctx, "sh", vec!["-c".to_string(), command])
 }
 
-/// Built-in exit command description
-pub fn exit_description() -> &'static str {
-    "Exit the shell"
-}
-
-/// Built-in exit command implementation
-/// Initiates graceful shell termination
-pub fn exit(_ctx: &Context, _argv: Vec<String>, proxy: &mut dyn ShellProxy) -> ExitStatus {
-    debug!("Exit command called - initiating normal shell exit");
-    proxy.exit_shell();
-    ExitStatus::ExitedWith(0)
-}
+pub use exit::{exit, exit_description};
 
 #[cfg(test)]
 mod shell_proxy_tests {

@@ -97,3 +97,53 @@ script = "alias capture_probe=parent; alias capture_probe; export CAPTURE_PROBE=
 status = 0
 stdout_exact = "capture_probe='parent'\nkept\n"
 stderr_exact = ""
+
+# `exit N` terminates `-c` execution with status N.
+[[case]]
+id = "simple-command.exit-status-argument"
+class = "posix"
+mode = "command"
+script = "exit 3"
+
+[case.expect]
+status = 3
+
+[[case]]
+id = "simple-command.exit-stops-script"
+class = "posix"
+mode = "command"
+script = "exit 3; echo AFTER"
+
+[case.expect]
+status = 3
+stdout_not_contains = ["AFTER"]
+
+[[case]]
+id = "simple-command.exit-without-argument-uses-last-status"
+class = "posix"
+mode = "command"
+script = "{{FALSE}}; exit"
+
+[case.expect]
+status = 1
+
+[[case]]
+id = "simple-command.exit-in-substitution-keeps-parent"
+class = "posix"
+mode = "command"
+script = "X=$(exit 4; echo SUB); echo \"[$X]\"; echo DONE"
+
+[case.expect]
+status = 0
+stdout_exact = "[]\nDONE\n"
+
+[[case]]
+id = "simple-command.exit-stops-interactive-input"
+class = "posix"
+mode = "interactive"
+script = "echo BEFORE\nexit 4\necho AFTER"
+
+[case.expect]
+status = 4
+stdout_contains = ["BEFORE"]
+stdout_not_contains = ["AFTER"]

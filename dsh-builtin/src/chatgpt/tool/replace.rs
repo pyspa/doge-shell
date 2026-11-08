@@ -148,6 +148,19 @@ pub(crate) fn run(arguments: &str, proxy: &mut dyn ChatToolHost) -> Result<Strin
         _ => {}
     }
 
+    // Size the result before building it: a one-character `old_string`
+    // replaced everywhere by a long `new_string` multiplies the file, and
+    // `replace` would allocate all of it before anyone is asked.
+    let replaced = if replace_all { matches } else { 1 };
+    let updated_len = (contents.len() - replaced * old_string.len())
+        .checked_add(replaced.saturating_mul(new_string.len()))
+        .filter(|len| *len <= crate::agent::files::MAX_TEXT_FILE_BYTES);
+    if updated_len.is_none() {
+        return Err(format!(
+            "chat: str_replace would make `{path_value}` larger than the 16 MiB file limit; replace fewer occurrences or a shorter string."
+        ));
+    }
+
     let updated = if replace_all {
         contents.replace(old_string, new_string)
     } else {
@@ -277,6 +290,34 @@ mod tests {
         assert_eq!(
             fs::read_to_string(dir.path().join("a.txt")).unwrap(),
             "y\ny\n"
+        );
+    }
+
+    /// A one-character `old_string` replaced everywhere by a long
+    /// `new_string` multiplies the file: `contents.replace` built the whole
+    /// result (gigabytes for a modest file) before anyone was asked, and the
+    /// allocation aborted the shell. The size is computed first and refused
+    /// over the same 16 MiB cap reads use.
+    #[test]
+    fn replace_all_refuses_a_result_over_the_file_size_cap() {
+        let dir = tempdir().unwrap();
+        let original = "x".repeat(100);
+        fs::write(dir.path().join("a.txt"), &original).unwrap();
+        let mut p = proxy(dir.path());
+
+        let arguments = json!({
+            "path": "a.txt",
+            "old_string": "x",
+            "new_string": "y".repeat(200_000),
+            "replace_all": true,
+        })
+        .to_string();
+        let err = run(&arguments, &mut p).unwrap_err();
+
+        assert!(err.contains("16 MiB"), "{err}");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            original
         );
     }
 

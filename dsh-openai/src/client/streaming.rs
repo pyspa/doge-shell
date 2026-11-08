@@ -80,7 +80,10 @@ impl ChatGptClient {
 
         if !status.is_success() {
             let text = self
-                .within_request_timeout(Self::await_with_cancel(response.text(), cancel_check))
+                .within_request_timeout(Self::await_with_cancel(
+                    read_capped_text(response),
+                    cancel_check,
+                ))
                 .await?;
             return Err(StreamError::BeforeFirstDelta(
                 ApiError {
@@ -101,7 +104,10 @@ impl ChatGptClient {
             // it under `MAX_TIMEOUT_SECS` silently disabled
             // `AI_CHAT_TIMEOUT_SECS` for every such endpoint.
             let text = self
-                .within_request_timeout(Self::await_with_cancel(response.text(), cancel_check))
+                .within_request_timeout(Self::await_with_cancel(
+                    read_capped_text(response),
+                    cancel_check,
+                ))
                 .await?;
             let data: Value = serde_json::from_str(&text).map_err(|err| {
                 StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
@@ -258,6 +264,12 @@ impl ChatGptClient {
                     return Ok(value);
                 }
                 self.apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
+                if aggregator.accumulated_bytes() > crate::stream::MAX_SSE_BUFFER_BYTES {
+                    return Err(Self::wrap_stream_error(
+                        anyhow!("the OpenAI stream sent a reply larger than the 16 MiB limit"),
+                        delta_sent,
+                    ));
+                }
             }
         }
     }

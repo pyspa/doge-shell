@@ -147,6 +147,19 @@ impl ItemStats {
         self.num_accesses += weight;
     }
 
+    /// Number of recorded accesses.
+    pub fn num_accesses(&self) -> i32 {
+        self.num_accesses
+    }
+
+    /// Absolute time (seconds since the Unix epoch) of the last access.
+    ///
+    /// `last_accessed` is stored relative to `reference_time`, which changes
+    /// every session, so persistence must use this absolute value.
+    pub fn last_accessed_time(&self) -> f64 {
+        self.reference_time + self.last_accessed as f64
+    }
+
     /// Update the time the item was last accessed
     pub fn update_last_access(&mut self, time: f64) {
         self.last_accessed = (time - self.reference_time) as f32;

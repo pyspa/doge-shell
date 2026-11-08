@@ -394,11 +394,9 @@ impl Value {
             (Value::Symbol(Symbol(this)), Value::Symbol(Symbol(other))) => this.partial_cmp(other),
             (Value::Int(this), Value::Int(other)) => this.partial_cmp(other),
             (Value::Float(this), Value::Float(other)) => this.partial_cmp(other),
-            (Value::Int(this), Value::Float(other)) => {
-                int_type_to_float_type(this).partial_cmp(other)
-            }
+            (Value::Int(this), Value::Float(other)) => cmp_int_float(*this, *other),
             (Value::Float(this), Value::Int(other)) => {
-                this.partial_cmp(&int_type_to_float_type(other))
+                cmp_int_float(*other, *this).map(Ordering::reverse)
             }
             _ => None,
         }
@@ -565,6 +563,29 @@ impl Div<Value> for Value {
     }
 }
 
+/// Exact comparison of an integer with a float. Converting the integer to
+/// f64 rounds above 2^53, which made distinct integers equal to the same
+/// float and broke transitivity. `None` for NaN.
+fn cmp_int_float(int: IntType, float: FloatType) -> Option<Ordering> {
+    // 2^63: the first float above every i64.
+    const LIMIT: FloatType = 9_223_372_036_854_775_808.0;
+    if float.is_nan() {
+        return None;
+    }
+    if float >= LIMIT {
+        return Some(Ordering::Less);
+    }
+    if float < -LIMIT {
+        return Some(Ordering::Greater);
+    }
+    let whole = float.trunc();
+    // Exact: `whole` is integral and within i64 range.
+    match int.cmp(&(whole as IntType)) {
+        Ordering::Equal => (0.0 as FloatType).partial_cmp(&(float - whole)),
+        ordering => Some(ordering),
+    }
+}
+
 /// Integer division that reports division by zero and `MIN / -1` overflow
 /// instead of panicking.
 pub(crate) fn checked_int_div(this: IntType, other: IntType) -> Result<IntType, ArithError> {
@@ -585,6 +606,11 @@ impl Ord for Value {
     /// order (NaN) fall back to `total_cmp` so sorting stays a total order.
     fn cmp(&self, other: &Self) -> Ordering {
         if let Some(ordering) = self.compare(other) {
+            // `Int(1)` and `Float(1.0)` compare equal but are not `==`;
+            // Ord must agree with Eq, so break the tie by kind.
+            if ordering == Ordering::Equal && self != other {
+                return matches!(self, Value::Float(_)).cmp(&matches!(other, Value::Float(_)));
+            }
             return ordering;
         }
         if let (Some(this), Some(other)) = (self.as_float(), other.as_float()) {

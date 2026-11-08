@@ -112,3 +112,26 @@ fn deep_finite_recursion_does_not_overflow_the_stack() {
         Value::from(2000 as IntType)
     );
 }
+
+#[test]
+fn int_float_comparison_is_exact_beyond_f64_precision() {
+    // 2^53 + 1 rounds to 2^53 as f64; it must still be greater than 2^53.0.
+    assert_eq!(
+        eval_ok("(> 9007199254740993 9007199254740992.0)"),
+        Value::True
+    );
+    assert_eq!(
+        eval_ok("(< 9007199254740992.0 9007199254740993)"),
+        Value::True
+    );
+    assert_eq!(eval_ok("(<= 1 1.0)"), Value::True);
+    assert_eq!(eval_ok("(< 2 2.5)"), Value::True);
+    assert_eq!(eval_ok("(> -2 -2.5)"), Value::True);
+
+    let big = Value::from(9_007_199_254_740_993 as IntType);
+    let float = Value::Float(9_007_199_254_740_992.0);
+    let small = Value::from(9_007_199_254_740_992 as IntType);
+    assert_eq!(big.cmp(&float), std::cmp::Ordering::Greater);
+    assert_eq!(float.cmp(&small), std::cmp::Ordering::Greater);
+    assert_eq!(big.cmp(&small), std::cmp::Ordering::Greater);
+}

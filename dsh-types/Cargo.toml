@@ -17,7 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 pulldown-cmark = "0.13"
 regex = "1.11"
+shell-words = "1"
 
 [dev-dependencies]
 tempfile = "3.8"
-shell-words = "1"

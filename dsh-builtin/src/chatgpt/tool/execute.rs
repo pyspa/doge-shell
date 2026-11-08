@@ -23,12 +23,12 @@ use xdg::BaseDirectories;
 use super::environment::filter_unscoped_ai_child_environment;
 use crate::shell_capabilities::{AgentCommandVerdict, ApprovalDecision, ChatToolHost};
 use anyhow::Result;
-use dsh_types::safety_policy::{string_eval_flag, substitution_construct};
+use dsh_types::safety_policy::{hidden_code_source, string_eval_flag, substitution_construct};
 
 mod authorize;
 mod capture;
 mod jobs;
-use authorize::{Authorization, authorize, program_name};
+use authorize::{Authorization, authorize};
 #[cfg(test)]
 use authorize::{command_is_allowlisted, load_allowed_commands};
 pub(crate) use authorize::{command_names_any, command_tokens};
@@ -338,64 +338,6 @@ fn push_stage(stages: &mut Vec<CommandStage>, tokens: Vec<String>) {
     for (program, args) in dsh_types::safety_policy::command_candidates(&tokens) {
         stages.push(CommandStage { program, args });
     }
-}
-
-/// Ways of feeding an interpreter code that no check can read.
-///
-/// `string_eval_flag` covers `sh -c '…'`, but a shell reading its script from
-/// standard input (`printf '…' | sh`) carries no flag at all, and `eval` is not
-/// an interpreter invocation the flag table describes. Both end with the guard
-/// having classified `printf` or `eval` while `sh` runs something else - the
-/// same hole the flag refusal exists to close.
-fn hidden_code_source(program: &str, args: &[String]) -> Option<&'static str> {
-    let name = program_name(program);
-
-    if name == "eval" {
-        return Some("`eval` runs a string that cannot be inspected first");
-    }
-
-    // A shell with no script operand reads its program from stdin.
-    if dsh_types::safety_policy::is_code_execution_command(&name)
-        && name != "sudo"
-        && args.iter().all(|arg| arg.starts_with('-'))
-    {
-        return Some("it reads the code to run from standard input");
-    }
-
-    // `printf '…' | bash /dev/stdin` has a script operand, so the rule above
-    // does not hold, but the operand is standard input (or an inherited
-    // descriptor) and the code it reads is just as unreadable.
-    if dsh_types::safety_policy::is_code_execution_command(&name)
-        && name != "sudo"
-        && dsh_types::safety_policy::interpreter_script_operand(program, args)
-            .is_some_and(dsh_types::safety_policy::names_inherited_descriptor)
-    {
-        return Some("it reads the code to run from standard input");
-    }
-
-    // `bash < script.sh` is the same hole with a redirection instead of a pipe:
-    // every argument the guard reads is a flag or a filename, the interpreter
-    // is classified as itself, and the file it executes is never looked at.
-    // `all(starts_with('-'))` above does not hold here because `<` and the
-    // filename are ordinary tokens.
-    if dsh_types::safety_policy::is_code_execution_command(&name)
-        && name != "sudo"
-        && args.iter().any(|arg| reads_stdin_from_file(arg))
-    {
-        return Some("it reads the code to run from a redirected file");
-    }
-
-    None
-}
-
-/// Whether this token opens standard input from a file.
-///
-/// `shell_words::split` leaves the redirection as its own token (`<`) when it
-/// is spaced and glued to the path (`<script.sh`) when it is not, and a
-/// descriptor may lead it (`0<`).
-fn reads_stdin_from_file(token: &str) -> bool {
-    let rest = token.strip_prefix('0').unwrap_or(token);
-    rest.starts_with('<')
 }
 
 /// Whether the line redirects output into a file.

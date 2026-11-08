@@ -126,6 +126,16 @@ impl SafetyGuard {
                     "MCP tool '{function_name}' from server '{server_label}' wants to execute a command, but arguments could not be validated safely."
                 ));
             };
+            // The tool hands this text to a real shell, so the constructs
+            // the `execute` tool refuses before classifying (substitution,
+            // compound statements, string-eval flags, code read from stdin)
+            // hide what runs from the classifier here as well.
+            if let Some(reason) = dsh_types::safety_policy::unjudgeable_command_construct(&cmd_str)
+            {
+                return SafetyResult::Confirm(format!(
+                    "MCP tool '{function_name}' from server '{server_label}' wants to execute command '{cmd_str}': {reason}"
+                ));
+            }
             return match self.classify_command_line(&cmd_str) {
                 Some(reason) => {
                     // The classifier reasons end in "Proceed?", and the

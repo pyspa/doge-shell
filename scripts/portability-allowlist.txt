@@ -11,11 +11,15 @@
 #
 # See docs/ai/skills/doge-shell-repo/references/platform-support.md
 dsh-builtin/src/chatgpt/mcp/tests.rs	/usr/bin/node
+dsh-builtin/src/chatgpt/tool/execute/tests.rs	/proc/123/fd/4
+dsh-builtin/src/chatgpt/tool/execute/tests.rs	/proc/self/fd/0
+dsh-builtin/src/chatgpt/tool/execute/tests.rs	/proc/thread-self/fd/0
 dsh-builtin/src/chatgpt/tool/execute/tests.rs	/usr/bin/env
 dsh-builtin/src/chatgpt/tool/read.rs	/etc/passwd
 dsh-builtin/src/completion_generation.rs	/bin/git
 dsh-builtin/src/output_gen.rs	/sbin/init
 dsh-types/src/output_text.rs	/sbin/init
+dsh-types/src/safety_policy/eval.rs	/proc/
 dsh/src/command_timing.rs	/usr/bin/ls
 dsh/src/completion/commands.rs	/usr/bin/ls
 dsh/src/completion/dynamic/collectors.rs	/proc

@@ -122,6 +122,80 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
     None
 }
 
+/// Long options that take the next word as their value, so that word is not
+/// the script operand.
+fn value_long_options(name: &str) -> &'static [&'static str] {
+    match name {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" => &["rcfile", "init-file"],
+        "python" | "python3" => &["check-hash-based-pycs"],
+        _ => &[],
+    }
+}
+
+/// The operand an interpreter reads its program from, if it has one.
+///
+/// Skips options and the values of the options that take one (`bash -o
+/// errexit script`), honours `--`, and returns `None` for a module run
+/// (`python3 -m json.tool`), which has no script operand.
+pub fn interpreter_script_operand<'a>(program: &str, args: &'a [String]) -> Option<&'a str> {
+    let name = program_name(program);
+    let flags = eval_flags(&name);
+    let value_long = value_long_options(&name);
+    let python = matches!(name.as_str(), "python" | "python3");
+
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args.next().map(String::as_str);
+        }
+        // `-` alone is an operand: it names standard input.
+        if arg == "-" || !(arg.starts_with('-') || arg.starts_with('+')) {
+            return Some(arg.as_str());
+        }
+        if let Some(long) = arg.strip_prefix("--") {
+            if !long.contains('=') && value_long.contains(&long) {
+                args.next();
+            }
+            continue;
+        }
+        let Some(flags) = flags.as_ref() else {
+            continue;
+        };
+        let cluster = &arg[1..];
+        for (index, letter) in cluster.char_indices() {
+            if python && letter == 'm' {
+                return None;
+            }
+            if flags.value.contains(&letter) {
+                if index + letter.len_utf8() == cluster.len() {
+                    args.next();
+                }
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Whether a path names the reading process's standard input or one of its
+/// inherited descriptors: `-`, `/dev/stdin`, `/dev/fd/N`, `/proc/self/fd/N`,
+/// `/proc/thread-self/fd/N` or `/proc/<pid>/fd/N`.
+pub fn names_inherited_descriptor(path: &str) -> bool {
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if path == "-" || path == "/dev/stdin" {
+        return true;
+    }
+    if let Some(fd) = path.strip_prefix("/dev/fd/") {
+        return digits(fd);
+    }
+    if let Some(rest) = path.strip_prefix("/proc/")
+        && let Some((process, fd)) = rest.split_once("/fd/")
+    {
+        return (process == "self" || process == "thread-self" || digits(process)) && digits(fd);
+    }
+    false
+}
+
 /// Name the substitution construct in `command`, if it has one.
 ///
 /// Deliberately textual and deliberately blunt: this runs *before* the parser,

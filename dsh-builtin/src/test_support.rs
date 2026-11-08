@@ -142,6 +142,8 @@ pub(crate) struct TestShellProxy {
     /// Empty by default; set per-test to model PATH A vs PATH B without
     /// touching process-global `std::env::PATH`.
     pub command_search_paths: Vec<PathBuf>,
+    /// Number of `exit_shell` calls.
+    pub exit_requests: usize,
 }
 
 impl Default for TestShellProxy {
@@ -205,12 +207,15 @@ impl Default for TestShellProxy {
             shell_options: ShellOptions::default(),
             effective_config: None,
             command_search_paths: Vec::new(),
+            exit_requests: 0,
         }
     }
 }
 
 impl ShellProxy for TestShellProxy {
-    fn exit_shell(&mut self) {}
+    fn exit_shell(&mut self) {
+        self.exit_requests += 1;
+    }
 
     fn get_github_status(&self) -> (usize, usize, usize) {
         (0, 0, 0)

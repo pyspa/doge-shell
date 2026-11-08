@@ -522,6 +522,11 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                             display_user_error(&err, true);
                         }
                     }
+                    // `exit [N]` stops reading input and becomes the status.
+                    if repl.shell.exited.is_some() {
+                        let status = repl.shell.environment.read().last_exit_status;
+                        return ExitCode::from(status.clamp(0, 255) as u8);
+                    }
                 }
                 Err(err) => {
                     eprintln!("Error reading input: {err}");

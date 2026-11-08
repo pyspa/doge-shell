@@ -357,7 +357,7 @@ impl ResponsesTransport {
         .await?
         {
             bytes = bytes.saturating_add(chunk.len());
-            if bytes > 16 * 1024 * 1024 {
+            if bytes > crate::stream::MAX_SSE_BUFFER_BYTES {
                 bail!("Responses stream exceeded the size limit.");
             }
             for frame in splitter.push(&chunk) {

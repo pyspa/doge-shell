@@ -1070,3 +1070,48 @@ fn api_key_provider_defaults_to_responses_and_chat_completions_is_opt_in() {
     assert_ne!(default.cache_scope(), compat.cache_scope());
     assert!(ChatGptClient::try_from_config(&config(Some("typo"))).is_err());
 }
+
+/// A chat/completions stream that never sends a newline (or never closes an
+/// event) used to grow the splitter's buffer without bound; the Responses
+/// transport already stopped at 16 MiB.
+#[test]
+fn a_streamed_event_over_the_size_cap_is_refused() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let server = std::thread::spawn(move || {
+        use std::io::Write;
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: ",
+        );
+        let block = vec![b'x'; 64 * 1024];
+        for _ in 0..(crate::stream::MAX_SSE_BUFFER_BYTES / block.len() + 2) {
+            if stream.write_all(&block).is_err() {
+                break;
+            }
+        }
+    });
+
+    let config = OpenAiConfig::from_getter(move |key| match key {
+        "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+        "AI_CHAT_MODEL" => Some("local-model".to_string()),
+        "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
+        "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
+        "AI_CHAT_TIMEOUT_SECS" => Some("10".to_string()),
+        "AI_CHAT_API" => Some("chat_completions".to_string()),
+        _ => None,
+    });
+    let client = ChatGptClient::try_from_config(&config).expect("client should initialize");
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    server.join().expect("fixture server thread panicked");
+    let error = result.expect_err("an oversized event must fail the stream");
+    assert!(error.to_string().contains("16 MiB"), "{error:#}");
+}

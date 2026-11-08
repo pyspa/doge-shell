@@ -89,7 +89,7 @@ impl HistoryImporter for FishHistoryImporter {
                 }
 
                 let cmd_part = trimmed.strip_prefix("- cmd:").unwrap_or("").trim();
-                current_cmd = cmd_part.to_string();
+                current_cmd = unescape_fish_command(cmd_part);
                 in_cmd_block = true;
             } else if trimmed.starts_with("when:") && in_cmd_block {
                 let when_part = trimmed.strip_prefix("when:").unwrap_or("").trim();
@@ -159,9 +159,47 @@ pub fn create_importer(
     }
 }
 
+/// Undo fish's history escaping: fish writes `\` as `\\` and a newline
+/// inside a command as `\n`. Any other backslash pair is kept as written.
+fn unescape_fish_command(escaped: &str) -> String {
+    let mut out = String::with_capacity(escaped.len());
+    let mut chars = escaped.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fish_escapes_for_backslash_and_newline_are_undone() {
+        assert_eq!(unescape_fish_command(r"echo a\\b"), r"echo a\b");
+        assert_eq!(
+            unescape_fish_command(r"for x in 1\n  echo $x\nend"),
+            "for x in 1\n  echo $x\nend"
+        );
+        assert_eq!(unescape_fish_command(r"printf '\\n'"), r"printf '\n'");
+        assert_eq!(
+            unescape_fish_command(r"odd\t trailing\"),
+            r"odd\t trailing\"
+        );
+    }
+
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;

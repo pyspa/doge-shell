@@ -122,6 +122,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn backspace_before_a_stop_keeps_the_stop_on_its_text() {
+        use crate::repl::placeholder::{PlaceholderSpan, PlaceholderState};
+
+        let mut shell = Shell::new(Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        // Stops at `src` (0..3) and `dst` (5..8); Backspace at 5 deletes the
+        // second separator char (index 4), so `dst` now starts at 4.
+        repl.input.reset("src  dst".to_string());
+        repl.state.placeholders = PlaceholderState::new(
+            &[
+                PlaceholderSpan { start: 0, end: 3 },
+                PlaceholderSpan { start: 5, end: 8 },
+            ],
+            0,
+        );
+        repl.input.move_to(5);
+
+        handler::handle_key_event(&mut repl, &key(KeyCode::Backspace, KeyModifiers::NONE))
+            .await
+            .unwrap();
+        assert_eq!(repl.input.as_str(), "src dst");
+
+        let state = repl.state.placeholders.as_mut().expect("stops kept");
+        assert_eq!(state.cursor(), 0);
+        assert_eq!(state.next(), 4);
+    }
+
+    #[tokio::test]
     async fn delete_key_removes_char_under_cursor() {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);

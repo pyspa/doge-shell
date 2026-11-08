@@ -64,20 +64,33 @@ impl PlaceholderState {
     /// every later stop pointing at the wrong column — the whole point of the
     /// stops is to survive the text you type into them.
     ///
-    /// A stop that starts after the edit slides; a stop the edit landed inside
-    /// grows or shrinks instead, so the placeholder still spans what you typed.
+    /// An insertion slides the stops that start after `at` and grows a stop it
+    /// landed inside (or at the end of), so the placeholder still spans what
+    /// you typed. A deletion removes `at..at + |delta|`: offsets past it move
+    /// back, and offsets inside it collapse to `at`.
     pub(crate) fn adjust(&mut self, at: usize, delta: isize) {
-        if delta == 0 {
-            return;
-        }
-        let shift = |value: usize| -> usize { (value as isize + delta).max(0) as usize };
-
-        for span in &mut self.spans {
-            if span.start > at {
-                span.start = shift(span.start);
-                span.end = shift(span.end);
-            } else if span.end >= at {
-                span.end = shift(span.end).max(span.start);
+        if delta > 0 {
+            let grown = delta as usize;
+            for span in &mut self.spans {
+                if span.start > at {
+                    span.start += grown;
+                    span.end += grown;
+                } else if span.end >= at {
+                    span.end += grown;
+                }
+            }
+        } else if delta < 0 {
+            let removed = delta.unsigned_abs();
+            let map = |value: usize| -> usize {
+                if value <= at {
+                    value
+                } else {
+                    value.saturating_sub(removed).max(at)
+                }
+            };
+            for span in &mut self.spans {
+                span.start = map(span.start);
+                span.end = map(span.end).max(span.start);
             }
         }
     }
@@ -228,6 +241,21 @@ mod tests {
         state.adjust(0, -3);
         assert_eq!(state.cursor(), 0);
         assert_eq!(state.next(), 7);
+    }
+
+    #[test]
+    fn deleting_a_range_maps_stops_inside_it_to_its_start() {
+        // Delete chars 4..7, which swallow the second stop's start at 5.
+        let mut state = PlaceholderState::new(&[span(0, 3), span(5, 8)], 0).unwrap();
+        state.adjust(4, -3);
+        assert_eq!(state.spans, [span(0, 3), span(4, 5)]);
+    }
+
+    #[test]
+    fn deleting_just_past_a_stop_leaves_it_intact() {
+        let mut state = PlaceholderState::new(&[span(0, 3), span(5, 8)], 0).unwrap();
+        state.adjust(3, -1);
+        assert_eq!(state.spans, [span(0, 3), span(4, 7)]);
     }
 
     #[test]

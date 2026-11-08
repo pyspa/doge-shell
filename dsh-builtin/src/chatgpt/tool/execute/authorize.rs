@@ -73,10 +73,14 @@ pub(super) fn authorize(
             }
         };
     }
-    let approved_exactly = proxy
-        .agent_session_approvals()
-        .iter()
-        .any(|approved| approved == command);
+    // A command spelled like a `write:`/`mcp:`/... key is not a command
+    // approval, whatever the list holds.
+    let namespaced = dsh_types::safety_policy::is_namespaced_approval_key(command);
+    let approved_exactly = !namespaced
+        && proxy
+            .agent_session_approvals()
+            .iter()
+            .any(|approved| approved == command);
     let allowlisted = approved_exactly
         || stages
             .iter()
@@ -110,7 +114,10 @@ pub(super) fn authorize(
     {
         ApprovalDecision::Allow => Ok(Authorization::Run),
         ApprovalDecision::AllowAlways => {
-            proxy.remember_agent_approval(command);
+            // Storing it would approve the write/MCP call the key names.
+            if !namespaced {
+                proxy.remember_agent_approval(command);
+            }
             Ok(Authorization::Run)
         }
         ApprovalDecision::Deny => Ok(Authorization::Cancelled),

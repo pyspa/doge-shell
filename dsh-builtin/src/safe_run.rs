@@ -131,7 +131,10 @@ fn confirm_with_safety_guard(
             match proxy.request_agent_approval(&format!("safe-run: {full_command}: {reason}")) {
                 Ok(ApprovalDecision::Allow) => true,
                 Ok(ApprovalDecision::AllowAlways) => {
-                    proxy.remember_agent_approval(full_command);
+                    // Spelled like a `write:`/`mcp:` key: run once, never remember.
+                    if !dsh_types::safety_policy::is_namespaced_approval_key(full_command) {
+                        proxy.remember_agent_approval(full_command);
+                    }
                     true
                 }
                 Ok(ApprovalDecision::Deny) => {
@@ -445,6 +448,9 @@ mod tests {
         };
 
         assert!(confirm_with_safety_guard(&ctx, &mut proxy, "rm -rf /tmp/x"));
+        assert_eq!(proxy.agent_session_approvals(), vec!["rm -rf /tmp/x"]);
+        // Spelled like a `write:` key, so "always" would approve that write.
+        assert!(confirm_with_safety_guard(&ctx, &mut proxy, "write:/r/hook"));
         assert_eq!(proxy.agent_session_approvals(), vec!["rm -rf /tmp/x"]);
     }
 

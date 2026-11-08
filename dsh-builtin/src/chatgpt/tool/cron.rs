@@ -235,7 +235,27 @@ fn approval_key(action: CronToolAction, request: &CronToolRequest) -> String {
         .as_deref()
         .or(request.name.as_deref())
         .unwrap_or("?");
-    format!("cron:{action}:{job}")
+    match action {
+        // "Always" for a create/update covers that exact change and nothing
+        // else - like `execute`, whose key is the command line itself. Keyed
+        // on the job alone, one approved update let a later update rewrite the
+        // job's command without asking. A JSON array keeps the encoding
+        // injective, so no field value can impersonate another field.
+        CronToolAction::Create | CronToolAction::Update => {
+            let change = serde_json::json!([
+                request.name,
+                request.schedule,
+                request.command,
+                request.cwd,
+                request.on,
+                request.timeout,
+                request.catchup,
+                request.force,
+            ]);
+            format!("cron:{action}:{job}:{change}")
+        }
+        _ => format!("cron:{action}:{job}"),
+    }
 }
 
 /// Everything that can be checked before anyone is asked anything - the same

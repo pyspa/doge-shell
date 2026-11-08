@@ -396,7 +396,7 @@ impl<'a> Repl<'a> {
     /// Detect AI Output Pipe pattern: `command |! "query"`
     /// Returns (command, query) if pattern is found
     pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
-        parse_ai_pipe(self.input.as_str())
+        super::ai_pipe::parse_ai_pipe(self.input.as_str())
     }
 
     /// Execute command, capture output, and send to AI for analysis
@@ -409,15 +409,35 @@ impl<'a> Repl<'a> {
         // before spawning: the child sees only `child_process_env()` via
         // `env_clear`, never the process-global environment.
         let child_env = self.shell.environment.read().child_process_env();
-        let output = crate::process::isolated_shell::command(&command, &child_env).output();
+        // Cooked mode for the capture: with raw mode on, ISIG is off and a
+        // Ctrl-C never becomes SIGINT, so a command that does not exit on its
+        // own (`tail -f log |! x`) would freeze the REPL.
+        let raw_mode_pause = terminal_state::RawModePause::new();
+        let output = super::ai_pipe::capture(
+            crate::process::isolated_shell::command(&command, &child_env),
+            super::ai_pipe::AI_PIPE_CAPTURE_BYTES,
+        );
+        drop(raw_mode_pause);
+        // Always consume the flag, even when the child exited normally.
+        let got_sigint = crate::process::signal::check_and_clear_sigint();
+        let interrupted = got_sigint
+            || output.as_ref().is_ok_and(|out| {
+                std::os::unix::process::ExitStatusExt::signal(&out.status)
+                    == Some(nix::libc::SIGINT)
+            });
+        if interrupted {
+            queue!(
+                renderer,
+                Print("\r\n⚠️ Interrupted; nothing sent to AI\r\n")
+            )
+            .ok();
+            self.print_prompt(&mut renderer);
+            renderer.flush().ok();
+            return Ok(());
+        }
 
         let (stdout, stderr, exit_code) = match output {
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let exit_code = out.status.code().unwrap_or(-1);
-                (stdout, stderr, exit_code)
-            }
+            Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
             Err(e) => {
                 queue!(
                     renderer,
@@ -459,8 +479,8 @@ impl<'a> Repl<'a> {
         queue!(renderer, Print("\r")).ok();
         queue!(renderer, Clear(ClearType::CurrentLine)).ok();
 
-        // The captured output is unbounded; keep both ends so an error at the
-        // tail of a long log still reaches the model.
+        // Keep both ends so an error at the tail of a long log still reaches
+        // the model.
         let bounded_output =
             dsh_openai::turn::truncate_middle(&combined_output, AI_PIPE_OUTPUT_CHARS);
         let message = format!(
@@ -495,29 +515,6 @@ fn is_auto_fix_blocked(input: &str) -> bool {
         .into_iter()
         .next()
         .is_some_and(|command| AUTO_FIX_BLOCKLIST.contains(&command.raw.as_str()))
-}
-
-/// Splits `command |! query` at the first top-level `|!`. A `|!` inside
-/// quotes or escapes belongs to the command, so `grep 'a|!b' f` is not an AI
-/// pipe. Surrounding quotes around the query are removed.
-pub(crate) fn parse_ai_pipe(input: &str) -> Option<(String, String)> {
-    let idx = crate::completion::command_segment::ai_pipe_marker(input)?;
-    let command = input[..idx].trim();
-    let query_part = input[idx + 2..].trim();
-    let query = query_part
-        .strip_prefix('"')
-        .and_then(|q| q.strip_suffix('"'))
-        .or_else(|| {
-            query_part
-                .strip_prefix('\'')
-                .and_then(|q| q.strip_suffix('\''))
-        })
-        .unwrap_or(query_part);
-
-    if command.is_empty() || query.is_empty() {
-        return None;
-    }
-    Some((command.to_string(), query.to_string()))
 }
 
 #[cfg(test)]
@@ -730,30 +727,6 @@ mod tests {
         let (command, query) = result.unwrap();
         assert_eq!(command, "kubectl get pods -n default");
         assert_eq!(query, "問題のあるPodを見つけて");
-    }
-
-    #[test]
-    fn ai_pipe_marker_inside_quotes_or_escapes_is_not_an_ai_pipe() {
-        for input in [
-            "grep 'foo|!bar' file.txt",
-            "echo \"a |! b\"",
-            "echo a \\|! b",
-            "echo # |! comment",
-            "echo $(printf '|!')",
-        ] {
-            assert_eq!(parse_ai_pipe(input), None, "{input:?}");
-        }
-    }
-
-    #[test]
-    fn ai_pipe_query_may_contain_another_marker() {
-        assert_eq!(
-            parse_ai_pipe("grep 'a|!b' f |! what's the |! about"),
-            Some((
-                "grep 'a|!b' f".to_string(),
-                "what's the |! about".to_string()
-            ))
-        );
     }
 
     #[tokio::test]

@@ -65,9 +65,14 @@ impl ChatGptClient {
 
         // Waiting for the headers is not streaming yet: a server that accepts
         // the connection and never answers must give up at the operator's
-        // budget, not the 30-minute stream cap above.
+        // budget, not the 30-minute stream cap above. The headers and any
+        // error or degraded body that follows share that one budget.
+        let deadline = tokio::time::Instant::now() + self.request_timeout;
         let response = self
-            .within_request_timeout(Self::await_with_cancel(builder.send(), cancel_check))
+            .within_request_timeout(
+                deadline,
+                Self::await_with_cancel(builder.send(), cancel_check),
+            )
             .await?;
 
         let status = response.status();
@@ -80,10 +85,10 @@ impl ChatGptClient {
 
         if !status.is_success() {
             let text = self
-                .within_request_timeout(Self::await_with_cancel(
-                    read_capped_text(response),
-                    cancel_check,
-                ))
+                .within_request_timeout(
+                    deadline,
+                    Self::await_with_cancel(read_capped_text(response), cancel_check),
+                )
                 .await?;
             return Err(StreamError::BeforeFirstDelta(
                 ApiError {
@@ -104,10 +109,10 @@ impl ChatGptClient {
             // it under `MAX_TIMEOUT_SECS` silently disabled
             // `AI_CHAT_TIMEOUT_SECS` for every such endpoint.
             let text = self
-                .within_request_timeout(Self::await_with_cancel(
-                    read_capped_text(response),
-                    cancel_check,
-                ))
+                .within_request_timeout(
+                    deadline,
+                    Self::await_with_cancel(read_capped_text(response), cancel_check),
+                )
                 .await?;
             let data: Value = serde_json::from_str(&text).map_err(|err| {
                 StreamError::BeforeFirstDelta(anyhow!("failed to parse the OpenAI response: {err}"))
@@ -131,13 +136,15 @@ impl ChatGptClient {
     }
 
     /// Run one pre-stream step (headers, an error body, a degraded JSON
-    /// reply) under the configured request timeout. Not retried by
-    /// `retry_delay`: a timeout already spent the whole budget.
+    /// reply) before `deadline`, which is the configured request timeout
+    /// counted from the request start. Not retried by `retry_delay`: a
+    /// timeout already spent the whole budget.
     async fn within_request_timeout<T>(
         &self,
+        deadline: tokio::time::Instant,
         step: impl std::future::Future<Output = Result<T>>,
     ) -> Result<T, StreamError> {
-        tokio::time::timeout(self.request_timeout, step)
+        tokio::time::timeout_at(deadline, step)
             .await
             .map_err(|_| {
                 StreamError::BeforeFirstDelta(anyhow!(

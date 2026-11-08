@@ -19,8 +19,10 @@ use crate::process::{BuiltinProcess, Job, JobProcess, Process, Redirect};
 use crate::shell::Shell;
 use anyhow::Result;
 use dsh_types::Context;
+use parking_lot::RwLock;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub struct MaterializedJob {
     pub job: Job,
@@ -286,6 +288,50 @@ async fn expand_redirects(
     Ok(out)
 }
 
+/// Assignment values made visible to the expansion of later assignments in
+/// the same simple command, then withdrawn on drop (also on an expansion
+/// error). Only the raw value is staged: export flags and derived state
+/// (`PATH` cache, AI client) are left alone, so nothing leaks or reloads.
+struct StagedAssignments {
+    environment: Arc<RwLock<crate::environment::Environment>>,
+    previous: Vec<(String, Option<String>)>,
+}
+
+impl StagedAssignments {
+    fn new(environment: Arc<RwLock<crate::environment::Environment>>) -> Self {
+        Self {
+            environment,
+            previous: Vec::new(),
+        }
+    }
+
+    fn stage(&mut self, name: &str, value: &str) {
+        let mut env = self.environment.write();
+        let variables = &mut env.variable_state.variables;
+        let old = variables.insert(name.to_string(), value.to_string());
+        // Keep only the first snapshot per name: that is the real prior value.
+        if !self.previous.iter().any(|(staged, _)| staged == name) {
+            self.previous.push((name.to_string(), old));
+        }
+    }
+}
+
+impl Drop for StagedAssignments {
+    fn drop(&mut self) {
+        if self.previous.is_empty() {
+            return;
+        }
+        let mut env = self.environment.write();
+        let variables = &mut env.variable_state.variables;
+        for (name, old) in self.previous.drain(..) {
+            match old {
+                Some(value) => variables.insert(name, value),
+                None => variables.remove(&name),
+            };
+        }
+    }
+}
+
 async fn expand_stage(
     host: &mut super::expansion_host::StageExpansionHost<'_>,
     ctx: &Context,
@@ -300,12 +346,21 @@ async fn expand_stage(
         argv.extend(expand_argument_word(host, ctx, word, confirm, resources, &mut trace).await?);
     }
     let mut env_overrides = Vec::with_capacity(stage.env_overrides.len());
-    for assignment in &stage.env_overrides {
+    // Assignments expand left to right, each seeing the earlier ones
+    // (`X=a Y=$X`). The earlier values are only staged for expansion and
+    // withdrawn before redirects; applying them stays with the executor.
+    let mut staged = StagedAssignments::new(host.environment.clone());
+    let last = stage.env_overrides.len().saturating_sub(1);
+    for (index, assignment) in stage.env_overrides.iter().enumerate() {
         let value =
             expand_assignment_value(host, ctx, &assignment.value, confirm, resources, &mut trace)
                 .await?;
+        if index < last {
+            staged.stage(&assignment.name, &value);
+        }
         env_overrides.push((assignment.name.clone(), value));
     }
+    drop(staged);
     let redirects = expand_redirects(host, ctx, stage, confirm, resources, &mut trace).await?;
     let execution_environment = if isolated {
         crate::process::stage_environment::StageEnvironment::Isolated(Box::new(

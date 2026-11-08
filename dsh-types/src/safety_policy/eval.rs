@@ -16,6 +16,9 @@ pub struct EvalFlags {
     eval: &'static [char],
     value: &'static [char],
     long: &'static [&'static str],
+    /// The program parses long options with `getopt_long`, which accepts any
+    /// unambiguous prefix (`env --split` is `--split-string`).
+    long_prefix: bool,
 }
 
 fn eval_flags(name: &str) -> Option<EvalFlags> {
@@ -24,17 +27,20 @@ fn eval_flags(name: &str) -> Option<EvalFlags> {
             eval: &['c'],
             value: &['o'],
             long: &["command"],
+            long_prefix: false,
         },
         // `-C`/`--init-command` runs commands before the shell starts.
         "fish" => EvalFlags {
             eval: &['c', 'C'],
             value: &[],
             long: &["command", "init-command"],
+            long_prefix: false,
         },
         "python" | "python3" => EvalFlags {
             eval: &['c'],
             value: &['m', 'W', 'X', 'Q'],
             long: &[],
+            long_prefix: false,
         },
         // `-l` and `-n` combine with `-e`, so only the letters that always take
         // a value stop the scan.
@@ -42,18 +48,31 @@ fn eval_flags(name: &str) -> Option<EvalFlags> {
             eval: &['e', 'E'],
             value: &['M', 'I', 'F'],
             long: &[],
+            long_prefix: false,
         },
         // Lowercase `-e` evaluates; uppercase `-E` sets the encoding.
         "ruby" => EvalFlags {
             eval: &['e'],
             value: &['I', 'r', 'E', 'C', 'F'],
             long: &[],
+            long_prefix: false,
         },
         // `-p` is `-e` with the result printed.
         "node" | "nodejs" | "deno" | "bun" => EvalFlags {
             eval: &['e', 'p'],
             value: &['r'],
             long: &["eval", "print"],
+            long_prefix: false,
+        },
+        // `-S`/`--split-string` splits its value into a whole new command
+        // line and runs it - `sh -c` without the shell. `-u`, `-C`, `-P` and
+        // `-a` take a value. Options end at the first operand (the command),
+        // which the scan below already honours.
+        "env" => EvalFlags {
+            eval: &['S'],
+            value: &['u', 'C', 'P', 'a'],
+            long: &["split-string"],
+            long_prefix: true,
         },
         _ => return None,
     };
@@ -92,7 +111,14 @@ pub fn string_eval_flag(program: &str, args: &[String]) -> Option<String> {
 
         if let Some(long) = arg.strip_prefix("--") {
             let long = long.split('=').next().unwrap_or(long);
-            if flags.long.contains(&long) {
+            let matches = |name: &&str| {
+                if flags.long_prefix {
+                    !long.is_empty() && name.starts_with(long)
+                } else {
+                    *name == long
+                }
+            };
+            if flags.long.iter().any(matches) {
                 return Some(arg.clone());
             }
             continue;

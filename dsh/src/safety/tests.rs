@@ -309,6 +309,42 @@ fn test_string_eval_flags_are_confirmed() {
     );
 }
 
+/// `env -S '<line>'` runs a string as a command line; the guard saw only the
+/// wrapper and an unregistered "program" named after the whole string.
+#[test]
+fn env_split_string_is_confirmed() {
+    let guard = SafetyGuard::new();
+    let level = SafetyLevel::Normal;
+
+    for args in [
+        vec!["-S", "rm -rf /home/u/proj"],
+        vec!["-iS", "rm -rf /home/u/proj"],
+        vec!["--split-string=rm -rf /home/u/proj"],
+    ] {
+        let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        assert!(
+            matches!(
+                guard.check_command(&level, "env", &args, &[]),
+                SafetyResult::Confirm(msg) if msg.contains("string to execute")
+            ),
+            "env {args:?} was not confirmed"
+        );
+    }
+    assert!(matches!(
+        guard.check_command(
+            &level,
+            "sudo",
+            &["env".to_string(), "-S".to_string(), "rm -rf /x".to_string()],
+            &[]
+        ),
+        SafetyResult::Confirm(_)
+    ));
+    assert_eq!(
+        guard.check_command(&level, "env", &["ls".to_string()], &[]),
+        SafetyResult::Allowed
+    );
+}
+
 #[test]
 fn test_mcp_tool_check() {
     let guard = SafetyGuard::new();

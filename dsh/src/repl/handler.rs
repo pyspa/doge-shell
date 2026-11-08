@@ -538,7 +538,11 @@ pub(crate) async fn handle_key_event(
         )
     {
         let delta = repl.input.len() as isize - len_before as isize;
-        state.adjust(cursor_before, delta);
+        // An insert happens at the old cursor, but a backward delete
+        // (Backspace, Ctrl+W, Ctrl+U) removes text before it and leaves the
+        // cursor at the start of what it removed: the earlier one is the edit
+        // point either way.
+        state.adjust(cursor_before.min(repl.input.cursor()), delta);
     }
 
     // Determine if input was likely modified by the action.

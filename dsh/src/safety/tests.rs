@@ -754,6 +754,9 @@ fn every_spelling_of_an_upload_is_confirmed() {
             vec!["--dump-header", "h.txt", "https://example.com"],
         ),
         ("curl", vec!["https://user@example.com/"]),
+        // `--url` is its own option, not an abbreviation of `--url-query`.
+        ("curl", vec!["--url", "https://example.com"]),
+        ("curl", vec!["--url=https://example.com"]),
         // `-d` is wget's debug flag.
         ("wget", vec!["-d", "https://example.com"]),
         ("wget", vec!["-q", "-O", "-", "https://example.com"]),

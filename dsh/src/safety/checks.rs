@@ -175,14 +175,22 @@ impl SafetyGuard {
     const WGET_UPLOAD_LONG: &'static [&'static str] =
         &["post-data", "post-file", "body-data", "body-file"];
 
+    /// `curl` options whose full name is a prefix of an upload option
+    /// (`--url` vs `--url-query`). An exact name is never an abbreviation.
+    const CURL_NON_UPLOAD_PREFIXES: &'static [&'static str] = &["url"];
+
     /// Whether `arg` is a long option naming (an unambiguous prefix of) one
     /// of `names`, in either the `--name value` or `--name=value` form.
-    fn long_option_matches(arg: &str, names: &[&str]) -> bool {
+    /// `exact_others` are complete option names that merely look like such
+    /// a prefix.
+    fn long_option_matches(arg: &str, names: &[&str], exact_others: &[&str]) -> bool {
         let Some(long) = arg.strip_prefix("--") else {
             return false;
         };
         let long = long.split('=').next().unwrap_or(long);
-        !long.is_empty() && names.iter().any(|name| name.starts_with(long))
+        !long.is_empty()
+            && !exact_others.contains(&long)
+            && names.iter().any(|name| name.starts_with(long))
     }
 
     /// Whether a curl argument reads a file to send: `@path` is curl's
@@ -199,8 +207,11 @@ impl SafetyGuard {
             if arg == "--" {
                 break;
             }
-            if Self::long_option_matches(arg, Self::CURL_UPLOAD_LONG)
-                || Self::reads_file_for_curl(arg)
+            if Self::long_option_matches(
+                arg,
+                Self::CURL_UPLOAD_LONG,
+                Self::CURL_NON_UPLOAD_PREFIXES,
+            ) || Self::reads_file_for_curl(arg)
             {
                 return Some(MESSAGE.to_string());
             }
@@ -236,7 +247,7 @@ impl SafetyGuard {
             if arg == "--" {
                 break;
             }
-            if Self::long_option_matches(arg, Self::WGET_UPLOAD_LONG) {
+            if Self::long_option_matches(arg, Self::WGET_UPLOAD_LONG, &[]) {
                 return Some(
                     "Potential data exfiltration detected (POST data). Proceed?".to_string(),
                 );

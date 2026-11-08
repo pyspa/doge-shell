@@ -571,8 +571,7 @@ fn input_hint(input: &str) -> Option<InputHint> {
 }
 
 fn has_smart_pipe_query(input: &str) -> bool {
-    input
-        .rfind("|?")
+    crate::completion::command_segment::smart_pipe_marker(input)
         .is_some_and(|idx| !input[idx + 2..].trim().is_empty())
 }
 
@@ -584,25 +583,7 @@ fn has_generative_query(input: &str) -> bool {
 }
 
 fn has_ai_pipe_query(input: &str) -> bool {
-    let Some(idx) = input.rfind("|!") else {
-        return false;
-    };
-
-    let command = input[..idx].trim();
-    if command.is_empty() {
-        return false;
-    }
-
-    let query_part = input[idx + 2..].trim();
-    let query = if (query_part.starts_with('"') && query_part.ends_with('"')
-        || query_part.starts_with('\'') && query_part.ends_with('\''))
-        && query_part.len() > 1
-    {
-        &query_part[1..query_part.len() - 1]
-    } else {
-        query_part
-    };
-    !query.is_empty()
+    super::repl_ai::parse_ai_pipe(input).is_some()
 }
 
 /// Draw a right-aligned DarkGrey hint when it fits. `ghost_width` is the

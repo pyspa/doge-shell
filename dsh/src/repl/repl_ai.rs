@@ -396,26 +396,7 @@ impl<'a> Repl<'a> {
     /// Detect AI Output Pipe pattern: `command |! "query"`
     /// Returns (command, query) if pattern is found
     pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
-        let input = self.input.as_str();
-        if let Some(idx) = input.rfind("|!") {
-            let command = input[..idx].trim().to_string();
-            let query_part = input[idx + 2..].trim();
-
-            // Extract query from quotes or as plain text
-            let query = if (query_part.starts_with('"') && query_part.ends_with('"')
-                || query_part.starts_with('\'') && query_part.ends_with('\''))
-                && query_part.len() > 1
-            {
-                query_part[1..query_part.len() - 1].to_string()
-            } else {
-                query_part.to_string()
-            };
-
-            if !command.is_empty() && !query.is_empty() {
-                return Some((command, query));
-            }
-        }
-        None
+        parse_ai_pipe(self.input.as_str())
     }
 
     /// Execute command, capture output, and send to AI for analysis
@@ -514,6 +495,29 @@ fn is_auto_fix_blocked(input: &str) -> bool {
         .into_iter()
         .next()
         .is_some_and(|command| AUTO_FIX_BLOCKLIST.contains(&command.raw.as_str()))
+}
+
+/// Splits `command |! query` at the first top-level `|!`. A `|!` inside
+/// quotes or escapes belongs to the command, so `grep 'a|!b' f` is not an AI
+/// pipe. Surrounding quotes around the query are removed.
+pub(crate) fn parse_ai_pipe(input: &str) -> Option<(String, String)> {
+    let idx = crate::completion::command_segment::ai_pipe_marker(input)?;
+    let command = input[..idx].trim();
+    let query_part = input[idx + 2..].trim();
+    let query = query_part
+        .strip_prefix('"')
+        .and_then(|q| q.strip_suffix('"'))
+        .or_else(|| {
+            query_part
+                .strip_prefix('\'')
+                .and_then(|q| q.strip_suffix('\''))
+        })
+        .unwrap_or(query_part);
+
+    if command.is_empty() || query.is_empty() {
+        return None;
+    }
+    Some((command.to_string(), query.to_string()))
 }
 
 #[cfg(test)]
@@ -726,6 +730,30 @@ mod tests {
         let (command, query) = result.unwrap();
         assert_eq!(command, "kubectl get pods -n default");
         assert_eq!(query, "問題のあるPodを見つけて");
+    }
+
+    #[test]
+    fn ai_pipe_marker_inside_quotes_or_escapes_is_not_an_ai_pipe() {
+        for input in [
+            "grep 'foo|!bar' file.txt",
+            "echo \"a |! b\"",
+            "echo a \\|! b",
+            "echo # |! comment",
+            "echo $(printf '|!')",
+        ] {
+            assert_eq!(parse_ai_pipe(input), None, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn ai_pipe_query_may_contain_another_marker() {
+        assert_eq!(
+            parse_ai_pipe("grep 'a|!b' f |! what's the |! about"),
+            Some((
+                "grep 'a|!b' f".to_string(),
+                "what's the |! about".to_string()
+            ))
+        );
     }
 
     #[tokio::test]

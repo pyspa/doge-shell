@@ -142,7 +142,20 @@ pub(crate) fn command_segment_at_cursor(input: &str, cursor: usize) -> CommandSe
     result
 }
 
+/// Byte offset of the first top-level `|?` (smart pipe) in `input`.
 pub(crate) fn smart_pipe_marker(input: &str) -> Option<usize> {
+    top_level_pipe_marker(input, "|?")
+}
+
+/// Byte offset of the first top-level `|!` (AI output pipe) in `input`.
+pub(crate) fn ai_pipe_marker(input: &str) -> Option<usize> {
+    top_level_pipe_marker(input, "|!")
+}
+
+/// Finds the first `|` control operator followed by `marker`'s second
+/// character, ignoring occurrences inside quotes, escapes, comments and
+/// substitutions.
+fn top_level_pipe_marker(input: &str, marker: &str) -> Option<usize> {
     let pairs = ShellParser::parse(Rule::completion_scan, input)
         .ok()?
         .next()?;
@@ -150,7 +163,7 @@ pub(crate) fn smart_pipe_marker(input: &str) -> Option<usize> {
         let start = pair.as_span().start();
         if pair.as_rule() == Rule::completion_control
             && pair.as_str() == "|"
-            && input[start..].starts_with("|?")
+            && input[start..].starts_with(marker)
             && !command_segment_at_cursor(&input[..start], start).suppressed
         {
             return Some(start);

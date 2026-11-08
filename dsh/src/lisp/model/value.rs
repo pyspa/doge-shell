@@ -5,6 +5,17 @@ use std::{cell::RefCell, cmp::Ordering};
 use std::{collections::HashMap, fmt::Debug};
 
 use super::{Env, FloatType, IntType, Lambda, List, RuntimeError, Symbol, TableRc};
+
+/// Why an arithmetic operator on two `Value`s failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArithError {
+    /// The operand kinds do not support this operator.
+    Type,
+    /// Integer result does not fit in `IntType`.
+    Overflow,
+    /// Integer division by zero.
+    DivideByZero,
+}
 use crate::lisp;
 
 pub type NativeClosureType =
@@ -367,6 +378,51 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
+impl Value {
+    /// Language-level ordering used by `<`, `<=`, `>`, `>=`: `None` for
+    /// values that have no meaningful order (mixed kinds, NaN), so those
+    /// comparisons evaluate to false instead of picking an arbitrary order.
+    pub(crate) fn compare(&self, other: &Value) -> Option<Ordering> {
+        if self == other {
+            return Some(Ordering::Equal);
+        }
+
+        match (self, other) {
+            (Value::True, Value::False) => Some(Ordering::Less),
+            (Value::False, Value::True) => Some(Ordering::Greater),
+            (Value::String(this), Value::String(other)) => this.partial_cmp(other),
+            (Value::Symbol(Symbol(this)), Value::Symbol(Symbol(other))) => this.partial_cmp(other),
+            (Value::Int(this), Value::Int(other)) => this.partial_cmp(other),
+            (Value::Float(this), Value::Float(other)) => this.partial_cmp(other),
+            (Value::Int(this), Value::Float(other)) => {
+                int_type_to_float_type(this).partial_cmp(other)
+            }
+            (Value::Float(this), Value::Int(other)) => {
+                this.partial_cmp(&int_type_to_float_type(other))
+            }
+            _ => None,
+        }
+    }
+
+    fn kind_rank(&self) -> u8 {
+        match self {
+            Value::True | Value::False => 0,
+            Value::Int(_) | Value::Float(_) => 1,
+            Value::String(_) => 2,
+            Value::Symbol(_) => 3,
+            _ => 4,
+        }
+    }
+
+    fn as_float(&self) -> Option<FloatType> {
+        match self {
+            Value::Int(value) => Some(int_type_to_float_type(value)),
+            Value::Float(value) => Some(*value),
+            _ => None,
+        }
+    }
+}
+
 impl PartialOrd for Value {
     fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -374,12 +430,15 @@ impl PartialOrd for Value {
 }
 
 impl Add<&Value> for &Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn add(self, other: &Value) -> Self::Output {
         match (self, other) {
             // same type
-            (Value::Int(this), Value::Int(other)) => Ok(Value::from(this + other)),
+            (Value::Int(this), Value::Int(other)) => this
+                .checked_add(*other)
+                .map(Value::from)
+                .ok_or(ArithError::Overflow),
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this + other)),
             (Value::String(this), Value::String(other)) => Ok(Value::from(this.clone() + other)),
 
@@ -401,13 +460,13 @@ impl Add<&Value> for &Value {
             (Value::Int(this), Value::String(other)) => Ok(Value::from(this.to_string() + other)),
             (Value::Float(this), Value::String(other)) => Ok(Value::from(this.to_string() + other)),
 
-            _ => Err(()),
+            _ => Err(ArithError::Type),
         }
     }
 }
 
 impl Add<Value> for Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn add(self, other: Value) -> Self::Output {
         &self + &other
@@ -415,11 +474,14 @@ impl Add<Value> for Value {
 }
 
 impl Sub<&Value> for &Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn sub(self, other: &Value) -> Self::Output {
         match (self, other) {
-            (Value::Int(this), Value::Int(other)) => Ok(Value::from(this - other)),
+            (Value::Int(this), Value::Int(other)) => this
+                .checked_sub(*other)
+                .map(Value::from)
+                .ok_or(ArithError::Overflow),
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this - other)),
 
             (Value::Int(this), Value::Float(other)) => {
@@ -429,13 +491,13 @@ impl Sub<&Value> for &Value {
                 Ok(Value::from(this - int_type_to_float_type(other)))
             }
 
-            _ => Err(()),
+            _ => Err(ArithError::Type),
         }
     }
 }
 
 impl Sub<Value> for Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn sub(self, other: Value) -> Self::Output {
         &self - &other
@@ -443,11 +505,14 @@ impl Sub<Value> for Value {
 }
 
 impl Mul<&Value> for &Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn mul(self, other: &Value) -> Self::Output {
         match (self, other) {
-            (Value::Int(this), Value::Int(other)) => Ok(Value::from(this * other)),
+            (Value::Int(this), Value::Int(other)) => this
+                .checked_mul(*other)
+                .map(Value::from)
+                .ok_or(ArithError::Overflow),
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this * other)),
 
             (Value::Int(this), Value::Float(other)) => {
@@ -457,13 +522,13 @@ impl Mul<&Value> for &Value {
                 Ok(Value::from(this * int_type_to_float_type(other)))
             }
 
-            _ => Err(()),
+            _ => Err(ArithError::Type),
         }
     }
 }
 
 impl Mul<Value> for Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn mul(self, other: Value) -> Self::Output {
         &self * &other
@@ -471,11 +536,13 @@ impl Mul<Value> for Value {
 }
 
 impl Div<&Value> for &Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn div(self, other: &Value) -> Self::Output {
         match (self, other) {
-            (Value::Int(this), Value::Int(other)) => Ok(Value::from(this / other)),
+            (Value::Int(this), Value::Int(other)) => {
+                checked_int_div(*this, *other).map(Value::from)
+            }
             (Value::Float(this), Value::Float(other)) => Ok(Value::from(this / other)),
 
             (Value::Int(this), Value::Float(other)) => {
@@ -485,17 +552,26 @@ impl Div<&Value> for &Value {
                 Ok(Value::from(this / int_type_to_float_type(other)))
             }
 
-            _ => Err(()),
+            _ => Err(ArithError::Type),
         }
     }
 }
 
 impl Div<Value> for Value {
-    type Output = Result<Value, ()>;
+    type Output = Result<Value, ArithError>;
 
     fn div(self, other: Value) -> Self::Output {
         &self / &other
     }
+}
+
+/// Integer division that reports division by zero and `MIN / -1` overflow
+/// instead of panicking.
+pub(crate) fn checked_int_div(this: IntType, other: IntType) -> Result<IntType, ArithError> {
+    if other == 0 {
+        return Err(ArithError::DivideByZero);
+    }
+    this.checked_div(other).ok_or(ArithError::Overflow)
 }
 
 /// Convert whatever int type we're using to whatever float type we're using
@@ -504,11 +580,21 @@ pub(crate) fn int_type_to_float_type(i: &IntType) -> FloatType {
 }
 
 impl Ord for Value {
+    /// Total order for `sort` and ordered containers. It must not call
+    /// `partial_cmp`, which delegates here; numbers that `compare` cannot
+    /// order (NaN) fall back to `total_cmp` so sorting stays a total order.
     fn cmp(&self, other: &Self) -> Ordering {
-        match self.partial_cmp(other) {
-            Some(ordering) => ordering,
-            None => format!("{self:?}").cmp(&format!("{other:?}")),
+        if let Some(ordering) = self.compare(other) {
+            return ordering;
         }
+        if let (Some(this), Some(other)) = (self.as_float(), other.as_float()) {
+            return this.total_cmp(&other);
+        }
+        // Group by kind first so mixed lists cannot form cycles such as
+        // True < False < Int(..) < True through the debug-string fallback.
+        self.kind_rank()
+            .cmp(&other.kind_rank())
+            .then_with(|| format!("{self:?}").cmp(&format!("{other:?}")))
     }
 }
 

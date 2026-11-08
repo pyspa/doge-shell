@@ -565,7 +565,7 @@ fn print_tool_definitions(tools: Vec<serde_json::Value>, empty_message: &str) ->
 
         // Truncate description if too long
         let desc = if desc.len() > 50 {
-            format!("{}...", &desc[..47])
+            format!("{}...", &desc[..desc.floor_char_boundary(47)])
         } else {
             desc.to_string()
         };

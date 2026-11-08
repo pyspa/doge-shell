@@ -63,7 +63,7 @@ async fn production_serve_router_rejects_outside_implicit_indexes() {
             let index = directory.join("index.html");
             symlink(target, &index).unwrap();
             let (status, _, body) = request(&root, url, true, false).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(status, StatusCode::NOT_FOUND);
             assert!(!body.contains("OUTSIDE_SENTINEL"));
             fs::remove_file(index).unwrap();
         }
@@ -129,7 +129,7 @@ async fn production_serve_router_blocks_encoded_traversal() {
     fs::write(dir.path().join("outside.txt"), "OUTSIDE_SENTINEL").unwrap();
     for url in ["/%2e%2e/outside.txt", "/%2e%2e%2foutside.txt"] {
         let (status, _, body) = request(&root, url, true, false).await;
-        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(!body.contains("OUTSIDE_SENTINEL"));
     }
 }
@@ -326,7 +326,7 @@ async fn directory_redirect_never_exposes_outside_symlinks_or_traversal() {
             "/%2e%2e%2foutside",
         ] {
             let (status, headers, _) = request(&root, path, index, false).await;
-            assert_eq!(status, StatusCode::FORBIDDEN);
+            assert_eq!(status, StatusCode::NOT_FOUND);
             assert!(!headers.contains_key("location"));
         }
     }
@@ -339,15 +339,48 @@ async fn directory_redirect_cannot_become_a_network_path_reference() {
     // Backslash is a filename character on both supported Unix platforms.
     let directory_name = std::ffi::OsStr::new(r"\example.com");
     fs::create_dir(root.join(directory_name)).unwrap();
-    for path in [format!("/{}", root.display()), r"/\example.com".into()] {
-        let (status, headers, _) = request(&root, &path, false, false).await;
-        assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
-        let base = reqwest::Url::parse("http://localhost/").unwrap();
-        let redirect = base.join(headers["location"].to_str().unwrap()).unwrap();
-        assert_eq!(redirect.host_str(), Some("localhost"), "{path}");
-        assert_eq!(
-            request(&root, redirect.path(), false, false).await.0,
-            StatusCode::OK
-        );
+    // A `//`-prefixed spelling decodes to an absolute path, which is refused
+    // before any redirect is built - so it can carry no Location at all.
+    let (status, headers, _) = request(&root, &format!("/{}", root.display()), false, false).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!headers.contains_key("location"));
+    let (status, headers, _) = request(&root, r"/\example.com", false, false).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    let base = reqwest::Url::parse("http://localhost/").unwrap();
+    let redirect = base.join(headers["location"].to_str().unwrap()).unwrap();
+    assert_eq!(redirect.host_str(), Some("localhost"));
+    assert_eq!(
+        request(&root, redirect.path(), false, false).await.0,
+        StatusCode::OK
+    );
+}
+
+/// A decoded absolute path used to be joined as-is (`join` replaces the base),
+/// so `/%2Fetc%2Fshadow` answered 403 and `/%2Fetc%2Fnope` 404 - an existence
+/// oracle for the whole filesystem. Anything outside the root is now one 404.
+#[tokio::test]
+async fn production_serve_router_has_no_existence_oracle_outside_the_root() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path().join("root");
+    fs::create_dir(&root).unwrap();
+    let secret = fs::canonicalize(dir.path()).unwrap().join("secret.txt");
+    fs::write(&secret, "OUTSIDE_SENTINEL").unwrap();
+    let missing = secret.with_file_name("missing.txt");
+    for target in [&secret, &missing] {
+        let raw = target.display().to_string();
+        for url in [format!("/{}", raw.replace('/', "%2F")), format!("/{raw}")] {
+            let (status, _, body) = request(&root, &url, true, false).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{url}");
+            assert!(!body.contains("OUTSIDE_SENTINEL"));
+        }
     }
+}
+
+#[tokio::test]
+async fn production_serve_file_sets_nosniff() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("data.txt"), "plain").unwrap();
+    let (status, headers, _) = request(dir.path(), "/data.txt", false, false).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-content-type-options"], "nosniff");
 }

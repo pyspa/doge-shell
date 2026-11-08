@@ -36,6 +36,32 @@ async fn refreshed_analysis_clears_stale_completion_before_accepting() {
 }
 
 #[tokio::test]
+async fn command_match_that_is_not_a_line_completion_is_not_acceptable() {
+    let environment = Environment::new();
+    environment
+        .write()
+        .set_executable_names(vec!["auditgrep".to_string()]);
+    let mut shell = Shell::new(environment);
+    let mut repl = Repl::new(&mut shell);
+    // A later list element, and a command already typed in full: none has a
+    // full-line completion, so Ctrl+E/Right must stay free for moving the
+    // cursor or accepting an AI suggestion.
+    for line in ["cat a && auditg", "cat a; auditg", "auditgrep"] {
+        repl.input.reset(line.into());
+        let analysis = repl.analyze_input(line, None);
+        assert_eq!(analysis.completion_full, None, "{line}");
+        let mut suffix = None;
+        super::apply_fresh_analysis(&mut repl, &mut suffix, analysis);
+        assert!(repl.input.completion.is_none(), "{line}");
+    }
+
+    repl.input.reset("auditg".into());
+    let analysis = repl.analyze_input("auditg", None);
+    assert_eq!(analysis.completion_full.as_deref(), Some("auditgrep"));
+    assert_eq!(analysis.completion.as_deref(), Some("rep"));
+}
+
+#[tokio::test]
 async fn accepting_stale_completion_preserves_current_input() {
     let mut shell = Shell::new(Environment::new());
     let mut repl = Repl::new(&mut shell);

@@ -70,10 +70,14 @@ pub(crate) fn analyze_input(
                         // Completion logic for command names
                         if current && completion.is_none() => {
                             if let Some(file) = repl.shell.environment.read().search_prefix(word) {
-                                if file.len() >= input.len() && file.starts_with(input) {
+                                // Only a strict extension of the whole line is
+                                // a completion; a bare command name for a later
+                                // list element would be a no-op accept that
+                                // shadows Ctrl+E and AI-suggestion acceptance.
+                                if file.len() > input.len() && file.starts_with(input) {
                                     completion = Some(file[input.len()..].to_string());
+                                    completion_full = Some(file);
                                 }
-                                completion_full = Some(file);
                                 break;
                             } else if let Some(filesystem) = filesystem.as_ref()
                                 && let Some(path_completion) =

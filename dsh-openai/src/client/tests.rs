@@ -1115,3 +1115,91 @@ fn a_streamed_event_over_the_size_cap_is_refused() {
     let error = result.expect_err("an oversized event must fail the stream");
     assert!(error.to_string().contains("16 MiB"), "{error:#}");
 }
+
+/// A chat/completions client pointed at a local fixture server, with a
+/// sub-second request timeout (`with_timeout` skips the env clamp).
+fn local_stream_client(addr: std::net::SocketAddr, timeout: Duration) -> ChatGptClient {
+    let config = OpenAiConfig::from_getter(move |key| match key {
+        "AI_CHAT_API_KEY" => Some("test-key".to_string()),
+        "AI_CHAT_MODEL" => Some("local-model".to_string()),
+        "AI_CHAT_BASE_URL" => Some(format!("http://{addr}/v1")),
+        "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".to_string()),
+        "AI_CHAT_API" => Some("chat_completions".to_string()),
+        _ => None,
+    })
+    .with_timeout(timeout);
+    ChatGptClient::try_from_config(&config).expect("client should initialize")
+}
+
+/// Hold the connection open, sending nothing more, until the client hangs up.
+fn stall_until_client_disconnects(mut stream: std::net::TcpStream) {
+    use std::io::Read;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    while matches!(stream.read(&mut buf), Ok(n) if n > 0) {}
+}
+
+/// A server that accepts the connection but never sends headers used to hold
+/// a streaming turn for `MAX_TIMEOUT_SECS` (30 minutes): the configured
+/// request timeout only ran as an idle timer once the event stream began.
+#[test]
+fn a_stream_whose_headers_never_arrive_times_out_at_the_request_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        stall_until_client_disconnects(stream);
+    });
+
+    let client = local_stream_client(addr, Duration::from_millis(300));
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let started = std::time::Instant::now();
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    let elapsed = started.elapsed();
+    let error = result.expect_err("a silent server must time out");
+    drop(client);
+    server.join().expect("fixture server thread panicked");
+    assert!(error.to_string().contains("timed out"), "{error:#}");
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}
+
+/// The same bound applies to reading a non-2xx error body that never ends.
+#[test]
+fn a_stream_error_body_that_never_ends_times_out_at_the_request_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        use std::io::Write;
+        let (mut stream, _) = listener.accept().unwrap();
+        let _ = read_request(&mut stream);
+        let _ = stream.write_all(
+            b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"error\":",
+        );
+        let _ = stream.flush();
+        stall_until_client_disconnects(stream);
+    });
+
+    let client = local_stream_client(addr, Duration::from_millis(300));
+    let messages = vec![json!({ "role": "user", "content": "hi" })];
+    let started = std::time::Instant::now();
+    let result = client.send_chat_streaming(
+        &messages,
+        &ChatRequestOptions::new(),
+        Some(&|| false),
+        &mut |_| {},
+    );
+    let elapsed = started.elapsed();
+    let error = result.expect_err("a stalled error body must time out");
+    drop(client);
+    server.join().expect("fixture server thread panicked");
+    assert!(error.to_string().contains("timed out"), "{error:#}");
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

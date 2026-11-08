@@ -526,3 +526,47 @@ script = "mkdir -p d/e; touch d/e/y d/z; printf '[%s]\\n' d/*/y"
 status = 0
 stdout_exact = "[d/e/y]\n"
 stderr_exact = ""
+
+# Quoted empty strings are kept as one empty field.
+[[case]]
+id = "expansion.empty-double-quoted-arg-is-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a \"\" b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.empty-double-quoted-test-operand"
+class = "posix"
+mode = "command"
+script = "[ -n \"\" ]; echo ST:$?"
+
+[case.expect]
+status = 0
+stdout_exact = "ST:1\n"
+
+[[case]]
+id = "expansion.adjacent-empty-double-quotes-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a \"\"\"\" b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""
+
+[[case]]
+id = "expansion.default-word-empty-double-quotes-one-field"
+class = "posix"
+mode = "command"
+script = "printf '[%s]\\n' a ${DOGESH_SPEC_NEVER_SET-\"\"} b"
+
+[case.expect]
+status = 0
+stdout_exact = "[a]\n[]\n[b]\n"
+stderr_exact = ""

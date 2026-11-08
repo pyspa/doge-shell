@@ -478,3 +478,15 @@ status = 0
 stdout_contains = ["AFTER:1", "missing-directory/out"]
 stdout_not_contains = ["NEVER"]
 stderr_exact = ""
+
+# `> ""` is an open failure on the empty path, not an ambiguous redirect.
+[[case]]
+id = "redirection.empty-quoted-target-is-open-failure"
+class = "posix"
+mode = "command"
+script = "echo x > \"\" || echo RECOVERED"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED"]
+stderr_not_contains = ["ambiguous"]

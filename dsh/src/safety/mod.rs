@@ -69,8 +69,8 @@ impl SafetyGuard {
         guard.register_checker("chmod", Self::check_recursive);
         guard.register_checker("chown", Self::check_recursive);
         guard.register_checker("cp", Self::check_cp);
-        guard.register_checker("curl", Self::check_data_exfiltration);
-        guard.register_checker("wget", Self::check_data_exfiltration);
+        guard.register_checker("curl", Self::check_curl_exfiltration);
+        guard.register_checker("wget", Self::check_wget_exfiltration);
 
         // Sensitive file readers
         for cmd in &["cat", "less", "more", "head", "tail", "grep", "awk", "sed"] {

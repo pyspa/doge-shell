@@ -375,6 +375,7 @@ fn get_span(pair: Pair<Rule>, pos: usize) -> Option<(Span, bool)> {
         | Rule::proc_subst_direction_out
         | Rule::stdout_redirect_direction
         | Rule::stderr_redirect_direction
+        | Rule::fd_redirect_direction
         | Rule::stdouterr_redirect_direction => {
             let pair_span = pair.as_span();
             if pair_span.start() < pos && pos <= pair_span.end() {

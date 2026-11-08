@@ -134,10 +134,19 @@ fn parse_assignment(pair: Pair<Rule>, ctx: &ParseContext) -> Result<(String, Pla
 /// Build the redirections one `redirect` pair stands for (pure, no resolution).
 fn parse_redirect(pair: Pair<Rule>, ctx: &ParseContext) -> Result<Vec<PlannedRedirect>> {
     let mut direction = None;
+    let mut numbered_fd = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::fd_dup => return parse_fd_dup(inner),
+            Rule::fd_redirect_direction => {
+                for part in inner.into_inner() {
+                    match part.as_rule() {
+                        Rule::fd_number => numbered_fd = Some(parse_fd(part.as_str())?),
+                        rule => direction = Some(rule),
+                    }
+                }
+            }
             Rule::stdout_redirect_direction
             | Rule::stderr_redirect_direction
             | Rule::stdouterr_redirect_direction
@@ -181,6 +190,18 @@ fn parse_redirect(pair: Pair<Rule>, ctx: &ParseContext) -> Result<Vec<PlannedRed
                     }],
                     Some(Rule::stdin_redirect_direction_in) => vec![PlannedRedirect {
                         fd: STDIN_FILENO,
+                        op: PlannedRedirectOp::ReadFile(target),
+                    }],
+                    Some(Rule::fd_redirect_out) => vec![PlannedRedirect {
+                        fd: numbered_fd.unwrap_or(STDOUT_FILENO),
+                        op: PlannedRedirectOp::WriteFile(target),
+                    }],
+                    Some(Rule::fd_redirect_append) => vec![PlannedRedirect {
+                        fd: numbered_fd.unwrap_or(STDOUT_FILENO),
+                        op: PlannedRedirectOp::AppendFile(target),
+                    }],
+                    Some(Rule::fd_redirect_in) => vec![PlannedRedirect {
+                        fd: numbered_fd.unwrap_or(STDIN_FILENO),
                         op: PlannedRedirectOp::ReadFile(target),
                     }],
                     _ => Vec::new(),

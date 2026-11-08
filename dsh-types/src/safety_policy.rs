@@ -321,6 +321,24 @@ pub fn destructive_rm_warning(args: &[String]) -> Option<String> {
     None
 }
 
+/// Whether a session approval entry is in a non-command namespace.
+///
+/// The agent's session approvals are one exact-match list: a bare command
+/// line, or a `<namespace>:...` key (`write:<path>`, `mcp:<tool>:<args>`,
+/// `sensitive:`, `delete:`, `hook:`, `skills:`, `instructions:`). A command
+/// line spelled like such a key (`write:/repo/.git/hooks/pre-commit`) must
+/// never be stored or matched as a command approval, or an "always" for that
+/// "command" would silently approve the write it names. Any leading
+/// `[a-z_-]+:` counts, so a namespace added later is covered too; no real
+/// program is named like that.
+pub fn is_namespaced_approval_key(entry: &str) -> bool {
+    let entry = entry.trim_start();
+    let namespace_len = entry
+        .find(|c: char| !(c.is_ascii_lowercase() || c == '_' || c == '-'))
+        .unwrap_or(entry.len());
+    namespace_len > 0 && entry[namespace_len..].starts_with(':')
+}
+
 /// The program itself, without the directory it was found in.
 fn program_name(program: &str) -> String {
     Path::new(program)

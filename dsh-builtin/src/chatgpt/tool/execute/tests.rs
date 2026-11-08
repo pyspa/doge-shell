@@ -293,6 +293,42 @@ fn run_remembers_an_always_approval_for_the_session() {
     assert_eq!(proxy.agent_session_allowlist, vec!["true".to_string()]);
 }
 
+/// Command approvals share one exact-match list with `write:<path>`,
+/// `mcp:<tool>`, ... keys. A model that `execute`s the literal string
+/// `write:/repo/.git/hooks/pre-commit` and gets an "always" would have
+/// silently approved every later write to that file.
+#[test]
+fn a_command_spelled_like_another_approval_key_is_never_remembered() {
+    let _lock = env_lock();
+    let _env_guard = EnvGuard::set(EXECUTE_TOOL_ENV_ALLOWLIST, "");
+    let command = "write:/nonexistent-dogesh-test/.git/hooks/pre-commit";
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Confirm("unknown command".to_string()),
+        approval_decision: Some(ApprovalDecision::AllowAlways),
+        ..TestProxy::default()
+    };
+
+    let _ = run(&json!({ "command": command }).to_string(), &mut proxy);
+    assert!(
+        proxy.agent_session_allowlist.is_empty(),
+        "{:?}",
+        proxy.agent_session_allowlist
+    );
+
+    // Nor does an existing key of that shape count as approving the command.
+    let mut proxy = TestProxy {
+        current_dir: std::env::current_dir().unwrap(),
+        agent_verdict: AgentCommandVerdict::Confirm("unknown command".to_string()),
+        agent_session_allowlist: vec![command.to_string()],
+        confirm_result: false,
+        ..TestProxy::default()
+    };
+    let result = run(&json!({ "command": command }).to_string(), &mut proxy).unwrap();
+    assert_eq!(proxy.confirm_calls, 1);
+    assert!(result.contains("cancelled by user"), "{result}");
+}
+
 /// Pipelines run now. Refusing them outright meant `cargo test | tail`
 /// could not be expressed, so every multi-step job cost a round trip per
 /// step; what makes it safe is the policy verdict, not a token blacklist.

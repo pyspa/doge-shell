@@ -74,8 +74,10 @@ doge-shell が**製品として持つ** AI 機能の設計方針の正典。`doc
     両者は同じ `RecoveryState` を共有し、**1 の判定を 2 より先に評価する**。逆にすると
     `reasoning_effort` が `DROPPABLE_FIELDS` にも入っているため 2 が先に一致して「落として」しまい、
     サーバ側既定が `none` 以外のまま同じ 400 が返って手詰まりになる。
-  - `AI_CHAT_ALLOW_INSECURE_HTTP`: `http://` の base URL を許可する。既定では https へ差し替え、
-    stderr に 1 回警告する。
+  - `AI_CHAT_ALLOW_INSECURE_HTTP`: `http://` の base URL を許可する。既定では `http://` や
+    scheme 無し・未知 scheme の base URL を設定エラーとして `validate()` が拒否する（scheme は
+    大文字小文字を区別しない）。`api.openai.com` へは差し替えない: 第三者・ローカル用の API key を
+    OpenAI へ bearer として送ってしまうため。
 
 ### OpenCode Go / Zen
 

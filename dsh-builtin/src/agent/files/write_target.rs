@@ -126,17 +126,11 @@ impl WriteTarget {
 
     pub(crate) fn previous(&self) -> io::Result<String> {
         let mut file = self.open_read()?;
-        let mut text = String::new();
         if self.restricted {
-            (&mut file)
-                .take(16 * 1024 * 1024 + 1)
-                .read_to_string(&mut text)?;
-            if text.len() > 16 * 1024 * 1024 {
-                return Err(io::Error::other("task file exceeds 16 MiB"));
-            }
-        } else {
-            file.read_to_string(&mut text)?;
+            return super::read_capped_text(file);
         }
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
         Ok(text)
     }
 

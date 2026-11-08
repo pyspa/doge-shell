@@ -206,7 +206,11 @@ impl OpenAiConfig {
             .iter()
             .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
 
-        let base_url = getter("AI_CHAT_BASE_URL").or_else(|| getter("OPENAI_BASE_URL"));
+        // Same rule for the base URL: a blank `AI_CHAT_BASE_URL` must not hide
+        // `OPENAI_BASE_URL` and send that server's key to the default endpoint.
+        let base_url = ["AI_CHAT_BASE_URL", "OPENAI_BASE_URL"]
+            .iter()
+            .find_map(|key| getter(key).filter(|v| !v.trim().is_empty()));
 
         let default_model = getter("AI_CHAT_MODEL").or_else(|| getter("OPENAI_MODEL"));
 

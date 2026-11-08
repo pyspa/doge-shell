@@ -209,6 +209,7 @@ impl<'a> Repl<'a> {
                 last_drawn_cursor_y: 0,
                 last_preprompt_plain: None,
                 status_line: status_line::shared(input_preferences.status_line),
+                bracketed_paste_enabled: false,
             },
             completion_ui: CompletionUiState {
                 start_completion: false,

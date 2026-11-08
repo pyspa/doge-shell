@@ -673,3 +673,31 @@ fn test_set_cursor_from_display_width() {
     input.set_cursor_from_display_width(10);
     assert_eq!(input.cursor(), 5);
 }
+
+// === parser word lookup ===
+
+#[test]
+fn parser_word_lookup_uses_byte_offsets_after_multibyte_words() {
+    use pest::Parser as _;
+
+    // `cursor` counts chars, pest spans count bytes: the multibyte word ends
+    // at byte 26 while the char cursor at end of line is 16, so a raw char
+    // cursor would mark the multibyte word current instead of `src`.
+    let input = input_with("echo 日本語ファイル src");
+    assert_eq!(input.cursor(), input.len());
+
+    let current_words = |words: Vec<(Rule, Span<'_>, bool)>| -> Vec<String> {
+        words
+            .into_iter()
+            .filter(|(_, _, current)| *current)
+            .map(|(_, span, _)| span.as_str().to_string())
+            .collect()
+    };
+    assert_eq!(current_words(input.get_words().expect("parse")), ["src"]);
+
+    let pairs = parser::ShellParser::parse(Rule::commands, input.as_str()).expect("parse");
+    assert_eq!(current_words(input.get_words_from_pairs(pairs)), ["src"]);
+
+    let (_, span) = input.get_cursor_word().expect("parse").expect("word");
+    assert_eq!(span.as_str(), "src");
+}

@@ -230,7 +230,16 @@ impl ChatGptClient {
                 }
             };
 
-            for payload in splitter.push(&chunk) {
+            let payloads = splitter.push(&chunk);
+            // The Responses transport stops at the same size; without this a
+            // server that never closes an event grew the buffer without bound.
+            if splitter.buffered_len() > crate::stream::MAX_SSE_BUFFER_BYTES {
+                return Err(Self::wrap_stream_error(
+                    anyhow!("the OpenAI stream sent an event larger than the 16 MiB limit"),
+                    delta_sent,
+                ));
+            }
+            for payload in payloads {
                 if is_done_marker(&payload) {
                     let value = aggregator.finish();
                     usage::record_response(&value);

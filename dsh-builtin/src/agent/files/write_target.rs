@@ -4,7 +4,7 @@ use nix::libc;
 use std::{
     ffi::CString,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Component, Path},
 };
 
@@ -125,13 +125,10 @@ impl WriteTarget {
     }
 
     pub(crate) fn previous(&self) -> io::Result<String> {
-        let mut file = self.open_read()?;
-        if self.restricted {
-            return super::read_capped_text(file);
-        }
-        let mut text = String::new();
-        file.read_to_string(&mut text)?;
-        Ok(text)
+        // Capped on every path: the foreground `edit` preview reads the
+        // existing file too, and an oversized one degrades to "existing
+        // content unavailable" there instead of loading it all into memory.
+        super::read_capped_text(self.open_read()?)
     }
 
     /// Reopen the original path without following any component symlink.

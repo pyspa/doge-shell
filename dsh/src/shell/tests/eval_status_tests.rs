@@ -18,7 +18,7 @@ fn test_shell() -> (Shell, Context) {
 }
 
 #[tokio::test]
-async fn generic_errors_replace_prior_status_and_allow_recovery() {
+async fn ambiguous_redirect_fails_one_command_and_replaces_prior_status() {
     let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
     for prior in [0, 7] {
         let (mut shell, mut ctx) = test_shell();
@@ -27,18 +27,17 @@ async fn generic_errors_replace_prior_status_and_allow_recovery() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a"), "").unwrap();
         std::fs::write(dir.path().join("b"), "").unwrap();
-        let error = shell
+        // An ambiguous redirect is an ordinary command failure: it gates
+        // `&&` and publishes status 1 instead of aborting the evaluation.
+        let status = shell
             .eval_str(
                 &mut ctx,
-                format!("echo hidden > {}/* || RECOVERED=bad", dir.path().display()),
+                format!("echo hidden > {}/* && RECOVERED=bad", dir.path().display()),
                 false,
             )
             .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("ambiguous redirect"),
-            "{error:?}"
-        );
+            .unwrap();
+        assert_eq!(status, 1, "prior status {prior}");
         assert_eq!(
             shell.environment.read().last_exit_status,
             1,

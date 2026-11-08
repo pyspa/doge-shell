@@ -68,12 +68,24 @@ stderr_contains = ["!& requires an interactive input/output TTY"]
 id = "interactive.generic-eval-error-status-and-recovery"
 class = "dogesh"
 mode = "interactive"
-script = "touch status-a status-b\necho hidden > status-* || echo should-not-run\necho ERROR_STATUS:$?\nRECOVERED=yes\necho RECOVERY_STATUS:$?"
+script = "echo 'unterminated || echo should-not-run\necho ERROR_STATUS:$?\nRECOVERED=yes\necho RECOVERY_STATUS:$?"
 
 [case.expect]
 status = 0
 stdout_contains = ["ERROR_STATUS:1", "RECOVERY_STATUS:0"]
 stdout_not_contains = ["should-not-run"]
+stderr_contains = ["syntax error"]
+
+# An ambiguous redirect is an ordinary command failure, not an eval error.
+[[case]]
+id = "interactive.ambiguous-redirect-is-command-failure"
+class = "posix"
+mode = "interactive"
+script = "touch status-a status-b\necho hidden > status-* || echo RECOVERED:$?\necho STATUS:$?"
+
+[case.expect]
+status = 0
+stdout_contains = ["RECOVERED:1", "STATUS:0"]
 stderr_contains = ["ambiguous redirect"]
 
 [[case]]

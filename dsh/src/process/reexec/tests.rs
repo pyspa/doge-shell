@@ -1,5 +1,34 @@
 use super::*;
 
+#[test]
+fn cargo_test_layouts_resolve_the_profile_binary_directory() {
+    use std::path::Path;
+
+    for (test, profile) in [
+        ("/tmp/target/debug/deps/doge_shell-abc", "/tmp/target/debug"),
+        (
+            "/tmp/target/debug/build/doge-shell/abc/out/doge_shell-abc",
+            "/tmp/target/debug",
+        ),
+        (
+            "/tmp/target/aarch64-apple-darwin/release/build/doge-shell/abc/out/doge_shell-abc",
+            "/tmp/target/aarch64-apple-darwin/release",
+        ),
+    ] {
+        assert_eq!(
+            cargo_test_bin_dir(Path::new(test)),
+            Some(Path::new(profile))
+        );
+    }
+    for binary in [
+        "/example/install/dogesh",
+        "/tmp/target/debug/dogesh",
+        "/tmp/out/dogesh",
+    ] {
+        assert_eq!(cargo_test_bin_dir(Path::new(binary)), None);
+    }
+}
+
 /// An inherited auxiliary fd referenced as `/dev/fd/N` survives an
 /// internal helper spawn: the protocol's dynamically reserved targets
 /// must never overwrite it.

@@ -2,33 +2,145 @@
   "command": "mise",
   "description": "Development tool version and task manager",
   "global_options": [
-    { "short": "-C", "long": "--cd", "description": "Change directory before running", "takes_value": true, "value_type": { "type": "Directory" } },
-    { "short": "-v", "long": "--verbose", "description": "Increase verbosity" },
-    { "short": "-q", "long": "--quiet", "description": "Decrease verbosity" },
-    { "short": "-h", "long": "--help", "description": "Show help" }
+    {
+      "short": "-C",
+      "long": "--cd",
+      "description": "Change directory before running",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "short": "-v",
+      "long": "--verbose",
+      "description": "Increase verbosity"
+    },
+    {
+      "short": "-q",
+      "long": "--quiet",
+      "description": "Decrease verbosity"
+    },
+    {
+      "short": "-h",
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "long": "--env",
+      "description": "Load named config environments",
+      "short": "-E",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--jobs",
+      "description": "Parallel jobs",
+      "short": "-j",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "--yes",
+      "description": "Accept confirmation prompts",
+      "short": "-y"
+    },
+    {
+      "long": "--raw",
+      "description": "Connect directly to terminal"
+    },
+    {
+      "long": "--locked",
+      "description": "Require locked download URLs"
+    },
+    {
+      "long": "--silent",
+      "description": "Suppress task output"
+    },
+    {
+      "long": "--version",
+      "description": "Show mise version",
+      "short": "-V"
+    }
   ],
   "subcommands": [
     {
       "name": "install",
       "description": "Install tool versions",
       "options": [
-        { "short": "-f", "long": "--force", "description": "Force reinstall even if already installed" },
-        { "short": "-j", "long": "--jobs", "description": "Number of parallel jobs", "takes_value": true, "value_type": { "type": "Number" } }
+        {
+          "short": "-f",
+          "long": "--force",
+          "description": "Force reinstall even if already installed"
+        },
+        {
+          "short": "-j",
+          "long": "--jobs",
+          "description": "Number of parallel jobs",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        }
       ],
       "arguments": [
-        { "name": "tool", "description": "Tool@version spec", "multiple": true, "required": false }
+        {
+          "name": "tool",
+          "description": "Tool@version spec",
+          "multiple": true,
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.registry_tool"
+            }
+          }
+        }
       ]
     },
     {
       "name": "use",
       "description": "Use tool version in config",
       "options": [
-        { "short": "-g", "long": "--global", "description": "Write to the global config" },
-        { "long": "--pin", "description": "Pin the exact version" },
-        { "long": "--remove", "description": "Remove the tool from the config", "takes_value": true, "value_type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+        {
+          "short": "-g",
+          "long": "--global",
+          "description": "Write to the global config"
+        },
+        {
+          "long": "--pin",
+          "description": "Pin the exact version"
+        },
+        {
+          "long": "--remove",
+          "description": "Remove the tool from the config",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
       ],
       "arguments": [
-        { "name": "tool", "description": "Tool@version spec", "multiple": true, "required": false }
+        {
+          "name": "tool",
+          "description": "Tool@version spec",
+          "multiple": true,
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.registry_tool"
+            }
+          }
+        }
       ]
     },
     {
@@ -39,25 +151,85 @@
           "name": "tool",
           "description": "Installed tool",
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
         }
       ]
     },
     {
       "name": "list",
-      "aliases": ["ls"],
+      "aliases": [
+        "ls"
+      ],
       "description": "List installed versions",
       "options": [
-        { "short": "-i", "long": "--installed", "description": "Only show installed versions" },
-        { "short": "-c", "long": "--current", "description": "Only show active versions" },
-        { "short": "-J", "long": "--json", "description": "JSON output" }
+        {
+          "short": "-i",
+          "long": "--installed",
+          "description": "Only show installed versions"
+        },
+        {
+          "short": "-c",
+          "long": "--current",
+          "description": "Only show active versions"
+        },
+        {
+          "short": "-J",
+          "long": "--json",
+          "description": "JSON output"
+        },
+        {
+          "long": "--global",
+          "description": "Only global requests",
+          "short": "-g"
+        },
+        {
+          "long": "--no-global",
+          "description": "Only non-global requests"
+        },
+        {
+          "long": "--missing",
+          "description": "Only missing versions",
+          "short": "-m"
+        },
+        {
+          "long": "--no-header",
+          "description": "Omit header"
+        },
+        {
+          "long": "--prunable",
+          "description": "Only unused versions"
+        },
+        {
+          "long": "--outdated",
+          "description": "Show outdated versions"
+        },
+        {
+          "long": "--backend",
+          "description": "Filter backend",
+          "short": "-b",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
       ],
       "arguments": [
         {
           "name": "tool",
           "description": "Installed tool",
           "required": false,
-          "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          },
+          "multiple": true
         }
       ]
     },
@@ -68,7 +240,12 @@
         {
           "name": "tool",
           "description": "Installed tool",
-          "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
         }
       ]
     },
@@ -80,69 +257,493 @@
           "name": "tool",
           "description": "Installed tool",
           "required": false,
-          "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
         }
       ]
     },
-    { "name": "exec", "description": "Execute command with tool versions", "arguments": [{ "name": "command", "description": "Command to execute", "type": { "type": "Command" } }] },
+    {
+      "name": "exec",
+      "description": "Execute command with tool versions",
+      "arguments": [
+        {
+          "name": "command",
+          "description": "Command to execute",
+          "type": {
+            "type": "Command"
+          }
+        }
+      ]
+    },
     {
       "name": "run",
       "description": "Run a project task",
       "arguments": [
-        { "name": "task", "description": "Task name", "type": { "type": "Dynamic", "data": { "provider": "project.task", "scope": "mise" } } }
+        {
+          "name": "task",
+          "description": "Task name",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "project.task",
+              "scope": "mise"
+            }
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--dry-run",
+          "description": "Show tasks without running them",
+          "short": "-n"
+        },
+        {
+          "long": "--force",
+          "description": "Ignore task freshness",
+          "short": "-f"
+        },
+        {
+          "long": "--skip-deps",
+          "description": "Skip task dependencies"
+        },
+        {
+          "long": "--skip-tools",
+          "description": "Do not install tools"
+        },
+        {
+          "long": "--no-cache",
+          "description": "Bypass remote task cache"
+        },
+        {
+          "long": "--timeout",
+          "description": "Task timeout",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
       ]
     },
-    { "name": "tasks", "description": "List project tasks" },
-    { "name": "plugins", "description": "Manage plugins" },
+    {
+      "name": "tasks",
+      "description": "List project tasks",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON",
+          "short": "-J"
+        },
+        {
+          "long": "--all",
+          "description": "Include all projects",
+          "short": "-a"
+        },
+        {
+          "long": "--hidden",
+          "description": "Include hidden tasks"
+        },
+        {
+          "long": "--name-only",
+          "description": "Print task names"
+        },
+        {
+          "long": "--no-header",
+          "description": "Omit table header"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "task",
+          "description": "Task to inspect",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "project.task",
+              "scope": "mise"
+            }
+          },
+          "required": false
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List tasks",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            },
+            {
+              "long": "--all",
+              "description": "Include all projects",
+              "short": "-a"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            },
+            {
+              "long": "--name-only",
+              "description": "Print task names"
+            },
+            {
+              "long": "--no-header",
+              "description": "Omit table header"
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "description": "Inspect a task",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "edit",
+          "description": "Edit a task",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "deps",
+          "description": "Inspect dependencies",
+          "options": [
+            {
+              "long": "--dot",
+              "description": "Output DOT graph"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true,
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "rm",
+          "description": "Remove tasks",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "validate",
+          "description": "Validate task definitions"
+        }
+      ]
+    },
+    {
+      "name": "plugins",
+      "description": "Manage plugins",
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List installed plugins",
+          "options": [
+            {
+              "long": "--core",
+              "description": "List built-in tools",
+              "short": "-c"
+            },
+            {
+              "long": "--urls",
+              "description": "Show source URLs",
+              "short": "-u"
+            },
+            {
+              "long": "--outdated",
+              "description": "Check for updates",
+              "short": "-o"
+            }
+          ]
+        },
+        {
+          "name": "ls-remote",
+          "description": "List available plugins"
+        },
+        {
+          "name": "install",
+          "description": "Install plugins",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Plugin names",
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "link",
+          "description": "Link a local plugin",
+          "arguments": [
+            {
+              "name": "name",
+              "description": "Plugin name"
+            },
+            {
+              "name": "path",
+              "description": "Plugin directory",
+              "type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "uninstall",
+          "description": "Uninstall plugins",
+          "options": [
+            {
+              "long": "--all",
+              "description": "Remove all plugins",
+              "short": "-a"
+            },
+            {
+              "long": "--purge",
+              "description": "Remove tool data",
+              "short": "-p"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Installed plugins",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "mise.plugin"
+                }
+              },
+              "multiple": true,
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "description": "Update plugins",
+          "arguments": [
+            {
+              "name": "plugin",
+              "description": "Installed plugins",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "mise.plugin"
+                }
+              },
+              "multiple": true,
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
     {
       "name": "env",
       "description": "Exports env vars to activate mise a single time",
       "arguments": [
-        { "name": "tool", "description": "Tool to get env for", "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+        {
+          "name": "tool",
+          "description": "Tool to get env for",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
       ]
     },
     {
       "name": "ls-remote",
       "description": "List runtime versions available for install",
       "arguments": [
-        { "name": "tool", "description": "Tool to list versions for", "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+        {
+          "name": "tool",
+          "description": "Tool to list versions for",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
       ]
     },
     {
       "name": "outdated",
       "description": "Shows outdated tool versions",
       "arguments": [
-        { "name": "tool", "description": "Tool to check", "multiple": true, "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+        {
+          "name": "tool",
+          "description": "Tool to check",
+          "multiple": true,
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
       ]
     },
     {
       "name": "upgrade",
       "description": "Upgrades outdated tool versions",
       "arguments": [
-        { "name": "tool", "description": "Tool(s) to upgrade", "multiple": true, "required": false, "type": { "type": "Dynamic", "data": { "provider": "mise.tool" } } }
+        {
+          "name": "tool",
+          "description": "Tool(s) to upgrade",
+          "multiple": true,
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--bump",
+          "description": "Upgrade past the configured range",
+          "short": "-b"
+        },
+        {
+          "long": "--pin",
+          "description": "Pin resolved versions"
+        },
+        {
+          "long": "--interactive",
+          "description": "Select upgrades",
+          "short": "-i"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Preview changes",
+          "short": "-n"
+        },
+        {
+          "long": "--exclude",
+          "description": "Exclude an installed tool",
+          "short": "-x",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--no-prune",
+          "description": "Keep old versions"
+        }
       ]
     },
     {
       "name": "config",
       "description": "Manage config files",
       "subcommands": [
-        { "name": "ls", "description": "List config files currently in use" },
-        { "name": "generate", "description": "Generate an mise.toml file" }
+        {
+          "name": "ls",
+          "description": "List config files currently in use"
+        },
+        {
+          "name": "generate",
+          "description": "Generate an mise.toml file"
+        }
       ]
     },
     {
       "name": "cache",
       "description": "Manage the mise cache",
       "subcommands": [
-        { "name": "clear", "description": "Delete all cache data" },
-        { "name": "dir", "description": "Show the cache directory" }
+        {
+          "name": "clear",
+          "description": "Delete all cache data"
+        },
+        {
+          "name": "dir",
+          "description": "Show the cache directory"
+        }
       ]
     },
     {
       "name": "search",
       "description": "Search for tools in the registry",
       "arguments": [
-        { "name": "query", "description": "Search term", "required": false }
+        {
+          "name": "query",
+          "description": "Search term",
+          "required": false
+        }
       ]
     },
     {
@@ -153,7 +754,12 @@
       "name": "unset",
       "description": "Remove environment variables in mise.toml",
       "arguments": [
-        { "name": "keys", "description": "Environment variable keys", "multiple": true, "required": false }
+        {
+          "name": "keys",
+          "description": "Environment variable keys",
+          "multiple": true,
+          "required": false
+        }
       ]
     },
     {
@@ -172,12 +778,644 @@
       "name": "which",
       "description": "Shows the path that a tool's binary is run from",
       "arguments": [
-        { "name": "command", "description": "Command to look up", "required": false, "type": { "type": "Command" } }
+        {
+          "name": "command",
+          "description": "Command to look up",
+          "required": false,
+          "type": {
+            "type": "Command"
+          }
+        }
       ]
     },
     {
       "name": "doctor",
       "description": "Check mise installation for possible problems"
+    },
+    {
+      "name": "prune",
+      "description": "Remove unused tools",
+      "options": [
+        {
+          "long": "--dry-run",
+          "description": "Preview removals",
+          "short": "-n"
+        },
+        {
+          "long": "--configs",
+          "description": "Forget unused configs"
+        },
+        {
+          "long": "--tools",
+          "description": "Only prune tools"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tool",
+          "description": "Installed tools",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          },
+          "multiple": true,
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "registry",
+      "description": "List available tools",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON",
+          "short": "-J"
+        },
+        {
+          "long": "--backend",
+          "description": "Filter backend",
+          "short": "-b",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tool",
+          "description": "Registry tool",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.registry_tool"
+            }
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "trust",
+      "description": "Trust configuration",
+      "options": [
+        {
+          "long": "--all",
+          "description": "Trust all configs",
+          "short": "-a"
+        },
+        {
+          "long": "--show",
+          "description": "Show trust status"
+        },
+        {
+          "long": "--untrust",
+          "description": "Remove trust"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "config",
+          "description": "Configuration file",
+          "type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "untrust",
+      "description": "Remove trust",
+      "arguments": [
+        {
+          "name": "config",
+          "description": "Configuration file",
+          "type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "ls",
+      "aliases": [
+        "ls"
+      ],
+      "description": "List installed versions",
+      "options": [
+        {
+          "short": "-i",
+          "long": "--installed",
+          "description": "Only show installed versions"
+        },
+        {
+          "short": "-c",
+          "long": "--current",
+          "description": "Only show active versions"
+        },
+        {
+          "short": "-J",
+          "long": "--json",
+          "description": "JSON output"
+        },
+        {
+          "long": "--global",
+          "description": "Only global requests",
+          "short": "-g"
+        },
+        {
+          "long": "--no-global",
+          "description": "Only non-global requests"
+        },
+        {
+          "long": "--missing",
+          "description": "Only missing versions",
+          "short": "-m"
+        },
+        {
+          "long": "--no-header",
+          "description": "Omit header"
+        },
+        {
+          "long": "--prunable",
+          "description": "Only unused versions"
+        },
+        {
+          "long": "--outdated",
+          "description": "Show outdated versions"
+        },
+        {
+          "long": "--backend",
+          "description": "Filter backend",
+          "short": "-b",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "tool",
+          "description": "Installed tool",
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          },
+          "multiple": true
+        }
+      ]
+    },
+    {
+      "name": "up",
+      "description": "Upgrades outdated tool versions",
+      "arguments": [
+        {
+          "name": "tool",
+          "description": "Tool(s) to upgrade",
+          "multiple": true,
+          "required": false,
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--bump",
+          "description": "Upgrade past the configured range",
+          "short": "-b"
+        },
+        {
+          "long": "--pin",
+          "description": "Pin resolved versions"
+        },
+        {
+          "long": "--interactive",
+          "description": "Select upgrades",
+          "short": "-i"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Preview changes",
+          "short": "-n"
+        },
+        {
+          "long": "--exclude",
+          "description": "Exclude an installed tool",
+          "short": "-x",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "mise.tool"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--no-prune",
+          "description": "Keep old versions"
+        }
+      ]
+    },
+    {
+      "name": "r",
+      "description": "Run a project task",
+      "arguments": [
+        {
+          "name": "task",
+          "description": "Task name",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "project.task",
+              "scope": "mise"
+            }
+          }
+        }
+      ],
+      "options": [
+        {
+          "long": "--dry-run",
+          "description": "Show tasks without running them",
+          "short": "-n"
+        },
+        {
+          "long": "--force",
+          "description": "Ignore task freshness",
+          "short": "-f"
+        },
+        {
+          "long": "--skip-deps",
+          "description": "Skip task dependencies"
+        },
+        {
+          "long": "--skip-tools",
+          "description": "Do not install tools"
+        },
+        {
+          "long": "--no-cache",
+          "description": "Bypass remote task cache"
+        },
+        {
+          "long": "--timeout",
+          "description": "Task timeout",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        }
+      ]
+    },
+    {
+      "name": "task",
+      "description": "List project tasks",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON",
+          "short": "-J"
+        },
+        {
+          "long": "--all",
+          "description": "Include all projects",
+          "short": "-a"
+        },
+        {
+          "long": "--hidden",
+          "description": "Include hidden tasks"
+        },
+        {
+          "long": "--name-only",
+          "description": "Print task names"
+        },
+        {
+          "long": "--no-header",
+          "description": "Omit table header"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "task",
+          "description": "Task to inspect",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "project.task",
+              "scope": "mise"
+            }
+          },
+          "required": false
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List tasks",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            },
+            {
+              "long": "--all",
+              "description": "Include all projects",
+              "short": "-a"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            },
+            {
+              "long": "--name-only",
+              "description": "Print task names"
+            },
+            {
+              "long": "--no-header",
+              "description": "Omit table header"
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "description": "Inspect a task",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "edit",
+          "description": "Edit a task",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "deps",
+          "description": "Inspect dependencies",
+          "options": [
+            {
+              "long": "--dot",
+              "description": "Output DOT graph"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true,
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "rm",
+          "description": "Remove tasks",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "validate",
+          "description": "Validate task definitions"
+        }
+      ]
+    },
+    {
+      "name": "t",
+      "description": "List project tasks",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON",
+          "short": "-J"
+        },
+        {
+          "long": "--all",
+          "description": "Include all projects",
+          "short": "-a"
+        },
+        {
+          "long": "--hidden",
+          "description": "Include hidden tasks"
+        },
+        {
+          "long": "--name-only",
+          "description": "Print task names"
+        },
+        {
+          "long": "--no-header",
+          "description": "Omit table header"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "task",
+          "description": "Task to inspect",
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "project.task",
+              "scope": "mise"
+            }
+          },
+          "required": false
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "ls",
+          "description": "List tasks",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            },
+            {
+              "long": "--all",
+              "description": "Include all projects",
+              "short": "-a"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            },
+            {
+              "long": "--name-only",
+              "description": "Print task names"
+            },
+            {
+              "long": "--no-header",
+              "description": "Omit table header"
+            }
+          ]
+        },
+        {
+          "name": "info",
+          "description": "Inspect a task",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON",
+              "short": "-J"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "edit",
+          "description": "Edit a task",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "deps",
+          "description": "Inspect dependencies",
+          "options": [
+            {
+              "long": "--dot",
+              "description": "Output DOT graph"
+            },
+            {
+              "long": "--hidden",
+              "description": "Include hidden tasks"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true,
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "rm",
+          "description": "Remove tasks",
+          "arguments": [
+            {
+              "name": "task",
+              "description": "Task names",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "project.task",
+                  "scope": "mise"
+                }
+              },
+              "multiple": true
+            }
+          ]
+        },
+        {
+          "name": "validate",
+          "description": "Validate task definitions"
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "description": "Show mise version"
     }
   ]
 }

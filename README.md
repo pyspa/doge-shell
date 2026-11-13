@@ -563,6 +563,22 @@ See [History Search](docs/usage.md#history-search).
 
 See [Fish Completion Fallback](docs/usage.md#fish-completion-fallback).
 
+Built-in CLI definitions include [Herdr](https://herdr.ink/docs/cli-reference),
+[mise](https://mise.jdx.dev/cli/),
+[Google Workspace](https://github.com/googleworkspace/cli) (`gws`), and
+[Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md)
+(`pi`). Dynamic completion offers saved Herdr machine labels/IDs and session
+names (`herdr.machine`, `herdr.session`), available mise registry tools
+(`mise.registry_tool`), installed plugins (`mise.plugin`), installed tools
+(`mise.tool`), and project task names (`project.task`). The CLI-backed lists use
+read-only queries through the shared bounded subprocess and cache path.
+
+Additional definitions cover [Unity CLI](https://github.com/Unity-Technologies/skills/blob/main/skills/unity-cli/SKILL.md)
+Editor installation, projects and agent skills; [Codex](https://developers.openai.com/codex/cli/reference)
+sessions, execution and app-server commands; [Claude Code](https://code.claude.com/docs/en/cli-reference)
+sessions, MCP and plugins; and [Emacs](https://www.gnu.org/software/emacs/manual/html_node/emacs/Emacs-Invocation.html)
+startup and Lisp-loading options. File and directory arguments use path completion.
+
 ## 💻 Command Palette
 
 Access all shell capabilities through a unified fuzzy-search interface, similar to VS Code's Command Palette.

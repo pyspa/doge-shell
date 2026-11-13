@@ -72,6 +72,10 @@ pub(super) fn build_router(config: &ServeConfig) -> Router {
                 move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
             }),
         )
+        .layer(axum::middleware::from_fn_with_state(
+            config.host.clone(),
+            super::host::validate,
+        ))
 }
 
 /// Signal handler for graceful shutdown

@@ -1,0 +1,362 @@
+{
+  "command": "claude",
+  "description": "Claude Code coding agent",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help",
+      "short": "-h"
+    },
+    {
+      "long": "--version",
+      "description": "Show version",
+      "short": "-v"
+    },
+    {
+      "long": "--print",
+      "description": "Print response and exit",
+      "short": "-p"
+    },
+    {
+      "long": "--continue",
+      "description": "Continue recent conversation",
+      "short": "-c"
+    },
+    {
+      "long": "--resume",
+      "description": "Resume by session ID or name",
+      "short": "-r",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--model",
+      "description": "Model name or alias",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--effort",
+      "description": "Reasoning effort",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
+      "long": "--output-format",
+      "description": "Output encoding",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "text",
+          "json",
+          "stream-json"
+        ]
+      }
+    },
+    {
+      "long": "--input-format",
+      "description": "Input encoding",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "text",
+          "stream-json"
+        ]
+      }
+    },
+    {
+      "long": "--json-schema",
+      "description": "Structured output schema",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--add-dir",
+      "description": "Additional directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--plugin-dir",
+      "description": "Plugin directory or ZIP",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--mcp-config",
+      "description": "MCP configuration",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--permission-mode",
+      "description": "Permission mode",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "acceptEdits",
+          "auto",
+          "bypassPermissions",
+          "manual",
+          "dontAsk",
+          "plan"
+        ]
+      }
+    },
+    {
+      "long": "--name",
+      "description": "Session display name",
+      "short": "-n",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--fork-session",
+      "description": "Resume into a new session"
+    },
+    {
+      "long": "--no-session-persistence",
+      "description": "Do not save session"
+    },
+    {
+      "long": "--allowedTools",
+      "description": "Allowed tool names",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--disallowedTools",
+      "description": "Denied tool names",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    }
+  ],
+  "arguments": [
+    {
+      "name": "prompt",
+      "type": {
+        "type": "String"
+      },
+      "required": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "update",
+      "description": "Update Claude Code"
+    },
+    {
+      "name": "upgrade",
+      "description": "Update Claude Code"
+    },
+    {
+      "name": "install",
+      "description": "Install native build",
+      "arguments": [
+        {
+          "name": "version",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "auth",
+      "description": "Manage authentication",
+      "subcommands": [
+        {
+          "name": "login",
+          "description": "Sign in"
+        },
+        {
+          "name": "logout",
+          "description": "Sign out"
+        },
+        {
+          "name": "status",
+          "description": "Inspect authentication"
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "description": "Manage MCP servers",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List servers"
+        },
+        {
+          "name": "get",
+          "description": "get server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "remove server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "login",
+          "description": "login server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "logout",
+          "description": "logout server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "plugin",
+      "description": "Manage plugins",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List plugins"
+        },
+        {
+          "name": "install",
+          "description": "install plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "uninstall",
+          "description": "uninstall plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "enable",
+          "description": "enable plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "disable",
+          "description": "disable plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "update",
+          "description": "update plugin",
+          "arguments": [
+            {
+              "name": "plugin",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

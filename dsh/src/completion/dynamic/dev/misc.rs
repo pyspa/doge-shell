@@ -47,6 +47,41 @@ pub(super) fn parse_mise_tools(lines: &[String]) -> Vec<String> {
     )
 }
 
+/// Session names include stopped sessions, which can still be attached/deleted.
+pub(super) fn parse_herdr_sessions(stdout: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(stdout) else {
+        return Vec::new();
+    };
+    let Some(sessions) = value.get("sessions").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        sessions
+            .iter()
+            .filter_map(|session| session.get("name").and_then(serde_json::Value::as_str))
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Both labels and stable IDs are accepted; SSH targets are not machine IDs.
+pub(super) fn parse_herdr_machines(stdout: &str) -> Vec<String> {
+    let Ok(machines) = serde_json::from_str::<Vec<serde_json::Value>>(stdout) else {
+        return Vec::new();
+    };
+    dedup_sorted(
+        machines
+            .iter()
+            .flat_map(|machine| ["id", "label"].map(|key| machine.get(key)))
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 pub(super) fn find_jj_root(current_dir: &Path) -> Option<PathBuf> {
     current_dir
         .ancestors()

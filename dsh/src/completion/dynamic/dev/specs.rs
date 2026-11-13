@@ -8,6 +8,54 @@ use super::*;
 /// provider's row lives in.
 pub(crate) const LOCAL_SPECS: &[crate::completion::dynamic::local::LocalSpec] = &[
     crate::completion::dynamic::local::LocalSpec {
+        provider: "herdr.machine",
+        command_name: "herdr",
+        value_kind: "machine",
+        scope: crate::completion::dynamic::local::Scope::CurrentDirCanonical,
+        source: crate::completion::dynamic::local::Source::Stdout {
+            executable: "herdr",
+            args: &["machine", "list", "--json"],
+            parser: parse_herdr_machines,
+        },
+        description: "herdr saved machine",
+    },
+    crate::completion::dynamic::local::LocalSpec {
+        provider: "herdr.session",
+        command_name: "herdr",
+        value_kind: "session",
+        scope: crate::completion::dynamic::local::Scope::CurrentDirCanonical,
+        source: crate::completion::dynamic::local::Source::Stdout {
+            executable: "herdr",
+            args: &["session", "list", "--json"],
+            parser: parse_herdr_sessions,
+        },
+        description: "herdr session",
+    },
+    crate::completion::dynamic::local::LocalSpec {
+        provider: "mise.registry_tool",
+        command_name: "mise",
+        value_kind: "registry-tool",
+        scope: crate::completion::dynamic::local::Scope::FixedCwd("/"),
+        source: crate::completion::dynamic::local::Source::Lines {
+            executable: "mise",
+            args: &["registry"],
+            parser: parse_first_field_lines,
+        },
+        description: "mise registry tool",
+    },
+    crate::completion::dynamic::local::LocalSpec {
+        provider: "mise.plugin",
+        command_name: "mise",
+        value_kind: "plugin",
+        scope: crate::completion::dynamic::local::Scope::FixedCwd("/"),
+        source: crate::completion::dynamic::local::Source::Lines {
+            executable: "mise",
+            args: &["plugins", "ls"],
+            parser: parse_first_field_lines,
+        },
+        description: "mise installed plugin",
+    },
+    crate::completion::dynamic::local::LocalSpec {
         provider: "rustup.component",
         command_name: "rustup",
         value_kind: "component",

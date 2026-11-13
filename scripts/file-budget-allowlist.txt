@@ -22,7 +22,6 @@ no-doc	dsh-builtin/src/glog.rs
 no-doc	dsh-builtin/src/help.rs
 no-doc	dsh-builtin/src/markdown/mod.rs
 no-doc	dsh-builtin/src/safe_run.rs
-no-doc	dsh-builtin/src/serve/handlers.rs
 no-doc	dsh-builtin/src/serve/scanner.rs
 no-doc	dsh-builtin/src/task.rs
 no-doc	dsh-builtin/src/test_support.rs

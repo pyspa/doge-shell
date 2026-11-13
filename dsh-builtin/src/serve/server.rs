@@ -1,8 +1,9 @@
 use super::config::ServeConfig;
 use super::error::ServeError;
-use super::handlers::serve_file_handler;
+use super::{handlers::serve_root_handler, root::ServeRoot};
 use axum::{Router, http::Uri, routing::get};
 use dsh_types::Context;
+use std::sync::Arc;
 use tracing::{debug, error, info};
 
 use std::net::SocketAddr;
@@ -41,7 +42,7 @@ impl HttpServer {
 
         info!("HTTP server listening on http://{}", addr);
 
-        let app = build_router(&self.config);
+        let app = build_router(&self.config)?;
 
         axum::serve(listener, app)
             .await
@@ -52,30 +53,30 @@ impl HttpServer {
 }
 
 /// Construct the router used by the HTTP server.
-pub(super) fn build_router(config: &ServeConfig) -> Router {
-    let serve_dir = config.directory.clone();
+pub(super) fn build_router(config: &ServeConfig) -> Result<Router, ServeError> {
+    let root = Arc::new(ServeRoot::new(&config.directory)?);
     let serve_index = config.serve_index;
     let enable_cors = config.enable_cors;
 
-    Router::new()
+    Ok(Router::new()
         .route(
             "/",
             get({
-                let serve_dir = serve_dir.clone();
-                move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
+                let root = root.clone();
+                move |uri: Uri| serve_root_handler(uri, root, serve_index, enable_cors)
             }),
         )
         .route(
             "/{*path}",
             get({
-                let serve_dir = serve_dir.clone();
-                move |uri: Uri| serve_file_handler(uri, serve_dir, serve_index, enable_cors)
+                let root = root.clone();
+                move |uri: Uri| serve_root_handler(uri, root, serve_index, enable_cors)
             }),
         )
         .layer(axum::middleware::from_fn_with_state(
             config.host.clone(),
             super::host::validate,
-        ))
+        )))
 }
 
 /// Signal handler for graceful shutdown

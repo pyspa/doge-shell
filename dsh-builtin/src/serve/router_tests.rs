@@ -16,7 +16,8 @@ async fn production_serve_router_rejects_rebinding_hosts() {
             directory: dir.path().to_owned(),
             enable_cors: cors,
             ..ServeConfig::default()
-        });
+        })
+        .unwrap();
         for host in [
             "attacker.example:8000",
             "localhost.attacker.example",
@@ -64,7 +65,8 @@ async fn production_serve_router_checks_all_authority_sources() {
     let app = build_router(&ServeConfig {
         directory: dir.path().to_owned(),
         ..ServeConfig::default()
-    });
+    })
+    .unwrap();
     let cases = [
         (Request::builder().uri("/"), StatusCode::FORBIDDEN),
         (
@@ -124,7 +126,8 @@ async fn request(
         serve_index: index,
         enable_cors: cors,
         ..ServeConfig::default()
-    });
+    })
+    .unwrap();
     let response = app
         .oneshot(
             Request::builder()
@@ -331,7 +334,8 @@ async fn production_serve_router_loopback_smoke() {
     let app = build_router(&ServeConfig {
         directory: dir.path().to_path_buf(),
         ..ServeConfig::default()
-    });
+    })
+    .unwrap();
     let task = tokio::spawn(async move { axum::serve(listener, app).await });
     // Collect results before assertions so every request outcome cleans up the listener.
     let results = async {
@@ -495,4 +499,134 @@ async fn production_serve_file_sets_nosniff() {
     let (status, headers, _) = request(dir.path(), "/data.txt", false, false).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["x-content-type-options"], "nosniff");
+}
+
+#[tokio::test]
+async fn production_router_pins_file_and_index_streams_before_path_replacement() {
+    use std::os::unix::fs::symlink;
+    for index in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let public = dir.path().join("public");
+        fs::create_dir(&public).unwrap();
+        let name = if index { "index.html" } else { "file.txt" };
+        fs::write(public.join(name), "PUBLIC").unwrap();
+        let outside = dir.path().join("secret");
+        fs::write(&outside, "OUTSIDE_SENTINEL").unwrap();
+        let app = build_router(&ServeConfig {
+            directory: public.clone(),
+            ..ServeConfig::default()
+        })
+        .unwrap();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(if index { "/" } else { "/file.txt" })
+                    .header("host", "localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        // The body has not been read yet. Streaming must retain the descriptor
+        // opened at authorization rather than resolving a pathname on demand.
+        fs::remove_file(public.join(name)).unwrap();
+        symlink(outside, public.join(name)).unwrap();
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(body, "PUBLIC");
+    }
+}
+
+#[tokio::test]
+async fn production_router_never_serves_a_replaced_public_root() {
+    use std::os::unix::fs::symlink;
+    for link in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let public = dir.path().join("public");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&public).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(public.join("file.txt"), "PUBLIC").unwrap();
+        fs::write(outside.join("file.txt"), "OUTSIDE_SENTINEL").unwrap();
+        fs::write(outside.join("private-name"), "private").unwrap();
+        let app = build_router(&ServeConfig {
+            directory: public.clone(),
+            serve_index: false,
+            ..ServeConfig::default()
+        })
+        .unwrap();
+        fs::rename(&public, dir.path().join("original")).unwrap();
+        if link {
+            symlink(&outside, &public).unwrap();
+        } else {
+            fs::rename(&outside, &public).unwrap();
+        }
+        for uri in ["/file.txt", "/"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                if link {
+                    StatusCode::NOT_FOUND
+                } else {
+                    StatusCode::OK
+                }
+            );
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let body = String::from_utf8_lossy(&body);
+            assert!(!body.contains("OUTSIDE_SENTINEL") && !body.contains("private-name"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn no_index_lists_readable_directories_without_search_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    for root_listing in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let public = dir.path().join("public");
+        let leaf = public.join("leaf");
+        fs::create_dir_all(&leaf).unwrap();
+        let limited = if root_listing { &public } else { &leaf };
+        fs::write(
+            limited.join("visible-name"),
+            "not readable without search permission",
+        )
+        .unwrap();
+        fs::set_permissions(limited, fs::Permissions::from_mode(0o400)).unwrap();
+        assert!(fs::read_dir(limited).is_ok());
+        let app = build_router(&ServeConfig {
+            directory: public.clone(),
+            serve_index: false,
+            ..ServeConfig::default()
+        });
+        let response = match app {
+            Ok(app) => Some(
+                app.oneshot(
+                    Request::builder()
+                        .uri(if root_listing { "/" } else { "/leaf/" })
+                        .header("host", "localhost")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap(),
+            ),
+            Err(_) => None,
+        };
+        fs::set_permissions(limited, fs::Permissions::from_mode(0o700)).unwrap();
+        let response = response.expect("readable public root must open");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 8192).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("visible-name"));
+    }
 }

@@ -33,6 +33,27 @@ pub(super) fn directory(parent: &File, name: &CStr) -> io::Result<File> {
     open_at(parent, name, search_flags(), 0)
 }
 
+pub(super) fn ensure_readable(file: &File) -> io::Result<()> {
+    // SAFETY: file owns a live fd; F_GETFL neither consumes nor changes it.
+    let flags = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    #[cfg(target_os = "linux")]
+    let search_only = flags & libc::O_PATH != 0;
+    // Darwin F_GETFL preserves O_EXEC, but not O_DIRECTORY (which is part
+    // of O_SEARCH). Test the access-mode bit, not all creation flags.
+    #[cfg(target_os = "macos")]
+    let search_only = flags & libc::O_EXEC != 0;
+    if search_only {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "directory is search-only",
+        ));
+    }
+    Ok(())
+}
+
 /// Keep an existing inode alive without requiring file read permission.
 /// This handle is used only for fstat/lifetime, never traversal, listing or I/O.
 pub(super) fn pin_file(parent: &File, name: &CStr) -> io::Result<File> {

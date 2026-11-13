@@ -1,10 +1,10 @@
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
-use ignore::WalkBuilder;
+mod walk;
 use regex::RegexBuilder;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
 
 pub(crate) const NAME: &str = "search";
 
@@ -122,6 +122,16 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("search cancelled by user.".to_string());
     }
 
+    // A sensitive-path prompt may have yielded while the search root changed.
+    // Validate every component again without following newly introduced links.
+    if normalized_abs_path.is_dir() {
+        crate::agent::files::open_directory(&normalized_abs_path)
+            .map_err(|err| format!("chat: failed to open search directory: {err}"))?;
+    } else {
+        crate::agent::files::open(&normalized_abs_path)
+            .map_err(|err| format!("chat: failed to open search file: {err}"))?;
+    }
+
     let mut results = Vec::new();
     let max_results = parsed
         .get("max_results")
@@ -129,6 +139,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         .map(|v| (v.max(1) as usize).min(MAX_MAX_RESULTS))
         .unwrap_or(DEFAULT_MAX_RESULTS);
     let mut hidden_sensitive = 0usize;
+    let mut skipped_files = 0usize;
+    let mut skipped_directories = 0usize;
 
     match search_type {
         "filename" => {
@@ -136,34 +148,33 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
             let glob = glob::Pattern::new(&glob_pattern)
                 .map_err(|err| format!("chat: invalid glob pattern: {err}"))?;
 
-            // Use ignore::WalkBuilder to automatically respect .gitignore
-            for entry in WalkBuilder::new(&normalized_abs_path)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .build()
-                .filter_map(|e| e.ok())
-            {
+            for entry in walk::Walk::new(&normalized_abs_path, &normalized_workspace_root) {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        skipped_directories += 1;
+                        continue;
+                    }
+                };
                 if results.len() >= max_results {
                     break;
                 }
 
-                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                    continue;
-                }
-                if safety_policy::is_sensitive_path(entry.path()) {
+                if safety_policy::is_sensitive_path(entry.path.as_path()) {
                     hidden_sensitive += 1;
                     continue;
                 }
 
                 // Check if file matches glob
                 // We match against the relative path from the search root
-                if let Ok(_rel_path) = entry.path().strip_prefix(&normalized_abs_path) {
+                if let Ok(_rel_path) = entry.path.as_path().strip_prefix(&normalized_abs_path) {
                     // For glob matching, we want to match against the filename or path
                     // Simple implementation: check if filename matches
-                    if glob.matches_path(entry.path())
+                    if glob.matches_path(entry.path.as_path())
                         || entry
+                            .path
                             .file_name()
+                            .unwrap_or_default()
                             .to_str()
                             .map(|s| glob.matches(s))
                             .unwrap_or(false)
@@ -175,7 +186,7 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
                         // silently - a real match with no marker that it was
                         // ever found. Fall back through the workspace root,
                         // then the absolute path.
-                        results.push(display_relative_to(entry.path(), &display_bases));
+                        results.push(display_relative_to(entry.path.as_path(), &display_bases));
                     }
                 }
             }
@@ -192,60 +203,59 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
                 })
                 .transpose()?;
 
-            // Use ignore::WalkBuilder to automatically respect .gitignore
-            for entry in WalkBuilder::new(&normalized_abs_path)
-                .git_ignore(true)
-                .git_global(true)
-                .git_exclude(true)
-                .build()
-                .filter_map(|e| e.ok())
-            {
+            for entry in walk::Walk::new(&normalized_abs_path, &normalized_workspace_root) {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(_) => {
+                        skipped_directories += 1;
+                        continue;
+                    }
+                };
                 if results.len() >= max_results {
                     break;
                 }
 
-                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                if !entry.is_file {
                     continue;
                 }
-                if safety_policy::is_sensitive_path(entry.path()) {
+                if safety_policy::is_sensitive_path(entry.path.as_path()) {
                     hidden_sensitive += 1;
                     continue;
                 }
                 if let Some(filter) = &name_filter
                     && !entry
+                        .path
                         .file_name()
+                        .unwrap_or_default()
                         .to_str()
                         .is_some_and(|name| filter.matches(name))
                 {
                     continue;
                 }
 
-                // Reading a binary file line by line produced no matches and
-                // cost the whole file; the previous code left this as a to-do.
-                if _proxy.agent_runtime().is_none() && looks_binary(entry.path()) {
+                // Reuse the same no-follow, bounded read as read_file. Opening
+                // once also avoids a race between binary sniffing and reading.
+                let Ok(contents) = crate::agent::files::read(entry.path.as_path()) else {
+                    skipped_files += 1;
                     continue;
-                }
-
-                let file = if _proxy.agent_runtime().is_some() {
-                    crate::agent::files::open(entry.path())
-                } else {
-                    fs::File::open(entry.path())
                 };
-                if let Ok(file) = file {
-                    let reader = BufReader::new(file);
+                if !contents
+                    .as_bytes()
+                    .iter()
+                    .take(BINARY_SNIFF_BYTES)
+                    .any(|byte| *byte == 0)
+                {
                     let mut matches_in_file = 0usize;
-                    for (line_idx, line) in reader.lines().enumerate() {
+                    for (line_idx, line_content) in contents.lines().enumerate() {
                         if results.len() >= max_results || matches_in_file >= MAX_MATCHES_PER_FILE {
                             break;
                         }
-                        if let Ok(line_content) = line
-                            && matcher.is_match(&line_content)
-                        {
+                        if matcher.is_match(line_content) {
                             let line_content =
                                 safety_policy::redact_sensitive_text(line_content.trim());
                             results.push(format!(
                                 "{}:{}: {}",
-                                display_relative_to(entry.path(), &display_bases),
+                                display_relative_to(entry.path.as_path(), &display_bases),
                                 line_idx + 1,
                                 trim_line(&line_content)
                             ));
@@ -265,7 +275,11 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
     ));
 
     if results.is_empty() {
-        output.push_str("(no matches found)");
+        output.push_str(if skipped_files == 0 && skipped_directories == 0 {
+            "(no matches found)"
+        } else {
+            "(no matches in successfully searched files)"
+        });
     } else {
         let hit_cap = results.len() >= max_results;
         for result in results {
@@ -281,6 +295,13 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         output.push_str(&format!(
             "\n... ({hidden_sensitive} sensitive paths hidden)"
         ));
+    }
+
+    if skipped_files > 0 {
+        output.push_str(&format!("\n... (incomplete search: {skipped_files} files skipped: unreadable, invalid UTF-8, changed path, or above the 16 MiB limit)"));
+    }
+    if skipped_directories > 0 {
+        output.push_str(&format!("\n... (incomplete search: {skipped_directories} directories skipped: unreadable, changed path, or invalid ignore rules)"));
     }
 
     // Cut here rather than leaving it to the shared cap: that one takes the
@@ -366,19 +387,6 @@ impl ContentMatcher {
     }
 }
 
-/// Whether a file is binary, judged the way `grep` judges it: a NUL byte in the
-/// first few kilobytes.
-fn looks_binary(path: &std::path::Path) -> bool {
-    let Ok(mut file) = fs::File::open(path) else {
-        return false;
-    };
-    let mut buffer = [0u8; BINARY_SNIFF_BYTES];
-    match file.read(&mut buffer) {
-        Ok(read) => buffer[..read].contains(&0),
-        Err(_) => false,
-    }
-}
-
 /// Keep a long matching line from eating the whole result budget.
 fn trim_line(line: &str) -> String {
     if line.len() <= MAX_LINE_CHARS {
@@ -395,6 +403,101 @@ mod tests {
 
     use crate::test_support::TestShellProxy;
     type NoopProxy = TestShellProxy;
+
+    #[test]
+    fn unreadable_subdirectory_preserves_other_matches() {
+        use std::os::unix::fs::PermissionsExt;
+        // Root can read mode-000 directories; the supported CI users cannot.
+        if unsafe { nix::libc::geteuid() } == 0 {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let blocked = dir.path().join("blocked");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(dir.path().join("match.txt"), "needle").unwrap();
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
+        let result = run(
+            r#"{"type":"content","query":"needle"}"#,
+            &mut proxy(dir.path()),
+        );
+        fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
+        let result = result.unwrap();
+        assert!(result.contains("match.txt:1: needle"), "{result}");
+        assert!(
+            result.contains("incomplete search: 1 directories skipped"),
+            "{result}"
+        );
+    }
+
+    #[test]
+    fn incomplete_content_search_reports_oversized_and_invalid_text() {
+        use std::io::Write;
+        let dir = tempdir().unwrap();
+        let mut large = fs::File::create(dir.path().join("large.txt")).unwrap();
+        large.write_all(b"needle\n").unwrap();
+        large
+            .set_len(crate::agent::files::MAX_TEXT_FILE_BYTES as u64 + 1)
+            .unwrap();
+        fs::write(dir.path().join("invalid.txt"), b"needle\n\xff").unwrap();
+        let result = run(
+            r#"{"type":"content","query":"needle"}"#,
+            &mut proxy(dir.path()),
+        )
+        .unwrap();
+        assert!(
+            result.contains("incomplete search: 2 files skipped"),
+            "{result}"
+        );
+        assert!(!result.contains("(no matches found)"), "{result}");
+    }
+
+    #[test]
+    fn safe_walk_respects_nested_ignore_files_and_hidden_entries() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        fs::write(dir.path().join(".gitignore"), "*.log\n!.shown\n").unwrap();
+        fs::write(dir.path().join("nested/.ignore"), "skip.txt\n").unwrap();
+        for file in [
+            "hidden.log",
+            ".hidden",
+            ".shown",
+            "nested/skip.txt",
+            "nested/keep.txt",
+        ] {
+            fs::write(dir.path().join(file), "needle").unwrap();
+        }
+        let result = run(r#"{"type":"filename","query":"*"}"#, &mut proxy(dir.path())).unwrap();
+        assert!(result.contains(".shown"), "{result}");
+        assert!(result.contains("nested/keep.txt"), "{result}");
+        for hidden in ["hidden.log", ".hidden", "skip.txt", ".gitignore", ".ignore"] {
+            assert!(!result.contains(hidden), "{hidden}: {result}");
+        }
+    }
+
+    #[test]
+    fn interactive_search_rejects_approval_time_directory_swap() {
+        use std::os::unix::fs::symlink;
+        for kind in ["content", "filename"] {
+            let dir = tempdir().unwrap();
+            let outside = tempdir().unwrap();
+            fs::create_dir(dir.path().join(".env")).unwrap();
+            fs::write(outside.path().join("outside-sentinel"), "outside-sentinel").unwrap();
+            let root = dir.path().to_owned();
+            let other = outside.path().to_owned();
+            let mut p = proxy(dir.path());
+            p.approval_callback = Some(Box::new(move || {
+                fs::remove_dir(root.join(".env")).unwrap();
+                symlink(&other, root.join(".env")).unwrap();
+            }));
+            let result = run(
+                &json!({"path":".env","type":kind,"query":"outside-sentinel"}).to_string(),
+                &mut p,
+            );
+            assert!(result.is_err(), "{kind}: {result:?}");
+            assert_eq!(p.confirm_calls, 1);
+        }
+    }
 
     #[test]
     fn test_search_filename() {

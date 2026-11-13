@@ -37,6 +37,7 @@
 - path spelling 差は canonicalized expected path で扱う。production の `workspace_root` / `canonicalize_or_normalize` は正であり、test の expected 側を canonical な既存 project directory から組み立てる (`.dogesh/skills` 自体のような未存在パスは canonicalize しない)。
 - timing-sensitive policy は sleep を同期機構にせず、pure helper / injected runner / explicit event で検証する。hook budget policy は `fire_with_runner` に fake `HookRun` + deterministic `Duration` を渡し、actual subprocess timeout mechanics は `runner.rs` の integration test へ分離する。
 - shell-level observer test は wiring + final data だけを assert し、chunking/race は `OutputMonitor` unit test の責務とする。
+- stdinを読まない短命コマンドも含むテストでは、起動後のパイプ書き込みが終了と競合し `BrokenPipe` になり得る。固定の小さな入力は `std::io::pipe()` に起動前に書き込み、writerを閉じてからreaderを子へ渡す。大きな入力の事前書き込みは容量待ちになるため使わない。
 - `scripts/check-portability.py` が macOS-only ignored test の再導入を拒否する (allowlist なし)。本当に platform-specific な test なら、その test 自体の責務/構造を review する。
 
 ## `scripts/check-portability.py` が見るもの / 見ないもの

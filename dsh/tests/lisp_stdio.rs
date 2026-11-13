@@ -65,7 +65,12 @@ fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
             cmd.stdin(Stdio::null()).process_group(0);
         }
         "pipe" => {
-            cmd.stdin(Stdio::piped()).process_group(0);
+            // Queue this tiny fixture before spawning: commands that do not
+            // read stdin can exit before a post-spawn write (EPIPE on macOS).
+            let (reader, mut writer) = std::io::pipe().unwrap();
+            writer.write_all(b"payload\n").unwrap();
+            drop(writer);
+            cmd.stdin(reader).process_group(0);
         }
         "file" => {
             cmd.stdin(File::open(root.path().join("payload")).unwrap())
@@ -99,9 +104,6 @@ fn run(form: &str, command: &str, file_mode: bool, input: &str) -> Output {
     }
     let mut owned = FixtureChild(Some(cmd.spawn().unwrap()));
     let child = owned.0.as_mut().unwrap();
-    if input == "pipe" {
-        child.stdin.take().unwrap().write_all(b"payload\n").unwrap();
-    }
     let pid = Pid::from_raw(child.id() as i32);
     let mut pty_output = Vec::new();
     let mut observed_modes = None;

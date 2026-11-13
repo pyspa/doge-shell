@@ -20,7 +20,7 @@ reqwest = { workspace = true, features = ["json", "rustls", "stream", "form"] }
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
-jsonwebtoken = { version = "9.3", default-features = false }
+jsonwebtoken = { version = "10.3", default-features = false, features = ["aws_lc_rs"] }
 libc = { workspace = true }
 uuid = { workspace = true }
 

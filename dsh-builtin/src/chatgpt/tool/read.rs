@@ -2,8 +2,8 @@
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::fs;
-use std::os::unix::fs::OpenOptionsExt;
 
 pub(crate) const NAME: &str = "read_file";
 
@@ -13,20 +13,6 @@ pub(crate) const DEFAULT_LINE_LIMIT: usize = 400;
 const MAX_LINE_LIMIT: usize = 2000;
 /// Byte budget for the rendered window, checked before the global tool cap.
 const MAX_READ_BYTES: usize = 6144;
-
-/// Opening a FIFO must never consume the chat thread waiting for a writer.
-/// Check the opened descriptor, rather than a path metadata check that can
-/// race with replacement of the file. Path and sensitive-access gates run first.
-fn read_regular_file(path: &std::path::Path) -> std::io::Result<String> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NONBLOCK)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other("read_file requires a regular file"));
-    }
-    crate::agent::files::read_capped_text(file)
-}
 
 pub(crate) fn definition() -> Value {
     json!({
@@ -218,12 +204,9 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("read_file cancelled by user.".to_string());
     }
 
-    let contents =
-        if _proxy.agent_runtime().is_some() || _proxy.background_task_context().is_some() {
-            crate::agent::files::read(&normalized_abs_path)
-        } else {
-            read_regular_file(&normalized_abs_path)
-        }
+    // All callers use descriptor-relative, no-follow traversal: a prompt can
+    // give another process time to replace any authorized path component.
+    let contents = crate::agent::files::read(&normalized_abs_path)
         .map_err(|err| format!("chat: failed to read file `{path_value}`: {err}"))?;
 
     if let Some(background) = _proxy.background_task_context()
@@ -274,6 +257,34 @@ mod tests {
 
     use crate::test_support::TestShellProxy;
     type NoopProxy = TestShellProxy;
+
+    #[test]
+    fn interactive_read_rejects_symlink_swap_during_approval() {
+        use std::os::unix::fs::symlink;
+        for parent in [false, true] {
+            let dir = tempdir().unwrap();
+            let outside = tempdir().unwrap();
+            fs::create_dir(dir.path().join("parent")).unwrap();
+            fs::write(dir.path().join("parent/.env"), "approved file").unwrap();
+            fs::write(outside.path().join(".env"), "outside sentinel").unwrap();
+            let root = dir.path().to_owned();
+            let other = outside.path().to_owned();
+            let mut p = proxy(dir.path());
+            p.confirm_result = true;
+            p.approval_callback = Some(Box::new(move || {
+                if parent {
+                    fs::rename(root.join("parent"), root.join("saved")).unwrap();
+                    symlink(&other, root.join("parent")).unwrap();
+                } else {
+                    fs::remove_file(root.join("parent/.env")).unwrap();
+                    symlink(other.join(".env"), root.join("parent/.env")).unwrap();
+                }
+            }));
+            let result = run(r#"{"path":"parent/.env"}"#, &mut p);
+            assert!(result.is_err(), "parent={parent}: {result:?}");
+            assert_eq!(p.confirm_calls, 1);
+        }
+    }
 
     #[test]
     fn test_read_file_success() {

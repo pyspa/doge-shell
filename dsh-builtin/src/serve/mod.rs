@@ -1,6 +1,7 @@
 pub mod config;
 pub mod error;
 pub mod handlers;
+mod host;
 pub mod scanner;
 pub mod server;
 

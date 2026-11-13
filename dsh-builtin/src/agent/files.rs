@@ -109,6 +109,7 @@ pub struct DirectoryEntry {
 #[derive(Debug)]
 pub struct DirectoryMetadata {
     pub is_dir: bool,
+    pub is_file: bool,
     pub size: u64,
 }
 
@@ -144,6 +145,7 @@ fn list_open_directory(file: File) -> io::Result<Vec<DirectoryEntry>> {
                 .ok()
                 .map(|size| DirectoryMetadata {
                     is_dir: stat.st_mode & libc::S_IFMT == libc::S_IFDIR,
+                    is_file: stat.st_mode & libc::S_IFMT == libc::S_IFREG,
                     size,
                 })
         } else {

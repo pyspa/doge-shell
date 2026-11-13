@@ -89,11 +89,18 @@ pub fn open_directory(path: &Path) -> io::Result<File> {
         return Err(io::Error::other("task directory must be absolute"));
     }
     let mut directory = traversal::root()?;
-    for component in path.components().filter(|part| *part != Component::RootDir) {
+    let mut parts = path
+        .components()
+        .filter(|part| *part != Component::RootDir)
+        .peekable();
+    while let Some(component) = parts.next() {
         let Component::Normal(name) = component else {
             return Err(io::Error::other("task directory must be normalized"));
         };
         let name = CString::new(name.as_bytes())?;
+        if parts.peek().is_none() {
+            return traversal::open_at(&directory, &name, libc::O_RDONLY | libc::O_DIRECTORY, 0);
+        }
         directory = traversal::directory(&directory, &name)?;
     }
     // Search handles cannot be passed to readdir/fdopendir.
@@ -117,8 +124,14 @@ pub fn read_directory(path: &Path) -> io::Result<Vec<DirectoryEntry>> {
     list_open_directory(open_directory(path)?)
 }
 
-fn list_open_directory(file: File) -> io::Result<Vec<DirectoryEntry>> {
+pub(crate) fn list_open_directory(file: File) -> io::Result<Vec<DirectoryEntry>> {
+    // nix 0.31's fdopendir failure path relinquishes ownership without closing
+    // its fd. Reject search-only descriptors while File still owns them.
+    traversal::ensure_readable(&file)?;
     let mut directory = nix::dir::Dir::from_fd(file.into())?;
+    // A pinned root may predate changes to its entries. Reset both the offset
+    // and directory-stream cache before its first listing too.
+    drop(directory.iter());
     let fd = directory.as_raw_fd();
     let mut entries = Vec::new();
     for entry in directory.iter() {
@@ -157,6 +170,50 @@ fn list_open_directory(file: File) -> io::Result<Vec<DirectoryEntry>> {
         });
     }
     Ok(entries)
+}
+
+/// Open a normalized path beneath an already-authorized directory handle.
+/// Neither ancestors nor the final component may be symlinks. The returned
+/// regular file/directory is the object to inspect and read, never its pathname.
+/// Empty paths duplicate `root`: callers must serialize listings sharing its
+/// offset. Directories without read permission return search-only handles.
+pub(crate) fn open_relative(root: &File, path: &Path) -> io::Result<File> {
+    let mut directory = root.try_clone()?;
+    let mut parts = path.components().peekable();
+    while let Some(component) = parts.next() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::other("relative file must be normalized"));
+        };
+        let name = CString::new(name.as_bytes())?;
+        if parts.peek().is_some() {
+            directory = traversal::directory(&directory, &name)?;
+        } else {
+            let file = traversal::open_at(
+                &directory,
+                &name,
+                libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY,
+                0,
+            )
+            .or_else(|err| {
+                // An index in an execute-only directory remains readable,
+                // while read-only directories can still be listed above.
+                if err.kind() == io::ErrorKind::PermissionDenied {
+                    traversal::directory(&directory, &name)
+                } else {
+                    Err(err)
+                }
+            })?;
+            let metadata = file.metadata()?;
+            return if metadata.is_file() || metadata.is_dir() {
+                Ok(file)
+            } else {
+                Err(io::Error::other("regular file or directory required"))
+            };
+        }
+    }
+    // Opening "." would incorrectly require search permission on a readable
+    // but non-searchable root. Dir::iter rewinds; the caller serializes it.
+    root.try_clone()
 }
 
 #[cfg(test)]

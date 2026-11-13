@@ -1,10 +1,12 @@
+//! HTTP file responses, with production requests anchored to a pinned public root.
+use super::root::{OpenedPath, ServeRoot};
 use axum::body::Body;
 use axum::http::header::ToStrError;
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::Response;
 use mime_guess::MimeGuess;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 use tokio::fs as async_fs;
 use tokio_util::io::ReaderStream;
@@ -485,6 +487,19 @@ pub async fn serve_file_handler(
     serve_index: bool,
     enable_cors: bool,
 ) -> Response<Body> {
+    let root = match ServeRoot::new(&serve_dir) {
+        Ok(root) => Arc::new(root),
+        Err(_) => return create_error_response(StatusCode::NOT_FOUND, "File not found"),
+    };
+    serve_root_handler(uri, root, serve_index, enable_cors).await
+}
+
+pub(super) async fn serve_root_handler(
+    uri: Uri,
+    root: Arc<ServeRoot>,
+    serve_index: bool,
+    enable_cors: bool,
+) -> Response<Body> {
     let path = uri.path();
     debug!("serving file request: {}", path);
 
@@ -504,32 +519,19 @@ pub async fn serve_file_handler(
     {
         return create_error_response(StatusCode::NOT_FOUND, "File not found");
     }
-    let file_path = serve_dir.join(relative_path);
-
-    // Security check: ensure the path is within the serve directory
-    match file_path.canonicalize() {
-        Ok(canonical_path) => {
-            let canonical_serve_dir = match serve_dir.canonicalize() {
-                Ok(root) => root,
-                Err(_) => {
-                    return create_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Server error",
-                    );
-                }
+    match root.open(&relative_path) {
+        Ok(opened) => {
+            let metadata = match opened.file.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => return create_error_response(StatusCode::NOT_FOUND, "File not found"),
             };
-            if !canonical_path.starts_with(&canonical_serve_dir) {
-                return create_error_response(StatusCode::NOT_FOUND, "File not found");
-            }
-
-            // Serve the file or directory
-            if canonical_path.is_file() {
-                let mut response = serve_file(&canonical_path).await;
+            if metadata.is_file() {
+                let mut response = serve_open_file(opened);
                 if enable_cors {
                     add_cors_headers(response.headers_mut());
                 }
                 response
-            } else if canonical_path.is_dir() {
+            } else if metadata.is_dir() {
                 if !path.ends_with('/') {
                     // Browsers treat raw backslashes as URL separators. Encode
                     // them without changing any existing percent-escapes.
@@ -562,43 +564,31 @@ pub async fn serve_file_handler(
                 }
                 // Try to serve index.html if serve_index is enabled
                 if serve_index {
-                    let index_path = canonical_path.join("index.html");
-                    // symlink_metadata distinguishes an absent index from a dangling link.
-                    // Every present index must resolve inside the serving root before opening.
-                    match fs::symlink_metadata(&index_path) {
-                        Ok(_) => {
-                            let index_path = match index_path.canonicalize() {
-                                Ok(path) => path,
-                                Err(_) => {
-                                    return create_error_response(
-                                        StatusCode::NOT_FOUND,
-                                        "File not found",
-                                    );
-                                }
-                            };
-                            if !index_path.starts_with(&canonical_serve_dir) {
-                                return create_error_response(
-                                    StatusCode::NOT_FOUND,
-                                    "File not found",
-                                );
-                            }
-                            if index_path.is_file() {
-                                let mut response = serve_file(&index_path).await;
+                    match root.index(&opened) {
+                        Ok(Some(index)) => match index.file.metadata() {
+                            Ok(metadata) if metadata.is_file() => {
+                                let mut response = serve_open_file(index);
                                 if enable_cors {
                                     add_cors_headers(response.headers_mut());
                                 }
                                 return response;
                             }
-                        }
-                        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Ok(_) => {}
+                            Err(_) => {
+                                return create_error_response(
+                                    StatusCode::NOT_FOUND,
+                                    "File not found",
+                                );
+                            }
+                        },
+                        Ok(None) => {}
                         Err(_) => {
                             return create_error_response(StatusCode::NOT_FOUND, "File not found");
                         }
                     }
                 }
 
-                // Serve directory listing
-                let mut response = serve_directory(&canonical_path).await;
+                let mut response = serve_directory(&root, opened);
                 if enable_cors {
                     add_cors_headers(response.headers_mut());
                 }
@@ -611,43 +601,32 @@ pub async fn serve_file_handler(
     }
 }
 
-/// Serve a single file
-async fn serve_file(file_path: &Path) -> Response<Body> {
-    debug!("serving file: {:?}", file_path);
-
-    match async_fs::File::open(file_path).await {
-        Ok(file) => {
-            let mime_type = MimeGuess::from_path(file_path)
-                .first_or_octet_stream()
-                .to_string();
-
-            let stream = ReaderStream::new(file);
-            let body = Body::from_stream(stream);
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime_type)
-                .header("X-Content-Type-Options", "nosniff")
-                .body(body)
-                .unwrap_or_else(|_| {
-                    create_error_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "Failed to create response",
-                    )
-                })
-        }
-        Err(e) => {
-            error!("failed to open file {:?}: {}", file_path, e);
-            create_error_response(StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file")
-        }
-    }
+/// Stream the exact descriptor validated by the public-root authority.
+fn serve_open_file(opened: OpenedPath) -> Response<Body> {
+    let mime_type = MimeGuess::from_path(&opened.relative)
+        .first_or_octet_stream()
+        .to_string();
+    let file = async_fs::File::from_std(opened.file);
+    let body = Body::from_stream(ReaderStream::new(file));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header("X-Content-Type-Options", "nosniff")
+        .body(body)
+        .unwrap_or_else(|_| {
+            create_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to create response",
+            )
+        })
 }
 
 /// Serve directory listing as HTML
-async fn serve_directory(dir_path: &Path) -> Response<Body> {
+fn serve_directory(root: &ServeRoot, opened: OpenedPath) -> Response<Body> {
+    let dir_path = root.path.join(&opened.relative);
     debug!("serving directory: {:?}", dir_path);
 
-    match fs::read_dir(dir_path) {
+    match root.list(opened.file, &opened.relative) {
         Ok(entries) => {
             let mut html = String::new();
             html.push_str("<!DOCTYPE html>\n");
@@ -671,34 +650,33 @@ async fn serve_directory(dir_path: &Path) -> Response<Body> {
 
             // Add parent directory link if not root
             if let Some(parent) = dir_path.parent()
-                && parent != dir_path
+                && parent != dir_path.as_path()
             {
                 html.push_str("<li><a href=\"../\" class=\"dir\">📁 ../</a></li>");
             }
 
             // Collect and sort entries
-            let mut entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-            entries.sort_by(|a, b| {
-                let a_is_dir = a.path().is_dir();
-                let b_is_dir = b.path().is_dir();
+            let mut entries: Vec<_> = entries
+                .into_iter()
+                .map(|entry| {
+                    // Resolve directory aliases through the same bounded authority.
+                    let is_dir = entry.metadata.as_ref().is_some_and(|m| m.is_dir)
+                        || (!entry.metadata.as_ref().is_some_and(|m| m.is_file)
+                            && root
+                                .open(&opened.relative.join(&entry.name))
+                                .and_then(|target| target.file.metadata())
+                                .is_ok_and(|m| m.is_dir()));
+                    (entry.name, is_dir)
+                })
+                .collect();
+            entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-                // Directories first, then files
-                match (a_is_dir, b_is_dir) {
-                    (true, false) => std::cmp::Ordering::Less,
-                    (false, true) => std::cmp::Ordering::Greater,
-                    _ => a.file_name().cmp(&b.file_name()),
-                }
-            });
-
-            // Add entries to HTML
-            for entry in entries {
-                let file_name = entry.file_name();
+            for (file_name, is_dir) in entries {
                 let file_name_str = file_name.to_string_lossy();
-                let path = entry.path();
                 let href = super::scanner::url_path_escape(&file_name_str);
                 let label = super::scanner::html_escape(&file_name_str);
 
-                if path.is_dir() {
+                if is_dir {
                     html.push_str(&format!(
                         "<li><a href=\"{href}/\" class=\"dir\">📁 {label}/</a></li>"
                     ));

@@ -17,7 +17,10 @@
       "description": "Use or create a named persistent session",
       "takes_value": true,
       "value_type": {
-        "type": "String"
+        "type": "Dynamic",
+        "data": {
+          "provider": "herdr.session"
+        }
       }
     },
     {
@@ -51,6 +54,17 @@
     {
       "long": "--skill",
       "description": "Print the agent skill file and exit"
+    },
+    {
+      "long": "--machine",
+      "description": "Run an API command on a saved machine",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "herdr.machine"
+        }
+      }
     }
   ],
   "subcommands": [
@@ -270,6 +284,18 @@
                 "type": "String"
               }
             }
+          ],
+          "arguments": [
+            {
+              "name": "ssh_target",
+              "description": "SSH host",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "ssh.host"
+                }
+              }
+            }
           ]
         },
         {
@@ -284,19 +310,106 @@
                 "type": "String"
               }
             }
+          ],
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              }
+            }
           ]
         },
         {
           "name": "remove",
-          "description": "Remove a saved SSH machine"
+          "description": "Remove a saved SSH machine",
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              }
+            }
+          ]
         },
         {
           "name": "enable",
-          "description": "Enable a saved SSH machine"
+          "description": "Enable a saved SSH machine",
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              }
+            }
+          ]
         },
         {
           "name": "disable",
-          "description": "Disable a saved SSH machine"
+          "description": "Disable a saved SSH machine",
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "status",
+          "description": "Check saved machine connectivity",
+          "options": [
+            {
+              "long": "--json",
+              "description": "Output JSON"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "reconnect",
+          "description": "Authenticate and reconnect a saved machine",
+          "arguments": [
+            {
+              "name": "machine",
+              "description": "Saved machine label or ID",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.machine"
+                }
+              }
+            }
+          ]
         }
       ]
     },
@@ -801,7 +914,13 @@
           "arguments": [
             {
               "name": "name",
-              "description": "Session name"
+              "description": "Session name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.session"
+                }
+              }
             }
           ]
         },
@@ -811,7 +930,13 @@
           "arguments": [
             {
               "name": "name",
-              "description": "Session name"
+              "description": "Session name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.session"
+                }
+              }
             }
           ],
           "options": [
@@ -827,7 +952,13 @@
           "arguments": [
             {
               "name": "name",
-              "description": "Session name"
+              "description": "Session name",
+              "type": {
+                "type": "Dynamic",
+                "data": {
+                  "provider": "herdr.session"
+                }
+              }
             }
           ],
           "options": [

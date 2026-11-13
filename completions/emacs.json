@@ -1,0 +1,182 @@
+{
+  "command": "emacs",
+  "description": "GNU Emacs editor",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help"
+    },
+    {
+      "long": "--version",
+      "description": "Show version"
+    },
+    {
+      "long": "--debug-init",
+      "description": "Debug initialization"
+    },
+    {
+      "long": "--fg-daemon",
+      "description": "Run server in foreground"
+    },
+    {
+      "long": "--daemon",
+      "description": "Run server in background"
+    },
+    {
+      "long": "--bg-daemon",
+      "description": "Run server in background"
+    },
+    {
+      "long": "--batch",
+      "description": "Run without interactive display"
+    },
+    {
+      "long": "--quick",
+      "description": "Skip initialization files",
+      "short": "-Q"
+    },
+    {
+      "long": "--no-init-file",
+      "description": "Skip user initialization",
+      "short": "-q"
+    },
+    {
+      "long": "--no-window-system",
+      "description": "Use terminal display",
+      "short": "-nw"
+    },
+    {
+      "long": "--no-site-file",
+      "description": "Skip site initialization"
+    },
+    {
+      "long": "--no-splash",
+      "description": "Skip splash screen"
+    },
+    {
+      "long": "--chdir",
+      "description": "Initial directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--init-directory",
+      "description": "User initialization directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--directory",
+      "description": "Add Lisp load directory",
+      "short": "-L",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--load",
+      "description": "Load Lisp file",
+      "short": "-l",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": [
+            ".el",
+            ".elc"
+          ]
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--script",
+      "description": "Run Lisp script",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      }
+    },
+    {
+      "long": "--file",
+      "description": "Visit file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--find-file",
+      "description": "Visit file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--eval",
+      "description": "Evaluate Lisp expression",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--funcall",
+      "description": "Call Lisp function",
+      "short": "-f",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--insert",
+      "description": "Insert file content",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      }
+    },
+    {
+      "long": "--kill",
+      "description": "Exit Emacs"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "file",
+      "type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "required": false,
+      "multiple": true
+    }
+  ],
+  "subcommands": []
+}

@@ -1,0 +1,616 @@
+{
+  "command": "unity",
+  "description": "Unity Editor and project management CLI",
+  "global_options": [
+    {
+      "long": "--version",
+      "description": "output the version number",
+      "short": "-V"
+    },
+    {
+      "long": "--format",
+      "description": "Output format: human, json, tsv, ndjson, github (env: UNITY_FORMAT)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "human",
+          "json",
+          "tsv",
+          "ndjson",
+          "github"
+        ]
+      }
+    },
+    {
+      "long": "--json",
+      "description": "Shorthand for --format json"
+    },
+    {
+      "long": "--no-banner",
+      "description": "Suppress the startup banner (env: UNITY_NO_BANNER)"
+    },
+    {
+      "long": "--no-pager",
+      "description": "Disable the pager for long output (env: UNITY_NO_PAGER)"
+    },
+    {
+      "long": "--non-interactive",
+      "description": "Disable interactive prompts. Useful in CI/CD environments. (env: UNITY_NON_INTERACTIVE)"
+    },
+    {
+      "long": "--quiet",
+      "description": "Suppress informational output (env: UNITY_QUIET)"
+    },
+    {
+      "long": "--verbose",
+      "description": "Show full error details including stack traces on failure (env: UNITY_VERBOSE)"
+    },
+    {
+      "long": "--color",
+      "description": "Control colored output (choices: \"auto\", \"always\", \"never\")",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "auto",
+          "always",
+          "never"
+        ]
+      }
+    },
+    {
+      "long": "--help",
+      "description": "display help for command",
+      "short": "-h"
+    }
+  ],
+  "arguments": [],
+  "subcommands": [
+    {
+      "name": "install",
+      "description": "Install an Editor",
+      "options": [
+        {
+          "long": "--architecture",
+          "description": "Editor architecture (x86_64 or arm64) (env:",
+          "short": "-a",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "x86_64",
+              "arm64"
+            ]
+          }
+        },
+        {
+          "long": "--changeset",
+          "description": "Changeset for archive installs",
+          "short": "-c",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--module",
+          "description": "Module IDs to install alongside editor",
+          "short": "-m",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--force",
+          "description": "Force reinstall of an already-installed",
+          "short": "-f"
+        },
+        {
+          "long": "--yes",
+          "description": "Automatically select the first match",
+          "short": "-y"
+        },
+        {
+          "long": "--accept-eula",
+          "description": "Accept all module license agreements"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Print what would be downloaded without"
+        },
+        {
+          "long": "--resume",
+          "description": "Resume interrupted downloads from cache"
+        },
+        {
+          "long": "--download-directory",
+          "description": "Install the Editor into this folder without",
+          "short": "-d",
+          "takes_value": true,
+          "value_type": {
+            "type": "Directory"
+          }
+        },
+        {
+          "long": "--list-modules",
+          "description": "List the editor's modules with the Hub id"
+        },
+        {
+          "long": "--timeout",
+          "description": "Stop waiting for another install after this",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "version",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "open",
+      "description": "Open a project",
+      "options": [
+        {
+          "long": "--editor-version",
+          "description": "Override project Editor version (e.g.",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--editor-path",
+          "description": "Use this Unity Editor application path",
+          "short": "-e",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        },
+        {
+          "long": "--architecture",
+          "description": "Editor architecture (x86_64 or arm64) (env:",
+          "short": "-a",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "x86_64",
+              "arm64"
+            ]
+          }
+        },
+        {
+          "long": "--build-target",
+          "description": "Pass -buildTarget to Unity (e.g. StandaloneOSX)",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--args",
+          "description": "Extra arguments passed to Unity",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--wait",
+          "description": "Wait for the Editor to exit instead of returning"
+        },
+        {
+          "long": "--batchmode",
+          "description": "Start the Editor in batch mode (-batchmode),"
+        },
+        {
+          "long": "--until-ready",
+          "description": "Wait until the Editor is ready for commands, and"
+        },
+        {
+          "long": "--timeout",
+          "description": "Seconds to keep waiting for a ready Editor",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "project",
+          "type": {
+            "type": "Directory"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "skill",
+      "description": "Manage agent skills",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install skills for a client",
+          "options": [
+            {
+              "long": "--list",
+              "description": "List supported clients, their install paths, and install"
+            },
+            {
+              "long": "--local",
+              "description": "Write into the project-local location instead of the"
+            },
+            {
+              "long": "--yes",
+              "description": "Overwrite an existing install without prompting. Without",
+              "short": "-y"
+            },
+            {
+              "long": "--dry-run",
+              "description": "Show what would be written without touching the filesystem"
+            },
+            {
+              "long": "--force",
+              "description": "Overwrite a skill copy this CLI did not write, taking"
+            }
+          ],
+          "arguments": [
+            {
+              "name": "client",
+              "type": {
+                "type": "Choice",
+                "data": [
+                  "claude-code",
+                  "claude-desktop",
+                  "grok",
+                  "cursor",
+                  "windsurf",
+                  "vscode",
+                  "cline",
+                  "codex"
+                ]
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "show",
+          "description": "Print agent skill"
+        }
+      ]
+    },
+    {
+      "name": "pipeline",
+      "description": "Manage Pipeline package",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install Pipeline",
+          "options": [
+            {
+              "long": "--project-path",
+              "description": "Path to Unity project (auto-detected if not specified)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--force",
+              "description": "Re-resolve and update the package to the latest version"
+            },
+            {
+              "long": "--version",
+              "description": "Install a specific version of the package (overwrites",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "description": "Upgrade Pipeline",
+          "options": [
+            {
+              "long": "--project-path",
+              "description": "Project directory",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "List Editor instances"
+        },
+        {
+          "name": "list-versions",
+          "description": "List package versions"
+        }
+      ]
+    },
+    {
+      "name": "self-update",
+      "description": "Update Unity CLI",
+      "options": [
+        {
+          "long": "--check",
+          "description": "Check for updates without installing"
+        },
+        {
+          "long": "--changelog",
+          "description": "Show release notes for the target version and exit"
+        },
+        {
+          "long": "--yes",
+          "description": "Skip confirmation prompt",
+          "short": "-y"
+        },
+        {
+          "long": "--channel",
+          "description": "Update channel: stable or beta",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "stable",
+              "beta"
+            ]
+          }
+        },
+        {
+          "long": "--target",
+          "description": "Update to a specific version",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--rollback",
+          "description": "Restore the previous binary installed before the last"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Preview the update without downloading or installing"
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "description": "Print CLI version"
+    },
+    {
+      "name": "completion",
+      "description": "Generate shell completions",
+      "arguments": [
+        {
+          "name": "shell",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "bash",
+              "zsh",
+              "fish",
+              "powershell"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "i",
+      "description": "Install an Editor",
+      "options": [
+        {
+          "long": "--architecture",
+          "description": "Editor architecture (x86_64 or arm64) (env:",
+          "short": "-a",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "x86_64",
+              "arm64"
+            ]
+          }
+        },
+        {
+          "long": "--changeset",
+          "description": "Changeset for archive installs",
+          "short": "-c",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--module",
+          "description": "Module IDs to install alongside editor",
+          "short": "-m",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--force",
+          "description": "Force reinstall of an already-installed",
+          "short": "-f"
+        },
+        {
+          "long": "--yes",
+          "description": "Automatically select the first match",
+          "short": "-y"
+        },
+        {
+          "long": "--accept-eula",
+          "description": "Accept all module license agreements"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Print what would be downloaded without"
+        },
+        {
+          "long": "--resume",
+          "description": "Resume interrupted downloads from cache"
+        },
+        {
+          "long": "--download-directory",
+          "description": "Install the Editor into this folder without",
+          "short": "-d",
+          "takes_value": true,
+          "value_type": {
+            "type": "Directory"
+          }
+        },
+        {
+          "long": "--list-modules",
+          "description": "List the editor's modules with the Hub id"
+        },
+        {
+          "long": "--timeout",
+          "description": "Stop waiting for another install after this",
+          "takes_value": true,
+          "value_type": {
+            "type": "Number"
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "version",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "pipe",
+      "description": "Manage Pipeline package",
+      "subcommands": [
+        {
+          "name": "install",
+          "description": "Install Pipeline",
+          "options": [
+            {
+              "long": "--project-path",
+              "description": "Path to Unity project (auto-detected if not specified)",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            },
+            {
+              "long": "--force",
+              "description": "Re-resolve and update the package to the latest version"
+            },
+            {
+              "long": "--version",
+              "description": "Install a specific version of the package (overwrites",
+              "takes_value": true,
+              "value_type": {
+                "type": "String"
+              }
+            }
+          ]
+        },
+        {
+          "name": "upgrade",
+          "description": "Upgrade Pipeline",
+          "options": [
+            {
+              "long": "--project-path",
+              "description": "Project directory",
+              "takes_value": true,
+              "value_type": {
+                "type": "Directory"
+              }
+            }
+          ]
+        },
+        {
+          "name": "list",
+          "description": "List Editor instances"
+        },
+        {
+          "name": "list-versions",
+          "description": "List package versions"
+        }
+      ]
+    },
+    {
+      "name": "upgrade",
+      "description": "Update Unity CLI",
+      "options": [
+        {
+          "long": "--check",
+          "description": "Check for updates without installing"
+        },
+        {
+          "long": "--changelog",
+          "description": "Show release notes for the target version and exit"
+        },
+        {
+          "long": "--yes",
+          "description": "Skip confirmation prompt",
+          "short": "-y"
+        },
+        {
+          "long": "--channel",
+          "description": "Update channel: stable or beta",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "stable",
+              "beta"
+            ]
+          }
+        },
+        {
+          "long": "--target",
+          "description": "Update to a specific version",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--rollback",
+          "description": "Restore the previous binary installed before the last"
+        },
+        {
+          "long": "--dry-run",
+          "description": "Preview the update without downloading or installing"
+        }
+      ]
+    }
+  ]
+}

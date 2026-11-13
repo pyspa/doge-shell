@@ -59,7 +59,7 @@ impl IntegratedCompletionEngine {
             Some(parsed_command_line.command.as_str())
         };
 
-        let candidates = self.deduplicate_and_sort(candidates, 10, history, command_context);
+        let candidates = self.deduplicate_and_sort(candidates, 1, history, command_context);
         let candidate = candidates.first()?;
         let full = replace_char_range(
             input,

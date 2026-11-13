@@ -181,7 +181,7 @@ fn timeout_preserves_partial_output() {
 #[test]
 fn stderr_only_held_pipe_reports_split_eof() {
     let _guard = common::serial_guard();
-    let child = Command::new("/bin/sh")
+    let mut child = Command::new("/bin/sh")
         .arg("-c")
         .arg("echo READY; exec 1>&-; sleep 10 & echo $! >&2")
         .stdin(Stdio::null())
@@ -191,6 +191,22 @@ fn stderr_only_held_pipe_reports_split_eof() {
         .spawn()
         .expect("spawn raw sh helper");
     let pgid = Pid::from_raw(child.id() as i32);
+    // Establish the condition this fixture measures before starting its
+    // short pipe-EOF deadline. CI scheduling/loader latency is not part of
+    // the OutputEof contract. try_wait caches the status for the collector.
+    let startup_deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait().expect("observe primary exit") {
+            assert!(status.success(), "fixture shell failed: {status}");
+            break;
+        }
+        if Instant::now() >= startup_deadline {
+            let _ = killpg(pgid, Signal::SIGKILL);
+            let _ = child.wait();
+            panic!("fixture shell did not exit before the startup deadline");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let timeout = Duration::from_millis(500);
     let started = Instant::now();
     match wait_child_with_output_deadline(child, pgid, timeout) {

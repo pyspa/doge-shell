@@ -3260,3 +3260,64 @@ async fn project_task_scope_limits_dev_task_sources() {
         );
     }
 }
+#[tokio::test]
+async fn recent_history_dynamic_completions_use_read_only_cli_queries() {
+    let dir = tempdir().unwrap();
+    let bin_dir = dir.path().join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    write_executable_script(
+        &bin_dir.join("herdr"),
+        r##"#!/bin/sh
+case "$*" in
+  'session list --json') printf '%s\n' '{"sessions":[{"name":"work","running":true},{"name":"weekend","running":false}]}' ;;
+  'machine list --json') printf '%s\n' '[{"id":"machine-1","label":"workstation","target":"ssh-secret"}]' ;;
+  *) exit 1 ;;
+esac
+"##,
+    );
+    write_executable_script(
+        &bin_dir.join("mise"),
+        r##"#!/bin/sh
+case "$*" in
+  'registry') printf 'node  core:node\npython  core:python\n' ;;
+  'plugins ls') printf 'node\npython\n' ;;
+  *) exit 1 ;;
+esac
+"##,
+    );
+    let engine = engine_with_path(&bin_dir);
+    let (notify_tx, mut notify_rx) = tokio::sync::mpsc::unbounded_channel();
+    engine.set_notifier(notify_tx);
+    for (input, expected) in [
+        ("herdr --session wo", "work"),
+        ("herdr session attach we", "weekend"),
+        ("herdr machine rename wo", "workstation"),
+        ("herdr machine rename --label laptop wo", "workstation"),
+        ("herdr --machine machine-", "machine-1"),
+        ("mise install no", "node"),
+        ("sudo mise install node py", "python"),
+        ("mise use py", "python"),
+        ("mise plugins uninstall no", "node"),
+    ] {
+        let result = wait_for_candidate_and_exact_cache(
+            &engine,
+            &mut notify_rx,
+            input,
+            dir.path(),
+            expected,
+        )
+        .await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == expected)
+        );
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == "ssh-secret")
+        );
+    }
+}

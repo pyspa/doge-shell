@@ -1,0 +1,512 @@
+{
+  "command": "codex",
+  "description": "Codex coding agent",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help",
+      "short": "-h"
+    },
+    {
+      "long": "--version",
+      "description": "Show version",
+      "short": "-V"
+    },
+    {
+      "long": "--config",
+      "description": "Override TOML setting",
+      "short": "-c",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--model",
+      "description": "Model name",
+      "short": "-m",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--profile",
+      "description": "Configuration profile",
+      "short": "-p",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--cd",
+      "description": "Working directory",
+      "short": "-C",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--image",
+      "description": "Attach an image",
+      "short": "-i",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--add-dir",
+      "description": "Additional writable directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--sandbox",
+      "description": "Execution sandbox",
+      "short": "-s",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "read-only",
+          "workspace-write",
+          "danger-full-access"
+        ]
+      }
+    },
+    {
+      "long": "--ask-for-approval",
+      "description": "Approval policy",
+      "short": "-a",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "on-request",
+          "never"
+        ]
+      }
+    },
+    {
+      "long": "--enable",
+      "description": "Enable feature",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--disable",
+      "description": "Disable feature",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--no-daemon",
+      "description": "Disable shared server"
+    },
+    {
+      "long": "--no-alt-screen",
+      "description": "Use inline terminal"
+    },
+    {
+      "long": "--search",
+      "description": "Enable web search"
+    },
+    {
+      "long": "--oss",
+      "description": "Use a local model provider"
+    },
+    {
+      "long": "--local-provider",
+      "description": "Local model backend",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "lmstudio",
+          "ollama"
+        ]
+      }
+    },
+    {
+      "long": "--remote",
+      "description": "App server address",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--remote-auth-token-env",
+      "description": "Token environment variable",
+      "takes_value": true,
+      "value_type": {
+        "type": "Dynamic",
+        "data": {
+          "provider": "shell.env_var"
+        }
+      }
+    },
+    {
+      "long": "--worktree",
+      "description": "Create a managed worktree"
+    }
+  ],
+  "arguments": [
+    {
+      "name": "prompt",
+      "type": {
+        "type": "String"
+      },
+      "required": false
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "resume",
+      "description": "Resume a session",
+      "options": [
+        {
+          "long": "--last",
+          "description": "Select most recent session"
+        },
+        {
+          "long": "--all",
+          "description": "Include other directories"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "session",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        },
+        {
+          "name": "prompt",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "fork",
+      "description": "Fork a session",
+      "options": [
+        {
+          "long": "--last",
+          "description": "Select most recent session"
+        },
+        {
+          "long": "--all",
+          "description": "Include other directories"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "session",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        },
+        {
+          "name": "prompt",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "agents",
+      "description": "Browse sessions"
+    },
+    {
+      "name": "exec",
+      "description": "Run non-interactively",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON events"
+        },
+        {
+          "long": "--output-schema",
+          "description": "JSON output schema",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        },
+        {
+          "long": "--output-last-message",
+          "description": "Save final response",
+          "short": "-o",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        },
+        {
+          "long": "--skip-git-repo-check",
+          "description": "Allow non-repository directories"
+        },
+        {
+          "long": "--ephemeral",
+          "description": "Do not persist session"
+        },
+        {
+          "long": "--color",
+          "description": "Color mode",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "auto",
+              "always",
+              "never"
+            ]
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "prompt",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "app-server",
+      "description": "Run app server",
+      "options": [
+        {
+          "long": "--listen",
+          "description": "Listen address",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          }
+        },
+        {
+          "long": "--stdio",
+          "description": "Use stdio transport"
+        }
+      ],
+      "subcommands": [
+        {
+          "name": "daemon",
+          "description": "Manage local daemon"
+        },
+        {
+          "name": "generate-ts",
+          "description": "Generate TypeScript bindings"
+        },
+        {
+          "name": "generate-json-schema",
+          "description": "Generate JSON schema"
+        }
+      ]
+    },
+    {
+      "name": "login",
+      "description": "Sign in"
+    },
+    {
+      "name": "logout",
+      "description": "Sign out"
+    },
+    {
+      "name": "doctor",
+      "description": "Diagnose local installation"
+    },
+    {
+      "name": "update",
+      "description": "Update Codex"
+    },
+    {
+      "name": "mcp",
+      "description": "Manage MCP servers",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List servers"
+        },
+        {
+          "name": "get",
+          "description": "get server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "remove",
+          "description": "remove server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "login",
+          "description": "login server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        },
+        {
+          "name": "logout",
+          "description": "logout server",
+          "arguments": [
+            {
+              "name": "name",
+              "type": {
+                "type": "String"
+              },
+              "required": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "completion",
+      "description": "Generate shell completions",
+      "arguments": [
+        {
+          "name": "shell",
+          "type": {
+            "type": "Choice",
+            "data": [
+              "bash",
+              "elvish",
+              "fish",
+              "powershell",
+              "zsh"
+            ]
+          },
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "features",
+      "description": "Inspect feature flags",
+      "subcommands": [
+        {
+          "name": "list",
+          "description": "List features"
+        }
+      ]
+    },
+    {
+      "name": "e",
+      "description": "Run non-interactively",
+      "options": [
+        {
+          "long": "--json",
+          "description": "Output JSON events"
+        },
+        {
+          "long": "--output-schema",
+          "description": "JSON output schema",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        },
+        {
+          "long": "--output-last-message",
+          "description": "Save final response",
+          "short": "-o",
+          "takes_value": true,
+          "value_type": {
+            "type": "File",
+            "data": {
+              "extensions": null
+            }
+          }
+        },
+        {
+          "long": "--skip-git-repo-check",
+          "description": "Allow non-repository directories"
+        },
+        {
+          "long": "--ephemeral",
+          "description": "Do not persist session"
+        },
+        {
+          "long": "--color",
+          "description": "Color mode",
+          "takes_value": true,
+          "value_type": {
+            "type": "Choice",
+            "data": [
+              "auto",
+              "always",
+              "never"
+            ]
+          }
+        }
+      ],
+      "arguments": [
+        {
+          "name": "prompt",
+          "type": {
+            "type": "String"
+          },
+          "required": false
+        }
+      ]
+    }
+  ]
+}

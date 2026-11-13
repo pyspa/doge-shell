@@ -139,7 +139,7 @@ fn spawn_sigdefault(preserve_int_quit: bool) -> SigSet {
 /// Resolve the binary a helper re-executes.
 ///
 /// Production always re-executes `current_exe`. Under `cargo test` the
-/// current image is the `deps/` test harness, which cannot serve the
+/// current image is a Cargo test harness, which cannot serve the
 /// internal protocol — so tests locate the sibling `dogesh` binary instead
 /// (built by a full `cargo test -p doge-shell`; `DOGESH_HELPER_BIN` overrides
 /// everything for exotic layouts). A missing candidate is a clean `Err`,
@@ -153,11 +153,7 @@ fn helper_executable() -> Result<std::path::PathBuf> {
         anyhow::bail!("DOGESH_HELPER_BIN does not exist: {}", path.display());
     }
     let current = std::env::current_exe().context("cannot find this dogesh binary")?;
-    let in_deps = current
-        .parent()
-        .and_then(|dir| dir.file_name())
-        .is_some_and(|name| name == "deps");
-    if in_deps && let Some(bin_dir) = current.parent().and_then(|deps| deps.parent()) {
+    if let Some(bin_dir) = cargo_test_bin_dir(&current) {
         let candidate = bin_dir.join("dogesh");
         if candidate.exists() {
             return Ok(candidate);
@@ -167,6 +163,23 @@ fn helper_executable() -> Result<std::path::PathBuf> {
         );
     }
     Ok(current)
+}
+
+/// Recognize both Cargo layouts without assuming the profile or target triple.
+/// Separate build/target directories still require `DOGESH_HELPER_BIN`.
+fn cargo_test_bin_dir(current: &std::path::Path) -> Option<&std::path::Path> {
+    let dir = current.parent()?;
+    if dir.file_name()? == "deps" {
+        return dir.parent();
+    }
+    // New Cargo layout: <profile>/build/<package>/<hash>/out/<test>.
+    if dir.file_name()? == "out" {
+        let build = dir.parent()?.parent()?.parent()?;
+        if build.file_name()? == "build" {
+            return build.parent();
+        }
+    }
+    None
 }
 
 /// Spawn a fresh `dogesh` helper carrying `request`, wired to the given

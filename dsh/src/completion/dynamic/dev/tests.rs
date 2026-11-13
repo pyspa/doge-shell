@@ -8,6 +8,26 @@ fn lines(value: &str) -> Vec<String> {
 }
 
 #[test]
+fn herdr_lists_keep_identifiers_and_ignore_missing_or_invalid_fields() {
+    assert_eq!(
+        parse_herdr_sessions(
+            r#"{"sessions":[{"name":"work"},{"name":"work"},{"name":"two words"},{"name":""},{"name":42},{}]}"#
+        ),
+        vec!["two words", "work"]
+    );
+    assert_eq!(
+        parse_herdr_machines(
+            r#"[{"id":"m1","label":"work","target":"private-host"},{"id":"m1","label":""},{"id":4},{}]"#
+        ),
+        vec!["m1", "work"]
+    );
+    for invalid in ["", "not JSON", "null", "{}", "[]"] {
+        assert!(parse_herdr_sessions(invalid).is_empty());
+        assert!(parse_herdr_machines(invalid).is_empty());
+    }
+}
+
+#[test]
 fn rustup_component_parser_strips_the_shared_host_triple() {
     let listing = lines(
         "cargo-x86_64-unknown-linux-gnu (installed)\n\

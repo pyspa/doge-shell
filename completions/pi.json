@@ -1,0 +1,280 @@
+{
+  "command": "pi",
+  "description": "Pi coding agent",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help",
+      "short": "-h"
+    },
+    {
+      "long": "--version",
+      "description": "Show version",
+      "short": "-v"
+    },
+    {
+      "long": "--print",
+      "description": "Run once and print",
+      "short": "-p"
+    },
+    {
+      "long": "--mode",
+      "description": "Output interface",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "text",
+          "json",
+          "rpc"
+        ]
+      }
+    },
+    {
+      "long": "--provider",
+      "description": "Model provider",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--model",
+      "description": "Model ID or pattern",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--thinking",
+      "description": "Thinking level",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "off",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      }
+    },
+    {
+      "long": "--models",
+      "description": "Model patterns",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--continue",
+      "description": "Continue latest session",
+      "short": "-c"
+    },
+    {
+      "long": "--resume",
+      "description": "Select a session",
+      "short": "-r"
+    },
+    {
+      "long": "--session",
+      "description": "Session path or ID",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      }
+    },
+    {
+      "long": "--session-dir",
+      "description": "Session storage directory",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      }
+    },
+    {
+      "long": "--no-session",
+      "description": "Keep session in memory"
+    },
+    {
+      "long": "--name",
+      "description": "Session name",
+      "short": "-n",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--tools",
+      "description": "Comma-separated tool names",
+      "short": "-t",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--no-tools",
+      "description": "Disable all tools",
+      "short": "-nt"
+    },
+    {
+      "long": "--extension",
+      "description": "Extension path",
+      "short": "-e",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--skill",
+      "description": "Skill path",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      },
+      "multiple": true
+    },
+    {
+      "long": "--no-skills",
+      "description": "Disable discovered skills",
+      "short": "-ns"
+    },
+    {
+      "long": "--no-extensions",
+      "description": "Disable discovered extensions",
+      "short": "-ne"
+    },
+    {
+      "long": "--no-mcp",
+      "description": "Disable MCP"
+    },
+    {
+      "long": "--offline",
+      "description": "Disable automatic network activity"
+    },
+    {
+      "long": "--append-system-prompt",
+      "description": "Append instructions",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "install",
+      "description": "Install a package",
+      "options": [
+        {
+          "long": "--local",
+          "description": "Use project settings",
+          "short": "-l"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "npm, Git, or local package source"
+        }
+      ]
+    },
+    {
+      "name": "remove",
+      "description": "Remove a package",
+      "options": [
+        {
+          "long": "--local",
+          "description": "Use project settings",
+          "short": "-l"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Package source"
+        }
+      ]
+    },
+    {
+      "name": "uninstall",
+      "description": "Remove a package",
+      "options": [
+        {
+          "long": "--local",
+          "description": "Use project settings",
+          "short": "-l"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Package source"
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "description": "List configured packages"
+    },
+    {
+      "name": "config",
+      "description": "Configure package resources",
+      "options": [
+        {
+          "long": "--local",
+          "description": "Use project settings",
+          "short": "-l"
+        }
+      ]
+    },
+    {
+      "name": "update",
+      "description": "Update Pi or packages",
+      "options": [
+        {
+          "long": "--extensions",
+          "description": "Update packages"
+        },
+        {
+          "long": "--models",
+          "description": "Refresh models"
+        },
+        {
+          "long": "--all",
+          "description": "Update Pi and packages"
+        },
+        {
+          "long": "--force",
+          "description": "Reinstall Pi"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "source",
+          "description": "Package source",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

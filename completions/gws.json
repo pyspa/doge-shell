@@ -1,0 +1,673 @@
+{
+  "command": "gws",
+  "description": "Google Workspace CLI",
+  "global_options": [
+    {
+      "long": "--help",
+      "description": "Show help",
+      "short": "-h"
+    },
+    {
+      "long": "--params",
+      "description": "Query parameters as JSON",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--json",
+      "description": "Request body as JSON",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--upload",
+      "description": "Upload local media",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      }
+    },
+    {
+      "long": "--upload-content-type",
+      "description": "Upload MIME type",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--output",
+      "description": "Save binary response",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {
+          "extensions": null
+        }
+      }
+    },
+    {
+      "long": "--format",
+      "description": "Output format",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "json",
+          "table",
+          "yaml",
+          "csv"
+        ]
+      }
+    },
+    {
+      "long": "--api-version",
+      "description": "API version",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      }
+    },
+    {
+      "long": "--page-all",
+      "description": "Fetch all pages"
+    },
+    {
+      "long": "--page-limit",
+      "description": "Maximum pages",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    },
+    {
+      "long": "--page-delay",
+      "description": "Delay between pages in milliseconds",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
+    }
+  ],
+  "subcommands": [
+    {
+      "name": "auth",
+      "description": "Manage credentials",
+      "subcommands": [
+        {
+          "name": "login",
+          "description": "Sign in"
+        },
+        {
+          "name": "logout",
+          "description": "Sign out"
+        },
+        {
+          "name": "status",
+          "description": "Inspect authentication"
+        },
+        {
+          "name": "setup",
+          "description": "Configure OAuth project"
+        },
+        {
+          "name": "export",
+          "description": "Export credentials"
+        }
+      ]
+    },
+    {
+      "name": "schema",
+      "description": "Inspect a method schema",
+      "options": [
+        {
+          "long": "--resolve-refs",
+          "description": "Resolve schema references"
+        }
+      ],
+      "arguments": [
+        {
+          "name": "method",
+          "description": "Service.resource.method"
+        }
+      ]
+    },
+    {
+      "name": "tasks",
+      "description": "Google Tasks",
+      "subcommands": [
+        {
+          "name": "tasklists",
+          "description": "Manage tasklists",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "insert",
+              "description": "insert resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "patch",
+              "description": "patch resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            }
+          ]
+        },
+        {
+          "name": "tasks",
+          "description": "Manage tasks",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "insert",
+              "description": "insert resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "patch",
+              "description": "patch resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            },
+            {
+              "name": "clear",
+              "description": "clear resource"
+            },
+            {
+              "name": "move",
+              "description": "move resource"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "drive",
+      "description": "Google Drive",
+      "subcommands": [
+        {
+          "name": "files",
+          "description": "Manage files",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            },
+            {
+              "name": "copy",
+              "description": "copy resource"
+            },
+            {
+              "name": "export",
+              "description": "export resource"
+            },
+            {
+              "name": "download",
+              "description": "download resource"
+            },
+            {
+              "name": "emptyTrash",
+              "description": "emptyTrash resource"
+            },
+            {
+              "name": "generateIds",
+              "description": "generateIds resource"
+            },
+            {
+              "name": "watch",
+              "description": "watch resource"
+            }
+          ]
+        },
+        {
+          "name": "drives",
+          "description": "Manage drives",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            }
+          ]
+        },
+        {
+          "name": "permissions",
+          "description": "Manage permissions",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "calendar",
+      "description": "Google Calendar",
+      "subcommands": [
+        {
+          "name": "calendarList",
+          "description": "Manage calendarList",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "insert",
+              "description": "insert resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "patch",
+              "description": "patch resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            },
+            {
+              "name": "watch",
+              "description": "watch resource"
+            }
+          ]
+        },
+        {
+          "name": "calendars",
+          "description": "Manage calendars",
+          "subcommands": [
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "insert",
+              "description": "insert resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "patch",
+              "description": "patch resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            },
+            {
+              "name": "clear",
+              "description": "clear resource"
+            }
+          ]
+        },
+        {
+          "name": "events",
+          "description": "Manage events",
+          "subcommands": [
+            {
+              "name": "list",
+              "description": "list resource"
+            },
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "insert",
+              "description": "insert resource"
+            },
+            {
+              "name": "update",
+              "description": "update resource"
+            },
+            {
+              "name": "patch",
+              "description": "patch resource"
+            },
+            {
+              "name": "delete",
+              "description": "delete resource"
+            },
+            {
+              "name": "import",
+              "description": "import resource"
+            },
+            {
+              "name": "move",
+              "description": "move resource"
+            },
+            {
+              "name": "quickAdd",
+              "description": "quickAdd resource"
+            },
+            {
+              "name": "instances",
+              "description": "instances resource"
+            },
+            {
+              "name": "watch",
+              "description": "watch resource"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "gmail",
+      "description": "Gmail",
+      "subcommands": [
+        {
+          "name": "users",
+          "description": "Mailbox resources",
+          "subcommands": [
+            {
+              "name": "messages",
+              "description": "Manage messages",
+              "subcommands": [
+                {
+                  "name": "list",
+                  "description": "list resource"
+                },
+                {
+                  "name": "get",
+                  "description": "get resource"
+                },
+                {
+                  "name": "send",
+                  "description": "send resource"
+                },
+                {
+                  "name": "insert",
+                  "description": "insert resource"
+                },
+                {
+                  "name": "import",
+                  "description": "import resource"
+                },
+                {
+                  "name": "modify",
+                  "description": "modify resource"
+                },
+                {
+                  "name": "trash",
+                  "description": "trash resource"
+                },
+                {
+                  "name": "untrash",
+                  "description": "untrash resource"
+                },
+                {
+                  "name": "delete",
+                  "description": "delete resource"
+                },
+                {
+                  "name": "batchDelete",
+                  "description": "batchDelete resource"
+                },
+                {
+                  "name": "batchModify",
+                  "description": "batchModify resource"
+                }
+              ]
+            },
+            {
+              "name": "labels",
+              "description": "Manage labels",
+              "subcommands": [
+                {
+                  "name": "list",
+                  "description": "list resource"
+                },
+                {
+                  "name": "get",
+                  "description": "get resource"
+                },
+                {
+                  "name": "create",
+                  "description": "create resource"
+                },
+                {
+                  "name": "update",
+                  "description": "update resource"
+                },
+                {
+                  "name": "patch",
+                  "description": "patch resource"
+                },
+                {
+                  "name": "delete",
+                  "description": "delete resource"
+                }
+              ]
+            },
+            {
+              "name": "threads",
+              "description": "Manage threads",
+              "subcommands": [
+                {
+                  "name": "list",
+                  "description": "list resource"
+                },
+                {
+                  "name": "get",
+                  "description": "get resource"
+                },
+                {
+                  "name": "modify",
+                  "description": "modify resource"
+                },
+                {
+                  "name": "trash",
+                  "description": "trash resource"
+                },
+                {
+                  "name": "untrash",
+                  "description": "untrash resource"
+                },
+                {
+                  "name": "delete",
+                  "description": "delete resource"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sheets",
+      "description": "Google Sheets",
+      "subcommands": [
+        {
+          "name": "spreadsheets",
+          "description": "Spreadsheets",
+          "subcommands": [
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "batchUpdate",
+              "description": "batchUpdate resource"
+            },
+            {
+              "name": "values",
+              "description": "Manage values",
+              "subcommands": [
+                {
+                  "name": "get",
+                  "description": "get resource"
+                },
+                {
+                  "name": "batchGet",
+                  "description": "batchGet resource"
+                },
+                {
+                  "name": "update",
+                  "description": "update resource"
+                },
+                {
+                  "name": "append",
+                  "description": "append resource"
+                },
+                {
+                  "name": "clear",
+                  "description": "clear resource"
+                },
+                {
+                  "name": "batchUpdate",
+                  "description": "batchUpdate resource"
+                },
+                {
+                  "name": "batchClear",
+                  "description": "batchClear resource"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "docs",
+      "description": "Google Docs",
+      "subcommands": [
+        {
+          "name": "documents",
+          "description": "Manage documents",
+          "subcommands": [
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "batchUpdate",
+              "description": "batchUpdate resource"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "slides",
+      "description": "Google Slides",
+      "subcommands": [
+        {
+          "name": "presentations",
+          "description": "Manage presentations",
+          "subcommands": [
+            {
+              "name": "get",
+              "description": "get resource"
+            },
+            {
+              "name": "create",
+              "description": "create resource"
+            },
+            {
+              "name": "batchUpdate",
+              "description": "batchUpdate resource"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

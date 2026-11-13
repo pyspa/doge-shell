@@ -24,3 +24,4 @@
 
 - Agent execute は raw source を `/bin/sh` へ渡すため、dsh alias 書換えと `contains_dynamic_expansion()` を grants/allowlist より前に拒否する。dry materialization の変数値を後続 `sh` 実行の値として信用しない（同一行の代入と後続参照も含む）。引用済み literal は維持する。
 - Git checker は global option の値を飛ばしてから subcommand を読む（`-C reset` の `reset` はディレクトリ）。未知の global option は確認へ倒し、新しい値付き option がチェックを隠さないようにする。
+- AI file reads/listings は foreground でも `agent::files` の descriptor-relative/no-follow access を使う。承認待ちの間に final/parent component が symlink に置換され得るので、事前の canonicalize だけに依存しない。search の実ファイル読み取りも同じ上限付き authority を使い、承認後の root 差し替えを拒否する。

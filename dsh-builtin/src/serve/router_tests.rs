@@ -7,6 +7,112 @@ use std::{fs, path::Path};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+#[tokio::test]
+async fn production_serve_router_rejects_rebinding_hosts() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("index.html"), "private sentinel").unwrap();
+    for cors in [false, true] {
+        let app = build_router(&ServeConfig {
+            directory: dir.path().to_owned(),
+            enable_cors: cors,
+            ..ServeConfig::default()
+        });
+        for host in [
+            "attacker.example:8000",
+            "localhost.attacker.example",
+            "127.0.0.1.attacker.example",
+            "attacker@localhost:8000",
+            "localhost:invalid",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/")
+                        .header("host", host)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN, "{host}");
+            let body = to_bytes(response.into_body(), 1024).await.unwrap();
+            assert!(!String::from_utf8_lossy(&body).contains("private sentinel"));
+        }
+        for host in ["127.0.0.1:8000", "localhost:8000", "LOCALHOST:8000"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/")
+                        .header("host", host)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{host}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn production_serve_router_checks_all_authority_sources() {
+    use axum::http::Version;
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("index.html"), "safe").unwrap();
+    let app = build_router(&ServeConfig {
+        directory: dir.path().to_owned(),
+        ..ServeConfig::default()
+    });
+    let cases = [
+        (Request::builder().uri("/"), StatusCode::FORBIDDEN),
+        (
+            Request::builder().uri("/").version(Version::HTTP_10),
+            StatusCode::OK,
+        ),
+        (
+            Request::builder()
+                .uri("/")
+                .header("host", "localhost")
+                .header("host", "attacker.example"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Request::builder()
+                .uri("http://attacker.example/")
+                .header("host", "localhost"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Request::builder()
+                .uri("http://localhost/")
+                .header("host", "attacker.example"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Request::builder()
+                .uri("http://localhost/")
+                .version(Version::HTTP_2),
+            StatusCode::OK,
+        ),
+        (
+            Request::builder()
+                .uri("http://attacker.example/")
+                .version(Version::HTTP_2),
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+    for (request, expected) in cases {
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
 async fn request(
     root: &Path,
     path: &str,
@@ -20,7 +126,13 @@ async fn request(
         ..ServeConfig::default()
     });
     let response = app
-        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", "localhost:8000")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = response.status();

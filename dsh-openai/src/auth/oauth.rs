@@ -352,6 +352,7 @@ fn validate_identity(
     validation.set_issuer(&[AUTH_ISSUER]);
     validation.set_audience(&[client_id]);
     validation.leeway = 0;
+    validation.validate_nbf = true;
     validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
     let claims = decode::<serde_json::Value>(id_token, &key, &validation)
         .map_err(|_| anyhow!("ID token signature, issuer, audience, or expiry validation failed."))?
@@ -464,6 +465,36 @@ impl AuthStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn signed_identity_rejects_invalid_or_future_optional_claims() {
+        let key = jsonwebtoken::EncodingKey::from_rsa_der(include_bytes!("fixtures/mock-rsa.der"));
+        let jwks: JwkSet = serde_json::from_str(include_str!("fixtures/mock-jwks.json")).unwrap();
+        let mut header = jsonwebtoken::Header::new(Algorithm::RS256);
+        header.kid = Some("mock".into());
+        let claims = serde_json::json!({"iss":AUTH_ISSUER,"aud":"issued","exp":now()+3600,"sub":"mock-account","nonce":"nonce"});
+        for invalid in [
+            serde_json::json!(now() + 600),
+            serde_json::json!("99999999999"),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            let mut claims = claims.clone();
+            claims["nbf"] = invalid;
+            let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+            assert!(
+                validate_identity(&token, "issued", "nonce", &jwks).is_err(),
+                "{claims}"
+            );
+        }
+        for nbf in [None, Some(now() - 60)] {
+            let mut claims = claims.clone();
+            if let Some(nbf) = nbf {
+                claims["nbf"] = serde_json::json!(nbf);
+            }
+            let token = jsonwebtoken::encode(&header, &claims, &key).unwrap();
+            assert!(validate_identity(&token, "issued", "nonce", &jwks).is_ok());
+        }
+    }
     #[test]
     fn signed_identity_enforces_signature_issuer_audience_expiry_nonce() {
         let key = jsonwebtoken::EncodingKey::from_rsa_der(include_bytes!("fixtures/mock-rsa.der"));

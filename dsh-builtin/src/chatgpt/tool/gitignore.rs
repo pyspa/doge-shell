@@ -1,48 +1,107 @@
-use ignore::gitignore::GitignoreBuilder;
-use std::path::Path;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 /// Whether `path` is ignored, and so must not be read or written by a tool.
 ///
 /// Git consults every `.gitignore` between the repository root and the file,
 /// plus `.git/info/exclude` and the user's global excludes, with the closest
 /// file winning. This used to read a single `.gitignore` in `base_dir`, which
-/// made the rule disagree with the `search` tool - that one walks with
-/// `ignore::WalkBuilder` and honours the full set. The same path could be
-/// invisible to `search` and readable by `read_file`, or the reverse.
+/// made the rule disagree with `search`. Both now use this matcher, so the
+/// same path cannot be hidden by one tool and readable through another.
 pub fn is_gitignored(path: &Path, base_dir: &Path) -> Result<bool, String> {
-    let is_dir = path.is_dir();
+    Ok(IgnoreMatcher::new(base_dir)
+        .gitignore_decision(path, path.is_dir())?
+        .unwrap_or(false))
+}
 
-    // Innermost first: the closest .gitignore wins, and a `!pattern` there is
-    // allowed to override an ignore further up.
-    for directory in ignore_file_directories(path, base_dir) {
-        let gitignore_path = directory.join(".gitignore");
-        if !gitignore_path.is_file() {
-            continue;
-        }
+/// One search uses one rule snapshot. Cache absent files and parse errors as
+/// well as matchers; a later search constructs a fresh instance.
+pub(super) struct IgnoreMatcher {
+    ceiling: PathBuf,
+    repo_root: Option<PathBuf>,
+    global: Option<Gitignore>,
+    files: HashMap<PathBuf, Result<Option<Gitignore>, String>>,
+}
 
-        match matches_ignore_file(&directory, &gitignore_path, path, is_dir)? {
-            Some(ignored) => return Ok(ignored),
-            None => continue,
+impl IgnoreMatcher {
+    pub fn new(base_dir: &Path) -> Self {
+        let repo_root = repository_root(base_dir);
+        let (global, err) = Gitignore::global();
+        Self {
+            ceiling: repo_root.clone().unwrap_or_else(|| base_dir.to_owned()),
+            repo_root,
+            global: err.is_none().then_some(global),
+            files: HashMap::new(),
         }
     }
 
-    if let Some(repo_root) = repository_root(base_dir) {
-        let exclude = repo_root.join(".git").join("info").join("exclude");
-        if exclude.is_file()
-            && let Some(ignored) = matches_ignore_file(&repo_root, &exclude, path, is_dir)?
+    fn matches_file(
+        &mut self,
+        root: &Path,
+        file: PathBuf,
+        path: &Path,
+        is_dir: bool,
+    ) -> Result<Option<bool>, String> {
+        if !path.starts_with(root) {
+            return Ok(None);
+        }
+        match self
+            .files
+            .entry(file)
+            .or_insert_with_key(|file| load_ignore_file(root, file))
         {
+            Ok(Some(matcher)) => Ok(matched_under_root(matcher, path, is_dir)),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err.clone()),
+        }
+    }
+
+    /// Search additionally respects .ignore and hides dotfiles unless explicitly
+    /// whitelisted. Reuse the same Git rules as every other file tool.
+    pub fn is_search_ignored(&mut self, path: &Path, is_dir: bool) -> Result<bool, String> {
+        for directory in ignore_file_directories(path, &self.ceiling) {
+            if let Some(ignored) =
+                self.matches_file(&directory, directory.join(".ignore"), path, is_dir)?
+            {
+                return Ok(ignored);
+            }
+        }
+        if let Some(ignored) = self.gitignore_decision(path, is_dir)? {
             return Ok(ignored);
         }
+        Ok(path
+            .file_name()
+            .is_some_and(|name| name.as_encoded_bytes().starts_with(b".")))
     }
 
-    let (global, err) = ignore::gitignore::Gitignore::global();
-    if err.is_none()
-        && let Some(ignored) = matched_under_root(&global, path, is_dir)
-    {
-        return Ok(ignored);
-    }
+    fn gitignore_decision(&mut self, path: &Path, is_dir: bool) -> Result<Option<bool>, String> {
+        // Innermost first: the closest .gitignore wins, and a `!pattern` there is
+        // allowed to override an ignore further up.
+        for directory in ignore_file_directories(path, &self.ceiling) {
+            match self.matches_file(&directory, directory.join(".gitignore"), path, is_dir)? {
+                Some(ignored) => return Ok(Some(ignored)),
+                None => continue,
+            }
+        }
 
-    Ok(false)
+        if let Some(repo_root) = self.repo_root.clone() {
+            let exclude = repo_root.join(".git").join("info").join("exclude");
+            if let Some(ignored) = self.matches_file(&repo_root, exclude, path, is_dir)? {
+                return Ok(Some(ignored));
+            }
+        }
+
+        if let Some(global) = &self.global
+            && let Some(ignored) = matched_under_root(global, path, is_dir)
+        {
+            return Ok(Some(ignored));
+        }
+
+        Ok(None)
+    }
 }
 
 /// The directories whose `.gitignore` applies to `path`, innermost first.
@@ -52,14 +111,10 @@ pub fn is_gitignored(path: &Path, base_dir: &Path) -> Result<bool, String> {
 /// and then jumped straight to the root, which skipped the levels in between -
 /// so a file ignored only by `/repo/a/.gitignore` stayed readable while
 /// `search` hid it, exactly the disagreement this is here to prevent.
-fn ignore_file_directories(path: &Path, base_dir: &Path) -> Vec<std::path::PathBuf> {
-    let ceiling = repository_root(base_dir).unwrap_or_else(|| base_dir.to_path_buf());
-
-    let start = if path.is_dir() {
-        Some(path)
-    } else {
-        path.parent()
-    };
+fn ignore_file_directories(path: &Path, ceiling: &Path) -> Vec<PathBuf> {
+    // A directory's own rules apply to its children, never to whether the
+    // directory itself is entered (notably `*` followed by `!keep.txt`).
+    let start = path.parent();
 
     // Only the part of the chain that lies inside the ceiling. A path outside
     // it - the runtime skills directory, say - has no repository above it, and
@@ -67,7 +122,7 @@ fn ignore_file_directories(path: &Path, base_dir: &Path) -> Vec<std::path::PathB
     let mut directories = Vec::new();
     let mut current = start;
     while let Some(directory) = current {
-        if !directory.starts_with(&ceiling) {
+        if !directory.starts_with(ceiling) {
             break;
         }
         directories.push(directory.to_path_buf());
@@ -80,13 +135,8 @@ fn ignore_file_directories(path: &Path, base_dir: &Path) -> Vec<std::path::PathB
     directories
 }
 
-fn matches_ignore_file(
-    root: &Path,
-    ignore_file: &Path,
-    path: &Path,
-    is_dir: bool,
-) -> Result<Option<bool>, String> {
-    if !path.starts_with(root) {
+fn load_ignore_file(root: &Path, ignore_file: &Path) -> Result<Option<Gitignore>, String> {
+    if !ignore_file.is_file() {
         return Ok(None);
     }
 
@@ -102,7 +152,7 @@ fn matches_ignore_file(
         )
     })?;
 
-    Ok(matched_under_root(&gitignore, path, is_dir))
+    Ok(Some(gitignore))
 }
 
 /// Ask a matcher about `path`, but only when `path` is under its root.
@@ -144,6 +194,35 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn search_rules_are_reused_until_the_next_search() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        let rules = dir.path().join(".gitignore");
+        let log = dir.path().join("file.log");
+        fs::write(&rules, "*.log\n").unwrap();
+        let mut search = IgnoreMatcher::new(dir.path());
+        assert!(search.is_search_ignored(&log, false).unwrap());
+        fs::write(&rules, "*.txt\n").unwrap();
+        // A search must not re-read/recompile the same rules for each sibling.
+        assert!(search.is_search_ignored(&log, false).unwrap());
+        assert!(
+            !IgnoreMatcher::new(dir.path())
+                .is_search_ignored(&log, false)
+                .unwrap()
+        );
+
+        // Cache missing files too, while subsequent searches see new rules.
+        fs::write(dir.path().join(".ignore"), "*.txt\n").unwrap();
+        let text = dir.path().join("file.txt");
+        assert!(!search.is_search_ignored(&text, false).unwrap());
+        assert!(
+            IgnoreMatcher::new(dir.path())
+                .is_search_ignored(&text, false)
+                .unwrap()
+        );
+    }
 
     #[test]
     fn test_no_gitignore_allows_all() {

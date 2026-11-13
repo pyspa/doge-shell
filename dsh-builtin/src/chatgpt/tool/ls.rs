@@ -1,6 +1,7 @@
 use crate::safety_policy;
 use crate::shell_capabilities::ChatToolHost;
 use serde_json::{Value, json};
+#[cfg(test)]
 use std::fs;
 
 pub(crate) const NAME: &str = "ls";
@@ -74,28 +75,8 @@ pub(crate) fn run(arguments: &str, _proxy: &mut dyn ChatToolHost) -> Result<Stri
         return Ok("ls cancelled by user.".to_string());
     }
 
-    let directory_entries = if restricted_io {
-        crate::agent::files::read_directory(&normalized_abs_path)
-    } else {
-        fs::read_dir(&normalized_abs_path).map(|entries| {
-            entries
-                .filter_map(|entry| entry.ok())
-                .map(|entry| {
-                    let metadata = entry.metadata().ok().map(|metadata| {
-                        crate::agent::files::DirectoryMetadata {
-                            is_dir: metadata.is_dir(),
-                            size: metadata.len(),
-                        }
-                    });
-                    crate::agent::files::DirectoryEntry {
-                        name: entry.file_name(),
-                        metadata,
-                    }
-                })
-                .collect()
-        })
-    }
-    .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?;
+    let directory_entries = crate::agent::files::read_directory(&normalized_abs_path)
+        .map_err(|err| format!("chat: failed to read directory `{path_value}`: {err}"))?;
     let mut hidden_sensitive = 0usize;
     let mut entries = directory_entries
         .into_iter()
@@ -172,6 +153,25 @@ mod tests {
 
     use crate::test_support::TestShellProxy;
     type NoopProxy = TestShellProxy;
+
+    #[test]
+    fn interactive_listing_rejects_approval_time_directory_swap() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        fs::create_dir(dir.path().join(".env")).unwrap();
+        fs::write(outside.path().join("outside-sentinel"), "private").unwrap();
+        let root = dir.path().to_owned();
+        let other = outside.path().to_owned();
+        let mut p = proxy(dir.path().to_path_buf());
+        p.approval_callback = Some(Box::new(move || {
+            fs::remove_dir(root.join(".env")).unwrap();
+            symlink(&other, root.join(".env")).unwrap();
+        }));
+        let result = run(r#"{"path":".env"}"#, &mut p);
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(p.confirm_calls, 1);
+    }
 
     #[test]
     fn test_ls_current_dir() {

@@ -701,3 +701,6 @@ mod exact_cache_tests;
 
 #[cfg(test)]
 mod cold_path_tests;
+
+#[cfg(test)]
+mod ranking_tests;

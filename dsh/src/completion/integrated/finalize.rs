@@ -112,8 +112,7 @@ impl IntegratedCompletionEngine {
             }
         }
 
-        // Sorting before dedup keeps the best-ranked candidate for duplicate text.
-        candidates.sort_by(|a, b| {
+        let compare = |a: &EnhancedCandidate, b: &EnhancedCandidate| {
             b.priority
                 .cmp(&a.priority)
                 .then_with(|| {
@@ -122,7 +121,17 @@ impl IntegratedCompletionEngine {
                         .cmp(&b.candidate_type.sort_order())
                 })
                 .then_with(|| a.text.cmp(&b.text))
-        });
+        };
+        // Ghost text only needs the winner. Dedup never removes the first
+        // sorted candidate, so a linear minimum gives the same result without
+        // sorting or allocating a key for every candidate. min_by retains the
+        // first equal item, matching the stable sort's source precedence.
+        if max_results == 1 {
+            return candidates.into_iter().min_by(compare).into_iter().collect();
+        }
+
+        // Sorting before dedup keeps the best-ranked candidate for duplicate text.
+        candidates.sort_by(compare);
         // Normalize away a trailing path separator before deduping: different
         // candidate sources (e.g. the JSON/FileSystemGenerator stage vs. the
         // fish-fallback stage) disagree on whether a directory's text ends in

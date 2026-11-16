@@ -1065,7 +1065,6 @@ dependencies = [
  "sysinfo",
  "tabled",
  "tempfile",
- "termios",
  "tokio",
  "toml",
  "tracing",
@@ -1175,7 +1174,6 @@ dependencies = [
  "shell-words",
  "tempfile",
  "tracing",
- "uuid",
 ]
 
 [[package]]

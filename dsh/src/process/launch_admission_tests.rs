@@ -2,7 +2,7 @@
 use super::launch_admission::{LaunchAdmission, StageAdmission};
 use super::preexec_full_proxy_tests::OwnedJob;
 use super::{Job, JobProcess, Process, ProcessState};
-use nix::sys::signal::{Signal, raise};
+use nix::sys::signal::{Signal, killpg, raise};
 use nix::unistd::Pid;
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
@@ -111,7 +111,10 @@ fn helper_consumed_ack_ends_startup_stop_propagation() {
     );
     // External continuation: canonical update_status must observe Continued,
     // without fg/bg's successful-resume state update helping the fixture.
-    owner.0.signal(Signal::SIGCONT).unwrap();
+    // Job::signal also walks the PIDs after signaling the group. A second
+    // SIGCONT can undo the helper's post-acknowledgement SIGSTOP, so model
+    // the external continuation with exactly one group signal.
+    killpg(pid, Signal::SIGCONT).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         owner.0.update_status();

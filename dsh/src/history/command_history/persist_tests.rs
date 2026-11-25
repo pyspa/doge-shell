@@ -223,9 +223,12 @@ fn failed_batch_then_outcome(existing: bool, background: bool) {
     if background {
         history.start_background_writer();
     }
-    history
-        .write_batch(vec![("synthetic rejected".to_string(), 20)])
-        .unwrap();
+    let result = history.write_batch(vec![("synthetic rejected".to_string(), 20)]);
+    assert_eq!(
+        result.is_ok(),
+        background,
+        "sync writes report the DB error"
+    );
     let failed = background.then(|| receive_ack(&history));
     if let Some(ack) = &failed {
         assert!(ack.result.is_err());

@@ -3,42 +3,22 @@ use super::*;
 
 impl<'a> Repl<'a> {
     pub(super) fn save_history(&mut self) {
-        // Command history is auto-saved by SQLite
-        Self::save_single_history_helper(&mut self.shell.path_history, "path", false);
-    }
-
-    fn save_single_history_helper(
-        history: &mut Option<Arc<ParkingMutex<FrecencyHistory>>>,
-        history_type: &str,
-        background: bool,
-    ) {
-        if let Some(history) = history {
-            if let Some(mut history_guard) = history.try_lock() {
-                // Only save if there are changes
-                if let Some(ref store) = history_guard.store {
-                    if store.changed {
-                        if background {
-                            history_guard.save_background();
-                            // debug!("{} history saving in background", history_type);
-                        } else if let Err(e) = history_guard.save() {
-                            warn!("Failed to save {} history: {}", history_type, e);
-                        } else {
-                            // debug!("{} history saved successfully", history_type);
-                        }
-                    } else {
-                        // debug!("{} history unchanged, skipping save", history_type);
-                    }
-                }
-            } else {
-                // debug!("{} history is locked, skipping save", history_type);
-            }
+        // Wait for an in-flight directory write before the process exits.
+        if let Some(history) = &self.shell.path_history
+            && let Err(err) = history.lock().save()
+        {
+            warn!("Failed to save directory history: {err}");
         }
     }
 
     pub(super) fn save_history_periodic(&mut self) {
-        // Command history is auto-saved by SQLite
-        Self::save_single_history_helper(&mut self.shell.path_history, "path", true);
+        if let Some(history) = &self.shell.path_history
+            && let Some(mut history) = history.try_lock()
+        {
+            history.save_background();
+        }
     }
+
     pub(super) fn learn_suggestion(&self, suggestion: &str) {
         if let Some(history) = &self.shell.cmd_history
             && let Some(mut history) = history.try_lock()

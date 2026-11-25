@@ -88,8 +88,8 @@ pub async fn run_shell() -> ExitCode {
         startup_tasks.push_loader(std::thread::spawn(move || {
             match crate::history::History::from_file("dsh_cmd_history") {
                 Ok(mut history) => {
-                    let older = prepare_command_history(&mut history, 1000, 9000);
-                    publish_command_history(&cmd_history, &history, older);
+                    prepare_command_history(&mut history);
+                    publish_command_history(&cmd_history, history);
                 }
                 Err(e) => {
                     fail_command_history_initialization(&cmd_history);
@@ -572,42 +572,20 @@ fn last_status_exit_code(shell: &Shell) -> ExitCode {
     ExitCode::from(status.clamp(0, 255) as u8)
 }
 
-// Publish both prepared baselines under one lock before reload can apply.
+// Publish the prepared baseline under one lock before reload can apply.
 pub(crate) fn publish_command_history(
     shared: &std::sync::Arc<parking_lot::Mutex<crate::history::History>>,
-    loaded: &crate::history::History,
-    older: Vec<crate::history::Entry>,
+    loaded: crate::history::History,
 ) {
-    shared.lock().install_startup_history(loaded, older);
+    shared.lock().install_startup_history(loaded);
 }
 
-/// Read both bounded database baselines before foreground writes can reach the
-/// writer. SQLite work stays on the startup loader, outside the shared lock.
-pub(crate) fn prepare_command_history(
-    history: &mut crate::history::History,
-    recent_limit: usize,
-    older_limit: usize,
-) -> Vec<crate::history::Entry> {
-    let min_timestamp = match history.load_recent(recent_limit) {
-        Ok(timestamp) => timestamp,
-        Err(error) => {
-            tracing::warn!("Failed to load recent history items: {}", error);
-            0
-        }
-    };
-    let older = if min_timestamp > 0 {
-        match history.load_older_than(min_timestamp, older_limit) {
-            Ok(entries) => entries,
-            Err(error) => {
-                tracing::warn!("Failed to load remaining history: {}", error);
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
+/// Read the bounded baseline in one SQLite snapshot, outside the shared lock.
+pub(crate) fn prepare_command_history(history: &mut crate::history::History) {
+    if let Err(error) = history.load() {
+        tracing::warn!("Failed to load command history: {error}");
+    }
     history.start_background_writer();
-    older
 }
 
 // Terminal initialization failure has no retry owner.

@@ -130,10 +130,24 @@ impl Db {
                 last_accessed INTEGER NOT NULL,
                 access_count INTEGER NOT NULL,
                 half_life REAL NOT NULL,
-                context TEXT
+                context TEXT,
+                score_time REAL
             )",
             [],
         )?;
+
+        // Older snapshots have no score timestamp. Decode their stored score
+        // as the load-time score until the next visit upgrades that row.
+        if !conn.column_exists(None, "directory_snapshot", "score_time")? {
+            let result = conn.execute(
+                "ALTER TABLE directory_snapshot ADD COLUMN score_time REAL",
+                [],
+            );
+            // Another shell may have completed the same migration meanwhile.
+            if result.is_err() && !conn.column_exists(None, "directory_snapshot", "score_time")? {
+                result?;
+            }
+        }
 
         // Create indexes for performance
         conn.execute(

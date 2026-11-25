@@ -16,12 +16,12 @@ impl History {
             let mut stmt = conn.prepare(
                 "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
+                    SELECT id, command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT ?1
                  ) 
-                 ORDER BY timestamp ASC",
+                 ORDER BY timestamp ASC, id ASC",
             )?;
 
             let rows = stmt.query_map([limit as i64], |row| {
@@ -69,13 +69,13 @@ impl History {
             let mut stmt = conn.prepare(
                 "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
+                    SELECT id, command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
                     WHERE timestamp < ?1
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT ?2
                  ) 
-                 ORDER BY timestamp ASC",
+                 ORDER BY timestamp ASC, id ASC",
             )?;
 
             let rows = stmt.query_map(rusqlite::params![timestamp, limit as i64], |row| {
@@ -155,12 +155,12 @@ impl History {
         let mut stmt = conn.prepare(
             "SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                  FROM (
-                    SELECT command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
+                    SELECT id, command, timestamp, count, context, exit_code, duration_ms, cwd, session_id, hostname
                     FROM command_history 
-                    ORDER BY timestamp DESC 
+                    ORDER BY timestamp DESC, id DESC
                     LIMIT 10000
                  ) 
-                 ORDER BY timestamp ASC",
+                 ORDER BY timestamp ASC, id ASC",
         )?;
 
         let rows = stmt.query_map([], |row| {

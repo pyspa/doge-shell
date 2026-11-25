@@ -26,6 +26,7 @@ fn crlf(text: &str) -> String {
 
 /// Synchronous confirmation helper that handles raw mode switching
 pub fn confirm_action(message: &str) -> Result<ConfirmationAction> {
+    let _restore = super::terminal_state::RawModeRestore::new();
     let mut stdout = stdout();
 
     // Check if raw mode is already enabled to restore state later

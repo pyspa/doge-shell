@@ -311,13 +311,19 @@ pub(super) fn status_report(proxy: &mut dyn ChatToolHost) -> StatusReport {
     };
     let scope = conversation_scope(proxy.get_current_dir().ok().as_deref());
 
-    let status = match session::check(ttl, &identity, scope.as_deref()) {
-        session::Continuity::Continued {
+    let status = match session::check(ttl, &identity, scope.as_deref(), |manager| {
+        let config = load_openai_config(proxy);
+        let client = ChatGptClient::try_from_config(&config)
+            .map_err(|_| "Check the AI provider configuration with doctor ai.".to_string())?;
+        manager.compatible_provider_scope(&client).map(|_| ())
+    }) {
+        Err(reason) => reason,
+        Ok(session::Continuity::Continued {
             id,
             messages,
             age,
             scope,
-        } => {
+        }) => {
             let left = ttl
                 .and_then(|ttl| ttl.checked_sub(age))
                 .map(|left| format!(", idle for {}s more", left.as_secs()))
@@ -330,7 +336,7 @@ pub(super) fn status_report(proxy: &mut dyn ChatToolHost) -> StatusReport {
                 age.as_secs()
             )
         }
-        session::Continuity::Fresh { stored, reasons } => {
+        Ok(session::Continuity::Fresh { stored, reasons }) => {
             if ttl.is_none() {
                 format!(
                     "no chat session ({} is 0, so `!` turns do not share a conversation)",
@@ -355,14 +361,14 @@ pub(super) fn status_report(proxy: &mut dyn ChatToolHost) -> StatusReport {
 
 /// Note appended to `chat_model` output when a carried conversation exists.
 ///
-/// A model change does not end the conversation - the history is
-/// model-agnostic text - so say so while the cause is still obvious, rather
-/// than leaving the next `!`'s continuation a surprise. Pure text built from
-/// the same age-only description `chat_reset` prints; `chat_status` remains
-/// the arbiter for whether identity or scope would still break it.
+/// Only the age is known here. The detailed status checks provider compatibility.
 pub(super) fn carried_model_note(proxy: &mut dyn ShellProxy) -> String {
     session::session_description(resolve_session_ttl(proxy))
-        .map(|detail| format!(" (carried conversation continues with the new model: {detail})"))
+        .map(|detail| {
+            format!(
+                " (stored conversation: {detail}; use chat_status to check whether it can continue)"
+            )
+        })
         .unwrap_or_default()
 }
 
@@ -454,12 +460,18 @@ mod tests {
         let manager = proxy.agent_mcp_manager();
         let identity = assemble_system_prompt("", None, None, &manager.read(), McpToolMode::Eager);
         let scope = conversation_scope(Some(&proxy.current_dir));
+        proxy
+            .vars
+            .insert("AI_CHAT_API_KEY".into(), "session-key".into());
+        let client = ChatGptClient::try_from_config(&load_openai_config(proxy)).unwrap();
+        let mut conversation = ConversationManager::new(
+            serde_json::json!({"role": "system", "content": "sys"}),
+            serde_json::json!({"role": "user", "content": "goal"}),
+        );
+        conversation.bind_provider(&client).unwrap();
         session::store(
             resolve_session_ttl(proxy),
-            ConversationManager::new(
-                serde_json::json!({"role": "system", "content": "sys"}),
-                serde_json::json!({"role": "user", "content": "goal"}),
-            ),
+            conversation,
             id,
             &identity,
             scope,
@@ -482,6 +494,28 @@ mod tests {
             "{}",
             report.status
         );
+    }
+
+    #[test]
+    fn status_report_preserves_the_session_after_a_provider_mismatch() {
+        let _guard = session::tests::TEST_LOCK.lock().unwrap();
+        let _state = session::tests::isolated_state_home();
+        session::session_reset();
+        let mut proxy = TestShellProxy::default();
+        seed_session(&mut proxy, "retained");
+        proxy
+            .vars
+            .insert("AI_CHAT_API_KEY".into(), "different-key".into());
+
+        let blocked = status_report(&mut proxy).status;
+        assert!(
+            blocked.contains("retained") && blocked.contains("Restore the original settings"),
+            "{blocked}"
+        );
+        proxy
+            .vars
+            .insert("AI_CHAT_API_KEY".into(), "session-key".into());
+        assert!(status_report(&mut proxy).status.contains("continues this"));
     }
 
     #[test]
@@ -530,7 +564,7 @@ mod tests {
         seed_session(&mut proxy, "s1");
         let note = carried_model_note(&mut proxy);
         assert!(note.contains("s1"), "{note}");
-        assert!(note.contains("continues with the new model"), "{note}");
+        assert!(note.contains("chat_status"), "{note}");
     }
 
     #[test]

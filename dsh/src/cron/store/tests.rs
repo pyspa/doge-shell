@@ -1850,6 +1850,64 @@ fn unfinished_legacy_run_cannot_use_a_newer_claim_from_the_same_driver() {
 }
 
 #[test]
+fn reclaiming_legacy_rows_preserves_more_recent_failure_and_skip_streaks() {
+    for state in [RunState::Failed, RunState::Skipped] {
+        let (dir, store) = store();
+        let job_id = store
+            .create(&spec("probe", "5s"), &env(), NOW, false)
+            .unwrap();
+        // Legacy history in insertion order: orphan, success, failure/skip.
+        let db = raw(&dir);
+        for (slot, value) in ["running", "succeeded", state.as_str()].iter().enumerate() {
+            db.execute(
+                "INSERT INTO runs(id, job_id, scheduled_for, state, finished_at, trigger, owner) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'manual', 'old')",
+                params![
+                    slot.to_string(),
+                    job_id,
+                    NOW + slot as i64,
+                    value,
+                    (slot > 0).then_some(NOW)
+                ],
+            )
+            .unwrap();
+        }
+        let failed = i64::from(state == RunState::Failed);
+        db.execute(
+            "UPDATE jobs SET run_count = 2, fail_count = ?1, consecutive_failures = ?1, \
+             consecutive_skips = ?2 WHERE id = ?3",
+            params![failed, 1 - failed, job_id],
+        )
+        .unwrap();
+        let run = store
+            .claim_one("probe", NOW + 3, "new", RunTrigger::Manual)
+            .unwrap();
+        store
+            .complete(&run.run_id, &outcome(state), NOW + 4)
+            .unwrap();
+        let job = store.get("probe").unwrap();
+        assert_eq!(job.run_count, 4);
+        assert_eq!(job.fail_count, 1 + 2 * u64::from(state == RunState::Failed));
+        assert_eq!(i64::from(job.consecutive_failures), 2 * failed);
+        let skips: i64 = db
+            .query_row(
+                "SELECT consecutive_skips FROM jobs WHERE id = ?1",
+                [job.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(skips, 2 * (1 - failed));
+        assert!(
+            !store
+                .incidents(true, 20)
+                .unwrap()
+                .iter()
+                .any(|i| i.kind == IncidentKind::Failing)
+        );
+    }
+}
+
+#[test]
 fn expired_worker_cannot_start_or_publish_before_the_next_scan() {
     let (_dir, store) = store();
     store

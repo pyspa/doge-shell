@@ -179,3 +179,13 @@ script = "printf '```sh\\nexit 23\\n```\\n' > book.md; echo y > answers; noteboo
 [case.expect]
 status = 23
 stderr_contains = ["block 1", "23"]
+
+[[case]]
+id = "simple-command.saved-command-preserves-literal-words"
+class = "dogesh"
+mode = "command"
+script = """bookmark add words printf '<%s>\\n' 'a  b' '' "it's"; bookmark run words; snippet add words printf '[%s]\\n' 'x  y' ''; snippet run words"""
+
+[case.expect]
+status = 0
+stdout_contains = ["<a  b>\n<>\n<it's>\n", "[x  y]\n[]\n"]

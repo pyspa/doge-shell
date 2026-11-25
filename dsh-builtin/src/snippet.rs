@@ -93,7 +93,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         _ => {
             if argv.len() >= 4 && (argv[1] == "add" || argv[1] == "-a") {
                 let name = &argv[2];
-                let command = argv[3..].join(" ");
+                let command = dsh_types::text::saved_shell_command(&argv[3..]);
                 add_snippet(ctx, name, &command, None, proxy)
             } else {
                 ctx.write_stderr("snippet: invalid arguments").ok();

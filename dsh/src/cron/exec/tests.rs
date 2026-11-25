@@ -131,3 +131,43 @@ fn only_a_uuid_can_start_a_run_child() {
         assert!(spawn_run_child(bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn timeout_includes_writers_that_outlive_the_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut job = run("echo ready; (sleep 2; echo late > survived) &", 1);
+    job.cwd = dir.path().to_string_lossy().into_owned();
+    let outcome = run_command(&job);
+    assert!(outcome.timed_out);
+    assert_eq!(outcome.exit_code, TIMED_OUT);
+    assert_eq!(outcome.stdout, "ready\n");
+    assert!(outcome.duration < Duration::from_secs(8));
+    std::thread::sleep(Duration::from_millis(1300));
+    assert!(!dir.path().join("survived").exists());
+}
+
+#[test]
+fn completed_child_keeps_buffered_diagnostics_at_deadline() {
+    let child = Command::new("/bin/sh")
+        .args(["-c", "echo final >&2; exit 4"])
+        .process_group(0)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+    // Observe exit while retaining the leader PID until the deadline handler reaps it.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id(),
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
+    let outcome = wait_with_deadline(child, Duration::ZERO, Instant::now());
+    assert_eq!(outcome.exit_code, 4);
+    assert_eq!(outcome.stderr, "final\n");
+    assert!(!outcome.timed_out);
+}

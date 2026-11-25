@@ -200,3 +200,21 @@ fn implicit_bookmark_saves_the_command_before_current_input() {
             assert_eq!(shell.get_bookmark("chosen").unwrap().0, "A=latest");
         });
 }
+
+#[tokio::test]
+async fn bare_smart_pipe_after_failure_still_succeeds() {
+    let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+    let (mut shell, mut ctx) = test_shell();
+    assert_eq!(
+        shell
+            .eval_str(&mut ctx, "false".into(), false)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        shell.eval_str(&mut ctx, "|".into(), false).await.unwrap(),
+        0
+    );
+    assert_eq!(shell.environment.read().last_exit_status, 0);
+}

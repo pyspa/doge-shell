@@ -306,3 +306,13 @@ stdout_contains = ["OK"]
 stdout_not_contains = ["WRONG", "ignored"]
 stderr_exact = ""
 files = [{ path = "before", exists = false }]
+
+[[case]]
+id = "comments.piped-comment-preserves-previous-status"
+class = "posix"
+mode = "interactive"
+script = "{{FALSE}}\n# comment only\necho STATUS:$?"
+[case.expect]
+status = 0
+stdout_exact = "STATUS:1\n"
+stderr_exact = ""

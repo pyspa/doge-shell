@@ -116,6 +116,60 @@ fn cron_show_json_works_with_the_flag_before_the_job_name() {
     assert!(out.contains("\"name\": \"t1\""), "{out}");
 }
 
+#[test]
+fn tick_dry_run_previews_the_real_claim_without_changing_the_store() {
+    use doge_shell::cron::store::SqliteCronStore;
+    use dsh_builtin::shell_capabilities::CronStore;
+    use dsh_types::cron::job::{RunOutcome, RunQuery, RunTrigger};
+
+    let sandbox = Sandbox::new();
+    for name in ["later", "duplicate", "leased", "first", "expired"] {
+        sandbox.run(&format!("cron add --name {name} 1h 'echo hello'"));
+    }
+    let store = SqliteCronStore::open(&sandbox.dir.path().join("dogesh/cron")).unwrap();
+    let now = chrono::Utc::now().timestamp();
+    store
+        .claim_one("leased", now, "live", RunTrigger::Tick)
+        .unwrap();
+    store
+        .claim_one("expired", now - 86400, "dead", RunTrigger::Tick)
+        .unwrap();
+    let duplicate = store
+        .claim_one("duplicate", now - 20, "prior", RunTrigger::Tick)
+        .unwrap();
+    store
+        .complete(&duplicate.run_id, &RunOutcome::default(), now - 19)
+        .unwrap();
+    for (name, offset) in [
+        ("leased", 30),
+        ("duplicate", 20),
+        ("expired", 10),
+        ("first", 5),
+        ("later", 1),
+    ] {
+        store.trigger(name, now - offset).unwrap();
+    }
+
+    let jobs = store.list().unwrap();
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    let preview = |limit| {
+        let stdout = sandbox.run(&format!("cron tick --dry-run --max {limit} --json"));
+        serde_json::from_str::<serde_json::Value>(&stdout).unwrap()["would_run"].clone()
+    };
+    assert_eq!(preview(0), serde_json::json!([]));
+    // The duplicate consumes a candidate slot before the unique-run constraint skips it.
+    assert_eq!(preview(2), serde_json::json!(["expired"]));
+    let names = preview(3);
+    assert_eq!(names, serde_json::json!(["expired", "first"]));
+    assert_eq!(store.list().unwrap(), jobs);
+    assert_eq!(store.runs(&RunQuery::default()).unwrap(), runs);
+    assert!(store.incidents(true, 10).unwrap().is_empty());
+
+    let claimed = store.claim_due(now, "tick", 3, RunTrigger::Tick).unwrap();
+    let claimed: Vec<_> = claimed.into_iter().map(|run| run.job_name).collect();
+    assert_eq!(names, serde_json::json!(claimed));
+}
+
 /// The bug this guards against: `cron doctor`'s ok/warn counts were only
 /// ever visible in `--json`; the human-readable listing gave no total.
 #[test]

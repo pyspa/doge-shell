@@ -466,12 +466,7 @@ pub(super) fn tick_cmd(ctx: &Context, store: &SqliteCronStore, args: &[String]) 
     let at = now();
 
     if dry_run {
-        let due: Vec<_> = store
-            .list()?
-            .into_iter()
-            .filter(|job| !job.paused && !job.blocked && job.next_run_at.is_some_and(|n| n <= at))
-            .map(|job| job.name)
-            .collect();
+        let due = store.preview_due_jobs(at, max)?;
         if json_output {
             ctx.write_stdout(&serde_json::to_string_pretty(&json!({"would_run": due}))?)?;
         } else if verbose {

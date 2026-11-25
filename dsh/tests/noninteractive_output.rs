@@ -143,3 +143,14 @@ fn unreadable_piped_input_fails_and_stops_the_script() {
         assert!(!stderr.contains("Error executing"), "{stderr}");
     }
 }
+
+#[test]
+fn piped_eof_preserves_async_output() {
+    let output = common::run_dsh_with_input(
+        std::iter::empty::<&str>(),
+        Some(b"sleep 0.2 && echo late &\n"),
+        DEFAULT_CASE_TIMEOUT,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"late\n");
+}

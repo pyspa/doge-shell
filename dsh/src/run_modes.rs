@@ -14,7 +14,8 @@ use crate::subcommands::{handle_completion_command, handle_import_command};
 use clap::Parser;
 use dsh_types::Context;
 use nix::unistd::isatty;
-use std::io::{self, BufRead, BufReader, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -496,8 +497,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     } else {
         // Pipe mode - read from stdin
         debug!("Running in pipe mode");
-        // Children and builtins read fd 0 directly. Even Stdin's own buffer
-        // can consume their input, so read at most through the current newline.
+        // Children and builtins share fd 0. Bypass Stdin's process-wide buffer.
         let fd = match io::stdin().as_fd().try_clone_to_owned() {
             Ok(fd) => fd,
             Err(error) => {
@@ -505,7 +505,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        let reader = BufReader::with_capacity(1, std::fs::File::from(fd));
+        let reader = script_reader(File::from(fd));
         // Lines of a command that is not complete yet (trailing `&&`/`|`,
         // open quote, ...). Running each physical line alone would let
         // `false &&` fail as a syntax error and then run the next line
@@ -556,6 +556,33 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         }
         // End of input: like `sh < script`, the status of the last command.
         finish_noninteractive(repl.shell, last_status_exit_code(repl.shell))
+    }
+}
+
+fn script_reader(mut file: File) -> Box<dyn BufRead> {
+    if file.metadata().is_ok_and(|meta| meta.is_file()) && file.stream_position().is_ok() {
+        Box::new(BufReader::new(ScriptFile(file)))
+    } else {
+        // A pipe cannot return bytes to the next reader.
+        Box::new(BufReader::with_capacity(1, file))
+    }
+}
+
+/// Return at most one physical line per read, rewinding any bytes past it on
+/// the shared file description before the shell passes fd 0 to a command.
+struct ScriptFile(File);
+
+impl Read for ScriptFile {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let count = self.0.read(buf)?;
+        if let Some(newline) = buf[..count].iter().position(|&byte| byte == b'\n') {
+            let end = newline + 1;
+            if end < count {
+                self.0.seek_relative(-((count - end) as i64))?;
+            }
+            return Ok(end);
+        }
+        Ok(count)
     }
 }
 

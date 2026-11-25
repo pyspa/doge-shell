@@ -1808,3 +1808,28 @@ fn late_and_duplicate_completions_cannot_release_the_current_run() {
     assert!(store.complete(&next.run_id, &success, later).is_err());
     assert_eq!(store.get("probe").unwrap().run_count, 2);
 }
+
+#[test]
+fn unfinished_legacy_run_cannot_use_a_newer_claim_from_the_same_driver() {
+    let (dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let old = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    // Older versions reclaimed a lease without closing its queued run.
+    raw(&dir)
+        .execute("UPDATE jobs SET claimed_by=NULL, claimed_until=NULL", [])
+        .unwrap();
+    let new = store
+        .claim_one("probe", NOW - 10, "driver", RunTrigger::Manual)
+        .unwrap();
+    let success = outcome(RunState::Succeeded);
+    assert!(store.start(&old.run_id, NOW).is_err());
+    assert!(store.complete(&old.run_id, &success, NOW).is_err());
+    assert!(store.get("probe").unwrap().running);
+    store.start(&new.run_id, NOW).unwrap();
+    store.complete(&new.run_id, &success, NOW).unwrap();
+    assert_eq!(store.get("probe").unwrap().run_count, 1);
+}

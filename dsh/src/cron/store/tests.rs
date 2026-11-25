@@ -1783,3 +1783,28 @@ fn attach_agent_task_errors_instead_of_silently_no_opping_on_an_unknown_run_id()
     let (_dir, store) = store();
     assert!(store.attach_agent_task("no-such-run", "task-1").is_err());
 }
+
+#[test]
+fn late_and_duplicate_completions_cannot_release_the_current_run() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let first = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    store.start(&first.run_id, NOW).unwrap();
+    let later = NOW + 121;
+    let next = store
+        .claim_due(later, "driver", 1, RunTrigger::Tick)
+        .unwrap()
+        .remove(0);
+    let success = outcome(RunState::Succeeded);
+    assert!(store.complete(&first.run_id, &success, later).is_err());
+    let job = store.get("probe").unwrap();
+    assert!(job.running);
+    assert_eq!((job.run_count, job.fail_count), (1, 1));
+    store.complete(&next.run_id, &success, later).unwrap();
+    assert!(store.complete(&next.run_id, &success, later).is_err());
+    assert_eq!(store.get("probe").unwrap().run_count, 2);
+}

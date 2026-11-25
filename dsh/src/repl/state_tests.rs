@@ -256,6 +256,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepting_an_ai_suggestion_does_not_record_an_unexecuted_command() {
+        let mut shell = Shell::new(Environment::new_synthetic());
+        let history = Arc::new(ParkingMutex::new(History::new()));
+        shell.cmd_history = Some(history.clone());
+        let mut repl = Repl::new(&mut shell);
+        repl.input.reset("echo".into());
+        repl.ai_ui
+            .suggestion_manager
+            .update_candidates(vec![crate::suggestion::SuggestionState {
+                full: "echo suggested".into(),
+                source: crate::suggestion::SuggestionSource::Ai,
+            }]);
+        assert!(repl.accept_active_suggestion());
+        assert_eq!(repl.input.as_str(), "echo suggested");
+        assert!(history.lock().get_recent_context(10).is_empty());
+    }
+
+    #[tokio::test]
     async fn ctrl_r_returns_run_interactive() {
         let environment = Environment::new();
         let mut shell = Shell::new(environment);

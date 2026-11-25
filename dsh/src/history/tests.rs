@@ -438,3 +438,127 @@ fn test_frecency_from_file_restores_name_sorted_order() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn command_history_input_distinguishes_ai_requests_from_command_arguments() {
+    for input in [
+        "!explain pwd",
+        "  ! 説明して",
+        "\t!& --edit fix it",
+        "!!",
+        "blocks explain 1",
+        "blocks explain '2'",
+        "blocks explain 1; # trailing comment",
+        "\"blocks\" explain 1",
+        "",
+        "# note\n  # second",
+    ] {
+        assert!(!super::is_command_history_input(input), "{input:?}");
+    }
+    for input in [
+        "false",
+        "??/run",
+        "ls |?script",
+        "echo '! explain'",
+        "printf '%s' 'a|!b'",
+        "echo 'blocks explain 1'",
+        "blocks explain 1; pwd",
+        "# note\npwd",
+        "blocks list",
+    ] {
+        assert!(super::is_command_history_input(input), "{input:?}");
+    }
+    assert!(!super::is_legacy_command_history_input("pwd |! explain"));
+}
+
+#[test]
+fn legacy_ai_requests_are_hidden_before_history_limits_without_deleting_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("history.db");
+    {
+        let db = crate::db::Db::new(path.clone()).unwrap();
+        db.get_connection()
+            .execute_batch(
+                "ALTER TABLE command_history DROP COLUMN is_command;
+                 ALTER TABLE command_events DROP COLUMN is_command;
+                 INSERT INTO command_history(command,timestamp) VALUES ('echo keep',1),(' ! explain',2);
+                 INSERT INTO command_events(command,started_at) VALUES ('echo keep',1),(' ! explain',2);",
+            )
+            .unwrap();
+    }
+    let db = crate::db::Db::new(path).unwrap();
+    let mut history = History::new();
+    history.db = Some(db.clone());
+    history.write_history("! another explanation").unwrap();
+    history
+        .record_outcome(
+            "! another explanation",
+            HistoryMetadata {
+                ledger_mode: CommandLedgerMode::Output,
+                output: Some("AI reply".into()),
+                ..HistoryMetadata::default()
+            },
+        )
+        .unwrap();
+    history.load_recent(1).unwrap();
+    assert_eq!(history.get_recent_context(1), ["echo keep"]);
+    assert_eq!(history.load_older_than(3, 1).unwrap()[0].entry, "echo keep");
+    history.reload().unwrap();
+    assert_eq!(history.get_recent_context(2), ["echo keep"]);
+    assert_eq!(
+        history.command_events(Some("human"), 1).unwrap()[0].command,
+        "echo keep"
+    );
+    assert_eq!(
+        history.picker_execution_metadata(1).unwrap()[0].command,
+        "echo keep"
+    );
+    assert_eq!(
+        db.get_connection()
+            .query_row(
+                "SELECT (SELECT count(*) FROM command_history), (SELECT count(*) FROM command_events)",
+                [],
+                |r| Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?)),
+            )
+            .unwrap(),
+        (2, 2)
+    );
+}
+
+#[test]
+fn explicitly_imported_commands_keep_the_source_shell_interpretation_on_reload() {
+    use crate::history_import::{FishHistoryImporter, HistoryImporter};
+    let root = tempfile::tempdir().unwrap();
+    let db = crate::db::Db::new(root.path().join("history.db")).unwrap();
+    let path = root.path().join("fish_history");
+    std::fs::write(&path, "- cmd: ! true\n  when: 42\n").unwrap();
+    let mut history = History::new();
+    history.db = Some(db);
+    assert_eq!(
+        FishHistoryImporter::with_path(path)
+            .import(&mut history)
+            .unwrap(),
+        1
+    );
+    history.reload().unwrap();
+    assert_eq!(history.get_recent_context(1), ["! true"]);
+    let command = "! test -d folder";
+    history
+        .record_external_event(CommandEvent {
+            command: command.into(),
+            author: "external-shell".into(),
+            started_at: chrono::Utc::now().timestamp(),
+            id: 0,
+            cwd: None,
+            duration_ms: None,
+            exit_code: None,
+            session_id: None,
+            hostname: None,
+            output: None,
+        })
+        .unwrap();
+    assert_eq!(
+        history.command_events(Some("external-shell"), 1).unwrap()[0].command,
+        command
+    );
+}

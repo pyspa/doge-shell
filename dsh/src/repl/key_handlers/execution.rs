@@ -227,7 +227,9 @@ async fn execute_shell_command(
         }
     };
     let mut ctx = Context::new(repl.shell.pid, repl.shell.pgid, Some(shell_tmode), true);
-    let output_observer = Some(ObservedOutput::shared(COMMAND_BLOCK_MAX_OBSERVED_BYTES));
+    let is_command = crate::history::is_command_history_input(&input_str);
+    let output_observer =
+        is_command.then(|| ObservedOutput::shared(COMMAND_BLOCK_MAX_OBSERVED_BYTES));
     ctx.output_observer = output_observer.clone();
 
     write_terminal_control(&super::super::shell_integration::command_output_start(
@@ -257,67 +259,68 @@ async fn execute_shell_command(
 
     repl.completion_ui.cache.invalidate();
 
-    // Record command timing statistics
     let elapsed = start_time.elapsed();
-    if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
-        {
-            let mut timing = repl.services.command_timing.write();
-            timing.record(&cmd_name, exit_code, elapsed);
+    if is_command {
+        if let Some(cmd_name) = command_timing::extract_command_name(&input_str) {
+            {
+                let mut timing = repl.services.command_timing.write();
+                timing.record(&cmd_name, exit_code, elapsed);
+            }
+            repl.schedule_command_timing_save();
         }
-        repl.schedule_command_timing_save();
-    }
 
-    let output_entries = repl
-        .shell
-        .environment
-        .read()
-        .session_output_state
-        .output_history
-        .entries_after_id(output_start_id);
-    let observed_output = output_observer.as_ref().and_then(snapshot_observed_output);
-    let watched_output = observed_output
-        .as_ref()
-        .filter(|output| !output.is_empty())
-        .map(combined_observed_output)
-        .unwrap_or_else(|| combined_output(&output_entries));
+        let output_entries = repl
+            .shell
+            .environment
+            .read()
+            .session_output_state
+            .output_history
+            .entries_after_id(output_start_id);
+        let observed_output = output_observer.as_ref().and_then(snapshot_observed_output);
+        let watched_output = observed_output
+            .as_ref()
+            .filter(|output| !output.is_empty())
+            .map(combined_observed_output)
+            .unwrap_or_else(|| combined_output(&output_entries));
 
-    repl.shell
-        .record_history_outcome(&input_str, exit_code, elapsed, Some(&watched_output));
+        repl.shell
+            .record_history_outcome(&input_str, exit_code, elapsed, Some(&watched_output));
 
-    let watch_summary = if let Some(request) = ai_watch_request.as_ref() {
-        summarize_ai_watch(
-            repl,
-            request,
-            &input_str,
-            &watched_output,
+        let watch_summary = if let Some(request) = ai_watch_request.as_ref() {
+            summarize_ai_watch(
+                repl,
+                request,
+                &input_str,
+                &watched_output,
+                exit_code,
+                elapsed,
+            )
+            .await
+        } else {
+            None
+        };
+
+        let mut block = CommandBlock::new(
+            input_str.clone(),
+            cwd,
             exit_code,
-            elapsed,
-        )
-        .await
-    } else {
-        None
-    };
-
-    let mut block = CommandBlock::new(
-        input_str.clone(),
-        cwd,
-        exit_code,
-        elapsed.as_millis() as u64,
-        &output_entries,
-        watch_summary,
-    );
-    if let Some(output) = observed_output.as_ref()
-        && !output.is_empty()
-    {
-        apply_observed_output_to_block(&mut block, output);
+            elapsed.as_millis() as u64,
+            &output_entries,
+            watch_summary,
+        );
+        if let Some(output) = observed_output.as_ref()
+            && !output.is_empty()
+        {
+            apply_observed_output_to_block(&mut block, output);
+        }
+        block.timestamp = command_timestamp;
+        repl.shell
+            .environment
+            .write()
+            .session_output_state
+            .command_blocks
+            .push(block);
     }
-    block.timestamp = command_timestamp;
-    repl.shell
-        .environment
-        .write()
-        .session_output_state
-        .command_blocks
-        .push(block);
 
     // Auto-Notify logic
     {

@@ -89,29 +89,6 @@ fn read_head_tail(mut reader: impl Read, limit: usize) -> Vec<u8> {
     head
 }
 
-/// Splits `command |! query` at the first top-level `|!`. A `|!` inside
-/// quotes or escapes belongs to the command, so `grep 'a|!b' f` is not an AI
-/// pipe. Surrounding quotes around the query are removed.
-pub(crate) fn parse_ai_pipe(input: &str) -> Option<(String, String)> {
-    let idx = crate::completion::command_segment::ai_pipe_marker(input)?;
-    let command = input[..idx].trim();
-    let query_part = input[idx + 2..].trim();
-    let query = query_part
-        .strip_prefix('"')
-        .and_then(|q| q.strip_suffix('"'))
-        .or_else(|| {
-            query_part
-                .strip_prefix('\'')
-                .and_then(|q| q.strip_suffix('\''))
-        })
-        .unwrap_or(query_part);
-
-    if command.is_empty() || query.is_empty() {
-        return None;
-    }
-    Some((command.to_string(), query.to_string()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,18 +149,15 @@ mod tests {
             "echo # |! comment",
             "echo $(printf '|!')",
         ] {
-            assert_eq!(parse_ai_pipe(input), None, "{input:?}");
+            assert_eq!(crate::ai_task_input::output_pipe(input), None, "{input:?}");
         }
     }
 
     #[test]
     fn ai_pipe_query_may_contain_another_marker() {
         assert_eq!(
-            parse_ai_pipe("grep 'a|!b' f |! what's the |! about"),
-            Some((
-                "grep 'a|!b' f".to_string(),
-                "what's the |! about".to_string()
-            ))
+            crate::ai_task_input::output_pipe("grep 'a|!b' f |! what's the |! about"),
+            Some(("grep 'a|!b' f", "what's the |! about"))
         );
     }
 }

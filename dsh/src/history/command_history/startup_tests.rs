@@ -354,3 +354,47 @@ fn startup_loads_all_commands_tied_at_the_former_page_boundary() {
     prepare_command_history(&mut history);
     assert_eq!(history.histories.len(), 1001);
 }
+
+#[test]
+fn startup_and_reload_keep_id_order_and_apply_same_second_local_writes_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::new(dir.path().join("history.db")).unwrap();
+    db.get_connection()
+        .execute_batch(
+            "INSERT INTO command_history(command, timestamp, context) VALUES
+        ('Zulu', 42, 'old context'), ('Middle', 42, NULL), ('Alpha', 42, NULL);",
+        )
+        .unwrap();
+    let mut loaded = History::new();
+    loaded.db = Some(db);
+    prepare_command_history(&mut loaded);
+    let mut live = History::new_for_startup();
+    live.write_batch(vec![
+        ("Middle".into(), 42),
+        ("Zulu".into(), 5),
+        ("Beta".into(), 42),
+        ("Omega".into(), 42),
+    ])
+    .unwrap();
+    assert_eq!(live.back().as_deref(), Some("Omega"));
+    live.install_startup_history(loaded);
+    assert_eq!(live.histories[live.current_index].entry, "Omega");
+    live.reset_index();
+    let expected = ["Omega", "Beta", "Middle", "Alpha", "Zulu"];
+    assert_eq!(live.get_recent_context(5), expected);
+    assert_eq!(live.histories[0].count, 2);
+    assert_eq!(live.histories[0].context.as_deref(), Some("old context"));
+
+    let (tx, rx) = mpsc::channel();
+    assert!(live.request_reload(move |result| tx.send(result).unwrap()));
+    let snapshot = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    assert_eq!(
+        live.apply_reload_snapshot(snapshot),
+        HistoryReloadApply::Applied
+    );
+    assert_eq!(live.get_recent_context(5), expected);
+    live.drain_persistence_acks();
+    assert!(live.pending_persistence.is_empty());
+    live.reload().unwrap();
+    assert_eq!(live.get_recent_context(5), expected);
+}

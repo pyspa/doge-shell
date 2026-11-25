@@ -1,4 +1,4 @@
-//! Recognize the interactive background AI prefix before shell syntax.
+//! Recognize AI prompts and shortcuts in the shell input buffer.
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum TaskInput<'a> {
@@ -36,6 +36,40 @@ pub(crate) fn classify(input: &str) -> Option<Result<TaskInput<'_>, &'static str
     } else {
         Some(Ok(TaskInput::Start { edit, prompt: rest }))
     }
+}
+
+pub(crate) fn generative_query(input: &str) -> Option<&str> {
+    let query = input.trim_start().strip_prefix("??")?.trim();
+    (!query.is_empty()).then_some(query)
+}
+
+pub(crate) fn smart_pipe_query(input: &str) -> Option<&str> {
+    let at = crate::completion::command_segment::smart_pipe_marker(input)?;
+    let query = input[at + 2..].trim();
+    (!query.is_empty()).then_some(query)
+}
+
+/// Splits `command |! query` at the first top-level `|!`. A `|!` inside
+/// quotes or escapes belongs to the command, so `grep 'a|!b' f` is not an AI
+/// pipe. Surrounding quotes around the query are removed.
+pub(crate) fn output_pipe(input: &str) -> Option<(&str, &str)> {
+    let idx = crate::completion::command_segment::ai_pipe_marker(input)?;
+    let command = input[..idx].trim();
+    let query_part = input[idx + 2..].trim();
+    let query = query_part
+        .strip_prefix('"')
+        .and_then(|q| q.strip_suffix('"'))
+        .or_else(|| {
+            query_part
+                .strip_prefix('\'')
+                .and_then(|q| q.strip_suffix('\''))
+        })
+        .unwrap_or(query_part);
+
+    if command.is_empty() || query.is_empty() {
+        return None;
+    }
+    Some((command, query))
 }
 
 #[cfg(test)]

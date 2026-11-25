@@ -1,6 +1,6 @@
 //! `ai-commit` / `aic`: a commit message for what is already staged.
 //!
-//! Three steps, in order: read the staged diff (bounded by `MAX_DIFF_CHARS`,
+//! Three steps, in order: read the staged diff (bounded by `MAX_DIFF_BYTES`,
 //! falling back to `--stat` plus an excerpt when it does not fit), ask the
 //! model for a Conventional Commits subject and body, then put it in front of
 //! the person as `y` / `n` / `e` before anything is committed.
@@ -179,7 +179,7 @@ fn confirm_commit(
 
 /// Diff bytes sent to the model. A large staged change used to be forwarded in
 /// full, which is unbounded input for a one-paragraph answer.
-const MAX_DIFF_CHARS: usize = 24_000;
+const MAX_DIFF_BYTES: usize = 24_000;
 
 fn run_git(
     proxy: &mut dyn ShellProxy,
@@ -208,22 +208,23 @@ fn get_staged_diff(
     cwd: Option<&std::path::Path>,
 ) -> Result<String, String> {
     let diff = run_git(proxy, &["diff", "--cached"], cwd)?;
-    if diff.len() <= MAX_DIFF_CHARS {
+    if diff.len() <= MAX_DIFF_BYTES {
         return Ok(diff);
     }
 
     // Too large to send whole: lead with the file-level summary so the model
     // still sees the shape of the change, then as much of the diff as fits.
     let stat = run_git(proxy, &["diff", "--cached", "--stat"], cwd).unwrap_or_default();
-    let budget = MAX_DIFF_CHARS.saturating_sub(stat.len());
-    let end = diff.floor_char_boundary(budget);
+    Ok(bounded_diff_excerpt(&stat, &diff))
+}
 
-    Ok(format!(
-        "Diff summary:\n{stat}\nDiff excerpt (truncated, {} of {} bytes):\n{}",
-        end,
-        diff.len(),
-        &diff[..end]
-    ))
+fn bounded_diff_excerpt(stat: &str, diff: &str) -> String {
+    const HEADER: &str = "Diff summary:\n";
+    let excerpt_header = format!("\nDiff excerpt (truncated from {} bytes):\n", diff.len());
+    let budget = MAX_DIFF_BYTES - HEADER.len() - excerpt_header.len();
+    let stat = &stat[..stat.floor_char_boundary(budget)];
+    let excerpt = &diff[..diff.floor_char_boundary(budget - stat.len())];
+    format!("{HEADER}{stat}{excerpt_header}{excerpt}")
 }
 
 fn generate_commit_message(
@@ -383,6 +384,18 @@ mod tests {
         let diff = get_staged_diff(&mut test_proxy(), Some(path)).unwrap();
         assert!(diff.contains("hello world"));
         assert!(diff.contains("diff --git"));
+    }
+
+    #[test]
+    fn large_stats_and_utf8_excerpts_respect_the_complete_byte_limit() {
+        let diff = "界".repeat(MAX_DIFF_BYTES);
+        for stat in ["small stat".to_owned(), "界".repeat(MAX_DIFF_BYTES)] {
+            let message = bounded_diff_excerpt(&stat, &diff);
+            assert!(message.len() <= MAX_DIFF_BYTES);
+            assert!(message.starts_with("Diff summary:\n"));
+            assert!(message.contains("Diff excerpt (truncated"));
+            assert!(MAX_DIFF_BYTES - message.len() < "界".len());
+        }
     }
 
     #[test]

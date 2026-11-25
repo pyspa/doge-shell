@@ -617,3 +617,14 @@ script = "printf '[%s]\\n' a{b,c}d"
 status = 0
 stdout_exact = "[abd]\n[acd]\n"
 stderr_exact = ""
+
+[[case]]
+id = "expansion.piped-escaped-trailing-space"
+class = "posix"
+mode = "interactive"
+script = "printf '<%s>\\n' arg\\ \nprintf 'done\\n'"
+
+[case.expect]
+status = 0
+stdout_exact = "<arg >\ndone\n"
+stderr_exact = ""

@@ -152,3 +152,52 @@ fn unreadable_piped_input_fails_and_stops_the_script() {
         assert!(!stderr.contains("Error executing"), "{stderr}");
     }
 }
+
+#[test]
+fn piped_eof_preserves_async_output() {
+    let output = common::run_dsh_with_input(
+        std::iter::empty::<&str>(),
+        Some(b"sleep 0.2 && echo late &\n"),
+        DEFAULT_CASE_TIMEOUT,
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"late\n");
+}
+
+#[test]
+fn piped_input_releases_output_consumers_only_on_normal_exit() {
+    let dir = tempfile::tempdir().unwrap();
+    let consumer = dir.path().join("consumer.sh");
+    // The shell sends its own PID through the substitution. A surviving
+    // consumer can print only after that parent has been reaped.
+    std::fs::write(
+        &consumer,
+        r#"read -r parent || exit 1
+i=0
+while kill -0 "$parent" 2>/dev/null; do
+    i=$((i+1))
+    [ "$i" -lt 100 ] || exit 1
+    sleep 0.05
+done
+echo consumer-tail
+"#,
+    )
+    .unwrap();
+    let command = format!("echo $$ > >(sh '{}')\n", consumer.display());
+    for (suffix, status, stdout) in [
+        (b"".as_slice(), 0, b"consumer-tail\n".as_slice()),
+        (b"\xff\n".as_slice(), 1, b"".as_slice()),
+    ] {
+        let input = [command.as_bytes(), suffix].concat();
+        let output = common::run_dsh_with_input(
+            std::iter::empty::<&str>(),
+            Some(&input),
+            DEFAULT_CASE_TIMEOUT,
+        );
+        assert_eq!(output.status.code(), Some(status), "{output:?}");
+        assert_eq!(output.stdout, stdout, "{output:?}");
+        if status != 0 {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("Error reading input:"));
+        }
+    }
+}

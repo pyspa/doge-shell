@@ -166,18 +166,12 @@ pub async fn run_shell() -> ExitCode {
     // Covers all three modes, including `-c`, which a `!` chat can reach.
     let _chat_jobs_shutdown = ChatJobsShutdown;
 
-    let code = match run_mode {
+    match run_mode {
         RunMode::LispInline(script) => execute_lisp(&mut shell, &mut ctx, &script).await,
         RunMode::LispFile { path, .. } => execute_lisp_file(&mut shell, &mut ctx, &path).await,
         RunMode::Command { command, .. } => execute_command(&mut shell, &mut ctx, &command).await,
         RunMode::Interactive | RunMode::Notebook(_) => run_interactive(&mut shell, &mut ctx).await,
-    };
-    // Interactive / notebook normal exit likewise releases `>(...)`
-    // consumers without signal; command-mode already released its own, so
-    // this second call is a no-op there. Abnormal paths still reach `Drop`
-    // cleanup with ownership intact.
-    let _ = shell.detach_process_substitution_consumers_for_normal_exit();
-    code
+    }
 }
 
 /// Kills every managed `!` chat command when the shell leaves.
@@ -351,6 +345,21 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     ctx.interactive = false;
 
     let evaluated = shell.eval_str(&mut ctx, command.to_string(), false).await;
+    let status = match evaluated {
+        Ok(code) => {
+            shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);
+            debug!("run command mode {:?} : {:?}", command, &code);
+            ExitCode::from(code.clamp(0, 255) as u8)
+        }
+        Err(err) => {
+            display_user_error(&err, true);
+            ExitCode::FAILURE
+        }
+    };
+    finish_noninteractive(shell, status)
+}
+
+fn finish_noninteractive(shell: &mut Shell, status: ExitCode) -> ExitCode {
     // Normal execution-environment exit: release `Active` known-async
     // ownership so background helpers outlive this process instead of being
     // waited on (the old exit drain) or killed (`Drop` safety cleanup).
@@ -369,17 +378,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         return ExitCode::FAILURE;
     }
     let _ = shell.detach_process_substitution_consumers_for_normal_exit();
-    match evaluated {
-        Ok(code) => {
-            shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);
-            debug!("run command mode {:?} : {:?}", command, &code);
-            ExitCode::from(code.clamp(0, 255) as u8)
-        }
-        Err(err) => {
-            display_user_error(&err, true);
-            ExitCode::FAILURE
-        }
-    }
+    status
 }
 
 pub async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &str) -> ExitCode {
@@ -480,26 +479,20 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     if isatty(unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) }).unwrap_or(false) {
         // Interactive mode
         debug!("Running in interactive mode");
-        match repl.run_interactive().await {
+        let status = match repl.run_interactive().await {
             // `exit [N]` ends the session with its status; other normal
             // endings (Ctrl+D, Ctrl+C twice) keep reporting success.
             Ok(()) if repl.shell.exited.is_some() => last_status_exit_code(repl.shell),
             Ok(()) => ExitCode::from(0),
+            Err(err) if err.is::<crate::ShellExit>() => ExitCode::SUCCESS,
             Err(err) => {
-                // Don't display error message for normal exit
-                let err_str = err.to_string();
-                if err_str.contains("Shell terminated by double Ctrl+C")
-                    || err_str.contains("Normal exit")
-                    || err_str.contains("Exit by")
-                {
-                    debug!("Shell exiting normally: {}", err_str);
-                    ExitCode::from(0)
-                } else {
-                    display_user_error(&err, true);
-                    ExitCode::FAILURE
-                }
+                display_user_error(&err, true);
+                return ExitCode::FAILURE;
             }
-        }
+        };
+        repl.shell
+            .detach_process_substitution_consumers_for_normal_exit();
+        status
     } else {
         // Pipe mode - read from stdin
         debug!("Running in pipe mode");
@@ -535,8 +528,11 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                         continue;
                     }
                     let input = std::mem::take(&mut pending);
-                    if run_piped_command(&mut repl, ctx, input.trim_end()).await {
-                        return last_status_exit_code(repl.shell);
+                    if run_piped_command(&mut repl, ctx, &input).await {
+                        return finish_noninteractive(
+                            repl.shell,
+                            last_status_exit_code(repl.shell),
+                        );
                     }
                 }
                 Err(err) => {
@@ -548,10 +544,10 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         // Input ended mid-command: run it anyway so the syntax error is
         // reported, as `sh` reports an unexpected end of file.
         if !pending.trim().is_empty() {
-            run_piped_command(&mut repl, ctx, pending.trim_end()).await;
+            run_piped_command(&mut repl, ctx, &pending).await;
         }
         // End of input: like `sh < script`, the status of the last command.
-        last_status_exit_code(repl.shell)
+        finish_noninteractive(repl.shell, last_status_exit_code(repl.shell))
     }
 }
 

@@ -58,7 +58,7 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
         .and_then(|choices| choices.get(0))
         .ok_or_else(|| format!("response contained no choices: {response}"))?;
 
-    let assistant_message = choice
+    let mut assistant_message = choice
         .get("message")
         .cloned()
         .ok_or_else(|| format!("response missing assistant message: {response}"))?;
@@ -69,12 +69,28 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
         .unwrap_or_default()
         .to_string();
 
+    let content = extract_message_content(&assistant_message);
+    if finish_reason == FINISH_REASON_LENGTH || finish_reason == FINISH_REASON_CONTENT_FILTER {
+        // Even a syntactically complete call can be part of an interrupted turn.
+        if let Some(message) = assistant_message.as_object_mut() {
+            message.remove("tool_calls");
+            message.remove("function_call");
+        }
+        return Ok(Turn {
+            assistant_message: content.is_some().then_some(assistant_message),
+            interim_text: None,
+            outcome: TurnOutcome::Cut {
+                finish_reason,
+                partial: content,
+            },
+        });
+    }
+
     let tool_calls = assistant_message
         .get("tool_calls")
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
-    let content = extract_message_content(&assistant_message);
 
     let keep_message = !tool_calls.is_empty() || content.is_some();
     let stored_message = keep_message.then(|| assistant_message.clone());
@@ -84,17 +100,6 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
             assistant_message: stored_message,
             interim_text: content,
             outcome: TurnOutcome::ToolCalls(tool_calls),
-        });
-    }
-
-    if finish_reason == FINISH_REASON_LENGTH || finish_reason == FINISH_REASON_CONTENT_FILTER {
-        return Ok(Turn {
-            assistant_message: stored_message,
-            interim_text: None,
-            outcome: TurnOutcome::Cut {
-                finish_reason,
-                partial: content,
-            },
         });
     }
 
@@ -327,6 +332,35 @@ mod tests {
             }
         );
         assert!(describe_cut("length", Some("half")).contains("half"));
+    }
+
+    #[test]
+    fn interrupted_calls_are_neither_dispatched_nor_replayed() {
+        for reason in ["length", "content_filter"] {
+            for partial in [None, Some("so far")] {
+                let function = json!({"name":"ls","arguments":"{}"});
+                let message = json!({
+                    "role": "assistant", "content": partial,
+                    "tool_calls": [{"id":"one","type":"function","function":function}],
+                    "function_call": function
+                });
+                let turn = interpret_response(&response(message, reason)).unwrap();
+                assert_eq!(
+                    turn.outcome,
+                    TurnOutcome::Cut {
+                        finish_reason: reason.into(),
+                        partial: partial.map(str::to_string)
+                    }
+                );
+                assert_eq!(
+                    turn.assistant_message,
+                    partial.map(|text| json!({
+                        "role":"assistant","content":text
+                    }))
+                );
+                assert!(turn.interim_text.is_none());
+            }
+        }
     }
 
     #[test]

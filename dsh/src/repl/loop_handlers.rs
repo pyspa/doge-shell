@@ -67,10 +67,7 @@ impl<'a> Repl<'a> {
             event_loop::LoopEvent::TerminalInput(event) => {
                 return self.handle_terminal_input(event).await;
             }
-            event_loop::LoopEvent::TerminalError(error) => {
-                self.shell.print_error(format!("Error: {error:?}\r"));
-                return Ok(false);
-            }
+            event_loop::LoopEvent::TerminalError(error) => return Err(error.into()),
             event_loop::LoopEvent::TerminalClosed => return Ok(false),
         }
         Ok(true)
@@ -136,17 +133,8 @@ impl<'a> Repl<'a> {
 
     async fn handle_terminal_input(&mut self, event: crossterm::event::Event) -> Result<bool> {
         let old_last_time = self.state.last_command_time;
-        let control_flow = match self.handle_event(ShellEvent::Input(event)).await {
-            Ok(control_flow) => control_flow,
-            Err(error) => {
-                self.shell.print_error(format!("Error: {error:?}\r"));
-                return Ok(false);
-            }
-        };
-
-        if !self.apply_repl_control_flow(control_flow).await {
-            return Ok(false);
-        }
+        let control_flow = self.handle_event(ShellEvent::Input(event)).await?;
+        self.apply_repl_control_flow(control_flow).await?;
 
         self.after_terminal_input(old_last_time);
         if self.ai_ui.input_preferences.ai_explanation {
@@ -155,19 +143,13 @@ impl<'a> Repl<'a> {
         Ok(true)
     }
 
-    async fn apply_repl_control_flow(&mut self, mut control_flow: ReplControlFlow) -> bool {
+    async fn apply_repl_control_flow(&mut self, mut control_flow: ReplControlFlow) -> Result<()> {
         while let ReplControlFlow::ReplayInput(event) = control_flow {
-            control_flow = match self.handle_event(ShellEvent::Input(event)).await {
-                Ok(flow) => flow,
-                Err(error) => {
-                    self.shell.print_error(format!("Error: {error:?}\r"));
-                    return false;
-                }
-            };
+            control_flow = self.handle_event(ShellEvent::Input(event)).await?;
         }
         match control_flow {
             ReplControlFlow::ReplayInput(_) => unreachable!("replayed above"),
-            ReplControlFlow::Continue => true,
+            ReplControlFlow::Continue => {}
             ReplControlFlow::ExecuteCurrentInput => {
                 self.event_loop.pause_input();
                 let status_pause =
@@ -175,16 +157,8 @@ impl<'a> Repl<'a> {
                 let result = key_handlers::execution::handle_execute(self).await;
                 drop(status_pause);
 
-                match result {
-                    Ok(()) => {
-                        self.event_loop.resume_input();
-                        true
-                    }
-                    Err(error) => {
-                        self.shell.print_error(format!("Error: {error:?}\r"));
-                        false
-                    }
-                }
+                result?;
+                self.event_loop.resume_input();
             }
             ReplControlFlow::OpenCommandPalette => {
                 self.event_loop.pause_input();
@@ -193,16 +167,8 @@ impl<'a> Repl<'a> {
                 let result = key_handlers::auxiliary::handle_open_command_palette(self).await;
                 drop(status_pause);
 
-                match result {
-                    Ok(_) => {
-                        self.event_loop.resume_input();
-                        true
-                    }
-                    Err(error) => {
-                        self.shell.print_error(format!("Error: {error:?}\r"));
-                        false
-                    }
-                }
+                result?;
+                self.event_loop.resume_input();
             }
             ReplControlFlow::RunInteractive(closure) => {
                 self.event_loop.pause_input();
@@ -260,10 +226,7 @@ impl<'a> Repl<'a> {
                 if execute_after {
                     let result = key_handlers::execution::handle_execute(self).await;
                     drop(status_pause);
-                    if let Err(error) = result {
-                        self.shell.print_error(format!("Error: {error:?}\r"));
-                        return false;
-                    }
+                    result?;
                 } else {
                     drop(status_pause);
                     let mut renderer = TerminalRenderer::new();
@@ -273,9 +236,9 @@ impl<'a> Repl<'a> {
                 }
 
                 self.event_loop.resume_input();
-                true
             }
         }
+        Ok(())
     }
 
     fn after_terminal_input(&mut self, old_last_time: Option<Instant>) {
@@ -579,34 +542,46 @@ mod completion_replay_tests {
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
     #[tokio::test]
+    async fn terminal_errors_reach_the_shell_but_closed_input_ends_normally() {
+        let mut shell = Shell::new(crate::environment::Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        let error = std::io::Error::other("terminal read failed");
+        let result = repl
+            .handle_loop_event(event_loop::LoopEvent::TerminalError(error))
+            .await;
+        assert!(result.unwrap_err().is::<std::io::Error>());
+        assert!(
+            !repl
+                .handle_loop_event(event_loop::LoopEvent::TerminalClosed)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn chooser_replays_paste_and_edit_keys_through_normal_editor() {
         let mut shell = Shell::new(crate::environment::Environment::new());
         let mut repl = Repl::new(&mut shell);
         repl.input.reset("cat al".into());
-        assert!(
-            repl.apply_repl_control_flow(
-                ReplControlFlow::ReplayInput(Event::Paste("pine".into()),)
-            )
+        repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Paste("pine".into())))
             .await
-        );
+            .unwrap();
         assert_eq!(repl.input.as_str(), "cat alpine");
-        assert!(
-            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
-                KeyCode::Char('a'),
-                KeyModifiers::CONTROL
-            )),))
-                .await
-        );
+        repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+        ))))
+        .await
+        .unwrap();
         assert_eq!(repl.input.as_str(), "cat alpine");
         assert_eq!(repl.input.cursor(), 0);
         repl.input.move_to_end();
-        assert!(
-            repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
-                KeyCode::Backspace,
-                KeyModifiers::NONE
-            )),))
-                .await
-        );
+        repl.apply_repl_control_flow(ReplControlFlow::ReplayInput(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        ))))
+        .await
+        .unwrap();
         assert_eq!(repl.input.as_str(), "cat alpin");
     }
 }

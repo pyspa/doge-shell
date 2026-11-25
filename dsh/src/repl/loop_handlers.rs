@@ -4,21 +4,7 @@ use super::*;
 impl<'a> Repl<'a> {
     pub async fn run_interactive(&mut self) -> Result<()> {
         self.setup();
-        // The cron store lives on disk, independent of any one session, so a
-        // session merely opens it (or, if that fails, simply runs without an
-        // in-session driver — jobs still fire from an external tick).
-        self.background_tasks.cron_task = match crate::cron::store::SqliteCronStore::open(
-            &dsh_builtin::config_paths::cron_state_dir(),
-        ) {
-            Ok(store) => Some(tokio::spawn(crate::cron::runner::cron_runner_task(
-                Arc::new(store),
-                self.shell.environment.read().cron_health.clone(),
-            ))),
-            Err(error) => {
-                warn!("cron: session driver disabled, could not open its store: {error}");
-                None
-            }
-        };
+        self.start_cron_runner(&dsh_builtin::config_paths::cron_state_dir());
 
         debug!(
             "shell setpgid pid:{:?} pgid:{:?}",
@@ -62,6 +48,24 @@ impl<'a> Repl<'a> {
         self.event_loop.pause_input();
         self.shell.kill_wait_jobs()?;
         Ok(())
+    }
+
+    fn start_cron_runner(&mut self, state_dir: &std::path::Path) {
+        // A caller can resume the same REPL after cancelling the event loop.
+        // Keep its original driver owned until Repl::drop aborts it.
+        if self.background_tasks.cron_task.is_some() {
+            return;
+        }
+        match crate::cron::store::SqliteCronStore::open(state_dir) {
+            Ok(store) => {
+                self.background_tasks.cron_task =
+                    Some(tokio::spawn(crate::cron::runner::cron_runner_task(
+                        Arc::new(store),
+                        self.shell.environment.read().cron_health.clone(),
+                    )));
+            }
+            Err(error) => warn!("cron: session driver disabled, could not open its store: {error}"),
+        }
     }
 
     async fn handle_loop_event(&mut self, event: event_loop::LoopEvent) -> Result<bool> {
@@ -555,6 +559,35 @@ impl<'a> Repl<'a> {
 mod completion_replay_tests {
     use super::*;
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+
+    #[tokio::test]
+    async fn resuming_the_repl_keeps_its_original_cron_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("cron");
+        let mut shell = Shell::new(crate::environment::Environment::new());
+        let mut repl = Repl::new(&mut shell);
+        repl.start_cron_runner(&state_dir);
+        let runner = repl
+            .background_tasks
+            .cron_task
+            .as_ref()
+            .unwrap()
+            .abort_handle();
+
+        repl.start_cron_runner(&state_dir);
+        assert_eq!(
+            repl.background_tasks.cron_task.as_ref().unwrap().id(),
+            runner.id()
+        );
+        drop(repl);
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !runner.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropping the REPL stops its original driver");
+    }
 
     #[tokio::test]
     async fn terminal_errors_reach_the_shell_but_closed_input_ends_normally() {

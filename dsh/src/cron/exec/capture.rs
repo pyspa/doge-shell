@@ -13,6 +13,8 @@ pub(super) struct Capture {
     head: Vec<u8>,
     tail: VecDeque<u8>,
     truncated: bool,
+    nonblank: bool,
+    preview: String,
 }
 
 impl Capture {
@@ -22,6 +24,8 @@ impl Capture {
             head: Vec::new(),
             tail: VecDeque::new(),
             truncated: false,
+            nonblank: false,
+            preview: String::new(),
         }
     }
 
@@ -31,6 +35,14 @@ impl Capture {
     }
 
     fn retain(&mut self, bytes: &[u8]) {
+        if self.preview.is_empty() && !bytes.is_empty() {
+            // The mask emits complete lines (or its last fragment at EOF).
+            let text = std::str::from_utf8(bytes).expect("redacted UTF-8");
+            if !text.trim().is_empty() {
+                self.nonblank = true;
+                self.preview = super::preview(text);
+            }
+        }
         let split = (HALF - self.head.len()).min(bytes.len());
         self.head.extend_from_slice(&bytes[..split]);
         let rest = &bytes[split..];
@@ -40,7 +52,7 @@ impl Capture {
         self.tail.extend(&rest[rest.len().saturating_sub(HALF)..]);
     }
 
-    pub(super) fn finish(mut self) -> String {
+    pub(super) fn finish(mut self) -> (String, Option<String>) {
         let last = self.mask.finish();
         self.retain(&last);
         if self.truncated {
@@ -56,7 +68,10 @@ impl Capture {
             }
         }
         self.head.extend(self.tail);
-        String::from_utf8(self.head).expect("redacted UTF-8")
+        (
+            String::from_utf8(self.head).expect("redacted UTF-8"),
+            self.nonblank.then_some(self.preview),
+        )
     }
 }
 
@@ -158,7 +173,8 @@ mod tests {
             capture.push(chunk);
             assert!(capture.head.len() <= HALF && capture.tail.len() <= HALF);
         }
-        let log = capture.finish();
+        let (log, preview) = capture.finish();
+        assert_eq!(preview.as_deref(), Some("first"));
         assert!(log.starts_with("first\n"));
         assert!(log.contains(GAP));
         assert!(log.ends_with("API_KEY=***\nlast\n"), "{log}");

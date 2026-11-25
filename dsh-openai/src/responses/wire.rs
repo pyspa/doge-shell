@@ -7,19 +7,20 @@ const NAMESPACE: &str = "doge_shell";
 pub(super) struct Wire {
     model: String,
     identity: Value,
-    /// `None` on ChatGPT subscription, which rejects sampling, output limits
-    /// and cache metadata and takes tools inside the `doge_shell` namespace.
-    api_key: Option<ApiKeyFields>,
-}
-struct ApiKeyFields {
+    subscription: bool,
     reasoning_effort: Option<String>,
 }
 impl Wire {
-    pub(super) fn subscription(model: &str, account: &Account) -> Self {
+    pub(super) fn subscription(
+        model: &str,
+        account: &Account,
+        reasoning_effort: Option<String>,
+    ) -> Self {
         Self {
             model: model.into(),
             identity: json!({"provider":"chatgpt_subscription", "model":model, "account":account.label, "client_id":account.client_id, "subject":account.subject}),
-            api_key: None,
+            subscription: true,
+            reasoning_effort,
         }
     }
     pub(super) fn api_key(
@@ -34,11 +35,12 @@ impl Wire {
         Self {
             model: model.into(),
             identity: json!({"provider":"api_key", "endpoint":endpoint, "key":key_fingerprint}),
-            api_key: Some(ApiKeyFields { reasoning_effort }),
+            subscription: false,
+            reasoning_effort,
         }
     }
     pub(super) fn is_subscription(&self) -> bool {
-        self.api_key.is_none()
+        self.subscription
     }
     /// Subscription namespaces local tools; the API-key route sends them flat,
     /// which every Responses-compatible gateway understands.
@@ -177,7 +179,10 @@ pub(super) fn build_body(
             None => json!(tools),
         };
     }
-    if let Some(fields) = &wire.api_key {
+    if let Some(effort) = &wire.reasoning_effort {
+        body["reasoning"] = json!({"effort":effort});
+    }
+    if !wire.is_subscription() {
         // Reasoning models reject sampling parameters on Responses.
         if let Some(temperature) = options.temperature
             && !crate::is_openai_reasoning_model(&wire.model)
@@ -190,9 +195,6 @@ pub(super) fn build_body(
         }
         if let Some(key) = &options.prompt_cache_key {
             body["prompt_cache_key"] = json!(key);
-        }
-        if let Some(effort) = &fields.reasoning_effort {
-            body["reasoning"] = json!({"effort":effort});
         }
     }
     if let Some(format) = &options.response_format {

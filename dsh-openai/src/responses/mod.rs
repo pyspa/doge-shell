@@ -27,7 +27,6 @@ pub(crate) enum ResponsesAuth {
         key: String,
         /// Truncated SHA-256 of the key: history identity must not hold the key.
         fingerprint: String,
-        reasoning_effort: Option<String>,
     },
 }
 
@@ -45,6 +44,7 @@ pub(crate) struct ResponsesTransport {
     pub auth: ResponsesAuth,
     pub model: String,
     pub timeout: Duration,
+    reasoning_effort: Option<String>,
     client: reqwest::Client,
     endpoint: String,
 }
@@ -65,11 +65,12 @@ impl Drop for AttemptUsage {
 }
 impl ResponsesTransport {
     /// ChatGPT subscription transport on the fixed public endpoint.
-    pub fn new(store: AuthStore, model: String, timeout: Duration) -> Result<Self> {
+    pub fn subscription(store: AuthStore, config: &crate::OpenAiConfig) -> Result<Self> {
         Self::build(
             ResponsesAuth::Subscription(store),
-            model,
-            timeout,
+            config.default_model().into(),
+            config.timeout(),
+            config.reasoning_effort().map(str::to_owned),
             "https://api.openai.com/v1/responses".into(),
             false,
             &|builder| builder,
@@ -88,13 +89,10 @@ impl ResponsesTransport {
         use sha2::{Digest, Sha256};
         let fingerprint = format!("{:x}", Sha256::digest(key.as_bytes()))[..16].to_string();
         Self::build(
-            ResponsesAuth::ApiKey {
-                key,
-                fingerprint,
-                reasoning_effort,
-            },
+            ResponsesAuth::ApiKey { key, fingerprint },
             model,
             timeout,
+            reasoning_effort,
             endpoint,
             allow_insecure_http,
             configure,
@@ -104,6 +102,7 @@ impl ResponsesTransport {
         auth: ResponsesAuth,
         model: String,
         timeout: Duration,
+        reasoning_effort: Option<String>,
         endpoint: String,
         allow_insecure_http: bool,
         configure: &dyn Fn(reqwest::ClientBuilder) -> reqwest::ClientBuilder,
@@ -133,6 +132,7 @@ impl ResponsesTransport {
             auth,
             model,
             timeout,
+            reasoning_effort,
             client,
             endpoint,
         })
@@ -161,17 +161,18 @@ impl ResponsesTransport {
                     bail!("Select AI_CHAT_SUBSCRIPTION_MODEL after chat_auth models.");
                 }
                 (
-                    Wire::subscription(model, &account),
+                    Wire::subscription(model, &account, self.reasoning_effort.clone()),
                     token,
                     Some((store, account)),
                 )
             }
-            ResponsesAuth::ApiKey {
-                key,
-                fingerprint,
-                reasoning_effort,
-            } => (
-                Wire::api_key(model, &self.endpoint, fingerprint, reasoning_effort.clone()),
+            ResponsesAuth::ApiKey { key, fingerprint } => (
+                Wire::api_key(
+                    model,
+                    &self.endpoint,
+                    fingerprint,
+                    self.reasoning_effort.clone(),
+                ),
                 key.clone(),
                 None,
             ),

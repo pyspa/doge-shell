@@ -85,8 +85,9 @@ To use the API-key provider:
    ```
 
    The file takes precedence over inherited values. Run `doctor ai` to check
-   the configured effort. Accepted levels depend on the model. The ChatGPT
-   subscription route currently omits the effort field.
+   the configured effort. The ChatGPT subscription provider also uses this effort
+   setting. For that provider, set the model with `AI_CHAT_SUBSCRIPTION_MODEL`.
+   Accepted effort levels depend on the selected model.
 
    | Variable | Default | Purpose |
    | --- | --- | --- |

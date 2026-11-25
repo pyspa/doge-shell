@@ -103,6 +103,15 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
         None => TurnOutcome::Stalled,
     };
 
+    if let Some(reason) = assistant_message
+        .get("refusal")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+    {
+        return Err(format!("the model refused this request: {reason}"));
+    }
+
     Ok(Turn {
         assistant_message: stored_message,
         interim_text: None,
@@ -313,6 +322,36 @@ mod tests {
 
         assert_eq!(turn.outcome, TurnOutcome::Stalled);
         assert!(turn.assistant_message.is_none());
+    }
+
+    #[test]
+    fn refusal_reports_its_reason_without_retrying_as_an_empty_turn() {
+        let message = json!({"role":"assistant","content":null,"refusal":"request declined"});
+        assert_eq!(
+            answer_text(&response(message.clone(), "stop")).unwrap_err(),
+            "the model refused this request: request declined"
+        );
+        assert!(matches!(
+            interpret_response(&response(message, "content_filter"))
+                .unwrap()
+                .outcome,
+            TurnOutcome::Cut { .. }
+        ));
+        let with_tool = json!({"refusal":"request declined","tool_calls":[{"id":"one","type":"function","function":{"name":"ls","arguments":"{}"}}]});
+        assert!(matches!(
+            interpret_response(&response(with_tool, "tool_calls"))
+                .unwrap()
+                .outcome,
+            TurnOutcome::ToolCalls(_)
+        ));
+        for refusal in [Value::Null, json!(" ")] {
+            assert_eq!(
+                interpret_response(&response(json!({"refusal":refusal}), "stop"))
+                    .unwrap()
+                    .outcome,
+                TurnOutcome::Stalled
+            );
+        }
     }
 
     #[test]

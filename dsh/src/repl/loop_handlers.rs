@@ -4,6 +4,22 @@ use super::*;
 impl<'a> Repl<'a> {
     pub async fn run_interactive(&mut self) -> Result<()> {
         self.setup();
+        // The cron store lives on disk, independent of any one session, so a
+        // session merely opens it (or, if that fails, simply runs without an
+        // in-session driver — jobs still fire from an external tick).
+        self.background_tasks.cron_task = match crate::cron::store::SqliteCronStore::open(
+            &dsh_builtin::config_paths::cron_state_dir(),
+        ) {
+            Ok(store) => Some(tokio::spawn(crate::cron::runner::cron_runner_task(
+                Arc::new(store),
+                self.shell.environment.read().cron_health.clone(),
+            ))),
+            Err(error) => {
+                warn!("cron: session driver disabled, could not open its store: {error}");
+                None
+            }
+        };
+
 
         debug!(
             "shell setpgid pid:{:?} pgid:{:?}",

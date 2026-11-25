@@ -201,3 +201,13 @@ echo consumer-tail
         }
     }
 }
+
+#[test]
+fn piped_script_does_not_start_the_interactive_cron_runner() {
+    let output = common::run_dsh_with_input(
+        Vec::<String>::new(),
+        Some(b"test ! -e \"$XDG_STATE_HOME/dogesh/cron/jobs.sqlite3\"\n"),
+        DEFAULT_CASE_TIMEOUT,
+    );
+    assert!(output.status.success(), "{output:?}");
+}

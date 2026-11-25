@@ -771,6 +771,49 @@ fn perform_summary_that_also_folds_in_this_turns_own_actions_still_advances_on_r
     assert!(manager.buffer.is_empty());
 }
 
+#[test]
+fn paid_summary_requires_a_removable_exchange_and_preserves_the_current_turn() {
+    let large = "a".repeat(MAX_BUFFER_CHARS + 1);
+    let old = json!({"role":"assistant", "content":large});
+    let user = json!({"role":"user","content":"current follow-up"});
+    let call = assistant_call("fresh", "search", "{}");
+    let result = tool_reply("fresh", "current result");
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    let client = ScriptedClient::new(vec![final_answer("the previous answer")]);
+
+    let mut manager = manager_with(vec![old]);
+    assert!(manager.should_summarize());
+    assert!(!manager.paid_summary_needed());
+    manager.perform_summary(&client, &mut proxy, None).unwrap();
+    assert!(client.tools_seen().is_empty());
+
+    manager.mark_turn_start();
+    for message in [&user, &call, &result] {
+        manager.add_message(message.clone());
+    }
+    assert!(manager.paid_summary_needed());
+    manager.perform_summary(&client, &mut proxy, None).unwrap();
+    assert_eq!(manager.buffer, vec![user, call, result]);
+    assert_eq!(manager.summary.as_deref(), Some("the previous answer"));
+    assert!(!manager.paid_summary_needed());
+    assert_eq!(client.tools_seen().len(), 1);
+    assert!(manager.rewind_to_turn_start());
+    assert!(manager.buffer.is_empty());
+    assert_eq!(manager.summary.as_deref(), Some("the previous answer"));
+}
+
+#[test]
+fn oversized_pinned_prompt_or_one_recent_tool_exchange_does_not_buy_a_summary() {
+    let mut manager = manager_with(vec![
+        assistant_call("a", "search", "{}"),
+        tool_reply("a", "r"),
+    ]);
+    manager.note_prompt_tokens(DEFAULT_CONTEXT_TOKEN_BUDGET + 1);
+    assert!(manager.should_summarize());
+    assert!(!manager.paid_summary_needed());
+}
+
 /// A checkpoint written before `turn_mark` existed has no such key at
 /// all; `#[serde(default)]` is what keeps it loadable.
 #[test]

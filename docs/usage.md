@@ -413,7 +413,8 @@ ledger, add `(pref-command-ledger "metadata")` to `config.lisp`; use `"output"`
 only when captured output should be inspected, redacted, and retained (64 KiB
 per event, at most 10,000 events, 90-day retention). The default `"off"` and
 `"metadata"` modes do not inspect or store command output. External agents can
-record provenance with `history record --json '<event>'`. Optional Atuin
+record provenance with `history record --json '<event>'`. These events appear in
+ledger queries by author. Aggregate rows describe commands submitted to the shell. Optional Atuin
 dual-write is enabled with `DOGESH_ATUIN_DUAL_WRITE=1`; failures run off the prompt
 path and never block a command.
 

@@ -105,6 +105,18 @@ metadata such as exit codes rides in HTML comments. The result plays back with
 `notebook-play`, which confirms each step before running it — record a
 procedure once, then replay or share it.
 
+Each confirmed block runs as one script. Bash blocks use `bash`. Blocks tagged
+`sh` and untagged code blocks use `/bin/sh`. A failed block stops playback
+and returns its exit status. End-of-input at a prompt stops playback. Each
+block starts in the displayed playback directory with a fresh shell. Keep
+commands that share variables or shell options in the same block. Start an
+exported runbook from the equivalent of its first recorded directory. New
+exports include an explicit `cd` for steps recorded in another directory.
+Export reports an error if a recorded directory contains the Unicode
+replacement character and its original pathname is ambiguous.
+For older exports and hand-written notebooks, put the required `cd` in the
+same block as the command that needs it.
+
 Runbooks can be parameterized with the same `{{name}}` / `{{name:default}}`
 markers snippets use: `notebook-play` prompts for each placeholder once (or
 takes `--var name=value` for non-interactive use). Only identifier-shaped

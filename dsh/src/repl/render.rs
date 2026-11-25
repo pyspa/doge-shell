@@ -561,29 +561,15 @@ impl InputHint {
 }
 
 fn input_hint(input: &str) -> Option<InputHint> {
-    if has_smart_pipe_query(input) || has_generative_query(input) {
+    if crate::ai_task_input::smart_pipe_query(input).is_some()
+        || crate::ai_task_input::generative_query(input).is_some()
+    {
         Some(InputHint::Expand)
-    } else if has_ai_pipe_query(input) {
+    } else if crate::ai_task_input::output_pipe(input).is_some() {
         Some(InputHint::Analyze)
     } else {
         None
     }
-}
-
-fn has_smart_pipe_query(input: &str) -> bool {
-    crate::completion::command_segment::smart_pipe_marker(input)
-        .is_some_and(|idx| !input[idx + 2..].trim().is_empty())
-}
-
-fn has_generative_query(input: &str) -> bool {
-    input
-        .trim_start()
-        .strip_prefix("??")
-        .is_some_and(|query| !query.trim().is_empty())
-}
-
-fn has_ai_pipe_query(input: &str) -> bool {
-    super::ai_pipe::parse_ai_pipe(input).is_some()
 }
 
 /// Draw a right-aligned DarkGrey hint when it fits. `ghost_width` is the

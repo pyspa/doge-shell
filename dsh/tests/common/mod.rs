@@ -50,7 +50,7 @@ where
     run_dsh_with_input(args, None, timeout)
 }
 
-pub fn run_dsh_with_input<I, S>(args: I, input: Option<&str>, timeout: Duration) -> Output
+pub fn run_dsh_with_input<I, S>(args: I, input: Option<&[u8]>, timeout: Duration) -> Output
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -75,9 +75,7 @@ where
 
     if let Some(input) = input {
         let mut stdin = child.stdin.take().expect("failed to open dsh stdin");
-        stdin
-            .write_all(input.as_bytes())
-            .expect("failed to write dsh stdin");
+        stdin.write_all(input).expect("failed to write dsh stdin");
     }
 
     let pgid = Pid::from_raw(child.id() as i32);
@@ -157,7 +155,7 @@ pub fn run_interactive(lines: &[&str]) -> Output {
     input.push_str("\nexit\n");
     run_dsh_with_input(
         std::iter::empty::<&str>(),
-        Some(&input),
+        Some(input.as_bytes()),
         Duration::from_secs(10),
     )
 }

@@ -152,7 +152,9 @@ fn export_selection_is_chronological() {
 
 #[test]
 fn export_writes_a_runbook_notebook_play_can_load() {
-    let mut proxy = blocks_proxy(export_fixture());
+    let mut blocks = export_fixture();
+    blocks[0].stdout = "progress\r\rfixture\r\n\nline".into();
+    let mut proxy = blocks_proxy(blocks);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("runbook.md");
 
@@ -169,6 +171,11 @@ fn export_writes_a_runbook_notebook_play_can_load() {
     );
     assert_eq!(status, ExitStatus::ExitedWith(0));
     assert!(snapshot.stdout.contains("Exported 3 block(s)"));
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("> progress\n> \n> fixture\n> \n> line\n")
+    );
 
     // Round-trip: notebook-play must see exactly the commands, in
     // chronological order, and nothing else as executable.

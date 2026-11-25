@@ -169,3 +169,13 @@ script = "echo BEFORE\n{{FALSE}}"
 [case.expect]
 status = 1
 stdout_contains = ["BEFORE"]
+
+[[case]]
+id = "simple-command.notebook-confirmed-block-status"
+class = "dogesh"
+mode = "command"
+script = "printf '```sh\\nexit 23\\n```\\n' > book.md; echo y > answers; notebook-play book.md < answers"
+
+[case.expect]
+status = 23
+stderr_contains = ["block 1", "23"]

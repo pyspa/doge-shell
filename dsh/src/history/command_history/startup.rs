@@ -64,40 +64,23 @@ impl History {
     }
 
     /// The snapshot predates foreground writes. Existing entries contain the
-    /// local delta, so add the database baseline exactly once, keeping all live
+    /// local delta, so add the database baseline exactly once, keeping the newest
     /// metadata. Merge the combined baseline once before any reload can apply.
     fn merge_startup_baseline(&mut self, entries: Vec<Entry>) {
         let selected = self
             .histories
             .get(self.current_index)
             .map(|entry| entry.entry.clone());
-        let mut baseline: HashMap<_, _> = entries
-            .into_iter()
-            .map(|entry| (entry.entry.clone(), entry))
-            .collect();
-        let mut merged = Vec::with_capacity(baseline.len() + self.histories.len());
-        for mut local in std::mem::take(&mut self.histories) {
-            if let Some(stored) = baseline.remove(&local.entry) {
-                local.count += stored.count;
-            }
-            merged.push(local);
-        }
-        merged.extend(baseline.into_values());
-        merged.sort_by(|left, right| {
-            left.when
-                .cmp(&right.when)
-                .then(left.entry.cmp(&right.entry))
-        });
-        self.histories = merged;
+        let local = std::mem::take(&mut self.histories);
+        self.histories = super::merge::merge_entries(
+            entries,
+            local
+                .into_iter()
+                .enumerate()
+                .map(|(index, entry)| (index, entry, super::merge::CountMerge::Add)),
+        );
         self.rebuild_normalized_entries();
-        self.recent_cache = self
-            .histories
-            .iter()
-            .rev()
-            .take(100)
-            .map(|entry| entry.entry.clone())
-            .collect();
-        self.recent_cache.reverse();
+        self.recent_cache = Self::recent_commands(&self.histories);
         self.current_index = selected
             .and_then(|command| {
                 self.histories

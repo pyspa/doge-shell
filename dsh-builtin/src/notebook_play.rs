@@ -1,11 +1,15 @@
 use super::ShellProxy;
 use crate::interactive_input;
 use crate::runbook;
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use dsh_types::notebook::{BlockKind, Notebook};
 use dsh_types::{Context, ExitStatus};
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use std::os::fd::{BorrowedFd, OwnedFd, RawFd};
+use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
 
 pub fn description() -> &'static str {
     "Play a notebook file (execute code blocks interactively)"
@@ -22,9 +26,9 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     match run_play(ctx, &args, proxy) {
-        Ok(_) => ExitStatus::ExitedWith(0),
+        Ok(code) => ExitStatus::ExitedWith(code),
         Err(e) => {
-            let _ = ctx.write_stderr(&format!("notebook-play: {}", e));
+            let _ = ctx.write_stderr(&format!("notebook-play: {e:#}"));
             ExitStatus::ExitedWith(1)
         }
     }
@@ -80,8 +84,8 @@ fn parse_args(args: &[String]) -> Result<PlayArgs, String> {
 /// several blocks is only listed once — accepting a default answers it for
 /// the whole notebook, which is why "already asked" cannot be inferred from
 /// the collected values.
-fn placeholders_to_prompt(
-    code_blocks: &[String],
+fn placeholders_to_prompt<'a>(
+    code_blocks: impl IntoIterator<Item = &'a str>,
     supplied: &HashMap<String, String>,
 ) -> Vec<runbook::Placeholder> {
     let mut pending: Vec<runbook::Placeholder> = Vec::new();
@@ -98,92 +102,111 @@ fn placeholders_to_prompt(
     pending
 }
 
-fn run_play(ctx: &Context, args: &PlayArgs, proxy: &mut dyn ShellProxy) -> Result<()> {
-    let path_buf = std::path::PathBuf::from(&args.file);
-    if !path_buf.exists() {
-        anyhow::bail!("File not found: {}", args.file);
-    }
+// The Context retains ownership of each descriptor, including redirected streams.
+fn duplicate_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()
+}
 
-    let notebook = Notebook::load_from_file(&path_buf)?;
-
-    // Filter for executable code blocks (bash, sh, or no language specified)
+fn run_play(ctx: &Context, args: &PlayArgs, proxy: &mut dyn ShellProxy) -> Result<i32> {
+    let notebook = Notebook::load_from_file(Path::new(&args.file))
+        .with_context(|| format!("cannot read {}", args.file))?;
     let blocks: Vec<_> = notebook
         .blocks
         .iter()
-        .filter(|b| match &b.kind {
-            BlockKind::Code(lang) => lang == "bash" || lang == "sh" || lang.is_empty(),
-            _ => false,
+        .filter_map(|block| {
+            let shell = match &block.kind {
+                BlockKind::Code(lang) if lang == "bash" => "bash",
+                BlockKind::Code(lang) if lang == "sh" || lang.is_empty() => "/bin/sh",
+                _ => return None,
+            };
+            Some((shell, block.raw_content()))
         })
         .collect();
-
     if blocks.is_empty() {
-        let _ = ctx.write_stdout("No executable blocks found in notebook.");
-        return Ok(());
+        ctx.write_stdout("No executable blocks found in notebook.")?;
+        return Ok(0);
     }
 
-    // Resolve `{{placeholder}}` values once for the whole notebook: values
-    // from --var win, everything else is prompted for (empty input keeps the
-    // marker's default).
+    // A child can read the same input after its confirmation. Reading past
+    // the newline here would consume bytes that belong to its script.
+    let prompt_file = if ctx.infile == nix::libc::STDIN_FILENO
+        && let Some(tty) = interactive_input::terminal_input(ctx)
+    {
+        tty
+    } else {
+        File::from(duplicate_fd(ctx.infile)?)
+    };
+    let mut prompts = BufReader::with_capacity(1, prompt_file);
+    let mut input = String::new();
     let mut values = args.vars.clone();
-    let code_blocks: Vec<String> = blocks.iter().map(|block| block.raw_content()).collect();
-    for placeholder in placeholders_to_prompt(&code_blocks, &values) {
+    for placeholder in placeholders_to_prompt(blocks.iter().map(|(_, code)| code.as_str()), &values)
+    {
         let prompt = match &placeholder.default {
             Some(default) => format!("{} [{}]: ", placeholder.name, default),
             None => format!("{}: ", placeholder.name),
         };
-        let _ = ctx.write_stdout(&prompt);
-        let _ = io::stdout().flush();
-        let mut input = String::new();
-        interactive_input::read_line(ctx, &mut input)?;
-        let input = input.trim();
-        if !input.is_empty() {
-            values.insert(placeholder.name, input.to_string());
+        ctx.write_stdout(&prompt)?;
+        input.clear();
+        prompts.read_line(&mut input)?;
+        if !input.ends_with('\n') {
+            return Ok(0);
         }
-        // Empty input: leave the name out so substitution falls back to
-        // the default written in the notebook.
+        if !input.trim().is_empty() {
+            values.insert(placeholder.name, input.trim().to_string());
+        }
     }
 
-    let _ = io::stdin();
-    let _ = io::stdout();
-
-    for (i, block) in blocks.iter().enumerate() {
-        let code = runbook::substitute_placeholders(&block.raw_content(), &values);
-        let _ = ctx.write_stdout(&format!("\n--- Block {} ---", i + 1));
-        let _ = ctx.write_stdout(code.trim());
-        let _ = ctx.write_stdout("Execute? [Y/n/q] ");
-        let _ = io::stdout().flush();
-
-        let mut input = String::new();
-        interactive_input::read_line(ctx, &mut input)?;
-        let choice = input.trim().to_lowercase();
-
-        if choice == "q" {
-            break;
-        } else if choice == "n" {
-            continue;
-        } else {
-            // Execute the code
-            for line in code.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    continue;
-                }
-
-                let _ = ctx.write_stdout(&format!("> {}", line));
-
-                // Currently dsh-builtin's dispatch is limited (assumes command + args),
-                // but real execution needs full evaluation which is in dsh::shell::eval.
-                // Since we are in dsh-builtin, we can only call what's exposed in ShellProxy.
-                // Assuming proxy.dispatch simply hands off execution to the main shell logic
-                // (or executes builtins).
-                // Note: The previous implementation also just called dispatch with empty argv.
-                // We preserve that behavior here.
-                let _ = proxy.dispatch(ctx, line, vec![]);
+    let runtime = proxy.command_runtime_snapshot()?;
+    'blocks: for (i, (shell, template)) in blocks.iter().enumerate() {
+        let number = i + 1;
+        let code = runbook::substitute_placeholders(template, &values);
+        ctx.write_stdout(&format!(
+            "\n--- Block {number} (starts in {}) ---",
+            runtime.current_dir().display()
+        ))?;
+        ctx.write_stdout(&code)?;
+        loop {
+            ctx.write_stdout("Execute? [Y/n/q] ")?;
+            input.clear();
+            prompts.read_line(&mut input)?;
+            if !input.ends_with('\n') {
+                return Ok(0);
+            }
+            match input.trim().to_ascii_lowercase().as_str() {
+                "" | "y" | "yes" => break,
+                "n" | "no" => continue 'blocks,
+                "q" | "quit" => return Ok(0),
+                _ => continue,
             }
         }
+        let status = run_script(ctx, proxy, shell, &code)
+            .with_context(|| format!("block {number}: could not run {shell}"))?;
+        if !status.success() {
+            let code = status
+                .code()
+                .unwrap_or_else(|| status.signal().map_or(1, |sig| 128 + sig));
+            ctx.write_stderr(&format!(
+                "notebook-play: block {number} exited with status {code}"
+            ))?;
+            return Ok(code);
+        }
     }
+    Ok(0)
+}
 
-    Ok(())
+fn run_script(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    shell: &str,
+    code: &str,
+) -> Result<std::process::ExitStatus> {
+    let mut command = crate::runtime_spawn::runtime_command(proxy, shell)?;
+    Ok(command
+        .args(["-c", "--", code])
+        .stdin(duplicate_fd(ctx.infile)?)
+        .stdout(duplicate_fd(ctx.outfile)?)
+        .stderr(duplicate_fd(ctx.errfile)?)
+        .status()?)
 }
 
 #[cfg(test)]
@@ -207,14 +230,14 @@ mod tests {
 
     #[test]
     fn each_placeholder_is_prompted_at_most_once() {
-        let blocks = vec![
-            "ssh {{host:localhost}} uptime".to_string(),
-            "echo {{message}}".to_string(),
+        let blocks = [
+            "ssh {{host:localhost}} uptime",
+            "echo {{message}}",
             // Same name again: answering it once (even by accepting the
             // default) must not produce a second prompt.
-            "scp file {{host:localhost}}:/tmp".to_string(),
+            "scp file {{host:localhost}}:/tmp",
         ];
-        let pending = placeholders_to_prompt(&blocks, &HashMap::new());
+        let pending = placeholders_to_prompt(blocks, &HashMap::new());
         assert_eq!(
             pending.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["host", "message"]
@@ -223,7 +246,7 @@ mod tests {
 
         // --var answers a placeholder without prompting.
         let supplied = HashMap::from([("host".to_string(), "example.com".to_string())]);
-        let pending = placeholders_to_prompt(&blocks, &supplied);
+        let pending = placeholders_to_prompt(blocks, &supplied);
         assert_eq!(
             pending.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["message"]
@@ -232,8 +255,8 @@ mod tests {
 
     #[test]
     fn go_template_blocks_prompt_for_nothing() {
-        let blocks = vec!["docker ps --format '{{json .}}'".to_string()];
-        assert!(placeholders_to_prompt(&blocks, &HashMap::new()).is_empty());
+        let blocks = ["docker ps --format '{{json .}}'"];
+        assert!(placeholders_to_prompt(blocks, &HashMap::new()).is_empty());
     }
 
     #[test]

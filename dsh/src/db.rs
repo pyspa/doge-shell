@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, functions::FunctionFlags};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -31,6 +31,22 @@ impl Db {
              PRAGMA foreign_keys = ON;",
         )?;
 
+        // Older databases can contain chat turns. Apply the same policy before
+        // each query's LIMIT without deleting existing user data on startup.
+        conn.create_scalar_function(
+            "dogesh_history_command",
+            1,
+            FunctionFlags::SQLITE_UTF8
+                | FunctionFlags::SQLITE_DETERMINISTIC
+                | FunctionFlags::SQLITE_DIRECTONLY,
+            |ctx| {
+                Ok(ctx
+                    .get_raw(0)
+                    .as_str()
+                    .is_ok_and(crate::history::is_legacy_command_history_input))
+            },
+        )?;
+
         let db = Db {
             conn: Arc::new(Mutex::new(conn)),
         };
@@ -58,7 +74,8 @@ impl Db {
                 cwd TEXT,
                 session_id TEXT,
                 hostname TEXT,
-                count INTEGER DEFAULT 1
+                count INTEGER DEFAULT 1,
+                is_command INTEGER
             )",
             [],
         )?;
@@ -94,10 +111,25 @@ impl Db {
                 session_id TEXT,
                 hostname TEXT,
                 author TEXT NOT NULL DEFAULT 'human',
-                output TEXT
+                output TEXT,
+                is_command INTEGER
             )",
             [],
         )?;
+        // NULL means this row predates the input policy. New writers confirm
+        // commands at their source, including foreign shells where `! cmd`
+        // may be an ordinary command. Older dsh writers still insert NULL.
+        for table in ["command_history", "command_events"] {
+            if !conn.column_exists(None, table, "is_command")?
+                && let Err(error) = conn.execute(
+                    &format!("ALTER TABLE {table} ADD COLUMN is_command INTEGER"),
+                    [],
+                )
+                && !conn.column_exists(None, table, "is_command")?
+            {
+                return Err(error.into());
+            }
+        }
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_command_events_started_at ON command_events(started_at DESC)",
             [],

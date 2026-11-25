@@ -237,14 +237,15 @@ impl Shell {
         input: String,
         force_background: bool,
     ) -> Result<i32> {
-        // Notebook Hook: Record input if session is active
         if let Some(session) = &mut self.notebook_session
             && session.state == dsh_types::notebook::SessionState::Active
+            && !input.trim().is_empty()
+            && let Err(err) = session.notebook.append_code(&input)
         {
-            // Ignore empty input or failures in appending for now (warn only)
-            if !input.trim().is_empty() {
-                let _ = session.notebook.append_code(&input);
-            }
+            let _ = ctx.write_stderr(&format!(
+                "Could not append to notebook {}: {err:#}",
+                session.notebook.path.display()
+            ));
         }
 
         let result = eval::eval_str(self, ctx, input, force_background).await;
@@ -343,8 +344,56 @@ impl Shell {
         self.notebook_session = None;
     }
 
+    pub(crate) fn record_command_input(&self, input: &str) {
+        if crate::history::is_command_history_input(input) {
+            self.record_confirmed_input(input);
+        }
+    }
+
+    fn record_confirmed_input(&self, input: &str) {
+        let Some(history) = &self.cmd_history else {
+            return;
+        };
+        let command = self
+            .environment
+            .read()
+            .policy_state
+            .secret_manager
+            .process_for_history(input);
+        if let Some(command) = command
+            && let Err(err) = history.lock().write_confirmed_command(&command)
+        {
+            debug!("Failed to write history: {err}");
+        }
+    }
+
     pub fn record_history_outcome(
         &mut self,
+        input: &str,
+        exit_code: i32,
+        duration: std::time::Duration,
+        output: Option<&str>,
+    ) {
+        if crate::history::is_command_history_input(input) {
+            self.record_confirmed_outcome(input, exit_code, duration, output);
+        }
+    }
+
+    /// The output pipe ran this command under /bin/sh. A leading `!` there
+    /// denotes negation, so it must not be interpreted as a dogesh chat turn.
+    pub(crate) fn record_pipe_command(
+        &self,
+        command: &str,
+        exit_code: i32,
+        duration: std::time::Duration,
+        output: &str,
+    ) {
+        self.record_confirmed_input(command);
+        self.record_confirmed_outcome(command, exit_code, duration, Some(output));
+    }
+
+    fn record_confirmed_outcome(
+        &self,
         input: &str,
         exit_code: i32,
         duration: std::time::Duration,
@@ -397,7 +446,7 @@ impl Shell {
         };
 
         let mut history = history.lock();
-        let _ = history.record_outcome(&command, metadata);
+        let _ = history.record_confirmed_outcome(&command, metadata);
     }
 
     pub fn reload_mcp_config(&self) {

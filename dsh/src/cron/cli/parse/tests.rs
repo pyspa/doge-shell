@@ -14,6 +14,40 @@ fn a_bare_shell_command_parses_with_defaults() {
 }
 
 #[test]
+fn build_spec_preserves_argument_boundaries_and_literal_characters() {
+    let words = [
+        "printf",
+        "<%s>\n",
+        "meeting notes",
+        "",
+        "a'b",
+        "$HOME",
+        "|",
+        "*",
+        "{a,b}",
+    ];
+    let mut argv = args(&["5m"]);
+    argv.extend(args(&words));
+    let spec = build_spec(parse_add(&argv).unwrap(), "/".into()).unwrap();
+    let output = std::process::Command::new("/bin/sh")
+        .args(["-c", &spec.command])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "<meeting notes>\n<>\n<a'b>\n<$HOME>\n<|>\n<*>\n<{a,b}>\n"
+    );
+}
+
+#[test]
+fn build_spec_preserves_a_single_shell_script_verbatim() {
+    let script = "git status --short | wc -l";
+    let spec = build_spec(parse_add(&args(&["5m", script])).unwrap(), "/".into()).unwrap();
+    assert_eq!(spec.command, script);
+}
+
+#[test]
 fn options_before_the_schedule_are_all_recognised() {
     let parsed = parse_add(&args(&[
         "--name",

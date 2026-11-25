@@ -132,6 +132,9 @@ pub async fn eval_str(
         }
     };
 
+    if plan.lists.is_empty() && !is_smart_pipe_input(&input) {
+        return Ok(shell.environment.read().last_exit_status);
+    }
     let mut last_exit_code = 0_i32;
     // Every list starts from the stdio the caller handed us. Launching
     // a job rewires `ctx` (pipes, capture, redirections) and nothing put it back,
@@ -613,7 +616,7 @@ pub(crate) fn parse_plan_with_smart_pipe(
     // SAFETY: `is_smart_pipe_input` verified the leading `|`.
     let downstream = trimmed[1..].trim_start();
     if downstream.is_empty() {
-        // A bare `|` is a no-op success, consistent with an empty line:
+        // A bare `|` is an explicit no-op success:
         // there is no downstream command to materialize. This differs from
         // `| FOO=bar`, which has a downstream stage that expands to no
         // command and is rejected as a pipeline failure.

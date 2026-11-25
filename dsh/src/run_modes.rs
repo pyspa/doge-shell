@@ -15,7 +15,7 @@ use clap::Parser;
 use dsh_types::Context;
 use nix::unistd::isatty;
 use std::io::{self, BufRead, BufReader, Write};
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -496,8 +496,16 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
     } else {
         // Pipe mode - read from stdin
         debug!("Running in pipe mode");
-        let stdin = io::stdin();
-        let reader = BufReader::new(stdin);
+        // Children and builtins read fd 0 directly. Even Stdin's own buffer
+        // can consume their input, so read at most through the current newline.
+        let fd = match io::stdin().as_fd().try_clone_to_owned() {
+            Ok(fd) => fd,
+            Err(error) => {
+                eprintln!("Error reading input: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let reader = BufReader::with_capacity(1, std::fs::File::from(fd));
         // Lines of a command that is not complete yet (trailing `&&`/`|`,
         // open quote, ...). Running each physical line alone would let
         // `false &&` fail as a syntax error and then run the next line

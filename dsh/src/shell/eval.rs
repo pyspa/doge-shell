@@ -12,6 +12,7 @@ use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::execute_chat_message;
 use dsh_types::{Context, ExitStatus};
 use std::io::Write;
+use std::os::fd::AsFd;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -73,6 +74,10 @@ pub async fn eval_str(
         let _raw_pause = ctx
             .interactive
             .then(crate::repl::terminal_state::RawModePause::new);
+        // On drop, restore the cooked ISIG bit before RawModePause re-enters raw mode.
+        let stdin = std::io::stdin();
+        let _signal_keys = (ctx.interactive && crate::terminal::terminal_control_enabled())
+            .then(|| crate::repl::terminal_state::ChatSignalKeys::enable(stdin.as_fd()));
         // Ensure signals are set correctly before AI execution
         shell.set_signals();
 

@@ -100,7 +100,7 @@ pub async fn run_shell() -> ExitCode {
 
         // Initialize directory history (Async)
         let path_history = std::sync::Arc::new(parking_lot::Mutex::new(
-            crate::history::FrecencyHistory::new(),
+            crate::history::FrecencyHistory::new_for_startup(),
         ));
         shell.path_history = Some(path_history.clone());
 
@@ -108,9 +108,10 @@ pub async fn run_shell() -> ExitCode {
             match crate::history::FrecencyHistory::from_file("dsh_directory_history") {
                 Ok(mut history) => {
                     history.start_background_writer();
-                    *path_history.lock() = history;
+                    path_history.lock().install_startup_history(history);
                 }
                 Err(e) => {
+                    path_history.lock().end_startup_initialization();
                     tracing::warn!("Failed to load directory history: {}", e);
                 }
             }

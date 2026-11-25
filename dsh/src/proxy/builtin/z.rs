@@ -93,9 +93,7 @@ pub fn execute(shell: &mut Shell, ctx: &Context, argv: Vec<String>) -> Result<()
 
     if clean {
         if let Some(ref mut history) = shell.path_history {
-            let mut history = history.lock();
-            history.prune();
-            let _ = history.save();
+            history.lock().prune()?;
         }
         if query.is_empty() && !interactive && !list {
             return Ok(());

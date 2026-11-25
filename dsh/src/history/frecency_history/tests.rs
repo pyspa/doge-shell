@@ -32,6 +32,53 @@ fn snapshot_paths(db: &Db) -> Vec<String> {
 }
 
 #[test]
+fn startup_visits_merge_with_the_snapshot_and_persist_once() {
+    let (_dir, db) = temp_db();
+    let mut loaded = FrecencyHistory::from_db(db.clone()).unwrap();
+    loaded.write_history("/shared").unwrap();
+    loaded.start_background_writer();
+
+    let mut live = FrecencyHistory::new_for_startup();
+    live.add("/shared");
+    let at = dsh_frecency::current_time_secs() - 60.0;
+    live.record_visit(DirectoryVisit {
+        path: "/early".into(),
+        at,
+        context: Some("early-context".into()),
+        half_life: live.store.as_ref().unwrap().half_life,
+    });
+    live.save_background();
+    assert!(live.prune().is_err());
+    live.install_startup_history(loaded);
+    assert_eq!(item(&live, "/shared").unwrap().num_accesses(), 2);
+    let early = item(&live, "/early").unwrap();
+    assert!((early.last_accessed_time() - at).abs() < 0.01);
+    assert_eq!(early.context.as_deref(), Some("early-context"));
+
+    live.reload().unwrap();
+    assert_eq!(item(&live, "/shared").unwrap().num_accesses(), 2);
+    assert_eq!(item(&live, "/early").unwrap().num_accesses(), 1);
+    let visits: i64 = db
+        .get_connection()
+        .query_row("SELECT COUNT(*) FROM directory_visits", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(visits, 3);
+}
+
+#[test]
+fn failed_startup_keeps_visits_in_memory() {
+    let mut live = FrecencyHistory::new_for_startup();
+    live.add("/early");
+    live.end_startup_initialization();
+    live.add("/early");
+    assert_eq!(item(&live, "/early").unwrap().num_accesses(), 2);
+    assert!(live.startup_visits.is_none());
+    assert!(live.pending.lock().is_empty());
+}
+
+#[test]
 fn saved_score_is_the_current_score_not_the_time_scaled_one() {
     let (_dir, db) = temp_db();
     let mut history = FrecencyHistory::from_db(db.clone()).unwrap();
@@ -84,6 +131,34 @@ fn non_finite_scores_are_neither_loaded_nor_saved() {
 }
 
 #[test]
+fn unrepresentable_snapshot_half_lives_do_not_block_other_visits() {
+    let (_dir, db) = temp_db();
+    let now = dsh_frecency::current_time_secs();
+    let fallback = f64::from(FrecencyStore::default().half_life);
+    for (path, half_life) in [("/tiny", 1.0e-300), ("/huge", 1.0e300)] {
+        db.get_connection()
+            .execute(
+                "INSERT INTO directory_snapshot
+             (path, score, last_accessed, access_count, half_life, score_time)
+             VALUES (?1, 2, ?2, 2, ?3, ?2)",
+                rusqlite::params![path, now - fallback, half_life],
+            )
+            .unwrap();
+    }
+    let mut history = FrecencyHistory::from_db(db).unwrap();
+    history.add("/other");
+    for path in ["/tiny", "/huge"] {
+        assert!((score(&history, path) - 1.0).abs() < 0.01);
+        history.add(path);
+    }
+    history.reload().unwrap();
+    assert_eq!(item(&history, "/other").unwrap().num_accesses(), 1);
+    for path in ["/tiny", "/huge"] {
+        assert!((score(&history, path) - 2.0).abs() < 0.01);
+    }
+}
+
+#[test]
 fn legacy_inflated_scores_are_capped_at_the_access_count() {
     let (_dir, db) = temp_db();
     // Older builds wrote a session-relative `last_accessed` and the
@@ -128,22 +203,57 @@ fn recent_visits_survive_a_restart_with_their_access_stats() {
 fn pruned_paths_are_removed_from_the_database() {
     let (dir, db) = temp_db();
     let kept = dir.path().display().to_string();
+    let inaccessible = dir.path().join("loop").display().to_string();
+    std::os::unix::fs::symlink(&inaccessible, &inaccessible).unwrap();
     let missing = dir.path().join("missing").display().to_string();
     let mut history = FrecencyHistory::from_db(db.clone()).unwrap();
     history.add(&kept);
+    history.add(&inaccessible);
     history.add(&missing);
     history.save().unwrap();
-    assert_eq!(snapshot_paths(&db), [kept.as_str(), missing.as_str()]);
+    assert_eq!(
+        snapshot_paths(&db),
+        [kept.as_str(), inaccessible.as_str(), missing.as_str()]
+    );
 
-    history.prune();
+    history.prune().unwrap();
     history.save().unwrap();
-    assert_eq!(snapshot_paths(&db), [kept.as_str()]);
+    assert_eq!(snapshot_paths(&db), [kept.as_str(), inaccessible.as_str()]);
 
     history.reload().unwrap();
     assert!(item(&history, &missing).is_none());
     let reloaded = FrecencyHistory::from_db(db.clone()).unwrap();
     assert!(item(&reloaded, &missing).is_none());
     assert!(item(&reloaded, &kept).is_some());
+}
+
+#[test]
+fn retrying_a_failed_prune_keeps_a_recreated_directory() {
+    let (dir, db) = temp_db();
+    let path = dir.path().join("recreated");
+    let path = path.to_str().unwrap();
+    let mut first = FrecencyHistory::from_db(db.clone()).unwrap();
+    first.write_history(path).unwrap();
+    db.get_connection()
+        .execute_batch(
+            "CREATE TRIGGER reject BEFORE DELETE ON directory_snapshot
+                        BEGIN SELECT RAISE(ABORT, 'delete rejected'); END;",
+        )
+        .unwrap();
+    assert!(first.prune().is_err());
+
+    std::fs::create_dir(path).unwrap();
+    let mut other =
+        FrecencyHistory::from_db(Db::new(dir.path().join("frecency.db")).unwrap()).unwrap();
+    other.write_history(path).unwrap();
+    db.get_connection()
+        .execute_batch("DROP TRIGGER reject")
+        .unwrap();
+    first.reload().unwrap();
+    assert_eq!(
+        item(&first, path).expect("lost fresh visit").num_accesses(),
+        2
+    );
 }
 
 #[test]
@@ -270,8 +380,8 @@ fn visiting_a_saturated_legacy_row_preserves_count_and_updates_context() {
     history.add("/full");
     let expected_context = item(&history, "/full").unwrap().context.clone();
     // Persist later than the visit. A legacy relative last_accessed has no epoch.
-    if let DirectoryChange::Visit { at, .. } = &mut history.pending.lock()[0] {
-        *at -= 60.0;
+    if let DirectoryChange::Visit(visit) = &mut history.pending.lock()[0] {
+        visit.at -= 60.0;
     }
     history.save().unwrap();
     history.reload().unwrap();

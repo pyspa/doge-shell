@@ -3,13 +3,15 @@ use super::*;
 use parking_lot::Mutex;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+pub(super) struct DirectoryVisit {
+    pub path: String,
+    pub at: f64,
+    pub context: Option<String>,
+    pub half_life: f32,
+}
+
 pub(super) enum DirectoryChange {
-    Visit {
-        path: String,
-        at: f64,
-        context: Option<String>,
-        half_life: f32,
-    },
+    Visit(DirectoryVisit),
     Delete(Vec<String>),
 }
 pub(super) type PendingChanges = Arc<Mutex<Vec<DirectoryChange>>>;
@@ -48,12 +50,12 @@ fn write_changes(conn: &mut rusqlite::Connection, changes: &[DirectoryChange]) -
     let mut select = tx.prepare(&format!("{SNAPSHOT_SELECT} WHERE path = ?1"))?;
     for change in changes {
         match change {
-            DirectoryChange::Visit {
+            DirectoryChange::Visit(DirectoryVisit {
                 path,
                 at,
                 context,
                 half_life,
-            } => {
+            }) => {
                 let previous = select
                     .query_row([path], |row| {
                         let last: f64 = row.get(2)?;
@@ -78,7 +80,7 @@ fn write_changes(conn: &mut rusqlite::Connection, changes: &[DirectoryChange]) -
                 let mut latest_context = context.as_deref();
                 if let Some((item, previous_last)) = &previous {
                     count = item.num_accesses();
-                    score = item.get_frecency();
+                    score = finite_score(item.get_frecency(), count);
                     last = last.max(previous_last.unwrap_or(*at));
                     if latest_context.is_none() || *at < last {
                         latest_context = item.context.as_deref();
@@ -109,7 +111,11 @@ fn write_changes(conn: &mut rusqlite::Connection, changes: &[DirectoryChange]) -
             }
             DirectoryChange::Delete(paths) => {
                 for path in paths {
-                    tx.execute("DELETE FROM directory_snapshot WHERE path = ?1", [path])?;
+                    // The directory may have been recreated and visited by another
+                    // shell while this deletion was queued for retry.
+                    if matches!(std::path::Path::new(path).try_exists(), Ok(false)) {
+                        tx.execute("DELETE FROM directory_snapshot WHERE path = ?1", [path])?;
+                    }
                 }
             }
         }
@@ -161,11 +167,11 @@ fn decode_item(row: &rusqlite::Row<'_>, store: &FrecencyStore) -> rusqlite::Resu
     let score: f64 = row.get(1)?;
     let last_accessed: f64 = row.get(2)?;
     let access_count: i64 = row.get(3)?;
-    let half_life: f64 = row.get(4)?;
+    let half_life = row.get::<_, f64>(4)? as f32;
     let context: Option<String> = row.get(5)?;
 
     let half_life = if half_life.is_finite() && half_life > 0.0 {
-        half_life as f32
+        half_life
     } else {
         store.half_life
     };

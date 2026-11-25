@@ -19,6 +19,7 @@ use super::plan::{
 };
 use super::struct_pipe;
 use crate::environment::Environment;
+use crate::parser::check::SHELL_WHITESPACE;
 use crate::parser::{self, Rule, ShellParser};
 use crate::process::{ListOp, SubshellType};
 use anyhow::Result;
@@ -76,7 +77,7 @@ pub(super) fn parse_logical_input(
     input: &str,
     environment: Arc<RwLock<Environment>>,
 ) -> Result<ExecutionPlan> {
-    if input.trim().is_empty() {
+    if input.trim_matches(SHELL_WHITESPACE).is_empty() {
         return Ok(ExecutionPlan::default());
     }
     // 1. Validate exactly what the user supplied BEFORE rewriting can discard
@@ -91,7 +92,7 @@ pub(super) fn parse_logical_input(
     };
 
     // 3. Parse the (possibly rewritten) line strictly.
-    if aliased.trim().is_empty() {
+    if aliased.trim_matches(SHELL_WHITESPACE).is_empty() {
         return Ok(ExecutionPlan::default());
     }
     let mut pairs = parse_commands_strict(aliased.as_ref())?;
@@ -510,7 +511,7 @@ fn build_commands(ctx: &mut ParseContext, pair: Pair<Rule>) -> Result<ExecutionP
                 Rule::and_or_list => {
                     let mut list = PlannedAndOrList {
                         source: parser::source_without_comments(pair.clone())
-                            .trim()
+                            .trim_matches(SHELL_WHITESPACE)
                             .to_string(),
                         jobs: Vec::new(),
                         execution: ListExecutionMode::Foreground,
@@ -593,7 +594,7 @@ fn build_jobs(ctx: &mut ParseContext, pair: Pair<Rule>, jobs: &mut Vec<PlannedJo
     // A continued pipeline can contain comments inside its source span. Keep
     // ignored quotes/operators out of the later raw-source safety check too.
     let job_str = parser::source_without_comments(pair.clone())
-        .trim()
+        .trim_matches(SHELL_WHITESPACE)
         .to_string();
 
     for inner_pair in pair.into_inner() {

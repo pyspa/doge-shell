@@ -8,6 +8,7 @@ use crate::cli::{Cli, RunMode, SubCommand};
 use crate::environment::Environment;
 use crate::errors::display_user_error;
 use crate::lisp::Value;
+use crate::parser::check::SHELL_WHITESPACE;
 use crate::repl::Repl;
 use crate::shell::Shell;
 use crate::subcommands::{handle_completion_command, handle_import_command};
@@ -517,12 +518,11 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     if pending.is_empty() {
                         // Only leading space: trailing space may sit inside
                         // a quote that continues on the next line.
-                        pending.push_str(content.trim_start());
+                        pending.push_str(content.trim_start_matches(SHELL_WHITESPACE));
                     } else {
                         pending.push_str(content);
                     }
-                    if pending.trim_end().is_empty() {
-                        pending.clear();
+                    if pending.is_empty() {
                         continue;
                     }
                     // `!&` takes the rest of its line as literal task text
@@ -554,7 +554,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         }
         // Input ended mid-command: run it anyway so the syntax error is
         // reported, as `sh` reports an unexpected end of file.
-        if !pending.trim().is_empty() {
+        if !pending.is_empty() {
             run_piped_command(&mut repl, ctx, &pending).await;
         }
         // End of input: like `sh < script`, the status of the last command.

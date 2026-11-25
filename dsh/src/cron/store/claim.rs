@@ -90,13 +90,7 @@ impl SqliteCronStore {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        // A dead owner cannot release its own claim, so every scan starts by
-        // taking back the ones whose deadline has passed.
-        tx.execute(
-            "UPDATE jobs SET claimed_by = NULL, claimed_until = NULL \
-             WHERE claimed_until IS NOT NULL AND claimed_until <= ?1",
-            [now],
-        )?;
+        Self::reap_leases_in(&tx, now)?;
 
         let due: Vec<(i64, i64, u64, u64, Schedule)> = {
             let mut statement = tx.prepare(
@@ -195,7 +189,8 @@ impl SqliteCronStore {
         let scheduled_for = now;
 
         let changed = tx.execute(
-            "UPDATE jobs SET claimed_by = ?1, claimed_until = ?2, updated_at = ?3              WHERE id = ?4 AND claimed_by IS NULL",
+            "UPDATE jobs SET claimed_by = ?1, claimed_until = ?2, updated_at = ?3 \
+             WHERE id = ?4 AND (claimed_by IS NULL OR claimed_until <= ?3)",
             // `saturating_add` - see the identical comment in `claim_due_jobs`.
             params![owner, now.saturating_add(lease_secs(timeout_secs)), now, id],
         )?;
@@ -203,6 +198,9 @@ impl SqliteCronStore {
             bail!("{selector}: already running; wait for it to finish or check `cron history`");
         }
 
+        // The replacement claim has no run yet. Close any rows left by the
+        // previous owner before inserting this run, including on manual-only jobs.
+        Self::fail_abandoned_runs(&tx, id, now)?;
         let run_id = uuid::Uuid::new_v4().to_string();
         let inserted = tx.execute(
             "INSERT OR IGNORE INTO runs(id, job_id, scheduled_for, state, trigger, owner)              VALUES(?1, ?2, ?3, 'queued', ?4, ?5)",
@@ -237,7 +235,9 @@ impl SqliteCronStore {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let started = tx.execute(
-            "UPDATE runs SET state = 'running', started_at = ?2 WHERE id = ?1 AND state = 'queued'",
+            "UPDATE runs SET state = 'running', started_at = ?2 WHERE id = ?1 AND state = 'queued' \
+             AND owner = (SELECT claimed_by FROM jobs WHERE id = runs.job_id AND claimed_until > ?2) \
+             AND rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = runs.job_id)",
             params![run_id, now],
         )?;
         if started == 0 {
@@ -253,6 +253,12 @@ impl SqliteCronStore {
             claimed_run_from_row(row, trigger, run_id.to_string())
         })?;
         run.scheduled_for = scheduled_for;
+        // The command timeout starts here. Time spent queued must not let
+        // another driver reclaim a command that is still within its timeout.
+        tx.execute(
+            "UPDATE jobs SET claimed_until = MAX(claimed_until, ?1) WHERE id = ?2",
+            params![now.saturating_add(lease_secs(run.timeout_secs)), job_id],
+        )?;
         tx.commit()?;
         Ok(run)
     }
@@ -263,8 +269,10 @@ impl SqliteCronStore {
 
         let (job_id, previous_digest): (i64, Option<i64>) = tx.query_row(
             "SELECT r.job_id, j.last_digest FROM runs r JOIN jobs j ON j.id = r.job_id \
-             WHERE r.id = ?1",
-            [run_id],
+             WHERE r.id = ?1 AND r.state IN ('queued', 'running') AND r.finished_at IS NULL \
+               AND j.claimed_by = r.owner AND j.claimed_until > ?2 \
+               AND r.rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = j.id)",
+            params![run_id, now],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
 
@@ -328,6 +336,8 @@ impl SqliteCronStore {
             ],
         )?;
 
+        // Account for the latest result before repairing earlier gaps.
+        Self::fail_abandoned_runs(&tx, job_id, now)?;
         let (failures, skips): (i64, i64) = tx.query_row(
             "SELECT consecutive_failures, consecutive_skips FROM jobs WHERE id = ?1",
             [job_id],
@@ -388,6 +398,12 @@ impl SqliteCronStore {
         // being closed out as a timeout.
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let released = Self::reap_leases_in(&tx, now)?;
+        tx.commit()?;
+        Ok(released)
+    }
+
+    fn reap_leases_in(tx: &rusqlite::Transaction<'_>, now: i64) -> Result<usize> {
         let released = tx.execute(
             "UPDATE jobs SET claimed_by = NULL, claimed_until = NULL \
              WHERE claimed_until IS NOT NULL AND claimed_until <= ?1",
@@ -407,43 +423,55 @@ impl SqliteCronStore {
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
 
-            // A run left behind by a dead owner is not a failure anyone saw;
-            // record it so `cron history` does not simply lose it.
-            tx.execute(
-                "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?1 \
-                 WHERE state IN ('queued', 'running') AND job_id IN \
-                   (SELECT id FROM jobs WHERE claimed_by IS NULL) AND finished_at IS NULL",
-                [now],
-            )?;
-
-            // A dead owner's abandoned run is not an ordinary failure a
-            // later tick will simply retry past: unlike a command that
-            // failed on its own, leaving this uncounted would mean
-            // `run_count`/`fail_count` never move, `consecutive_failures`
-            // never crosses `STREAK_TO_INCIDENT`, and `IncidentKind::LeaseLost`
-            // - built for exactly "a claim expired while its owner was
-            // presumed alive" - never actually fires. A job whose process
-            // keeps dying mid-run would then silently never surface as
-            // failing anywhere.
             for job_id in abandoned_jobs {
-                tx.execute(
-                    "UPDATE jobs SET run_count = run_count + 1, fail_count = fail_count + 1, \
-                     consecutive_failures = consecutive_failures + 1 WHERE id = ?1",
-                    [job_id],
-                )?;
-                open_incident_in(
-                    &tx,
-                    Some(job_id),
-                    IncidentKind::LeaseLost,
-                    "the process running this job disappeared before it finished; its last \
-                     claim was reclaimed after the lease expired",
-                    None,
-                    now,
-                )?;
+                Self::fail_abandoned_runs(tx, job_id, now)?;
             }
         }
-        tx.commit()?;
         Ok(released)
+    }
+
+    fn fail_abandoned_runs(tx: &rusqlite::Transaction<'_>, job_id: i64, now: i64) -> Result<()> {
+        // Legacy rows may predate completed runs. Every lost run counts in
+        // the totals, but only failures after the last nonfailure extend the
+        // current streak. Skips after the newest lost run stay consecutive.
+        let latest: Option<i64> = tx.query_row(
+            "SELECT MAX(rowid) FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') \
+             AND finished_at IS NULL",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        let Some(latest) = latest else {
+            return Ok(());
+        };
+        let cutoff = failure_streak_cutoff(tx, job_id)?;
+        let trailing_failures: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') \
+             AND finished_at IS NULL AND (?2 IS NULL OR rowid > ?2)",
+            params![job_id, cutoff],
+            |row| row.get(0),
+        )?;
+        let count = tx.execute(
+            "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?2 \
+             WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",
+            params![job_id, now],
+        )?;
+        tx.execute(
+            "UPDATE jobs SET run_count = run_count + ?2, fail_count = fail_count + ?2, \
+             consecutive_failures = consecutive_failures + ?3, \
+             consecutive_skips = MIN(consecutive_skips, (SELECT COUNT(*) FROM runs \
+                 WHERE job_id = ?1 AND rowid > ?4 AND state = 'skipped')) WHERE id = ?1",
+            params![job_id, i64::try_from(count)?, trailing_failures, latest],
+        )?;
+        open_incident_in(
+            tx,
+            Some(job_id),
+            IncidentKind::LeaseLost,
+            "the process running this job disappeared before it finished; its last \
+             claim was reclaimed after the lease expired",
+            None,
+            now,
+        )?;
+        Ok(())
     }
 
     pub(super) fn record_incident(
@@ -537,6 +565,33 @@ fn open_incident_in(
         )?;
     }
     Ok(id)
+}
+
+fn failure_streak_cutoff(tx: &rusqlite::Transaction<'_>, job_id: i64) -> Result<Option<i64>> {
+    let (missing_reset, last_reset, retained_streak): (bool, Option<i64>, i64) = tx.query_row(
+        "WITH history AS (SELECT COUNT(*) FILTER (WHERE state = 'failed') AS failures, \
+             COUNT(*) FILTER (WHERE state <> 'failed') AS resets, \
+             MAX(rowid) FILTER (WHERE state <> 'failed') AS last_reset \
+             FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL) \
+         SELECT run_count - fail_count > resets, last_reset, \
+                consecutive_failures - (fail_count - failures) FROM jobs, history WHERE id = ?1",
+        [job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if !missing_reset {
+        return Ok(last_reset);
+    }
+    // Pruning may have removed the reset. Even if every missing failure was
+    // in the current streak, the last `retained_streak` finished rows still
+    // belong to it. If none are certain, only extend past the latest result.
+    Ok(tx
+        .query_row(
+            "SELECT rowid FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL \
+             ORDER BY rowid DESC LIMIT 1 OFFSET ?2",
+            params![job_id, (retained_streak - 1).max(0)],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn incident_detail(outcome: &RunOutcome) -> String {

@@ -25,7 +25,7 @@ use dsh_types::cron::job::ClaimedRun;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -145,7 +145,11 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
             TIMED_OUT
         } else {
             status
-                .and_then(|status| status.code())
+                .and_then(|status| {
+                    status
+                        .code()
+                        .or_else(|| status.signal().map(|signal| 128 + signal))
+                })
                 .unwrap_or(SPAWN_FAILED)
         },
         timed_out,

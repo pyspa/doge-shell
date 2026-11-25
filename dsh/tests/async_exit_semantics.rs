@@ -713,18 +713,17 @@ fn stdin_eof_releases_async_job_before_it_finishes() {
     use std::io::Write;
     let _guard = common::serial_guard();
     let (input, mut writer) = std::io::pipe().unwrap();
-    writeln!(
-        writer,
-        "mkfifo gate; head -n 1 gate > marker & echo $! > async.pid"
-    )
-    .unwrap();
+    // The bounded wait also releases the helper if the harness fails early.
+    let mut gate = tempfile::NamedTempFile::new().unwrap();
+    gate.write_all(b"i=0\nwhile [ ! -f release ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n[ -f release ] && echo done > marker\n").unwrap();
+    writeln!(writer, "sh '{}' &", gate.path().display()).unwrap();
     drop(writer);
     let mut parent = spawn_parent_with_input(&[], input.into(), Stdio::null(), Stdio::null());
-    let helper = read_helper_pid(&parent.workdir, "async.pid");
-    let mut survivor = SurvivingChild::new(helper, helper);
-    assert!(parent.wait_exit(Duration::from_secs(10)).success());
-    survivor.assert_alive();
-    let _gate = release_subshell_via_fifo(&parent.workdir.join("gate"));
-    poll_file_contains(&parent.workdir.join("marker"), "go", Duration::from_secs(5));
-    survivor.cleanup();
+    assert!(parent.wait_exit(Duration::from_secs(5)).success());
+    std::fs::write(parent.workdir.join("release"), "").unwrap();
+    poll_file_contains(
+        &parent.workdir.join("marker"),
+        "done",
+        Duration::from_secs(5),
+    );
 }

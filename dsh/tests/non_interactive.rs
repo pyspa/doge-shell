@@ -158,3 +158,47 @@ fn notebook_append_failure_reports_path_and_preserves_command_status() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("still-running"));
     assert!(std::fs::read_to_string(old).unwrap().contains("mkdir"));
 }
+
+#[test]
+fn read_exact_script_prefix_fixture() {
+    use std::io::Read;
+    use std::os::fd::AsFd;
+
+    if std::env::var_os("DSH_TEST_READ_SCRIPT_PREFIX").is_none() {
+        return;
+    }
+    let fd = std::io::stdin().as_fd().try_clone_to_owned().unwrap();
+    let mut prefix = [0; 11];
+    std::fs::File::from(fd).read_exact(&mut prefix).unwrap();
+    assert_eq!(&prefix, b"true\ntrue\nx");
+}
+
+#[test]
+fn script_stdin_resumes_after_a_child_reads_lines_and_part_of_a_line() {
+    let executable = std::env::current_exe().unwrap();
+    let executable = shell_words::quote(executable.to_str().unwrap());
+    let script = format!(
+        "DSH_TEST_READ_SCRIPT_PREFIX=1 {executable} --exact read_exact_script_prefix_fixture > /dev/null\n\
+         true\ntrue\nxprintf 'child:%s\\n' \"$?\"\nread value\nbuiltin input\nprintf '<%s>\\n' \"$value\"\n"
+    );
+    let timeout = Duration::from_secs(5);
+    let pipe = common::run_dsh_with_input([] as [&str; 0], Some(script.as_bytes()), timeout);
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("script");
+    std::fs::write(&path, script).unwrap();
+    let file = common::run_dsh(
+        [
+            "-c",
+            "\"$0\" < \"$1\"",
+            env!("CARGO_BIN_EXE_dogesh"),
+            path.to_str().unwrap(),
+        ],
+        timeout,
+    );
+    for output in [pipe, file] {
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"child:0\n<builtin input>\n");
+        assert!(output.stderr.is_empty(), "{output:?}");
+    }
+}

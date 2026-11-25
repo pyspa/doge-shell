@@ -64,6 +64,27 @@ pub(super) fn drain(mut file: File, shared: &Shared) {
     shared.append_output(&generic.finish());
 }
 
+/// Escape invisible/control characters losslessly. Approval fields also escape
+/// backslashes, so a literal escape spelling cannot impersonate a real control.
+pub(super) fn escape_display(text: &str, multiline: bool) -> String {
+    static FORMAT: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\p{Cf}").expect("Unicode format class"));
+    let mut output = String::new();
+    for ch in text.chars() {
+        let mut bytes = [0; 4];
+        if !multiline && ch == '\\' {
+            output.push_str("\\\\");
+        } else if (ch.is_control() && !(multiline && matches!(ch, '\n' | '\t')))
+            || FORMAT.is_match(ch.encode_utf8(&mut bytes))
+        {
+            output.extend(ch.escape_unicode());
+        } else {
+            output.push(ch);
+        }
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,25 +130,4 @@ mod tests {
         assert!(output.len() <= super::super::OUTPUT_LIMIT);
         assert!(output.ends_with(&"z".repeat(100)));
     }
-}
-
-/// Escape invisible/control characters losslessly. Approval fields also escape
-/// backslashes, so a literal escape spelling cannot impersonate a real control.
-pub(super) fn escape_display(text: &str, multiline: bool) -> String {
-    static FORMAT: std::sync::LazyLock<regex::Regex> =
-        std::sync::LazyLock::new(|| regex::Regex::new(r"\p{Cf}").expect("Unicode format class"));
-    let mut output = String::new();
-    for ch in text.chars() {
-        let mut bytes = [0; 4];
-        if !multiline && ch == '\\' {
-            output.push_str("\\\\");
-        } else if (ch.is_control() && !(multiline && matches!(ch, '\n' | '\t')))
-            || FORMAT.is_match(ch.encode_utf8(&mut bytes))
-        {
-            output.extend(ch.escape_unicode());
-        } else {
-            output.push(ch);
-        }
-    }
-    output
 }

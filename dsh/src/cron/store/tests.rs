@@ -1851,7 +1851,12 @@ fn unfinished_legacy_run_cannot_use_a_newer_claim_from_the_same_driver() {
 
 #[test]
 fn reclaiming_legacy_rows_preserves_more_recent_failure_and_skip_streaks() {
-    for state in [RunState::Failed, RunState::Skipped] {
+    for (state, prune_success) in [
+        (RunState::Failed, false),
+        (RunState::Failed, true),
+        (RunState::Skipped, false),
+        (RunState::Skipped, true),
+    ] {
         let (dir, store) = store();
         let job_id = store
             .create(&spec("probe", "5s"), &env(), NOW, false)
@@ -1873,6 +1878,11 @@ fn reclaiming_legacy_rows_preserves_more_recent_failure_and_skip_streaks() {
             .unwrap();
         }
         let failed = i64::from(state == RunState::Failed);
+        if prune_success {
+            // Retention deletes finished history without changing job totals.
+            db.execute("DELETE FROM runs WHERE state = 'succeeded'", [])
+                .unwrap();
+        }
         db.execute(
             "UPDATE jobs SET run_count = 2, fail_count = ?1, consecutive_failures = ?1, \
              consecutive_skips = ?2 WHERE id = ?3",

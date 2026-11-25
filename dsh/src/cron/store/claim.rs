@@ -434,17 +434,31 @@ impl SqliteCronStore {
         // Legacy rows may predate completed runs. Every lost run counts in
         // the totals, but only failures after the last nonfailure extend the
         // current streak. Skips after the newest lost run stay consecutive.
-        let (latest, trailing_failures): (Option<i64>, i64) = tx.query_row(
-            "SELECT MAX(rowid), COUNT(*) FILTER (WHERE rowid > COALESCE((\
-                 SELECT MAX(rowid) FROM runs WHERE job_id = ?1 \
-                   AND finished_at IS NOT NULL AND state <> 'failed'), 0)) \
-             FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",
+        let latest: Option<i64> = tx.query_row(
+            "SELECT MAX(rowid) FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') \
+             AND finished_at IS NULL",
             [job_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )?;
         let Some(latest) = latest else {
             return Ok(());
         };
+        // Pruning can remove the nonfailure that reset the streak. In that
+        // case only append lost runs newer than the retained completed history.
+        let cutoff: Option<i64> = tx.query_row(
+            "SELECT CASE WHEN (SELECT run_count - fail_count FROM jobs WHERE id = ?1) \
+                     > COUNT(*) FILTER (WHERE state <> 'failed') THEN MAX(rowid) \
+                     ELSE MAX(rowid) FILTER (WHERE state <> 'failed') END \
+             FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL",
+            [job_id],
+            |row| row.get(0),
+        )?;
+        let trailing_failures: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') \
+             AND finished_at IS NULL AND (?2 IS NULL OR rowid > ?2)",
+            params![job_id, cutoff],
+            |row| row.get(0),
+        )?;
         let count = tx.execute(
             "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?2 \
              WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",

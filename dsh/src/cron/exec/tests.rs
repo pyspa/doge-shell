@@ -148,13 +148,24 @@ fn timeout_includes_writers_that_outlive_the_shell() {
 
 #[test]
 fn completed_child_keeps_buffered_diagnostics_at_deadline() {
-    let mut child = Command::new("/bin/sh")
+    let child = Command::new("/bin/sh")
         .args(["-c", "echo final >&2; exit 4"])
+        .process_group(0)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.wait().unwrap();
+    let mut info = std::mem::MaybeUninit::<libc::siginfo_t>::uninit();
+    // Observe exit while retaining the leader PID until the deadline handler reaps it.
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            child.id(),
+            info.as_mut_ptr(),
+            libc::WEXITED | libc::WNOWAIT,
+        )
+    };
+    assert_eq!(result, 0, "{}", std::io::Error::last_os_error());
     let outcome = wait_with_deadline(child, Duration::ZERO, Instant::now());
     assert_eq!(outcome.exit_code, 4);
     assert_eq!(outcome.stderr, "final\n");

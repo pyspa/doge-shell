@@ -63,6 +63,15 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
         .cloned()
         .ok_or_else(|| format!("response missing assistant message: {response}"))?;
 
+    if let Some(reason) = assistant_message
+        .get("refusal")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+    {
+        return Err(format!("the model refused this request: {reason}"));
+    }
+
     let finish_reason = choice
         .get("finish_reason")
         .and_then(|value| value.as_str())
@@ -102,15 +111,6 @@ pub fn interpret_response(response: &Value) -> Result<Turn, String> {
         Some(content) => TurnOutcome::Answer(content),
         None => TurnOutcome::Stalled,
     };
-
-    if let Some(reason) = assistant_message
-        .get("refusal")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|reason| !reason.is_empty())
-    {
-        return Err(format!("the model refused this request: {reason}"));
-    }
 
     Ok(Turn {
         assistant_message: stored_message,
@@ -331,19 +331,20 @@ mod tests {
             answer_text(&response(message.clone(), "stop")).unwrap_err(),
             "the model refused this request: request declined"
         );
-        assert!(matches!(
-            interpret_response(&response(message, "content_filter"))
-                .unwrap()
-                .outcome,
-            TurnOutcome::Cut { .. }
-        ));
-        let with_tool = json!({"refusal":"request declined","tool_calls":[{"id":"one","type":"function","function":{"name":"ls","arguments":"{}"}}]});
-        assert!(matches!(
-            interpret_response(&response(with_tool, "tool_calls"))
-                .unwrap()
-                .outcome,
-            TurnOutcome::ToolCalls(_)
-        ));
+        let with_tool = json!({
+            "refusal": "request declined",
+            "tool_calls": [{"id": "one", "type": "function", "function": {"name": "ls", "arguments": "{}"}}]
+        });
+        for (message, finish_reason) in [
+            (message.clone(), "content_filter"),
+            (message, "length"),
+            (with_tool, "tool_calls"),
+        ] {
+            assert_eq!(
+                interpret_response(&response(message, finish_reason)).unwrap_err(),
+                "the model refused this request: request declined"
+            );
+        }
         for refusal in [Value::Null, json!(" ")] {
             assert_eq!(
                 interpret_response(&response(json!({"refusal":refusal}), "stop"))

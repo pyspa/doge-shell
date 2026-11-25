@@ -15,13 +15,34 @@ pub(super) fn completion_replacement_range(
     cursor_pos: usize,
     parsed_command_line: &ParsedCommandLine,
 ) -> Option<CompletionReplacementRange> {
-    let token_range = token_range_at_cursor(input, cursor_pos)?;
+    let mut token_range = token_range_at_cursor(input, cursor_pos)?;
+    if parsed_command_line.command == "pacman"
+        && matches!(&parsed_command_line.completion_context,
+            parser::CompletionContext::OptionValue { option_name, .. }
+            if matches!(option_name.as_str(), "--ignore" | "--ignoregroup"))
+        && let Some(next_comma) = input
+            .chars()
+            .skip(cursor_pos)
+            .take(token_range.end.saturating_sub(cursor_pos))
+            .position(|c| c == ',')
+    {
+        token_range.end = cursor_pos + next_comma;
+    }
     let token = slice_chars(input, token_range.start, token_range.end);
 
     if let parser::CompletionContext::OptionValue { option_name, .. } =
         &parsed_command_line.completion_context
         && let Some(value_range) =
-            option_value_range_from_token(&token, token_range.start, option_name)
+            option_value_range_from_token(&token, token_range.start, option_name).or_else(|| {
+                if parsed_command_line.command != "pacman" {
+                    return None;
+                }
+                let (name, value) = crate::completion::context::pacman_short_path(&token)?;
+                (name == option_name && !value.is_empty()).then(|| CompletionReplacementRange {
+                    start: token_range.end - value.chars().count(),
+                    end: token_range.end,
+                })
+            })
     {
         return Some(value_range);
     }

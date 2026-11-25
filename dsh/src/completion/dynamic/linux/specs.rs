@@ -164,18 +164,6 @@ pub(crate) const LOCAL_SPECS: &[crate::completion::dynamic::local::LocalSpec] = 
         description: "SELinux boolean",
     },
     crate::completion::dynamic::local::LocalSpec {
-        provider: "pacman.repository",
-        command_name: "pacman-conf",
-        value_kind: "repository",
-        scope: crate::completion::dynamic::local::Scope::Fixed("/etc/pacman.conf"),
-        source: crate::completion::dynamic::local::Source::Lines {
-            executable: "pacman-conf",
-            args: &["--repo-list"],
-            parser: parse_non_empty_lines,
-        },
-        description: "pacman repository",
-    },
-    crate::completion::dynamic::local::LocalSpec {
         provider: "ip.route_table",
         command_name: "ip",
         value_kind: "route-table",

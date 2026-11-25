@@ -29,7 +29,6 @@ dsh/src/completion/dynamic/linux/collectors.rs	/etc/selinux
 dsh/src/completion/dynamic/linux/collectors.rs	/etc/snapper/configs
 dsh/src/completion/dynamic/linux/specs.rs	/etc/audit/rules.d
 dsh/src/completion/dynamic/linux/specs.rs	/etc/iproute2/rt_tables
-dsh/src/completion/dynamic/linux/specs.rs	/etc/pacman.conf
 dsh/src/completion/dynamic/linux/specs.rs	/etc/shells
 dsh/src/completion/dynamic/linux/specs.rs	/etc/snapper/configs
 dsh/src/completion/dynamic/linux/specs.rs	/proc/mdstat

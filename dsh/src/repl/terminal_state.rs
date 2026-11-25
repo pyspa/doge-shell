@@ -1,4 +1,6 @@
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, is_raw_mode_enabled};
+use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
+use std::os::fd::BorrowedFd;
 
 /// Temporarily releases raw mode and restores the previous terminal state on
 /// every return path.
@@ -20,6 +22,46 @@ impl Drop for RawModePause {
     fn drop(&mut self) {
         if self.restore_raw_mode {
             enable_raw_mode().ok();
+        }
+    }
+}
+
+/// While a chat waits in cooked mode, let its Ctrl-C handler receive SIGINT
+/// even if the shell inherited a terminal with signal keys disabled.
+pub(crate) struct ChatSignalKeys<'fd> {
+    input: BorrowedFd<'fd>,
+    restore_disabled: bool,
+}
+
+impl<'fd> ChatSignalKeys<'fd> {
+    pub(crate) fn enable(input: BorrowedFd<'fd>) -> Self {
+        let restore_disabled = Self::set_enabled(input, true).unwrap_or_else(|err| {
+            tracing::warn!("could not enable terminal signal keys for chat: {err}");
+            false
+        });
+        Self {
+            input,
+            restore_disabled,
+        }
+    }
+
+    fn set_enabled(input: BorrowedFd<'_>, enabled: bool) -> nix::Result<bool> {
+        let mut mode = tcgetattr(input)?;
+        if mode.local_flags.contains(LocalFlags::ISIG) == enabled {
+            return Ok(false);
+        }
+        mode.local_flags.set(LocalFlags::ISIG, enabled);
+        tcsetattr(input, SetArg::TCSANOW, &mode)?;
+        Ok(true)
+    }
+}
+
+impl Drop for ChatSignalKeys<'_> {
+    fn drop(&mut self) {
+        if self.restore_disabled
+            && let Err(err) = Self::set_enabled(self.input, false)
+        {
+            tracing::warn!("could not restore terminal signal keys after chat: {err}");
         }
     }
 }
@@ -56,6 +98,28 @@ impl Drop for RawModeRestore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::fd::AsFd;
+
+    #[test]
+    fn chat_enables_signal_keys_for_the_turn_and_restores_only_that_bit() {
+        let pty = nix::pty::openpty(None, None).unwrap();
+        for initially_enabled in [false, true] {
+            let mut entry = tcgetattr(&pty.slave).unwrap();
+            entry.local_flags.set(LocalFlags::ISIG, initially_enabled);
+            entry.local_flags.insert(LocalFlags::ECHO);
+            tcsetattr(&pty.slave, SetArg::TCSANOW, &entry).unwrap();
+            {
+                let _keys = ChatSignalKeys::enable(pty.slave.as_fd());
+                let mut during = tcgetattr(&pty.slave).unwrap();
+                assert!(during.local_flags.contains(LocalFlags::ISIG));
+                during.local_flags.remove(LocalFlags::ECHO);
+                tcsetattr(&pty.slave, SetArg::TCSANOW, &during).unwrap();
+            }
+            let flags = tcgetattr(&pty.slave).unwrap().local_flags;
+            assert_eq!(flags.contains(LocalFlags::ISIG), initially_enabled);
+            assert!(!flags.contains(LocalFlags::ECHO));
+        }
+    }
 
     #[test]
     fn pause_is_safe_when_raw_mode_is_not_enabled() {

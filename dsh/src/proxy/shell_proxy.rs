@@ -688,12 +688,7 @@ impl ShellProxy for Shell {
     }
 
     fn get_last_command(&self) -> Option<String> {
-        if let Some(ref history) = self.cmd_history {
-            let history = history.lock();
-            history.iter().next().map(|e| e.entry.clone())
-        } else {
-            None
-        }
+        self.history_before_input.clone()
     }
 
     fn add_dir_alias(&mut self, name: String, path: String) -> bool {

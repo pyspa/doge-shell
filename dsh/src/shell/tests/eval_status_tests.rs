@@ -176,3 +176,27 @@ async fn only_commands_reach_aggregate_history_and_the_output_ledger() {
         .unwrap();
     assert_eq!(output, "child output");
 }
+
+#[test]
+fn implicit_bookmark_saves_the_command_before_current_input() {
+    use dsh_builtin::ShellProxy;
+    let _env = crate::test_env_lock();
+    let root = tempfile::tempdir().unwrap();
+    let _data = crate::ProcessEnvGuard::set("XDG_DATA_HOME", root.path().to_str().unwrap());
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (mut shell, mut ctx) = test_shell();
+            ctx.save_history = true;
+            shell.cmd_history = Some(Arc::new(ParkingMutex::new(crate::history::History::new())));
+            for input in ["A=oldest", "A=latest", "bookmark add chosen"] {
+                assert_eq!(
+                    shell.eval_str(&mut ctx, input.into(), false).await.unwrap(),
+                    0
+                );
+            }
+            assert_eq!(shell.get_bookmark("chosen").unwrap().0, "A=latest");
+        });
+}

@@ -77,6 +77,8 @@ pub struct Shell {
     pub process_substitution_registry:
         crate::shell::process_substitution::ProcessSubstitutionRegistry,
     pub session_id: String,
+    /// Latest recalled command at the start of this evaluation, before history insertion.
+    pub(crate) history_before_input: Option<String>,
     pending_eval_commands: VecDeque<String>,
     pending_eval_drain_active: Arc<AtomicBool>,
 }
@@ -155,6 +157,7 @@ impl Shell {
             process_substitution_registry:
                 crate::shell::process_substitution::ProcessSubstitutionRegistry::default(),
             session_id: xid::new().to_string(),
+            history_before_input: None,
             pending_eval_commands: VecDeque::new(),
             pending_eval_drain_active: Arc::new(AtomicBool::new(false)),
         }
@@ -248,7 +251,16 @@ impl Shell {
             ));
         }
 
+        let latest = self.cmd_history.as_ref().and_then(|history| {
+            history
+                .lock()
+                .iter()
+                .next_back()
+                .map(|entry| entry.entry.clone())
+        });
+        let outer_history = std::mem::replace(&mut self.history_before_input, latest);
         let result = eval::eval_str(self, ctx, input, force_background).await;
+        self.history_before_input = outer_history;
         // Generic evaluation errors may escape before any job publishes a
         // status (for example, an infrastructure failure during materialization).
         // Preserve the error for the caller's diagnostic, but never leave `$?`

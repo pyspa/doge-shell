@@ -11,7 +11,9 @@ mod persistence;
 use dsh_frecency::{FrecencyStore, ItemStats, SortMethod};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
-use persistence::{DirectoryChange, PendingChanges, flush_changes, read_snapshot_items};
+use persistence::{
+    DirectoryChange, DirectoryVisit, PendingChanges, flush_changes, read_snapshot_items,
+};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Sender};
@@ -60,6 +62,7 @@ pub struct FrecencyHistory {
     matcher: SkimMatcherV2,
     sender: Option<Sender<FrecencyMsg>>,
     pending: PendingChanges,
+    startup_visits: Option<Vec<DirectoryVisit>>,
     revision: u64,
 }
 
@@ -94,8 +97,30 @@ impl FrecencyHistory {
             matcher,
             sender: None,
             pending: PendingChanges::default(),
+            startup_visits: None,
             revision: 0,
         }
+    }
+
+    pub(crate) fn new_for_startup() -> Self {
+        Self {
+            startup_visits: Some(Vec::new()),
+            ..Self::new()
+        }
+    }
+
+    /// The loader has already read the snapshot and started its writer.
+    pub(crate) fn install_startup_history(&mut self, mut loaded: Self) {
+        for visit in self.startup_visits.take().unwrap_or_default() {
+            loaded.record_visit(visit);
+        }
+        loaded.save_background();
+        *self = loaded;
+    }
+
+    pub(crate) fn end_startup_initialization(&mut self) {
+        // Keep the live store for this session after a failed database open.
+        self.startup_visits = None;
     }
 
     /// Create a frecency history from a database file.
@@ -132,6 +157,7 @@ impl FrecencyHistory {
             matcher,
             sender: None,
             pending: PendingChanges::default(),
+            startup_visits: None,
             revision: 0,
         })
     }
@@ -316,20 +342,26 @@ impl FrecencyHistory {
 
     /// Add a new entry to the frecency history.
     pub fn add(&mut self, history: &str) {
-        if let Some(ref mut store) = self.store {
-            let ctx = get_current_context();
-            Arc::make_mut(store).add(history, ctx.clone());
-
-            if self.db.is_some() {
-                self.pending.lock().push(DirectoryChange::Visit {
-                    path: history.to_owned(),
-                    at: dsh_frecency::current_time_secs(),
-                    context: ctx,
-                    half_life: store.half_life,
-                });
-            }
-            self.bump_revision();
+        if let Some(store) = &self.store {
+            self.record_visit(DirectoryVisit {
+                path: history.to_owned(),
+                at: dsh_frecency::current_time_secs(),
+                context: get_current_context(),
+                half_life: store.half_life,
+            });
         }
+    }
+
+    fn record_visit(&mut self, visit: DirectoryVisit) {
+        if let Some(store) = &mut self.store {
+            Arc::make_mut(store).add_at(&visit.path, visit.context.clone(), visit.at);
+        }
+        if let Some(startup) = &mut self.startup_visits {
+            startup.push(visit);
+        } else if self.db.is_some() {
+            self.pending.lock().push(DirectoryChange::Visit(visit));
+        }
+        self.bump_revision();
     }
 
     /// Search for a recent path with the given prefix.
@@ -350,9 +382,13 @@ impl FrecencyHistory {
     /// Prune entries whose directory no longer exists, in memory and in the
     /// database: saves only upsert, so a row left behind would come back on
     /// the next load or reload.
-    pub fn prune(&mut self) {
+    pub fn prune(&mut self) -> Result<()> {
+        anyhow::ensure!(
+            self.startup_visits.is_none(),
+            "directory history is still loading"
+        );
         let Some(ref mut store) = self.store else {
-            return;
+            return Ok(());
         };
         let store = Arc::make_mut(store);
         let before: Vec<String> = store.items.iter().map(|item| item.item.clone()).collect();
@@ -366,14 +402,13 @@ impl FrecencyHistory {
                     .is_err()
             })
             .collect();
-        if removed.is_empty() {
-            return;
+        if !removed.is_empty() {
+            self.bump_revision();
+            if self.db.is_some() {
+                self.pending.lock().push(DirectoryChange::Delete(removed));
+            }
         }
-        self.bump_revision();
-        if self.db.is_some() {
-            self.pending.lock().push(DirectoryChange::Delete(removed));
-            self.save_background();
-        }
+        self.save()
     }
 
     /// Search for a path with context boosting.

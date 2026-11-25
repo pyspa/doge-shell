@@ -65,11 +65,21 @@ impl FrecencyStore {
 
     /// Log a visit to a item
     pub fn add(&mut self, item: &str, context: Option<String>) {
-        let item_stats = self.get(item, context);
+        self.add_at(item, context, current_time_secs());
+    }
 
-        item_stats.update_frecency(1.0);
+    /// Apply a visit at its original time when merging a loaded history.
+    pub fn add_at(&mut self, item: &str, context: Option<String>, at: f64) {
+        let weight = (-((current_time_secs() - at).max(0.0) as f32) / self.half_life).exp2();
+        let item_stats = self.get(item);
+        if item_stats.num_accesses() == 0 || at >= item_stats.last_accessed_time() {
+            item_stats.update_last_access(at);
+            if context.is_some() {
+                item_stats.context = context;
+            }
+        }
+        item_stats.update_frecency(weight);
         item_stats.update_num_accesses(1);
-        item_stats.update_last_access(current_time_secs());
 
         // Mark as changed since we've added/updated an item
         self.changed = true;
@@ -85,7 +95,7 @@ impl FrecencyStore {
 
     /// Adjust the score of a item by a given weight
     pub fn adjust(&mut self, item: &str, weight: f32) {
-        let item_stats = self.get(item, None);
+        let item_stats = self.get(item);
 
         item_stats.update_frecency(weight);
         item_stats.update_num_accesses(weight as i32);
@@ -100,7 +110,8 @@ impl FrecencyStore {
     }
 
     pub fn prune(&mut self) {
-        self.items.retain(|item| Path::new(&item.item).exists());
+        self.items
+            .retain(|item| !matches!(Path::new(&item.item).try_exists(), Ok(false)));
         self.check_changed();
     }
 
@@ -145,23 +156,16 @@ impl FrecencyStore {
         start..end
     }
 
-    fn get(&mut self, item: &str, context: Option<String>) -> &mut ItemStats {
+    fn get(&mut self, item: &str) -> &mut ItemStats {
         match self
             .items
             .binary_search_by_key(&item, |item_stats| &item_stats.item)
         {
-            Ok(idx) => {
-                let stats = &mut self.items[idx];
-                // Update context if provided
-                if context.is_some() {
-                    stats.context = context;
-                }
-                stats
-            }
+            Ok(idx) => &mut self.items[idx],
             Err(idx) => {
                 self.items.insert(
                     idx,
-                    ItemStats::new(item, self.reference_time, self.half_life, context),
+                    ItemStats::new(item, self.reference_time, self.half_life, None),
                 );
                 &mut self.items[idx]
             }

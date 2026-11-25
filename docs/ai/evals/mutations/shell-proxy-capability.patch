@@ -1,6 +1,7 @@
 --- a/dsh-builtin/src/lib.rs
 +++ b/dsh-builtin/src/lib.rs
-@@ -212,0 +213,3 @@
-+    /// Misplaced compatibility method.
+@@ -220,2 +220,4 @@
+ {
 +    fn eval_probe(&self) -> bool { true }
 +
+     /// Initiates shell exit process

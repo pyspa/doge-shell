@@ -23,6 +23,7 @@ scripts/check-ai-guidance.sh  # also runs scripts/eval-agent-routing.py
 python3 scripts/check-agent-context-budget.py
 python3 scripts/check-agent-eval-schemas.py
 python3 scripts/check-agent-eval-fixtures.py
+python3 scripts/check-agent-eval-fixtures.py --case shell-proxy-capability --smoke
 python3 scripts/test-check-agent-eval-support.py
 python3 scripts/test-agent-eval-evidence.py
 python3 scripts/check-agent-eval-support.py

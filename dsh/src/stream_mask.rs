@@ -20,11 +20,30 @@ impl<'a> GenericStreamMask<'a> {
             withheld: false,
         }
     }
-    pub(crate) fn push(&mut self, bytes: &[u8]) -> Vec<u8> {
+    pub(crate) fn push(&mut self, mut bytes: &[u8]) -> Vec<u8> {
         if self.withheld {
             return Vec::new();
         }
         let mut output = Vec::new();
+        // Cron often receives thousands of short records in one pipe read.
+        // A block of complete, independent lines needs only one regex pass.
+        // Fall back to the line-aware path for cross-line or known secrets.
+        if self.secrets.is_empty()
+            && !self.deferred
+            && let Some(last) = bytes.iter().rposition(|byte| *byte == b'\n')
+            && self.pending.len() + last < GENERIC_PENDING_LIMIT
+        {
+            let original_len = self.pending.len();
+            self.pending.extend_from_slice(&bytes[..=last]);
+            let text = String::from_utf8_lossy(&self.pending);
+            if dsh_types::safety_policy::may_redact_across_lines(&text) {
+                self.pending.truncate(original_len);
+            } else {
+                output = dsh_types::safety_policy::redact_sensitive_text(&text).into_bytes();
+                self.pending.clear();
+                bytes = &bytes[last + 1..];
+            }
+        }
         for part in bytes.split_inclusive(|byte| *byte == b'\n') {
             if self.secrets.iter().any(|secret| secret.len() > 4096)
                 || self.pending.len().saturating_add(part.len()) > GENERIC_PENDING_LIMIT

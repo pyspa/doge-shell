@@ -554,6 +554,8 @@ pub struct RunOutcome {
     /// Already masked by the caller. This is persisted.
     pub stdout: String,
     pub stderr: String,
+    /// First masked diagnostic before log truncation, when captured by the runner.
+    pub preview: Option<String>,
     /// `None` leaves the previous digest in place, which is what a skipped run
     /// wants: it produced no output to compare next time against.
     pub digest: Option<u64>,

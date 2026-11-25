@@ -44,6 +44,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub struct CommandOutcome {
     pub stdout: String,
     pub stdout_digest: u64,
+    pub preview: String,
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
@@ -78,10 +79,14 @@ pub fn run_command(run: &ClaimedRun) -> CommandOutcome {
     let child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let stderr = dsh_types::safety_policy::redact_sensitive_text(&format!(
+                "cron: failed to start: {error}\n"
+            ));
             return CommandOutcome {
                 stdout: String::new(),
                 stdout_digest: digest(""),
-                stderr: format!("cron: failed to start: {error}\n"),
+                preview: preview(&stderr),
+                stderr,
                 exit_code: SPAWN_FAILED,
                 timed_out: false,
                 duration: started.elapsed(),
@@ -130,10 +135,11 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
         break None;
     };
 
-    let [stdout, stderr] = output.streams.map(Capture::finish);
+    let [(stdout, stdout_preview), (stderr, stderr_preview)] = output.streams.map(Capture::finish);
     CommandOutcome {
         stdout,
         stdout_digest: output.digest.finish(),
+        preview: stderr_preview.or(stdout_preview).unwrap_or_default(),
         stderr,
         exit_code: if timed_out {
             TIMED_OUT

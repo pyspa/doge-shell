@@ -169,3 +169,10 @@ fn completed_child_keeps_buffered_diagnostics_at_deadline() {
     assert_eq!(outcome.stderr, "final\n");
     assert!(!outcome.timed_out);
 }
+
+#[test]
+fn truncation_does_not_replace_the_preview_with_a_marker() {
+    let outcome = run_command(&run("echo diagnostic; seq 1 10000 | sed 's/.*//' >&2", 10));
+    assert!(outcome.stderr.contains("[truncated]"));
+    assert_eq!(outcome.preview, "diagnostic");
+}

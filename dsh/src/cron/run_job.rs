@@ -54,6 +54,7 @@ fn shell_outcome(run: &ClaimedRun) -> RunOutcome {
         duration_ms: result.duration.as_millis() as u64,
         // The store keeps these; a command that printed a token would leave it
         // on disk for as long as the history does.
+        preview: Some(result.preview),
         stdout: result.stdout,
         stderr: result.stderr,
         digest: Some(result.stdout_digest),

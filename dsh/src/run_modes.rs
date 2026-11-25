@@ -123,12 +123,10 @@ pub async fn run_shell() -> ExitCode {
     // historically opened the notebook before running the one-shot command.
     if let Some(notebook_path) = cli.notebook.as_deref() {
         if let Err(e) = shell.open_notebook(PathBuf::from(notebook_path)) {
-            tracing::error!("Failed to open notebook: {}", e);
-            eprintln!("Error opening notebook: {}", e);
-            // Decide whether to continue or exit. Continuing without notebook mode is safer but warning is needed.
-        } else {
-            println!("Notebook Mode Active.");
+            eprintln!("Error opening notebook {notebook_path}: {e:#}");
+            return ExitCode::FAILURE;
         }
+        println!("Notebook Mode Active.");
     }
 
     // Load config.lisp to initialize aliases, variables, and other settings
@@ -543,7 +541,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("Error reading input: {err}");
-                    break;
+                    return ExitCode::FAILURE;
                 }
             }
         }

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
-use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -15,22 +15,20 @@ pub enum BlockKind {
 pub struct Block {
     pub content: String,
     pub kind: BlockKind,
+    // Decoded by the Markdown parser, independently of the original source used for saving.
+    body: Option<String>,
 }
 
 impl Block {
     pub fn raw_content(&self) -> String {
-        match &self.kind {
-            BlockKind::Code(_) | BlockKind::Output => {
-                let lines: Vec<&str> = self.content.trim().lines().collect();
-                let last_line_is_fence =
-                    lines.last().map(|line| line.starts_with("```")) == Some(true);
-                if lines.len() >= 2 && lines[0].starts_with("```") && last_line_is_fence {
-                    lines[1..lines.len() - 1].join("\n")
-                } else {
-                    self.content.clone()
-                }
-            }
-            BlockKind::Markdown => self.content.clone(),
+        self.body.as_ref().unwrap_or(&self.content).clone()
+    }
+
+    fn markdown(content: &str) -> Self {
+        Self {
+            content: content.to_string(),
+            kind: BlockKind::Markdown,
+            body: None,
         }
     }
 }
@@ -53,6 +51,21 @@ pub struct NotebookSession {
     pub state: SessionState,
 }
 
+/// A fence longer than any backtick run in the body, so it cannot close early.
+pub fn fence_for(body: &str) -> String {
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for ch in body.chars() {
+        if ch == '`' {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    "`".repeat((longest + 1).max(3))
+}
+
 impl Notebook {
     pub fn new(path: PathBuf) -> Self {
         Self {
@@ -62,122 +75,86 @@ impl Notebook {
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self> {
-        let content = fs::read_to_string(path).unwrap_or_default();
-        let mut blocks = Vec::new();
+        Self::read(path, File::open(path)?)
+    }
 
-        let parser = Parser::new(&content).into_offset_iter();
+    fn read(path: &Path, mut file: File) -> Result<Self> {
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        let mut notebook = Self::new(path.to_owned());
         let mut last_offset = 0;
-        let mut in_code_block = false;
-        let mut code_lang = String::new();
+        let mut quote_depth = 0;
+        let mut code = None;
 
-        // Simple approach: Iterate events.
-        // Ideally we use offsets to preserve raw markdown.
-        // But for now, let's just parse what we can identify as code blocks.
-        // Actually, for "load and execute", we just need to identify code blocks.
-        // For "save", we append.
-
-        // Strategy:
-        // We will process the file to identify blocks.
-        // If we want to preserve exact text between code blocks, we should capture the text ranges.
-
-        for (event, range) in parser {
+        for (event, range) in Parser::new(&content).into_offset_iter() {
             match event {
-                Event::Start(Tag::CodeBlock(kind)) => {
-                    // Capture text before this code block as Markdown block
+                // Runbook exports put output in blockquotes. A fence in quoted
+                // output is part of the prose, even when it is labelled `sh`.
+                Event::Start(Tag::BlockQuote(_)) => quote_depth += 1,
+                Event::End(TagEnd::BlockQuote(_)) => quote_depth -= 1,
+                Event::Start(Tag::CodeBlock(kind)) if quote_depth == 0 => {
                     if range.start > last_offset {
-                        let text = &content[last_offset..range.start];
-                        if !text.is_empty() {
-                            blocks.push(Block {
-                                content: text.to_string(),
-                                kind: BlockKind::Markdown,
-                            });
-                        }
+                        notebook
+                            .blocks
+                            .push(Block::markdown(&content[last_offset..range.start]));
                     }
-
-                    in_code_block = true;
-                    code_lang = match kind {
-                        CodeBlockKind::Fenced(lang) => lang.to_string(),
-                        CodeBlockKind::Indented => "".to_string(),
+                    let kind = match kind {
+                        CodeBlockKind::Fenced(lang) if lang.as_ref() == "text" => BlockKind::Output,
+                        CodeBlockKind::Fenced(lang) => BlockKind::Code(lang.to_string()),
+                        CodeBlockKind::Indented => BlockKind::Code(String::new()),
                     };
-                    last_offset = range.start; // Mark start of code block content? 
-                    // Wait, range includes fences for Fenced blocks?
-                    // pulldown-cmark range covers the whole event.
+                    code = Some((kind, String::new()));
+                    last_offset = range.start;
                 }
-                Event::End(TagEnd::CodeBlock) if in_code_block => {
-                    // The range end is the end of the block.
-                    // However, we want the *content* of the code block.
-                    // Actually, taking the whole range is better for reproduction,
-                    // but we need inner content for execution.
-
-                    let full_block = &content[last_offset..range.end];
-                    // We need to strip fences if we want just code.
-                    // This is getting complicated to do perfectly round-trip.
-
-                    // Alternate simple strategy:
-                    // Just store the whole range as "Code Block" and parse inner content when executing.
-                    let kind = if code_lang == "text" {
-                        BlockKind::Output
-                    } else {
-                        BlockKind::Code(code_lang.clone())
-                    };
-
-                    blocks.push(Block {
-                        content: full_block.to_string(),
-                        kind,
-                    });
-
-                    last_offset = range.end;
-                    in_code_block = false;
+                Event::Text(text) => {
+                    if let Some((_, body)) = &mut code {
+                        body.push_str(&text);
+                    }
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    if let Some((kind, mut body)) = code.take() {
+                        if body.ends_with('\n') {
+                            body.pop();
+                        }
+                        notebook.blocks.push(Block {
+                            content: content[last_offset..range.end].to_string(),
+                            kind,
+                            body: Some(body),
+                        });
+                        last_offset = range.end;
+                    }
                 }
                 _ => {}
             }
         }
-
-        // Remaining text
         if last_offset < content.len() {
-            let text = &content[last_offset..];
-            blocks.push(Block {
-                content: text.to_string(),
-                kind: BlockKind::Markdown,
-            });
+            notebook
+                .blocks
+                .push(Block::markdown(&content[last_offset..]));
         }
-
-        Ok(Self {
-            path: path.to_path_buf(),
-            blocks,
-        })
+        Ok(notebook)
     }
 
-    // Simple append for recording
     pub fn append_code(&mut self, code: &str) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-
-        let block = format!("\n```bash\n{}\n```\n", code.trim());
-        file.write_all(block.as_bytes())?;
-
-        self.blocks.push(Block {
-            content: block,
-            kind: BlockKind::Code("bash".to_string()),
-        });
-        Ok(())
+        self.append_block(code.trim(), "bash", BlockKind::Code("bash".to_owned()))
     }
 
     pub fn append_output(&mut self, output: &str) -> Result<()> {
+        self.append_block(output.trim_end(), "text", BlockKind::Output)
+    }
+
+    fn append_block(&mut self, body: &str, language: &str, kind: BlockKind) -> Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)?;
-
-        // Use a generic code block or specific generic one for output
-        let block = format!("\n```text\n{}\n```\n", output.trim_end());
-        file.write_all(block.as_bytes())?;
-
+        let fence = fence_for(body);
+        let content = format!("\n{fence}{language}\n{body}\n{fence}\n");
+        file.write_all(content.as_bytes())?;
         self.blocks.push(Block {
-            content: block,
-            kind: BlockKind::Output,
+            content,
+            kind,
+            body: Some(body.to_owned()),
         });
         Ok(())
     }
@@ -194,11 +171,19 @@ impl Notebook {
 
 impl NotebookSession {
     pub fn new(path: PathBuf) -> Result<Self> {
-        let notebook = if path.exists() {
-            Notebook::load_from_file(&path)?
-        } else {
-            Notebook::new(path)
-        };
+        // Anchor recording to the original directory even when a command runs `cd`.
+        let path = std::path::absolute(path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&path)?;
+        anyhow::ensure!(
+            file.metadata()?.is_file(),
+            "expected a regular notebook file"
+        );
+        file.rewind()?;
+        let notebook = Notebook::read(&path, file)?;
 
         Ok(Self {
             notebook,
@@ -218,6 +203,7 @@ impl NotebookSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -262,6 +248,32 @@ mod tests {
         let content_2 = fs::read_to_string(&path)?;
         assert_eq!(content, content_2);
 
+        Ok(())
+    }
+
+    #[test]
+    fn recorded_code_and_output_keep_embedded_fences_in_their_blocks() -> Result<()> {
+        let file = NamedTempFile::new()?;
+        let code = "cat <<'EOF'\n```\nEOF";
+        let output = "````\n```sh\nquoted output\n```";
+        let mut session = NotebookSession::new(file.path().into())?;
+        session.notebook.append_code(code)?;
+        session.notebook.append_output(output)?;
+
+        let loaded = Notebook::load_from_file(file.path())?;
+        let blocks: Vec<_> = loaded
+            .blocks
+            .iter()
+            .filter(|block| block.kind != BlockKind::Markdown)
+            .map(|block| (block.kind.clone(), block.raw_content()))
+            .collect();
+        assert_eq!(
+            blocks,
+            vec![
+                (BlockKind::Code("bash".into()), code.into()),
+                (BlockKind::Output, output.into()),
+            ]
+        );
         Ok(())
     }
 

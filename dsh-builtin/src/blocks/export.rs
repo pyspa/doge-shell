@@ -79,7 +79,13 @@ fn write_runbook(
         descriptions,
         ..Default::default()
     };
-    let markdown = crate::runbook::render_runbook(selected, &options);
+    let markdown = match crate::runbook::render_runbook(selected, &options) {
+        Ok(markdown) => markdown,
+        Err(err) => {
+            let _ = ctx.write_stderr(&format!("blocks: {err}"));
+            return ExitStatus::ExitedWith(1);
+        }
+    };
 
     match output {
         Some(path) => match std::fs::write(path, &markdown) {

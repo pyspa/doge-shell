@@ -10,7 +10,9 @@
 
 use dsh_types::ansi::strip_ansi;
 use dsh_types::command_block::CommandBlock;
+use dsh_types::notebook::fence_for;
 pub use dsh_types::placeholder::Placeholder;
+use std::path::Path;
 
 pub struct RunbookOptions {
     pub title: Option<String>,
@@ -33,7 +35,17 @@ impl Default for RunbookOptions {
 
 /// Render blocks (oldest first — a runbook is a procedure, so callers must
 /// hand in chronological order) as an executable Markdown runbook.
-pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> String {
+pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> Result<String, String> {
+    if let Some(block) = blocks.iter().find(|b| {
+        b.cwd
+            .as_deref()
+            .is_some_and(|cwd| cwd.contains(char::REPLACEMENT_CHARACTER))
+    }) {
+        return Err(format!(
+            "cannot export block {}: the recorded directory contains a Unicode replacement character and cannot be identified reliably",
+            block.id
+        ));
+    }
     let mut out = String::new();
     let title = opts.title.as_deref().unwrap_or("Session export");
     out.push_str(&format!("# Runbook: {}\n\n", sanitize_inline(title)));
@@ -42,6 +54,10 @@ pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> String 
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     ));
 
+    let starting_dir = blocks
+        .first()
+        .and_then(|block| block.cwd.as_deref())
+        .map(Path::new);
     for (step, block) in blocks.iter().enumerate() {
         out.push('\n');
         out.push_str(&format!(
@@ -60,12 +76,6 @@ pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> String 
                 .map(|cwd| format!(" cwd={}", sanitize_inline(cwd)))
                 .unwrap_or_default()
         ));
-        if block.command.contains('\n') {
-            out.push_str(
-                "<!-- dsh:warning multi-line command; notebook-play executes line by line -->\n",
-            );
-        }
-
         if let Some(description) = opts
             .descriptions
             .as_ref()
@@ -73,17 +83,15 @@ pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> String 
             .map(|description| description.trim())
             .filter(|description| !description.is_empty())
         {
-            out.push('\n');
+            out.push_str("\nDescription: ");
             out.push_str(&sanitize_inline(description));
             out.push('\n');
         }
 
         out.push('\n');
-        let fence = fence_for(&block.command);
-        out.push_str(&format!(
-            "{fence}sh\n{}\n{fence}\n",
-            block.command.trim_end()
-        ));
+        let command = replay_script(block, starting_dir);
+        let fence = fence_for(&command);
+        out.push_str(&format!("{fence}sh\n{}\n{fence}\n", command.trim_end()));
 
         let excerpt = output_excerpt(block, opts.max_excerpt_lines);
         if !excerpt.is_empty() {
@@ -92,34 +100,49 @@ pub fn render_runbook(blocks: &[CommandBlock], opts: &RunbookOptions) -> String 
         }
     }
 
-    out
+    Ok(out)
+}
+
+/// Each step starts in the playback directory. Recreate a recorded directory
+/// change explicitly in the script the user sees and confirms.
+fn replay_script(block: &CommandBlock, starting_dir: Option<&Path>) -> String {
+    let Some(cwd) = block.cwd.as_deref().map(Path::new) else {
+        return block.command.clone();
+    };
+    if Some(cwd) == starting_dir || !cwd.is_absolute() {
+        return block.command.clone();
+    }
+    let target = starting_dir
+        .and_then(|base| cwd.strip_prefix(base).ok())
+        .map(|relative| Path::new(".").join(relative))
+        .unwrap_or_else(|| cwd.to_owned());
+    // A directory name can itself contain a runbook placeholder. Break the
+    // literal at each opening brace so substitution never rewrites a path.
+    let target = target.to_string_lossy();
+    // A literal CR followed by LF is normalized by Markdown. Emit CR
+    // through printf so even that path survives a render/read round trip.
+    let quoted = target
+        .split('\r')
+        .map(|part| {
+            part.split('{')
+                .map(shell_words::quote)
+                .collect::<Vec<_>>()
+                .join("'{'")
+        })
+        .collect::<Vec<_>>()
+        .join("\"$(printf '\\r')\"");
+    format!("cd {quoted} || exit 1\n{}", block.command)
 }
 
 /// First line of the command, shortened for a heading.
 fn step_heading(command: &str) -> String {
     const MAX: usize = 60;
-    let first = command.lines().next().unwrap_or("").trim();
+    let first = command.split(['\r', '\n']).next().unwrap_or("").trim();
     if first.chars().count() > MAX {
         first.chars().take(MAX - 1).collect::<String>() + "…"
     } else {
         first.to_string()
     }
-}
-
-/// A fence longer than any backtick run inside the command, so the command
-/// itself can never close the fence early.
-fn fence_for(command: &str) -> String {
-    let mut longest = 0usize;
-    let mut current = 0usize;
-    for ch in command.chars() {
-        if ch == '`' {
-            current += 1;
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    "`".repeat((longest + 1).max(3))
 }
 
 /// Output excerpt as a blockquote: parsed as Markdown by `notebook-play`, so
@@ -130,7 +153,9 @@ fn output_excerpt(block: &CommandBlock, max_lines: usize) -> String {
     } else {
         block.stdout.as_str()
     };
-    let cleaned = strip_ansi(output);
+    // CommonMark treats CR, CRLF, and LF as line endings. Quote each line
+    // using the same boundaries the notebook reader will see.
+    let cleaned = strip_ansi(output).replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = cleaned.lines().collect();
     if lines.iter().all(|line| line.trim().is_empty()) {
         return String::new();
@@ -140,7 +165,7 @@ fn output_excerpt(block: &CommandBlock, max_lines: usize) -> String {
     let mut excerpt = String::new();
     for line in &lines[..shown] {
         excerpt.push_str("> ");
-        excerpt.push_str(line.trim_end_matches('\r'));
+        excerpt.push_str(line);
         excerpt.push('\n');
     }
     if lines.len() > shown {
@@ -210,7 +235,7 @@ mod tests {
             block(1, "cargo build", "Compiling foo\nFinished dev", "", 0),
             block(2, "cargo test", "", "error: oops", 101),
         ];
-        let md = render_runbook(&blocks, &RunbookOptions::default());
+        let md = render_runbook(&blocks, &RunbookOptions::default()).unwrap();
 
         assert!(md.starts_with("# Runbook: Session export\n"));
         assert!(md.contains("<!-- dsh:runbook v1 exported="));
@@ -236,7 +261,7 @@ mod tests {
             max_excerpt_lines: 3,
             ..Default::default()
         };
-        let md = render_runbook(&blocks, &opts);
+        let md = render_runbook(&blocks, &opts).unwrap();
         assert!(md.contains("> line 1\n> line 2\n> line 3\n> … (excerpt, 3/20 lines)\n"));
         assert!(!md.contains("line 4"));
     }
@@ -244,7 +269,7 @@ mod tests {
     #[test]
     fn output_with_fences_stays_quoted_not_executable() {
         let blocks = vec![block(1, "cat doc.md", "```sh\nrm -rf /\n```", "", 0)];
-        let md = render_runbook(&blocks, &RunbookOptions::default());
+        let md = render_runbook(&blocks, &RunbookOptions::default()).unwrap();
         // The dangerous content only appears behind blockquote markers.
         assert!(md.contains("> ```sh\n> rm -rf /\n> ```\n"));
         assert!(!md.contains("\n```sh\nrm -rf /"));
@@ -253,15 +278,15 @@ mod tests {
     #[test]
     fn command_with_backticks_gets_a_longer_fence() {
         let blocks = vec![block(1, "echo ```dangerous```", "", "", 0)];
-        let md = render_runbook(&blocks, &RunbookOptions::default());
+        let md = render_runbook(&blocks, &RunbookOptions::default()).unwrap();
         assert!(md.contains("````sh\necho ```dangerous```\n````"));
     }
 
     #[test]
-    fn multi_line_command_gets_a_warning() {
+    fn multi_line_command_stays_in_one_fence() {
         let blocks = vec![block(1, "echo one\necho two", "", "", 0)];
-        let md = render_runbook(&blocks, &RunbookOptions::default());
-        assert!(md.contains("<!-- dsh:warning multi-line command"));
+        let md = render_runbook(&blocks, &RunbookOptions::default()).unwrap();
+        assert!(md.contains("```sh\necho one\necho two\n```"));
     }
 
     #[test]
@@ -273,7 +298,7 @@ mod tests {
             "",
             0,
         )];
-        let md = render_runbook(&blocks, &RunbookOptions::default());
+        let md = render_runbook(&blocks, &RunbookOptions::default()).unwrap();
         assert!(md.contains("> red.txt\n"));
         assert!(!md.contains('\u{1b}'));
     }
@@ -288,10 +313,57 @@ mod tests {
             descriptions: Some(vec!["Build everything.".to_string()]),
             ..Default::default()
         };
-        let md = render_runbook(&blocks, &opts);
+        let md = render_runbook(&blocks, &opts).unwrap();
         assert!(md.contains("Build everything.\n\n```sh\nmake\n```"));
         // Second step has no description and still renders.
         assert!(md.contains("## Step 2: make test"));
+    }
+
+    #[test]
+    fn exported_steps_restore_their_directory_relative_to_the_first_step() {
+        let first = block(1, "cd src", "", "", 0);
+        let mut second = block(2, "pwd", "", "", 0);
+        second.cwd = Some("/tmp/src with spaces".into());
+        let md = render_runbook(&[first, second], &RunbookOptions::default()).unwrap();
+        assert!(md.contains("cd './src with spaces' || exit 1\npwd\n"));
+    }
+
+    #[test]
+    fn directory_names_survive_markdown_or_stop_export_when_ambiguous() {
+        let first = block(1, "pwd", "", "", 0);
+        let mut second = block(2, "test -f marker", "", "", 0);
+        second.cwd = Some("/tmp/cr\r\nname".into());
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("cr\r\nname");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("marker"), "").unwrap();
+        std::fs::create_dir(dir.path().join("cr\nname")).unwrap();
+        let path = dir.path().join("book.md");
+        let rendered =
+            render_runbook(&[first.clone(), second.clone()], &RunbookOptions::default()).unwrap();
+        std::fs::write(&path, rendered).unwrap();
+        let book = dsh_types::notebook::Notebook::load_from_file(&path).unwrap();
+        let code = book
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| matches!(block.kind, dsh_types::notebook::BlockKind::Code(_)))
+            .unwrap()
+            .raw_content();
+        assert!(
+            std::process::Command::new("/bin/sh")
+                .args(["-c", &code])
+                .current_dir(dir.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        second.cwd = Some("/tmp/\u{fffd}".into());
+        assert!(
+            render_runbook(&[first, second], &RunbookOptions::default())
+                .unwrap_err()
+                .contains("block 2")
+        );
     }
 
     #[test]
@@ -368,7 +440,7 @@ mod tests {
             title: Some("multi\nline\ntitle".to_string()),
             ..Default::default()
         };
-        let md = render_runbook(&[b], &opts);
+        let md = render_runbook(&[b], &opts).unwrap();
         assert!(md.contains("# Runbook: multi line title"));
         assert!(md.contains("cwd=/tmp/x → y -->"));
     }

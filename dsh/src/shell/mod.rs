@@ -237,14 +237,15 @@ impl Shell {
         input: String,
         force_background: bool,
     ) -> Result<i32> {
-        // Notebook Hook: Record input if session is active
         if let Some(session) = &mut self.notebook_session
             && session.state == dsh_types::notebook::SessionState::Active
+            && !input.trim().is_empty()
+            && let Err(err) = session.notebook.append_code(&input)
         {
-            // Ignore empty input or failures in appending for now (warn only)
-            if !input.trim().is_empty() {
-                let _ = session.notebook.append_code(&input);
-            }
+            let _ = ctx.write_stderr(&format!(
+                "Could not append to notebook {}: {err:#}",
+                session.notebook.path.display()
+            ));
         }
 
         let result = eval::eval_str(self, ctx, input, force_background).await;

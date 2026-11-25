@@ -129,7 +129,17 @@ impl ContextCorrector<'_> {
 
         if let Some(raw_token) = Self::current_raw_token(parsed)
             && let Some((option_name, value_type, value)) =
-                split_attached_short_option_value(raw_token, &options)
+                split_attached_short_option_value(raw_token, &options).or_else(|| {
+                    if parsed.command != "pacman" {
+                        return None;
+                    }
+                    let (name, value) = pacman_short_path(raw_token)?;
+                    if value.is_empty() {
+                        return None;
+                    }
+                    let opt = options.iter().find(|opt| opt.matches_name(name))?;
+                    Some((name.to_owned(), opt.value_type().cloned(), value))
+                })
         {
             let mut corrected = parsed.clone();
             corrected.current_token = value.to_string();
@@ -150,9 +160,16 @@ impl ContextCorrector<'_> {
 
         let previous =
             super::super::shell_path::decode_literal_word(Self::previous_argv_token(parsed)?);
+        let previous = if parsed.command == "pacman" {
+            pacman_short_path(&previous)
+                .filter(|(_, attached)| attached.is_empty())
+                .map_or(previous.as_str(), |(name, _)| name)
+        } else {
+            &previous
+        };
         let option = options
             .into_iter()
-            .find(|option| option.matches_name(&previous) && option.expects_value())?;
+            .find(|option| option.matches_name(previous) && option.expects_value())?;
 
         let mut corrected = parsed.clone();
         corrected.completion_context = CompletionContext::OptionValue {

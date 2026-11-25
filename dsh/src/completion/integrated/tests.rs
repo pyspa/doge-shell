@@ -2542,6 +2542,125 @@ fn dynamic_provider_target_unwraps_command_wrappers() {
 }
 
 #[tokio::test]
+async fn pacman_options_follow_the_selected_operation() {
+    let dir = tempdir().unwrap();
+    let engine = engine_with_path(dir.path());
+    for (input, option, expected) in [
+        ("pacman -S --over", "--overwrite", true),
+        ("pacman -yuS --over", "--overwrite", true),
+        ("pacman --upgrade --over", "--overwrite", true),
+        ("sudo pacman -Syu --over", "--overwrite", true),
+        ("pacman -S pkg --overwrite glob --over", "--overwrite", true),
+        (
+            "pacman --config conf -Rns --print-f",
+            "--print-format",
+            true,
+        ),
+        ("pacman -F --machine", "--machinereadable", true),
+        ("pacman -Q -c", "-c", true),
+        ("pacman -Q --over", "--overwrite", false),
+        ("pacman -Rns --over", "--overwrite", false),
+    ] {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert_eq!(
+            result
+                .candidates
+                .iter()
+                .any(|candidate| candidate.text == option),
+            expected,
+            "{input}: {:?}",
+            result.candidates
+        );
+    }
+}
+
+#[tokio::test]
+async fn pacman_dynamic_targets_follow_modifiers_and_option_values() {
+    let dir = tempdir().unwrap();
+    write_executable_script(
+        &dir.path().join("pacman"),
+        r#"#!/bin/sh
+case "$1" in
+    -Slq) echo test-sync ;;
+    -Qq) case "$2" in
+        --dbpath=other) echo test-other-db ;;
+        *) echo test-local ;;
+    esac ;;
+    -Qg) echo 'test-installed-group member' ;;
+    -Sg) echo test-sync-group ;;
+esac
+"#,
+    );
+    write_executable_script(
+        &dir.path().join("pacman-conf"),
+        "#!/bin/sh\necho test-repo\n",
+    );
+    fs::write(dir.path().join("test-file.pkg.tar.gz"), "").unwrap();
+    fs::create_dir(dir.path().join("test-dir")).unwrap();
+    let engine = engine_with_path(dir.path());
+    let attached = "pacman -Qbtest-d";
+    let result = wait_for_candidate(&engine, attached, dir.path(), "test-dir").await;
+    assert_eq!(result.replacement_range.unwrap().start, "pacman -Qb".len());
+    for (input, expected) in [
+        ("pacman -Qbother test-", "test-other-db"),
+        ("pacman -Q --dbpath other test-", "test-other-db"),
+        ("pacman -g -Q test-", "test-installed-group"),
+        ("pacman --needed -S test-", "test-sync"),
+        ("pacman -S --ignore=linux,test-", "linux,test-sync"),
+        ("sudo pacman -Sl test-", "test-repo"),
+        ("pacman -Q --groups test-", "test-installed-group"),
+        ("pacman -Sg test-", "test-sync-group"),
+        ("pacman -Fl test-", "test-sync"),
+        ("pacman -Q --owns test-", "test-file.pkg.tar.gz"),
+        ("pacman -Qip test-", "test-file.pkg.tar.gz"),
+        ("pacman -U test-", "test-file.pkg.tar.gz"),
+        ("pacman -Syu --ignore test-", "test-sync"),
+        ("pacman -U --ignoregroup test-", "test-sync-group"),
+    ] {
+        let result = wait_for_candidate(&engine, input, dir.path(), expected).await;
+        assert!(
+            !result.candidates.iter().any(|c| c.text == "test-local"),
+            "{input}"
+        );
+    }
+    for separator in ["=", " "] {
+        let prefix = format!("pacman -S --ignore{separator}first,test-");
+        let input = format!("{prefix}old,last");
+        let result = engine
+            .complete(&input, prefix.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            result
+                .candidates
+                .iter()
+                .any(|c| c.text == "first,test-sync"),
+            "{input}: {:?}",
+            result.candidates
+        );
+        let range = result.replacement_range.unwrap();
+        assert_eq!(&input[range.start..range.end], "first,test-old");
+    }
+    for input in [
+        "pacman -F test-",
+        "pacman -S --overwrite test-",
+        "pacman -Qs test-",
+    ] {
+        let result = engine
+            .complete(input, input.len(), dir.path(), 50, None)
+            .await;
+        assert!(
+            !result
+                .candidates
+                .iter()
+                .any(|c| matches!(c.text.as_str(), "test-local" | "test-sync")),
+            "{input}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn pacman_removal_offers_aur_packages_and_install_does_not() {
     let dir = tempdir().unwrap();
     let bin_dir = dir.path().join("bin");

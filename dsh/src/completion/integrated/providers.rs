@@ -114,10 +114,6 @@ pub(super) const DYNAMIC_PROVIDER_SPECS: &[DynamicProviderSpec] = &[
         command: "nmcli",
         collect: collect_nmcli_dynamic_candidates,
     },
-    DynamicProviderSpec {
-        command: "pacman",
-        collect: collect_pacman_dynamic_candidates,
-    },
     // AUR helpers take the same operation flags and share the pacman package
     // provider in their JSON definitions, so they need the same bundled-flag
     // handling (`yay -Rns`, `paru -Syu`).

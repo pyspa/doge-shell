@@ -31,6 +31,11 @@ pub(super) fn collect(
             parsed_command_line.command.as_str(),
             cached_only,
         ),
+        "pacman.installed_group"
+        | "pacman.installed_package"
+        | "pacman.sync_group"
+        | "pacman.sync_package"
+        | "pacman.repository" => super::pacman::collect(collector, request),
         "pacman.package" => match pacman_sync_mode(parsed_command_line) {
             Some(sync) => collector.collect_pacman_package_candidates(
                 current_dir,

@@ -30,6 +30,7 @@ mod inventory;
 mod kubernetes;
 mod linux;
 mod local;
+mod pacman;
 mod platform;
 mod project;
 mod registry;

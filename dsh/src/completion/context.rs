@@ -10,6 +10,8 @@ use super::parser::{
 };
 
 mod option_values;
+mod pacman;
+pub(crate) use pacman::pacman_short_path;
 mod tokens;
 fn normalize_specified_option(
     options: &[String],
@@ -107,9 +109,20 @@ impl<'a> ContextCorrector<'a> {
                 .map_or(0, |source| source.argument_start);
             let (_, index) =
                 Self::positional_arguments_after_raw_index(&corrected, start, &options);
-            if let CompletionContext::Argument { arg_index, .. } = &mut corrected.completion_context
+            let pacman_target = if corrected.command == "pacman" {
+                Self::pacman_target_type(&corrected, &options, definition)
+            } else {
+                None
+            };
+            if let CompletionContext::Argument {
+                arg_index,
+                arg_type,
+            } = &mut corrected.completion_context
             {
                 *arg_index = index;
+                if pacman_target.is_some() {
+                    *arg_type = pacman_target;
+                }
             }
         }
         corrected
@@ -298,6 +311,7 @@ impl<'a> ContextCorrector<'a> {
                 && prev_token.starts_with('-')
                 && !prev_token.starts_with("--")
                 && prev_token.len() > 2
+                && !(parsed.command == "pacman" && pacman_short_path(prev_token).is_some())
             {
                 // Collect available options for current scope
                 let mut available_options = command_completion.global_options.clone();
@@ -360,7 +374,16 @@ impl<'a> ContextCorrector<'a> {
             let is_current =
                 Self::current_raw_index(&new_parsed).is_some_and(|index| index == tokens_consumed);
 
-            if let Some(sub) = Self::find_matching_subcommand(current_subcommands, token) {
+            // A completed pacman operation may carry short modifiers, e.g. -Syu.
+            // Keep the original argv for providers and for replacement spans.
+            let sub = Self::find_matching_subcommand(current_subcommands, token).or_else(|| {
+                if parsed.command == "pacman" && !is_current {
+                    Self::pacman_bundled_operation(current_subcommands, token)
+                } else {
+                    None
+                }
+            });
+            if let Some(sub) = sub {
                 if is_current {
                     // The current token IS a valid subcommand (e.g. pacman -S|)
                     new_parsed.completion_context = CompletionContext::SubCommand;
@@ -407,6 +430,21 @@ impl<'a> ContextCorrector<'a> {
                     continue;
                 }
 
+                // Pacman also accepts operation-specific flags before the operation.
+                if parsed.command == "pacman" && valid_subcommands.is_empty() && token != "--" {
+                    let name = token.split('=').next().unwrap_or(token);
+                    let takes_value = !token.contains('=')
+                        && current_subcommands
+                            .iter()
+                            .flat_map(|sub| &sub.options)
+                            .any(|opt| opt.matches_name(name) && opt.expects_value());
+                    tokens_consumed += 1;
+                    if takes_value {
+                        tokens_consumed =
+                            Self::next_argv_index(&parsed.raw_args, tokens_consumed) + 1;
+                    }
+                    continue;
+                }
                 break;
             } else {
                 // Token doesn't match any subcommand, stop scanning

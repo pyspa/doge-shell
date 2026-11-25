@@ -24,15 +24,7 @@
       "description": "Be verbose",
       "takes_value": false,
       "required": false,
-      "multiple": true
-    },
-    {
-      "long": "--quiet",
-      "short": "-q",
-      "description": "Show less information for query and search",
-      "takes_value": false,
-      "required": false,
-      "multiple": true
+      "multiple": false
     },
     {
       "long": "--root",
@@ -73,6 +65,117 @@
       "takes_value": false,
       "required": false,
       "multiple": false
+    },
+    {
+      "long": "--arch",
+      "description": "Set an alternate architecture",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": false
+    },
+    {
+      "long": "--cachedir",
+      "description": "Set an alternate package cache location",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--color",
+      "description": "Colorize the output",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "auto",
+          "always",
+          "never"
+        ]
+      },
+      "multiple": false
+    },
+    {
+      "long": "--confirm",
+      "description": "Always ask for confirmation",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--debug",
+      "description": "Display debug messages",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--disable-download-timeout",
+      "description": "Use relaxed timeouts for download",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--disable-sandbox",
+      "description": "Disables all sandbox features used for the downloader process",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--disable-sandbox-filesystem",
+      "description": "Disables the filesystem part of the downloader process sandbox",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--disable-sandbox-network",
+      "description": "Disables network isolation for scriptlets and hooks",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--disable-sandbox-syscalls",
+      "description": "Disables the syscalls part of the downloader process sandbox",
+      "takes_value": false,
+      "multiple": false
+    },
+    {
+      "long": "--gpgdir",
+      "description": "Set an alternate home directory for GnuPG",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": false
+    },
+    {
+      "long": "--hookdir",
+      "description": "Set an alternate hook location",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": true
+    },
+    {
+      "long": "--logfile",
+      "description": "Set an alternate log file",
+      "takes_value": true,
+      "value_type": {
+        "type": "File",
+        "data": {}
+      },
+      "multiple": false
+    },
+    {
+      "long": "--sysroot",
+      "description": "Operate on a mounted guest system (root-only)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Directory"
+      },
+      "multiple": false
     }
   ],
   "subcommands": [
@@ -97,7 +200,7 @@
           "description": "Upgrade installed packages",
           "takes_value": false,
           "required": false,
-          "multiple": false
+          "multiple": true
         },
         {
           "short": "-s",
@@ -165,7 +268,7 @@
           "description": "View all packages belonging to a group",
           "takes_value": false,
           "required": false,
-          "multiple": false
+          "multiple": true
         },
         {
           "short": "-p",
@@ -173,6 +276,90 @@
           "description": "Print the targets instead of performing the operation",
           "takes_value": false,
           "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--nodeps",
+          "short": "-d",
+          "description": "Skip dependency version checks (-dd to skip all checks)",
+          "takes_value": false,
+          "multiple": true
+        },
+        {
+          "long": "--list",
+          "short": "-l",
+          "description": "View a list of packages in a repo",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Show less information for query and search",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--assume-installed",
+          "description": "Add a virtual package to satisfy dependencies",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--ignore",
+          "description": "Ignore a package upgrade (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.sync_package"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--ignoregroup",
+          "description": "Ignore a group upgrade (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.sync_group"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--noprogressbar",
+          "description": "Do not show a progress bar when downloading files",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--noscriptlet",
+          "description": "Do not execute the install scriptlet if one exists",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--overwrite",
+          "description": "Overwrite conflicting files (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--print-format",
+          "description": "Specify how the targets should be printed",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
           "multiple": false
         }
       ],
@@ -182,7 +369,12 @@
           "description": "Package name to install",
           "required": false,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "pacman.package" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.sync_package"
+            }
+          }
         }
       ],
       "subcommands": []
@@ -200,7 +392,7 @@
           "description": "Remove dependencies not required by other packages",
           "takes_value": false,
           "required": false,
-          "multiple": false
+          "multiple": true
         },
         {
           "short": "-n",
@@ -233,6 +425,49 @@
           "takes_value": false,
           "required": false,
           "multiple": false
+        },
+        {
+          "long": "--nodeps",
+          "short": "-d",
+          "description": "Skip dependency version checks (-dd to skip all checks)",
+          "takes_value": false,
+          "multiple": true
+        },
+        {
+          "long": "--assume-installed",
+          "description": "Add a virtual package to satisfy dependencies",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--dbonly",
+          "description": "Only modify database entries, not package files",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--noprogressbar",
+          "description": "Do not show a progress bar when downloading files",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--noscriptlet",
+          "description": "Do not execute the install scriptlet if one exists",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--print-format",
+          "description": "Specify how the targets should be printed",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": false
         }
       ],
       "arguments": [
@@ -241,7 +476,12 @@
           "description": "Package name to remove",
           "required": true,
           "multiple": true,
-          "type": { "type": "Dynamic", "data": { "provider": "pacman.package" } }
+          "type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.installed_package"
+            }
+          }
         }
       ],
       "subcommands": []
@@ -307,7 +547,7 @@
           "description": "List packages not required by any other package",
           "takes_value": false,
           "required": false,
-          "multiple": false
+          "multiple": true
         },
         {
           "short": "-u",
@@ -342,10 +582,32 @@
           "multiple": true
         },
         {
+          "short": "-c",
           "long": "--changelog",
           "description": "View the changelog of a package",
           "takes_value": false,
           "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--groups",
+          "short": "-g",
+          "description": "View all members of a package group",
+          "takes_value": false,
+          "multiple": true
+        },
+        {
+          "long": "--file",
+          "short": "-p",
+          "description": "Query a package file instead of the database",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Show less information for query and search",
+          "takes_value": false,
           "multiple": false
         }
       ],
@@ -356,7 +618,10 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "String"
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.installed_package"
+            }
           }
         }
       ],
@@ -389,6 +654,96 @@
           "takes_value": false,
           "required": false,
           "multiple": false
+        },
+        {
+          "long": "--nodeps",
+          "short": "-d",
+          "description": "Skip dependency version checks (-dd to skip all checks)",
+          "takes_value": false,
+          "multiple": true
+        },
+        {
+          "long": "--print",
+          "short": "-p",
+          "description": "Print the targets instead of performing the operation",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--downloadonly",
+          "short": "-w",
+          "description": "Download packages but do not install/upgrade anything",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--assume-installed",
+          "description": "Add a virtual package to satisfy dependencies",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--dbonly",
+          "description": "Only modify database entries, not package files",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--ignore",
+          "description": "Ignore a package upgrade (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.sync_package"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--ignoregroup",
+          "description": "Ignore a group upgrade (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "Dynamic",
+            "data": {
+              "provider": "pacman.sync_group"
+            }
+          },
+          "multiple": true
+        },
+        {
+          "long": "--noprogressbar",
+          "description": "Do not show a progress bar when downloading files",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--noscriptlet",
+          "description": "Do not execute the install scriptlet if one exists",
+          "takes_value": false,
+          "multiple": false
+        },
+        {
+          "long": "--overwrite",
+          "description": "Overwrite conflicting files (can be used more than once)",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": true
+        },
+        {
+          "long": "--print-format",
+          "description": "Specify how the targets should be printed",
+          "takes_value": true,
+          "value_type": {
+            "type": "String"
+          },
+          "multiple": false
         }
       ],
       "arguments": [
@@ -401,8 +756,17 @@
             "type": "File",
             "data": {
               "extensions": [
-                "pkg.tar.xz",
-                "pkg.tar.zst"
+                ".pkg.tar",
+                ".pkg.tar.zst",
+                ".pkg.tar.xz",
+                ".pkg.tar.gz",
+                ".pkg.tar.bz2",
+                ".pkg.tar.lrz",
+                ".pkg.tar.lzo",
+                ".pkg.tar.Z",
+                ".pkg.tar.lz4",
+                ".pkg.tar.lz",
+                ".pkg.tar.lzma"
               ]
             }
           }
@@ -426,14 +790,6 @@
           "multiple": true
         },
         {
-          "short": "-s",
-          "long": "--search",
-          "description": "Search package file names for matching strings",
-          "takes_value": false,
-          "required": false,
-          "multiple": false
-        },
-        {
           "short": "-x",
           "long": "--regex",
           "description": "Enable searching using regular expressions",
@@ -450,11 +806,16 @@
           "multiple": false
         },
         {
-          "short": "-o",
-          "long": "--owns",
-          "description": "Query the package that owns a file",
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Show less information for query and search",
           "takes_value": false,
-          "required": false,
+          "multiple": false
+        },
+        {
+          "long": "--machinereadable",
+          "description": "Produce machine-readable output",
+          "takes_value": false,
           "multiple": false
         }
       ],
@@ -465,8 +826,7 @@
           "required": false,
           "multiple": true,
           "type": {
-            "type": "Dynamic",
-            "data": { "provider": "pacman.package" }
+            "type": "String"
           }
         }
       ],
@@ -502,11 +862,10 @@
           "multiple": true
         },
         {
-          "short": "-t",
-          "long": "--check-optional-deps",
-          "description": "Check optional dependencies of a package",
+          "long": "--quiet",
+          "short": "-q",
+          "description": "Suppress output of success messages",
           "takes_value": false,
-          "required": false,
           "multiple": false
         }
       ],
@@ -518,7 +877,9 @@
           "multiple": true,
           "type": {
             "type": "Dynamic",
-            "data": { "provider": "pacman.package" }
+            "data": {
+              "provider": "pacman.installed_package"
+            }
           }
         }
       ],
@@ -539,7 +900,9 @@
           "multiple": true,
           "type": {
             "type": "Dynamic",
-            "data": { "provider": "pacman.package" }
+            "data": {
+              "provider": "pacman.installed_package"
+            }
           }
         }
       ],

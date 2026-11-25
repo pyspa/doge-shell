@@ -131,3 +131,12 @@ fn only_a_uuid_can_start_a_run_child() {
         assert!(spawn_run_child(bad).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn timeout_includes_writers_that_outlive_the_shell() {
+    let outcome = run_command(&run("echo ready; sleep 12 &", 1));
+    assert!(outcome.timed_out);
+    assert_eq!(outcome.exit_code, TIMED_OUT);
+    assert_eq!(outcome.stdout, "ready\n");
+    assert!(outcome.duration < Duration::from_secs(8));
+}

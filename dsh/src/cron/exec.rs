@@ -19,7 +19,9 @@
 
 use anyhow::{Context as _, Result};
 use dsh_types::cron::job::ClaimedRun;
-use std::io::Read;
+use std::fs::File;
+use std::io::{self, Read};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -85,63 +87,86 @@ pub fn run_command(run: &ClaimedRun) -> CommandOutcome {
     wait_with_deadline(child, timeout, started)
 }
 
-/// Waits for `child`, draining both pipes from their own threads.
-///
-/// Reading after the wait would deadlock the moment a command produces more
-/// than a pipe buffer, which is exactly the sort of job someone schedules.
+/// Keep the group leader waitable until both output pipes close. Its PID
+/// pins the group identity if a descendant outlives the shell and keeps a
+/// writer open past the deadline.
 fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> CommandOutcome {
-    let mut stdout_pipe = child.stdout.take();
-    let mut stderr_pipe = child.stderr.take();
-    let stdout_reader = std::thread::spawn(move || read_to_string(&mut stdout_pipe));
-    let stderr_reader = std::thread::spawn(move || read_to_string(&mut stderr_pipe));
-
+    let mut pipes = [
+        child.stdout.take().map(OwnedFd::from).map(File::from),
+        child.stderr.take().map(OwnedFd::from).map(File::from),
+    ];
+    let mut output = [Vec::new(), Vec::new()];
     let mut timed_out = false;
     let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    timed_out = true;
-                    // The child has its own process group, so the whole
-                    // pipeline goes, not just `sh`.
-                    kill_group(&child);
-                    let _ = child.wait();
-                    break None;
-                }
-                std::thread::sleep(POLL_INTERVAL);
+        if pipes.iter().all(Option::is_none) {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {}
+                Err(_) => break None,
             }
-            Err(_) => break None,
         }
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            timed_out = true;
+        } else if drain_ready(&mut pipes, &mut output, remaining.min(POLL_INTERVAL)).is_ok() {
+            continue;
+        }
+        kill_group(&child);
+        let _ = child.wait();
+        break None;
     };
 
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
-    let exit_code = if timed_out {
-        TIMED_OUT
-    } else {
-        // A signalled child has no exit code; report it the way the shell does
-        // elsewhere rather than inventing a success.
-        status
-            .and_then(|status| status.code())
-            .unwrap_or(SPAWN_FAILED)
-    };
-
+    let [stdout, stderr] = output.map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
     CommandOutcome {
         stdout,
         stderr,
-        exit_code,
+        exit_code: if timed_out {
+            TIMED_OUT
+        } else {
+            status
+                .and_then(|status| status.code())
+                .unwrap_or(SPAWN_FAILED)
+        },
         timed_out,
         duration: started.elapsed(),
     }
 }
 
-fn read_to_string<R: Read>(pipe: &mut Option<R>) -> String {
-    let Some(pipe) = pipe.as_mut() else {
-        return String::new();
-    };
-    let mut buffer = Vec::new();
-    let _ = pipe.read_to_end(&mut buffer);
-    String::from_utf8_lossy(&buffer).into_owned()
+fn drain_ready(
+    pipes: &mut [Option<File>; 2],
+    output: &mut [Vec<u8>; 2],
+    wait: Duration,
+) -> io::Result<()> {
+    let mut descriptors = pipes.each_ref().map(|pipe| libc::pollfd {
+        fd: pipe.as_ref().map_or(-1, AsRawFd::as_raw_fd),
+        events: libc::POLLIN,
+        revents: 0,
+    });
+    // The descriptors borrow the two live pipe readers. A negative fd
+    // tells poll to ignore a stream which already reached EOF.
+    let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, wait.as_millis().max(1) as i32) };
+    if ready < 0 {
+        let error = io::Error::last_os_error();
+        return if error.kind() == io::ErrorKind::Interrupted {
+            Ok(())
+        } else {
+            Err(error)
+        };
+    }
+    let mut buffer = [0; 16384];
+    for (index, descriptor) in descriptors.iter().enumerate() {
+        if descriptor.revents != 0
+            && let Some(pipe) = &mut pipes[index]
+        {
+            match pipe.read(&mut buffer) {
+                Ok(0) => pipes[index] = None,
+                Ok(n) => output[index].extend_from_slice(&buffer[..n]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn kill_group(child: &Child) {

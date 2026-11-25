@@ -6,8 +6,18 @@ pub(crate) enum TaskInput<'a> {
     Start { edit: bool, prompt: &'a str },
 }
 
+/// Skip shell whitespace and line continuations before the marker. Once the
+/// prompt starts, its text belongs to the chat and remains literal.
+pub(crate) fn chat_prompt(input: &str) -> Option<&str> {
+    let mut start = input.trim_start();
+    while let Some(rest) = start.strip_prefix("\\\n") {
+        start = rest.trim_start();
+    }
+    start.strip_prefix('!')
+}
+
 pub(crate) fn classify(input: &str) -> Option<Result<TaskInput<'_>, &'static str>> {
-    let rest = input.trim_start().strip_prefix("!&")?;
+    let rest = chat_prompt(input)?.strip_prefix('&')?;
     if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
         return Some(Err("!& needs whitespace before the task text"));
     }
@@ -75,6 +85,19 @@ pub(crate) fn output_pipe(input: &str) -> Option<(&str, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_marker_can_follow_continuations_without_changing_the_prompt() {
+        assert_eq!(chat_prompt(" \\\n \\\n!a\\\nb"), Some("a\\\nb"));
+        assert!(matches!(
+            classify("\\\n!& fix what's here\\\nnow"),
+            Some(Ok(TaskInput::Start {
+                edit: false,
+                prompt: "fix what's here\\\nnow"
+            }))
+        ));
+        assert_eq!(chat_prompt(r"\!escaped"), None);
+    }
 
     #[test]
     fn task_text_is_literal_and_options_are_only_read_at_the_start() {

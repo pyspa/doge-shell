@@ -260,3 +260,22 @@ script = """bookmark add words printf '<%s>\\n' 'a  b' '' "it's"; bookmark run w
 [case.expect]
 status = 0
 stdout_contains = ["<a  b>\n<>\n<it's>\n", "[x  y]\n[]\n"]
+
+[[case]]
+id = "simple-command.continued-foreground-chat-marker"
+class = "dogesh"
+mode = "command"
+script = "\\\n!"
+[case.expect]
+status = 1
+stderr_contains = ["message content required"]
+
+[[case]]
+id = "simple-command.continued-task-marker-preserves-next-line"
+class = "dogesh"
+mode = "interactive"
+script = "\\\n!& fix what's broken\necho NEXT"
+[case.expect]
+status = 0
+stdout_exact = "NEXT\n"
+stderr_contains = ["!& requires an interactive input/output TTY"]

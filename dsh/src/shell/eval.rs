@@ -71,7 +71,7 @@ pub async fn eval_str(
         return Ok(0);
     }
 
-    if let Some(rest) = input.trim_start().strip_prefix('!') {
+    if let Some(rest) = crate::ai_task_input::chat_prompt(&input) {
         if let Err(e) = disable_raw_mode() {
             tracing::error!("Failed to disable raw mode: {}", e);
         } else {
@@ -594,7 +594,8 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
 /// the `|>` capture syntax and not the `||` OR operator. Leading whitespace
 /// is allowed.
 pub(crate) fn is_smart_pipe_input(input: &str) -> bool {
-    let trimmed = input.trim_start();
+    let joined = crate::parser::check::join_continued_lines(input);
+    let trimmed = joined.trim_start();
     trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||")
 }
 
@@ -691,6 +692,9 @@ mod tests {
 
     #[test]
     fn test_smart_pipe_detection() {
+        assert!(is_smart_pipe_input("\\\n|"));
+        assert!(!is_smart_pipe_input("|\\\n| true"));
+        assert!(!is_smart_pipe_input("|\\\n> output"));
         assert!(!is_smart_pipe_input("ls -la"));
         assert!(!is_smart_pipe_input("echo hello"));
         assert!(!is_smart_pipe_input("|| echo fail"));

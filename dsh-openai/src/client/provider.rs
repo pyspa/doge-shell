@@ -25,10 +25,9 @@ impl ChatGptClient {
             })?
         };
         let responses = if subscription {
-            Some(crate::responses::ResponsesTransport::new(
+            Some(crate::responses::ResponsesTransport::subscription(
                 crate::auth::AuthStore::new(config.auth_dir()?.to_path_buf()),
-                config.default_model().into(),
-                config.timeout(),
+                config,
             )?)
         } else if config.api_protocol() == crate::ApiProtocol::Responses {
             Some(crate::responses::ResponsesTransport::api_key(

@@ -29,13 +29,13 @@ async fn subscription_alias_catalog_selection_and_inference_use_oauth() {
     .await;
     let config = crate::OpenAiConfig::from_getter(|key| match key {
         crate::PROVIDER_ENV => Some("chatgpt".into()),
+        crate::REASONING_EFFORT_ENV => Some("high".into()),
+        crate::TIMEOUT_ENV => Some("2".into()),
         "OPENAI_API_KEY" => Some("mock-api-must-not-use".into()),
         _ => None,
     });
     config.validate().unwrap();
-    let mut transport =
-        ResponsesTransport::new(store, config.default_model().into(), Duration::from_secs(2))
-            .unwrap();
+    let mut transport = ResponsesTransport::subscription(store, &config).unwrap();
     let models = transport.models_at(&endpoint, None).await.unwrap();
     assert_eq!(
         models,
@@ -70,10 +70,22 @@ async fn subscription_alias_catalog_selection_and_inference_use_oauth() {
         );
         assert!(!request.contains("mock-api-must-not-use"));
     }
-    assert!(requests[1].contains("\"model\":\"catalog-first\""));
+    let body: Value = serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(body["reasoning"]["effort"], "high");
+    assert_eq!(body["model"], "catalog-first");
     assert!(requests[1].contains("\"store\":false"));
     assert!(requests[1].contains("\"stream\":true"));
 }
+fn subscription_fixture(store: AuthStore, timeout_secs: u64) -> ResponsesTransport {
+    let config = crate::OpenAiConfig::from_getter(|key| match key {
+        crate::PROVIDER_ENV => Some("chatgpt_subscription".into()),
+        crate::SUBSCRIPTION_MODEL_ENV => Some("model".into()),
+        crate::TIMEOUT_ENV => Some(timeout_secs.to_string()),
+        _ => None,
+    });
+    ResponsesTransport::subscription(store, &config).unwrap()
+}
+
 fn account() -> Account {
     Account {
         label: "mock-label".into(),
@@ -105,7 +117,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
     let response = normalize(
         &completed(output.clone()),
         &opts,
-        &Wire::subscription("model", &account),
+        &Wire::subscription("model", &account, None),
     )
     .unwrap();
     let assistant = crate::turn::interpret_response(&response)
@@ -122,7 +134,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
             json!({"role":"tool","tool_call_id":"exact-call-id","content":"{\"matches\":1}"}),
         ],
         &opts,
-        &Wire::subscription("model", &account),
+        &Wire::subscription("model", &account, None),
     )
     .unwrap();
     assert_eq!(body["input"][0]["role"], "developer");
@@ -145,7 +157,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[response["choices"][0]["message"].clone()],
             &opts,
-            &Wire::subscription("other-model", &account)
+            &Wire::subscription("other-model", &account, None)
         )
         .is_err()
     );
@@ -155,7 +167,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[response["choices"][0]["message"].clone()],
             &opts,
-            &Wire::subscription("model", &other)
+            &Wire::subscription("model", &other, None)
         )
         .is_err()
     );
@@ -163,7 +175,7 @@ fn native_history_replays_order_and_encrypted_reasoning_after_serialization() {
         build_body(
             &[json!({"role":"assistant","content":"legacy"})],
             &opts,
-            &Wire::subscription("model", &account)
+            &Wire::subscription("model", &account, None)
         )
         .is_err()
     );
@@ -178,7 +190,7 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
             normalize(
                 &completed(vec![valid]),
                 &options(),
-                &Wire::subscription("model", &account())
+                &Wire::subscription("model", &account(), None)
             )
             .is_ok()
         );
@@ -200,7 +212,7 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
             normalize(
                 &completed(vec![invalid]),
                 &options(),
-                &Wire::subscription("model", &account())
+                &Wire::subscription("model", &account(), None)
             )
             .is_err()
         );
@@ -209,7 +221,7 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
         normalize(
             &completed(vec![call.clone(), call]),
             &options(),
-            &Wire::subscription("model", &account())
+            &Wire::subscription("model", &account(), None)
         )
         .is_err()
     );
@@ -217,7 +229,7 @@ fn function_calls_allow_omission_but_refuse_unknown_namespace_duplicate_ids_and_
         normalize(
             &completed(vec![json!({"type":"tool_search_call"})]),
             &options(),
-            &Wire::subscription("model", &account())
+            &Wire::subscription("model", &account(), None)
         )
         .is_err()
     );
@@ -228,7 +240,7 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
     let body = build_body(
         &[json!({"role":"user","content":"JSON please"})],
         &opts,
-        &Wire::subscription("model", &account()),
+        &Wire::subscription("model", &account(), None),
     )
     .unwrap();
     for field in [
@@ -254,7 +266,7 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
         normalize(
             &completed(vec![message("{\"ok\":true}")]),
             &opts,
-            &Wire::subscription("model", &account())
+            &Wire::subscription("model", &account(), None)
         )
         .is_ok()
     );
@@ -262,7 +274,7 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
         normalize(
             &completed(vec![message("partial JSON")]),
             &opts,
-            &Wire::subscription("model", &account())
+            &Wire::subscription("model", &account(), None)
         )
         .is_err()
     );
@@ -271,14 +283,19 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
         normalize(
             &completed(vec![refusal]),
             &opts,
-            &Wire::subscription("model", &account())
+            &Wire::subscription("model", &account(), None)
         )
         .unwrap_err()
         .to_string()
         .contains("refused")
     );
     let json_object = opts.with_response_format(Some(json!({"type":"json_object"})));
-    let body = build_body(&[], &json_object, &Wire::subscription("model", &account())).unwrap();
+    let body = build_body(
+        &[],
+        &json_object,
+        &Wire::subscription("model", &account(), None),
+    )
+    .unwrap();
     assert_eq!(body["text"]["format"]["type"], "json_object");
     assert!(
         body["input"][0]["content"]
@@ -287,7 +304,14 @@ fn unsupported_fields_stay_absent_and_structured_output_is_preserved() {
             .contains("JSON")
     );
     let unsupported = json_object.with_response_format(Some(json!({"type":"unknown"})));
-    assert!(build_body(&[], &unsupported, &Wire::subscription("model", &account())).is_err());
+    assert!(
+        build_body(
+            &[],
+            &unsupported,
+            &Wire::subscription("model", &account(), None)
+        )
+        .is_err()
+    );
 }
 #[test]
 fn usage_maps_cached_tokens_and_missing_usage_remains_unknown() {
@@ -297,7 +321,7 @@ fn usage_maps_cached_tokens_and_missing_usage_remains_unknown() {
     let mapped = normalize(
         &native,
         &ChatRequestOptions::new(),
-        &Wire::subscription("model", &account()),
+        &Wire::subscription("model", &account(), None),
     )
     .unwrap();
     let usage = crate::usage::TokenUsage::from_response(&mapped).unwrap();
@@ -310,7 +334,7 @@ fn usage_maps_cached_tokens_and_missing_usage_remains_unknown() {
             &normalize(
                 &native,
                 &ChatRequestOptions::new(),
-                &Wire::subscription("model", &account())
+                &Wire::subscription("model", &account(), None)
             )
             .unwrap()
         )
@@ -329,8 +353,7 @@ async fn sse_multiple_deltas_complete_and_wire_contract() {
             completed(vec![message("Hello")]),
         );
     let (endpoint, requests, task) = mock_http(vec![(200, "text/event-stream", sse)]).await;
-    let mut transport =
-        ResponsesTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
+    let mut transport = subscription_fixture(store, 3);
     transport.endpoint = endpoint;
     let mut visible = String::new();
     let result = transport
@@ -354,6 +377,7 @@ async fn sse_multiple_deltas_complete_and_wire_contract() {
     let body: Value = serde_json::from_str(request[0].split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(body["store"], false);
     assert_eq!(body["stream"], true);
+    assert!(body.get("reasoning").is_none());
 }
 #[tokio::test]
 async fn partial_failure_eof_incomplete_and_quota_never_retry() {
@@ -374,8 +398,7 @@ async fn partial_failure_eof_incomplete_and_quota_never_retry() {
             event("response.output_text.delta", "delta", json!("partial")) + &terminal,
         )])
         .await;
-        let mut transport =
-            ResponsesTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
+        let mut transport = subscription_fixture(store, 2);
         transport.endpoint = endpoint;
         let before = crate::usage::session_total();
         let mut visible = String::new();
@@ -404,8 +427,7 @@ async fn partial_failure_eof_incomplete_and_quota_never_retry() {
         r#"{"error":{"code":"usage_limit","message":"mock-secret"}}"#.into(),
     )])
     .await;
-    let mut transport =
-        ResponsesTransport::new(store, "model".into(), Duration::from_secs(2)).unwrap();
+    let mut transport = subscription_fixture(store, 2);
     transport.endpoint = endpoint;
     let error = transport
         .send(&[], &ChatRequestOptions::new(), None, &mut |_| {})
@@ -438,8 +460,7 @@ async fn transient_before_visible_retries_and_cancellation_is_typed() {
         ),
     ])
     .await;
-    let mut transport =
-        ResponsesTransport::new(store, "model".into(), Duration::from_secs(3)).unwrap();
+    let mut transport = subscription_fixture(store, 3);
     transport.endpoint = endpoint;
     assert!(
         transport
@@ -550,7 +571,7 @@ fn api_key_history_is_flat_bound_to_its_identity_and_skips_unresolvable_reasonin
             "other",
             None,
         ),
-        Wire::subscription("gpt-4.1", &account()),
+        Wire::subscription("gpt-4.1", &account(), None),
     ] {
         assert!(build_body(std::slice::from_ref(&assistant), &opts, &other).is_err());
     }
@@ -585,7 +606,14 @@ fn api_key_incomplete_is_a_named_cut_and_never_runs_a_partial_call() {
     native["incomplete_details"] = json!({"reason":"content_filter"});
     let response = normalize(&native, &options(), &api_key_wire("gpt-5-mini")).unwrap();
     assert_eq!(response["choices"][0]["finish_reason"], "content_filter");
-    assert!(normalize(&native, &options(), &Wire::subscription("m", &account())).is_err());
+    assert!(
+        normalize(
+            &native,
+            &options(),
+            &Wire::subscription("m", &account(), None)
+        )
+        .is_err()
+    );
 }
 #[tokio::test]
 async fn api_key_rejected_field_is_dropped_once_and_json_replies_are_accepted() {

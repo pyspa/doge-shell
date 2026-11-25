@@ -296,6 +296,129 @@ fn with_usage(mut response: Value) -> Value {
     response
 }
 
+#[test]
+fn reaching_the_turn_budget_in_a_summary_stops_all_later_requests() {
+    let _guard = session::tests::TEST_LOCK.lock().unwrap();
+    let _state = session::tests::isolated_state_home();
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    proxy
+        .vars
+        .insert(session::SESSION_TTL_KEY.into(), "600".into());
+    proxy.vars.insert(TURN_TOKEN_BUDGET_KEY.into(), "15".into());
+    let mcp = Arc::new(RwLock::new(McpManager::default()));
+    for finish in ["stop", "length"] {
+        session::session_reset();
+        let mut summary = with_usage(final_answer("short summary"));
+        summary["choices"][0]["finish_reason"] = json!(finish);
+        let large = "x".repeat(MAX_BUFFER_CHARS + 1);
+        let client = ScriptedClient::new(vec![final_answer(&large), summary]);
+        let mut run = |input| {
+            chat_with_tools(
+                &client, input, None, None, None, None, &mcp, None, &mut proxy,
+            )
+        };
+        assert!(run("first goal").is_ok());
+        let error = run("follow-up").unwrap_err();
+        assert!(error.contains("stopped after 15 tokens"), "{error}");
+        let seen = client.tools_seen();
+        assert_eq!(seen.len(), 2);
+        assert!(!seen[0].is_empty());
+        assert!(
+            seen[1].is_empty(),
+            "the only follow-up request was the summary"
+        );
+    }
+    session::session_reset();
+}
+
+#[test]
+fn billed_summary_failures_stop_before_the_main_request() {
+    use axum::{Json, Router, routing::post};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _guard = session::tests::TEST_LOCK.lock().unwrap();
+    let _state = session::tests::isolated_state_home();
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    proxy
+        .vars
+        .insert(session::SESSION_TTL_KEY.into(), "600".into());
+    proxy.vars.insert(TURN_TOKEN_BUDGET_KEY.into(), "15".into());
+    let mcp = Arc::new(RwLock::new(McpManager::default()));
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    for (sse, status) in [
+        (false, "completed"),
+        (true, "completed"),
+        (false, "failed"),
+        (true, "failed"),
+    ] {
+        session::session_reset();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let received = calls.clone();
+        let app = Router::new().route(
+            "/responses",
+            post(move |Json(body): Json<Value>| {
+                let request = received.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let content = if request == 0 {
+                        json!({"type":"output_text", "text":"x".repeat(MAX_BUFFER_CHARS + 1)})
+                    } else if body.get("tools").is_some() {
+                        json!({"type":"output_text", "text":"unexpected main request"})
+                    } else {
+                        json!({"type":"refusal", "refusal":"declined"})
+                    };
+                    let status = if request == 0 { "completed" } else { status };
+                    let mut native = json!({
+                        "status":status, "usage":{"input_tokens":10, "output_tokens":5},
+                        "output":[{"type":"message", "role":"assistant", "content":[content]}]
+                    });
+                    if status == "failed" {
+                        native["error"] = json!({"code": "server_error"});
+                    }
+                    if sse {
+                        let event = json!({"type":format!("response.{status}"), "response":native});
+                        (
+                            [("content-type", "text/event-stream")],
+                            format!("data: {event}\n\n"),
+                        )
+                    } else {
+                        ([("content-type", "application/json")], native.to_string())
+                    }
+                }
+            }),
+        );
+        let listener = runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = runtime.spawn(async move { axum::serve(listener, app).await });
+        let config = OpenAiConfig::from_getter(|key| match key {
+            "AI_CHAT_API_KEY" => Some("test-key".into()),
+            "AI_CHAT_BASE_URL" => Some(base_url.clone()),
+            "AI_CHAT_ALLOW_INSECURE_HTTP" => Some("1".into()),
+            _ => None,
+        });
+        let client = ChatGptClient::try_from_config(&config).unwrap();
+        let mut run = |input| {
+            chat_with_tools(
+                &client, input, None, None, None, None, &mcp, None, &mut proxy,
+            )
+        };
+        run("initial question").unwrap();
+        let error = run("follow-up").unwrap_err();
+        server.abort();
+        assert!(error.contains("stopped after 15 tokens"), "{error}");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+    session::session_reset();
+}
+
 /// Tool Search v2 loads at tool granularity within one agent turn: the
 /// first request lacks the hidden tool, `tool_search` names it, and the
 /// second request carries exactly its schema - while the group toggle

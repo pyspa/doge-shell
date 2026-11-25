@@ -440,6 +440,71 @@ async fn partial_failure_eof_incomplete_and_quota_never_retry() {
     assert_eq!(requests.lock().unwrap().len(), 1);
 }
 #[tokio::test]
+async fn billed_subscription_failures_preserve_usage_and_do_not_retry() {
+    for kind in ["response.failed", "response.incomplete"] {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, _) = seeded_store(dir.path().join("subscription-auth"));
+        let terminal = event(
+            kind,
+            "response",
+            json!({
+                "error": {"code": "server_error"},
+                "usage": {"input_tokens": 10, "output_tokens": 5}
+            }),
+        );
+        let (endpoint, requests, task) =
+            mock_http(vec![(200, "text/event-stream", terminal)]).await;
+        let mut transport = subscription_fixture(store, 2);
+        transport.endpoint = endpoint;
+        let error = transport
+            .send(&[], &ChatRequestOptions::new(), None, &mut |_| {})
+            .await
+            .unwrap_err();
+        let api = error
+            .downcast_ref::<crate::ApiError>()
+            .expect("provider diagnostic");
+        assert!(api.message.contains("server_error"));
+        let mut usage = crate::usage::TokenUsage::default();
+        usage.add_error_usage(&error);
+        assert_eq!((usage.requests, usage.total_tokens()), (1, 15));
+        task.await.unwrap();
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+}
+#[tokio::test]
+async fn unbilled_server_error_before_output_can_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, _) = seeded_store(dir.path().join("subscription-auth"));
+    let failure = event(
+        "response.failed",
+        "response",
+        json!({
+            "error": {"code": "server_error"},
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+        }),
+    );
+    let success = event(
+        "response.completed",
+        "response",
+        completed(vec![message("ok")]),
+    );
+    let (endpoint, requests, task) = mock_http(vec![
+        (200, "text/event-stream", failure),
+        (200, "text/event-stream", success),
+    ])
+    .await;
+    let mut transport = subscription_fixture(store, 3);
+    transport.endpoint = endpoint;
+    let result = transport
+        .send(&[], &ChatRequestOptions::new(), None, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(crate::turn::answer_text(&result).unwrap(), "ok");
+    task.await.unwrap();
+    assert_eq!(requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn transient_before_visible_retries_and_cancellation_is_typed() {
     let dir = tempfile::tempdir().unwrap();
     let (store, _) = seeded_store(dir.path().join("subscription-auth"));

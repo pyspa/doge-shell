@@ -51,9 +51,16 @@ pub(crate) struct ResponsesTransport {
 // Dropping a sent request does not prove zero billing. Account for absent terminal usage.
 struct AttemptUsage(bool);
 impl AttemptUsage {
-    fn completed(&mut self, native: &Value) {
-        crate::usage::record_response(&json!({"usage":wire::normalized_usage(native)}));
+    fn completed(&mut self, native: &Value, result: Result<Value>) -> Result<Value> {
+        let response_usage = json!({"usage":wire::normalized_usage(native)});
+        crate::usage::record_response(&response_usage);
         self.0 = true;
+        match result {
+            Err(error) if !response_usage["usage"].is_null() => {
+                Err(crate::usage::FailedResponse::attach(error, response_usage))
+            }
+            result => result,
+        }
     }
 }
 impl Drop for AttemptUsage {
@@ -205,6 +212,15 @@ impl ResponsesTransport {
                         .await
                     {
                         Ok(response) => return Ok(response),
+                        // A billed terminal response belongs to this request, even if its
+                        // error code would qualify for transport recovery on its own.
+                        Err(error)
+                            if error
+                                .downcast_ref::<crate::usage::FailedResponse>()
+                                .is_some_and(crate::usage::FailedResponse::consumed_tokens) =>
+                        {
+                            return Err(error);
+                        }
                         Err(error)
                             if !visible
                                 && !wire.is_subscription()
@@ -333,8 +349,7 @@ impl ResponsesTransport {
                     self.timeout,
                 )
                 .await?;
-                attempt_usage.completed(&native);
-                return finish(&native, options, wire);
+                return attempt_usage.completed(&native, finish(&native, options, wire));
             }
             bail!("Responses API requires an SSE stream.");
         }
@@ -377,16 +392,13 @@ impl ResponsesTransport {
                         let native = event
                             .get("response")
                             .ok_or_else(|| anyhow!("Responses completion has no response."))?;
-                        attempt_usage.completed(native);
-                        let normalized = normalize(native, options, wire)?;
-                        return Ok(normalized);
+                        return attempt_usage.completed(native, normalize(native, options, wire));
                     }
                     Some("response.incomplete") if !wire.is_subscription() => {
                         let native = event
                             .get("response")
                             .ok_or_else(|| anyhow!("Responses completion has no response."))?;
-                        attempt_usage.completed(native);
-                        return finish(native, options, wire);
+                        return attempt_usage.completed(native, finish(native, options, wire));
                     }
                     Some(kind @ ("response.failed" | "response.incomplete" | "error")) => {
                         let code = auth::identifier(
@@ -407,13 +419,17 @@ impl ResponsesTransport {
                         } else {
                             String::new()
                         };
-                        return Err(crate::ApiError {
+                        let error = crate::ApiError {
                             status: (kind != "response.incomplete" && code == "server_error")
                                 .then_some(500),
                             retry_after: None,
                             message: format!("Responses did not complete (code={code}).{hint}"),
                         }
-                        .into());
+                        .into();
+                        return match event.get("response") {
+                            Some(native) => attempt_usage.completed(native, Err(error)),
+                            None => Err(error),
+                        };
                     }
                     _ => {}
                 }

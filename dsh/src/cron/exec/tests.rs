@@ -53,11 +53,9 @@ fn stderr_is_captured_separately() {
 fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
     let outcome = run_command(&run("seq 1 20000", 30));
     assert_eq!(outcome.exit_code, 0);
-    assert!(
-        outcome.stdout.lines().count() == 20_000,
-        "{}",
-        outcome.stdout.len()
-    );
+    assert!(outcome.stdout.len() <= crate::cron::store::MAX_STREAM_BYTES);
+    assert!(outcome.stdout.starts_with("1\n2\n"));
+    assert!(outcome.stdout.ends_with("20000\n"));
 }
 
 #[test]

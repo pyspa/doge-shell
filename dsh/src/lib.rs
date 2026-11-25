@@ -55,6 +55,7 @@ pub mod safety;
 pub mod secrets;
 pub mod shell;
 pub mod snippet;
+mod stream_mask;
 mod subcommands;
 pub mod suggestion;
 pub mod terminal;

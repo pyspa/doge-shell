@@ -138,12 +138,20 @@ impl Drop for SurvivingChild {
 /// Spawn `dogesh -c <script>` with caller-chosen stdio. The caller must hold
 /// `common::serial_guard()`; this spawner takes no lock itself.
 fn spawn_parent(script: &str, stdout: Stdio, stderr: Stdio) -> ObservedParent {
+    spawn_parent_with_input(&["-c", script], Stdio::null(), stdout, stderr)
+}
+
+fn spawn_parent_with_input(
+    args: &[&str],
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+) -> ObservedParent {
     let temp = TempDir::new().expect("isolated dsh test directory");
     let workdir = temp.path().join("work");
     std::fs::create_dir_all(&workdir).expect("isolated dsh cwd");
     let child = Command::new(env!("CARGO_BIN_EXE_dogesh"))
-        .arg("-c")
-        .arg(script)
+        .args(args)
         .current_dir(&workdir)
         .env("HOME", temp.path().join("home"))
         .env("XDG_STATE_HOME", temp.path().join("state"))
@@ -152,7 +160,7 @@ fn spawn_parent(script: &str, stdout: Stdio, stderr: Stdio) -> ObservedParent {
         .env("LC_ALL", "C")
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
         .process_group(0)
@@ -698,4 +706,24 @@ fn non_job_control_doubly_nested_substitution_group_ignores_sigint() {
     killpg(survivor.pgid, Signal::SIGINT).expect("group SIGINT must deliver");
     assert_survives_for(survivor.pid, Duration::from_secs(2));
     survivor.cleanup();
+}
+
+#[test]
+fn stdin_eof_releases_async_job_before_it_finishes() {
+    use std::io::Write;
+    let _guard = common::serial_guard();
+    let (input, mut writer) = std::io::pipe().unwrap();
+    // The bounded wait also releases the helper if the harness fails early.
+    let mut gate = tempfile::NamedTempFile::new().unwrap();
+    gate.write_all(b"i=0\nwhile [ ! -f release ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i+1)); done\n[ -f release ] && echo done > marker\n").unwrap();
+    writeln!(writer, "sh '{}' &", gate.path().display()).unwrap();
+    drop(writer);
+    let mut parent = spawn_parent_with_input(&[], input.into(), Stdio::null(), Stdio::null());
+    assert!(parent.wait_exit(Duration::from_secs(5)).success());
+    std::fs::write(parent.workdir.join("release"), "").unwrap();
+    poll_file_contains(
+        &parent.workdir.join("marker"),
+        "done",
+        Duration::from_secs(5),
+    );
 }

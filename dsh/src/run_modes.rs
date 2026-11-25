@@ -351,6 +351,21 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
     ctx.interactive = false;
 
     let evaluated = shell.eval_str(&mut ctx, command.to_string(), false).await;
+    let status = match evaluated {
+        Ok(code) => {
+            shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);
+            debug!("run command mode {:?} : {:?}", command, &code);
+            ExitCode::from(code.clamp(0, 255) as u8)
+        }
+        Err(err) => {
+            display_user_error(&err, true);
+            ExitCode::FAILURE
+        }
+    };
+    finish_noninteractive(shell, status)
+}
+
+fn finish_noninteractive(shell: &mut Shell, status: ExitCode) -> ExitCode {
     // Normal execution-environment exit: release `Active` known-async
     // ownership so background helpers outlive this process instead of being
     // waited on (the old exit drain) or killed (`Drop` safety cleanup).
@@ -369,17 +384,7 @@ pub async fn execute_command(shell: &mut Shell, _ctx: &mut Context, command: &st
         return ExitCode::FAILURE;
     }
     let _ = shell.detach_process_substitution_consumers_for_normal_exit();
-    match evaluated {
-        Ok(code) => {
-            shell.record_history_outcome(command, code, std::time::Duration::from_millis(0), None);
-            debug!("run command mode {:?} : {:?}", command, &code);
-            ExitCode::from(code.clamp(0, 255) as u8)
-        }
-        Err(err) => {
-            display_user_error(&err, true);
-            ExitCode::FAILURE
-        }
-    }
+    status
 }
 
 pub async fn execute_lisp(shell: &mut Shell, _ctx: &mut Context, lisp_script: &str) -> ExitCode {
@@ -536,7 +541,10 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     }
                     let input = std::mem::take(&mut pending);
                     if run_piped_command(&mut repl, ctx, &input).await {
-                        return last_status_exit_code(repl.shell);
+                        return finish_noninteractive(
+                            repl.shell,
+                            last_status_exit_code(repl.shell),
+                        );
                     }
                 }
                 Err(err) => {
@@ -551,7 +559,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
             run_piped_command(&mut repl, ctx, &pending).await;
         }
         // End of input: like `sh < script`, the status of the last command.
-        last_status_exit_code(repl.shell)
+        finish_noninteractive(repl.shell, last_status_exit_code(repl.shell))
     }
 }
 

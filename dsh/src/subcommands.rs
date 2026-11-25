@@ -17,6 +17,17 @@ pub async fn handle_completion_command(
 
     info!("Generating completion for command: {}", command);
 
+    let output_path = match CompletionGenerationService::prepare_output_path(
+        &command,
+        output.map(PathBuf::from),
+        force,
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    };
     let help_text = {
         let env = Environment::new();
         let guard = env.read();
@@ -92,18 +103,6 @@ pub async fn handle_completion_command(
         eprintln!("Error: Generated completion failed validation: {e:#}");
         return ExitCode::FAILURE;
     }
-
-    let output_path = match output {
-        Some(path) => PathBuf::from(path),
-        None => match CompletionGenerationService::default_output_path(&command) {
-            Ok(path) => path,
-            Err(e) => {
-                error!("Failed to resolve completion output path: {:#}", e);
-                eprintln!("Error: Failed to resolve completion output path: {e:#}");
-                return ExitCode::FAILURE;
-            }
-        },
-    };
 
     match CompletionGenerationService::write_json_atomic(
         &output_path,

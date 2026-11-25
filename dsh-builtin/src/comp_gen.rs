@@ -97,6 +97,22 @@ pub fn command_async<'a>(
             return run_non_generate_action(ctx, action);
         };
 
+        let output_path = if options.check_only || options.stdout {
+            None
+        } else {
+            match CompletionGenerationService::prepare_output_path(
+                &command_name,
+                None,
+                options.force,
+            ) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    ctx.write_stderr(&format!("Error: {error:#}")).ok();
+                    return ExitStatus::ExitedWith(1);
+                }
+            }
+        };
+
         let log_to_stderr = options.stdout;
         let snapshot = match proxy.command_runtime_snapshot() {
             Ok(snapshot) => snapshot,
@@ -117,21 +133,10 @@ pub fn command_async<'a>(
                 }
             };
 
-        if options.check_only {
-            ctx.write_stdout("OK").ok();
+        let Some(path) = output_path else {
+            ctx.write_stdout(if options.check_only { "OK" } else { &json })
+                .ok();
             return ExitStatus::ExitedWith(0);
-        }
-        if options.stdout {
-            ctx.write_stdout(&json).ok();
-            return ExitStatus::ExitedWith(0);
-        }
-
-        let path = match CompletionGenerationService::default_output_path(&command_name) {
-            Ok(path) => path,
-            Err(e) => {
-                ctx.write_stderr(&format!("Error: {:#}", e)).ok();
-                return ExitStatus::ExitedWith(1);
-            }
         };
         match CompletionGenerationService::write_json_atomic(
             &path,

@@ -1,8 +1,9 @@
+use crate::repl::terminal_state::RawModeRestore;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, enable_raw_mode},
 };
 use ratatui::{
     Terminal,
@@ -20,11 +21,10 @@ pub struct DiagnosticContext {
     pub exit_code: i32,
 }
 
-struct TerminalGuard;
+struct AlternateScreenGuard;
 
-impl Drop for TerminalGuard {
+impl Drop for AlternateScreenGuard {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
         let _ = execute!(io::stdout(), LeaveAlternateScreen);
         let _ = execute!(io::stdout(), crossterm::cursor::Show);
     }
@@ -57,10 +57,11 @@ impl AiChatUi {
 
     pub fn run(&mut self) -> Result<UiOutcome> {
         let mut stdout = stdout();
+        let _raw_mode = RawModeRestore::new();
         enable_raw_mode()?;
+        let _screen = AlternateScreenGuard;
         execute!(stdout, EnterAlternateScreen)?;
 
-        let _guard = TerminalGuard; // Ensures cleanup on ? or panic
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend)?;
 
@@ -167,7 +168,6 @@ impl AiChatUi {
             }
         }
 
-        // Drop guard restores the terminal
         Ok(outcome)
     }
 

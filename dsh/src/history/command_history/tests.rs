@@ -140,7 +140,13 @@ fn reload_snapshot_imports_another_sessions_command() {
 
     let mut history = History::new();
     history.db = Some(db.clone());
-    let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+    let snapshot = History::load_reload_snapshot(
+        &db,
+        history.revision,
+        Vec::new(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
 
     assert_eq!(
         history.apply_reload_snapshot(snapshot),
@@ -155,7 +161,13 @@ fn stale_reload_snapshot_does_not_overwrite_local_append() {
     let db = crate::db::Db::new(dir.path().join("history.db")).unwrap();
     let mut history = History::new();
     history.db = Some(db.clone());
-    let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+    let snapshot = History::load_reload_snapshot(
+        &db,
+        history.revision,
+        Vec::new(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
 
     history.add_test_entry("local while loading");
 
@@ -175,7 +187,13 @@ fn reload_snapshot_is_discarded_during_navigation() {
     history
         .write_batch(vec![("git status".to_string(), 100)])
         .unwrap();
-    let snapshot = History::load_reload_snapshot(&db, history.revision, Vec::new()).unwrap();
+    let snapshot = History::load_reload_snapshot(
+        &db,
+        history.revision,
+        Vec::new(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
     assert_eq!(history.back().as_deref(), Some("git status"));
 
     assert_eq!(
@@ -201,7 +219,21 @@ fn reload_snapshot_keeps_an_unpersisted_local_entry() {
         hostname: Some("local-host".to_string()),
     };
 
-    let snapshot = History::load_reload_snapshot(&db, 0, vec![local.clone()]).unwrap();
+    let mut history = History::new();
+    History::track_pending_entry(
+        &mut history.pending_persistence,
+        1,
+        &local,
+        1,
+        Some((local.when, 1, 0)),
+    );
+    let snapshot = History::load_reload_snapshot(
+        &db,
+        0,
+        history.pending_entries_snapshot(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
 
     assert_eq!(snapshot.histories.len(), 1);
     let restored = &snapshot.histories[0];
@@ -235,7 +267,7 @@ fn failed_persistence_ack_keeps_the_local_reload_delta() {
 
     let pending = history.pending_entries_snapshot();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].entry, "keep after sqlite failure");
+    assert_eq!(pending[0].entry.entry, "keep after sqlite failure");
 }
 
 fn sample_entry(

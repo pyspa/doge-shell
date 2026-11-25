@@ -124,3 +124,22 @@ fn piped_input_mode_writes_no_terminal_control_sequences() {
     // either: the escape would end up in whatever consumes stdout.
     assert_eq!(output.stdout, b"hi\n");
 }
+
+#[test]
+fn unreadable_piped_input_fails_and_stops_the_script() {
+    for input in [
+        b"echo before\n\xff\necho after\n".as_slice(),
+        b"echo before\necho 'unfinished\n\xff\necho after\n",
+    ] {
+        let output = common::run_dsh_with_input(
+            std::iter::empty::<&str>(),
+            Some(input),
+            DEFAULT_CASE_TIMEOUT,
+        );
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        assert_eq!(output.stdout, b"before\n");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Error reading input:"), "{stderr}");
+        assert!(!stderr.contains("Error executing"), "{stderr}");
+    }
+}

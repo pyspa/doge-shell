@@ -951,7 +951,7 @@ fn history_can_be_narrowed_to_failures() {
 #[test]
 fn a_notepad_round_trips_and_lives_outside_the_agent_state() {
     let (dir, store) = store();
-    store
+    let id = store
         .create(&spec("probe", "1h"), &env(), NOW, false)
         .unwrap();
 
@@ -959,7 +959,7 @@ fn a_notepad_round_trips_and_lives_outside_the_agent_state() {
     store.set_notepad("probe", "remember this").unwrap();
     assert_eq!(store.notepad("probe").unwrap(), "remember this");
 
-    let path = store.notepad_path("probe");
+    let path = store.notepad_path(id);
     assert!(path.starts_with(root(&dir)), "{}", path.display());
     assert!(!path.to_string_lossy().contains("/agent/"));
 
@@ -987,8 +987,88 @@ fn a_notepad_is_capped() {
 #[test]
 fn a_notepad_path_cannot_escape_its_directory() {
     let (dir, store) = store();
-    let path = store.notepad_path("../../etc/passwd");
-    assert_eq!(path.parent().unwrap(), root(&dir).join("notepad"));
+    let id = store
+        .create(&spec("team/nightly", "1h"), &env(), NOW, false)
+        .unwrap();
+    let path = store.notepad_path(id);
+    assert_eq!(path.parent().unwrap(), root(&dir).join("notepad/by-id"));
+}
+
+#[test]
+fn notepads_follow_renames_and_survive_other_jobs_with_similar_names() {
+    let (_dir, store) = store();
+    for (name, note) in [("report.daily", "first"), ("report_daily", "second")] {
+        store.create(&spec(name, "1h"), &env(), NOW, false).unwrap();
+        store.set_notepad(name, note).unwrap();
+    }
+    store
+        .patch(
+            "report.daily",
+            &CronJobPatch {
+                name: Some("renamed".into()),
+                ..Default::default()
+            },
+            NOW,
+        )
+        .unwrap();
+    store
+        .create(&spec("report.daily", "1h"), &env(), NOW, false)
+        .unwrap();
+    assert_eq!(store.notepad("report.daily").unwrap(), "");
+    store.delete("report.daily").unwrap();
+    assert_eq!(store.notepad("renamed").unwrap(), "first");
+    assert_eq!(store.notepad("report_daily").unwrap(), "second");
+}
+
+#[test]
+fn legacy_notepads_migrate_once_and_ambiguous_and_unowned_files_survive() {
+    let (dir, store) = store();
+    let long_name = "nested/".repeat(44);
+    store
+        .create(&spec(&long_name, "1h"), &env(), NOW, false)
+        .unwrap();
+    for name in ["only", "report.daily", "report_daily"] {
+        store.create(&spec(name, "1h"), &env(), NOW, false).unwrap();
+    }
+    let migrated = store
+        .create(&spec("in-progress", "1h"), &env(), NOW, false)
+        .unwrap();
+    store
+        .set_notepad("in-progress", "already migrated")
+        .unwrap();
+    drop(store);
+    let legacy = root(&dir).join("notepad");
+    for name in ["only", "report_daily", "orphan", "in-progress"] {
+        std::fs::write(legacy.join(format!("{name}.md")), name).unwrap();
+    }
+    raw(&dir).pragma_update(None, "user_version", 2).unwrap();
+    let store = SqliteCronStore::open(&root(&dir)).unwrap();
+    assert_eq!(store.notepad(&long_name).unwrap(), "");
+    assert_eq!(store.notepad("only").unwrap(), "only");
+    assert_eq!(
+        std::fs::read_to_string(store.notepad_path(migrated)).unwrap(),
+        "already migrated"
+    );
+    assert_eq!(
+        std::fs::read_to_string(legacy.join("in-progress.md")).unwrap(),
+        "in-progress"
+    );
+    assert!(!legacy.join("only.md").exists());
+    for name in ["report.daily", "report_daily"] {
+        assert_eq!(store.notepad(name).unwrap(), "");
+    }
+    store.delete("report.daily").unwrap();
+    drop(store);
+    let reopened = SqliteCronStore::open(&root(&dir)).unwrap();
+    assert_eq!(reopened.notepad("report_daily").unwrap(), "");
+    assert_eq!(
+        std::fs::read_to_string(legacy.join("report_daily.md")).unwrap(),
+        "report_daily"
+    );
+    assert_eq!(
+        std::fs::read_to_string(legacy.join("orphan.md")).unwrap(),
+        "orphan"
+    );
 }
 
 #[test]

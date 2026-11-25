@@ -18,14 +18,15 @@
 //!
 //! # Migrations
 //!
-//! [`MIGRATIONS`] is append-only and `PRAGMA user_version` records how far a
-//! database has been taken. A store written by a **newer** dsh is refused
+//! `PRAGMA user_version` records the last completed migration. A store
+//! written by a **newer** dsh is refused
 //! rather than opened: with an external tick in the system crontab, an old
 //! binary can easily outlive an upgrade, and silently writing the old shape
 //! into a new schema is worse than not running.
 
 mod api;
 mod claim;
+mod notepads;
 mod rows;
 
 use rows::*;
@@ -131,8 +132,7 @@ CREATE INDEX incidents_open ON incidents(acked_at, opened_at DESC);
 const SCHEMA_V2: &str =
     "ALTER TABLE jobs ADD COLUMN individually_paused INTEGER NOT NULL DEFAULT 0;";
 
-/// Append only. The index of a statement is the `user_version` it produces.
-const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug)]
 pub struct SqliteCronStore {
@@ -185,7 +185,7 @@ impl SqliteCronStore {
              PRAGMA foreign_keys=ON;
              PRAGMA secure_delete=ON;",
         )?;
-        migrate(&mut connection)?;
+        migrate(&mut connection, root)?;
 
         Ok(Self {
             connection: Mutex::new(connection),
@@ -196,8 +196,8 @@ impl SqliteCronStore {
     /// Where a job's notepad lives. Under the cron state directory, never the
     /// agent one: `SafetyGuard::task_file_allowed` refuses that whole subtree,
     /// and the notepad has to stay writable as ordinary job notes.
-    pub fn notepad_path(&self, job: &str) -> PathBuf {
-        self.root.join("notepad").join(format!("{}.md", slug(job)))
+    pub fn notepad_path(&self, job_id: i64) -> PathBuf {
+        notepads::path(&self.root, job_id)
     }
 
     /// Where a job's single-run lease lives.
@@ -210,30 +210,36 @@ impl SqliteCronStore {
     }
 }
 
-fn migrate(connection: &mut Connection) -> Result<()> {
-    let current: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    let current = usize::try_from(current).unwrap_or(usize::MAX);
-    if current > MIGRATIONS.len() {
+fn migrate(connection: &mut Connection, root: &Path) -> Result<()> {
+    if connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?
+        == SCHEMA_VERSION
+    {
+        return Ok(());
+    }
+    // Another dsh may finish the upgrade while this connection waits for the write lock.
+    let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let current = tx.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
+    if !(0..=SCHEMA_VERSION).contains(&current) {
         bail!(
-            "cron store is at schema {current} but this dsh only knows {}; \
-             upgrade dsh, or move the store aside to start over",
-            MIGRATIONS.len()
+            "cron store is at schema {current} but this dsh only knows {SCHEMA_VERSION}; \
+             upgrade dsh, or move the store aside to start over"
         );
     }
-    for (index, statements) in MIGRATIONS.iter().enumerate().skip(current) {
-        let tx = connection.transaction()?;
-        tx.execute_batch(statements)?;
-        tx.pragma_update(None, "user_version", (index + 1) as i64)?;
-        tx.commit()?;
+    if current < 1 {
+        tx.execute_batch(SCHEMA_V1)?;
     }
+    if current < 2 {
+        tx.execute_batch(SCHEMA_V2)?;
+    }
+    if current < 3 {
+        notepads::migrate(&tx, root)?;
+    }
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
 }
 
-/// Reduces a job name to something safe for a filename.
-///
-/// Job names are already restricted at the CLI, so this is a second line
-/// rather than the only one - but a notepad path is handed to an agent as a
-/// write grant, and a name that escaped its directory would widen that grant.
+/// Filename mapping used by legacy notes and leases.
 fn slug(name: &str) -> String {
     let cleaned: String = name
         .chars()

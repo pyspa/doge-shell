@@ -22,6 +22,8 @@ const LEDGER_RETENTION_SECONDS: i64 = 90 * 24 * 60 * 60;
 const LEDGER_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const LEDGER_MAX_EVENTS: i64 = 10_000;
 
+mod batch;
+mod merge;
 mod navigation;
 mod persist;
 mod picker_metadata;
@@ -173,7 +175,7 @@ enum HistoryMsg {
     },
     Reload {
         base_revision: u64,
-        pending_entries: Vec<Entry>,
+        pending_entries: Vec<PendingHistoryEntry>,
         complete: CommandHistoryReloadCallback,
     },
 }
@@ -186,11 +188,20 @@ struct HistoryPersistAck {
 }
 
 #[derive(Debug, Clone)]
+struct FailedOccurrences {
+    count: i64,
+    latest: (i64, u64, usize),
+}
+
+#[derive(Debug, Clone)]
 struct PendingHistoryEntry {
     persistence_id: u64,
     first_persistence_id: u64,
     // One obligation per command occurrence sent to persistence, not per snapshot.
     unconfirmed_operations: usize,
+    // Most recent occurrence in (timestamp, batch, input position) order.
+    // Metadata-only outcomes and imports of older rows do not promote a command.
+    last_occurrence: Option<(i64, u64, usize)>,
     entry: Entry,
 }
 
@@ -400,6 +411,9 @@ pub struct History {
     /// Entries whose most recent SQLite write has not been acknowledged yet.
     /// Only this small delta is copied into a background reload request.
     pending_persistence: HashMap<String, PendingHistoryEntry>,
+    /// Occurrences missing from SQLite after a failed transaction. Ownership
+    /// moves to the FIFO writer when background persistence starts.
+    failed_occurrences: HashMap<String, FailedOccurrences>,
     persist_ack_rx: Option<Arc<ParkingMutex<Receiver<HistoryPersistAck>>>>,
     next_persistence_id: u64,
     /// Ordered writes made before startup attaches the persistence owner.
@@ -426,6 +440,7 @@ impl History {
             normalized_entries: Vec::new(),
             revision: 0,
             pending_persistence: HashMap::new(),
+            failed_occurrences: HashMap::new(),
             persist_ack_rx: None,
             next_persistence_id: 0,
             startup_writes: None,
@@ -457,6 +472,7 @@ impl History {
             normalized_entries: Vec::new(),
             revision: 0,
             pending_persistence: HashMap::new(),
+            failed_occurrences: HashMap::new(),
             persist_ack_rx: None,
             next_persistence_id: 0,
             startup_writes: None,

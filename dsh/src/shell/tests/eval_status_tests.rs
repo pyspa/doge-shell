@@ -121,3 +121,58 @@ async fn fatal_expansion_still_aborts_lists_and_success_preserves_gating() {
             .contains_key("SELECTED")
     );
 }
+
+#[tokio::test]
+async fn only_commands_reach_aggregate_history_and_the_output_ledger() {
+    let _guard = SHELL_PROCESS_TEST_LOCK.lock().await;
+    let (mut shell, mut ctx) = test_shell();
+    ctx.save_history = true;
+    let root = tempfile::tempdir().unwrap();
+    let db = crate::db::Db::new(root.path().join("history.db")).unwrap();
+    let mut history = crate::history::History::new();
+    history.db = Some(db.clone());
+    shell.cmd_history = Some(Arc::new(ParkingMutex::new(history)));
+    shell.environment.write().variable_state.command_ledger_mode =
+        crate::history::CommandLedgerMode::Output;
+
+    for input in [
+        "!&invalid",
+        "blocks explain 1;",
+        "\"blocks\" explain 1",
+        "CHECK_HISTORY='! literal'",
+    ] {
+        let code = shell
+            .eval_str(&mut ctx, input.into(), false)
+            .await
+            .unwrap_or(1);
+        shell.record_history_outcome(
+            input,
+            code,
+            std::time::Duration::ZERO,
+            Some("synthetic output"),
+        );
+    }
+    shell.record_pipe_command("! false", 0, std::time::Duration::ZERO, "child output");
+    // Inspect both raw tables so hiding a bad row at read time cannot pass this test.
+    for table in ["command_history", "command_events"] {
+        let connection = db.get_connection();
+        let mut statement = connection
+            .prepare(&format!("SELECT command FROM {table} ORDER BY id"))
+            .unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows, ["CHECK_HISTORY='! literal'", "! false"], "{table}");
+    }
+    let output: String = db
+        .get_connection()
+        .query_row(
+            "SELECT output FROM command_events WHERE command = '! false'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(output, "child output");
+}

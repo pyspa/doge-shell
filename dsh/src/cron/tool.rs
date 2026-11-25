@@ -69,7 +69,7 @@ fn list(store: &SqliteCronStore) -> Result<serde_json::Value> {
 fn show(store: &SqliteCronStore, request: &CronToolRequest) -> Result<serde_json::Value> {
     let selector = request.job.as_deref().context("`job` is required")?;
     let job = store.get(selector)?;
-    let notepad_path = store.notepad_path(&job.name);
+    let notepad_path = store.notepad_path(job.id);
     Ok(job_detail_json(&job, &notepad_path))
 }
 

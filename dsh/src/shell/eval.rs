@@ -60,25 +60,8 @@ pub async fn eval_str(
     // exit with the terminal left raw.
     let _raw_mode = crate::repl::terminal_state::RawModeRestore::new();
 
-    if ctx.save_history
-        && let Some(ref mut history) = shell.cmd_history
-    {
-        // Apply secret filtering before saving to history
-        let filtered_cmd = shell
-            .environment
-            .read()
-            .policy_state
-            .secret_manager
-            .process_for_history(&input);
-
-        if let Some(cmd_to_save) = filtered_cmd {
-            let mut history = history.lock();
-            if let Err(e) = history.write_history(&cmd_to_save) {
-                debug!("Failed to write history: {}", e);
-            }
-        } else {
-            debug!("Command skipped from history due to secret detection");
-        }
+    if ctx.save_history {
+        shell.record_command_input(&input);
     }
 
     if let Some(task_input) = crate::ai_task_input::classify(&input) {

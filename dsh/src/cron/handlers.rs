@@ -106,7 +106,7 @@ pub(super) fn show(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> R
     let rest = without_flags(args, &["--json"]);
     let name = rest.first().context("expected a job name")?;
     let job = store.get(name)?;
-    let notepad_path = store.notepad_path(&job.name);
+    let notepad_path = store.notepad_path(job.id);
     if has_flag(args, "--json") {
         let value = job_detail_json(&job, &notepad_path);
         ctx.write_stdout(&serde_json::to_string_pretty(&value)?)?;
@@ -556,7 +556,7 @@ mod tests {
             .unwrap();
 
         let job = store.get(&spec.name).unwrap();
-        let notepad_path = store.notepad_path(&job.name);
+        let notepad_path = store.notepad_path(job.id);
         assert!(
             job_detail_json(&job, &notepad_path)["last"].is_null(),
             "a job that has never run has no `last`"

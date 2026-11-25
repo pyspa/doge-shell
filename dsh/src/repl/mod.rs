@@ -469,7 +469,6 @@ impl<'a> Repl<'a> {
         self.input.insert_str(&insert_chunk);
 
         if matches!(mode, SuggestionAcceptMode::Full) && inserted_all {
-            self.learn_suggestion(&suggestion.full);
             self.ai_ui.suggestion_manager.clear();
         }
 

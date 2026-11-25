@@ -158,6 +158,7 @@ struct ToolCallAccumulator {
 pub struct DeltaAggregator {
     role: Option<String>,
     content: String,
+    reasoning_content: Option<String>,
     tool_calls: Vec<ToolCallAccumulator>,
     finish_reason: Option<String>,
     usage: Option<Value>,
@@ -188,6 +189,12 @@ impl DeltaAggregator {
 
         if let Some(role) = delta.get("role").and_then(Value::as_str) {
             self.role = Some(role.to_string());
+        }
+        if let Some(reasoning) = delta.get("reasoning_content").and_then(Value::as_str) {
+            self.accumulated_bytes = self.accumulated_bytes.saturating_add(reasoning.len());
+            self.reasoning_content
+                .get_or_insert_with(String::new)
+                .push_str(reasoning);
         }
 
         let text_delta = delta.get("content").and_then(Value::as_str).map(|text| {
@@ -234,8 +241,8 @@ impl DeltaAggregator {
         }
     }
 
-    /// Bytes of text, tool-call names, and tool-call arguments collected so
-    /// far. The client refuses the stream once this passes
+    /// Bytes of text (including provider reasoning), tool-call names, and
+    /// tool-call arguments collected so far. The client refuses the stream once this passes
     /// [`MAX_SSE_BUFFER_BYTES`], the same cap the Responses transport keeps:
     /// the per-event buffer cap alone let many small events grow the reply
     /// without bound.
@@ -261,6 +268,9 @@ impl DeltaAggregator {
             "role".to_string(),
             json!(self.role.unwrap_or_else(|| "assistant".to_string())),
         );
+        if let Some(reasoning) = self.reasoning_content {
+            message.insert("reasoning_content".to_string(), Value::String(reasoning));
+        }
         message.insert(
             "content".to_string(),
             if self.content.is_empty() {
@@ -409,6 +419,18 @@ mod tests {
             TurnOutcome::Answer(content) => assert_eq!(content, "Hello"),
             other => panic!("expected an answer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn reasoning_fragments_count_toward_the_stream_limit() {
+        let mut aggregator = DeltaAggregator::new();
+        for text in ["a", "次"] {
+            assert_eq!(
+                aggregator.apply(&json!({"choices":[{"delta":{"reasoning_content":text}}]})),
+                None
+            );
+        }
+        assert_eq!(aggregator.accumulated_bytes(), "a次".len());
     }
 
     #[test]

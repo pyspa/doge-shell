@@ -10,6 +10,14 @@ use std::time::Duration;
 fn run_worker(outcome: &str) {
     let _guard = common::serial_guard();
     let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config/dogesh");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.lisp"),
+        r#"(vset "AI_CHAT_MODEL" "offline-model")
+           (vset "AI_CHAT_REASONING_EFFORT" "high")"#,
+    )
+    .unwrap();
     let child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -23,7 +31,7 @@ fn run_worker(outcome: &str) {
         .env("AI_CHAT_API_KEY", "synthetic-offline-key")
         .env("AI_CHAT_PROVIDER", "api_key")
         .env("AI_CHAT_API", "chat_completions")
-        .env("AI_CHAT_MODEL", "offline-model")
+        .env("AI_CHAT_REASONING_EFFORT", "low")
         .env("AI_CHAT_ALLOW_INSECURE_HTTP", "1")
         .env("AI_CHAT_STREAM", "0")
         .env("AI_CHAT_HOOKS", "off")
@@ -86,7 +94,11 @@ fn foreground_chat_status_worker() {
             .parse()
             .unwrap();
         assert!(length < 2 * 1024 * 1024, "fixture body limit");
-        stream.read_exact(&mut vec![0; length]).unwrap();
+        let mut body = vec![0; length];
+        stream.read_exact(&mut body).unwrap();
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(request["model"], "offline-model");
+        assert_eq!(request["reasoning_effort"], "high");
         let (status, body) = if success {
             (
                 "200 OK",
@@ -107,6 +119,7 @@ fn foreground_chat_status_worker() {
             .write()
             .set_shell_var("AI_CHAT_BASE_URL".into(), endpoint);
         let mut shell = doge_shell::shell::Shell::new(environment);
+        shell.lisp_engine.borrow().run_config_lisp().unwrap();
         let mut ctx = dsh_types::Context::new_safe(shell.pid, shell.pgid, false);
         ctx.interactive = false;
         let (seed, prior, expected) = if success {

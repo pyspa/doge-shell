@@ -528,7 +528,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                         continue;
                     }
                     let input = std::mem::take(&mut pending);
-                    if run_piped_command(&mut repl, ctx, input.trim_end()).await {
+                    if run_piped_command(&mut repl, ctx, &input).await {
                         return finish_noninteractive(
                             repl.shell,
                             last_status_exit_code(repl.shell),
@@ -544,7 +544,7 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         // Input ended mid-command: run it anyway so the syntax error is
         // reported, as `sh` reports an unexpected end of file.
         if !pending.trim().is_empty() {
-            run_piped_command(&mut repl, ctx, pending.trim_end()).await;
+            run_piped_command(&mut repl, ctx, &pending).await;
         }
         // End of input: like `sh < script`, the status of the last command.
         finish_noninteractive(repl.shell, last_status_exit_code(repl.shell))

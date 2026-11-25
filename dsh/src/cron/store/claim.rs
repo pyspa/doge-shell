@@ -89,8 +89,32 @@ impl SqliteCronStore {
         }
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let claimed = Self::claim_due_in(&tx, now, owner, limit, trigger)?;
+        tx.commit()?;
+        Ok(claimed)
+    }
 
-        Self::reap_leases_in(&tx, now)?;
+    /// Exercise the same lease recovery and unique slot checks as a tick, then
+    /// discard the changes before returning the names that would be started.
+    pub(in crate::cron) fn preview_due_jobs(&self, now: i64, limit: usize) -> Result<Vec<String>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let claimed = Self::claim_due_in(&tx, now, "dry-run", limit, RunTrigger::Tick)?;
+        tx.rollback()?;
+        Ok(claimed.into_iter().map(|run| run.job_name).collect())
+    }
+
+    fn claim_due_in(
+        tx: &rusqlite::Transaction<'_>,
+        now: i64,
+        owner: &str,
+        limit: usize,
+        trigger: RunTrigger,
+    ) -> Result<Vec<ClaimedRun>> {
+        Self::reap_leases_in(tx, now)?;
 
         let due: Vec<(i64, i64, u64, u64, Schedule)> = {
             let mut statement = tx.prepare(
@@ -162,7 +186,6 @@ impl SqliteCronStore {
             claimed.push(run);
         }
 
-        tx.commit()?;
         Ok(claimed)
     }
 

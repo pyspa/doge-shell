@@ -290,58 +290,48 @@ pub enum Continuity {
 }
 
 /// Check continuity without consuming the stored conversation.
-pub fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
+pub(super) fn check(
+    ttl: Option<Duration>,
+    identity: &str,
+    scope: Option<&Path>,
+    check_provider: impl FnOnce(&ConversationManager) -> Result<(), String>,
+) -> Result<Continuity, String> {
     let Some(ttl) = ttl else {
-        return Continuity::Fresh {
+        return Ok(Continuity::Fresh {
             stored: slot().is_some()
                 || (!BACKGROUND_SESSION.load(Ordering::SeqCst)
                     && crate::config_paths::chat_session_file().is_file()),
             reasons: Vec::new(),
-        };
+        });
     };
-    if let Some(found) = slot().as_ref().map(|stored| {
-        (
-            stored.id.clone(),
-            stored.manager.buffer.len(),
-            stored.stored_at.elapsed(),
-            stored.scope.clone(),
-            mismatch_reasons(stored, ttl, identity, scope),
-        )
-    }) {
-        let (id, messages, age, scope, reasons) = found;
+    let describe = |stored: &StoredSession| {
+        let reasons = mismatch_reasons(stored, ttl, identity, scope);
         if reasons.is_empty() {
-            return Continuity::Continued {
-                id,
-                messages,
-                age,
-                scope,
-            };
-        }
-        return Continuity::Fresh {
-            stored: true,
-            reasons,
-        };
-    }
-    // Restart recovery: the slot is empty but a previous shell may have left
-    // a conversation on disk.
-    if let Some(stored) = read_persisted() {
-        let reasons = mismatch_reasons(&stored, ttl, identity, scope);
-        if reasons.is_empty() {
-            return Continuity::Continued {
-                id: stored.id,
+            check_provider(&stored.manager)
+                .map_err(|reason| format!("chat session {} is stored. {reason}", stored.id))?;
+            Ok(Continuity::Continued {
+                id: stored.id.clone(),
                 messages: stored.manager.buffer.len(),
                 age: stored.stored_at.elapsed(),
-                scope: stored.scope,
-            };
+                scope: stored.scope.clone(),
+            })
+        } else {
+            Ok(Continuity::Fresh {
+                stored: true,
+                reasons,
+            })
         }
-        return Continuity::Fresh {
-            stored: true,
-            reasons,
-        };
+    };
+    if let Some(stored) = slot().as_ref() {
+        return describe(stored);
     }
-    Continuity::Fresh {
-        stored: false,
-        reasons: Vec::new(),
+    // After a restart, inspect the disk copy without consuming or migrating it.
+    match read_persisted() {
+        Some(stored) => describe(&stored),
+        None => Ok(Continuity::Fresh {
+            stored: false,
+            reasons: Vec::new(),
+        }),
     }
 }
 
@@ -380,37 +370,35 @@ pub(super) enum Claim {
 
 /// Claim the stored conversation when it still matches this turn.
 ///
-/// Always removes it first, so a turn that dies mid-flight cannot leave a
-/// stale conversation behind.
-pub(super) fn take(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Claim {
+/// Validate the provider before consuming either copy. A rejected turn leaves
+/// the original conversation and its idle deadline available to its owner.
+pub(super) fn take(
+    ttl: Option<Duration>,
+    identity: &str,
+    scope: Option<&Path>,
+    bind: impl FnOnce(&mut ConversationManager) -> Result<(), String>,
+) -> Result<Claim, String> {
     let Some(ttl) = ttl else {
-        return Claim::Fresh(None);
+        return Ok(Claim::Fresh(None));
     };
-    // A restart leaves the slot empty with the conversation on disk.
-    let Some(stored) = slot().take().or_else(read_persisted) else {
-        return Claim::Fresh(None);
+    let mut guard = slot();
+    let Some(mut stored) = guard.take().or_else(read_persisted) else {
+        return Ok(Claim::Fresh(None));
     };
-
     if let Some(reason) = mismatch(&stored, ttl, identity, scope) {
-        return Claim::Fresh(Some(reason));
+        return Ok(Claim::Fresh(Some(reason)));
     }
 
-    // The turn owns the conversation now: drop the file copy so a later
-    // `take` cannot resurrect it when this turn ends without storing (a new
-    // conversation that fails stores nothing). A mismatch above leaves the
-    // file alone - returning to the old project can still resume it until
-    // the next successful turn overwrites it.
+    if let Err(error) = bind(&mut stored.manager) {
+        *guard = Some(stored);
+        return Err(error);
+    }
     remove_persisted();
-
-    if let Some(reason) = mismatch(&stored, ttl, identity, scope) {
-        return Claim::Fresh(Some(reason));
-    }
-
-    Claim::Continued(Box::new(Carried {
+    Ok(Claim::Continued(Box::new(Carried {
         manager: stored.manager,
         id: stored.id,
         stored_at: stored.stored_at,
-    }))
+    })))
 }
 
 /// The id this turn will continue, without consuming the conversation.

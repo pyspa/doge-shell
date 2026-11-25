@@ -83,10 +83,8 @@ fn chat_with_tools(
     let mut iterations = 0usize;
     let mut turn_tokens = (0u64, 0u64, 0u64);
     let outcome: Result<String, String> = (|| {
-        // Set when this turn continues a stored conversation, so the final
-        // `store` below can keep the idle clock from restarting if this turn
-        // fails and is rewound. Fully local to this closure - nothing after
-        // it reads this.
+        // A carried session was already bound at claim. Preserve its idle
+        // deadline when rewinding a failed turn.
         let mut carried_stored_at: Option<Instant> = None;
         let submitted = setup.hook_ctx.fire(
             hooks::HookEvent::UserPromptSubmit,
@@ -126,7 +124,8 @@ fn chat_with_tools(
             setup.session_ttl,
             &setup.prompt.identity,
             setup.scope.as_deref(),
-        ) {
+            |manager| manager.bind_provider(client),
+        )? {
             session::Claim::Continued(carried) => {
                 let age = carried.stored_at.elapsed();
                 let soon = setup
@@ -141,9 +140,7 @@ fn chat_with_tools(
                 );
                 carried_stored_at = Some(carried.stored_at);
                 let mut manager = carried.manager;
-                // The carried conversation was pinned with the skills list as it
-                // stood then. Re-render it so a skill written last turn is visible
-                // this turn without discarding the conversation.
+                // Re-render the carried prompt so a skill written last turn is visible.
                 set_system_prompt(&mut manager, &setup.prompt.text);
                 // Recorded before this turn's own messages are added, so a
                 // failed turn can be rewound to exactly this point.
@@ -247,7 +244,9 @@ fn chat_with_tools(
                 set_system_prompt(&mut manager, &setup.prompt.text);
             }
         }
-        manager.bind_provider(client.cache_scope())?;
+        if carried_stored_at.is_none() {
+            manager.bind_provider(client)?;
+        }
         manager.transport_session_id = Some(setup.hook_ctx.session_id().to_owned());
         manager.instructions = instructions::InstructionContext::default();
         // The interactive registry belongs to `!` alone. A task polls
@@ -358,7 +357,7 @@ fn chat_with_tools(
                 setup.turn_token_budget,
             ));
 
-            if let Err(error) = manager.check_provider(&client.cache_scope()) {
+            if let Err(error) = manager.check_provider(&client.conversation_scope()) {
                 break Err(error);
             }
             // Compact by rule before paying a model to summarize. Superseded and

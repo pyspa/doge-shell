@@ -97,26 +97,42 @@ impl ConversationManager {
         client: &dyn ChatClient,
         proxy: &dyn ChatToolHost,
     ) -> bool {
-        task_cancelled(proxy) || self.check_provider(&client.cache_scope()).is_err()
+        task_cancelled(proxy) || self.check_provider(&client.conversation_scope()).is_err()
     }
     pub(super) fn check_provider(&self, scope: &str) -> Result<(), String> {
         if self.provider_scope.as_ref().is_some_and(|old| old != scope) {
-            return Err("Provider, model, or account changed. Run chat_reset before continuing this history.".into());
+            return Err("Provider settings changed. Restore the original settings to resume, or run chat_reset to start over.".into());
         }
         Ok(())
     }
-    pub(super) fn bind_provider(&mut self, scope: String) -> Result<(), String> {
+    pub(super) fn compatible_provider_scope(
+        &self,
+        client: &dyn ChatClient,
+    ) -> Result<String, String> {
+        let scope = client.conversation_scope();
         if scope.is_empty() {
-            return Ok(());
+            return Ok(scope);
         }
-        self.check_provider(&scope)?;
+        if let Some(old) = &self.provider_scope
+            && old != &scope
+            && !client.accepts_legacy_conversation_scope(old, &self.buffer)
+        {
+            self.check_provider(&scope)?;
+        }
         if self.provider_scope.is_none() && (self.summary.is_some() || !self.buffer.is_empty()) {
             return Err(
                 "This older history has no provider identity. Run chat_reset to migrate safely."
                     .into(),
             );
         }
-        self.provider_scope = Some(scope);
+        Ok(scope)
+    }
+
+    pub(super) fn bind_provider(&mut self, client: &dyn ChatClient) -> Result<(), String> {
+        let scope = self.compatible_provider_scope(client)?;
+        if !scope.is_empty() {
+            self.provider_scope = Some(scope);
+        }
         Ok(())
     }
 

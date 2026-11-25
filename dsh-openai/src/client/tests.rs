@@ -1071,6 +1071,39 @@ fn api_key_provider_defaults_to_responses_and_chat_completions_is_opt_in() {
     assert!(ChatGptClient::try_from_config(&config(Some("typo"))).is_err());
 }
 
+#[test]
+fn api_key_responses_history_survives_model_changes_but_caches_and_accounts_stay_isolated() {
+    use crate::ChatClient;
+
+    let make = |model: &str, key: &str, endpoint: &str, protocol| {
+        let config = OpenAiConfig::new(Some(key.into()), Some(endpoint.into()), Some(model.into()))
+            .with_api_protocol(protocol);
+        ChatGptClient::try_from_config(&config).unwrap()
+    };
+    let responses = crate::ApiProtocol::Responses;
+    let prior = make("old", TEST_API_KEY, TEST_BASE_URL, responses);
+    let next = make("new", TEST_API_KEY, TEST_BASE_URL, responses);
+    let other_key = make("old", "other", TEST_BASE_URL, responses);
+    let other_route = make("old", TEST_API_KEY, "https://other.invalid", responses);
+    let history = [json!({crate::responses::CONTINUATION: {"model": "old"}})];
+    assert_ne!(prior.cache_scope(), next.cache_scope());
+    assert_eq!(prior.conversation_scope(), next.conversation_scope());
+    assert!(next.accepts_legacy_conversation_scope(&prior.cache_scope(), &history));
+    assert!(prior.accepts_legacy_conversation_scope(&prior.cache_scope(), &[]));
+    for refused in [other_key, other_route] {
+        assert_ne!(prior.conversation_scope(), refused.conversation_scope());
+        assert!(!refused.accepts_legacy_conversation_scope(&prior.cache_scope(), &history));
+    }
+    let compat = make(
+        "old",
+        TEST_API_KEY,
+        TEST_BASE_URL,
+        crate::ApiProtocol::ChatCompletions,
+    );
+    assert_eq!(compat.conversation_scope(), compat.cache_scope());
+    assert_ne!(compat.conversation_scope(), prior.conversation_scope());
+}
+
 /// A chat/completions stream that never sends a newline (or never closes an
 /// event) used to grow the splitter's buffer without bound; the Responses
 /// transport already stopped at 16 MiB.

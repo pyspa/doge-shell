@@ -53,11 +53,9 @@ fn stderr_is_captured_separately() {
 fn output_larger_than_a_pipe_buffer_does_not_deadlock() {
     let outcome = run_command(&run("seq 1 20000", 30));
     assert_eq!(outcome.exit_code, 0);
-    assert!(
-        outcome.stdout.lines().count() == 20_000,
-        "{}",
-        outcome.stdout.len()
-    );
+    assert!(outcome.stdout.len() <= crate::cron::store::MAX_STREAM_BYTES);
+    assert!(outcome.stdout.starts_with("1\n2\n"));
+    assert!(outcome.stdout.ends_with("20000\n"));
 }
 
 #[test]
@@ -170,4 +168,18 @@ fn completed_child_keeps_buffered_diagnostics_at_deadline() {
     assert_eq!(outcome.exit_code, 4);
     assert_eq!(outcome.stderr, "final\n");
     assert!(!outcome.timed_out);
+}
+
+#[test]
+fn truncation_does_not_replace_the_preview_with_a_marker() {
+    let outcome = run_command(&run("echo diagnostic; seq 1 10000 | sed 's/.*//' >&2", 10));
+    assert!(outcome.stderr.contains("[truncated]"));
+    assert_eq!(outcome.preview, "diagnostic");
+}
+
+#[test]
+fn color_reset_on_stderr_does_not_hide_stdout_preview() {
+    let outcome = run_command(&run("echo diagnostic; printf '\\033[0m\\n' >&2", 10));
+    assert_eq!(outcome.stderr, "\x1b[0m\n");
+    assert_eq!(outcome.preview, "diagnostic");
 }

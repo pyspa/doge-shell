@@ -15,7 +15,7 @@ use rusqlite::{Connection, OptionalExtension, Row};
 
 /// Kept per run, masked. Enough to see what happened without turning the
 /// database into a log shipper.
-pub(super) const MAX_STREAM_BYTES: usize = 8 * 1024;
+pub(crate) const MAX_STREAM_BYTES: usize = 8 * 1024;
 
 /// Keeps the head and the tail of a stream, which is where the useful parts of
 /// a failure are. Byte-based, and stepped back to a character boundary so a

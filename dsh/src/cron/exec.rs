@@ -17,6 +17,9 @@
 //!    which waits for the detached shell command while keeping the session
 //!    runtime out of the child process.
 
+mod capture;
+use capture::{Capture, Digest};
+
 use anyhow::{Context as _, Result};
 use dsh_types::cron::job::ClaimedRun;
 use std::fs::File;
@@ -40,6 +43,8 @@ const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub struct CommandOutcome {
     pub stdout: String,
+    pub stdout_digest: u64,
+    pub preview: String,
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
@@ -74,9 +79,14 @@ pub fn run_command(run: &ClaimedRun) -> CommandOutcome {
     let child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            let stderr = dsh_types::safety_policy::redact_sensitive_text(&format!(
+                "cron: failed to start: {error}\n"
+            ));
             return CommandOutcome {
                 stdout: String::new(),
-                stderr: format!("cron: failed to start: {error}\n"),
+                stdout_digest: digest(""),
+                preview: preview(&stderr),
+                stderr,
                 exit_code: SPAWN_FAILED,
                 timed_out: false,
                 duration: started.elapsed(),
@@ -95,7 +105,7 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
         child.stdout.take().map(OwnedFd::from).map(File::from),
         child.stderr.take().map(OwnedFd::from).map(File::from),
     ];
-    let mut output = [Vec::new(), Vec::new()];
+    let mut output = JobOutput::new();
     let mut timed_out = false;
     let status = loop {
         if pipes.iter().all(Option::is_none) {
@@ -125,9 +135,11 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
         break None;
     };
 
-    let [stdout, stderr] = output.map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    let [(stdout, stdout_preview), (stderr, stderr_preview)] = output.streams.map(Capture::finish);
     CommandOutcome {
         stdout,
+        stdout_digest: output.digest.finish(),
+        preview: stderr_preview.or(stdout_preview).unwrap_or_default(),
         stderr,
         exit_code: if timed_out {
             TIMED_OUT
@@ -141,14 +153,41 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
     }
 }
 
-fn drain_buffered(pipes: &mut [Option<File>; 2], output: &mut [Vec<u8>; 2]) {
-    for (pipe, bytes) in pipes.iter_mut().zip(output.iter_mut()) {
+struct JobOutput {
+    streams: [Capture; 2],
+    digest: Digest,
+}
+
+impl JobOutput {
+    fn new() -> Self {
+        Self {
+            streams: [Capture::new(), Capture::new()],
+            digest: Digest::new(),
+        }
+    }
+    fn push(&mut self, index: usize, bytes: &[u8]) {
+        if index == 0 {
+            self.digest.push(bytes);
+        }
+        self.streams[index].push(bytes);
+    }
+}
+
+fn drain_buffered(pipes: &mut [Option<File>; 2], output: &mut JobOutput) {
+    for (index, pipe) in pipes.iter_mut().enumerate() {
         if let Some(reader) = pipe {
             let mut available: libc::c_int = 0;
             // FIONREAD snapshots the number of buffered bytes; this is
             // the sole reader, so reading up to that many cannot block.
             if unsafe { libc::ioctl(reader.as_raw_fd(), libc::FIONREAD, &mut available) } == 0 {
-                let _ = reader.take(available.max(0) as u64).read_to_end(bytes);
+                let mut buffered = reader.take(available.max(0) as u64);
+                let mut chunk = [0; 16384];
+                while let Ok(n) = buffered.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    output.push(index, &chunk[..n]);
+                }
             }
         }
     }
@@ -158,7 +197,7 @@ fn drain_buffered(pipes: &mut [Option<File>; 2], output: &mut [Vec<u8>; 2]) {
 
 fn drain_ready(
     pipes: &mut [Option<File>; 2],
-    output: &mut [Vec<u8>; 2],
+    output: &mut JobOutput,
     wait: Duration,
 ) -> io::Result<()> {
     let mut descriptors = pipes.each_ref().map(|pipe| libc::pollfd {
@@ -184,7 +223,7 @@ fn drain_ready(
         {
             match pipe.read(&mut buffer) {
                 Ok(0) => pipes[index] = None,
-                Ok(n) => output[index].extend_from_slice(&buffer[..n]),
+                Ok(n) => output.push(index, &buffer[..n]),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Err(error) => return Err(error),
             }
@@ -222,18 +261,9 @@ pub fn spawn_run_child(run_id: &str) -> Result<Child> {
 /// colours its output or pads a column would otherwise look different on every
 /// run for reasons nobody asked about.
 pub fn digest(output: &str) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for line in output.lines() {
-        for byte in console::strip_ansi_codes(line).trim_end().bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-        hash ^= u64::from(b'\n');
-        hash = hash.wrapping_mul(PRIME);
-    }
-    hash
+    let mut digest = Digest::new();
+    digest.push(output.as_bytes());
+    digest.finish()
 }
 
 /// First non-empty output line, truncated for single-line display.

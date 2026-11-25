@@ -114,7 +114,8 @@ impl History {
             output: event.output,
             ledger_mode: CommandLedgerMode::Output,
         };
-        Self::record_outcome_sync(db, &event.command, None, &metadata)
+        // An external event identifies its own execution, not the local aggregate row.
+        Self::append_event_sync(db, &event.command, &metadata)
     }
 
     /// Search for the first entry matching the given prefix.

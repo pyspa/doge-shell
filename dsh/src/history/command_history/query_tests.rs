@@ -117,3 +117,55 @@ fn event_project_uses_current_markers_and_exact_context_strings() {
         2
     );
 }
+
+#[test]
+fn external_events_preserve_local_outcomes_and_remain_in_the_ledger() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut history = history_at(dir.path());
+    let now = chrono::Utc::now().timestamp();
+    let command = "cargo test";
+    history
+        .write_batch(vec![(command.to_string(), now)])
+        .unwrap();
+    let local = super::HistoryMetadata {
+        started_at: now,
+        exit_code: Some(0),
+        duration_ms: Some(100),
+        cwd: Some("/local".into()),
+        session_id: Some("local".into()),
+        hostname: None,
+        author: "human".into(),
+        output: None,
+        ledger_mode: super::CommandLedgerMode::Off,
+    };
+    for started_at in [now + 5, now, now - 10] {
+        history
+            .record_external_event(CommandEvent {
+                id: 0,
+                command: command.into(),
+                author: "builder".into(),
+                started_at,
+                exit_code: Some(7),
+                cwd: Some("/other".into()),
+                duration_ms: None,
+                output: None,
+                hostname: None,
+                session_id: None,
+            })
+            .unwrap();
+        if started_at > now {
+            history.record_outcome(command, local.clone()).unwrap();
+        }
+    }
+    let events = history.command_events(Some("builder"), 10).unwrap();
+    assert_eq!(
+        events.iter().map(|e| e.started_at).collect::<Vec<_>>(),
+        [now + 5, now, now - 10]
+    );
+    history.load().unwrap();
+    let entry = history.iter().next().unwrap();
+    assert_eq!(
+        (entry.when, entry.exit_code, entry.cwd.as_deref()),
+        (now, Some(0), Some("/local"))
+    );
+}

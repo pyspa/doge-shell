@@ -235,6 +235,14 @@ impl History {
         metadata: &HistoryMetadata,
     ) -> Result<()> {
         Self::update_metadata_sync(db, command, context, metadata)?;
+        Self::append_event_sync(db, command, metadata)
+    }
+
+    pub(super) fn append_event_sync(
+        db: &mut Db,
+        command: &str,
+        metadata: &HistoryMetadata,
+    ) -> Result<()> {
         if metadata.ledger_mode == CommandLedgerMode::Off {
             return Ok(());
         }

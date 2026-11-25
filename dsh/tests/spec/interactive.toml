@@ -157,3 +157,27 @@ script = "!& fix what's broken\necho NEXT_LINE_RAN"
 status = 0
 stdout_contains = ["NEXT_LINE_RAN"]
 stderr_contains = ["!& requires an interactive input/output TTY"]
+
+[[case]]
+id = "interactive.read-shares-script-input"
+class = "posix"
+mode = "interactive"
+script = """read value
+literal data
+echo "<$value>" """
+
+[case.expect]
+status = 0
+stdout_exact = "<literal data>\n"
+stderr_exact = ""
+
+[[case]]
+id = "interactive.external-reader-shares-script-input"
+class = "posix"
+mode = "interactive"
+script = "cat\nliteral data"
+
+[case.expect]
+status = 0
+stdout_contains = ["literal data"]
+stderr_exact = ""

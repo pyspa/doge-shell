@@ -5,6 +5,15 @@ use common::contract::expand_tokens;
 use common::process::{DEFAULT_CASE_TIMEOUT, spawn_dsh_unlocked};
 
 #[test]
+fn inserted_saved_words_round_trip_in_dogesh() {
+    let words = ["printf", "<%s>\\n", "ends\\", "\\'quote", "\\\\", ""].map(String::from);
+    let script = dsh_types::text::saved_shell_command(&words);
+    let result = common::run_dsh(["-c", &script], DEFAULT_CASE_TIMEOUT);
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(result.stdout, b"<ends\\>\n<\\'quote>\n<\\\\>\n<>\n");
+}
+
+#[test]
 fn external_output_preserves_bytes_and_streams() {
     let _guard = common::serial_guard();
     let cases: &[(&str, &[u8], &[u8])] = &[

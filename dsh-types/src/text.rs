@@ -39,7 +39,15 @@ pub fn saved_shell_command(args: &[String]) -> String {
         [script] => script.clone(),
         words => words
             .iter()
-            .map(|word| shell_quote(word))
+            // Snippets can also be inserted back into dogesh. Its
+            // single quotes recognize an escaped quote, so spell a literal
+            // backslash outside quotes in both interpreters.
+            .map(|word| {
+                word.split('\\')
+                    .map(shell_quote)
+                    .collect::<Vec<_>>()
+                    .join("\\\\")
+            })
             .collect::<Vec<_>>()
             .join(" "),
     }

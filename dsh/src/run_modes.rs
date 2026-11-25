@@ -484,19 +484,10 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
             // endings (Ctrl+D, Ctrl+C twice) keep reporting success.
             Ok(()) if repl.shell.exited.is_some() => last_status_exit_code(repl.shell),
             Ok(()) => ExitCode::from(0),
+            Err(err) if err.is::<crate::ShellExit>() => ExitCode::SUCCESS,
             Err(err) => {
-                // Don't display error message for normal exit
-                let err_str = err.to_string();
-                if err_str.contains("Shell terminated by double Ctrl+C")
-                    || err_str.contains("Normal exit")
-                    || err_str.contains("Exit by")
-                {
-                    debug!("Shell exiting normally: {}", err_str);
-                    ExitCode::from(0)
-                } else {
-                    display_user_error(&err, true);
-                    return ExitCode::FAILURE;
-                }
+                display_user_error(&err, true);
+                return ExitCode::FAILURE;
             }
         };
         repl.shell

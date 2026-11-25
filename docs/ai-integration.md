@@ -75,9 +75,18 @@ To use the API-key provider:
    Optional settings:
 
    `OPENAI_API_KEY` and `OPEN_AI_API_KEY` are accepted as fallbacks, as are
-   `OPENAI_BASE_URL` and `OPENAI_MODEL`. Every setting below is read as a shell
-   variable first and from the process environment second, so `config.lisp` can
-   set any of them without an `export`.
+   `OPENAI_BASE_URL` and `OPENAI_MODEL`. doge-shell imports the process environment at startup.
+   To persist your model and reasoning effort, add these forms to
+   `~/.config/dogesh/config.lisp` (or `$XDG_CONFIG_HOME/dogesh/config.lisp`):
+
+   ```lisp
+   (vset "AI_CHAT_MODEL" "gpt-5-mini")
+   (vset "AI_CHAT_REASONING_EFFORT" "high")
+   ```
+
+   The file takes precedence over inherited values. Run `doctor ai` to check
+   the configured effort. Accepted levels depend on the model. The ChatGPT
+   subscription route currently omits the effort field.
 
    | Variable | Default | Purpose |
    | --- | --- | --- |

@@ -9,11 +9,9 @@ pub(crate) enum TaskInput<'a> {
 /// Skip shell whitespace and line continuations before the marker. Once the
 /// prompt starts, its text belongs to the chat and remains literal.
 pub(crate) fn chat_prompt(input: &str) -> Option<&str> {
-    let mut start = input.trim_start();
-    while let Some(rest) = start.strip_prefix("\\\n") {
-        start = rest.trim_start();
-    }
-    start.strip_prefix('!')
+    crate::parser::check::after_leading_continuations(input)
+        .trim_start()
+        .strip_prefix('!')
 }
 
 pub(crate) fn classify(input: &str) -> Option<Result<TaskInput<'_>, &'static str>> {

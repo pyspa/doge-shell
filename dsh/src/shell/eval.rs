@@ -50,7 +50,7 @@ impl Drop for TitleGuard {
 pub async fn eval_str(
     shell: &mut Shell,
     ctx: &mut Context,
-    input: String,
+    mut input: String,
     force_background: bool,
 ) -> Result<i32> {
     // Every `enable_raw_mode()` below is gated on `ctx.interactive`, but the
@@ -64,6 +64,12 @@ pub async fn eval_str(
         shell.record_command_input(&input);
     }
 
+    // Keep the physical input in history. Only the prefix is shell syntax
+    // for a chat shortcut; the prompt after its marker stays literal.
+    let skipped = input.len() - crate::parser::check::after_leading_continuations(&input).len();
+    if skipped != 0 {
+        input.drain(..skipped);
+    }
     if let Some(task_input) = crate::ai_task_input::classify(&input) {
         let result = crate::background_task::shortcut::execute(shell, ctx, task_input);
         publish_exit_status(shell, if result.is_ok() { 0 } else { 1 });
@@ -71,7 +77,7 @@ pub async fn eval_str(
         return Ok(0);
     }
 
-    if let Some(rest) = crate::ai_task_input::chat_prompt(&input) {
+    if let Some(rest) = input.trim_start().strip_prefix('!') {
         if let Err(e) = disable_raw_mode() {
             tracing::error!("Failed to disable raw mode: {}", e);
         } else {

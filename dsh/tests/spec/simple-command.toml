@@ -279,3 +279,12 @@ script = "\\\n!& fix what's broken\necho NEXT"
 status = 0
 stdout_exact = "NEXT\n"
 stderr_contains = ["!& requires an interactive input/output TTY"]
+
+[[case]]
+id = "simple-command.continued-command-keeps-non-shell-whitespace"
+class = "dogesh"
+mode = "command"
+script = "\u00a0\\\necho UNEXPECTED"
+[case.expect]
+status = 127
+stdout_exact = ""

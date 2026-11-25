@@ -2,6 +2,17 @@ use super::{Rule, ShellParser};
 use pest::Parser as _;
 use std::borrow::Cow;
 
+/// Skip active continuations before the first command token without parsing its body.
+pub(crate) fn after_leading_continuations(mut input: &str) -> &str {
+    while let Some(rest) = input
+        .trim_start_matches([' ', '\t', '\r', '\n'])
+        .strip_prefix("\\\n")
+    {
+        input = rest;
+    }
+    input
+}
+
 /// Remove active backslash-newline pairs before shell tokenization. Quotes,
 /// comments and embedded Lisp retain the bytes their own grammar consumes.
 pub(crate) fn join_continued_lines(input: &str) -> Cow<'_, str> {

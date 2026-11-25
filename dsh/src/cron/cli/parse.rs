@@ -186,14 +186,7 @@ pub fn build_spec(args: AddArgs, default_cwd: String) -> Result<CronJobSpec, Str
         schedule,
         schedule_spec: args.schedule_spec,
         kind: JobKind::Sh,
-        command: match args.command.as_slice() {
-            [script] => script.clone(),
-            words => words
-                .iter()
-                .map(|word| crate::utils::shell_quote(word))
-                .collect::<Vec<_>>()
-                .join(" "),
-        },
+        command: dsh_types::text::saved_shell_command(&args.command),
         agent: None,
         cwd: args.cwd.unwrap_or(default_cwd),
         notify: args.notify,

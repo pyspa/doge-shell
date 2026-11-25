@@ -14,6 +14,45 @@ pub fn clamp_chars(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// Wrap a value in single quotes so it is treated as a single literal argument
+/// by a POSIX shell. Any embedded single quote is escaped using the standard
+/// `'\''` sequence. Use this before splicing any user-controlled value into a
+/// string that is later executed via `sh -c` (script completion templates,
+/// preview commands, etc.).
+pub fn shell_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+/// A single argument supplies a script; multiple arguments supply literal words.
+pub fn saved_shell_command(args: &[String]) -> String {
+    match args {
+        [script] => script.clone(),
+        words => words
+            .iter()
+            // Snippets can also be inserted back into dogesh. Its
+            // single quotes recognize an escaped quote, so spell a literal
+            // backslash outside quotes in both interpreters.
+            .map(|word| {
+                word.split('\\')
+                    .map(shell_quote)
+                    .collect::<Vec<_>>()
+                    .join("\\\\")
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

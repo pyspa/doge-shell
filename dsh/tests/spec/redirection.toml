@@ -547,3 +547,22 @@ script = "echo a 3>out.txt; echo STATUS:$?"
 status = 0
 stdout_contains = ["STATUS:1"]
 stderr_contains = ["file descriptor 3 is not supported"]
+
+[[case]]
+id = "redirection.bookmark-replay-honors-all-streams"
+class = "dogesh"
+mode = "command"
+script = """bookmark add replay 'cat; echo warn >&2' > setup; echo input > data; bookmark run replay < data > out 2> err"""
+
+[case.expect]
+status = 0
+stdout_exact = ""
+stderr_exact = ""
+
+[[case.expect.files]]
+path = "out"
+content_exact = "▶ Running: cat; echo warn >&2\ninput\n"
+
+[[case.expect.files]]
+path = "err"
+content_exact = "warn\n"

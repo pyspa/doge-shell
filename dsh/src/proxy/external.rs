@@ -4,6 +4,8 @@ use crate::environment::Environment;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
 use parking_lot::RwLock;
+use std::os::fd::{BorrowedFd, RawFd};
+use std::process::Stdio;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -18,7 +20,7 @@ const SYSTEM_SHELL: &str = "/bin/sh";
 /// This is the fallback handler when no builtin command matches.
 /// Uses `std::process::Command` for synchronous execution.
 pub fn execute(
-    _ctx: &Context,
+    ctx: &Context,
     cmd: &str,
     argv: Vec<String>,
     environment: Arc<RwLock<Environment>>,
@@ -44,22 +46,25 @@ pub fn execute(
         env.command_runtime_snapshot(current_dir)
     };
 
-    let status = if use_shell {
+    let mut command = if use_shell {
         debug!("Detected complex command, using sh -c");
         let mut command = snapshot
             .std_command(SYSTEM_SHELL)
             .context("failed to resolve the internal shell")?;
         command.arg("-c").arg(cmd);
-        command.status()
+        command
     } else {
         let mut command = snapshot
             .std_command(cmd)
             .ok_or_else(|| anyhow::anyhow!("command not found: {cmd}"))?;
         command.args(argv);
-        command.status()
+        command
     };
 
-    match status {
+    command.stdin(child_stream(ctx.infile, libc::STDIN_FILENO)?);
+    command.stdout(child_stream(ctx.outfile, libc::STDOUT_FILENO)?);
+    command.stderr(child_stream(ctx.errfile, libc::STDERR_FILENO)?);
+    match command.status() {
         Ok(status) => {
             if !status.success() {
                 // We return Err to signal failure to the caller (safe-run)
@@ -74,6 +79,16 @@ pub fn execute(
         }
     }
     Ok(())
+}
+
+fn child_stream(fd: RawFd, standard: RawFd) -> Result<Stdio> {
+    if fd == standard {
+        return Ok(Stdio::inherit());
+    }
+    // Context borrows the applied redirect or pipeline descriptor until
+    // dispatch returns. Command owns a separate close-on-exec duplicate.
+    let owned = unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?;
+    Ok(Stdio::from(owned))
 }
 
 #[cfg(test)]

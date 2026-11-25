@@ -60,7 +60,7 @@ doctor skills
 - Skill 自体を書き足すとき (製品利用者向けにも公開): `dsh-skill-authoring`
 - 製品利用者向け: `--profile dogesh-user` (`dsh-cron`, `dsh-skill-authoring`, `dsh-chat`)
 
-編集前の案内は `python3 scripts/agent-context.py --topic "<task>" --json`。`--path` は複数指定でき、`--changed` は作業ツリーの変更pathを使う。routing metadataは `agent-routing.json`、回帰ケースは `evals/routing-cases.json`。編集後の検証コマンドは `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ（release バイナリが新しければ `doctor validate` の提案も使える）。Claude Codeでrust-analyzer Code Intelligenceが利用可能ならsymbol navigationを優先し、利用できなければ `rg` を使う。LSPはbuild/testの必須条件ではない。
+編集前の案内は `python3 scripts/agent-context.py --topic "<task>"`。構造化出力を使うツールは `--json` を指定する。`--path` は複数指定でき、`--changed` は作業ツリーの変更pathを使う。routing metadataは `agent-routing.json`、回帰ケースは `evals/routing-cases.json`。編集後の検証コマンドは `docs/ai/skills/doge-shell-repo/references/test-scope.md` で選ぶ（release バイナリが新しければ `doctor validate` の提案も使える）。Claude Codeでrust-analyzer Code Intelligenceが利用可能ならsymbol navigationを優先し、利用できなければ `rg` を使う。LSPはbuild/testの必須条件ではない。
 
 ## 製品利用者向け Skill
 

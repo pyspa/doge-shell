@@ -1,0 +1,16 @@
+#!/bin/sh
+# Git supplies the resolved author here, including --author and reused messages.
+set -eu
+
+for role in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
+    ident=$(git var "$role")
+    case "${ident%>*}>" in
+        'mopemope <yutaka.matsubara@gmail.com>' | \
+        'mopemope <22645+mopemope@users.noreply.github.com>' | \
+        'mopemope <mopemope@users.noreply.github.com>') ;;
+        *)
+            echo "Commit refused: $role must be mopemope with a linked email address." >&2
+            exit 1
+            ;;
+    esac
+done

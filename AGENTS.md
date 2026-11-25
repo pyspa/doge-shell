@@ -1,49 +1,23 @@
 # Agent Guide
 
-このリポジトリでは、最小探索・最小検証を徹底する。
+日本語で応答する。既存のユーザー変更を保持し、Linux と macOS の両方をサポートする。
 
-## 共通ルール
+## 実装の入口
 
-- チャットは日本語で行う。
-- 対応 OS は Linux と macOS。片方だけで動く変更を入れない。
-- 既存のユーザー変更を破棄しない。
-- 非自明な実装では編集前に「完了条件・変更範囲・検証方法」を短く定め、完了時に実行結果と未検証範囲を報告する。長期作業だけTASK.mdへ残し、小変更で計画文書を増やさない。
-- `Cargo.toml` でcrate境界を確認し、`rg --files` / `rg -n` で当たりを付けてから狭く読む。
-- 該当Skillを先に使い、詳細な `references/` は必要になったときだけ読む。
-- 利用可能で信頼できるsymbol navigationを優先する。使えない場合は `rg` とcompiler/test結果を使う。LSPを必須検証にしない。
-- `README.md` 全文を最初から読まない。公開挙動・設定例の更新時だけ該当箇所を読む。
-- repo-trackedな生成・整形は目的が明確なときだけ行う。
-- 400行超の非テストファイルには `//!` module docを付け、800行超は分割を検討する。`scripts/check-file-budget.py` が検査する。
+- 非自明な実装・調査・refactor は `python3 scripts/agent-context.py --topic "<依頼>"` で担当 Skill を探す。既知のパスは `--path <path>` で渡す。typo や変更箇所が明確な単純修正は対象に直接進む。
+- 返された Skill と必要な reference だけを読む。振り分け不能なら `docs/ai/skills/doge-shell-repo/references/task-map.md` の該当節を検索する。同一タスクの探索結果はスコープや内容が変わるまで再利用する。
+- 編集前に完了条件・変更範囲・検証方法を短く定める。再開時は今回の目標に合う `.agent/TASK.md` を使う。長期作業の手順は `docs/ai/long-task-workflow.md` にある。
+- 定義・参照を辿るには利用可能な symbol navigation または `rg` を使う。crate 境界は `Cargo.toml` で確認する。ルート README は公開挙動・設定例の該当節だけ読む。
 
-## 編集前のルーティング
+## 実装と検証
 
-- 非自明な実装・調査・refactorでは、まず `python3 scripts/agent-context.py --topic "<task>" --json` を使う。pathが既知なら `--path <repo-relative-path>` を追加できる。
-- routerの結果があれば該当Skillから読み、全体のtask-mapは先読みしない。同一タスクで読んだ文書は、変更・スコープ変更・文脈喪失がなければ再読しない。
-- routerは編集前のSkillとreferenceの入口だけを示す。使えないときは `docs/ai/skills/doge-shell-repo/references/task-map.md` を読む。
-- typo、明白な1ファイルdocs編集、変更内容を完全指定された単純修正ではrouterを省略してよい。
-- 補完定義は `doge-shell-completion-spec` と `references/invariants/completion.md`、execution/job lifecycleは `doge-shell-execution-semantics` と `references/invariants/execution*.md` を読む。
-- 製品側のAI機能では `docs/design/ai/README.md` を先に読む。
-- 構文・実行の挙動の仕様は `dsh/src/shell.pest`（文法）と `dsh/tests/spec/*.toml`（契約）が正典。仕様を変えるときは spec にケースを足してから実装する。
+- 構文・実行の仕様は `dsh/src/shell.pest` と `dsh/tests/spec/*.toml`。仕様変更は契約ケースを先に追加する。補完定義は completion-spec、job lifecycle は execution-semantics の Skill と該当 invariant に従う。
+- 製品 AI の設計は `docs/design/ai/README.md` が入口。AI、補完、環境、subprocess、wait、ShellProxy の操作は各領域の既存 authority を使う。OS 固有処理は `docs/ai/skills/doge-shell-repo/references/platform-support.md` に従う。
+- 検証は `docs/ai/skills/doge-shell-repo/references/test-scope.md` で、変更した挙動を通るテストと必須 checker を選ぶ。対象テストの実行件数・結果・未検証範囲を報告する。`dsh/` の package 名は `doge-shell`。段階的設計変更の最終確認・リリース前は `./scripts/check.sh` を使う。
+- 生成物・整形の差分は必要箇所に限る。非テスト Rust ファイルは 400 行超で `//!` module doc を付け、800 行超は分割を検討する。
+- 開発用 Skill の正本は `docs/ai/skills/`。常設公開は core 3 件、Codex の既定インストールは doge-shell-repo のみ。繰り返す失敗は該当 Skill・reference と回帰ケースに戻す。ガイド・Skill・installer・アダプタ変更後は `scripts/check-ai-guidance.sh` を実行する。
 
-## 設計境界
+## コミットと PR
 
-- AI機能、completion、environment、runtime subprocess、ShellProxy capabilityの既存authorityを迂回しない。詳細は関連Skill・invariantと `scripts/check-runtime-authority.py`、`scripts/check-shell-proxy-capabilities.py` にある。
-- executionのwait/ownership境界は `scripts/check-execution-authority.py` が検査する。
-- OS固有の変更は `docs/ai/skills/doge-shell-repo/references/platform-support.md` を読み、Linux/macOS両方の実装と `scripts/check-portability.py` を確認する。
-
-## 編集後の検証
-
-- 検証コマンドは `docs/ai/skills/doge-shell-repo/references/test-scope.md` から最小のものを選ぶ。release バイナリがソースより新しい場合だけ `doctor validate` の提案を使ってよい。routerを検証コマンドのauthorityにしない。
-- `dsh/` はCargo package `doge-shell`、`dsh-builtin/` は `dsh-builtin`。複数crateに跨るときだけ広いtestを選ぶ。
-- `AGENTS.md` / `CLAUDE.md` / `docs/ai/` / Skill / installer / `.claude/` を変えたら `scripts/check-ai-guidance.sh` を実行する。runtime Skillの `--check-installed` はコピーの新旧を検査し、`--status` は表示専用。
-- OS依存コード・設定では `scripts/check-portability.py`、ShellProxy・能力trait変更では `scripts/check-shell-proxy-capabilities.py` を実行する。
-- `Cargo.toml` / `README.md` / `LICENSE` 変更では `scripts/check-project-consistency.py` を実行する。
-- 全体の `./scripts/check.sh` は段階的な設計変更の最後とリリース前に実行する。
-- 長時間タスクで `.agent/TASK.md` が存在すれば再開前に読み、Current state / Decisions / Blockersを短く保つ。手順は `docs/ai/long-task-workflow.md` を参照する。
-- 失敗例の再発防止は `task-map.md` または該当Skillのreferenceへ短く戻す。
-
-## Skillの配置
-
-- canonical sourceは `docs/ai/skills/`。Codex runtimeには原則 `doge-shell-repo` だけを常設し、領域別Skillは必要時に読む。
-- `.agents/skills` と `.claude/skills` はcore 3件だけをcanonical directoryへのsymlinkとして公開する。domain Skillはrouterが返す `skills[].path` を直接読む。
-- 製品AI機能の設計ノートは `docs/design/ai/` に置き、runtime Skillには入れない。
+- コミットの author・committer と PR 作成者はすべて `mopemope` とする。コミット前にこの checkout の `.githooks/prepare-commit-msg` を有効にする（標準のフックが未使用なら `git config --local core.hooksPath .githooks`、既存フックがあればそこから呼ぶ）。
+- PR 作成は `scripts/agent-create-pr.sh BASE HEAD TITLE BODY_FILE [--draft]` を使う。名義を確認できないときは作成を中止する。別のアカウント・コネクタ・Web UI での再試行やフックの無効化は禁止。

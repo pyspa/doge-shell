@@ -60,5 +60,10 @@
   {"id":"guidance-coding-en","topic":"improve coding agent implementation accuracy and token efficiency","expected_primary_route":"ai-guidance","max_routes":1},
   {"id":"guidance-eval-script-path","paths":["scripts/eval-agent-routing.py"],"expected_primary_route":"ai-guidance","max_routes":1},
   {"id":"guidance-budget-script-path","paths":["scripts/check-agent-context-budget.py"],"expected_primary_route":"ai-guidance","max_routes":1},
-  {"id":"generic-skills-ambiguous","topic":"Skillsの追加、最適化","expected_primary_route":"repo-general","max_routes":1}
+  {"id":"generic-skills-ambiguous","topic":"Skillsの追加、最適化","expected_primary_route":"repo-general","max_routes":1},
+  {"id":"pipeline-status-ja","topic":"パイプラインの終了コードが最後のコマンドと一致しない","expected_primary_route":"execution-semantics","expected_risk":"high","required_references":["docs/ai/skills/doge-shell-repo/references/invariants/execution.md"]},
+  {"id":"process-substitution-wait-ja","topic":"プロセス置換で終了待ちが戻らない","expected_primary_route":"execution-semantics","expected_risk":"high","max_routes":1},
+  {"id":"command-substitution-quoting-ja","topic":"コマンド置換の引用符が消える","expected_primary_route":"parser-shell","max_routes":1},
+  {"id":"tab-candidates-ja","topic":"タブ補完の候補が重複する","expected_primary_route":"repl-completion","max_routes":1},
+  {"id":"pipeline-grammar-ja","topic":"パイプラインの構文エラーを報告する","expected_primary_route":"parser-shell","max_routes":1}
 ]

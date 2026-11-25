@@ -321,6 +321,9 @@ if [ -d "$source_root" ]; then
     fi
 fi
 
+if ! sh "$repo_root/scripts/test-agent-publish.sh"; then
+    fail "agent commit and PR identity checks failed"
+fi
 if ! python3 "$repo_root/scripts/eval-agent-routing.py"; then
     fail "agent routing evaluation failed"
 fi

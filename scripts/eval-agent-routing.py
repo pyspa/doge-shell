@@ -23,6 +23,7 @@ def main():
         skill_paths_valid = all(skill["path"] == f"docs/ai/skills/{skill['name']}/SKILL.md" for route in routes for skill in route["skills"])
         refs = {ref for route in routes for ref in route["references"]}
         valid = (routes[0]["id"] == case["expected_primary_route"]
+                 and ("expected_risk" not in case or result["risk"] == case["expected_risk"])
                  and set(case.get("expected_skills", [])) <= skills
                  and skill_paths_valid
                  and set(case.get("required_references", [])) <= refs
@@ -31,7 +32,9 @@ def main():
         if valid:
             passed += 1
         else:
-            errors.append(f"{case['id']}: expected {case['expected_primary_route']}, got {[r['id'] for r in routes]}")
+            errors.append(f"{case['id']}: expected {case['expected_primary_route']} "
+                          f"(risk {case.get('expected_risk', 'any')}), got {[r['id'] for r in routes]} "
+                          f"(risk {result['risk']})")
     if errors:
         print("\n".join(errors), file=sys.stderr)
     print(f"routing eval: {passed}/{len(cases)} passed")

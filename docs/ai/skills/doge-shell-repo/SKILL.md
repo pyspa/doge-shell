@@ -5,8 +5,7 @@ description: Use when working in the doge-shell repository or doge-shell リポ�
 
 # Doge Shell Repo
 
-- Follow `AGENTS.md`; use `python3 scripts/agent-context.py --topic "<task>" --json` for nontrivial work. Add a known repo-relative `--path` to narrow ambiguous requests.
-- Read the returned `skills[].path` and relevant references directly from the checkout. Do not install every domain skill or read the full catalog first. If already routed in this task, reuse that result until scope changes.
+- Follow the routing command in `AGENTS.md`. Open the returned Skill paths in this checkout and reuse the result until scope changes. For machine-readable paths use `--json` (`routes[].skills[].path`).
 - Use [references/task-map.md](references/task-map.md) only when routing is unavailable or returns `repo-general`; search for the relevant entry rather than reading the whole map.
 - Start source exploration with targeted `rg --files` / `rg -n`. Read [references/read-boundaries.md](references/read-boundaries.md) when search output is broad or a large file needs inspection.
 - Use [references/module-map.md](references/module-map.md) only when ownership is unclear. Use [references/package-map.md](references/package-map.md) when the Cargo package is unknown.

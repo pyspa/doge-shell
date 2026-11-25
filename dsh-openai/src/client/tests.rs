@@ -1228,43 +1228,65 @@ fn write_oversized(
 /// Enough 64 KiB blocks to go past the 16 MiB cap.
 const OVERSIZED_BLOCKS: usize = crate::stream::MAX_SSE_BUFFER_BYTES / (64 * 1024) + 2;
 
-/// Each event is under the per-event cap, but together they carry more text
-/// than the Responses transport would ever hold: the aggregated reply must be
-/// capped too, not just the one event waiting for its boundary.
+/// The cumulative limit is inclusive and applies even when EOF flushes the
+/// final event before its terminating blank line arrives.
 #[test]
-fn a_streamed_reply_over_the_cumulative_size_cap_is_refused() {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let _ = read_request(&mut stream);
-        let event = format!(
-            "data: {}\n\n",
-            json!({ "choices": [{ "delta": { "content": "x".repeat(64 * 1024) } }] })
-        );
-        let done =
-            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n";
-        write_oversized(
-            &mut stream,
-            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
-            event.as_bytes(),
-            OVERSIZED_BLOCKS,
-            done.as_bytes(),
-        );
-    });
+fn streamed_reply_size_limit_at_normal_completion_and_eof() {
+    const BLOCK_BYTES: usize = 64 * 1024;
+    let limit = crate::stream::MAX_SSE_BUFFER_BYTES;
+    for ending in ["\n\ndata: [DONE]\n\n", "\n"] {
+        for extra_byte in ["", "y"] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                read_request(&mut stream);
+                let event = format!(
+                    "data: {}\n\n",
+                    json!({"choices":[{"delta":{"content":"x".repeat(BLOCK_BYTES)}}]})
+                );
+                let last = format!(
+                    "data: {}{ending}",
+                    json!({"choices":[{"delta":{"content":extra_byte},"finish_reason":"stop"}]})
+                );
+                write_oversized(
+                    &mut stream,
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+                    event.as_bytes(),
+                    limit / BLOCK_BYTES,
+                    last.as_bytes(),
+                );
+            });
 
-    let client = local_stream_client(addr, Duration::from_secs(10));
-    let messages = vec![json!({ "role": "user", "content": "hi" })];
-    let result = client.send_chat_streaming(
-        &messages,
-        &ChatRequestOptions::new(),
-        Some(&|| false),
-        &mut |_| {},
-    );
-    drop(client);
-    server.join().expect("fixture server thread panicked");
-    let error = result.expect_err("an oversized reply must fail the stream");
-    assert!(error.to_string().contains("16 MiB"), "{error:#}");
+            let client = local_stream_client(addr, Duration::from_secs(10));
+            let messages = [json!({"role":"user","content":"hi"})];
+            let mut displayed_bytes = 0;
+            let result = client.send_chat_streaming(
+                &messages,
+                &ChatRequestOptions::new(),
+                Some(&|| false),
+                &mut |delta| displayed_bytes += delta.len(),
+            );
+            server.join().expect("fixture server thread panicked");
+            assert_eq!(displayed_bytes, limit);
+            if extra_byte.is_empty() {
+                let response = result.expect("a reply exactly at the limit must succeed");
+                assert_eq!(response["choices"][0]["finish_reason"], "stop");
+                assert_eq!(
+                    response["choices"][0]["message"]["content"]
+                        .as_str()
+                        .unwrap()
+                        .len(),
+                    limit
+                );
+            } else {
+                let error = result
+                    .err()
+                    .expect("a reply one byte over the limit must fail");
+                assert!(error.to_string().contains("16 MiB"), "{error:#}");
+            }
+        }
+    }
 }
 
 /// Tool-call arguments accumulate the same way as text.

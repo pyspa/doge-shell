@@ -4,7 +4,7 @@ use crate::environment::Environment;
 use anyhow::{Context as _, Result};
 use dsh_types::Context;
 use parking_lot::RwLock;
-use std::os::fd::{BorrowedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::process::Stdio;
 use std::sync::Arc;
 use tracing::debug;
@@ -82,18 +82,42 @@ pub fn execute(
 }
 
 fn child_stream(fd: RawFd, standard: RawFd) -> Result<Stdio> {
-    if fd == standard {
-        return Ok(Stdio::inherit());
+    // A redirect can occupy fd 0, 1 or 2 if that slot was closed at
+    // startup. Duplicate even a matching number so CLOEXEC on its source
+    // does not close the child's standard stream at exec.
+    let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicate < 0 {
+        let error = std::io::Error::last_os_error();
+        if fd == standard && error.raw_os_error() == Some(libc::EBADF) {
+            return Ok(Stdio::inherit());
+        }
+        return Err(error.into());
     }
-    // Context borrows the applied redirect or pipeline descriptor until
-    // dispatch returns. Command owns a separate close-on-exec duplicate.
-    let owned = unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?;
-    Ok(Stdio::from(owned))
+    // fcntl returned a fresh descriptor with exclusive ownership.
+    Ok(Stdio::from(unsafe { OwnedFd::from_raw_fd(duplicate) }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn matching_slot_still_preserves_a_cloexec_redirect() {
+        use std::io::{Read, Seek};
+        use std::os::fd::AsRawFd;
+        let mut file = tempfile::tempfile().unwrap();
+        let fd = file.as_raw_fd();
+        let status = std::process::Command::new(SYSTEM_SHELL)
+            .args(["-c", "printf redirected"])
+            .stdout(child_stream(fd, fd).unwrap())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        file.rewind().unwrap();
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "redirected");
+    }
 
     fn write_script(dir: &std::path::Path, name: &str, body: &str) {
         let path = dir.join(name);

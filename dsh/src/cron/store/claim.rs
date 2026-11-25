@@ -231,7 +231,9 @@ impl SqliteCronStore {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let started = tx.execute(
-            "UPDATE runs SET state = 'running', started_at = ?2 WHERE id = ?1 AND state = 'queued'",
+            "UPDATE runs SET state = 'running', started_at = ?2 WHERE id = ?1 AND state = 'queued' \
+             AND owner = (SELECT claimed_by FROM jobs WHERE id = runs.job_id) \
+             AND rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = runs.job_id)",
             params![run_id, now],
         )?;
         if started == 0 {
@@ -258,7 +260,8 @@ impl SqliteCronStore {
         let (job_id, previous_digest): (i64, Option<i64>) = tx.query_row(
             "SELECT r.job_id, j.last_digest FROM runs r JOIN jobs j ON j.id = r.job_id \
              WHERE r.id = ?1 AND r.state IN ('queued', 'running') AND r.finished_at IS NULL \
-               AND j.claimed_by = r.owner",
+               AND j.claimed_by = r.owner \
+               AND r.rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = j.id)",
             [run_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;

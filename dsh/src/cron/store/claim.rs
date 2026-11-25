@@ -189,7 +189,8 @@ impl SqliteCronStore {
         let scheduled_for = now;
 
         let changed = tx.execute(
-            "UPDATE jobs SET claimed_by = ?1, claimed_until = ?2, updated_at = ?3              WHERE id = ?4 AND claimed_by IS NULL",
+            "UPDATE jobs SET claimed_by = ?1, claimed_until = ?2, updated_at = ?3 \
+             WHERE id = ?4 AND (claimed_by IS NULL OR claimed_until <= ?3)",
             // `saturating_add` - see the identical comment in `claim_due_jobs`.
             params![owner, now.saturating_add(lease_secs(timeout_secs)), now, id],
         )?;
@@ -197,6 +198,9 @@ impl SqliteCronStore {
             bail!("{selector}: already running; wait for it to finish or check `cron history`");
         }
 
+        // The replacement claim has no run yet. Close any rows left by the
+        // previous owner before inserting this run, including on manual-only jobs.
+        Self::fail_abandoned_runs(&tx, id, now)?;
         let run_id = uuid::Uuid::new_v4().to_string();
         let inserted = tx.execute(
             "INSERT OR IGNORE INTO runs(id, job_id, scheduled_for, state, trigger, owner)              VALUES(?1, ?2, ?3, 'queued', ?4, ?5)",
@@ -232,7 +236,7 @@ impl SqliteCronStore {
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let started = tx.execute(
             "UPDATE runs SET state = 'running', started_at = ?2 WHERE id = ?1 AND state = 'queued' \
-             AND owner = (SELECT claimed_by FROM jobs WHERE id = runs.job_id) \
+             AND owner = (SELECT claimed_by FROM jobs WHERE id = runs.job_id AND claimed_until > ?2) \
              AND rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = runs.job_id)",
             params![run_id, now],
         )?;
@@ -249,6 +253,12 @@ impl SqliteCronStore {
             claimed_run_from_row(row, trigger, run_id.to_string())
         })?;
         run.scheduled_for = scheduled_for;
+        // The command timeout starts here. Time spent queued must not let
+        // another driver reclaim a command that is still within its timeout.
+        tx.execute(
+            "UPDATE jobs SET claimed_until = MAX(claimed_until, ?1) WHERE id = ?2",
+            params![now.saturating_add(lease_secs(run.timeout_secs)), job_id],
+        )?;
         tx.commit()?;
         Ok(run)
     }
@@ -260,9 +270,9 @@ impl SqliteCronStore {
         let (job_id, previous_digest): (i64, Option<i64>) = tx.query_row(
             "SELECT r.job_id, j.last_digest FROM runs r JOIN jobs j ON j.id = r.job_id \
              WHERE r.id = ?1 AND r.state IN ('queued', 'running') AND r.finished_at IS NULL \
-               AND j.claimed_by = r.owner \
+               AND j.claimed_by = r.owner AND j.claimed_until > ?2 \
                AND r.rowid = (SELECT MAX(last.rowid) FROM runs last WHERE last.job_id = j.id)",
-            [run_id],
+            params![run_id, now],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
 
@@ -307,6 +317,10 @@ impl SqliteCronStore {
                 clamp_stream(&outcome.stderr),
             ],
         )?;
+
+        // Older stores could leave earlier runs open underneath the current
+        // claim. Once the current run is final, all remaining open runs are lost.
+        Self::fail_abandoned_runs(&tx, job_id, now)?;
 
         let failed = i64::from(outcome.state.counts_as_failure());
         let skipped = i64::from(outcome.state == RunState::Skipped);
@@ -411,42 +425,36 @@ impl SqliteCronStore {
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
 
-            // A run left behind by a dead owner is not a failure anyone saw;
-            // record it so `cron history` does not simply lose it.
-            tx.execute(
-                "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?1 \
-                 WHERE state IN ('queued', 'running') AND job_id IN \
-                   (SELECT id FROM jobs WHERE claimed_by IS NULL) AND finished_at IS NULL",
-                [now],
-            )?;
-
-            // A dead owner's abandoned run is not an ordinary failure a
-            // later tick will simply retry past: unlike a command that
-            // failed on its own, leaving this uncounted would mean
-            // `run_count`/`fail_count` never move, `consecutive_failures`
-            // never crosses `STREAK_TO_INCIDENT`, and `IncidentKind::LeaseLost`
-            // - built for exactly "a claim expired while its owner was
-            // presumed alive" - never actually fires. A job whose process
-            // keeps dying mid-run would then silently never surface as
-            // failing anywhere.
             for job_id in abandoned_jobs {
-                tx.execute(
-                    "UPDATE jobs SET run_count = run_count + 1, fail_count = fail_count + 1, \
-                     consecutive_failures = consecutive_failures + 1 WHERE id = ?1",
-                    [job_id],
-                )?;
-                open_incident_in(
-                    tx,
-                    Some(job_id),
-                    IncidentKind::LeaseLost,
-                    "the process running this job disappeared before it finished; its last \
-                     claim was reclaimed after the lease expired",
-                    None,
-                    now,
-                )?;
+                Self::fail_abandoned_runs(tx, job_id, now)?;
             }
         }
         Ok(released)
+    }
+
+    fn fail_abandoned_runs(tx: &rusqlite::Transaction<'_>, job_id: i64, now: i64) -> Result<()> {
+        let count = tx.execute(
+            "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?2 \
+             WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",
+            params![job_id, now],
+        )?;
+        if count > 0 {
+            tx.execute(
+                "UPDATE jobs SET run_count = run_count + ?2, fail_count = fail_count + ?2, \
+                 consecutive_failures = consecutive_failures + ?2, consecutive_skips = 0 WHERE id = ?1",
+                params![job_id, i64::try_from(count)?],
+            )?;
+            open_incident_in(
+                tx,
+                Some(job_id),
+                IncidentKind::LeaseLost,
+                "the process running this job disappeared before it finished; its last \
+                 claim was reclaimed after the lease expired",
+                None,
+                now,
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) fn record_incident(

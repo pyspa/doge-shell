@@ -1,5 +1,7 @@
 use super::*;
-use dsh_types::cron::job::{AgentJobSpec, RunOutcome, RunSelector, RunState, RunTrigger};
+use dsh_types::cron::job::{
+    AgentJobSpec, RunOutcome, RunSelector, RunState, RunTrigger, lease_secs,
+};
 use tempfile::TempDir;
 
 const NOW: i64 = 1_717_234_200;
@@ -1818,18 +1820,80 @@ fn unfinished_legacy_run_cannot_use_a_newer_claim_from_the_same_driver() {
     let old = store
         .claim_one("probe", NOW, "driver", RunTrigger::Manual)
         .unwrap();
-    // Older versions reclaimed a lease without closing its queued run.
+    // Older versions inserted a new run for the same owner while leaving
+    // the previous run queued. A clock step can reverse their timestamps.
+    let new_id = uuid::Uuid::new_v4().to_string();
     raw(&dir)
-        .execute("UPDATE jobs SET claimed_by=NULL, claimed_until=NULL", [])
-        .unwrap();
-    let new = store
-        .claim_one("probe", NOW - 10, "driver", RunTrigger::Manual)
+        .execute(
+            "INSERT INTO runs(id, job_id, scheduled_for, state, trigger, owner) \
+             SELECT ?1, job_id, ?2, state, trigger, owner FROM runs WHERE id = ?3",
+            params![new_id, NOW - 10, old.run_id],
+        )
         .unwrap();
     let success = outcome(RunState::Succeeded);
     assert!(store.start(&old.run_id, NOW).is_err());
     assert!(store.complete(&old.run_id, &success, NOW).is_err());
     assert!(store.get("probe").unwrap().running);
-    store.start(&new.run_id, NOW).unwrap();
-    store.complete(&new.run_id, &success, NOW).unwrap();
-    assert_eq!(store.get("probe").unwrap().run_count, 1);
+    store.start(&new_id, NOW).unwrap();
+    store.complete(&new_id, &success, NOW).unwrap();
+    let job = store.get("probe").unwrap();
+    assert_eq!(
+        (job.run_count, job.fail_count, job.consecutive_failures),
+        (2, 1, 0)
+    );
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    let old = runs.iter().find(|run| run.id == old.run_id).unwrap();
+    assert_eq!(
+        (old.state, old.reason),
+        (RunState::Failed, Some(RunReason::Timeout))
+    );
+}
+
+#[test]
+fn expired_worker_cannot_start_or_publish_before_the_next_scan() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let old = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    let deadline = NOW + lease_secs(old.timeout_secs);
+    assert!(store.start(&old.run_id, deadline).is_err());
+    let success = outcome(RunState::Succeeded);
+    assert!(store.complete(&old.run_id, &success, deadline).is_err());
+
+    let new = store
+        .claim_one("probe", deadline, "driver", RunTrigger::Manual)
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().fail_count, 1);
+    store.start(&new.run_id, deadline).unwrap();
+    store.complete(&new.run_id, &success, deadline).unwrap();
+    assert_eq!(store.get("probe").unwrap().run_count, 2);
+}
+
+#[test]
+fn valid_worker_start_has_time_to_finish_before_reclaim() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let run = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    let claim_deadline = NOW + lease_secs(run.timeout_secs);
+    store.start(&run.run_id, claim_deadline - 1).unwrap();
+    assert!(
+        store
+            .claim_due(claim_deadline, "other", 1, RunTrigger::Tick)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .complete(
+            &run.run_id,
+            &outcome(RunState::Succeeded),
+            claim_deadline + 1,
+        )
+        .unwrap();
 }

@@ -5,7 +5,37 @@
 //! way to tell whether a context change helped or hurt.
 
 use serde_json::Value;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// The provider returned a terminal response with usage, but its payload
+/// could not be used. Keep the usage on this error for the requesting turn.
+#[derive(Debug)]
+pub(crate) struct FailedResponse {
+    message: String,
+    response_usage: Value,
+}
+
+impl FailedResponse {
+    pub(crate) fn consumed_tokens(&self) -> bool {
+        TokenUsage::from_response(&self.response_usage)
+            .is_some_and(|usage| usage.total_tokens() > 0)
+    }
+
+    pub(crate) fn attach(error: anyhow::Error, response_usage: Value) -> anyhow::Error {
+        let message = error.to_string();
+        error.context(Self {
+            message,
+            response_usage,
+        })
+    }
+}
+
+impl fmt::Display for FailedResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
 
 /// Token counts for one or more chat completion responses.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -88,6 +118,13 @@ impl TokenUsage {
         } else {
             self.unknown_usage_requests = self.unknown_usage_requests.saturating_add(1);
             self.unknown_cached_requests = self.unknown_cached_requests.saturating_add(1);
+        }
+    }
+
+    /// Charge a failed response only when the provider reported its usage.
+    pub fn add_error_usage(&mut self, error: &anyhow::Error) {
+        if let Some(failed) = error.downcast_ref::<FailedResponse>() {
+            self.add_response(&failed.response_usage);
         }
     }
 

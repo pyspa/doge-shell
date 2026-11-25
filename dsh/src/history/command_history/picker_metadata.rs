@@ -15,7 +15,7 @@ impl History {
         let conn = db.get_connection();
         let mut stmt = conn.prepare(
             "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author
-             FROM command_events ORDER BY started_at DESC, id DESC LIMIT ?1"
+             FROM command_events WHERE COALESCE(is_command, dogesh_history_command(command)) ORDER BY started_at DESC, id DESC LIMIT ?1"
         )?;
         let events = stmt
             .query_map([limit as i64], |row| {

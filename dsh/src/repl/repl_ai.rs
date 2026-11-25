@@ -372,31 +372,18 @@ impl<'a> Repl<'a> {
     }
 
     pub(crate) fn detect_smart_pipe(&self) -> Option<String> {
-        let input = self.input.as_str();
-        if let Some(idx) = crate::completion::command_segment::smart_pipe_marker(input) {
-            let query = input[idx + 2..].trim();
-            if !query.is_empty() {
-                return Some(query.to_string());
-            }
-        }
-        None
+        crate::ai_task_input::smart_pipe_query(self.input.as_str()).map(str::to_owned)
     }
 
     pub(crate) fn detect_generative_command(&self) -> Option<String> {
-        let input = self.input.as_str().trim_start();
-        if let Some(query) = input.strip_prefix("??") {
-            let query = query.trim();
-            if !query.is_empty() {
-                return Some(query.to_string());
-            }
-        }
-        None
+        crate::ai_task_input::generative_query(self.input.as_str()).map(str::to_owned)
     }
 
     /// Detect AI Output Pipe pattern: `command |! "query"`
     /// Returns (command, query) if pattern is found
     pub(crate) fn detect_ai_pipe(&self) -> Option<(String, String)> {
-        super::ai_pipe::parse_ai_pipe(self.input.as_str())
+        crate::ai_task_input::output_pipe(self.input.as_str())
+            .map(|(command, query)| (command.to_owned(), query.to_owned()))
     }
 
     /// Execute command, capture output, and send to AI for analysis
@@ -413,6 +400,7 @@ impl<'a> Repl<'a> {
         // Ctrl-C never becomes SIGINT, so a command that does not exit on its
         // own (`tail -f log |! x`) would freeze the REPL.
         let raw_mode_pause = terminal_state::RawModePause::new();
+        let started = Instant::now();
         let output = super::ai_pipe::capture(
             crate::process::isolated_shell::command(&command, &child_env),
             super::ai_pipe::AI_PIPE_CAPTURE_BYTES,
@@ -420,7 +408,28 @@ impl<'a> Repl<'a> {
         drop(raw_mode_pause);
         // Always consume the flag, even when the child exited normally.
         let got_sigint = crate::process::signal::check_and_clear_sigint();
-        if super::ai_pipe::was_interrupted(got_sigint, output.as_ref().ok()) {
+        let interrupted = super::ai_pipe::was_interrupted(got_sigint, output.as_ref().ok());
+        let result = output.map(|captured| {
+            use std::os::unix::process::ExitStatusExt;
+            let code = captured
+                .status
+                .code()
+                .unwrap_or_else(|| captured.status.signal().map_or(1, |s| 128 + s));
+            let combined = if captured.stderr.is_empty() {
+                captured.stdout
+            } else if captured.stdout.is_empty() {
+                captured.stderr
+            } else {
+                format!(
+                    "STDOUT:\n{}\n\nSTDERR:\n{}",
+                    captured.stdout, captured.stderr
+                )
+            };
+            self.shell
+                .record_pipe_command(&command, code, started.elapsed(), &combined);
+            (combined, code)
+        });
+        if interrupted {
             queue!(
                 renderer,
                 Print("\r\n⚠️ Interrupted; nothing sent to AI\r\n")
@@ -431,8 +440,8 @@ impl<'a> Repl<'a> {
             return Ok(());
         }
 
-        let (stdout, stderr, exit_code) = match output {
-            Ok(out) => (out.stdout, out.stderr, out.status.code().unwrap_or(-1)),
+        let (combined_output, exit_code) = match result {
+            Ok(output) => output,
             Err(e) => {
                 queue!(
                     renderer,
@@ -442,15 +451,6 @@ impl<'a> Repl<'a> {
                 renderer.flush().ok();
                 return Ok(());
             }
-        };
-
-        // Combine stdout and stderr for analysis
-        let combined_output = if stderr.is_empty() {
-            stdout
-        } else if stdout.is_empty() {
-            stderr
-        } else {
-            format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr)
         };
 
         // Check if AI service is available

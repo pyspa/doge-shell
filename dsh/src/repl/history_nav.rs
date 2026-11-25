@@ -1,4 +1,4 @@
-//! History-related helpers pulled out of the main `impl Repl`: saving path history, learning an accepted suggestion, and the Ctrl-R history picker (`select_history` / `select_history_with_skim`).
+//! History-related helpers pulled out of the main `impl Repl`: saving path history and the Ctrl-R history picker (`select_history` / `select_history_with_skim`).
 use super::*;
 
 impl<'a> Repl<'a> {
@@ -16,15 +16,6 @@ impl<'a> Repl<'a> {
             && let Some(mut history) = history.try_lock()
         {
             history.save_background();
-        }
-    }
-
-    pub(super) fn learn_suggestion(&self, suggestion: &str) {
-        if let Some(history) = &self.shell.cmd_history
-            && let Some(mut history) = history.try_lock()
-            && let Err(e) = history.write_history(suggestion)
-        {
-            warn!("Failed to learn suggestion: {}", e);
         }
     }
 

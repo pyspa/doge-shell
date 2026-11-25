@@ -123,6 +123,7 @@ impl HistoryImporter for FishHistoryImporter {
 
         if !entries.is_empty() {
             debug!("Writing {} entries to history...", entries.len());
+            history.load_import_baseline(&entries)?;
             history.write_batch(entries)?;
         }
 
@@ -217,6 +218,67 @@ mod tests {
         let dir = tempdir().unwrap();
         let importer = FishHistoryImporter::with_path(dir.path());
         assert!(importer.import(&mut History::new()).is_err());
+    }
+
+    #[test]
+    fn fish_import_aggregates_unsorted_occurrences_without_losing_newer_history() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("fish_history");
+        std::fs::write(
+            &path,
+            "- cmd: Hit old\n  when: 10\n- cmd: Hit imported\n  when: 90\n\
+             - cmd: Hit first tie\n  when: 100\n- cmd: Hit imported\n  when: 5\n\
+             - cmd: Hit last tie\n  when: 100\n- cmd: Hit first tie\n  when: 100\n",
+        )?;
+        let mut history = History::new();
+        let db = crate::db::Db::new(dir.path().join("commands.db"))?;
+        db.get_connection().execute_batch(
+            "INSERT INTO command_history(command, timestamp, count, context, exit_code,
+                 duration_ms, cwd, session_id, hostname)
+             VALUES ('Hit old', 100, 4, '/project', 7, 123, '/work', 'session', 'host');
+             INSERT INTO command_history(command, timestamp) VALUES ('Resident', 100);",
+        )?;
+        history.db = Some(db);
+        // The command with metadata sits just outside the loaded window.
+        history.load_recent(1)?;
+        assert_eq!(
+            FishHistoryImporter::with_path(path).import(&mut history)?,
+            6
+        );
+
+        for reload in [false, true] {
+            if reload {
+                history.load()?;
+            }
+            let rows: Vec<_> = history
+                .iter()
+                .map(|e| (e.entry.as_str(), e.when, e.count))
+                .collect();
+            assert_eq!(
+                rows,
+                [
+                    ("Hit imported", 90, 2),
+                    ("Hit old", 100, 5),
+                    ("Resident", 100, 1),
+                    ("Hit last tie", 100, 1),
+                    ("Hit first tie", 100, 2),
+                ]
+            );
+            assert_eq!(history.search_first("Hit"), Some("Hit first tie"));
+            let old = history
+                .search_entries(&crate::history::HistoryQuery {
+                    text: Some("HIT OLD".into()),
+                    ..Default::default()
+                })
+                .pop()
+                .unwrap();
+            assert_eq!(old.context.as_deref(), Some("/project"));
+            assert_eq!((old.exit_code, old.duration_ms), (Some(7), Some(123)));
+            assert_eq!(old.cwd.as_deref(), Some("/work"));
+            assert_eq!(old.session_id.as_deref(), Some("session"));
+            assert_eq!(old.hostname.as_deref(), Some("host"));
+        }
+        Ok(())
     }
 
     #[test]

@@ -29,7 +29,7 @@ fn failed_upsert_rolls_back_the_entire_batch() {
     let mut db = Db::new(dir.path().join("history.db")).unwrap();
     History::write_batch_sync(
         &mut db,
-        vec![("synthetic existing".to_string(), 10)],
+        &[("synthetic existing".to_string(), 10)],
         Some("original context".to_string()),
     )
     .unwrap();
@@ -37,7 +37,7 @@ fn failed_upsert_rolls_back_the_entire_batch() {
 
     let result = History::write_batch_sync(
         &mut db,
-        vec![
+        &[
             ("synthetic existing".to_string(), 20),
             ("synthetic before".to_string(), 21),
             ("synthetic rejected".to_string(), 22),
@@ -119,9 +119,13 @@ fn background_upsert_failure_ack_retains_the_whole_local_batch() {
         .query_row("SELECT COUNT(*) FROM command_history", [], |row| row.get(0))
         .unwrap();
     assert_eq!(stored, 0, "no partial batch may reach SQLite");
-    let snapshot =
-        History::load_reload_snapshot(&db, history.revision, history.pending_entries_snapshot())
-            .unwrap();
+    let snapshot = History::load_reload_snapshot(
+        &db,
+        history.revision,
+        history.pending_entries_snapshot(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
     assert_eq!(snapshot.histories.len(), 3);
     assert_eq!(
         history.apply_reload_snapshot(snapshot),
@@ -194,9 +198,13 @@ fn drain_actual_acks(history: &mut History, acks: Vec<HistoryPersistAck>) {
 }
 
 fn assert_reload_preserves_entry(history: &mut History, db: &Db, expected: &Entry) {
-    let snapshot =
-        History::load_reload_snapshot(db, history.revision, history.pending_entries_snapshot())
-            .unwrap();
+    let snapshot = History::load_reload_snapshot(
+        db,
+        history.revision,
+        history.pending_entries_snapshot(),
+        &history.failed_occurrences,
+    )
+    .unwrap();
     assert_eq!(
         history.apply_reload_snapshot(snapshot),
         HistoryReloadApply::Applied
@@ -349,7 +357,10 @@ fn successful_batch_ack_keeps_newer_outcome_until_its_ack() {
     let expected = history.histories[0].clone();
     drain_actual_acks(&mut history, vec![batch]);
     assert_eq!(history.pending_persistence.len(), 1);
-    assert_eq!(history.pending_entries_snapshot()[0].exit_code, Some(7));
+    assert_eq!(
+        history.pending_entries_snapshot()[0].entry.exit_code,
+        Some(7)
+    );
     drain_actual_acks(&mut history, vec![outcome]);
     assert!(history.pending_persistence.is_empty());
     assert_reload_preserves_entry(&mut history, &db, &expected);
@@ -377,4 +388,101 @@ fn outcome_ack_without_a_tracked_entry_cannot_confirm_a_later_batch() {
     assert_eq!(history.pending_persistence.len(), 1);
     drain_actual_acks(&mut history, vec![batch]);
     assert!(history.pending_persistence.is_empty());
+}
+
+#[test]
+fn failed_writes_retain_local_tie_order_but_older_increments_do_not_move_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::new(dir.path().join("history.db")).unwrap();
+    db.get_connection().execute_batch(
+        "INSERT INTO command_history(command, timestamp) VALUES ('Zulu', 10), ('Repeat', 10), ('Alpha', 10);",
+    ).unwrap();
+    let mut history = History::new();
+    history.db = Some(db.clone());
+    history.load().unwrap();
+    reject_synthetic_command(&db);
+    assert!(
+        history
+            .write_batch(vec![
+                ("Zulu".into(), 1),
+                ("Xray".into(), 10),
+                ("Repeat".into(), 10),
+                ("synthetic rejected".into(), 10),
+                ("Xray".into(), 10),
+            ])
+            .is_err()
+    );
+    history
+        .record_outcome("Repeat", outcome_metadata())
+        .unwrap();
+    let expected = ["Xray", "synthetic rejected", "Repeat", "Alpha", "Zulu"];
+    assert_eq!(history.get_recent_context(5), expected);
+    history.reload().unwrap();
+    assert_eq!(history.get_recent_context(5), expected);
+    assert_eq!(history.histories[0].count, 2);
+    assert_eq!(history.histories[2].exit_code, Some(7));
+}
+
+#[test]
+fn reload_combines_failed_local_batches_with_other_sessions_commits_once() {
+    for background in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::new(dir.path().join("history.db")).unwrap();
+        let mut history = History::new();
+        history.db = Some(db.clone());
+        history.write_batch(vec![("shared".into(), 1)]).unwrap();
+        reject_synthetic_command(&db);
+        if background {
+            history.start_background_writer();
+        }
+        let result = history.write_batch(vec![
+            ("shared".into(), 2),
+            ("shared".into(), 3),
+            ("synthetic rejected".into(), 4),
+        ]);
+        assert_eq!(result.is_ok(), background);
+        db.get_connection().execute(
+            "UPDATE command_history SET count = count + 1, timestamp = 5 WHERE command = 'shared'", []
+        ).unwrap();
+        if background {
+            let (tx, rx) = mpsc::channel();
+            assert!(history.request_reload(move |snapshot| tx.send(snapshot).unwrap()));
+            assert_eq!(
+                history.apply_reload_snapshot(
+                    rx.recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap()
+                        .unwrap()
+                ),
+                HistoryReloadApply::Applied
+            );
+        }
+        for _ in 0..2 {
+            history.reload().unwrap();
+            let shared = history
+                .histories
+                .iter()
+                .find(|row| row.entry == "shared")
+                .unwrap();
+            assert_eq!((shared.count, shared.when), (4, 5));
+        }
+        history.write_batch(vec![("shared".into(), 6)]).unwrap();
+        history.reload().unwrap(); // wait for the local successful write
+        db.get_connection()
+            .execute(
+                "INSERT INTO command_history(command, timestamp) VALUES ('other session',6)",
+                [],
+            )
+            .unwrap();
+        history.reload().unwrap();
+        assert_eq!(history.get_recent_context(2), ["other session", "shared"]);
+        assert_eq!(
+            history
+                .histories
+                .iter()
+                .find(|row| row.entry == "shared")
+                .unwrap()
+                .count,
+            5
+        );
+    }
 }

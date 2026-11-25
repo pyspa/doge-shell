@@ -383,7 +383,14 @@ dogesh import fish --path /path/to/fish_history
 
 ### `history` Command
 
-Search command history with text and metadata filters.
+Search submitted shell commands with text and metadata filters. Chat and task
+prompts (`!` and `!&`), standalone `blocks explain N` requests, and inline AI
+explanations stay out of command history. Accepting a suggestion only edits the
+input buffer. Submitting the command records it. For `command |! question`,
+history records the command that ran. History searches also omit recognizable
+AI requests saved by older versions. Commands explicitly imported from fish or
+submitted through `history record` keep their source shell's spelling, including
+a leading `!`.
 
 ```bash
 # Search by text

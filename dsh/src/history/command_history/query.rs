@@ -44,10 +44,10 @@ impl History {
         let author = author.filter(|author| *author != "all");
         let sql = if author.is_some() {
             "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-             FROM command_events WHERE author = ?1 ORDER BY started_at DESC, id DESC"
+             FROM command_events WHERE author = ?1 AND COALESCE(is_command, dogesh_history_command(command)) ORDER BY started_at DESC, id DESC"
         } else {
             "SELECT id, command, cwd, started_at, duration_ms, exit_code, session_id, hostname, author, output
-             FROM command_events ORDER BY started_at DESC, id DESC"
+             FROM command_events WHERE COALESCE(is_command, dogesh_history_command(command)) ORDER BY started_at DESC, id DESC"
         };
         let mut stmt = conn.prepare(sql)?;
         let map_row = |row: &rusqlite::Row<'_>| {

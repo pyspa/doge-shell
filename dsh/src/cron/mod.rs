@@ -36,7 +36,7 @@ use store::SqliteCronStore;
 
 const HELP: &str = "\
 Usage:
-  cron add [options] <schedule> <command...>          Register a shell job
+  cron add [options] <schedule> <command...>          Register a shell job (quote a whole shell script as one argument)
   cron list [--json]                                   Show jobs
   cron show <job> [--json]                              Show one job in full
   cron edit <job> [options]                             Change one job's fields

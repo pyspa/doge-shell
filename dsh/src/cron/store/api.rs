@@ -177,7 +177,7 @@ impl CronStore for SqliteCronStore {
     }
 
     fn delete(&self, selector: &str) -> Result<String> {
-        let name = {
+        let (id, name) = {
             // Resolving the selector to an id and deleting it have to be one
             // transaction: two bare statements on the same connection each
             // commit on their own, so another process (this store is shared
@@ -190,10 +190,10 @@ impl CronStore for SqliteCronStore {
             let name = job_name(&tx, id)?;
             tx.execute("DELETE FROM jobs WHERE id = ?1", [id])?;
             tx.commit()?;
-            name
+            (id, name)
         };
         // The notepad is the job's memory; it goes with the job.
-        std::fs::remove_file(self.notepad_path(&name)).ok();
+        std::fs::remove_file(self.notepad_path(id)).ok();
         std::fs::remove_file(self.lease_path(&name)).ok();
         Ok(name)
     }
@@ -442,12 +442,8 @@ impl CronStore for SqliteCronStore {
     }
 
     fn notepad(&self, selector: &str) -> Result<String> {
-        let name = {
-            let connection = self.connection.lock();
-            let id = resolve(&connection, selector)?;
-            job_name(&connection, id)?
-        };
-        match std::fs::read_to_string(self.notepad_path(&name)) {
+        let id = resolve(&self.connection.lock(), selector)?;
+        match std::fs::read_to_string(self.notepad_path(id)) {
             Ok(body) => Ok(body),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
             Err(error) => Err(error.into()),
@@ -455,26 +451,23 @@ impl CronStore for SqliteCronStore {
     }
 
     fn set_notepad(&self, selector: &str, body: &str) -> Result<()> {
-        let name = {
-            let connection = self.connection.lock();
-            let id = resolve(&connection, selector)?;
-            job_name(&connection, id)?
-        };
-        let path = self.notepad_path(&name);
-        if let Some(parent) = path.parent() {
-            DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(parent)
-                .ok();
-        }
+        let mut connection = self.connection.lock();
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let path = self.notepad_path(resolve(&tx, selector)?);
+        let parent = path.parent().expect("notepad is in the by-id directory");
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)?;
         let trimmed = if body.len() > MAX_NOTEPAD_BYTES {
             &body[..body.floor_char_boundary(MAX_NOTEPAD_BYTES)]
         } else {
             body
         };
-        std::fs::write(&path, trimmed)?;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        let mut file = tempfile::NamedTempFile::new_in(parent)?;
+        std::io::Write::write_all(&mut file, trimmed.as_bytes())?;
+        file.persist(path)?;
+        tx.commit()?;
         Ok(())
     }
 

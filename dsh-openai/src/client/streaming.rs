@@ -271,12 +271,6 @@ impl ChatGptClient {
                     return Ok(value);
                 }
                 self.apply_stream_payload(&payload, &mut aggregator, &mut delta_sent, on_delta)?;
-                if aggregator.accumulated_bytes() > crate::stream::MAX_SSE_BUFFER_BYTES {
-                    return Err(Self::wrap_stream_error(
-                        anyhow!("the OpenAI stream sent a reply larger than the 16 MiB limit"),
-                        delta_sent,
-                    ));
-                }
             }
         }
     }
@@ -330,7 +324,14 @@ impl ChatGptClient {
             return Err(Self::wrap_stream_error(err.into(), *delta_sent));
         }
 
-        if let Some(text) = aggregator.apply(&chunk) {
+        let text = aggregator.apply(&chunk);
+        if aggregator.accumulated_bytes() > crate::stream::MAX_SSE_BUFFER_BYTES {
+            return Err(Self::wrap_stream_error(
+                anyhow!("the OpenAI stream sent a reply larger than the 16 MiB limit"),
+                *delta_sent,
+            ));
+        }
+        if let Some(text) = text {
             *delta_sent = true;
             on_delta(&text);
         }

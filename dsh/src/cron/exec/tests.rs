@@ -134,9 +134,29 @@ fn only_a_uuid_can_start_a_run_child() {
 
 #[test]
 fn timeout_includes_writers_that_outlive_the_shell() {
-    let outcome = run_command(&run("echo ready; sleep 12 &", 1));
+    let dir = tempfile::tempdir().unwrap();
+    let mut job = run("echo ready; (sleep 2; echo late > survived) &", 1);
+    job.cwd = dir.path().to_string_lossy().into_owned();
+    let outcome = run_command(&job);
     assert!(outcome.timed_out);
     assert_eq!(outcome.exit_code, TIMED_OUT);
     assert_eq!(outcome.stdout, "ready\n");
     assert!(outcome.duration < Duration::from_secs(8));
+    std::thread::sleep(Duration::from_millis(1300));
+    assert!(!dir.path().join("survived").exists());
+}
+
+#[test]
+fn completed_child_keeps_buffered_diagnostics_at_deadline() {
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", "echo final >&2; exit 4"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.wait().unwrap();
+    let outcome = wait_with_deadline(child, Duration::ZERO, Instant::now());
+    assert_eq!(outcome.exit_code, 4);
+    assert_eq!(outcome.stderr, "final\n");
+    assert!(!outcome.timed_out);
 }

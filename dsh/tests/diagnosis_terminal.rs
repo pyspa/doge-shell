@@ -102,3 +102,46 @@ fn diagnosis_preserves_entry_raw_mode() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn noninteractive_chat_preserves_terminal_signal_mode() {
+    use nix::sys::termios::{LocalFlags, SetArg, tcsetattr};
+    let pty = openpty(None, None).unwrap();
+    let mut flags = tcgetattr(&pty.slave).unwrap();
+    flags.local_flags.remove(LocalFlags::ISIG);
+    tcsetattr(&pty.slave, SetArg::TCSANOW, &flags).unwrap();
+
+    let home = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_dogesh"));
+    command
+        .args(["-c", "!"])
+        .env_clear()
+        .envs(common::process::contract_env(&home))
+        .current_dir(home.path())
+        .stdin(File::from(dup(&pty.slave).unwrap()))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // SAFETY: detach from the test runner's controlling terminal before exec.
+    unsafe {
+        command.pre_exec(|| setsid().map(|_| ()).map_err(io::Error::from));
+    }
+    let child = command.spawn().unwrap();
+    let pid = Pid::from_raw(child.id() as i32);
+    let output = common::process::wait_child_with_output_deadline(
+        child,
+        pid,
+        common::process::DEFAULT_CASE_TIMEOUT,
+    )
+    .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("message"),
+        "{output:?}"
+    );
+    assert!(
+        !tcgetattr(&pty.slave)
+            .unwrap()
+            .local_flags
+            .contains(LocalFlags::ISIG)
+    );
+}

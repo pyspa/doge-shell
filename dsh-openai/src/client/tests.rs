@@ -1278,6 +1278,58 @@ fn the_cumulative_cap_counts_tool_call_arguments_and_names() {
     assert_eq!(aggregator.accumulated_bytes(), 3 + 4 + 7);
 }
 
+#[test]
+fn streamed_reasoning_is_replayed_to_the_provider_without_rendering_it() {
+    use std::io::Write;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut first, _) = listener.accept().unwrap();
+        read_request(&mut first);
+        first
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+        let chunks = [
+            json!({"delta":{"role":"assistant","reasoning_content":"first "}}),
+            json!({"delta":{"reasoning_content":"second","content":"checking"}}),
+            json!({"delta":{"tool_calls":[{"index":0,"id":"one","type":"function","function":{"name":"ls","arguments":"{}"}}]},"finish_reason":"tool_calls"}),
+        ];
+        for choice in chunks {
+            write!(first, "data: {}\n\n", json!({"choices":[choice]})).unwrap();
+        }
+        first.write_all(b"data: [DONE]\n\n").unwrap();
+        drop(first);
+        let (mut second, _) = listener.accept().unwrap();
+        let body = read_request(&mut second);
+        reply(
+            &mut second,
+            "200 OK",
+            &json!({"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}),
+        );
+        body
+    });
+    let client = local_stream_client(addr, Duration::from_secs(5));
+    let mut messages = vec![json!({"role":"user","content":"hi"})];
+    let mut rendered = String::new();
+    let response = client
+        .send_chat_streaming(&messages, &ChatRequestOptions::new(), None, &mut |text| {
+            rendered.push_str(text)
+        })
+        .unwrap();
+    let turn = crate::turn::interpret_response(&response).unwrap();
+    messages.push(turn.assistant_message.unwrap());
+    messages.push(json!({"role":"tool","tool_call_id":"one","content":"ok"}));
+    client
+        .send_chat(&messages, &ChatRequestOptions::new(), None)
+        .unwrap();
+    let request = server.join().unwrap();
+    assert_eq!(rendered, "checking");
+    assert_eq!(request["messages"][1]["reasoning_content"], "first second");
+    assert_eq!(request["messages"][1]["tool_calls"][0]["id"], "one");
+}
+
 /// A non-streaming reply is read through the same cap instead of an
 /// unbounded `response.text()`.
 #[test]

@@ -9,6 +9,10 @@ fn take(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Claim {
     super::take(ttl, identity, scope, |_| Ok(())).unwrap()
 }
 
+fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
+    super::check(ttl, identity, scope, |_| Ok(())).unwrap()
+}
+
 fn manager() -> ConversationManager {
     ConversationManager::new(
         json!({"role": "system", "content": "sys"}),

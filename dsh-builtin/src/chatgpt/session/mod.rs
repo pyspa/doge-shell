@@ -290,58 +290,48 @@ pub enum Continuity {
 }
 
 /// Check continuity without consuming the stored conversation.
-pub fn check(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Continuity {
+pub(super) fn check(
+    ttl: Option<Duration>,
+    identity: &str,
+    scope: Option<&Path>,
+    check_provider: impl FnOnce(&ConversationManager) -> Result<(), String>,
+) -> Result<Continuity, String> {
     let Some(ttl) = ttl else {
-        return Continuity::Fresh {
+        return Ok(Continuity::Fresh {
             stored: slot().is_some()
                 || (!BACKGROUND_SESSION.load(Ordering::SeqCst)
                     && crate::config_paths::chat_session_file().is_file()),
             reasons: Vec::new(),
-        };
+        });
     };
-    if let Some(found) = slot().as_ref().map(|stored| {
-        (
-            stored.id.clone(),
-            stored.manager.buffer.len(),
-            stored.stored_at.elapsed(),
-            stored.scope.clone(),
-            mismatch_reasons(stored, ttl, identity, scope),
-        )
-    }) {
-        let (id, messages, age, scope, reasons) = found;
+    let describe = |stored: &StoredSession| {
+        let reasons = mismatch_reasons(stored, ttl, identity, scope);
         if reasons.is_empty() {
-            return Continuity::Continued {
-                id,
-                messages,
-                age,
-                scope,
-            };
-        }
-        return Continuity::Fresh {
-            stored: true,
-            reasons,
-        };
-    }
-    // Restart recovery: the slot is empty but a previous shell may have left
-    // a conversation on disk.
-    if let Some(stored) = read_persisted() {
-        let reasons = mismatch_reasons(&stored, ttl, identity, scope);
-        if reasons.is_empty() {
-            return Continuity::Continued {
-                id: stored.id,
+            check_provider(&stored.manager)
+                .map_err(|reason| format!("chat session {} is stored. {reason}", stored.id))?;
+            Ok(Continuity::Continued {
+                id: stored.id.clone(),
                 messages: stored.manager.buffer.len(),
                 age: stored.stored_at.elapsed(),
-                scope: stored.scope,
-            };
+                scope: stored.scope.clone(),
+            })
+        } else {
+            Ok(Continuity::Fresh {
+                stored: true,
+                reasons,
+            })
         }
-        return Continuity::Fresh {
-            stored: true,
-            reasons,
-        };
+    };
+    if let Some(stored) = slot().as_ref() {
+        return describe(stored);
     }
-    Continuity::Fresh {
-        stored: false,
-        reasons: Vec::new(),
+    // After a restart, inspect the disk copy without consuming or migrating it.
+    match read_persisted() {
+        Some(stored) => describe(&stored),
+        None => Ok(Continuity::Fresh {
+            stored: false,
+            reasons: Vec::new(),
+        }),
     }
 }
 

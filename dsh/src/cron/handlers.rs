@@ -418,17 +418,51 @@ pub(super) fn status(ctx: &Context, store: &SqliteCronStore, args: &[String]) ->
     Ok(())
 }
 
+struct TickArgs {
+    json: bool,
+    verbose: bool,
+    dry_run: bool,
+    max: usize,
+}
+
+fn parse_tick_args(args: &[String]) -> Result<TickArgs> {
+    let mut options = TickArgs {
+        json: false,
+        verbose: false,
+        dry_run: false,
+        max: tick::MAX_PER_TICK,
+    };
+    let mut max = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--json" => options.json = true,
+            "--verbose" => options.verbose = true,
+            "--dry-run" => options.dry_run = true,
+            "--max" => {
+                let value = args.next().context("--max requires a value")?;
+                let limit: usize = value
+                    .parse()
+                    .context("--max requires a nonnegative integer")?;
+                i64::try_from(limit).context("--max exceeds the SQLite limit")?;
+                if max.replace(limit).is_some() {
+                    bail!("--max may only be supplied once");
+                }
+            }
+            _ => bail!("unexpected argument to cron tick: {arg}"),
+        }
+    }
+    options.max = max.unwrap_or(tick::MAX_PER_TICK);
+    Ok(options)
+}
+
 pub(super) fn tick_cmd(ctx: &Context, store: &SqliteCronStore, args: &[String]) -> Result<()> {
-    let json_output = has_flag(args, "--json");
-    let verbose = has_flag(args, "--verbose");
-    let dry_run = has_flag(args, "--dry-run");
-    let rest = without_flags(args, &["--json", "--verbose", "--dry-run"]);
-    let max = rest
-        .iter()
-        .position(|a| *a == "--max")
-        .and_then(|i| rest.get(i + 1))
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(tick::MAX_PER_TICK);
+    let TickArgs {
+        json: json_output,
+        verbose,
+        dry_run,
+        max,
+    } = parse_tick_args(args)?;
     let at = now();
 
     if dry_run {
@@ -539,6 +573,24 @@ mod tests {
     #[test]
     fn a_non_numeric_limit_is_a_clear_error() {
         assert!(parse_history_args(&args(&["--limit", "many"])).is_err());
+    }
+
+    #[test]
+    fn tick_rejects_typos_and_invalid_limits_before_claiming() {
+        for invalid in [
+            vec!["--dryrun"],
+            vec!["ignored"],
+            vec!["--max"],
+            vec!["--max", "-1"],
+            vec!["--max", "many"],
+            vec!["--max", "0", "--max", "2"],
+            vec!["--max", "18446744073709551615"],
+        ] {
+            assert!(parse_tick_args(&args(&invalid)).is_err(), "{invalid:?}");
+        }
+        let options = parse_tick_args(&args(&["--json", "--max", "0", "--dry-run"])).unwrap();
+        assert_eq!(options.max, 0);
+        assert!(options.json && options.dry_run);
     }
 
     /// `store.get()` has always loaded `job.last`; before this, `show` and

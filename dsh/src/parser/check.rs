@@ -2,6 +2,46 @@ use super::{Rule, ShellParser};
 use pest::Parser as _;
 use std::borrow::Cow;
 
+// `sp` and line breaks in shell.pest. Other Unicode whitespace is word content.
+pub(crate) const SHELL_WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+
+/// Skip active continuations before the first command token without parsing its body.
+pub(crate) fn after_leading_continuations(mut input: &str) -> &str {
+    while let Some(rest) = input
+        .trim_start_matches(SHELL_WHITESPACE)
+        .strip_prefix("\\\n")
+    {
+        input = rest;
+    }
+    input
+}
+
+/// Remove active backslash-newline pairs before shell tokenization. Quotes,
+/// comments and embedded Lisp retain the bytes their own grammar consumes.
+pub(crate) fn join_continued_lines(input: &str) -> Cow<'_, str> {
+    if !input.contains("\\\n") {
+        return Cow::Borrowed(input);
+    }
+    let Ok(pairs) = ShellParser::parse(Rule::comment_scan, input) else {
+        return Cow::Borrowed(input);
+    };
+    let mut joined = String::new();
+    let mut start = 0;
+    for pair in pairs
+        .flatten()
+        .filter(|p| p.as_rule() == Rule::line_continuation)
+    {
+        let span = pair.as_span();
+        joined.push_str(&input[start..span.start()]);
+        start = span.end();
+    }
+    if start == 0 {
+        return Cow::Borrowed(input);
+    }
+    joined.push_str(&input[start..]);
+    Cow::Owned(joined)
+}
+
 /// Mask only grammar-recognized comments, retaining byte offsets and newlines.
 /// The lexical scan also handles unfinished editor input and nested shell bodies.
 fn without_comments(input: &str) -> Cow<'_, str> {
@@ -22,9 +62,10 @@ fn without_comments(input: &str) -> Cow<'_, str> {
 /// 3. The line ends with a backslash (\).
 /// 4. The line ends with an operator that expects more input (|, &&, ||).
 pub fn is_incomplete_input(input: &str) -> bool {
-    let uncommented = without_comments(input);
+    let joined = join_continued_lines(input);
+    let uncommented = without_comments(&joined);
     let input = uncommented.as_ref();
-    let trimmed = input.trim_end();
+    let trimmed = input.trim_end_matches(SHELL_WHITESPACE);
     let mut quote_char = None;
     let mut in_backslash = false;
     let mut braces = Vec::new();
@@ -100,6 +141,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn joining_shell_lines_preserves_embedded_languages_and_escaped_bytes() {
+        for (input, expected) in [
+            (
+                "echo x |\\\n: (list \"a\\\nb\")",
+                "echo x |: (list \"a\\\nb\")",
+            ),
+            (
+                "echo x |:\n(list \"a\\\nb\")",
+                "echo x |:\n(list \"a\\\nb\")",
+            ),
+            (
+                "echo x |: where x == \"a\\\nb\"",
+                "echo x |: where x == \"a\\\nb\"",
+            ),
+            ("echo a\\\\\\\nb", "echo a\\\\b"),
+            ("echo a\\\n#tag", "echo a#tag"),
+            ("echo x ${A:-#\\\nword}", "echo x ${A:-#word}"),
+            ("echo \"$\\\n((1)\\\n)\"\\\n#tag", "echo \"$((1))\"#tag"),
+        ] {
+            assert_eq!(join_continued_lines(input), expected, "{input:?}");
+        }
+    }
+
+    #[test]
     fn escaped_operator_suffixes_are_complete() {
         for input in [
             r"echo \|",
@@ -117,6 +182,7 @@ mod tests {
             "echo $(echo \\|)",
             "echo ${X:-\\|}",
             "echo 日本語\\|",
+            "echo |\\\n\u{a0}",
         ] {
             assert!(!is_incomplete_input(input), "{input:?}");
         }

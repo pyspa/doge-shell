@@ -1,5 +1,76 @@
 version = 1
 
+[[case]]
+id = "simple-command.splice-before-tokenization"
+class = "posix"
+mode = "command"
+script = '''
+VA\
+LUE=ok
+ec\
+ho "$VA\
+LUE" &\
+& printf '<%s>\n' café\
+ine
+'''
+[case.expect]
+status = 0
+stdout_exact = "ok\n<caféine>\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.splice-quoted-and-comment-boundaries"
+class = "posix"
+mode = "command"
+script = '''
+printf '<%s>\n' 'a\
+b' "c\
+d" e\\
+echo \\
+echo \
+# ignored \
+echo next
+'''
+[case.expect]
+status = 0
+stdout_exact = "<a\\\nb>\n<cd>\n<e\\>\n\\\n\nnext\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.splice-in-nested-command"
+class = "posix"
+mode = "command"
+script = '''
+printf '<%s>\n' "$\
+(echo 'a\
+b' # ignored \
+)" "$((1 + 2\
+0))" "${UNSET:-fa\
+llback}"
+'''
+[case.expect]
+status = 0
+stdout_exact = "<a\\\nb>\n<21>\n<fallback>\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.piped-spliced-operator"
+class = "posix"
+mode = "interactive"
+script = '''
+echo one &\
+&
+echo tw\
+o
+echo \
+# ignored \
+echo three
+'''
+[case.expect]
+status = 0
+stdout_exact = "one\ntwo\n\nthree\n"
+stderr_exact = ""
+
 # Simple commands: status propagation is the shell's most basic contract.
 # `dogesh -c` exits with the last command's status.
 
@@ -189,3 +260,69 @@ script = """bookmark add words printf '<%s>\\n' 'a  b' '' "it's"; bookmark run w
 [case.expect]
 status = 0
 stdout_contains = ["<a  b>\n<>\n<it's>\n", "[x  y]\n[]\n"]
+
+[[case]]
+id = "simple-command.continued-foreground-chat-marker"
+class = "dogesh"
+mode = "command"
+script = "\\\n!"
+[case.expect]
+status = 1
+stderr_contains = ["message content required"]
+
+[[case]]
+id = "simple-command.continued-task-marker-preserves-next-line"
+class = "dogesh"
+mode = "interactive"
+script = "\\\n!& fix what's broken\necho NEXT"
+[case.expect]
+status = 0
+stdout_exact = "NEXT\n"
+stderr_contains = ["!& requires an interactive input/output TTY"]
+
+[[case]]
+id = "simple-command.continued-command-keeps-non-shell-whitespace"
+class = "dogesh"
+mode = "command"
+script = "\u00a0\\\necho UNEXPECTED"
+[case.expect]
+status = 127
+stdout_exact = ""
+
+[[case]]
+id = "simple-command.piped-continued-command-keeps-non-shell-whitespace"
+class = "dogesh"
+mode = "interactive"
+script = "\u00a0\\\necho UNEXPECTED"
+[case.expect]
+status = 127
+stdout_exact = ""
+
+[[case]]
+id = "simple-command.continued-non-shell-whitespace-is-a-command"
+class = "dogesh"
+mode = "command"
+script = "\\\n\u00a0"
+[case.expect]
+status = 127
+stderr_contains = ["\u00a0: command not found"]
+
+[[case]]
+id = "simple-command.non-shell-whitespace-keeps-chat-marker-in-command-name"
+class = "dogesh"
+mode = "interactive"
+script = "\\\n\u00a0!\necho $?\n\u00a0!"
+[case.expect]
+status = 127
+stdout_exact = "127\n"
+stderr_contains = ["\u00a0!: command not found"]
+
+[[case]]
+id = "simple-command.non-shell-whitespace-after-capture-rejects-entire-command"
+class = "dogesh"
+mode = "command"
+script = "echo UNEXPECTED > marker |>\\\n\u00a0"
+[case.expect]
+status = 1
+stderr_contains = ["syntax error: unexpected input"]
+files = [{ path = "marker", exists = false }]

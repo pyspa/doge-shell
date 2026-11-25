@@ -1,9 +1,10 @@
+use crate::parser::check::SHELL_WHITESPACE;
 use crate::process::{Job, JobLaunchOutcome, ListOp, ProcessState};
 use crate::shell::{
     Shell,
     authorize::{AuthorizationDecision, is_authorization_cancelled},
     materialize::{MaterializeOutcome, materialize_job},
-    parse::parse_execution_plan,
+    parse::parse_logical_input,
     plan::ListExecutionMode,
 };
 use crate::terminal::title;
@@ -49,7 +50,7 @@ impl Drop for TitleGuard {
 pub async fn eval_str(
     shell: &mut Shell,
     ctx: &mut Context,
-    input: String,
+    mut input: String,
     force_background: bool,
 ) -> Result<i32> {
     // Every `enable_raw_mode()` below is gated on `ctx.interactive`, but the
@@ -63,6 +64,12 @@ pub async fn eval_str(
         shell.record_command_input(&input);
     }
 
+    // Keep the physical input in history. Only the prefix is shell syntax
+    // for a chat shortcut; the prompt after its marker stays literal.
+    let skipped = input.len() - crate::parser::check::after_leading_continuations(&input).len();
+    if skipped != 0 {
+        input.drain(..skipped);
+    }
     if let Some(task_input) = crate::ai_task_input::classify(&input) {
         let result = crate::background_task::shortcut::execute(shell, ctx, task_input);
         publish_exit_status(shell, if result.is_ok() { 0 } else { 1 });
@@ -70,7 +77,7 @@ pub async fn eval_str(
         return Ok(0);
     }
 
-    if let Some(rest) = input.trim_start().strip_prefix('!') {
+    if let Some(rest) = crate::ai_task_input::chat_prompt(&input) {
         let _raw_pause = ctx
             .interactive
             .then(crate::repl::terminal_state::RawModePause::new);
@@ -577,7 +584,8 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
 /// the `|>` capture syntax and not the `||` OR operator. Leading whitespace
 /// is allowed.
 pub(crate) fn is_smart_pipe_input(input: &str) -> bool {
-    let trimmed = input.trim_start();
+    let joined = crate::parser::check::join_continued_lines(input);
+    let trimmed = joined.trim_start_matches(SHELL_WHITESPACE);
     trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||")
 }
 
@@ -589,12 +597,14 @@ pub(crate) fn parse_plan_with_smart_pipe(
     environment: Arc<parking_lot::RwLock<crate::environment::Environment>>,
 ) -> Result<crate::shell::plan::ExecutionPlan> {
     use crate::shell::plan::PlannedPipelineSource;
+    let joined = crate::parser::check::join_continued_lines(input);
+    let input = joined.as_ref();
     if !is_smart_pipe_input(input) {
-        return parse_execution_plan(input, environment);
+        return parse_logical_input(input, environment);
     }
-    let trimmed = input.trim_start();
+    let trimmed = input.trim_start_matches(SHELL_WHITESPACE);
     // SAFETY: `is_smart_pipe_input` verified the leading `|`.
-    let downstream = trimmed[1..].trim_start();
+    let downstream = trimmed[1..].trim_start_matches(SHELL_WHITESPACE);
     if downstream.is_empty() {
         // A bare `|` is an explicit no-op success:
         // there is no downstream command to materialize. This differs from
@@ -602,14 +612,14 @@ pub(crate) fn parse_plan_with_smart_pipe(
         // command and is rejected as a pipeline failure.
         return Ok(crate::shell::plan::ExecutionPlan::default());
     }
-    let mut plan = parse_execution_plan(downstream, environment)?;
+    let mut plan = parse_logical_input(downstream, environment)?;
     if let Some(first) = plan.first_job_mut() {
         first.pipeline_source = Some(PlannedPipelineSource::PreviousOutput);
         // User-facing source keeps the line-head pipe, but only for this
         // job: with `| grep foo; echo hi` the second job must stay `echo hi`,
         // not inherit the whole line (which would pollute history, safety
         // messages, and exact-source allowlist matching).
-        first.source = format!("| {}", first.source.trim_start());
+        first.source = format!("| {}", first.source);
     }
     debug!(
         "Smart Pipe: downstream={downstream:?} lists={}",
@@ -673,6 +683,9 @@ mod tests {
 
     #[test]
     fn test_smart_pipe_detection() {
+        assert!(is_smart_pipe_input("\\\n|"));
+        assert!(!is_smart_pipe_input("|\\\n| true"));
+        assert!(!is_smart_pipe_input("|\\\n> output"));
         assert!(!is_smart_pipe_input("ls -la"));
         assert!(!is_smart_pipe_input("echo hello"));
         assert!(!is_smart_pipe_input("|| echo fail"));

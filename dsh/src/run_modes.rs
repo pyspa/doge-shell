@@ -503,17 +503,23 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
         // `false &&` fail as a syntax error and then run the next line
         // unconditionally.
         let mut pending = String::new();
-
-        for line in reader.lines() {
-            match line {
-                Ok(line) => {
+        let mut reader = reader;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let content = line
+                        .strip_suffix("\r\n")
+                        .or_else(|| line.strip_suffix('\n'))
+                        .unwrap_or(&line);
                     if pending.is_empty() {
                         // Only leading space: trailing space may sit inside
                         // a quote that continues on the next line.
-                        pending.push_str(line.trim_start());
+                        pending.push_str(content.trim_start());
                     } else {
-                        pending.push('\n');
-                        pending.push_str(&line);
+                        pending.push_str(content);
                     }
                     if pending.trim_end().is_empty() {
                         pending.clear();
@@ -525,6 +531,11 @@ pub async fn run_interactive(shell: &mut Shell, ctx: &mut Context) -> ExitCode {
                     if crate::ai_task_input::classify(&pending).is_none()
                         && crate::parser::is_incomplete_input(&pending)
                     {
+                        // Keep a real delimiter even at EOF: a final backslash
+                        // joins it, whereas a bare final backslash is incomplete.
+                        if line.ends_with('\n') {
+                            pending.push('\n');
+                        }
                         continue;
                     }
                     let input = std::mem::take(&mut pending);

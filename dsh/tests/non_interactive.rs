@@ -3,6 +3,18 @@ mod common;
 use std::time::Duration;
 
 #[test]
+fn pipe_input_joins_a_final_backslash_newline_at_eof() {
+    let output = common::run_dsh_with_input(
+        [] as [&str; 0],
+        Some(b"printf '%s' final\\\n"),
+        Duration::from_secs(5),
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"final");
+    assert!(output.stderr.is_empty(), "{output:?}");
+}
+
+#[test]
 fn command_mode_exits_without_waiting_for_interactive_prewarm() {
     let output = common::run_dsh(["-c", "true"], Duration::from_secs(2));
     assert!(

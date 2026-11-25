@@ -3,7 +3,7 @@ use crate::shell::{
     Shell,
     authorize::{AuthorizationDecision, is_authorization_cancelled},
     materialize::{MaterializeOutcome, materialize_job},
-    parse::parse_execution_plan,
+    parse::parse_logical_input,
     plan::ListExecutionMode,
 };
 use crate::terminal::title;
@@ -606,8 +606,10 @@ pub(crate) fn parse_plan_with_smart_pipe(
     environment: Arc<parking_lot::RwLock<crate::environment::Environment>>,
 ) -> Result<crate::shell::plan::ExecutionPlan> {
     use crate::shell::plan::PlannedPipelineSource;
+    let joined = crate::parser::check::join_continued_lines(input);
+    let input = joined.as_ref();
     if !is_smart_pipe_input(input) {
-        return parse_execution_plan(input, environment);
+        return parse_logical_input(input, environment);
     }
     let trimmed = input.trim_start();
     // SAFETY: `is_smart_pipe_input` verified the leading `|`.
@@ -619,7 +621,7 @@ pub(crate) fn parse_plan_with_smart_pipe(
         // command and is rejected as a pipeline failure.
         return Ok(crate::shell::plan::ExecutionPlan::default());
     }
-    let mut plan = parse_execution_plan(downstream, environment)?;
+    let mut plan = parse_logical_input(downstream, environment)?;
     if let Some(first) = plan.first_job_mut() {
         first.pipeline_source = Some(PlannedPipelineSource::PreviousOutput);
         // User-facing source keeps the line-head pipe, but only for this

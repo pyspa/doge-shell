@@ -1,5 +1,76 @@
 version = 1
 
+[[case]]
+id = "simple-command.splice-before-tokenization"
+class = "posix"
+mode = "command"
+script = '''
+VA\
+LUE=ok
+ec\
+ho "$VA\
+LUE" &\
+& printf '<%s>\n' café\
+ine
+'''
+[case.expect]
+status = 0
+stdout_exact = "ok\n<caféine>\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.splice-quoted-and-comment-boundaries"
+class = "posix"
+mode = "command"
+script = '''
+printf '<%s>\n' 'a\
+b' "c\
+d" e\\
+echo \\
+echo \
+# ignored \
+echo next
+'''
+[case.expect]
+status = 0
+stdout_exact = "<a\\\nb>\n<cd>\n<e\\>\n\\\n\nnext\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.splice-in-nested-command"
+class = "posix"
+mode = "command"
+script = '''
+printf '<%s>\n' "$\
+(echo 'a\
+b' # ignored \
+)" "$((1 + 2\
+0))" "${UNSET:-fa\
+llback}"
+'''
+[case.expect]
+status = 0
+stdout_exact = "<a\\\nb>\n<21>\n<fallback>\n"
+stderr_exact = ""
+
+[[case]]
+id = "simple-command.piped-spliced-operator"
+class = "posix"
+mode = "interactive"
+script = '''
+echo one &\
+&
+echo tw\
+o
+echo \
+# ignored \
+echo three
+'''
+[case.expect]
+status = 0
+stdout_exact = "one\ntwo\n\nthree\n"
+stderr_exact = ""
+
 # Simple commands: status propagation is the shell's most basic contract.
 # `dogesh -c` exits with the last command's status.
 

@@ -107,6 +107,15 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
         }
         let remaining = timeout.saturating_sub(started.elapsed());
         if remaining.is_zero() {
+            // Account for bytes already in the pipes before deciding whether
+            // the child finished in time. A live writer must not extend this
+            // final drain by producing more data.
+            drain_buffered(&mut pipes, &mut output);
+            if pipes.iter().all(Option::is_none)
+                && let Ok(Some(status)) = child.try_wait()
+            {
+                break Some(status);
+            }
             timed_out = true;
         } else if drain_ready(&mut pipes, &mut output, remaining.min(POLL_INTERVAL)).is_ok() {
             continue;
@@ -132,6 +141,21 @@ fn wait_with_deadline(mut child: Child, timeout: Duration, started: Instant) -> 
     }
 }
 
+fn drain_buffered(pipes: &mut [Option<File>; 2], output: &mut [Vec<u8>; 2]) {
+    for (pipe, bytes) in pipes.iter_mut().zip(output.iter_mut()) {
+        if let Some(reader) = pipe {
+            let mut available: libc::c_int = 0;
+            // FIONREAD snapshots the number of buffered bytes; this is
+            // the sole reader, so reading up to that many cannot block.
+            if unsafe { libc::ioctl(reader.as_raw_fd(), libc::FIONREAD, &mut available) } == 0 {
+                let _ = reader.take(available.max(0) as u64).read_to_end(bytes);
+            }
+        }
+    }
+    // Probe EOF once, without waiting for future writes.
+    let _ = drain_ready(pipes, output, Duration::ZERO);
+}
+
 fn drain_ready(
     pipes: &mut [Option<File>; 2],
     output: &mut [Vec<u8>; 2],
@@ -144,7 +168,7 @@ fn drain_ready(
     });
     // The descriptors borrow the two live pipe readers. A negative fd
     // tells poll to ignore a stream which already reached EOF.
-    let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, wait.as_millis().max(1) as i32) };
+    let ready = unsafe { libc::poll(descriptors.as_mut_ptr(), 2, wait.as_millis() as i32) };
     if ready < 0 {
         let error = io::Error::last_os_error();
         return if error.kind() == io::ErrorKind::Interrupted {

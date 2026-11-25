@@ -307,7 +307,7 @@ fn propose(
                 || snap
                     .provider_scope
                     .as_ref()
-                    .is_some_and(|scope| scope != &client.cache_scope())
+                    .is_some_and(|scope| scope != &client.conversation_scope())
         })
         .map_err(|err| format!("request failed: {err}"))?;
     // Counted against this turn's budget like everything else it spent -

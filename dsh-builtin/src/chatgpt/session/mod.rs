@@ -380,37 +380,35 @@ pub(super) enum Claim {
 
 /// Claim the stored conversation when it still matches this turn.
 ///
-/// Always removes it first, so a turn that dies mid-flight cannot leave a
-/// stale conversation behind.
-pub(super) fn take(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Claim {
+/// Validate the provider before consuming either copy. A rejected turn leaves
+/// the original conversation and its idle deadline available to its owner.
+pub(super) fn take(
+    ttl: Option<Duration>,
+    identity: &str,
+    scope: Option<&Path>,
+    bind: impl FnOnce(&mut ConversationManager) -> Result<(), String>,
+) -> Result<Claim, String> {
     let Some(ttl) = ttl else {
-        return Claim::Fresh(None);
+        return Ok(Claim::Fresh(None));
     };
-    // A restart leaves the slot empty with the conversation on disk.
-    let Some(stored) = slot().take().or_else(read_persisted) else {
-        return Claim::Fresh(None);
+    let mut guard = slot();
+    let Some(mut stored) = guard.take().or_else(read_persisted) else {
+        return Ok(Claim::Fresh(None));
     };
-
     if let Some(reason) = mismatch(&stored, ttl, identity, scope) {
-        return Claim::Fresh(Some(reason));
+        return Ok(Claim::Fresh(Some(reason)));
     }
 
-    // The turn owns the conversation now: drop the file copy so a later
-    // `take` cannot resurrect it when this turn ends without storing (a new
-    // conversation that fails stores nothing). A mismatch above leaves the
-    // file alone - returning to the old project can still resume it until
-    // the next successful turn overwrites it.
+    if let Err(error) = bind(&mut stored.manager) {
+        *guard = Some(stored);
+        return Err(error);
+    }
     remove_persisted();
-
-    if let Some(reason) = mismatch(&stored, ttl, identity, scope) {
-        return Claim::Fresh(Some(reason));
-    }
-
-    Claim::Continued(Box::new(Carried {
+    Ok(Claim::Continued(Box::new(Carried {
         manager: stored.manager,
         id: stored.id,
         stored_at: stored.stored_at,
-    }))
+    })))
 }
 
 /// The id this turn will continue, without consuming the conversation.

@@ -17,6 +17,16 @@ pub trait ChatClient: Send + Sync {
     fn cache_scope(&self) -> String {
         String::new()
     }
+    /// Identity allowed to receive this conversation's history.
+    fn conversation_scope(&self) -> String {
+        self.cache_scope()
+    }
+
+    /// Recognize older on-disk bindings when a transport's history policy changed.
+    fn accepts_legacy_conversation_scope(&self, _scope: &str, _messages: &[Value]) -> bool {
+        false
+    }
+
     fn send_chat_cancellable(
         &self,
         messages: &[Value],
@@ -62,6 +72,30 @@ impl ChatClient for ChatGptClient {
     fn cache_scope(&self) -> String {
         ChatGptClient::cache_scope(self)
     }
+    fn conversation_scope(&self) -> String {
+        if self.uses_api_key_responses() {
+            format!("responses:{}", self.cache_scope_for_model(""))
+        } else {
+            self.cache_scope()
+        }
+    }
+
+    fn accepts_legacy_conversation_scope(&self, scope: &str, messages: &[Value]) -> bool {
+        // Older files used a model-bound cache key. Verify it against the same
+        // endpoint and key before upgrading, even when the model just changed.
+        self.uses_api_key_responses()
+            && (scope == self.cache_scope()
+                || messages
+                    .iter()
+                    .filter_map(|message| {
+                        message
+                            .get(crate::responses::CONTINUATION)?
+                            .get("model")?
+                            .as_str()
+                    })
+                    .any(|model| self.cache_scope_for_model(model) == scope))
+    }
+
     fn send_chat_cancellable(
         &self,
         messages: &[Value],

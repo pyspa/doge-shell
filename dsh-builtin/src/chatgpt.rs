@@ -126,7 +126,8 @@ fn chat_with_tools(
             setup.session_ttl,
             &setup.prompt.identity,
             setup.scope.as_deref(),
-        ) {
+            |manager| manager.bind_provider(client),
+        )? {
             session::Claim::Continued(carried) => {
                 let age = carried.stored_at.elapsed();
                 let soon = setup
@@ -247,7 +248,9 @@ fn chat_with_tools(
                 set_system_prompt(&mut manager, &setup.prompt.text);
             }
         }
-        manager.bind_provider(client.cache_scope())?;
+        if carried_stored_at.is_none() {
+            manager.bind_provider(client)?;
+        }
         manager.transport_session_id = Some(setup.hook_ctx.session_id().to_owned());
         manager.instructions = instructions::InstructionContext::default();
         // The interactive registry belongs to `!` alone. A task polls
@@ -358,7 +361,7 @@ fn chat_with_tools(
                 setup.turn_token_budget,
             ));
 
-            if let Err(error) = manager.check_provider(&client.cache_scope()) {
+            if let Err(error) = manager.check_provider(&client.conversation_scope()) {
                 break Err(error);
             }
             // Compact by rule before paying a model to summarize. Superseded and

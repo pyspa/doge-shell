@@ -90,13 +90,7 @@ impl SqliteCronStore {
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
-        // A dead owner cannot release its own claim, so every scan starts by
-        // taking back the ones whose deadline has passed.
-        tx.execute(
-            "UPDATE jobs SET claimed_by = NULL, claimed_until = NULL \
-             WHERE claimed_until IS NOT NULL AND claimed_until <= ?1",
-            [now],
-        )?;
+        Self::reap_leases_in(&tx, now)?;
 
         let due: Vec<(i64, i64, u64, u64, Schedule)> = {
             let mut statement = tx.prepare(
@@ -263,7 +257,8 @@ impl SqliteCronStore {
 
         let (job_id, previous_digest): (i64, Option<i64>) = tx.query_row(
             "SELECT r.job_id, j.last_digest FROM runs r JOIN jobs j ON j.id = r.job_id \
-             WHERE r.id = ?1",
+             WHERE r.id = ?1 AND r.state IN ('queued', 'running') AND r.finished_at IS NULL \
+               AND j.claimed_by = r.owner",
             [run_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
@@ -388,6 +383,12 @@ impl SqliteCronStore {
         // being closed out as a timeout.
         let mut connection = self.connection.lock();
         let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let released = Self::reap_leases_in(&tx, now)?;
+        tx.commit()?;
+        Ok(released)
+    }
+
+    fn reap_leases_in(tx: &rusqlite::Transaction<'_>, now: i64) -> Result<usize> {
         let released = tx.execute(
             "UPDATE jobs SET claimed_by = NULL, claimed_until = NULL \
              WHERE claimed_until IS NOT NULL AND claimed_until <= ?1",
@@ -432,7 +433,7 @@ impl SqliteCronStore {
                     [job_id],
                 )?;
                 open_incident_in(
-                    &tx,
+                    tx,
                     Some(job_id),
                     IncidentKind::LeaseLost,
                     "the process running this job disappeared before it finished; its last \
@@ -442,7 +443,6 @@ impl SqliteCronStore {
                 )?;
             }
         }
-        tx.commit()?;
         Ok(released)
     }
 

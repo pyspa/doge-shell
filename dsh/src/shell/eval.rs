@@ -12,9 +12,8 @@ use anyhow::Result;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use dsh_builtin::execute_chat_message;
 use dsh_types::{Context, ExitStatus};
-use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
 use std::io::Write;
-use std::os::fd::{AsRawFd, BorrowedFd};
+use std::os::fd::AsFd;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -79,28 +78,13 @@ pub async fn eval_str(
     }
 
     if let Some(rest) = crate::ai_task_input::chat_prompt(&input) {
-        if let Err(e) = disable_raw_mode() {
-            tracing::error!("Failed to disable raw mode: {}", e);
-        } else {
-            tracing::info!("Raw mode disabled successfully");
-        }
-
-        // Force enable ISIG to ensure Ctrl+C generates SIGINT
-        // This addresses issues where crossterm might not fully restore terminal flags
-        if let Ok(mut termios) =
-            tcgetattr(unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) })
-            && !termios.local_flags.contains(LocalFlags::ISIG)
-        {
-            termios.local_flags.insert(LocalFlags::ISIG);
-            if let Err(e) = tcsetattr(
-                unsafe { BorrowedFd::borrow_raw(std::io::stdin().as_raw_fd()) },
-                SetArg::TCSANOW,
-                &termios,
-            ) {
-                tracing::error!("Failed to force enable ISIG: {}", e);
-            }
-        }
-
+        let _raw_pause = ctx
+            .interactive
+            .then(crate::repl::terminal_state::RawModePause::new);
+        // On drop, restore the cooked ISIG bit before RawModePause re-enters raw mode.
+        let stdin = std::io::stdin();
+        let _signal_keys = (ctx.interactive && crate::terminal::terminal_control_enabled())
+            .then(|| crate::repl::terminal_state::ChatSignalKeys::enable(stdin.as_fd()));
         // Ensure signals are set correctly before AI execution
         shell.set_signals();
 
@@ -120,10 +104,6 @@ pub async fn eval_str(
             ExitStatus::Break | ExitStatus::Continue | ExitStatus::Return => 0,
         };
         publish_exit_status(shell, code);
-        // Only re-enable raw mode in interactive context
-        if ctx.interactive {
-            enable_raw_mode().ok();
-        }
         return Ok(code);
     }
 
@@ -650,6 +630,7 @@ mod tests {
     use super::*;
     use crate::environment::Environment;
     use crate::shell::Shell;
+    use std::os::fd::AsRawFd;
 
     #[tokio::test]
     async fn task_shortcut_rejects_redirected_context_without_starting_a_task() {

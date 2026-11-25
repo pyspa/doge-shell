@@ -1,5 +1,6 @@
 //! Read-only queries over `History`: prefix search, the `HistoryQuery`/`EntryMatcher`-driven `search_entries`, event log reads for `shell_history`, and the test-only entry injector.
 use super::*;
+use anyhow::Context as _;
 
 impl History {
     pub fn command_events(&self, author: Option<&str>, limit: usize) -> Result<Vec<CommandEvent>> {
@@ -100,9 +101,10 @@ impl History {
     }
 
     pub fn record_external_event(&mut self, event: CommandEvent) -> Result<()> {
-        let Some(db) = &mut self.db else {
-            return Ok(());
-        };
+        let db = self
+            .db
+            .as_mut()
+            .context("persistent history is unavailable")?;
         let metadata = HistoryMetadata {
             exit_code: event.exit_code,
             duration_ms: event.duration_ms,

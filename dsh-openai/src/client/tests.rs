@@ -1280,9 +1280,7 @@ fn streamed_reply_size_limit_at_normal_completion_and_eof() {
                     limit
                 );
             } else {
-                let error = result
-                    .err()
-                    .expect("a reply one byte over the limit must fail");
+                let error = result.expect_err("a reply one byte over the limit must fail");
                 assert!(error.to_string().contains("16 MiB"), "{error:#}");
             }
         }

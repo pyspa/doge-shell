@@ -323,7 +323,10 @@ impl ConversationManager {
             .send_chat_cancellable(&summary_messages, &options, &|| {
                 self.request_cancelled(client, proxy)
             })
-            .map_err(|e| format!("Summarization failed: {e}"))?;
+            .map_err(|e| {
+                self.turn_usage.add_error_usage(&e);
+                format!("Summarization failed: {e}")
+            })?;
         self.turn_usage.add_response(&response);
         if let Some(runtime) = proxy.agent_runtime() {
             let mut runtime = runtime.lock();

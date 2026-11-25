@@ -329,3 +329,13 @@ script = "{{YES}} > /dev/null & p1=$!; {{YES}} > /dev/null & p2=$!; jobs; {{KILL
 [case.expect]
 status = 0
 stdout_contains = ["[1]-", "[2]+"]
+
+[[case]]
+id = "background.piped-exit-preserves-async-list"
+class = "posix"
+mode = "interactive"
+script = "sleep 0.2 && echo late &\nexit 7"
+
+[case.expect]
+status = 7
+stdout_exact = "late\n"

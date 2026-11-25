@@ -509,9 +509,9 @@ fn test_pacman_completion_uses_dynamic_package_arguments() {
             Some(ArgumentType::Dynamic {
                 ref provider,
                 ..
-            }) if provider == "pacman.package"
+            }) if provider == "pacman.sync_package"
         ),
-        "pacman -S package arg should use reusable dynamic package candidates"
+        "pacman -S package arg should use sync database candidates"
     );
 
     let remove_arg = remove
@@ -528,8 +528,8 @@ fn test_pacman_completion_uses_dynamic_package_arguments() {
             Some(ArgumentType::Dynamic {
                 ref provider,
                 ..
-            }) if provider == "pacman.package"
+            }) if provider == "pacman.installed_package"
         ),
-        "pacman -R package arg should use reusable dynamic package candidates"
+        "pacman -R package arg should use installed package candidates"
     );
 }

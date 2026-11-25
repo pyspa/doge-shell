@@ -146,6 +146,19 @@ impl ConversationManager {
         self.turn_usage = usage::TokenUsage::default();
     }
 
+    pub(super) fn check_turn_budget(&self, budget: Option<u64>) -> Result<(), String> {
+        let used = self.turn_usage.total_tokens();
+        if let Some(limit) = budget
+            && used >= limit
+        {
+            return Err(format!(
+                "chat: stopped after {used} tokens, at the {TURN_TOKEN_BUDGET_KEY} of {limit}. \
+                 Raise it, or ask a narrower question."
+            ));
+        }
+        Ok(())
+    }
+
     /// Remember where this turn starts, before its first message is added.
     pub(super) fn mark_turn_start(&mut self) {
         self.turn_mark = Some(TurnStart {

@@ -296,6 +296,42 @@ fn with_usage(mut response: Value) -> Value {
     response
 }
 
+#[test]
+fn reaching_the_turn_budget_in_a_summary_stops_all_later_requests() {
+    let _guard = session::tests::TEST_LOCK.lock().unwrap();
+    let _state = session::tests::isolated_state_home();
+    let cwd = tempfile::tempdir().unwrap();
+    let mut proxy = hermetic_chat_proxy(cwd.path().to_path_buf());
+    proxy
+        .vars
+        .insert(session::SESSION_TTL_KEY.into(), "600".into());
+    proxy.vars.insert(TURN_TOKEN_BUDGET_KEY.into(), "15".into());
+    let mcp = Arc::new(RwLock::new(McpManager::default()));
+    for finish in ["stop", "length"] {
+        session::session_reset();
+        let mut summary = with_usage(final_answer("short summary"));
+        summary["choices"][0]["finish_reason"] = json!(finish);
+        let large = "x".repeat(MAX_BUFFER_CHARS + 1);
+        let client = ScriptedClient::new(vec![final_answer(&large), summary]);
+        let mut run = |input| {
+            chat_with_tools(
+                &client, input, None, None, None, None, &mcp, None, &mut proxy,
+            )
+        };
+        assert!(run("first goal").is_ok());
+        let error = run("follow-up").unwrap_err();
+        assert!(error.contains("stopped after 15 tokens"), "{error}");
+        let seen = client.tools_seen();
+        assert_eq!(seen.len(), 2);
+        assert!(!seen[0].is_empty());
+        assert!(
+            seen[1].is_empty(),
+            "the only follow-up request was the summary"
+        );
+    }
+    session::session_reset();
+}
+
 /// Tool Search v2 loads at tool granularity within one agent turn: the
 /// first request lacks the hidden tool, `tool_search` names it, and the
 /// second request carries exactly its schema - while the group toggle

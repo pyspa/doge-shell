@@ -84,6 +84,34 @@ impl CompletionGenerationService {
             .context("Failed to resolve the completion output path")
     }
 
+    pub fn prepare_output_path(
+        command_name: &str,
+        explicit: Option<PathBuf>,
+        force: bool,
+    ) -> Result<PathBuf> {
+        Self::validate_command_name(command_name)?;
+        let path = match explicit {
+            Some(path) => path,
+            None => xdg::BaseDirectories::with_prefix("dogesh")
+                .get_config_file(format!("completions/{command_name}.json"))
+                .context("Failed to resolve the completion output path")?,
+        };
+        if !force {
+            match std::fs::symlink_metadata(&path) {
+                Ok(_) => bail!(
+                    "completion file already exists: {}. Use --force to overwrite",
+                    path.display()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("Failed to inspect {}", path.display()));
+                }
+            }
+        }
+        Ok(path)
+    }
+
     pub fn write_json_atomic(
         output_path: &Path,
         json: &str,
@@ -100,6 +128,24 @@ impl CompletionGenerationService {
 #[cfg(test)]
 mod tests {
     use super::CompletionGenerationService;
+
+    #[test]
+    fn existing_entries_are_detected_before_generation_even_for_dangling_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("foo.json");
+        let prepare = |force| {
+            CompletionGenerationService::prepare_output_path("foo", Some(path.clone()), force)
+        };
+        assert_eq!(prepare(false).unwrap(), path);
+        std::os::unix::fs::symlink(dir.path().join("missing"), &path).unwrap();
+        assert!(
+            prepare(false)
+                .unwrap_err()
+                .to_string()
+                .contains("already exists")
+        );
+        assert_eq!(prepare(true).unwrap(), path);
+    }
 
     #[test]
     fn command_name_rejects_shell_and_path_syntax() {

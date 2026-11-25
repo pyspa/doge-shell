@@ -20,7 +20,6 @@ impl<'a> Repl<'a> {
             }
         };
 
-
         debug!(
             "shell setpgid pid:{:?} pgid:{:?}",
             self.shell.pid, self.shell.pgid

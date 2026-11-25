@@ -176,3 +176,10 @@ fn truncation_does_not_replace_the_preview_with_a_marker() {
     assert!(outcome.stderr.contains("[truncated]"));
     assert_eq!(outcome.preview, "diagnostic");
 }
+
+#[test]
+fn color_reset_on_stderr_does_not_hide_stdout_preview() {
+    let outcome = run_command(&run("echo diagnostic; printf '\\033[0m\\n' >&2", 10));
+    assert_eq!(outcome.stderr, "\x1b[0m\n");
+    assert_eq!(outcome.preview, "diagnostic");
+}

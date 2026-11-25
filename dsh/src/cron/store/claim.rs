@@ -562,12 +562,12 @@ fn outcome_preview(outcome: &RunOutcome) -> String {
 }
 
 fn preview(stdout: &str, stderr: &str) -> String {
-    let source = if stderr.trim().is_empty() {
-        stdout
+    let diagnostic = super::super::exec::preview(stderr);
+    if diagnostic.is_empty() {
+        super::super::exec::preview(stdout)
     } else {
-        stderr
-    };
-    super::super::exec::preview(source)
+        diagnostic
+    }
 }
 
 /// Trims a job's history, on a fraction of runs rather than every one.

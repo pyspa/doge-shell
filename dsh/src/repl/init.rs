@@ -97,22 +97,6 @@ impl<'a> Repl<'a> {
         // Set github_status in shell as well for proxy access
         shell.github_status = Some(status_for_github);
 
-        // The cron store lives on disk, independent of any one session, so a
-        // session merely opens it (or, if that fails, simply runs without an
-        // in-session driver — jobs still fire from an external tick).
-        let cron_task = match crate::cron::store::SqliteCronStore::open(
-            &dsh_builtin::config_paths::cron_state_dir(),
-        ) {
-            Ok(store) => Some(tokio::spawn(crate::cron::runner::cron_runner_task(
-                Arc::new(store),
-                shell.environment.read().cron_health.clone(),
-            ))),
-            Err(error) => {
-                warn!("cron: session driver disabled, could not open its store: {error}");
-                None
-            }
-        };
-
         let prompt_mark_cache = prompt.read().mark.clone();
         let prompt_mark_width = display_width(&prompt_mark_cache);
 
@@ -237,7 +221,7 @@ impl<'a> Repl<'a> {
                 git_task_inflight: Arc::new(AtomicBool::new(false)),
                 history_sync_last_check: Instant::now(),
                 github_task: Some(github_task),
-                cron_task,
+                cron_task: None,
                 io: background_io,
             },
             event_loop,

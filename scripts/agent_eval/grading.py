@@ -10,17 +10,35 @@ from .case import Case
 from .workspace import bounded_command, git
 
 
+def validate_command(command: str, worktree: Path, timeout: int) -> tuple[dict, str]:
+    args = shlex.split(command)
+    try:
+        code, log, timed_out = bounded_command(args, worktree, timeout)
+    except OSError as exc:
+        return {"exit_code": None, "timed_out": False, "error": str(exc)}, str(exc)
+    result = {"exit_code": code, "timed_out": timed_out}
+    if args[:2] == ["cargo", "test"]:
+        # libtest's "running N tests" includes ignored tests. Only completed
+        # suites tell us how many actually passed or failed.
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", log)
+        counts = re.findall(r"^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed;", plain, re.M)
+        failed = sum(int(fail) for _, fail in counts)
+        result["tests_executed"] = sum(int(passed) for passed, _ in counts) + failed
+        if code != 0 and not failed:
+            result["error"] = "cargo test exited without a reported failing test"
+        elif not result["tests_executed"]:
+            result.update(exit_code=1, error="cargo test completed no passing or failing tests")
+    if timed_out:
+        result.update(exit_code=None, error=f"timed out after {timeout}s")
+    elif code is not None and code < 0:
+        result["error"] = f"terminated by signal {-code}"
+    return result, log
+
+
 def run_validation(case: Case, worktree: Path, log_dir: Path, timeout: int) -> dict:
     results = {}
     for index, command in enumerate(case.required_tests + case.required_checkers):
-        code, log, timed_out = bounded_command(shlex.split(command), worktree, timeout)
-        result = {"exit_code": code, "timed_out": timed_out}
-        if command.startswith("cargo test "):
-            counts = [int(count) for count in re.findall(r"\brunning (\d+) tests?\b", log)]
-            result["tests_executed"] = sum(counts)
-            if code == 0 and not any(counts):
-                result["exit_code"] = 1
-                result["error"] = "cargo test matched no tests"
+        result, log = validate_command(command, worktree, timeout)
         (log_dir / f"validation-{index}.log").write_text(log, encoding="utf-8")
         results[command] = result
     return results

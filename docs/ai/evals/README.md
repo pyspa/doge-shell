@@ -5,7 +5,7 @@
 ```sh
 python3 scripts/check-agent-eval-schemas.py
 python3 scripts/check-agent-eval-fixtures.py
-python3 scripts/check-agent-eval-fixtures.py --smoke  # optional: mutation must fail a required validation
+python3 scripts/check-agent-eval-fixtures.py --smoke  # optional: compare clean HEAD and the mutation
 python3 scripts/eval-agent-routing.py
 python3 scripts/run-agent-eval.py --runner codex --case wait-n-completed-ledger --repeat 3
 python3 scripts/run-agent-eval.py --runner opencode --suite smoke --model provider/model
@@ -19,6 +19,10 @@ The generic command runner accepts an argv array such as `{"argv":["my-agent","-
 Support boundary: `opencode` and generic `command` are local-only runners. The manual workflow `.github/workflows/agent-eval.yml` intentionally remains Codex/Claude-only with least-privilege credentials (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`), because OpenCode relies on provider model/auth configuration with dynamic CLI capability probing and the command runner accepts arbitrary argv, making workflow credentials and installs less bounded and reproducible than the pinned Codex/Claude setup. `python3 scripts/check-agent-eval-support.py` enforces this contract deterministically.
 
 The grade keeps outcome, correctness, process, and efficiency separate, without a combined score. A mutation is restored when its changed path returns exactly to HEAD; a semantically equivalent but different fix may require manual review. Trace-based route access is advisory. Broader tests and command count above 40 are warnings when trace is available. Collect 5–10 runs per model before defining a regression threshold.
+
+Fixture smoke runs the required validations on clean HEAD first. The mutation must then fail a checker or a completed Rust test. Cargo counts come from libtest's passed and failed totals. An ignored-only filter, compile failure, or timeout is inconclusive and fails the smoke check.
+
+The comparison report shows the number of runs, the fraction that passed, and the number with measured prompt tokens. It lists groups present on just one side and exits nonzero if there are no matching groups. When repeat counts differ, inspect the per-group summaries in `--json` before interpreting pooled medians.
 
 Reviewer cases are separate from implementer cases. A reviewer receives the original prompt, router packet, diff, changed paths, recommended validations, and relevant references, without the implementer's conversation. The suite includes historical bug diffs and a clean control. Its true-positive check is a path-and-term heuristic, so inspect the finding text before treating the rate as a quality result. Invalid output or a changed worktree fails the review run.
 

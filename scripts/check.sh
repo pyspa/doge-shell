@@ -24,6 +24,7 @@ python3 scripts/check-agent-context-budget.py
 python3 scripts/check-agent-eval-schemas.py
 python3 scripts/check-agent-eval-fixtures.py
 python3 scripts/test-check-agent-eval-support.py
+python3 scripts/test-agent-eval-evidence.py
 python3 scripts/check-agent-eval-support.py
 scripts/check-project-consistency.py
 scripts/check-shell-proxy-capabilities.py

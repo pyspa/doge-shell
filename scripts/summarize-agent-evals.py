@@ -25,10 +25,13 @@ def median(results, key):
 
 def summarize(results):
     runs = [run for group in results.values() for run in group]
+    successes = sum(bool(run["grade"]["outcome"]["pass"]) for run in runs)
     return {
         "cases": len(results),
         "runs": len(runs),
-        "success": sum(bool(run["grade"]["outcome"]["pass"]) for run in runs),
+        "success": successes,
+        "success_rate": successes / len(runs) if runs else None,
+        "prompt_token_samples": sum(run["normalized"].get("prompt_tokens") is not None for run in runs),
         "median_prompt_tokens": median(runs, "prompt_tokens"),
         "median_tool_calls": median(runs, "tool_calls"),
         "median_changed_files": statistics.median([len(run["normalized"]["files_changed"]) for run in runs]) if runs else None,
@@ -55,16 +58,25 @@ def main():
         for key in sorted(common, key=str)
     }
     output = {"common_case_runner_models_agents_variants": [list(key) for key in sorted(common, key=str)], "baseline": before, "candidate": after, "groups": groups, "warnings": []}
-    if before["median_prompt_tokens"] and after["median_prompt_tokens"] and after["median_prompt_tokens"] > before["median_prompt_tokens"] * 1.3:
+    for label, keys in (("baseline", baseline.keys() - common), ("candidate", candidate.keys() - common)):
+        for key in sorted(keys, key=str):
+            output["warnings"].append(f"{label}-only group excluded: {key}")
+    if not common:
+        output["warnings"].append("no matching case, runner, model, agent and variant to compare")
+    elif any(len(baseline[key]) != len(candidate[key]) for key in common):
+        output["warnings"].append("repeat counts differ within matched groups; pooled results weight runs by count")
+    if (before["median_prompt_tokens"] is not None and after["median_prompt_tokens"] is not None
+            and after["median_prompt_tokens"] > before["median_prompt_tokens"] * 1.3):
         output["warnings"].append("candidate prompt-token median exceeds baseline by 30%")
     if args.json:
         print(json.dumps(output, indent=2))
     else:
-        for key in ("cases", "success", "median_prompt_tokens", "median_tool_calls", "median_changed_files", "median_duration_ms"):
+        for key in ("cases", "runs", "success", "success_rate", "prompt_token_samples",
+                    "median_prompt_tokens", "median_tool_calls", "median_changed_files", "median_duration_ms"):
             print(f"{key}: {before[key]} -> {after[key]}")
         for warning in output["warnings"]:
             print(f"warning: {warning}")
-    return 0
+    return 0 if common else 1
 
 
 if __name__ == "__main__":

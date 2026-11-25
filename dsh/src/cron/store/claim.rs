@@ -312,7 +312,7 @@ impl SqliteCronStore {
                 outcome.agent_task_id,
                 outcome.tokens_used as i64,
                 i64::from(outcome.pending_skills),
-                preview(&outcome.stdout, &outcome.stderr),
+                outcome_preview(outcome),
                 clamp_stream(&outcome.stdout),
                 clamp_stream(&outcome.stderr),
             ],
@@ -599,7 +599,7 @@ fn incident_detail(outcome: &RunOutcome) -> String {
         .reason
         .map(|reason| reason.to_string())
         .unwrap_or_else(|| outcome.state.to_string());
-    let note = preview(&outcome.stdout, &outcome.stderr);
+    let note = outcome_preview(outcome);
     if note.is_empty() {
         reason
     } else {
@@ -607,20 +607,22 @@ fn incident_detail(outcome: &RunOutcome) -> String {
     }
 }
 
-/// Picks which stream `exec::preview` reads from - stderr, preferring it
-/// since that is where the reason a run failed usually is - then defers the
-/// actual first-line/ANSI-strip/length-clamp work to that single primitive
-/// rather than a second copy of it. `exec::preview`'s own tests
-/// (`exec/tests.rs`) pin the exact truncation shape (`PREVIEW_CHARS`, the
-/// trailing `…`), so this must stay a thin wrapper, not grow logic of its
-/// own that could drift from them.
+/// Shell runs capture the preview before truncating their logs. Other run
+/// types store complete diagnostics, from which the store can derive it.
+fn outcome_preview(outcome: &RunOutcome) -> String {
+    outcome
+        .preview
+        .clone()
+        .unwrap_or_else(|| preview(&outcome.stdout, &outcome.stderr))
+}
+
 fn preview(stdout: &str, stderr: &str) -> String {
-    let source = if stderr.trim().is_empty() {
-        stdout
+    let diagnostic = super::super::exec::preview(stderr);
+    if diagnostic.is_empty() {
+        super::super::exec::preview(stdout)
     } else {
-        stderr
-    };
-    super::super::exec::preview(source)
+        diagnostic
+    }
 }
 
 /// Trims a job's history, on a fraction of runs rather than every one.

@@ -29,6 +29,7 @@ mod claim;
 mod notepads;
 mod rows;
 
+pub(super) use rows::MAX_STREAM_BYTES;
 use rows::*;
 
 #[cfg(test)]

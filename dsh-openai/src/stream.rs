@@ -161,6 +161,7 @@ pub struct DeltaAggregator {
     reasoning_content: Option<String>,
     tool_calls: Vec<ToolCallAccumulator>,
     finish_reason: Option<String>,
+    refusal: String,
     usage: Option<Value>,
     accumulated_bytes: usize,
 }
@@ -207,6 +208,11 @@ impl DeltaAggregator {
             for tool_call in tool_calls {
                 self.apply_tool_call_delta(tool_call);
             }
+        }
+        // The turn interpreter reports the whole refusal once when the stream ends.
+        if let Some(refusal) = delta.get("refusal").and_then(Value::as_str) {
+            self.accumulated_bytes = self.accumulated_bytes.saturating_add(refusal.len());
+            self.refusal.push_str(refusal);
         }
 
         text_delta
@@ -296,6 +302,10 @@ impl DeltaAggregator {
                 })
                 .collect();
             message.insert("tool_calls".to_string(), json!(tool_calls));
+        }
+
+        if !self.refusal.is_empty() {
+            message.insert("refusal".to_string(), Value::String(self.refusal));
         }
 
         let choice = json!({
@@ -527,6 +537,19 @@ mod tests {
         let response = agg.finish();
         assert_eq!(response["usage"]["prompt_tokens"], 12);
         assert_eq!(response["usage"]["completion_tokens"], 3);
+    }
+
+    #[test]
+    fn streamed_refusal_is_reported_once_after_its_fragments_arrive() {
+        let mut aggregator = DeltaAggregator::new();
+        for fragment in ["request ", "declined"] {
+            let delta = json!({"choices":[{"delta":{"refusal":fragment}}]});
+            assert_eq!(aggregator.apply(&delta), None);
+        }
+        aggregator.apply(&json!({"choices":[{"delta":{},"finish_reason":"stop"}]}));
+        assert_eq!(aggregator.accumulated_bytes(), "request declined".len());
+        let error = interpret_response(&aggregator.finish()).unwrap_err();
+        assert_eq!(error, "the model refused this request: request declined");
     }
 
     #[test]

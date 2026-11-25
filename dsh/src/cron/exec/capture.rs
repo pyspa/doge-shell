@@ -13,7 +13,6 @@ pub(super) struct Capture {
     head: Vec<u8>,
     tail: VecDeque<u8>,
     truncated: bool,
-    nonblank: bool,
     preview: String,
 }
 
@@ -24,7 +23,6 @@ impl Capture {
             head: Vec::new(),
             tail: VecDeque::new(),
             truncated: false,
-            nonblank: false,
             preview: String::new(),
         }
     }
@@ -39,7 +37,6 @@ impl Capture {
             // The mask emits complete lines (or its last fragment at EOF).
             let text = std::str::from_utf8(bytes).expect("redacted UTF-8");
             if !text.trim().is_empty() {
-                self.nonblank = true;
                 self.preview = super::preview(text);
             }
         }
@@ -70,7 +67,7 @@ impl Capture {
         self.head.extend(self.tail);
         (
             String::from_utf8(self.head).expect("redacted UTF-8"),
-            self.nonblank.then_some(self.preview),
+            (!self.preview.is_empty()).then_some(self.preview),
         )
     }
 }

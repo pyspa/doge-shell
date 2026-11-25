@@ -152,7 +152,7 @@ fn directory_visits_keep_only_the_latest_rows() {
     {
         let conn = db.get_connection();
         for ts in 0..5 {
-            log_visit(&conn, "/frecency/visit", ts, None, 3);
+            persistence::log_visit(&conn, "/frecency/visit", ts, None, 3).unwrap();
         }
     }
     let conn = db.get_connection();
@@ -165,4 +165,117 @@ fn directory_visits_keep_only_the_latest_rows() {
         .map(|row| row.unwrap())
         .collect();
     assert_eq!(timestamps, [2, 3, 4]);
+}
+
+#[test]
+fn concurrent_sessions_preserve_visits_across_save_and_reload() {
+    let (dir, db) = temp_db();
+    let mut a = FrecencyHistory::from_db(db.clone()).unwrap();
+    a.write_history("/shared").unwrap();
+    let mut b = FrecencyHistory::from_db(Db::new(dir.path().join("frecency.db")).unwrap()).unwrap();
+    b.start_background_writer();
+    a.write_history("/shared").unwrap();
+    b.add("/other");
+    b.save_background();
+    b.reload().unwrap();
+    assert_eq!(item(&b, "/shared").unwrap().num_accesses(), 2);
+    b.add("/shared");
+    a.write_history("/shared").unwrap();
+    b.save_background();
+    b.reload().unwrap();
+    assert_eq!(item(&b, "/shared").unwrap().num_accesses(), 4);
+    assert!((score(&b, "/shared") - 4.0).abs() < 0.01);
+    assert_eq!(item(&b, "/other").unwrap().num_accesses(), 1);
+}
+
+#[test]
+fn failed_visit_transaction_retries_without_counting_twice() {
+    let (_dir, db) = temp_db();
+    let mut history = FrecencyHistory::from_db(db.clone()).unwrap();
+    db.get_connection()
+        .execute_batch(
+            "CREATE TRIGGER reject BEFORE INSERT ON directory_visits
+        BEGIN SELECT RAISE(ABORT, 'visit rejected'); END;",
+        )
+        .unwrap();
+    assert!(history.write_history("/retry").is_err());
+    assert!(snapshot_paths(&db).is_empty());
+    db.get_connection()
+        .execute_batch("DROP TRIGGER reject")
+        .unwrap();
+    history.save().unwrap();
+    history.reload().unwrap();
+    assert_eq!(item(&history, "/retry").unwrap().num_accesses(), 1);
+}
+
+#[test]
+fn legacy_database_is_upgraded_on_visit_and_dated_scores_decay() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE directory_snapshot (
+            path TEXT PRIMARY KEY, score REAL, last_accessed INTEGER, access_count INTEGER,
+            half_life REAL, context TEXT);
+            INSERT INTO directory_snapshot VALUES ('/old', 2.0, 1700000000, 3, 43200, NULL);",
+        )
+        .unwrap();
+    }
+    let db = Db::new(path).unwrap();
+    let mut history = FrecencyHistory::from_db(db.clone()).unwrap();
+    history.write_history("/old").unwrap();
+    db.get_connection()
+        .execute(
+            "UPDATE directory_snapshot SET score_time = score_time - half_life",
+            [],
+        )
+        .unwrap();
+    history.reload().unwrap();
+    assert_eq!(item(&history, "/old").unwrap().num_accesses(), 4);
+    assert!((score(&history, "/old") - 1.5).abs() < 0.01);
+}
+
+#[test]
+fn revisiting_an_unreadable_snapshot_does_not_block_other_visits() {
+    let (_dir, db) = temp_db();
+    db.get_connection()
+        .execute_batch(
+            "INSERT INTO directory_snapshot
+        (path, score, last_accessed, access_count, half_life) VALUES
+        ('/bad', 'invalid', 1700000000, 1, 43200)",
+        )
+        .unwrap();
+    let mut history = FrecencyHistory::from_db(db.clone()).unwrap();
+    assert!(item(&history, "/bad").is_none());
+    history.add("/good");
+    history.write_history("/bad").unwrap();
+    history.reload().unwrap();
+    for path in ["/bad", "/good"] {
+        assert_eq!(item(&history, path).unwrap().num_accesses(), 1);
+    }
+}
+
+#[test]
+fn visiting_a_saturated_legacy_row_preserves_count_and_updates_context() {
+    let (_dir, db) = temp_db();
+    db.get_connection()
+        .execute_batch(
+            "INSERT INTO directory_snapshot
+        (path, score, last_accessed, access_count, half_life, context)
+        VALUES ('/full', 1.0, 1, 2147483647, 43200, 'old-context')",
+        )
+        .unwrap();
+    let mut history = FrecencyHistory::from_db(db).unwrap();
+    history.add("/full");
+    let expected_context = item(&history, "/full").unwrap().context.clone();
+    // Persist later than the visit. A legacy relative last_accessed has no epoch.
+    if let DirectoryChange::Visit { at, .. } = &mut history.pending.lock()[0] {
+        *at -= 60.0;
+    }
+    history.save().unwrap();
+    history.reload().unwrap();
+    let saved = item(&history, "/full").unwrap();
+    assert_eq!(saved.num_accesses(), i32::MAX);
+    assert_eq!(saved.context, expected_context);
 }

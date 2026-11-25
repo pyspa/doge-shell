@@ -65,7 +65,15 @@ impl HistoryImporter for FishHistoryImporter {
         let mut line_number = 0;
         let mut entries = Vec::new();
 
-        while let Ok(bytes_read) = reader.read_until(b'\n', &mut line_buffer) {
+        loop {
+            let bytes_read = reader
+                .read_until(b'\n', &mut line_buffer)
+                .with_context(|| {
+                    format!(
+                        "Failed to read fish history file: {}",
+                        self.history_path.display()
+                    )
+                })?;
             if bytes_read == 0 {
                 break;
             }
@@ -203,6 +211,13 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn fish_import_reports_read_errors() {
+        let dir = tempdir().unwrap();
+        let importer = FishHistoryImporter::with_path(dir.path());
+        assert!(importer.import(&mut History::new()).is_err());
+    }
 
     #[test]
     fn test_fish_history_import() -> Result<()> {

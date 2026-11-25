@@ -144,7 +144,7 @@ impl ItemStats {
 
     /// Update the number of accesses of the item by the given weight
     pub fn update_num_accesses(&mut self, weight: i32) {
-        self.num_accesses += weight;
+        self.num_accesses = self.num_accesses.saturating_add(weight);
     }
 
     /// Number of recorded accesses.

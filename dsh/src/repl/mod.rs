@@ -4,7 +4,6 @@ use crate::completion::integrated::IntegratedCompletionEngine;
 use crate::completion::{self as completion_lib, Completion};
 
 use crate::environment::Environment;
-use crate::history::FrecencyHistory;
 
 use crate::input::{ColorType, Input, InputConfig, display_width};
 use crate::lisp::{Symbol, Value};
@@ -25,7 +24,6 @@ use futures::StreamExt;
 
 use nix::sys::termios::{Termios, tcgetattr};
 use nix::unistd::tcsetpgrp;
-use parking_lot::Mutex as ParkingMutex;
 use parking_lot::RwLock;
 
 use pest::iterators::Pairs;

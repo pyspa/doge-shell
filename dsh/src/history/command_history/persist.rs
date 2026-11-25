@@ -323,16 +323,17 @@ impl History {
             .collect::<Vec<_>>();
         self.track_pending_entries(persistence_id, &commands);
         if let Some(sender) = &self.sender {
-            let _ = sender.send(HistoryMsg::WriteBatch {
-                entries,
-                context,
-                persistence_id,
-                commands,
-            });
+            sender
+                .send(HistoryMsg::WriteBatch {
+                    entries,
+                    context,
+                    persistence_id,
+                    commands,
+                })
+                .map_err(|_| anyhow::anyhow!("command history writer disconnected"))?;
         } else if let Some(db) = &mut self.db {
-            if Self::write_batch_sync(db, entries, context).is_ok() {
-                self.acknowledge_persistence(persistence_id, &commands);
-            }
+            Self::write_batch_sync(db, entries, context)?;
+            self.acknowledge_persistence(persistence_id, &commands);
         } else if let Some(writes) = &mut self.startup_writes {
             writes.push(StartupHistoryWrite::Batch {
                 entries,

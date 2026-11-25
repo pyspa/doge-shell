@@ -34,13 +34,12 @@ impl StartupHistoryWrite {
 impl History {
     /// The loader has already read SQLite and started its canonical writer.
     /// Only in-memory merge work and channel sends happen under the live lock.
-    pub(crate) fn install_startup_history(&mut self, loaded: &History, mut older: Vec<Entry>) {
+    pub(crate) fn install_startup_history(&mut self, loaded: History) {
         debug_assert!(self.db.is_none());
-        self.db = loaded.db.clone();
-        self.sender = loaded.sender.clone();
-        self.persist_ack_rx = loaded.persist_ack_rx.clone();
-        older.extend(loaded.histories.iter().cloned());
-        self.merge_startup_baseline(older);
+        self.db = loaded.db;
+        self.sender = loaded.sender;
+        self.persist_ack_rx = loaded.persist_ack_rx;
+        self.merge_startup_baseline(loaded.histories);
 
         if let Some(sender) = &self.sender {
             let writes = self.startup_writes.take().unwrap_or_default();
@@ -64,7 +63,7 @@ impl History {
         self.startup_writes = None;
     }
 
-    /// Both snapshots predate foreground writes. Existing entries contain the
+    /// The snapshot predates foreground writes. Existing entries contain the
     /// local delta, so add the database baseline exactly once, keeping all live
     /// metadata. Merge the combined baseline once before any reload can apply.
     fn merge_startup_baseline(&mut self, entries: Vec<Entry>) {

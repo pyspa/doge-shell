@@ -2,7 +2,7 @@ use super::*;
 use crate::run_modes::{prepare_command_history, publish_command_history};
 use std::time::Duration;
 
-fn fixture() -> (tempfile::TempDir, History, Vec<Entry>) {
+fn fixture() -> (tempfile::TempDir, History) {
     let dir = tempfile::tempdir().unwrap();
     let mut loaded = History::new();
     loaded.db = Some(Db::new(dir.path().join("startup.db")).unwrap());
@@ -13,8 +13,8 @@ fn fixture() -> (tempfile::TempDir, History, Vec<Entry>) {
             ("Duplicate".into(), 30),
         ])
         .unwrap();
-    let older = prepare_command_history(&mut loaded, 1, 9000);
-    (dir, loaded, older)
+    prepare_command_history(&mut loaded);
+    (dir, loaded)
 }
 
 fn flush(shared: &Arc<ParkingMutex<History>>) {
@@ -28,7 +28,7 @@ fn flush(shared: &Arc<ParkingMutex<History>>) {
 
 #[test]
 fn startup_publication_preserves_live_writes_outcomes_and_full_baseline() {
-    let (_dir, loaded, older) = fixture();
+    let (_dir, loaded) = fixture();
     let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
     let shell_handle = shared.clone();
     {
@@ -56,7 +56,7 @@ fn startup_publication_preserves_live_writes_outcomes_and_full_baseline() {
         )
         .unwrap();
     }
-    publish_command_history(&shared, &loaded, older);
+    publish_command_history(&shared, loaded);
     assert!(Arc::ptr_eq(&shared, &shell_handle));
     {
         let live = shell_handle.lock();
@@ -123,7 +123,7 @@ fn startup_publication_preserves_live_writes_outcomes_and_full_baseline() {
 
 #[test]
 fn startup_publication_preserves_navigation_with_full_baseline() {
-    let (_dir, loaded, older) = fixture();
+    let (_dir, loaded) = fixture();
     let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
     {
         let mut live = shared.lock();
@@ -131,7 +131,7 @@ fn startup_publication_preserves_navigation_with_full_baseline() {
         live.search_word = Some("loc".into());
         assert_eq!(live.back().as_deref(), Some("Local"));
     }
-    publish_command_history(&shared, &loaded, older);
+    publish_command_history(&shared, loaded);
     let mut live = shared.lock();
     assert_eq!(live.search_word.as_deref(), Some("loc"));
     assert!(!live.at_end());
@@ -146,7 +146,7 @@ fn startup_publication_preserves_navigation_with_full_baseline() {
 
 #[test]
 fn startup_publication_replays_each_outcome_once_and_retires_journal() {
-    let (_dir, loaded, older) = fixture();
+    let (_dir, loaded) = fixture();
     let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
     for code in [1, 2] {
         let mut live = shared.lock();
@@ -163,7 +163,7 @@ fn startup_publication_replays_each_outcome_once_and_retires_journal() {
         )
         .unwrap();
     }
-    publish_command_history(&shared, &loaded, older);
+    publish_command_history(&shared, loaded);
     flush(&shared);
     // Later writes must not replay any acknowledged startup operation.
     shared
@@ -219,7 +219,7 @@ fn ordinary_memory_history_does_not_buffer_startup_operations() {
 #[test]
 fn review_regression_reload_must_not_double_startup_baseline() {
     for early_executions in [0, 2] {
-        let (_dir, loaded, older) = fixture();
+        let (_dir, loaded) = fixture();
         let shared = Arc::new(ParkingMutex::new(History::new_for_startup()));
         for timestamp in 0..early_executions {
             shared
@@ -229,7 +229,7 @@ fn review_regression_reload_must_not_double_startup_baseline() {
         }
         // The combined baseline is published atomically; the first opportunity
         // to request/apply reload is after older counts are already installed.
-        publish_command_history(&shared, &loaded, older);
+        publish_command_history(&shared, loaded);
         assert_eq!(
             shared
                 .lock()
@@ -336,4 +336,21 @@ fn review_regression_terminal_initialization_failure_ends_journal() {
     assert_eq!(live.pending_persistence["Keep"].entry.count, 33);
     assert_eq!(live.pending_persistence["Keep"].entry.exit_code, Some(31));
     assert!(live.startup_writes.is_none());
+}
+
+#[test]
+fn startup_loads_all_commands_tied_at_the_former_page_boundary() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::new(dir.path().join("startup.db")).unwrap();
+    db.get_connection()
+        .execute_batch(
+            "WITH RECURSIVE seq(n) AS (
+        VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n < 1001
+    ) INSERT INTO command_history(command, timestamp) SELECT 'cmd-' || n, 42 FROM seq",
+        )
+        .unwrap();
+    let mut history = History::new();
+    history.db = Some(db);
+    prepare_command_history(&mut history);
+    assert_eq!(history.histories.len(), 1001);
 }

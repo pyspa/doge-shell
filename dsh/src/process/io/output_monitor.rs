@@ -229,10 +229,15 @@ impl OutputMonitor {
     /// Newline `0x0A` never appears inside a UTF-8 multi-byte sequence, so
     /// record framing never splits a character for the observer projection.
     fn feed_bytes(&mut self, display: &mut Vec<u8>, bytes: &[u8]) {
-        self.pending_line.extend_from_slice(bytes);
-        while let Some(newline) = self.pending_line.iter().position(|&byte| byte == b'\n') {
-            let record: Vec<u8> = self.pending_line.drain(..=newline).collect();
-            self.publish_record(display, &record);
+        for part in bytes.split_inclusive(|&byte| byte == b'\n') {
+            if part.last() != Some(&b'\n') {
+                self.pending_line.extend_from_slice(part);
+            } else if self.pending_line.is_empty() {
+                self.publish_record(display, part);
+            } else {
+                self.pending_line.extend_from_slice(part);
+                self.flush_pending_fragment(display);
+            }
         }
     }
 

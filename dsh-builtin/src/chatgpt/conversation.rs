@@ -97,7 +97,7 @@ impl ConversationManager {
         client: &dyn ChatClient,
         proxy: &dyn ChatToolHost,
     ) -> bool {
-        task_cancelled(proxy) || self.check_provider(&client.cache_scope()).is_err()
+        task_cancelled(proxy) || self.check_provider(&client.conversation_scope()).is_err()
     }
     pub(super) fn check_provider(&self, scope: &str) -> Result<(), String> {
         if self.provider_scope.as_ref().is_some_and(|old| old != scope) {
@@ -105,11 +105,17 @@ impl ConversationManager {
         }
         Ok(())
     }
-    pub(super) fn bind_provider(&mut self, scope: String) -> Result<(), String> {
+    pub(super) fn bind_provider(&mut self, client: &dyn ChatClient) -> Result<(), String> {
+        let scope = client.conversation_scope();
         if scope.is_empty() {
             return Ok(());
         }
-        self.check_provider(&scope)?;
+        if let Some(old) = &self.provider_scope
+            && old != &scope
+            && !client.accepts_legacy_conversation_scope(old, &self.buffer)
+        {
+            return self.check_provider(&scope);
+        }
         if self.provider_scope.is_none() && (self.summary.is_some() || !self.buffer.is_empty()) {
             return Err(
                 "This older history has no provider identity. Run chat_reset to migrate safely."

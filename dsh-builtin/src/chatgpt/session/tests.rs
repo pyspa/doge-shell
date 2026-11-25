@@ -5,6 +5,10 @@ fn ttl() -> Option<Duration> {
     resolve_ttl(None)
 }
 
+fn take(ttl: Option<Duration>, identity: &str, scope: Option<&Path>) -> Claim {
+    super::take(ttl, identity, scope, |_| Ok(())).unwrap()
+}
+
 fn manager() -> ConversationManager {
     ConversationManager::new(
         json!({"role": "system", "content": "sys"}),
@@ -51,6 +55,31 @@ pub(crate) fn isolated_state_home() -> StateHomeGuard {
         _dir: dir,
         previous,
     }
+}
+
+#[test]
+fn rejected_provider_preserves_the_session_in_memory_and_after_restart() {
+    let _guard = TEST_LOCK.lock().unwrap();
+    let _state = isolated_state_home();
+    session_reset();
+    let mut conversation = manager();
+    conversation.add_message(json!({"role":"assistant","content":"finished answer"}));
+    store(ttl(), conversation, "saved", "sys", None, None);
+    let path = crate::config_paths::chat_session_file();
+    let original = std::fs::read(&path).unwrap();
+    for restart in [false, true] {
+        if restart {
+            slot().take();
+        }
+        let refused = super::take(ttl(), "sys", None, |_| Err("wrong provider".into()));
+        assert!(matches!(refused, Err(reason) if reason == "wrong provider"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(peek_id(ttl(), "sys", None).as_deref(), Some("saved"));
+    }
+    let Claim::Continued(carried) = take(ttl(), "sys", None) else {
+        panic!("the original provider should still resume");
+    };
+    assert_eq!(carried.manager.buffer[0]["content"], "finished answer");
 }
 
 #[test]
@@ -640,9 +669,7 @@ fn responses_native_continuation_survives_restart_compaction_and_clone() {
 #[test]
 fn summary_keeps_account_binding_after_all_original_output_is_removed() {
     let mut conversation = manager();
-    conversation
-        .bind_provider("account-A-model".into())
-        .unwrap();
+    conversation.provider_scope = Some("account-A-model".into());
     conversation.add_message(json!({"role":"assistant","content":"old"}));
     conversation.summary = Some("summary of account A".into());
     conversation.drop_buffer_prefix(1);

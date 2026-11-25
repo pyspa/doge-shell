@@ -71,10 +71,18 @@ impl ChatGptClient {
         Ok(client)
     }
 
+    pub(crate) fn uses_api_key_responses(&self) -> bool {
+        self.provider == crate::AiProvider::ApiKey && self.responses.is_some()
+    }
+
     pub fn cache_scope(&self) -> String {
+        self.cache_scope_for_model(&self.default_model)
+    }
+
+    pub(crate) fn cache_scope_for_model(&self, model: &str) -> String {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
-        self.default_model.hash(&mut hash);
+        model.hash(&mut hash);
         if let Some(store) = self
             .responses
             .as_ref()

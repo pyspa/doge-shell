@@ -331,6 +331,29 @@ mod tests {
     }
 
     #[test]
+    fn external_record_requires_a_connected_database() {
+        let mut history = crate::history::History::new_for_startup();
+        let env = crate::environment::Environment::new();
+        let mut ctx = Context::new_safe(nix::unistd::getpid(), nix::unistd::getpid(), false);
+        let observer = dsh_types::observed_output::ObservedOutput::shared(4096);
+        ctx.output_observer = Some(observer.clone());
+        let args = [
+            "--json".into(),
+            r#"{"command":"ls","author":"external","started_at":1}"#.into(),
+        ];
+        for _ in 0..2 {
+            let error = record_external_event(&mut history, &env, &ctx, &args).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("persistent history is unavailable")
+            );
+            assert!(observer.lock().unwrap().snapshot().stdout.is_empty());
+            history.end_startup_initialization();
+        }
+    }
+
+    #[test]
     fn external_json_record_preserves_author_and_uses_event_schema() {
         let dir = tempfile::tempdir().unwrap();
         let mut history = crate::history::History::new();

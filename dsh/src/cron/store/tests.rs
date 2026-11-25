@@ -1918,6 +1918,55 @@ fn reclaiming_legacy_rows_preserves_more_recent_failure_and_skip_streaks() {
 }
 
 #[test]
+fn a_legacy_gap_inside_the_current_failure_streak_still_triggers_an_incident() {
+    let (dir, store) = store();
+    let job_id = store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    // 48 earlier successes have aged out. The failure on each side of the
+    // orphan still belongs to the current streak, making it three failures.
+    let db = raw(&dir);
+    for (slot, state) in ["succeeded", "failed", "running", "queued"]
+        .iter()
+        .enumerate()
+    {
+        db.execute(
+            "INSERT INTO runs(id, job_id, scheduled_for, state, finished_at, trigger, owner) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'manual', 'owner')",
+            params![
+                slot.to_string(),
+                job_id,
+                NOW + slot as i64,
+                state,
+                (slot < 2).then_some(NOW)
+            ],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "UPDATE jobs SET run_count = 50, fail_count = 1, consecutive_failures = 1, \
+         claimed_by = 'owner', claimed_until = ?1 WHERE id = ?2",
+        params![NOW + 60, job_id],
+    )
+    .unwrap();
+    store
+        .complete("3", &outcome(RunState::Failed), NOW + 4)
+        .unwrap();
+    let job = store.get("probe").unwrap();
+    assert_eq!(
+        (job.run_count, job.fail_count, job.consecutive_failures),
+        (52, 3, 3)
+    );
+    assert!(
+        store
+            .incidents(true, 20)
+            .unwrap()
+            .iter()
+            .any(|i| i.kind == IncidentKind::Failing)
+    );
+}
+
+#[test]
 fn expired_worker_cannot_start_or_publish_before_the_next_scan() {
     let (_dir, store) = store();
     store

@@ -443,16 +443,7 @@ impl SqliteCronStore {
         let Some(latest) = latest else {
             return Ok(());
         };
-        // Pruning can remove the nonfailure that reset the streak. In that
-        // case only append lost runs newer than the retained completed history.
-        let cutoff: Option<i64> = tx.query_row(
-            "SELECT CASE WHEN (SELECT run_count - fail_count FROM jobs WHERE id = ?1) \
-                     > COUNT(*) FILTER (WHERE state <> 'failed') THEN MAX(rowid) \
-                     ELSE MAX(rowid) FILTER (WHERE state <> 'failed') END \
-             FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL",
-            [job_id],
-            |row| row.get(0),
-        )?;
+        let cutoff = failure_streak_cutoff(tx, job_id)?;
         let trailing_failures: i64 = tx.query_row(
             "SELECT COUNT(*) FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') \
              AND finished_at IS NULL AND (?2 IS NULL OR rowid > ?2)",
@@ -574,6 +565,33 @@ fn open_incident_in(
         )?;
     }
     Ok(id)
+}
+
+fn failure_streak_cutoff(tx: &rusqlite::Transaction<'_>, job_id: i64) -> Result<Option<i64>> {
+    let (missing_reset, last_reset, retained_streak): (bool, Option<i64>, i64) = tx.query_row(
+        "WITH history AS (SELECT COUNT(*) FILTER (WHERE state = 'failed') AS failures, \
+             COUNT(*) FILTER (WHERE state <> 'failed') AS resets, \
+             MAX(rowid) FILTER (WHERE state <> 'failed') AS last_reset \
+             FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL) \
+         SELECT run_count - fail_count > resets, last_reset, \
+                consecutive_failures - (fail_count - failures) FROM jobs, history WHERE id = ?1",
+        [job_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if !missing_reset {
+        return Ok(last_reset);
+    }
+    // Pruning may have removed the reset. Even if every missing failure was
+    // in the current streak, the last `retained_streak` finished rows still
+    // belong to it. If none are certain, only extend past the latest result.
+    Ok(tx
+        .query_row(
+            "SELECT rowid FROM runs WHERE job_id = ?1 AND finished_at IS NOT NULL \
+             ORDER BY rowid DESC LIMIT 1 OFFSET ?2",
+            params![job_id, (retained_streak - 1).max(0)],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn incident_detail(outcome: &RunOutcome) -> String {

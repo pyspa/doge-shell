@@ -1,5 +1,7 @@
 use super::*;
-use dsh_types::cron::job::{AgentJobSpec, RunOutcome, RunSelector, RunState, RunTrigger};
+use dsh_types::cron::job::{
+    AgentJobSpec, RunOutcome, RunSelector, RunState, RunTrigger, lease_secs,
+};
 use tempfile::TempDir;
 
 const NOW: i64 = 1_717_234_200;
@@ -1782,4 +1784,233 @@ fn run_output_by_id_treats_wildcard_characters_in_the_prefix_literally() {
 fn attach_agent_task_errors_instead_of_silently_no_opping_on_an_unknown_run_id() {
     let (_dir, store) = store();
     assert!(store.attach_agent_task("no-such-run", "task-1").is_err());
+}
+
+#[test]
+fn late_and_duplicate_completions_cannot_release_the_current_run() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let first = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    store.start(&first.run_id, NOW).unwrap();
+    let later = NOW + 121;
+    let next = store
+        .claim_due(later, "driver", 1, RunTrigger::Tick)
+        .unwrap()
+        .remove(0);
+    let success = outcome(RunState::Succeeded);
+    assert!(store.complete(&first.run_id, &success, later).is_err());
+    let job = store.get("probe").unwrap();
+    assert!(job.running);
+    assert_eq!((job.run_count, job.fail_count), (1, 1));
+    store.complete(&next.run_id, &success, later).unwrap();
+    assert!(store.complete(&next.run_id, &success, later).is_err());
+    assert_eq!(store.get("probe").unwrap().run_count, 2);
+}
+
+#[test]
+fn unfinished_legacy_run_cannot_use_a_newer_claim_from_the_same_driver() {
+    let (dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let old = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    // Older versions inserted a new run for the same owner while leaving
+    // the previous run queued. A clock step can reverse their timestamps.
+    let new_id = uuid::Uuid::new_v4().to_string();
+    raw(&dir)
+        .execute(
+            "INSERT INTO runs(id, job_id, scheduled_for, state, trigger, owner) \
+             SELECT ?1, job_id, ?2, state, trigger, owner FROM runs WHERE id = ?3",
+            params![new_id, NOW - 10, old.run_id],
+        )
+        .unwrap();
+    let success = outcome(RunState::Succeeded);
+    assert!(store.start(&old.run_id, NOW).is_err());
+    assert!(store.complete(&old.run_id, &success, NOW).is_err());
+    assert!(store.get("probe").unwrap().running);
+    store.start(&new_id, NOW).unwrap();
+    store.complete(&new_id, &success, NOW).unwrap();
+    let job = store.get("probe").unwrap();
+    assert_eq!(
+        (job.run_count, job.fail_count, job.consecutive_failures),
+        (2, 1, 0)
+    );
+    let runs = store.runs(&RunQuery::default()).unwrap();
+    let old = runs.iter().find(|run| run.id == old.run_id).unwrap();
+    assert_eq!(
+        (old.state, old.reason),
+        (RunState::Failed, Some(RunReason::Timeout))
+    );
+}
+
+#[test]
+fn reclaiming_legacy_rows_preserves_more_recent_failure_and_skip_streaks() {
+    for (state, prune_success) in [
+        (RunState::Failed, false),
+        (RunState::Failed, true),
+        (RunState::Skipped, false),
+        (RunState::Skipped, true),
+    ] {
+        let (dir, store) = store();
+        let job_id = store
+            .create(&spec("probe", "5s"), &env(), NOW, false)
+            .unwrap();
+        // Legacy history in insertion order: orphan, success, failure/skip.
+        let db = raw(&dir);
+        for (slot, value) in ["running", "succeeded", state.as_str()].iter().enumerate() {
+            db.execute(
+                "INSERT INTO runs(id, job_id, scheduled_for, state, finished_at, trigger, owner) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'manual', 'old')",
+                params![
+                    slot.to_string(),
+                    job_id,
+                    NOW + slot as i64,
+                    value,
+                    (slot > 0).then_some(NOW)
+                ],
+            )
+            .unwrap();
+        }
+        let failed = i64::from(state == RunState::Failed);
+        if prune_success {
+            // Retention deletes finished history without changing job totals.
+            db.execute("DELETE FROM runs WHERE state = 'succeeded'", [])
+                .unwrap();
+        }
+        db.execute(
+            "UPDATE jobs SET run_count = 2, fail_count = ?1, consecutive_failures = ?1, \
+             consecutive_skips = ?2 WHERE id = ?3",
+            params![failed, 1 - failed, job_id],
+        )
+        .unwrap();
+        let run = store
+            .claim_one("probe", NOW + 3, "new", RunTrigger::Manual)
+            .unwrap();
+        store
+            .complete(&run.run_id, &outcome(state), NOW + 4)
+            .unwrap();
+        let job = store.get("probe").unwrap();
+        assert_eq!(job.run_count, 4);
+        assert_eq!(job.fail_count, 1 + 2 * u64::from(state == RunState::Failed));
+        assert_eq!(i64::from(job.consecutive_failures), 2 * failed);
+        let skips: i64 = db
+            .query_row(
+                "SELECT consecutive_skips FROM jobs WHERE id = ?1",
+                [job.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(skips, 2 * (1 - failed));
+        assert!(
+            !store
+                .incidents(true, 20)
+                .unwrap()
+                .iter()
+                .any(|i| i.kind == IncidentKind::Failing)
+        );
+    }
+}
+
+#[test]
+fn a_legacy_gap_inside_the_current_failure_streak_still_triggers_an_incident() {
+    let (dir, store) = store();
+    let job_id = store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    // 48 earlier successes have aged out. The failure on each side of the
+    // orphan still belongs to the current streak, making it three failures.
+    let db = raw(&dir);
+    for (slot, state) in ["succeeded", "failed", "running", "queued"]
+        .iter()
+        .enumerate()
+    {
+        db.execute(
+            "INSERT INTO runs(id, job_id, scheduled_for, state, finished_at, trigger, owner) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 'manual', 'owner')",
+            params![
+                slot.to_string(),
+                job_id,
+                NOW + slot as i64,
+                state,
+                (slot < 2).then_some(NOW)
+            ],
+        )
+        .unwrap();
+    }
+    db.execute(
+        "UPDATE jobs SET run_count = 50, fail_count = 1, consecutive_failures = 1, \
+         claimed_by = 'owner', claimed_until = ?1 WHERE id = ?2",
+        params![NOW + 60, job_id],
+    )
+    .unwrap();
+    store
+        .complete("3", &outcome(RunState::Failed), NOW + 4)
+        .unwrap();
+    let job = store.get("probe").unwrap();
+    assert_eq!(
+        (job.run_count, job.fail_count, job.consecutive_failures),
+        (52, 3, 3)
+    );
+    assert!(
+        store
+            .incidents(true, 20)
+            .unwrap()
+            .iter()
+            .any(|i| i.kind == IncidentKind::Failing)
+    );
+}
+
+#[test]
+fn expired_worker_cannot_start_or_publish_before_the_next_scan() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let old = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    let deadline = NOW + lease_secs(old.timeout_secs);
+    assert!(store.start(&old.run_id, deadline).is_err());
+    let success = outcome(RunState::Succeeded);
+    assert!(store.complete(&old.run_id, &success, deadline).is_err());
+
+    let new = store
+        .claim_one("probe", deadline, "driver", RunTrigger::Manual)
+        .unwrap();
+    assert_eq!(store.get("probe").unwrap().fail_count, 1);
+    store.start(&new.run_id, deadline).unwrap();
+    store.complete(&new.run_id, &success, deadline).unwrap();
+    assert_eq!(store.get("probe").unwrap().run_count, 2);
+}
+
+#[test]
+fn valid_worker_start_has_time_to_finish_before_reclaim() {
+    let (_dir, store) = store();
+    store
+        .create(&spec("probe", "5s"), &env(), NOW, false)
+        .unwrap();
+    let run = store
+        .claim_one("probe", NOW, "driver", RunTrigger::Manual)
+        .unwrap();
+    let claim_deadline = NOW + lease_secs(run.timeout_secs);
+    store.start(&run.run_id, claim_deadline - 1).unwrap();
+    assert!(
+        store
+            .claim_due(claim_deadline, "other", 1, RunTrigger::Tick)
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .complete(
+            &run.run_id,
+            &outcome(RunState::Succeeded),
+            claim_deadline + 1,
+        )
+        .unwrap();
 }

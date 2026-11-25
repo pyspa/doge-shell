@@ -4,6 +4,25 @@ version = 1
 # and downstream stages must observe transformed data (not duplicated text).
 
 [[case]]
+id = "smart-pipe.non-shell-whitespace-before-pipe-is-a-command"
+class = "dogesh"
+mode = "command"
+script = "\\\n\u00a0| {{TRUE}}"
+[case.expect]
+status = 0
+stderr_contains = ["\u00a0: command not found"]
+
+[[case]]
+id = "smart-pipe.non-shell-whitespace-starts-the-downstream-command"
+class = "dogesh"
+mode = "command"
+script = "|\\\n\u00a0printf UNEXPECTED"
+[case.expect]
+status = 127
+stdout_exact = ""
+stderr_contains = ["\u00a0printf: command not found"]
+
+[[case]]
 id = "smart-pipe.real-downstream-transform"
 class = "dogesh"
 mode = "interactive"

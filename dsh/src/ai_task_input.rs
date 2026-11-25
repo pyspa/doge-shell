@@ -1,5 +1,7 @@
 //! Recognize AI prompts and shortcuts in the shell input buffer.
 
+use crate::parser::check::{SHELL_WHITESPACE, after_leading_continuations};
+
 #[derive(PartialEq, Eq)]
 pub(crate) enum TaskInput<'a> {
     Menu,
@@ -9,8 +11,8 @@ pub(crate) enum TaskInput<'a> {
 /// Skip shell whitespace and line continuations before the marker. Once the
 /// prompt starts, its text belongs to the chat and remains literal.
 pub(crate) fn chat_prompt(input: &str) -> Option<&str> {
-    crate::parser::check::after_leading_continuations(input)
-        .trim_start()
+    after_leading_continuations(input)
+        .trim_start_matches(SHELL_WHITESPACE)
         .strip_prefix('!')
 }
 
@@ -95,6 +97,7 @@ mod tests {
             }))
         ));
         assert_eq!(chat_prompt(r"\!escaped"), None);
+        assert!(classify("\\\n\u{a0}!& task").is_none());
     }
 
     #[test]

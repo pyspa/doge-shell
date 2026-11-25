@@ -56,7 +56,7 @@ pub(crate) fn source_without_comments<'i>(
 }
 
 /// The portion of `input` the parser did not consume, or `None` when only
-/// whitespace is left.
+/// shell whitespace is left.
 ///
 /// The grammar deliberately has no `EOI` anchor — highlighting and completion
 /// must keep parsing half-typed lines — so `Rule::commands` can return a
@@ -69,7 +69,7 @@ pub(crate) fn source_without_comments<'i>(
 /// right, while treating the line as fully consumed would silently restore the
 /// very failure this guard exists to catch.
 pub fn unparsed_tail(input: &str, consumed: usize) -> Option<&str> {
-    let rest = input[unparsed_tail_start(input, consumed)..].trim();
+    let rest = input[unparsed_tail_start(input, consumed)..].trim_matches(check::SHELL_WHITESPACE);
     (!rest.is_empty()).then_some(rest)
 }
 

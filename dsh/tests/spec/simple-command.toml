@@ -288,3 +288,41 @@ script = "\u00a0\\\necho UNEXPECTED"
 [case.expect]
 status = 127
 stdout_exact = ""
+
+[[case]]
+id = "simple-command.piped-continued-command-keeps-non-shell-whitespace"
+class = "dogesh"
+mode = "interactive"
+script = "\u00a0\\\necho UNEXPECTED"
+[case.expect]
+status = 127
+stdout_exact = ""
+
+[[case]]
+id = "simple-command.continued-non-shell-whitespace-is-a-command"
+class = "dogesh"
+mode = "command"
+script = "\\\n\u00a0"
+[case.expect]
+status = 127
+stderr_contains = ["\u00a0: command not found"]
+
+[[case]]
+id = "simple-command.non-shell-whitespace-keeps-chat-marker-in-command-name"
+class = "dogesh"
+mode = "interactive"
+script = "\\\n\u00a0!\necho $?\n\u00a0!"
+[case.expect]
+status = 127
+stdout_exact = "127\n"
+stderr_contains = ["\u00a0!: command not found"]
+
+[[case]]
+id = "simple-command.non-shell-whitespace-after-capture-rejects-entire-command"
+class = "dogesh"
+mode = "command"
+script = "echo UNEXPECTED > marker |>\\\n\u00a0"
+[case.expect]
+status = 1
+stderr_contains = ["syntax error: unexpected input"]
+files = [{ path = "marker", exists = false }]

@@ -1,3 +1,4 @@
+use crate::parser::check::SHELL_WHITESPACE;
 use crate::process::{Job, JobLaunchOutcome, ListOp, ProcessState};
 use crate::shell::{
     Shell,
@@ -77,7 +78,7 @@ pub async fn eval_str(
         return Ok(0);
     }
 
-    if let Some(rest) = input.trim_start().strip_prefix('!') {
+    if let Some(rest) = crate::ai_task_input::chat_prompt(&input) {
         if let Err(e) = disable_raw_mode() {
             tracing::error!("Failed to disable raw mode: {}", e);
         } else {
@@ -601,7 +602,7 @@ pub fn get_jobs(shell: &mut Shell, input: &str) -> Result<Vec<Job>> {
 /// is allowed.
 pub(crate) fn is_smart_pipe_input(input: &str) -> bool {
     let joined = crate::parser::check::join_continued_lines(input);
-    let trimmed = joined.trim_start();
+    let trimmed = joined.trim_start_matches(SHELL_WHITESPACE);
     trimmed.starts_with('|') && !trimmed.starts_with("|>") && !trimmed.starts_with("||")
 }
 
@@ -618,9 +619,9 @@ pub(crate) fn parse_plan_with_smart_pipe(
     if !is_smart_pipe_input(input) {
         return parse_logical_input(input, environment);
     }
-    let trimmed = input.trim_start();
+    let trimmed = input.trim_start_matches(SHELL_WHITESPACE);
     // SAFETY: `is_smart_pipe_input` verified the leading `|`.
-    let downstream = trimmed[1..].trim_start();
+    let downstream = trimmed[1..].trim_start_matches(SHELL_WHITESPACE);
     if downstream.is_empty() {
         // A bare `|` is a no-op success, consistent with an empty line:
         // there is no downstream command to materialize. This differs from
@@ -635,7 +636,7 @@ pub(crate) fn parse_plan_with_smart_pipe(
         // job: with `| grep foo; echo hi` the second job must stay `echo hi`,
         // not inherit the whole line (which would pollute history, safety
         // messages, and exact-source allowlist matching).
-        first.source = format!("| {}", first.source.trim_start());
+        first.source = format!("| {}", first.source);
     }
     debug!(
         "Smart Pipe: downstream={downstream:?} lists={}",

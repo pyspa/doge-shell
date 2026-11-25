@@ -2,10 +2,13 @@ use super::{Rule, ShellParser};
 use pest::Parser as _;
 use std::borrow::Cow;
 
+// `sp` and line breaks in shell.pest. Other Unicode whitespace is word content.
+pub(crate) const SHELL_WHITESPACE: [char; 4] = [' ', '\t', '\r', '\n'];
+
 /// Skip active continuations before the first command token without parsing its body.
 pub(crate) fn after_leading_continuations(mut input: &str) -> &str {
     while let Some(rest) = input
-        .trim_start_matches([' ', '\t', '\r', '\n'])
+        .trim_start_matches(SHELL_WHITESPACE)
         .strip_prefix("\\\n")
     {
         input = rest;
@@ -62,7 +65,7 @@ pub fn is_incomplete_input(input: &str) -> bool {
     let joined = join_continued_lines(input);
     let uncommented = without_comments(&joined);
     let input = uncommented.as_ref();
-    let trimmed = input.trim_end();
+    let trimmed = input.trim_end_matches(SHELL_WHITESPACE);
     let mut quote_char = None;
     let mut in_backslash = false;
     let mut braces = Vec::new();
@@ -179,6 +182,7 @@ mod tests {
             "echo $(echo \\|)",
             "echo ${X:-\\|}",
             "echo 日本語\\|",
+            "echo |\\\n\u{a0}",
         ] {
             assert!(!is_incomplete_input(input), "{input:?}");
         }

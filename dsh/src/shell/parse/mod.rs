@@ -69,15 +69,26 @@ pub fn parse_execution_plan(
     input: &str,
     environment: Arc<RwLock<Environment>>,
 ) -> Result<ExecutionPlan> {
+    parse_logical_input(&parser::check::join_continued_lines(input), environment)
+}
+
+pub(super) fn parse_logical_input(
+    input: &str,
+    environment: Arc<RwLock<Environment>>,
+) -> Result<ExecutionPlan> {
+    if input.trim().is_empty() {
+        return Ok(ExecutionPlan::default());
+    }
     // 1. Validate exactly what the user supplied BEFORE rewriting can discard
     // an unparsed suffix.
     validate_complete_commands(input)?;
 
     // 2. Syntax-time alias rewrite only; runtime expansion happens later.
-    let aliased = parser::rewrite_aliases(input, environment)?;
-    if let std::borrow::Cow::Owned(_) = aliased {
-        validate_complete_commands(aliased.as_ref())?;
-    }
+    let rewritten = parser::rewrite_aliases(input, environment)?;
+    let aliased = match &rewritten {
+        std::borrow::Cow::Owned(alias) => parser::check::join_continued_lines(alias),
+        std::borrow::Cow::Borrowed(input) => std::borrow::Cow::Borrowed(*input),
+    };
 
     // 3. Parse the (possibly rewritten) line strictly.
     if aliased.trim().is_empty() {

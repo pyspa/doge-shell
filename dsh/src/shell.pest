@@ -211,34 +211,38 @@ commands            =  {
 // unfinished quotes/expansions up to EOI. A scan_word joins all adjacent parts,
 // so # after a quote/variable/substitution is still data. Nested shell bodies
 // use scan_tokens recursively; parameter/arithmetic/Lisp text is not shell
-// token space. Only comment spans are consumed by parser::check.
+// token space. Recognize a spliced opener before entering its nested context.
 comment_scan = { scan_token* ~ EOI }
-scan_token = _{ sp | NEWLINE | comment | scan_struct | scan_word | scan_operator }
+line_continuation = { "\\" ~ "\n" }
+scan_escape = _{ line_continuation | escape_sequence }
+scan_token = _{ sp | NEWLINE | comment | line_continuation | scan_struct | scan_word | scan_operator }
 scan_operator = _{ ";" | "&" | "|" | "<" | ">" | ")" }
-scan_struct = _{ "|:" ~ sp* ~ scan_lisp? }
+scan_struct = _{ "|" ~ line_continuation* ~ ":" ~ (sp | line_continuation)* ~ linebreak? ~ (scan_lisp | struct_pipe_dsl)? }
 scan_lisp = _{ "(" ~ (scan_lisp | (!("(" | ")") ~ ANY))* ~ (")" | EOI) }
 scan_word = _{ scan_part+ }
 scan_part = _{
     scan_arithmetic | scan_parameter | scan_substitution | scan_process
-    | scan_group | scan_double | scan_single | escape_sequence
+    | scan_group | scan_double | scan_single | scan_escape
     | (!(sp | NEWLINE | ";" | "&" | "|" | "<" | ">" | "(" | ")" | "$" | "\"" | "'" | "\\") ~ ANY)
     | "$" | "\\"
 }
 scan_body = _{ (!")" ~ scan_token)* }
-scan_substitution = _{ "$(" ~ scan_body ~ (")" | EOI) }
-scan_process = _{ ("<(" | ">(") ~ scan_body ~ (")" | EOI) }
+scan_substitution = _{ "$" ~ line_continuation* ~ "(" ~ scan_body ~ (")" | EOI) }
+scan_process = _{ ("<" | ">") ~ line_continuation* ~ "(" ~ scan_body ~ (")" | EOI) }
 scan_group = _{ "(" ~ scan_body ~ (")" | EOI) }
 scan_single = _{ "'" ~ ("\\'" | (!"'" ~ ANY))* ~ ("'" | EOI) }
 scan_double = _{ "\"" ~ (scan_arithmetic | scan_parameter | scan_substitution
-    | escape_sequence | (!"\"" ~ ANY))* ~ ("\"" | EOI) }
-scan_parameter = _{ "${" ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | scan_escape | (!"\"" ~ ANY))* ~ ("\"" | EOI) }
+scan_parameter = _{ "$" ~ line_continuation* ~ "{" ~ (scan_arithmetic | scan_parameter | scan_substitution
     | scan_process | (&subshell ~ scan_group) | scan_single | scan_double
-    | escape_sequence | (!"}" ~ ANY))* ~ ("}" | EOI) }
-scan_arithmetic = _{ "$((" ~ (scan_arithmetic | scan_parameter | scan_substitution
-    | scan_single | scan_double | escape_sequence | scan_arithmetic_paren
-    | (!"))" ~ ANY))* ~ ("))" | EOI) }
+    | scan_escape | (!"}" ~ ANY))* ~ ("}" | EOI) }
+scan_arithmetic_end = _{ ")" ~ line_continuation* ~ ")" }
+scan_arithmetic = _{ "$" ~ line_continuation* ~ "(" ~ line_continuation* ~ "("
+    ~ (scan_arithmetic | scan_parameter | scan_substitution
+    | scan_single | scan_double | scan_escape | scan_arithmetic_paren
+    | (!scan_arithmetic_end ~ ANY))* ~ (scan_arithmetic_end | EOI) }
 scan_arithmetic_paren = _{ "(" ~ (scan_arithmetic | scan_parameter | scan_substitution
-    | scan_single | scan_double | escape_sequence | scan_arithmetic_paren
+    | scan_single | scan_double | scan_escape | scan_arithmetic_paren
     | (!("(" | ")") ~ ANY))* ~ (")" | EOI) }
 
 // Completion-only lexical view. Reuse tolerant quote/expansion scanning without

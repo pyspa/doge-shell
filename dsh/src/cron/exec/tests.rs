@@ -183,3 +183,10 @@ fn color_reset_on_stderr_does_not_hide_stdout_preview() {
     assert_eq!(outcome.stderr, "\x1b[0m\n");
     assert_eq!(outcome.preview, "diagnostic");
 }
+
+#[test]
+fn a_signalled_command_reports_the_signal_exit_code() {
+    let outcome = run_command(&run("kill -TERM $$", 10));
+    assert_eq!(outcome.exit_code, 128 + libc::SIGTERM);
+    assert!(!outcome.timed_out);
+}

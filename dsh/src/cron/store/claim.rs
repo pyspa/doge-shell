@@ -318,10 +318,6 @@ impl SqliteCronStore {
             ],
         )?;
 
-        // Older stores could leave earlier runs open underneath the current
-        // claim. Once the current run is final, all remaining open runs are lost.
-        Self::fail_abandoned_runs(&tx, job_id, now)?;
-
         let failed = i64::from(outcome.state.counts_as_failure());
         let skipped = i64::from(outcome.state == RunState::Skipped);
         tx.execute(
@@ -340,6 +336,8 @@ impl SqliteCronStore {
             ],
         )?;
 
+        // Account for the latest result before repairing earlier gaps.
+        Self::fail_abandoned_runs(&tx, job_id, now)?;
         let (failures, skips): (i64, i64) = tx.query_row(
             "SELECT consecutive_failures, consecutive_skips FROM jobs WHERE id = ?1",
             [job_id],
@@ -433,27 +431,41 @@ impl SqliteCronStore {
     }
 
     fn fail_abandoned_runs(tx: &rusqlite::Transaction<'_>, job_id: i64, now: i64) -> Result<()> {
+        // Legacy rows may predate completed runs. Every lost run counts in
+        // the totals, but only failures after the last nonfailure extend the
+        // current streak. Skips after the newest lost run stay consecutive.
+        let (latest, trailing_failures): (Option<i64>, i64) = tx.query_row(
+            "SELECT MAX(rowid), COUNT(*) FILTER (WHERE rowid > COALESCE((\
+                 SELECT MAX(rowid) FROM runs WHERE job_id = ?1 \
+                   AND finished_at IS NOT NULL AND state <> 'failed'), 0)) \
+             FROM runs WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",
+            [job_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let Some(latest) = latest else {
+            return Ok(());
+        };
         let count = tx.execute(
             "UPDATE runs SET state = 'failed', reason = 'timeout', finished_at = ?2 \
              WHERE job_id = ?1 AND state IN ('queued', 'running') AND finished_at IS NULL",
             params![job_id, now],
         )?;
-        if count > 0 {
-            tx.execute(
-                "UPDATE jobs SET run_count = run_count + ?2, fail_count = fail_count + ?2, \
-                 consecutive_failures = consecutive_failures + ?2, consecutive_skips = 0 WHERE id = ?1",
-                params![job_id, i64::try_from(count)?],
-            )?;
-            open_incident_in(
-                tx,
-                Some(job_id),
-                IncidentKind::LeaseLost,
-                "the process running this job disappeared before it finished; its last \
-                 claim was reclaimed after the lease expired",
-                None,
-                now,
-            )?;
-        }
+        tx.execute(
+            "UPDATE jobs SET run_count = run_count + ?2, fail_count = fail_count + ?2, \
+             consecutive_failures = consecutive_failures + ?3, \
+             consecutive_skips = MIN(consecutive_skips, (SELECT COUNT(*) FROM runs \
+                 WHERE job_id = ?1 AND rowid > ?4 AND state = 'skipped')) WHERE id = ?1",
+            params![job_id, i64::try_from(count)?, trailing_failures, latest],
+        )?;
+        open_incident_in(
+            tx,
+            Some(job_id),
+            IncidentKind::LeaseLost,
+            "the process running this job disappeared before it finished; its last \
+             claim was reclaimed after the lease expired",
+            None,
+            now,
+        )?;
         Ok(())
     }
 

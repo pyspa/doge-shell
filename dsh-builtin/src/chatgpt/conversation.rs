@@ -241,6 +241,31 @@ impl ConversationManager {
             || self.last_prompt_tokens > self.prompt_token_budget
     }
 
+    /// The complete exchanges a summary can replace. Usually the most recent
+    /// six messages stay verbatim. If that window itself is oversized, a
+    /// completed earlier turn can be folded up to its saved boundary.
+    fn summary_prefix_len(&self) -> usize {
+        const RETAIN_AFTER_SUMMARY: usize = 6;
+        let recent = retain_boundary(&self.buffer, RETAIN_AFTER_SUMMARY);
+        if let Some(mark) = &self.turn_mark {
+            let start = mark.buffer_index.min(self.buffer.len());
+            if start > recent
+                && self.buffer_chars > MAX_BUFFER_CHARS
+                && sum_message_lengths(&self.buffer[recent..]) > MAX_BUFFER_CHARS
+                && sum_message_lengths(&self.buffer[start..]) <= MAX_BUFFER_CHARS
+            {
+                // A carried mark precedes a new user message. Also respect
+                // tool pairs when reading a serialized checkpoint.
+                return retain_boundary(&self.buffer, self.buffer.len() - start);
+            }
+        }
+        recent
+    }
+
+    pub(super) fn paid_summary_needed(&self) -> bool {
+        self.should_summarize() && self.summary_prefix_len() > 0
+    }
+
     /// Indices of tool results that a later identical call has replaced.
     ///
     /// Reading the same file twice used to keep both copies in the request for
@@ -267,6 +292,10 @@ impl ConversationManager {
         proxy: &mut dyn ChatToolHost,
         model_override: Option<String>,
     ) -> Result<(), String> {
+        let retain_start = self.summary_prefix_len();
+        if retain_start == 0 {
+            return Ok(());
+        }
         let _spinner = SpinnerGuard::start("Summarizing conversation history...");
 
         // Determine which model to use for summarization:
@@ -291,7 +320,8 @@ impl ConversationManager {
         }));
 
         let current_summary_text = self.summary.as_deref().unwrap_or("None");
-        let buffer_text = flatten_conversation(&self.buffer, MAX_SUMMARY_TOOL_CHARS);
+        let buffer_text =
+            flatten_conversation(&self.buffer[..retain_start], MAX_SUMMARY_TOOL_CHARS);
 
         summary_messages.push(json!({
             "role": "user",
@@ -350,8 +380,6 @@ impl ConversationManager {
         }
 
         // Update state: keep most recent messages to maintain tool_call/result continuity
-        const RETAIN_AFTER_SUMMARY: usize = 6; // Keep last ~3 exchanges (assistant+tool pairs)
-        let retain_start = retain_boundary(&self.buffer, RETAIN_AFTER_SUMMARY);
         self.drop_buffer_prefix(retain_start);
         self.summary = Some(new_summary);
         // The measured prompt size describes the request we just replaced. Left
@@ -532,7 +560,7 @@ pub(super) fn flatten_conversation(buffer: &[Value], max_tool_chars: usize) -> S
 /// a long session. Walking backwards keeps at most one extra exchange.
 pub(super) fn retain_boundary(buffer: &[Value], retain: usize) -> usize {
     let mut start = buffer.len().saturating_sub(retain);
-    while start > 0 && message_role(&buffer[start]) == Some("tool") {
+    while start > 0 && buffer.get(start).and_then(message_role) == Some("tool") {
         start -= 1;
     }
     start

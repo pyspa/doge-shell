@@ -382,7 +382,7 @@ fn chat_with_tools(
                         report.skipped_unseen,
                     );
                 }
-                let will_summarize = manager.should_summarize();
+                let will_summarize = manager.paid_summary_needed();
                 setup.hook_ctx.fire(
                     hooks::HookEvent::PreCompact,
                     hooks::HookSubject::none(),
@@ -403,7 +403,7 @@ fn chat_with_tools(
             // Bounded: a summary that fails to shrink the context must not turn into
             // an unbounded stream of paid requests.
             let mut summary_rounds = 0;
-            while manager.should_summarize() && summary_rounds < MAX_SUMMARY_ROUNDS {
+            while manager.paid_summary_needed() && summary_rounds < MAX_SUMMARY_ROUNDS {
                 summary_rounds += 1;
                 // Graceful fallback on summary failure
                 if let Err(e) = manager.perform_summary(client, proxy, model_override.clone()) {

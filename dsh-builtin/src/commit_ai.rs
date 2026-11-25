@@ -91,7 +91,7 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
     };
 
     let language = crate::chatgpt::response_language(proxy);
-    let mut message = match generate_commit_message(&client, &diff, model_override, language) {
+    let message = match generate_commit_message(&client, &diff, model_override, language) {
         Ok(m) => m,
         Err(e) => {
             ctx.write_stderr(&format!("ai-commit: failed to generate message: {}", e))
@@ -100,7 +100,15 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         }
     };
 
-    // 3. User Review Loop
+    confirm_commit(ctx, proxy, message, interactive_input::read_line)
+}
+
+fn confirm_commit(
+    ctx: &Context,
+    proxy: &mut dyn ShellProxy,
+    mut message: String,
+    mut read_line: impl FnMut(&Context, &mut String) -> io::Result<usize>,
+) -> ExitStatus {
     loop {
         ctx.write_stdout("\nGenerated Commit Message:").ok();
         ctx.write_stdout("----------------------------------------")
@@ -115,8 +123,13 @@ pub fn command(ctx: &Context, argv: Vec<String>, proxy: &mut dyn ShellProxy) -> 
         let _ = io::stdout().flush();
 
         let mut input = String::new();
-        if interactive_input::read_line(ctx, &mut input).is_err() {
-            return ExitStatus::ExitedWith(1);
+        match read_line(ctx, &mut input) {
+            Ok(0) => {
+                ctx.write_stdout("Commit aborted.").ok();
+                return ExitStatus::ExitedWith(0);
+            }
+            Err(_) => return ExitStatus::ExitedWith(1),
+            Ok(_) => {}
         }
 
         match input.trim().to_lowercase().as_str() {
@@ -325,6 +338,22 @@ mod tests {
             .expect("failed to set git user name");
 
         temp_dir
+    }
+
+    #[test]
+    fn eof_cancels_the_commit_after_a_blank_answer() {
+        use std::io::BufRead;
+        let pid = nix::unistd::getpid();
+        let ctx = Context::new_safe(pid, pid, false);
+        let mut input = &b"\n"[..];
+        let mut reads = 0;
+        let result = confirm_commit(&ctx, &mut test_proxy(), "test message".into(), |_, line| {
+            reads += 1;
+            assert!(reads <= 2, "retried after EOF");
+            input.read_line(line)
+        });
+        assert_eq!(reads, 2);
+        assert_eq!(result, ExitStatus::ExitedWith(0));
     }
 
     #[test]

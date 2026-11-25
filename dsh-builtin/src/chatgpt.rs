@@ -336,17 +336,8 @@ fn chat_with_tools(
                 break Err("chat: exceeded maximum number of tool interactions".to_string());
             }
 
-            // Checked before the request, not after: stopping once the bill is
-            // already over the line would let a single expensive turn blow through
-            // whatever number the user set.
-            if let Some(budget) = setup.turn_token_budget
-                && manager.turn_usage.total_tokens() >= budget
-            {
-                break Err(format!(
-                    "chat: stopped after {} tokens, at the {TURN_TOKEN_BUDGET_KEY} of {budget}. \
-                 Raise it, or ask a narrower question.",
-                    manager.turn_usage.total_tokens()
-                ));
+            if let Err(error) = manager.check_turn_budget(setup.turn_token_budget) {
+                break Err(error);
             }
 
             // Told before any hook of this round can fire, so a governor hook
@@ -405,8 +396,13 @@ fn chat_with_tools(
             let mut summary_rounds = 0;
             while manager.should_summarize() && summary_rounds < MAX_SUMMARY_ROUNDS {
                 summary_rounds += 1;
-                // Graceful fallback on summary failure
-                if let Err(e) = manager.perform_summary(client, proxy, model_override.clone()) {
+                let summary = manager.perform_summary(client, proxy, model_override.clone());
+                // A billed summary can exhaust the budget even when its reply
+                // is unusable. Recheck before another summary or the main request.
+                if let Err(error) = manager.check_turn_budget(setup.turn_token_budget) {
+                    break 'agent Err(error);
+                }
+                if let Err(e) = summary {
                     if setup.runtime.is_some() {
                         break 'agent Err(e);
                     }

@@ -65,6 +65,96 @@ fn command_mode_queries_saved_history_without_recording_the_query() {
 }
 
 #[test]
+fn fish_import_finds_xdg_history_and_only_counts_new_occurrences() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("data/fish/fish_history");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    let first = "- cmd: echo repeat\n  when: 42\n- cmd: echo undated\n";
+    std::fs::write(&source, first).unwrap();
+
+    let imported = |args: &[&str], count: usize| {
+        let output = run(&dir, args);
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("imported {count} command")),
+            "{output:?}"
+        );
+    };
+    imported(&["import", "fish"], 2);
+    let before = report(&command(&dir, "history --json"));
+    let backup = dir.path().join("backup");
+    std::fs::copy(&source, &backup).unwrap();
+    imported(&["import", "fish", "--path", backup.to_str().unwrap()], 0);
+    assert_eq!(report(&command(&dir, "history --json")), before);
+
+    // Reordered snapshot, two identical records in one second, and a late older record.
+    std::fs::write(
+        &source,
+        format!("- cmd: echo repeat\n  when: 42\n- cmd: echo repeat\n  when: 5\n{first}"),
+    )
+    .unwrap();
+    imported(&["import", "fish"], 2);
+    imported(&["import", "fish"], 0);
+    let entries = report(&command(&dir, "history repeat --json"));
+    assert_eq!(entries[0]["count"], 3);
+}
+
+#[test]
+fn fish_import_distinguishes_significant_bytes_across_files() {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, source, count) in [
+        (
+            "left",
+            b"- cmd: echo exact  \n  when: 42\n- cmd: echo \x80\n  when: 42\n".as_slice(),
+            2,
+        ),
+        (
+            "right",
+            b"- cmd: echo exact\n  when: 42\n- cmd: echo \x81\n  when: 42\n".as_slice(),
+            2,
+        ),
+        ("again", b"- cmd: echo \x81\n  when: 42\n".as_slice(), 0),
+        (
+            "carriage-return",
+            b"- cmd: echo exact\r\n  when: 42\n".as_slice(),
+            1,
+        ),
+        (
+            "crlf-copy",
+            b"- cmd: echo exact\r\n  when: 42\r\n- cmd: \r\n  when: 42\r\n".as_slice(),
+            0,
+        ),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, source).unwrap();
+        let output = run(&dir, &["import", "fish", "--path", path.to_str().unwrap()]);
+        assert!(output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(&format!("imported {count} command")),
+            "{output:?}"
+        );
+    }
+    let rows = report(&command(&dir, "history --json"));
+    let rows = rows.as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r["entry"] == "echo exact\r" && r["count"] == 1)
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["entry"] == "echo exact  " && r["count"] == 1)
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["entry"] == "echo exact" && r["count"] == 1)
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r["entry"] == "echo �" && r["count"] == 2)
+    );
+}
+
+#[test]
 fn history_help_works_without_opening_the_database() {
     let dir = tempfile::tempdir().unwrap();
     let output = command(&dir, "history --help");

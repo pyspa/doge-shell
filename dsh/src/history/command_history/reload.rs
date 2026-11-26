@@ -128,16 +128,15 @@ impl History {
     /// The live window may omit older aggregate rows. Fetch only missing
     /// commands named by the import so their latest metadata and counts are
     /// available before applying the batch, including for memory-side queries.
-    pub(crate) fn load_import_baseline(&mut self, entries: &[(String, i64)]) -> Result<()> {
-        let Some(db) = &self.db else {
-            return Ok(());
-        };
-        let mut conn = db.get_connection();
-        let tx = conn.transaction()?;
+    pub(super) fn read_import_baseline(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        entries: &[(String, i64)],
+    ) -> Result<Vec<Entry>> {
         if !tx.query_row("SELECT EXISTS(SELECT 1 FROM command_history)", [], |row| {
             row.get::<_, bool>(0)
         })? {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let mut missing: std::collections::HashSet<_> = entries
             .iter()
@@ -163,21 +162,10 @@ impl History {
                 }
             }
         }
-        tx.commit()?;
-        drop(conn);
-
-        if !stored.is_empty() {
-            // Missing rows from a limited load precede resident rows in a
-            // timestamp tie, as load_recent selects the highest ids first.
-            stored.sort_unstable_by_key(|(id, _)| *id);
-            let mut combined: Vec<_> = stored.into_iter().map(|(_, entry)| entry).collect();
-            combined.append(&mut self.histories);
-            combined.sort_by_key(|entry| entry.when);
-            self.histories = combined;
-            self.rebuild_normalized_entries();
-            self.recent_cache = Self::recent_commands(&self.histories);
-        }
-        Ok(())
+        // Missing rows from a limited load precede resident rows in a
+        // timestamp tie, as load_recent selects the highest ids first.
+        stored.sort_unstable_by_key(|(id, _)| *id);
+        Ok(stored.into_iter().map(|(_, entry)| entry).collect())
     }
 
     /// Load entries older than the given timestamp.

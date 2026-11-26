@@ -381,6 +381,22 @@ dogesh import fish
 dogesh import fish --path /path/to/fish_history
 ```
 
+The default source is `$XDG_DATA_HOME/fish/fish_history`, or
+`~/.local/share/fish/fish_history` when the variable is unset. Use `--path`
+for a named fish session or a backup.
+
+The reported count is the number of newly imported occurrences. Running the
+import again on an unchanged file reports zero. Dogesh treats copies and
+reordered files as overlapping snapshots: for each command and fish timestamp
+it keeps the largest number of occurrences seen in any one snapshot. Records
+without a valid timestamp form a separate group per command and receive the
+time of their first import. Separate files with an identical command at the
+same second therefore overlap too.
+
+Older dogesh versions saved only aggregate counts. Importing a file previously
+read by one of those versions adds its records once more on the first import
+after upgrading. Subsequent imports of that file count only new occurrences.
+
 ### `history` Command
 
 Search submitted shell commands with text and metadata filters. Chat and task

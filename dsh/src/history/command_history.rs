@@ -33,6 +33,7 @@ const LEDGER_MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const LEDGER_MAX_EVENTS: i64 = 10_000;
 
 mod batch;
+mod fish_import;
 mod merge;
 mod navigation;
 mod persist;
@@ -171,6 +172,8 @@ pub struct CommandEvent {
 
 /// Message types for background history writer.
 enum HistoryMsg {
+    /// Wait for earlier live writes before a synchronous import transaction.
+    Flush(Sender<()>),
     WriteBatch {
         entries: Vec<(String, i64)>,
         context: Option<String>,
@@ -426,6 +429,8 @@ pub struct History {
     failed_occurrences: HashMap<String, FailedOccurrences>,
     persist_ack_rx: Option<Arc<ParkingMutex<Receiver<HistoryPersistAck>>>>,
     next_persistence_id: u64,
+    /// Receipts for explicitly importing into a memory-only history.
+    memory_fish_imports: HashMap<[u8; 32], i64>,
     /// Ordered writes made before startup attaches the persistence owner.
     startup_writes: Option<Vec<StartupHistoryWrite>>,
 }
@@ -453,6 +458,7 @@ impl History {
             failed_occurrences: HashMap::new(),
             persist_ack_rx: None,
             next_persistence_id: 0,
+            memory_fish_imports: HashMap::new(),
             startup_writes: None,
         }
     }

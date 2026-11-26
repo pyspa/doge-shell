@@ -283,6 +283,7 @@ fn test_load_invalid_json() {
 fn test_validation_empty_command_name() {
     let loader = JsonCompletionLoader::new();
     let completion = CommandCompletion {
+        short_option_clusters: None,
         command: "".to_string(),
         description: None,
         subcommands: vec![],
@@ -529,6 +530,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("-f <FILE>".to_string()),
         long: None,
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -541,6 +543,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("--type <TYPE>".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -553,6 +556,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("-f <FILE>".to_string()),
         long: Some("--file <FILE>".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -565,6 +569,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("--".to_string()), // Invalid: this is a long option prefix, not a short option
         long: None,
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -576,6 +581,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("-".to_string()),
         long: None,
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -588,6 +594,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("-123".to_string()), // Should be valid now: starts with -
         long: None,
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -603,6 +610,7 @@ fn test_validate_option_with_placeholders() {
         short: Some("-ofile".to_string()),
         long: None,
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -619,6 +627,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("--".to_string()), // Invalid: just -- without any content
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -630,6 +639,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("-- <ARG>".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -645,6 +655,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("-".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -657,6 +668,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("--123invalid".to_string()), // Should be valid now: starts with --
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,
@@ -672,6 +684,7 @@ fn test_validate_option_with_placeholders() {
         short: None,
         long: Some("-Xmx".to_string()),
         description: None,
+        value_attached_only: false,
         takes_value: false,
         value_type: None,
         argument: None,

@@ -1,6 +1,7 @@
 use crate::completion::command::{
-    CommandCompletion, CommandOption, CompletionCandidate, SubCommand,
+    CommandCompletion, CommandOption, CompletionCandidate, ShortOptionClusters, SubCommand,
 };
+use crate::completion::context::OptionWord;
 use crate::completion::integrated::matches_prefix;
 use crate::completion::parser::ParsedCommandLine;
 use anyhow::Result;
@@ -13,7 +14,12 @@ impl OptionGenerator {
         parsed: &ParsedCommandLine,
     ) -> Result<Vec<CompletionCandidate>> {
         let options = Self::collect_available_options(command_completion, &parsed.subcommand_path);
-        Ok(Self::match_options(&options, parsed, false, true))
+        Ok(Self::match_options(
+            &options,
+            parsed,
+            false,
+            command_completion.short_option_clusters.as_ref(),
+        ))
     }
 
     pub fn generate_long_option_candidates(
@@ -23,7 +29,12 @@ impl OptionGenerator {
         let options = Self::collect_available_options(command_completion, &parsed.subcommand_path);
         // Long-option context also offers short options because the parser
         // treats a single "-" as LongOption context.
-        Ok(Self::match_options(&options, parsed, true, true))
+        Ok(Self::match_options(
+            &options,
+            parsed,
+            true,
+            command_completion.short_option_clusters.as_ref(),
+        ))
     }
 
     /// Match options with **prefix-first, fuzzy-fallback** semantics (same as
@@ -34,19 +45,55 @@ impl OptionGenerator {
         options: &[&CommandOption],
         parsed: &ParsedCommandLine,
         include_long: bool,
-        include_short: bool,
+        clusters: Option<&ShortOptionClusters>,
     ) -> Vec<CompletionCandidate> {
         // The parser records the token currently under the cursor in
         // `specified_options` too. Drop one occurrence of it so that completing
         // a fully-typed option (e.g. `--all`) is not self-excluded just because
         // it prefixes another option (e.g. `--all-match`).
-        let mut already_specified = parsed.specified_options.clone();
-        if let Some(pos) = already_specified
-            .iter()
-            .position(|opt| opt == &parsed.completion_query())
+        let query = parsed.completion_query();
+        let mut already_specified = Vec::new();
+        if clusters.is_some_and(ShortOptionClusters::enabled)
+            && let Some(source) = &parsed.source
         {
-            already_specified.remove(pos);
+            let mut argv = source.argv();
+            while let Some((index, raw)) = argv.next() {
+                let logical = crate::completion::shell_path::decode_literal_word(raw);
+                if logical == "--" && index != source.cursor_word {
+                    break;
+                }
+                let before = already_specified.len();
+                let word = OptionWord::visit(&logical, options, |name| {
+                    if index != source.cursor_word {
+                        already_specified.push(name);
+                    }
+                });
+                match word {
+                    Some(word) if word.takes_separate_value() => {
+                        argv.next();
+                    }
+                    None => already_specified.truncate(before),
+                    _ => {}
+                }
+            }
+        } else {
+            already_specified.extend(parsed.specified_options.iter().map(String::as_str));
+            if let Some(pos) = already_specified.iter().position(|&opt| opt == query) {
+                already_specified.remove(pos);
+            }
         }
+        let used = |option: &CommandOption, name: &str| {
+            !option.multiple
+                && already_specified.iter().any(|&specified| {
+                    specified == name
+                        || (option.matches_name(specified)
+                            && options
+                                .iter()
+                                .filter(|other| other.matches_name(specified))
+                                .count()
+                                == 1)
+                })
+        };
 
         let build = |matcher: &dyn Fn(&str, &str) -> bool| -> Vec<CompletionCandidate> {
             let mut candidates = Vec::with_capacity(16);
@@ -54,22 +101,10 @@ impl OptionGenerator {
                 // Global and subcommand options may reuse a short name
                 // (git -p: paginate versus fetch --prune). An ambiguous
                 // spelling cannot prove that its other name was used.
-                let used = |name: &str| {
-                    !option.multiple
-                        && already_specified.iter().any(|specified| {
-                            specified == name
-                                || (option.matches_name(specified)
-                                    && options
-                                        .iter()
-                                        .filter(|other| other.matches_name(specified))
-                                        .count()
-                                        == 1)
-                        })
-                };
-                if include_long
-                    && let Some(ref long) = option.long
-                    && matcher(&parsed.completion_query(), long)
-                    && !used(long)
+                if let Some(ref long) = option.long
+                    && (include_long || (long.starts_with('-') && !long.starts_with("--")))
+                    && matcher(&query, long)
+                    && !used(option, long)
                 {
                     candidates.push(CompletionCandidate::long_option(
                         long.clone(),
@@ -77,10 +112,9 @@ impl OptionGenerator {
                     ));
                 }
 
-                if include_short
-                    && let Some(ref short) = option.short
-                    && matcher(&parsed.completion_query(), short)
-                    && !used(short)
+                if let Some(ref short) = option.short
+                    && matcher(&query, short)
+                    && !used(option, short)
                 {
                     candidates.push(CompletionCandidate::short_option(
                         short.clone(),
@@ -91,7 +125,29 @@ impl OptionGenerator {
             candidates
         };
 
-        let prefix = build(&|token: &str, value: &str| value.starts_with(token));
+        let mut prefix = build(&|token: &str, value: &str| value.starts_with(token));
+        if let Some(clusters) = clusters
+            && let Some(flags) = query.strip_prefix('-')
+            && !flags.is_empty()
+            && flags.chars().all(|ch| clusters.allows(ch))
+            && OptionWord::visit(&query, options, |_| {})
+                .is_some_and(|word| word.can_extend_cluster())
+        {
+            for option in options {
+                if let Some(short) = option.short.as_deref()
+                    && let Some(letter) = short.strip_prefix('-')
+                    && letter.len() == 1
+                    && clusters.allows(char::from(letter.as_bytes()[0]))
+                    && (option.multiple || !flags.contains(letter))
+                    && !used(option, short)
+                {
+                    prefix.push(CompletionCandidate::short_option(
+                        format!("{query}{letter}"),
+                        option.description.clone(),
+                    ));
+                }
+            }
+        }
         if !prefix.is_empty() {
             return prefix;
         }
@@ -153,6 +209,7 @@ mod tests {
             short: None,
             long: Some(long.to_string()),
             description: Some(description.to_string()),
+            value_attached_only: false,
             takes_value: false,
             value_type: None,
             argument: None,
@@ -178,7 +235,7 @@ mod tests {
 
     fn long_texts(options: &[CommandOption], token: &str) -> Vec<String> {
         let refs: Vec<&CommandOption> = options.iter().collect();
-        OptionGenerator::match_options(&refs, &parsed(token), true, true)
+        OptionGenerator::match_options(&refs, &parsed(token), true, None)
             .into_iter()
             .map(|c| c.text)
             .collect()
@@ -191,7 +248,7 @@ mod tests {
         for used in ["-e", "--regexp"] {
             let mut p = parsed("-");
             p.specified_options = vec![used.into()];
-            let candidates = OptionGenerator::match_options(&[&option], &p, true, true);
+            let candidates = OptionGenerator::match_options(&[&option], &p, true, None);
             assert_eq!(
                 candidates
                     .iter()
@@ -209,7 +266,7 @@ mod tests {
         for used in ["-i", "--ignore-case"] {
             let mut p = parsed("-");
             p.specified_options = vec![used.into()];
-            assert!(OptionGenerator::match_options(&[&option], &p, true, true).is_empty());
+            assert!(OptionGenerator::match_options(&[&option], &p, true, None).is_empty());
         }
     }
 
@@ -243,7 +300,7 @@ mod tests {
         let mut p = parsed("--all");
         p.specified_options = vec!["--all".to_string()];
         let refs: Vec<&CommandOption> = options.iter().collect();
-        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, true)
+        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, None)
             .into_iter()
             .map(|c| c.text)
             .collect();
@@ -259,7 +316,7 @@ mod tests {
         let mut p = parsed("--");
         p.specified_options = vec!["--foo".to_string(), "--".to_string()];
         let refs: Vec<&CommandOption> = options.iter().collect();
-        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, true)
+        let got: Vec<String> = OptionGenerator::match_options(&refs, &p, true, None)
             .into_iter()
             .map(|c| c.text)
             .collect();

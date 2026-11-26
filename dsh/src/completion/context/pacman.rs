@@ -52,7 +52,7 @@ impl ContextCorrector<'_> {
             if token == "--" {
                 break;
             }
-            if is_separate_value_option(&token, options) {
+            if OptionWord::parse(&token, options).is_some_and(|word| word.takes_separate_value()) {
                 i = Self::next_argv_index(&parsed.raw_args, i + 1);
                 continue;
             }

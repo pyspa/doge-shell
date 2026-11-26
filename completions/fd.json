@@ -1,5 +1,6 @@
 {
   "command": "fd",
+  "short_option_clusters": true,
   "description": "A fast alternative to find",
   "global_options": [
     {
@@ -55,37 +56,82 @@
     {
       "short": "-d",
       "long": "--max-depth",
-      "description": "Maximum search depth"
+      "description": "Maximum search depth",
+      "takes_value": true,
+      "value_type": {
+        "type": "Number"
+      }
     },
     {
       "short": "-t",
       "long": "--type",
-      "description": "Filter by type (f, d, l, x, e, s, p)"
+      "description": "Filter by type (f, d, l, x, e, s, p)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "f",
+          "d",
+          "l",
+          "x",
+          "e",
+          "s",
+          "p"
+        ]
+      },
+      "multiple": true
     },
     {
       "short": "-e",
       "long": "--extension",
-      "description": "Filter by extension"
+      "description": "Filter by extension",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
     },
     {
       "short": "-E",
       "long": "--exclude",
-      "description": "Exclude pattern"
+      "description": "Exclude pattern",
+      "takes_value": true,
+      "value_type": {
+        "type": "String"
+      },
+      "multiple": true
     },
     {
       "short": "-x",
       "long": "--exec",
-      "description": "Execute command for each result"
+      "description": "Execute command for each result",
+      "takes_value": true,
+      "value_type": {
+        "type": "Command"
+      }
     },
     {
       "short": "-X",
       "long": "--exec-batch",
-      "description": "Execute command with results as args"
+      "description": "Execute command with results as args",
+      "takes_value": true,
+      "value_type": {
+        "type": "Command"
+      }
     },
     {
       "short": "-c",
       "long": "--color",
-      "description": "Color output (auto, always, never)"
+      "description": "Color output (auto, always, never)",
+      "takes_value": true,
+      "value_type": {
+        "type": "Choice",
+        "data": [
+          "always",
+          "auto",
+          "never"
+        ]
+      }
     },
     {
       "short": "-0",

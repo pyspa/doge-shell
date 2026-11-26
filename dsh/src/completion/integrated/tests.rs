@@ -2421,9 +2421,16 @@ fi
         "#!/bin/sh\nif [ \"$1\" = \"list-timezones\" ]; then printf 'Asia/Tokyo\\nEurope/London\\n'; fi\n",
     );
 
+    write_executable_script(
+        &bin_dir.join("tar"),
+        "#!/bin/sh\nif [ \"$1\" = -tf ] && [ \"${2##*/}\" = sample.tar ]; then echo member-in-archive; fi\n",
+    );
+
     let engine = engine_with_path(&bin_dir);
 
     let cases = [
+        ("tar -xvfsample.tar memb", "member-in-archive"),
+        ("tar '-xPf' sample.tar '--' -c memb", "member-in-archive"),
         ("cargo build -p ap", "app-core"),
         ("cargo run --bin cl", "cli-tool"),
         ("git switch fe", "feature/demo"),

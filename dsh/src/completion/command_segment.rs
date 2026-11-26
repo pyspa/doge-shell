@@ -20,6 +20,24 @@ pub struct CommandSource {
 }
 
 impl CommandSource {
+    /// Arguments of this invocation with their source indexes, excluding shell redirections.
+    pub(crate) fn argv(&self) -> impl Iterator<Item = (usize, &str)> {
+        let mut redirect_target = false;
+        self.words
+            .iter()
+            .enumerate()
+            .skip(self.command_word + 1)
+            .map(|(index, word)| (index, word.raw.as_str()))
+            .filter(move |(_, word)| {
+                if redirect_target {
+                    redirect_target = false;
+                    return false;
+                }
+                redirect_target = super::parser::CommandLineParser::is_redirect_operator(word);
+                !redirect_target
+            })
+    }
+
     pub(crate) fn raw_index(&self, raw_len: usize) -> Option<usize> {
         self.cursor_word
             .checked_sub(self.words.len().saturating_sub(raw_len))

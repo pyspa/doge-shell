@@ -1,5 +1,6 @@
 {
   "command": "tar",
+  "short_option_clusters": true,
   "description": "An archiving utility",
   "global_options": [
     {
@@ -19,6 +20,7 @@
     },
     {
       "short": "-v",
+      "multiple": true,
       "long": "--verbose",
       "description": "Verbosely list files processed"
     },
@@ -49,6 +51,7 @@
     },
     {
       "short": "-C",
+      "multiple": true,
       "long": "--directory",
       "description": "Change to directory DIR",
       "takes_value": true,
@@ -58,11 +61,42 @@
     },
     {
       "long": "--exclude",
+      "multiple": true,
       "description": "Exclude files, given as a PATTERN",
       "takes_value": true,
       "value_type": {
         "type": "String"
       }
+    },
+    {
+      "short": "-P",
+      "description": "Preserve absolute pathnames"
+    },
+    {
+      "short": "-S",
+      "long": "--sparse",
+      "description": "Handle sparse files"
+    },
+    {
+      "short": "-w",
+      "long": "--interactive",
+      "description": "Ask for confirmation before each action"
+    },
+    {
+      "short": "-T",
+      "long": "--files-from",
+      "description": "Read member names from a file",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": { "type": "File", "data": {} }
+    },
+    {
+      "short": "-X",
+      "long": "--exclude-from",
+      "description": "Read exclusion patterns from a file",
+      "takes_value": true,
+      "multiple": true,
+      "value_type": { "type": "File", "data": {} }
     },
     {
       "short": "-h",

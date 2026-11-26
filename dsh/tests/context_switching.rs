@@ -9,6 +9,7 @@ async fn test_context_switching_logic() {
     // Create a mock DB to have controlled environment
     let mut db = CommandCompletionDatabase::new();
     let mock_completion = CommandCompletion {
+        short_option_clusters: None,
         command: "mock".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -16,6 +17,7 @@ async fn test_context_switching_logic() {
             short: None,
             long: Some("--global".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: false,
             value_type: None,
             argument: None,
@@ -29,6 +31,7 @@ async fn test_context_switching_logic() {
                 short: None,
                 long: Some("--local".to_string()),
                 description: None,
+                value_attached_only: false,
                 takes_value: false,
                 value_type: None,
                 argument: None,

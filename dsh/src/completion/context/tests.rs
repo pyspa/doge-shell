@@ -5,6 +5,7 @@ use crate::completion::command::{ArgumentType, CommandCompletion, CommandOption,
 fn test_correct_flag_like_subcommand() {
     let mut db = CommandCompletionDatabase::new();
     let completion = CommandCompletion {
+        short_option_clusters: None,
         command: "pacman".to_string(),
         description: None,
         global_options: vec![],
@@ -53,6 +54,7 @@ fn test_correct_flag_like_subcommand() {
 fn test_correct_alias_subcommand() {
     let mut db = CommandCompletionDatabase::new();
     let completion = CommandCompletion {
+        short_option_clusters: None,
         command: "pacman".to_string(),
         description: None,
         global_options: vec![],
@@ -100,6 +102,7 @@ fn test_correct_alias_subcommand() {
 fn alias_subcommand_is_canonicalized_before_argument_completion() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "pacman".to_string(),
         description: None,
         global_options: vec![],
@@ -128,6 +131,7 @@ fn alias_subcommand_is_canonicalized_before_argument_completion() {
 fn option_value_context_uses_completion_definition() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cargo".to_string(),
         description: None,
         global_options: vec![],
@@ -140,6 +144,7 @@ fn option_value_context_uses_completion_definition() {
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: None,
+                value_attached_only: false,
                 takes_value: true,
                 value_type: Some(ArgumentType::Choice(vec!["doge-shell".to_string()])),
                 argument: None,
@@ -168,6 +173,7 @@ fn option_value_context_uses_completion_definition() {
 fn global_option_before_subcommand_preserves_argument_context() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "snapper".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -175,6 +181,7 @@ fn global_option_before_subcommand_preserves_argument_context() {
             short: Some("-c".to_string()),
             long: Some("--config".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::Choice(vec!["root".to_string()])),
             argument: None,
@@ -213,6 +220,7 @@ fn global_option_before_subcommand_preserves_argument_context() {
 fn recovered_subcommand_counts_only_preceding_positional_arguments() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "helm".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -220,6 +228,7 @@ fn recovered_subcommand_counts_only_preceding_positional_arguments() {
             short: None,
             long: Some("--kube-context".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::String),
             argument: None,
@@ -267,6 +276,7 @@ fn recovered_subcommand_counts_only_preceding_positional_arguments() {
 fn known_option_value_is_removed_before_positional_argument_index() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "pytest".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -274,6 +284,7 @@ fn known_option_value_is_removed_before_positional_argument_index() {
             short: Some("-k".to_string()),
             long: None,
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::String),
             argument: None,
@@ -303,6 +314,7 @@ fn known_option_value_is_removed_before_positional_argument_index() {
 fn known_option_value_removal_preserves_same_text_positional_argument() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -310,6 +322,7 @@ fn known_option_value_removal_preserves_same_text_positional_argument() {
             short: Some("-k".to_string()),
             long: None,
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::String),
             argument: None,
@@ -340,6 +353,7 @@ fn known_option_value_removal_preserves_same_text_positional_argument() {
 fn known_option_value_is_removed_before_empty_positional_argument() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "pytest".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -347,6 +361,7 @@ fn known_option_value_is_removed_before_empty_positional_argument() {
             short: Some("-k".to_string()),
             long: None,
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::String),
             argument: None,
@@ -374,6 +389,7 @@ fn known_option_value_is_removed_before_empty_positional_argument() {
 fn inline_long_option_value_uses_completion_definition() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "kubectl".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -381,6 +397,7 @@ fn inline_long_option_value_uses_completion_definition() {
             short: None,
             long: Some("--context".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::Choice(vec!["dev-cluster".to_string()])),
             argument: None,
@@ -409,6 +426,7 @@ fn inline_long_option_value_uses_completion_definition() {
 fn short_attached_option_value_uses_completion_definition() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "kubectl".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -416,6 +434,7 @@ fn short_attached_option_value_uses_completion_definition() {
             short: Some("-n".to_string()),
             long: Some("--namespace".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::Choice(vec!["dev-namespace".to_string()])),
             argument: None,
@@ -444,6 +463,7 @@ fn short_attached_option_value_uses_completion_definition() {
 fn short_attached_option_without_value_definition_does_not_use_value_provider() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -451,6 +471,7 @@ fn short_attached_option_without_value_definition_does_not_use_value_provider() 
             short: Some("-v".to_string()),
             long: Some("--verbose".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: false,
             value_type: None,
             argument: None,
@@ -471,6 +492,7 @@ fn short_attached_option_without_value_definition_does_not_use_value_provider() 
 fn short_equals_option_value_stays_out_of_scope() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -478,6 +500,7 @@ fn short_equals_option_value_stays_out_of_scope() {
             short: Some("-x".to_string()),
             long: Some("--example".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: true,
             value_type: Some(ArgumentType::Choice(vec!["value".to_string()])),
             argument: None,
@@ -498,6 +521,7 @@ fn short_equals_option_value_stays_out_of_scope() {
 fn separate_option_empty_value_uses_completion_definition() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cargo".to_string(),
         description: None,
         global_options: vec![],
@@ -510,6 +534,7 @@ fn separate_option_empty_value_uses_completion_definition() {
                 short: Some("-p".to_string()),
                 long: Some("--package".to_string()),
                 description: None,
+                value_attached_only: false,
                 takes_value: true,
                 value_type: Some(ArgumentType::Choice(vec!["doge-shell".to_string()])),
                 argument: None,
@@ -537,6 +562,7 @@ fn separate_option_empty_value_uses_completion_definition() {
 fn inline_long_option_without_value_definition_does_not_use_value_provider() {
     let mut db = CommandCompletionDatabase::new();
     db.add_command(CommandCompletion {
+        short_option_clusters: None,
         command: "cmd".to_string(),
         description: None,
         global_options: vec![CommandOption {
@@ -544,6 +570,7 @@ fn inline_long_option_without_value_definition_does_not_use_value_provider() {
             short: None,
             long: Some("--verbose".to_string()),
             description: None,
+            value_attached_only: false,
             takes_value: false,
             value_type: None,
             argument: None,

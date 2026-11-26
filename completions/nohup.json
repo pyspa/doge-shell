@@ -14,11 +14,8 @@
   "arguments": [
     {
       "name": "command",
-      "description": "Command to run"
-    },
-    {
-      "name": "args",
-      "description": "Arguments for the command"
+      "description": "Command to run with its arguments",
+      "type": { "type": "CommandWithArgs" }
     }
   ]
 }

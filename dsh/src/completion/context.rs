@@ -10,6 +10,7 @@ use super::parser::{
 };
 
 mod option_values;
+pub(super) use option_values::OptionWord;
 mod pacman;
 pub(crate) use pacman::pacman_short_path;
 mod tokens;
@@ -28,36 +29,6 @@ fn normalize_specified_option(
         normalized.push(option_name.to_string());
     }
     normalized
-}
-
-fn split_attached_short_option_value<'a>(
-    raw_token: &'a str,
-    options: &[&CommandOption],
-) -> Option<(String, Option<ArgumentType>, &'a str)> {
-    if !raw_token.starts_with('-') || raw_token.starts_with("--") {
-        return None;
-    }
-
-    options.iter().find_map(|option| {
-        let short = option.short.as_deref()?;
-        if short.len() != 2 || !option.expects_value() || !raw_token.starts_with(short) {
-            return None;
-        }
-
-        let value = &raw_token[short.len()..];
-        if value.is_empty() || value.starts_with('=') {
-            return None;
-        }
-
-        Some((short.to_string(), option.value_type().cloned(), value))
-    })
-}
-
-fn is_separate_value_option(raw_token: &str, options: &[&CommandOption]) -> bool {
-    options.iter().any(|option| {
-        option.matches_name(&super::shell_path::decode_literal_word(raw_token))
-            && option.expects_value()
-    })
 }
 
 /// Responsible for correcting parsed command line based on completion database
@@ -95,6 +66,25 @@ impl<'a> ContextCorrector<'a> {
             return target;
         }
         let mut corrected = self.correct_inner(parsed);
+        // A lexical guess such as "sudo -n VALUE" can point at the wrapper's
+        // command operand. Use its declared argv position once flags and their
+        // values have been accounted for.
+        if matches!(
+            corrected.completion_context,
+            CompletionContext::OptionValue {
+                value_type: None,
+                ..
+            }
+        ) && Self::current_raw_token(&corrected) == Some(corrected.current_token.as_str())
+            && let Some((index, _)) = self.find_command_with_args_arg(&corrected)
+            && let Some(raw_index) = self.argument_raw_index(&corrected, index)
+            && Self::current_raw_index(&corrected) == Some(raw_index)
+        {
+            corrected.completion_context = CompletionContext::Argument {
+                arg_index: index,
+                arg_type: None,
+            };
+        }
         if corrected.source.is_some()
             && matches!(
                 corrected.completion_context,
@@ -298,59 +288,11 @@ impl<'a> ContextCorrector<'a> {
         if matches!(
             new_parsed.completion_context,
             CompletionContext::Argument { .. }
-        ) {
-            // Check for combined short options in the previous token
-            let check_index = if new_parsed.current_token.is_empty() {
-                new_parsed.raw_args.len().checked_sub(1)
-            } else {
-                new_parsed.raw_args.len().checked_sub(2)
-            };
-
-            if let Some(idx) = check_index
-                && let Some(prev_token) = new_parsed.raw_args.get(idx)
-                && prev_token.starts_with('-')
-                && !prev_token.starts_with("--")
-                && prev_token.len() > 2
-                && !(parsed.command == "pacman" && pacman_short_path(prev_token).is_some())
-            {
-                // Collect available options for current scope
-                let mut available_options = command_completion.global_options.clone();
-                let mut curr_subs = &command_completion.subcommands;
-                for sub_name in &new_parsed.subcommand_path {
-                    if let Some(sub) = Self::find_matching_subcommand(curr_subs, sub_name) {
-                        available_options.extend(sub.options.clone());
-                        curr_subs = &sub.subcommands;
-                    } else {
-                        break;
-                    }
-                }
-
-                // Check the last character of the combined option
-                if let Some(last_char) = prev_token.chars().last() {
-                    let short_name = format!("-{}", last_char);
-                    if let Some(opt) = available_options
-                        .iter()
-                        .find(|o| o.short.as_ref() == Some(&short_name))
-                        && opt.expects_value()
-                    {
-                        // The last flag requires an argument, so the current token is its value
-                        new_parsed.completion_context = CompletionContext::OptionValue {
-                            option_name: short_name,
-                            value_type: None, // Will be resolved by generator
-                        };
-                        return new_parsed;
-                    }
-                }
-            }
-
-            // Subcommand fallback check (existing logic)
-            if !current_subcommands.is_empty()
-                && current_subcommands
-                    .iter()
-                    .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
-            {
-                new_parsed.completion_context = CompletionContext::SubCommand;
-            }
+        ) && current_subcommands
+            .iter()
+            .any(|s| Self::subcommand_starts_with(s, &new_parsed.completion_query()))
+        {
+            new_parsed.completion_context = CompletionContext::SubCommand;
         }
 
         // 4. NEW: Scan raw_args for additional subcommands
@@ -411,19 +353,9 @@ impl<'a> ContextCorrector<'a> {
                 let available_options =
                     self.collect_available_options(command_completion, &valid_subcommands);
 
-                if Self::is_inline_long_option_value(raw_token, &available_options)
-                    || split_attached_short_option_value(raw_token, &available_options).is_some()
-                {
+                if let Some(word) = OptionWord::parse(token, &available_options) {
                     tokens_consumed += 1;
-                    continue;
-                }
-
-                if let Some(option) = available_options
-                    .iter()
-                    .find(|option| option.matches_name(token))
-                {
-                    tokens_consumed += 1;
-                    if option.expects_value() && tokens_consumed < parsed.raw_args.len() {
+                    if word.takes_separate_value() && tokens_consumed < parsed.raw_args.len() {
                         tokens_consumed =
                             Self::next_argv_index(&parsed.raw_args, tokens_consumed) + 1;
                     }
@@ -437,7 +369,7 @@ impl<'a> ContextCorrector<'a> {
                         && current_subcommands
                             .iter()
                             .flat_map(|sub| &sub.options)
-                            .any(|opt| opt.matches_name(name) && opt.expects_value());
+                            .any(|opt| opt.matches_name(name) && opt.takes_separate_value());
                     tokens_consumed += 1;
                     if takes_value {
                         tokens_consumed =

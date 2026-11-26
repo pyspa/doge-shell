@@ -28,53 +28,19 @@ pub(super) fn completion_replacement_range(
     {
         token_range.end = cursor_pos + next_comma;
     }
-    let token = slice_chars(input, token_range.start, token_range.end);
-
-    if let parser::CompletionContext::OptionValue { option_name, .. } =
-        &parsed_command_line.completion_context
-        && let Some(value_range) =
-            option_value_range_from_token(&token, token_range.start, option_name).or_else(|| {
-                if parsed_command_line.command != "pacman" {
-                    return None;
-                }
-                let (name, value) = crate::completion::context::pacman_short_path(&token)?;
-                (name == option_name && !value.is_empty()).then(|| CompletionReplacementRange {
-                    start: token_range.end - value.chars().count(),
-                    end: token_range.end,
-                })
-            })
-    {
-        return Some(value_range);
-    }
-
-    Some(token_range)
-}
-
-pub(super) fn option_value_range_from_token(
-    token: &str,
-    token_start: usize,
-    option_name: &str,
-) -> Option<CompletionReplacementRange> {
-    if option_name.starts_with("--")
-        && let Some((raw_name, _)) = parser::split_inline_long_option(token)
-        && super::super::shell_path::decode_literal_word(raw_name) == option_name
-    {
-        return Some(CompletionReplacementRange {
-            start: token_start + raw_name.chars().count() + 1,
-            end: token_start + token.chars().count(),
-        });
-    }
-
-    if option_name.len() == 2 && !option_name.starts_with("--") && token.starts_with(option_name) {
-        let value = &token[option_name.len()..];
-        if !value.is_empty() && !value.starts_with('=') {
-            let start = token_start + option_name.chars().count();
-            let end = token_start + token.chars().count();
-            return Some(CompletionReplacementRange { start, end });
+    if matches!(
+        parsed_command_line.completion_context,
+        parser::CompletionContext::OptionValue { .. }
+    ) {
+        // The corrector already identified the raw value before the cursor.
+        // Map its length back to the public input, including inside wrappers.
+        let cursor = cursor_pos.min(token_range.end);
+        let prefix = slice_chars(input, token_range.start, cursor);
+        if prefix.ends_with(&parsed_command_line.current_token) {
+            token_range.start = cursor - parsed_command_line.current_token.chars().count();
         }
     }
-
-    None
+    Some(token_range)
 }
 
 pub(crate) fn token_range_at_cursor(

@@ -1,5 +1,6 @@
 {
   "command": "rg",
+  "short_option_clusters": true,
   "description": "A fast, user-friendly alternative to grep.",
   "global_options": [
     {
@@ -51,6 +52,7 @@
     },
     {
       "short": "-g",
+      "multiple": true,
       "long": "--glob",
       "description": "Include or exclude files with GLOB.",
       "takes_value": true,
@@ -88,6 +90,7 @@
     },
     {
       "long": "--type-clear",
+      "multiple": true,
       "description": "Clear the globs of the given file type.",
       "takes_value": true,
       "value_type": {
@@ -158,6 +161,7 @@
     },
     {
       "short": "-u",
+      "multiple": true,
       "long": "--unrestricted",
       "description": "Search hidden files and directories.",
       "takes_value": false

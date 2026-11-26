@@ -13,26 +13,12 @@ pub(super) fn completion_words(parsed_command_line: &ParsedCommandLine) -> Vec<&
         .collect()
 }
 
-pub(super) fn tar_reads_archive(parsed_command_line: &ParsedCommandLine) -> bool {
-    completion_words(parsed_command_line)
-        .into_iter()
-        .any(|word| {
-            matches!(
-                word,
-                "-x" | "--extract" | "--get" | "-t" | "--list" | "x" | "t"
-            ) || word
-                .strip_prefix('-')
-                .filter(|flags| !flags.starts_with('-'))
-                .is_some_and(|flags| flags.contains('x') || flags.contains('t'))
-        })
-}
-
 /// Whether this `modprobe` line unloads rather than loads.
 ///
 /// `-r` is routinely bundled with its modifiers (`modprobe -rv`, `-nr`), and
 /// matching the whole token -- as this used to -- left every bundled form
 /// offering the whole `/lib/modules` list instead of the loaded modules `-r`
-/// can actually remove. Same shape as `tar_reads_archive` above.
+/// can actually remove.
 ///
 /// Long options are excluded from the cluster scan on purpose: `--remove` is
 /// modprobe's only long spelling of this, and `--dry-run` must not match on its
@@ -56,31 +42,89 @@ pub(super) fn selected_tar_archive(
     parsed_command_line: &ParsedCommandLine,
     current_dir: &Path,
 ) -> Option<PathBuf> {
-    let words = completion_words(parsed_command_line);
-    for (index, word) in words.iter().enumerate() {
-        if let Some(value) = word.strip_prefix("--file=") {
-            return archive_path_from_token(current_dir, value);
-        }
-        if matches!(*word, "-f" | "--file") {
-            return words
-                .get(index + 1)
-                .and_then(|value| archive_path_from_token(current_dir, value));
-        }
-        if word
-            .strip_prefix('-')
-            .filter(|flags| !flags.starts_with('-'))
-            .is_some_and(|flags| flags.contains('f'))
-            || (!word.starts_with('-')
-                && word.chars().all(|ch| ch.is_ascii_alphabetic())
-                && word.contains('f')
-                && (word.contains('x') || word.contains('t')))
-        {
-            return words
-                .get(index + 1)
-                .and_then(|value| archive_path_from_token(current_dir, value));
+    let raw_words = if let Some(source) = &parsed_command_line.source {
+        source
+            .argv()
+            .map(|(index, word)| {
+                if index == source.cursor_word {
+                    ""
+                } else {
+                    word
+                }
+            })
+            .collect()
+    } else {
+        completion_words(parsed_command_line)
+    };
+    let words: Vec<_> = raw_words
+        .into_iter()
+        .map(crate::completion::shell_path::decode_literal_word)
+        .collect();
+    let mut argv = words.iter().map(String::as_str).enumerate();
+    let mut reads = false;
+    let mut archive = None;
+    while let Some((index, word)) = argv.next() {
+        match word {
+            "--" => break,
+            "--create" | "--append" | "--update" => return None,
+            "--extract" | "--get" | "--list" => reads = true,
+            "--file" => archive = argv.next().map(|(_, value)| value),
+            "--directory"
+            | "--exclude"
+            | "--exclude-from"
+            | "--files-from"
+            | "--blocking-factor"
+            | "--use-compress-program" => {
+                argv.next();
+            }
+            _ if word.starts_with("--file=") => archive = word.strip_prefix("--file="),
+            _ => {
+                // Traditional options (e.g. "xfz") take arguments from
+                // subsequent words regardless of the position of 'f'.
+                let traditional =
+                    index == 0 && !word.is_empty() && word.bytes().all(|c| c.is_ascii_alphabetic());
+                let flags = if traditional {
+                    word
+                } else if let Some(flags) = word.strip_prefix('-').filter(|s| !s.starts_with('-')) {
+                    flags
+                } else {
+                    continue;
+                };
+                for (i, flag) in flags.char_indices() {
+                    match flag {
+                        'x' | 't' => reads = true,
+                        'c' | 'r' | 'u' => return None,
+                        'f' | 'C' | 'T' | 'X' | 'b' | 'I' => {
+                            let tail = &flags[i + 1..];
+                            let attached = !traditional && !tail.is_empty();
+                            let value = if attached {
+                                Some(tail)
+                            } else {
+                                argv.next().map(|(_, value)| value)
+                            };
+                            if flag == 'f' {
+                                archive = value;
+                            }
+                            if attached {
+                                break;
+                            }
+                        }
+                        // No argument on the tar implementations that accept them.
+                        'a' | 'B' | 'G' | 'h' | 'i' | 'j' | 'J' | 'k' | 'l' | 'm' | 'M' | 'n'
+                        | 'o' | 'O' | 'p' | 'P' | 'q' | 'R' | 'S' | 'U' | 'v' | 'w' | 'y' | 'z'
+                        | 'Z' => {}
+                        // In particular H/L/s/W differ between GNU tar and bsdtar.
+                        // Their suffix may be a value rather than more flags.
+                        _ => break,
+                    }
+                }
+            }
         }
     }
-    None
+    archive
+        .filter(|_| reads)
+        .filter(|value| !value.is_empty() && *value != "-")
+        .map(|value| current_dir.join(value))
 }
 
 pub(super) fn selected_unzip_archive(

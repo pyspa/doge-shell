@@ -142,6 +142,59 @@ pub fn completion_from_cmd(
     command::complete_sync(input, query, framework)
 }
 
+/// The shell argument being edited, before alias expansion. Redirection words
+/// are not arguments, and only words left of the cursor can select a provider.
+struct LegacyArgument {
+    command: String,
+    args: Vec<String>,
+    index: usize,
+}
+
+impl LegacyArgument {
+    fn at(input: &Input) -> Option<Self> {
+        let cursor = super::command_segment::char_to_byte(input.as_str(), input.cursor());
+        let parsed = super::parser::CommandLineParser::new().parse(input.as_str(), cursor);
+        let source = parsed.source?;
+        if source.suppressed || source.cursor_word <= source.command_word {
+            return None;
+        }
+        let mut args = Vec::new();
+        let mut cursor_arg = None;
+        for (index, word) in source.argv() {
+            if index == source.cursor_word {
+                cursor_arg = Some(args.len());
+            }
+            args.push(super::shell_path::decode_literal_word(word));
+        }
+        Some(Self {
+            command: parsed.command,
+            args,
+            index: cursor_arg?,
+        })
+    }
+
+    fn lisp_definition<'a>(
+        &self,
+        definitions: &'a [super::AutoComplete],
+    ) -> Option<&'a super::AutoComplete> {
+        if definitions.is_empty() {
+            return None;
+        }
+        // Lisp registers multiword targets with underscores. Compare only
+        // after appending a whole shell word; underscores may also be literal.
+        let mut key = self.command.clone();
+        let mut selected = definitions.iter().find(|def| def.target == key);
+        for word in &self.args[..self.index] {
+            key.push('_');
+            key.push_str(word);
+            if let Some(definition) = definitions.iter().find(|def| def.target == key) {
+                selected = Some(definition);
+            }
+        }
+        selected
+    }
+}
+
 pub async fn input_completion(
     input: &Input,
     repl: &Repl<'_>,
@@ -151,76 +204,50 @@ pub async fn input_completion(
     input_text: &str,
 ) -> CompletionSelection {
     let framework = default_completion_framework();
-    // Main fallback completion function that tries multiple completion sources in sequence:
-    // 1. Lisp-based completion (custom completion definitions)
-    // 2. Current context completion (path completion, command completion from PATH)
-    // 3. ChatGPT completion (if enabled and API key is set)
-
     debug!("input_completion starting with query: {:?}", query);
 
-    // Try lisp-based completion first (custom completions defined by user)
-    // Lisp callbacks stay local; command-backed definitions yield while the
-    // bounded helper runs and return any interrupted editor event unchanged.
-    let (res, preformatted) =
-        completion_from_lisp_with_prompt(input, repl, query, prompt_text, input_text, framework)
-            .await;
-    if let CompletionSelection::Selected(_)
-    | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_)
-    | CompletionSelection::Event(_)
-    | CompletionSelection::Cancelled = res
-    {
-        debug!("Lisp completion returned result: {:?}", res);
-        return if preformatted {
-            res
-        } else {
-            render_legacy_selection(res, raw_token)
+    if let Some(argument) = LegacyArgument::at(input) {
+        let (selection, preformatted) = completion_from_lisp_with_prompt(
+            &argument,
+            input,
+            repl,
+            query,
+            prompt_text,
+            input_text,
+            framework,
+        )
+        .await;
+        if !matches!(selection, CompletionSelection::None) {
+            return if preformatted {
+                selection
+            } else {
+                render_legacy_selection(selection, raw_token)
+            };
+        }
+
+        let selection = match argument.command.as_str() {
+            "cd" | "pushd" | "popd" => {
+                dir_stack_candidates(&argument, repl, query, prompt_text, input_text, framework)
+            }
+            "z" => z_history_candidates(
+                &argument,
+                repl.shell.path_history.as_ref(),
+                query,
+                prompt_text,
+                input_text,
+                framework,
+            ),
+            _ => CompletionSelection::None,
         };
+        if !matches!(selection, CompletionSelection::None) {
+            return render_legacy_selection(selection, raw_token);
+        }
     }
 
-    // Try directory-stack index completion (`cd -N`, `pushd +N`, `popd +N`)
-    let stack_res =
-        completion_for_dir_stack(input, repl, query, prompt_text, input_text, framework);
-    if let CompletionSelection::Selected(_)
-    | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_)
-    | CompletionSelection::Event(_)
-    | CompletionSelection::Cancelled = stack_res
-    {
-        return render_legacy_selection(stack_res, raw_token);
-    }
-
-    // Try z completion
-    let z_res = completion_for_z(input, repl, query, prompt_text, input_text, framework);
-    if let CompletionSelection::Selected(_)
-    | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_)
-    | CompletionSelection::Event(_)
-    | CompletionSelection::Cancelled = z_res
-    {
-        return render_legacy_selection(z_res, raw_token);
-    }
-
-    // Try current context completion (files, directories, commands in PATH)
-    let res =
+    let selection =
         completion_from_current_with_prompt(input, repl, query, prompt_text, input_text, framework)
             .await;
-    if let CompletionSelection::Selected(_)
-    | CompletionSelection::Interactive(..)
-    | CompletionSelection::Input(_)
-    | CompletionSelection::Event(_)
-    | CompletionSelection::Cancelled = res
-    {
-        debug!("Context completion returned result: {:?}", res);
-        return render_legacy_selection(res, raw_token);
-    }
-
-    debug!("No completion candidates found from any source");
-
-    // Return None if no completion sources provided any candidates
-    // This is the "silent failure" behavior when no matches are found from any source
-    // No error message is shown to user, maintaining the "no visible effect" behavior
-    CompletionSelection::None
+    render_legacy_selection(selection, raw_token)
 }
 
 /// Legacy collectors/cache/UI carry raw words. Render selected output once;
@@ -246,6 +273,7 @@ fn render_legacy_selection(
 }
 
 async fn completion_from_lisp_with_prompt(
+    argument: &LegacyArgument,
     input: &Input,
     repl: &Repl<'_>,
     query: Option<&str>,
@@ -261,85 +289,70 @@ async fn completion_from_lisp_with_prompt(
     };
 
     // Release the RefCell borrow before a command-backed definition awaits.
-    let completion = autocompletion
-        .borrow()
-        .iter()
-        .find(|compl| replace_space(input.as_str()).starts_with(&compl.target))
-        .cloned();
-    for compl in completion.iter() {
-        let cmd_str = compl.target.to_string();
-        // debug!("match cmd:'{}' in:'{}'", cmd_str, replace_space(input));
-        if replace_space(input.as_str()).starts_with(cmd_str.as_str()) {
-            if let Some(func) = &compl.func {
-                // run lisp func with input as argument
-                let args = vec![Value::String(replace_space(input.as_str()))];
-                match lisp_engine.borrow().apply_func(func.to_owned(), args) {
-                    Ok(Value::List(list)) => {
-                        let mut items: Vec<Candidate> = Vec::new();
-                        for val in list.into_iter() {
-                            items.push(Candidate::Basic(val.to_string()));
-                        }
-                        return (
-                            select_completion_items(
-                                items,
-                                query,
-                                prompt_text,
-                                input_text,
-                                framework,
-                            ),
-                            false,
-                        );
-                    }
-                    Ok(Value::String(str)) => {
-                        // A direct Lisp String is a preformatted replacement (e.g.
-                        // `hello\ world`); lists such as ["hello world"] are raw
-                        // literal words. Never decode or infer syntax from values.
-                        return (CompletionSelection::Selected(str), true);
-                    }
-                    Err(err) => {
-                        warn!("Lisp completion error: {err:?}");
-                    }
-                    _ => {}
+    let Some(compl) = argument.lisp_definition(&autocompletion.borrow()).cloned() else {
+        return (CompletionSelection::None, false);
+    };
+    if let Some(func) = &compl.func {
+        // run lisp func with input as argument
+        let args = vec![Value::String(replace_space(input.as_str()))];
+        match lisp_engine.borrow().apply_func(func.to_owned(), args) {
+            Ok(Value::List(list)) => {
+                let mut items: Vec<Candidate> = Vec::new();
+                for val in list.into_iter() {
+                    items.push(Candidate::Basic(val.to_string()));
                 }
-            } else if let Some(cmd) = &compl.cmd {
-                let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
-                    return (CompletionSelection::None, false);
-                };
-                let res = command::complete_with_runtime(
-                    cmd.to_string(),
-                    snapshot.runtime,
-                    query,
-                    prompt_text,
-                    input_text,
-                    framework,
-                )
-                .await;
-                if let CompletionSelection::Selected(val) = res {
-                    return (
-                        CompletionSelection::Selected(strip_selected_marker(val)),
-                        false,
-                    );
-                } else if matches!(
-                    res,
-                    CompletionSelection::Interactive(..)
-                        | CompletionSelection::Input(_)
-                        | CompletionSelection::Event(_)
-                        | CompletionSelection::Cancelled
-                ) {
-                    return (res, false);
-                }
-            } else if let Some(items) = &compl.candidates {
-                let items: Vec<Candidate> = items
-                    .iter()
-                    .map(|x| Candidate::Basic(x.trim().to_string()))
-                    .collect();
                 return (
                     select_completion_items(items, query, prompt_text, input_text, framework),
                     false,
                 );
             }
-            return (CompletionSelection::None, false);
+            Ok(Value::String(str)) => {
+                // A direct Lisp String is a preformatted replacement (e.g.
+                // `hello\ world`); lists such as ["hello world"] are raw
+                // literal words. Never decode or infer syntax from values.
+                return (CompletionSelection::Selected(str), true);
+            }
+            Err(err) => {
+                warn!("Lisp completion error: {err:?}");
+            }
+            _ => {}
         }
+    } else if let Some(cmd) = &compl.cmd {
+        let Some(snapshot) = LegacyCompletionSnapshot::capture(repl) else {
+            return (CompletionSelection::None, false);
+        };
+        let res = command::complete_with_runtime(
+            cmd.to_string(),
+            snapshot.runtime,
+            query,
+            prompt_text,
+            input_text,
+            framework,
+        )
+        .await;
+        if let CompletionSelection::Selected(val) = res {
+            return (
+                CompletionSelection::Selected(strip_selected_marker(val)),
+                false,
+            );
+        } else if matches!(
+            res,
+            CompletionSelection::Interactive(..)
+                | CompletionSelection::Input(_)
+                | CompletionSelection::Event(_)
+                | CompletionSelection::Cancelled
+        ) {
+            return (res, false);
+        }
+    } else if let Some(items) = &compl.candidates {
+        let items: Vec<Candidate> = items
+            .iter()
+            .map(|x| Candidate::Basic(x.trim().to_string()))
+            .collect();
+        return (
+            select_completion_items(items, query, prompt_text, input_text, framework),
+            false,
+        );
     }
     (CompletionSelection::None, false)
 }
@@ -357,9 +370,21 @@ pub fn completion_for_dir_stack(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    let line = input.as_str();
-    let command = line.split_whitespace().next().unwrap_or("");
-    if !matches!(command, "cd" | "pushd" | "popd") {
+    let Some(argument) = LegacyArgument::at(input) else {
+        return CompletionSelection::None;
+    };
+    dir_stack_candidates(&argument, repl, query, prompt_text, input_text, framework)
+}
+
+fn dir_stack_candidates(
+    argument: &LegacyArgument,
+    repl: &Repl,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    framework: CompletionFrameworkKind,
+) -> CompletionSelection {
+    if !matches!(argument.command.as_str(), "cd" | "pushd" | "popd") || argument.index != 0 {
         return CompletionSelection::None;
     }
 
@@ -375,7 +400,7 @@ pub fn completion_for_dir_stack(
     let stack = repl.shell.environment.read().dir_stack.clone();
     // Entry 0 is the current directory. `popd +0` drops it (same as bare
     // `popd`), but `cd +0` would be a no-op, so hide it there.
-    let first = if command == "cd" { 1 } else { 0 };
+    let first = if argument.command == "cd" { 1 } else { 0 };
 
     let candidates: Vec<Candidate> = stack
         .iter()
@@ -414,17 +439,42 @@ pub(crate) fn completion_for_z_with_path_history(
     input_text: &str,
     framework: CompletionFrameworkKind,
 ) -> CompletionSelection {
-    let line = input.as_str();
-    if !line.trim_start().starts_with("z ") && line.trim() != "z" {
+    let Some(argument) = LegacyArgument::at(input) else {
+        return CompletionSelection::None;
+    };
+    z_history_candidates(
+        &argument,
+        path_history,
+        query,
+        prompt_text,
+        input_text,
+        framework,
+    )
+}
+
+fn z_history_candidates(
+    argument: &LegacyArgument,
+    path_history: Option<&Arc<parking_lot::Mutex<FrecencyHistory>>>,
+    query: Option<&str>,
+    prompt_text: &str,
+    input_text: &str,
+    framework: CompletionFrameworkKind,
+) -> CompletionSelection {
+    if argument.command != "z" || !crate::proxy::z_history_operand(&argument.args, argument.index) {
         return CompletionSelection::None;
     }
+    let pattern = query.map(super::shell_path::decode_literal_word);
 
     if let Some(history) = path_history {
-        let history = history.lock();
-        let items = history.sorted(&SortMethod::Frecent);
+        let items = history.lock().sorted(&SortMethod::Frecent);
 
         let candidates: Vec<Candidate> = items
             .iter()
+            .filter(|item| {
+                pattern
+                    .as_deref()
+                    .is_none_or(|q| fuzzy_match_score(&item.item, q).is_some())
+            })
             .map(|i| Candidate::Item(i.item.clone(), format!("({:.1})", i.get_frecency())))
             .collect();
 

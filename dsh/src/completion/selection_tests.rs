@@ -498,3 +498,62 @@ fn cold_legacy_tab_keeps_files_and_refreshes_after_shared_scan() {
             .any(|item| item.output() == "zz-cold-file")
     );
 }
+
+#[tokio::test]
+async fn legacy_triggers_follow_the_argument_at_the_cursor() {
+    use crate::{completion::AutoComplete, environment::Environment, shell::Shell};
+    let environment = Environment::new_synthetic();
+    environment.write().variable_state.paths.clear();
+    environment.write().dir_stack = vec!["zero".into(), "one".into()];
+    let mut shell = Shell::new(environment);
+    let repl = Repl::new(&mut shell);
+    let callbacks = repl
+        .shell
+        .lisp_engine
+        .borrow()
+        .env
+        .borrow()
+        .autocompletion
+        .clone();
+    for (target, value) in [("probe", "xyz-general"), ("probe_sub", "xyz-specific")] {
+        callbacks.borrow_mut().push(AutoComplete {
+            target: target.into(),
+            candidates: Some(vec![value.into()]),
+            cmd: None,
+            func: None,
+        });
+    }
+    for (marked, query, expected) in [
+        ("probe-extra xyz§", "xyz", None),
+        ("probe_xyz xyz§", "xyz", None),
+        ("probe xyz; other xyz§", "xyz", None),
+        ("probe > xyz§", "xyz", None),
+        ("prob§e sub xyz", "prob", None),
+        ("界 && probe xyz§; other", "xyz", Some("xyz-general")),
+        ("A=1 probe >out sub xyz§", "xyz", Some("xyz-specific")),
+        ("probe xyz§ sub", "xyz", Some("xyz-general")),
+        ("probe sub xyz§", "xyz", Some("xyz-specific")),
+        ("popd +1; other +1§", "+1", None),
+        ("popd +1 +1§", "+1", None),
+        ("popd > +1§", "+1", None),
+        ("echo 'a;b' | popd >out +1§", "+1", Some("+1")),
+    ] {
+        let mut input = Input::new(crate::input::InputConfig::default());
+        input.reset(marked.replace('§', ""));
+        input.move_to(marked[..marked.find('§').unwrap()].chars().count());
+        let result =
+            input_completion(&input, &repl, Some(query), Some(query), "", input.as_str()).await;
+        if let Some(value) = expected {
+            assert_eq!(
+                result,
+                CompletionSelection::Selected(value.into()),
+                "{marked}"
+            );
+        } else {
+            assert!(
+                !matches!(&result, CompletionSelection::Selected(s) if ["xyz-general", "xyz-specific", "+1"].contains(&s.as_str())),
+                "{marked}: {result:?}"
+            );
+        }
+    }
+}

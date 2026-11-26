@@ -19,10 +19,12 @@ pub struct FishHistoryImporter {
 impl FishHistoryImporter {
     /// Create a new Fish history importer
     ///
-    /// By default, it will look for the history file at ~/.local/share/fish/fish_history
+    /// Look for the default fish session under the XDG data directory.
     pub fn new() -> Result<Self> {
-        let home_dir = dirs::home_dir().context("Failed to get home directory")?;
-        let default_path = home_dir.join(".local/share/fish/fish_history");
+        let default_path = xdg::BaseDirectories::with_prefix("fish")
+            .get_data_home()
+            .context("Failed to resolve fish data directory")?
+            .join("fish_history");
 
         if !default_path.exists() {
             bail!("Fish history file not found at {}", default_path.display());
@@ -58,9 +60,7 @@ impl HistoryImporter for FishHistoryImporter {
         })?;
 
         let mut reader = BufReader::new(file);
-        let mut count = 0;
-        let mut in_cmd_block = false;
-        let mut current_cmd = String::new();
+        let mut current_cmd = None;
         let mut line_buffer = Vec::new();
         let mut line_number = 0;
         let mut entries = Vec::new();
@@ -79,54 +79,46 @@ impl HistoryImporter for FishHistoryImporter {
             }
 
             line_number += 1;
-            let line = String::from_utf8_lossy(&line_buffer).into_owned();
+            let line = line_buffer.strip_suffix(b"\n").unwrap_or(&line_buffer);
+            let line = line.trim_ascii_start();
 
-            if line.contains('\u{FFFD}') {
-                tracing::warn!(
-                    "Line {line_number} contains invalid UTF-8 characters, replaced with '\\u{{FFFD}}'"
-                );
-            }
-
-            let trimmed = line.trim();
-
-            if trimmed.starts_with("- cmd:") {
-                if in_cmd_block && !current_cmd.is_empty() {
-                    // If we see a new - cmd: but didn't see when: yet
-                    entries.push((current_cmd.clone(), chrono::Local::now().timestamp()));
-                    count += 1;
+            if let Some(raw) = line.strip_prefix(b"- cmd:") {
+                if let Some(previous) = current_cmd.take() {
+                    entries.push((previous, None));
                 }
-
-                let cmd_part = trimmed.strip_prefix("- cmd:").unwrap_or("").trim();
-                current_cmd = unescape_fish_command(cmd_part);
-                in_cmd_block = true;
-            } else if trimmed.starts_with("when:") && in_cmd_block {
-                let when_part = trimmed.strip_prefix("when:").unwrap_or("").trim();
-                let when = when_part
-                    .parse::<i64>()
-                    .unwrap_or_else(|_| chrono::Local::now().timestamp());
-
-                if !current_cmd.is_empty() {
-                    entries.push((current_cmd.clone(), when));
-                    count += 1;
-                    current_cmd.clear();
+                // Fish inserts one space after the colon. All remaining
+                // bytes, including leading and trailing spaces, are command data.
+                let raw = raw.strip_prefix(b" ").unwrap_or(raw);
+                if !raw.is_empty() {
+                    if std::str::from_utf8(raw).is_err() {
+                        tracing::warn!("Invalid UTF-8 in fish command on line {line_number}");
+                    }
+                    current_cmd = Some(unescape_fish_command(raw));
                 }
-                in_cmd_block = false;
+            } else if let Some(raw) = line.strip_prefix(b"when:")
+                && let Some(mut command) = current_cmd.take()
+            {
+                // Native fish uses LF and can store a literal trailing CR.
+                // A CR on the timestamp line identifies a CRLF-converted record.
+                if raw.ends_with(b"\r") && command.last() == Some(&b'\r') {
+                    command.pop();
+                }
+                let when = std::str::from_utf8(raw.trim_ascii())
+                    .ok()
+                    .and_then(|value| value.parse().ok());
+                if !command.is_empty() {
+                    entries.push((command, when));
+                }
             }
 
             line_buffer.clear();
         }
 
-        if in_cmd_block && !current_cmd.is_empty() {
-            entries.push((current_cmd, chrono::Local::now().timestamp()));
-            count += 1;
+        if let Some(command) = current_cmd {
+            entries.push((command, None));
         }
 
-        if !entries.is_empty() {
-            debug!("Writing {} entries to history...", entries.len());
-            history.load_import_baseline(&entries)?;
-            history.write_batch(entries)?;
-        }
-
+        let count = history.import_fish_entries(entries)?;
         debug!("Imported {} commands from fish history", count);
         tracing::info!("Successfully imported {count} commands from fish history");
         Ok(count)
@@ -170,22 +162,19 @@ pub fn create_importer(
 
 /// Undo fish's history escaping: fish writes `\` as `\\` and a newline
 /// inside a command as `\n`. Any other backslash pair is kept as written.
-fn unescape_fish_command(escaped: &str) -> String {
-    let mut out = String::with_capacity(escaped.len());
-    let mut chars = escaped.chars();
-    while let Some(ch) = chars.next() {
-        if ch != '\\' {
-            out.push(ch);
+fn unescape_fish_command(escaped: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(escaped.len());
+    let mut bytes = escaped.iter().copied();
+    while let Some(byte) = bytes.next() {
+        if byte != b'\\' {
+            out.push(byte);
             continue;
         }
-        match chars.next() {
-            Some('\\') => out.push('\\'),
-            Some('n') => out.push('\n'),
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
+        match bytes.next() {
+            Some(b'\\') => out.push(b'\\'),
+            Some(b'n') => out.push(b'\n'),
+            Some(other) => out.extend([b'\\', other]),
+            None => out.push(b'\\'),
         }
     }
     out
@@ -197,15 +186,15 @@ mod tests {
 
     #[test]
     fn fish_escapes_for_backslash_and_newline_are_undone() {
-        assert_eq!(unescape_fish_command(r"echo a\\b"), r"echo a\b");
+        assert_eq!(unescape_fish_command(br"echo a\\b"), br"echo a\b");
         assert_eq!(
-            unescape_fish_command(r"for x in 1\n  echo $x\nend"),
-            "for x in 1\n  echo $x\nend"
+            unescape_fish_command(br"for x in 1\n  echo $x\nend"),
+            b"for x in 1\n  echo $x\nend"
         );
-        assert_eq!(unescape_fish_command(r"printf '\\n'"), r"printf '\n'");
+        assert_eq!(unescape_fish_command(br"printf '\\n'"), br"printf '\n'");
         assert_eq!(
-            unescape_fish_command(r"odd\t trailing\"),
-            r"odd\t trailing\"
+            unescape_fish_command(br"odd\t trailing\"),
+            br"odd\t trailing\"
         );
     }
 

@@ -3,7 +3,7 @@
 use super::*;
 
 impl History {
-    fn next_persistence_id(&mut self) -> u64 {
+    pub(super) fn next_persistence_id(&mut self) -> u64 {
         self.next_persistence_id = self.next_persistence_id.wrapping_add(1);
         self.next_persistence_id
     }
@@ -31,7 +31,7 @@ impl History {
         pending.unconfirmed_operations += operations;
     }
 
-    fn acknowledge_persistence(&mut self, persistence_id: u64, commands: &[String]) {
+    pub(super) fn acknowledge_persistence(&mut self, persistence_id: u64, commands: &[String]) {
         for command in commands {
             if let Some(pending) = self.pending_persistence.get_mut(command) {
                 // An outcome for an absent entry was never tracked. Its ACK can
@@ -92,6 +92,9 @@ impl History {
                 let mut db = db_clone;
                 while let Ok(msg) = rx.recv() {
                     match msg {
+                        HistoryMsg::Flush(complete) => {
+                            let _ = complete.send(());
+                        }
                         HistoryMsg::WriteBatch {
                             entries,
                             context,
@@ -174,8 +177,17 @@ impl History {
         let mut conn = db.get_connection();
         let tx = conn.transaction()?;
 
-        {
-            let mut upsert_stmt = tx.prepare(
+        Self::upsert_batch(&tx, entries, context.as_deref())?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(super) fn upsert_batch(
+        tx: &rusqlite::Transaction<'_>,
+        entries: &[(String, i64)],
+        context: Option<&str>,
+    ) -> Result<()> {
+        let mut upsert_stmt = tx.prepare(
                 "INSERT INTO command_history (command, timestamp, context, count, is_command)
                  VALUES (?1, ?2, ?3, 1, 1)
                  ON CONFLICT(command) DO UPDATE SET
@@ -191,11 +203,9 @@ impl History {
                      hostname = CASE WHEN excluded.timestamp < timestamp THEN hostname END",
             )?;
 
-            for (cmd, when) in entries {
-                upsert_stmt.execute(rusqlite::params![cmd, when, context])?;
-            }
+        for (cmd, when) in entries {
+            upsert_stmt.execute(rusqlite::params![cmd, when, context])?;
         }
-        tx.commit()?;
         Ok(())
     }
 

@@ -35,10 +35,26 @@ impl Db {
             fs::set_permissions(&path, perms).context("Failed to set SQLite permissions")?;
         }
 
-        // Optimize SQLite settings for performance
+        // Two first-time openers can both read the old journal mode and
+        // immediately get SQLITE_BUSY on lock promotion. SQLite skips its
+        // busy handler in that case. Retry the pragma with a fresh transaction.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match conn.execute_batch("PRAGMA journal_mode = WAL") {
+                Err(err)
+                    if err.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => {
+                    result?;
+                    break;
+                }
+            }
+        }
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
+            "PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;",
         )?;
 

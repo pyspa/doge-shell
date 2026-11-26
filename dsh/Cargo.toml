@@ -61,6 +61,7 @@ fuzzy-matcher = "0.3"
 indexmap = { version = "2", features = ["serde"] }
 tabled = { version = "0.21", default-features = false, features = ["std"] }
 rust-embed = "8.5"
+sha2 = "0.10"
 rusqlite = { version = "0.41", features = ["bundled", "functions"] }
 tempfile = "3.0"
 which = "8.0"

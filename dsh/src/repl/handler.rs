@@ -204,7 +204,7 @@ pub(crate) async fn handle_key_event(
 
     // --- KeyAction-based dispatch for simple actions ---
     let ctx = KeyContext {
-        cursor_at_end: repl.input.cursor() == repl.input.len(),
+        cursor_at_end: repl.input.cursor_at_end(),
         input_empty: repl.input.is_empty(),
         has_suggestion: repl.ai_ui.suggestion_manager.active.is_some()
             || (repl.input.is_empty()

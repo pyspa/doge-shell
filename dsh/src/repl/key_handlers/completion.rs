@@ -62,6 +62,7 @@ pub(crate) fn handle_rotate_suggestion_backward(repl: &mut Repl<'_>) -> bool {
 pub(crate) fn handle_accept_completion(repl: &mut Repl<'_>) {
     repl.completion_ui.path_feedback.clear();
     if let Some(comp) = repl.input.completion.take()
+        && repl.input.cursor_at_end()
         && comp.starts_with(repl.input.as_str())
         && comp.len() > repl.input.as_str().len()
     {

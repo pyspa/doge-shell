@@ -163,7 +163,6 @@ pub(crate) async fn handle_cursor_left(
     _prev_cursor_disp: usize,
 ) -> Result<ReplControlFlow> {
     if repl.input.cursor() > 0 {
-        repl.input.completion = None;
         let previous_cursor = repl.input.cursor();
         let prev_pos = repl
             .input

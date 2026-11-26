@@ -329,4 +329,22 @@ fn path_feedback_pending_backend_owns_row_until_settled() {
     out.clear();
     repl.print_input(&mut out, false, false);
     assert!(String::from_utf8_lossy(&out).contains("PATH ready · Tab again"));
+
+    // An intervening command can leave an empty prompt with a quick fix
+    // while the previous request is still pending. The fix owns the suffix.
+    repl.input.clear();
+    let fix = "echo retry";
+    repl.ai_ui.auto_fix_suggestion = Some(AutoFixSuggestion {
+        replacement: fix.into(),
+        title: None,
+        kind: AutoFixKind::QuickFix,
+        command_time: None,
+    });
+    repl.terminal_ui.columns = repl.terminal_ui.prompt_mark_width + fix.len();
+    pending.store(true, Ordering::SeqCst);
+    out.clear();
+    repl.print_input(&mut out, false, false);
+    let frame = String::from_utf8(out).unwrap();
+    let after_fix = &frame[frame.find(fix).unwrap() + fix.len()..];
+    assert!(after_fix[after_fix.find(" ⧗").unwrap()..].contains("\x1b[1A"));
 }

@@ -4,62 +4,35 @@
 //! click needs (`set_cursor_from_display_width`).
 use super::*;
 
+/// Terminal wrapping is deferred until the next printable cell crosses the edge.
+pub(crate) fn visual_position(text: &str, columns: usize, start_column: usize) -> (usize, usize) {
+    let mut column = start_column;
+    let mut row = 0;
+    for ch in text.chars() {
+        if ch == '\n' {
+            column = 0;
+            row += 1;
+        } else {
+            let width = ch.width().unwrap_or_default();
+            if columns > 0 && column + width > columns {
+                column = 0;
+                row += 1;
+            }
+            column += width;
+        }
+    }
+    (column, row)
+}
+
 impl Input {
     /// Returns the (display_column, visual_line_index) of the cursor.
     pub fn cursor_pos(&self, columns: usize, prompt_width: usize) -> (usize, usize) {
-        if self.cursor == 0 {
-            return (prompt_width, 0);
-        }
-
-        let cursor_byte_pos = self.byte_index();
-        let text_to_cursor = &self.input[..cursor_byte_pos];
-
-        let mut width = prompt_width;
-        let mut lines = 0;
-
-        for c in text_to_cursor.chars() {
-            if c == '\n' {
-                width = 0;
-                lines += 1;
-            } else {
-                let w = c.width().unwrap_or_default();
-                if columns > 0 && width + w > columns {
-                    width = w;
-                    lines += 1;
-                } else {
-                    width += w;
-                }
-            }
-        }
-
-        (width, lines)
+        visual_position(&self.input[..self.byte_index()], columns, prompt_width)
     }
 
     /// Returns the total number of visual lines in the input.
     pub fn line_count(&self, columns: usize, prompt_width: usize) -> usize {
-        if self.input.is_empty() {
-            return 1;
-        }
-
-        let mut width = prompt_width;
-        let mut lines = 1;
-
-        for c in self.input.chars() {
-            if c == '\n' {
-                width = 0;
-                lines += 1;
-            } else {
-                let w = c.width().unwrap_or_default();
-                if columns > 0 && width + w > columns {
-                    width = w;
-                    lines += 1;
-                } else {
-                    width += w;
-                }
-            }
-        }
-
-        lines
+        visual_position(&self.input, columns, prompt_width).1 + 1
     }
 
     /// Get the cached display width of the full input string

@@ -3,7 +3,7 @@ use super::input_analysis::{CachedInputAnalysis, InputAnalysis};
 use crate::input::{ColorType, display_width};
 use crate::parser::{self, HighlightKind, Rule};
 use anyhow::Result;
-use crossterm::cursor::{self, MoveLeft};
+use crossterm::cursor;
 use crossterm::queue;
 use crossterm::style::{Color, Print, ResetColor, Stylize};
 use crossterm::terminal::{self, Clear, ClearType};
@@ -11,24 +11,14 @@ use pest::iterators::Pairs;
 use std::io::Write;
 use tracing::debug;
 
-pub(crate) fn restore_cursor_position<W: Write>(repl: &Repl<'_>, out: &mut W, extra_lines: usize) {
-    let (cursor_x, cursor_y) = repl
-        .input
-        .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
-
-    let mut cursor_display_pos = cursor_x;
-
-    if repl.terminal_ui.columns > 0 {
-        cursor_display_pos = cursor_display_pos.min(repl.terminal_ui.columns.saturating_sub(1));
-    } else {
-        cursor_display_pos = cursor_display_pos.min(1000);
-    }
-
-    let input_lines = repl
-        .input
-        .line_count(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
-    let current_y = (input_lines.saturating_sub(1)) + extra_lines;
-    let move_up = current_y.saturating_sub(cursor_y);
+fn restore_cursor_position(
+    out: &mut impl Write,
+    cursor: (usize, usize),
+    columns: usize,
+    drawn_row: usize,
+) {
+    let cursor_display_pos = cursor.0.min(columns.checked_sub(1).unwrap_or(1000));
+    let move_up = drawn_row.saturating_sub(cursor.1);
 
     if move_up > 0 {
         queue!(out, cursor::MoveUp(move_up as u16)).ok();
@@ -50,11 +40,18 @@ pub(crate) fn move_cursor_relative(
     previous_cursor: usize,
 ) {
     let input = repl.input.as_str();
-    if (input.contains("|?") || input.contains("??"))
-        && input_hint(repl, previous_cursor) != input_hint(repl, repl.input.cursor())
+    let at_end = repl.input.cursor_at_end();
+    let crossed_end = at_end != (previous_cursor == repl.input.len());
+    let refresh_ghost = crossed_end
+        && (at_end
+            || repl.input.completion.is_some()
+            || repl.ai_ui.suggestion_manager.active.is_some());
+    if refresh_ghost
+        || ((input.contains("|?") || input.contains("??"))
+            && input_hint(repl, previous_cursor) != input_hint(repl, repl.input.cursor()))
     {
         repl.terminal_ui.last_drawn_cursor_y = prev_pos.1;
-        print_input(repl, out, false, false);
+        print_input(repl, out, false, refresh_ghost && at_end);
         return;
     }
     let new_pos = repl
@@ -327,10 +324,13 @@ pub fn print_input(
         repl.ai_ui.last_analysis_result = None;
     } else {
         // Safe to use &mut repl now because input_string is owned
-        completion = repl.get_completion_from_history(&input_string);
+        if repl.input.cursor_at_end() {
+            completion = repl.get_completion_from_history(&input_string);
+        }
 
         if repl.ai_ui.last_analyzed_input == input_string
             && let Some(analysis) = repl.ai_ui.last_analysis_result.as_ref()
+            && analysis.cursor_at_end == repl.input.cursor_at_end()
         {
             let completion_full = analysis.completion_full.clone();
             let analysis_completion = analysis.completion.clone();
@@ -347,7 +347,7 @@ pub fn print_input(
         merge_history_match_ranges(&mut repl.input.color_ranges, ranges);
     }
 
-    if completion.is_none() {
+    if completion.is_none() && repl.input.cursor_at_end() {
         if refresh_suggestion {
             repl.refresh_inline_suggestion();
         }
@@ -392,23 +392,51 @@ pub fn print_input(
     queue!(out, Print(repl.terminal_ui.prompt_mark_cache.as_str())).ok();
 
     // Set new cursor Y
-    let (_, new_y) = repl
+    let cursor_pos = repl
         .input
         .cursor_pos(repl.terminal_ui.columns, repl.terminal_ui.prompt_mark_width);
-    repl.terminal_ui.last_drawn_cursor_y = new_y;
+    repl.terminal_ui.last_drawn_cursor_y = cursor_pos.1;
 
-    // Print the input
-    repl.input.print(out, ghost_suffix.as_deref());
+    // Draw exactly the suffix that the acceptance key would use, in place
+    // while a terminal at its right margin still has a pending wrap.
+    let inline = auto_fix
+        .as_ref()
+        .and_then(|(fix, _)| fix.as_deref())
+        .map(|text| (text, Color::DarkGrey))
+        .or_else(|| {
+            completion
+                .as_deref()
+                .map(|text| (text, repl.input.completion_color()))
+        })
+        .or_else(|| {
+            ghost_suffix
+                .as_deref()
+                .map(|text| (text, repl.input.ghost_color()))
+        });
+    repl.input.print_with_suffix(out, inline);
+    let suffix = inline.map_or("", |(text, _)| text);
+    let columns = repl.terminal_ui.columns;
+    let (end_column, end_row) = if repl.input.cursor_at_end() {
+        cursor_pos
+    } else {
+        crate::input::editor::visual_position(
+            &input_string,
+            columns,
+            repl.terminal_ui.prompt_mark_width,
+        )
+    };
+    let (suffix_column, suffix_rows) =
+        crate::input::editor::visual_position(suffix, columns, end_column);
+    let mut drawn_row = end_row + suffix_rows;
+    let pending = if ai_pending_now { " ⧗" } else { "" };
+    let hint_extra_width = || display_width(suffix) + display_width(pending);
+    if ai_pending_now {
+        queue!(out, Print(pending)).ok();
+        drawn_row += crate::input::editor::visual_position(pending, columns, suffix_column).1;
+    }
 
-    if let Some((replacement, annotation)) = auto_fix.as_ref() {
-        let mut ghost_width = 0usize;
-        if let Some(ai_fix) = replacement.as_deref() {
-            // Render AI suggestion with a distinct color
-            queue!(out, Print(ai_fix.with(Color::DarkGrey))).ok();
-            ghost_width = display_width(ai_fix);
-            queue!(out, MoveLeft(ghost_width as u16)).ok();
-        }
-        render_hint_if_room(repl, out, annotation, ghost_width);
+    if let Some((_, annotation)) = auto_fix.as_ref() {
+        render_hint_if_room(repl, out, annotation, hint_extra_width());
     }
 
     let path_hint = if repl.completion_ui.path_feedback.is_active() {
@@ -426,52 +454,19 @@ pub fn print_input(
         None
     };
     if let Some(hint) = input_hint(repl, repl.input.cursor()) {
-        let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
-        render_hint_if_room(repl, out, hint.text(), ghost_width);
+        render_hint_if_room(repl, out, hint.text(), hint_extra_width());
     } else if auto_fix.is_none()
         && !ai_pending_now
         && let Some(hint) = path_hint
+        && !input_string.contains('\n')
+        && suffix_rows == 0
     {
-        // Completion/history suffixes are drawn after the cursor is restored;
-        // reserve their cells too. Multiline ghosts own their following rows.
-        let suffix = completion
-            .as_deref()
-            .or(ghost_suffix.as_deref())
-            .unwrap_or("");
-        if !input_string.contains('\n') && !suffix.contains('\n') {
-            render_hint_if_room(repl, out, hint, display_width(suffix));
-        }
-    }
-
-    if ai_pending_now {
-        queue!(out, Print(" ⧗")).ok();
+        render_hint_if_room(repl, out, hint, hint_extra_width());
     }
 
     repl.ai_ui.ai_pending_shown = ai_pending_now;
 
-    let ghost_extra_lines = if let Some(suffix) = ghost_suffix.as_deref() {
-        suffix.chars().filter(|&c| c == '\n').count()
-    } else {
-        0
-    };
-
-    restore_cursor_position(repl, out, ghost_extra_lines);
-
-    if let Some(completion) = completion {
-        let comp_extra_lines = completion.chars().filter(|&c| c == '\n').count();
-        let rest_of_input_extra_lines = repl
-            .input
-            .split_current_pos()
-            .map(|(_, post)| post)
-            .unwrap_or("")
-            .chars()
-            .filter(|&c| c == '\n')
-            .count();
-        let total_extra_lines = comp_extra_lines + rest_of_input_extra_lines;
-
-        repl.input.print_candidates(out, completion);
-        restore_cursor_position(repl, out, total_extra_lines);
-    }
+    restore_cursor_position(out, cursor_pos, columns, drawn_row);
     queue!(out, cursor::Show).ok();
 }
 
@@ -515,6 +510,7 @@ fn apply_fresh_analysis(
     repl.input.color_ranges = color_ranges;
     repl.input.can_execute = can_execute;
     repl.ai_ui.last_analysis_result = Some(CachedInputAnalysis {
+        cursor_at_end: repl.input.cursor_at_end(),
         completion_full,
         completion: analysis_completion,
     });

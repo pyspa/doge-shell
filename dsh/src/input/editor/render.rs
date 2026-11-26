@@ -12,6 +12,13 @@ impl Input {
     /// line, the hint and the cursor restore into one buffer so the terminal sees
     /// a single atomic frame; flushing mid-way would split it across writes.
     pub fn print<W: Write>(&self, out: &mut W, ghost_suffix: Option<&str>) {
+        self.print_with_suffix(
+            out,
+            ghost_suffix.map(|text| (text, self.config.ghost_color)),
+        );
+    }
+
+    pub(crate) fn print_with_suffix(&self, out: &mut impl Write, suffix: Option<(&str, Color)>) {
         if let Some(color_ranges) = &self.color_ranges {
             // Write colored segments directly to reduce allocation
             self.write_colored_ranges_to(out, color_ranges).ok();
@@ -25,14 +32,8 @@ impl Input {
             }
         }
 
-        if let Some(suffix) = ghost_suffix.filter(|s| !s.is_empty()) {
-            for (i, line) in suffix.split('\n').enumerate() {
-                if i > 0 {
-                    out.write_all(b"\r\n").ok();
-                }
-                out.write_fmt(format_args!("{}", line.with(self.config.ghost_color)))
-                    .ok();
-            }
+        if let Some((text, color)) = suffix {
+            write_suffix(out, text, color);
         }
     }
 
@@ -144,11 +145,7 @@ impl Input {
         let current_byte = self.byte_index();
         let is_end = current_byte == self.input.len();
 
-        out.write_fmt(format_args!(
-            "{}",
-            completion.with(self.config.completion_color)
-        ))
-        .ok();
+        write_suffix(out, &completion, self.config.completion_color);
 
         if !is_end {
             let tmp = &self.input[current_byte..];
@@ -166,5 +163,14 @@ impl Input {
             let post = &self.input[current_byte..];
             Some((pre, post))
         }
+    }
+}
+
+fn write_suffix(out: &mut impl Write, suffix: &str, color: Color) {
+    for (i, line) in suffix.split('\n').enumerate() {
+        if i > 0 {
+            out.write_all(b"\r\n").ok();
+        }
+        write!(out, "{}", line.with(color)).ok();
     }
 }

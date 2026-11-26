@@ -11,6 +11,7 @@ use std::io::Write;
 use unicode_width::UnicodeWidthChar;
 
 mod metrics;
+pub(crate) use metrics::visual_position;
 mod render;
 mod words;
 
@@ -204,6 +205,10 @@ impl Input {
 
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    pub(crate) fn cursor_at_end(&self) -> bool {
+        self.cursor == self.len()
     }
 
     pub fn clear(&mut self) {

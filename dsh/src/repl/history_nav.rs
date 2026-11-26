@@ -30,34 +30,23 @@ impl<'a> Repl<'a> {
         // If we can't get the lock, we just won't be able to stop history mode - no warning needed
     }
 
-    pub(super) fn get_completion_from_history(&mut self, input: &str) -> Option<String> {
+    pub(super) fn get_completion_from_history(&self, input: &str) -> Option<String> {
         let now = Instant::now();
         // Try cached match-sorted list first if still fresh and prefix unchanged
         if let Some(last_time) = self.completion_ui.cache.time
             && now.duration_since(last_time) <= self.completion_ui.cache.ttl
             && self.completion_ui.cache.prefix.starts_with(input)
             && let Some(ref list) = self.completion_ui.cache.match_sorted
-            && let Some(top) = list.iter().find(|it| it.item.starts_with(input))
+            && let Some(top) = list
+                .iter()
+                .find(|it| it.item.len() > input.len() && it.item.starts_with(input))
         {
-            let entry = top.item.clone();
-            self.input.completion = Some(entry.clone());
-            if entry.len() >= input.len() && entry.starts_with(input) {
-                return Some(entry[input.len()..].to_string());
-            }
+            return Some(top.item[input.len()..].to_string());
         }
 
-        if let Some(ref mut history) = self.shell.cmd_history
-            && let Some(history) = history.try_lock()
-            && let Some(entry) = history.search_first(input)
-        {
-            let entry = entry.to_string();
-            self.input.completion = Some(entry.clone());
-            if entry.len() >= input.len() && entry.starts_with(input) {
-                return Some(entry[input.len()..].to_string());
-            }
-        }
-        // If we can't get the lock, completion just won't be available - no warning needed
-        None
+        let history = self.shell.cmd_history.as_ref()?.try_lock()?;
+        let entry = history.first_extension(input)?;
+        Some(entry[input.len()..].to_string())
     }
 
     pub(crate) fn analyze_input(&self, input: &str, completion: Option<String>) -> InputAnalysis {

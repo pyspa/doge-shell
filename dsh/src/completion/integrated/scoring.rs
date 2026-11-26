@@ -150,18 +150,8 @@ pub(super) fn option_for_subcommand_path<'a>(
     path: &[String],
     option_name: &str,
 ) -> Option<&'a CommandOption> {
-    let mut options = command_completion.global_options.iter().collect::<Vec<_>>();
-    let mut subcommands = &command_completion.subcommands;
-
-    for name in path {
-        let Some(subcommand) = find_matching_subcommand(subcommands, name) else {
-            break;
-        };
-        options.extend(subcommand.options.iter());
-        subcommands = &subcommand.subcommands;
-    }
-
-    options
+    command_completion
+        .options_for_path(path)
         .into_iter()
         .find(|option| option.matches_name(option_name))
 }

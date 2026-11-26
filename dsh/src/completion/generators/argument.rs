@@ -176,22 +176,7 @@ impl<'a> ArgumentGenerator<'a> {
                 ref option_name, ..
             } = parsed.completion_context
         {
-            let mut options = Vec::new();
-            options.extend(&command_completion.global_options);
-
-            // Find current subcommand to get its options
-            let mut current_subcommands = &command_completion.subcommands;
-            for subcommand_name in &parsed.subcommand_path {
-                if let Some(sc) =
-                    Self::find_matching_subcommand(current_subcommands, subcommand_name)
-                {
-                    options.extend(&sc.options);
-                    current_subcommands = &sc.subcommands;
-                } else {
-                    break;
-                }
-            }
-
+            let options = command_completion.options_for_path(&parsed.subcommand_path);
             if let Some(opt) = options.iter().find(|o| o.matches_name(option_name))
                 && let Some(arg_type) = opt.value_type()
             {

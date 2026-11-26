@@ -150,10 +150,96 @@ async fn rustup_options_follow_the_selected_subcommand() {
         ("rustup component remove --tar", "--target", true),
         ("rustup component list --tar", "--target", false),
         ("rustup target --toolc", "--toolchain", false),
+        ("rustup --qu", "--quiet", true),
+        ("rustup --ver", "--version", true),
+        ("rustup component list --qu", "--quiet", true),
+        ("rustup --quiet component list --qu", "--quiet", true),
+        ("rustup -q component list --qu", "--quiet", true),
+        ("rustup -v show active-toolchain --verb", "--verbose", true),
+        ("rustup show -v active-toolchain --verb", "--verbose", true),
+        (
+            "rustup --quiet component list --quiet --qu",
+            "--quiet",
+            false,
+        ),
+        ("rustup component add --qu", "--quiet", false),
+        ("rustup -q component add --ver", "--version", false),
+        ("rustup show home --verb", "--verbose", false),
+        ("rustup show active-toolchain --verb", "--verbose", true),
+        ("rustup component add --he", "--help", true),
     ] {
         let result = e.complete(input, input.len(), cwd.path(), 50, None).await;
         assert_eq!(
             result.candidates.iter().any(|c| c.text == option),
+            offered,
+            "{input}: {result:?}"
+        );
+    }
+    for (marked, option, offered) in [
+        ("rustup --qu§ component list --quiet", "--quiet", true),
+        (
+            "rustup show --ver§ active-toolchain --verbose",
+            "--verbose",
+            true,
+        ),
+        ("rustup component list --qu§ --quiet", "--quiet", false),
+    ] {
+        let input = marked.replace('§', "");
+        let cursor = marked.find('§').unwrap();
+        let result = e.complete(&input, cursor, cwd.path(), 50, None).await;
+        assert_eq!(
+            result.candidates.iter().any(|c| c.text == option),
+            offered,
+            "{marked}: {result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn git_lfs_migrate_flags_follow_all_three_modes() {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/git-lfs.json")).unwrap(),
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    for sub in ["info", "import", "export"] {
+        for option in ["--everything", "--include-ref", "--exclude-ref"] {
+            let input = format!("git-lfs migrate {sub} {}", &option[..option.len() - 2]);
+            let result = e.complete(&input, input.len(), cwd.path(), 50, None).await;
+            assert!(
+                result.candidates.iter().any(|c| c.text == option),
+                "{input}: {result:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn root_option_values_work_before_a_subcommand() {
+    let e = engine();
+    e.command_completion.lock().add_command(serde_json::from_str(r#"{
+        "command":"pick",
+        "global_options":[{"long":"--mode","inherit":false,"takes_value":true,"value_type":{"type":"Choice","data":["alpha"]}}],
+        "subcommands":[{"name":"run","aliases":["go"],"options":[{"long":"--local"},
+            {"long":"--format","takes_value":true,"value_type":{"type":"Choice","data":["json"]}}]}]
+    }"#).unwrap());
+    let cwd = tempfile::tempdir().unwrap();
+    for (input, candidate, offered) in [
+        ("pick --mode=a", "alpha", true),
+        ("pick --mode a", "alpha", true),
+        ("pick --mode alpha run --lo", "--local", true),
+        ("pick --mode -- run --lo", "--local", true),
+        ("pick --mode -- run --local --lo", "--local", false),
+        ("pick --mode -- run --format j", "json", true),
+        ("pick --mode -- run --format=j", "json", true),
+        ("pick go --format j", "json", true),
+        ("pick --mode -- go --format j", "json", true),
+        ("pick run --mo", "--mode", false),
+        ("pick run --mode=a", "alpha", false),
+    ] {
+        let result = e.complete(input, input.len(), cwd.path(), 50, None).await;
+        assert_eq!(
+            result.candidates.iter().any(|c| c.text == candidate),
             offered,
             "{input}: {result:?}"
         );

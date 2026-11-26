@@ -1,4 +1,5 @@
-use crate::completion::command::{CommandCompletion, CommandCompletionDatabase, SubCommand};
+use crate::completion::command::CommandCompletionDatabase;
+use crate::completion::context::ContextCorrector;
 use crate::completion::json_loader::JsonCompletionLoader;
 use crate::completion::parser::{CommandLineParser, CompletionContext};
 
@@ -39,129 +40,38 @@ impl ArgumentExplainer {
 
         let cursor = crate::completion::command_segment::char_to_byte(input, cursor);
         let parsed = self.parser.parse(input, cursor);
-        let cmd_name = &parsed.command;
-
-        // Lookup command
-        let completion = self.db.get_command(cmd_name)?;
-
-        // Resolve subcommand chain
-        let chain = self.resolve_command_chain(completion, &parsed.subcommand_path);
-
-        match &parsed.completion_context {
-            CompletionContext::ShortOption | CompletionContext::LongOption => {
-                let (word, offset) = self.parser.token_at_cursor(input, cursor)?;
-                return self.explain_option(&chain, &word, offset);
-            }
-            _ => {}
+        let completion = self.db.get_command(&parsed.command)?;
+        if !matches!(
+            parsed.completion_context,
+            CompletionContext::ShortOption | CompletionContext::LongOption
+        ) && !parsed.current_token.starts_with('-')
+        {
+            return None;
         }
-
-        None
-    }
-
-    // Collects the hierarchy: [RootCommand, SubCommand1, SubCommand2]
-    // We treat RootCommand's global_options as available everywhere.
-    // Each SubCommand's options are available in its scope.
-    fn resolve_command_chain<'a>(
-        &self,
-        root: &'a CommandCompletion,
-        subcommand_path: &[String],
-    ) -> Vec<CompletionContextRef<'a>> {
-        let mut chain = Vec::new();
-        chain.push(CompletionContextRef::Root(root));
-
-        let mut current_level_subcommands = &root.subcommands;
-
-        for sub_name in subcommand_path {
-            if let Some(sub) = current_level_subcommands
-                .iter()
-                .find(|s| s.name == *sub_name)
-            {
-                chain.push(CompletionContextRef::Sub(sub));
-                current_level_subcommands = &sub.subcommands;
-            }
+        let corrected = ContextCorrector::new(&self.db).correct_parsed_command_line(&parsed);
+        if !matches!(
+            corrected.completion_context,
+            CompletionContext::ShortOption | CompletionContext::LongOption
+        ) {
+            return None;
         }
-        chain
-    }
-
-    fn explain_option(
-        &self,
-        chain: &[CompletionContextRef],
-        word: &str,
-        cursor_offset: usize,
-    ) -> Option<String> {
-        if word.starts_with("--") {
-            let opt_name = word.split('=').next().unwrap_or(word);
-            for ctx in chain.iter().rev() {
-                if let Some(desc) = ctx.find_long_option(opt_name) {
-                    return Some(desc.to_string());
-                }
-            }
-        } else if word.starts_with('-') {
-            if cursor_offset == 0 {
-                return None;
-            }
-            // If word is something like "-m" and cursor_offset is 1 ('m'), char is 'm'.
-            // If word is "-am" and cursor_offset is 2 ('m'), char is 'm'.
-            // Handle quotes? If word is "-m"foo"", and cursor is at 'foo', offset > 2.
-            // If offset >= len, it's out of bounds?
-            let char_at_cursor = word.chars().nth(cursor_offset)?;
-
-            // If char is alphanumeric, it might be a flag.
-            // Check if we are inside a value?
-            // E.g. -m"foo". If cursor on f, it's not a short flag.
-            // How do we differentiate "-am" (two flags) vs "-mfoo" (flag + value)?
-            // It depends if 'a' takes a value.
-            // This requires scanning from left and checking if option takes value.
-            // Complex.
-            // For MVP: assume standard combined short flags without value, OR assume user treats them as simple flags.
-            // If user hovers 'f' in '-xzvf', show 'file'.
-            // If user hovers 'o' in '-mfoo', it shouldn't show matching for '-o'.
-            // To fix this, we need to know if previous char consumed a value.
-
-            // Simplification: Check exact match for char as short option.
-            // If I verify that the char corresponds to a defined short option, show it.
-            // False positive: '-mfoo' where 'f' is defined as '-f'.
-            // Risk is acceptable for inline explainer (user logic check: "Wait, f is not a flag here?").
-            // Or we check if PREDECESSORS consume value?
-
-            let short_flag = format!("-{}", char_at_cursor);
-
-            for ctx in chain.iter().rev() {
-                if let Some(desc) = ctx.find_short_option(&short_flag) {
-                    return Some(desc.to_string());
-                }
-            }
-        }
-        None
-    }
-}
-
-enum CompletionContextRef<'a> {
-    Root(&'a CommandCompletion),
-    Sub(&'a SubCommand),
-}
-
-impl<'a> CompletionContextRef<'a> {
-    fn find_long_option(&self, name: &str) -> Option<&str> {
-        let options = match self {
-            CompletionContextRef::Root(c) => &c.global_options,
-            CompletionContextRef::Sub(s) => &s.options,
+        let (word, offset) = self.parser.token_at_cursor(input, cursor)?;
+        let short_flag;
+        let name = if word.starts_with("--") {
+            word.split('=').next()?
+        } else if word.starts_with('-') && offset > 0 {
+            // Explain the letter under the cursor in a short-flag cluster.
+            short_flag = format!("-{}", word.chars().nth(offset)?);
+            &short_flag
+        } else {
+            return None;
         };
-        options
-            .iter()
-            .find(|o| o.long.as_deref() == Some(name))
-            .and_then(|o| o.description.as_deref())
-    }
-
-    fn find_short_option(&self, name: &str) -> Option<&str> {
-        let options = match self {
-            CompletionContextRef::Root(c) => &c.global_options,
-            CompletionContextRef::Sub(s) => &s.options,
-        };
-        options
-            .iter()
-            .find(|o| o.short.as_deref() == Some(name))
-            .and_then(|o| o.description.as_deref())
+        completion
+            .options_for_path(&corrected.subcommand_path)
+            .into_iter()
+            .rev()
+            .filter(|option| option.matches_name(name))
+            .find_map(|option| option.description.clone())
     }
 }
 
@@ -182,6 +92,7 @@ mod tests {
                     short: Some("-a".to_string()),
                     long: Some("--all".to_string()),
                     description: Some("Stage all modified files".to_string()),
+                    inherit: None,
                     value_attached_only: false,
                     takes_value: false,
                     value_type: None,
@@ -192,6 +103,7 @@ mod tests {
                     short: Some("-m".to_string()),
                     long: Some("--message".to_string()),
                     description: Some("Commit message".to_string()),
+                    inherit: None,
                     value_attached_only: false,
                     takes_value: false,
                     value_type: None,
@@ -212,6 +124,7 @@ mod tests {
                 short: Some("-v".to_string()),
                 long: Some("--version".to_string()),
                 description: Some("Show version".to_string()),
+                inherit: None,
                 value_attached_only: false,
                 takes_value: false,
                 value_type: None,
@@ -283,5 +196,36 @@ mod tests {
             explainer.get_explanation(input, input.chars().count() - 1),
             Some("Stage all modified files".into())
         );
+    }
+
+    #[test]
+    fn rustup_explains_the_option_in_its_cli_scope() {
+        let mut db = CommandCompletionDatabase::new();
+        db.add_command(
+            serde_json::from_str(include_str!("../../completions/rustup.json")).unwrap(),
+        );
+        db.add_command(
+            serde_json::from_str(include_str!("../../completions/git-lfs.json")).unwrap(),
+        );
+        let explainer = ArgumentExplainer::with_db(db.into());
+        for (input, expected) in [
+            ("rustup --quiet", Some("Quiet output")),
+            (
+                "rustup component list --quiet",
+                Some("Use a single output column"),
+            ),
+            ("rustup -v component add --quiet", None),
+            ("rustup show home --verbose", None),
+            (
+                "git-lfs migrate info --everything",
+                Some("Migrate every local ref"),
+            ),
+        ] {
+            assert_eq!(
+                explainer.get_explanation(input, input.len() - 1).as_deref(),
+                expected,
+                "{input}"
+            );
+        }
     }
 }

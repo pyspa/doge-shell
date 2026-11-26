@@ -10,7 +10,7 @@ use super::parser::{
 };
 
 mod option_values;
-pub(super) use option_values::OptionWord;
+pub(super) use option_values::{OptionWord, scan_scoped_options};
 mod pacman;
 pub(crate) use pacman::pacman_short_path;
 mod tokens;

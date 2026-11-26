@@ -8,6 +8,7 @@
 - 短いオプションをまとめられるコマンドでは `"short_option_clusters": true` を指定すると、入力中のフラグに次の一文字を追加する候補が出る。GNU 版と BSD 版で異なるフラグがある場合は、両方で使える文字を `"short_option_clusters": "bcdfns"` のように列挙する。既定値は false。
 
 ## option
+- 宣言した階層だけで受け取るオプションには `inherit: false` を指定する。親サブコマンドから子にも候補を引き継ぐ場合は `inherit: true` を指定する。省略した既存定義ではトップレベルのオプションと選択中のサブコマンドのオプションを候補にする。
 - `short` は `-` 1 個で始まる（`-v`, `-f <FILE>`）。`long` は `-` か `+` で始まる（`--verbose`, `-Xmx`, `+short`）。裸の `-` / `--` は不可。
 - 値を取るなら `takes_value: true` と `value_type` をセットで書く。
 - `--color[=WHEN]` のように値を省略でき、次の単語を消費しないものは `value_attached_only: true` も指定する。

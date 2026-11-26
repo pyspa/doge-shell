@@ -122,29 +122,182 @@ async fn refreshed_analysis_clears_stale_completion_before_accepting() {
 }
 
 #[tokio::test]
-async fn command_match_that_is_not_a_line_completion_is_not_acceptable() {
-    let environment = Environment::new();
-    environment
-        .write()
-        .set_executable_names(vec!["auditgrep".to_string()]);
+async fn executable_completion_extends_the_command_at_the_end_of_the_line() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let environment = Environment::new_synthetic();
+    let mut names = [
+        "audit-danger;echo",
+        "audit-esc\u{1b}ape",
+        "audit-space name",
+        "auditgrep",
+        "auditgrepper",
+    ]
+    .map(str::to_string);
+    names.sort();
+    environment.write().set_executable_names(names.into());
     let mut shell = Shell::new(environment);
     let mut repl = Repl::new(&mut shell);
-    // A later list element, and a command already typed in full: none has a
-    // full-line completion, so Ctrl+E/Right must stay free for moving the
-    // cursor or accepting an AI suggestion.
-    for line in ["cat a && auditg", "cat a; auditg", "auditgrep"] {
+    let ctrl_e = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL);
+
+    for (line, suffix) in [
+        ("auditg", "rep"),
+        ("  auditg", "rep"),
+        ("cat a && auditg", "rep"),
+        ("cat a; auditg", "rep"),
+        ("cat 日本語 || auditg", "rep"),
+        ("cat 日本語 | auditg", "rep"),
+        ("cat a & auditg", "rep"),
+        ("cat a\nauditg", "rep"),
+        ("cat a | audi\\\ntg", "rep"),
+        ("cat a | audit-danger", "\\;echo"),
+        ("audit-space\\ na", "me"),
+    ] {
         repl.input.reset(line.into());
-        let analysis = repl.analyze_input(line, None);
-        assert_eq!(analysis.completion_full, None, "{line}");
-        let mut suffix = None;
-        super::apply_fresh_analysis(&mut repl, &mut suffix, analysis);
-        assert!(repl.input.completion.is_none(), "{line}");
+        let mut out = Vec::new();
+        repl.print_input(&mut out, false, false);
+        let expected = format!("{line}{suffix}");
+        assert_eq!(
+            repl.input.completion.as_deref(),
+            Some(expected.as_str()),
+            "{line}"
+        );
+        let frame = String::from_utf8(out).unwrap();
+        assert!(frame.contains(&format!("{suffix}\x1b[")), "{frame:?}");
+        repl.handle_key_event(&ctrl_e).await.unwrap();
+        assert_eq!(repl.input.as_str(), expected);
     }
 
-    repl.input.reset("auditg".into());
-    let analysis = repl.analyze_input("auditg", None);
-    assert_eq!(analysis.completion_full.as_deref(), Some("auditgrep"));
-    assert_eq!(analysis.completion.as_deref(), Some("rep"));
+    for (line, cursor) in [
+        ("auditgrep", None),
+        ("cat a && auditgrep", None),
+        ("cat a && auditg ", None),
+        ("cat auditg", None),
+        ("cat a ) auditg", None),
+        ("cat a && $VAR'auditg'", None),
+        ("cat a && audit-esc", None),
+        ("cat a && auditg", Some(5)),
+    ] {
+        repl.input.reset(line.into());
+        if let Some(cursor) = cursor {
+            repl.input.move_to(cursor);
+        }
+        repl.print_input(&mut Vec::new(), false, false);
+        assert!(repl.input.completion.is_none(), "{line}");
+        repl.handle_key_event(&ctrl_e).await.unwrap();
+        assert_eq!(repl.input.as_str(), line);
+        assert_eq!(repl.input.cursor(), line.chars().count());
+    }
+}
+
+#[tokio::test]
+async fn executable_completion_preserves_typed_spelling_and_one_literal_argv0() {
+    use crate::shell::{parse::parse_execution_plan, word_expand::dry_expand_argument_word};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let environment = Environment::new_synthetic();
+    let cases = [
+        ("audit#compl", "ete", "audit#complete"),
+        (r"audit\#compl", "ete", "audit#complete"),
+        (r"audit\@compl", "ete", "audit@complete"),
+        (r"audit\\", "complete", r"audit\complete"),
+        ("AUDIT", r"\=complete", "AUDIT=complete"),
+        ("audit-danger", r"\;\ extra", "audit-danger; extra"),
+    ];
+    let mut names: Vec<_> = cases
+        .iter()
+        .map(|(_, _, name)| (*name).to_string())
+        .collect();
+    names.push("~audit-exe".into());
+    names.sort();
+    names.dedup();
+    environment.write().set_executable_names(names);
+    let mut shell = Shell::new(environment.clone());
+    let mut repl = Repl::new(&mut shell);
+    let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+
+    for (word, suffix, name) in cases {
+        let source = format!("echo x | {word}");
+        let expected = format!("{source}{suffix}");
+        repl.input.reset(source);
+        repl.print_input(&mut Vec::new(), false, false);
+        assert_eq!(repl.input.completion.as_deref(), Some(expected.as_str()));
+        repl.handle_key_event(&right).await.unwrap();
+        assert_eq!(repl.input.as_str(), expected);
+
+        let plan = parse_execution_plan(repl.input.as_str(), environment.clone()).unwrap();
+        assert_eq!(plan.lists.len(), 1);
+        assert_eq!(plan.lists[0].jobs.len(), 1);
+        let stages = &plan.lists[0].jobs[0].stages;
+        assert_eq!(stages.len(), 2);
+        assert!(stages[1].env_overrides.is_empty());
+        assert_eq!(stages[1].argv.len(), 1);
+        assert_eq!(
+            dry_expand_argument_word(&stages[1].argv[0], &*repl.shell, std::path::Path::new("/")),
+            [name]
+        );
+    }
+
+    for source in [r"echo x | audit\", "echo x | ~audit"] {
+        repl.input.reset(source.into());
+        repl.print_input(&mut Vec::new(), false, true);
+        assert!(repl.input.completion.is_none(), "{source}");
+        repl.handle_key_event(&right).await.unwrap();
+        assert_eq!(repl.input.as_str(), source);
+    }
+}
+
+#[tokio::test]
+async fn executable_completion_uses_the_logical_continuation_context() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let environment = Environment::new_synthetic();
+    environment
+        .write()
+        .set_executable_names(vec!["audit-complete command".into()]);
+    let mut shell = Shell::new(environment);
+    let mut repl = Repl::new(&mut shell);
+    let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+    let line = "audit-compl";
+
+    for (prefix, expected) in [
+        ("echo '日本語\n", line),
+        ("echo 日本語 \\\n", line),
+        ("echo 日本語 |\n", "audit-complete\\ command"),
+    ] {
+        repl.state.multiline_buffer = prefix.into();
+        repl.input.reset(line.into());
+        let mut out = Vec::new();
+        repl.print_input(&mut out, true, false);
+        repl.print_input(&mut out, false, true);
+        let frame = String::from_utf8(out).unwrap();
+        assert_eq!(
+            frame.contains("ete\\ command"),
+            expected != line,
+            "{frame:?}"
+        );
+        repl.handle_key_event(&right).await.unwrap();
+        assert_eq!(repl.input.as_str(), expected);
+        assert_eq!(repl.state.multiline_buffer, prefix);
+
+        // A refresh can also supply the suggestion while input analysis is
+        // cached without a candidate, such as when the PATH scan settles.
+        repl.input.reset(line.into());
+        repl.ai_ui.suggestion_manager.clear();
+        repl.refresh_inline_suggestion();
+        assert!(repl.input.completion.is_none());
+        assert_eq!(
+            repl.ai_ui
+                .suggestion_manager
+                .active
+                .as_ref()
+                .map(|suggestion| suggestion.full.as_str()),
+            (expected != line).then_some(expected)
+        );
+        repl.handle_key_event(&right).await.unwrap();
+        assert_eq!(repl.input.as_str(), expected);
+        assert_eq!(repl.state.multiline_buffer, prefix);
+    }
 }
 
 #[tokio::test]

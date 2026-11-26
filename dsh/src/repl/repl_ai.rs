@@ -165,35 +165,53 @@ impl<'a> Repl<'a> {
         );
 
         if candidates.is_empty() {
+            let logical_input = self.state.logical_input(&current_input);
+            let completion_input = crate::parser::check::join_continued_lines(&logical_input);
+            let needs_projection = logical_input.len() != current_input.len()
+                || completion_input.len() != logical_input.len();
+            let completion_cursor = if needs_projection {
+                completion_input.chars().count()
+            } else {
+                cursor_pos
+            };
+            // Only the final line is editable at a continuation prompt.
+            let editable_completion = |full: String| {
+                let suffix = full.strip_prefix(completion_input.as_ref())?;
+                if suffix.is_empty() {
+                    return None;
+                }
+                Some(if needs_projection {
+                    format!("{current_input}{suffix}")
+                } else {
+                    full
+                })
+            };
             let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
             self.sync_completion_jobs();
             if let Some(full) = self.completion_ui.integrated_completion.ghost_completion(
-                current_input.as_str(),
-                cursor_pos,
+                &completion_input,
+                completion_cursor,
                 &current_dir,
                 history_ref,
-            ) {
+            ) && let Some(full) = editable_completion(full)
+            {
                 candidates.push(crate::suggestion::SuggestionState {
                     full,
                     source: crate::suggestion::SuggestionSource::Completion,
                 });
-            }
-        }
-
-        if candidates.is_empty() {
-            let current_dir = self.terminal_ui.prompt.read().current_path().to_path_buf();
-            if let Some(filesystem) = self
+            } else if let Some(filesystem) = self
                 .completion_ui
                 .integrated_completion
-                .filesystem_context_for_input(&current_input, cursor_pos, &current_dir)
+                .filesystem_context_for_input(&completion_input, completion_cursor, &current_dir)
                 && let Some(extra) = super::completion::completion_suggestion(
                     &self.input,
-                    current_input.as_str(),
+                    &completion_input,
                     &self.shell.environment,
                     &filesystem,
                 )
+                && let Some(full) = editable_completion(extra.full)
             {
-                candidates.push(extra);
+                candidates.push(crate::suggestion::SuggestionState { full, ..extra });
             }
         }
 

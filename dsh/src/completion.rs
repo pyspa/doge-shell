@@ -44,6 +44,7 @@ pub use crate::completion::display::CompletionConfig;
 pub use crate::completion::framework::CompletionSelection;
 pub use crate::completion::fuzzy::{fuzzy_match_score, fuzzy_rank};
 pub use crate::completion::path::*;
+pub(crate) use crate::completion::selection::input_completion_at;
 pub use crate::completion::selection::{
     completion_for_z, default_completion_framework, get_prompt_and_input_for_completion,
     input_completion, select_completion_items, select_completion_items_with_framework,

@@ -97,6 +97,8 @@ fn assignment_source_syntax_is_not_inferred_from_decoded_equals() {
         r"X\=value arg§",
         "X'='value arg§",
         "\"X=value\" arg§",
+        "X\\\n\\=value arg§",
+        "X\\\n'='value arg§",
     ] {
         let (_, _, parsed) = at(&engine, marked);
         assert_eq!(parsed.command, "X=value", "{marked}: {parsed:?}");

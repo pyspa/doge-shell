@@ -15,7 +15,6 @@ fn legacy_public_selection_changes_with_working_directory() {
         let root = tempfile::tempdir().unwrap();
         let mut shell = crate::shell::Shell::new(crate::environment::Environment::new_synthetic());
         let repl = Repl::new(&mut shell);
-        let input = Input::new(crate::input::InputConfig::default());
         for name in ["apple", "banana"] {
             let dir = root.path().join(name);
             std::fs::create_dir(&dir).unwrap();
@@ -23,7 +22,6 @@ fn legacy_public_selection_changes_with_working_directory() {
             std::fs::write(dir.join(&filename), "").unwrap();
             std::env::set_current_dir(&dir).unwrap();
             let result = completion_from_current_with_prompt(
-                &input,
                 &repl,
                 Some("legacy_public_scope_"),
                 "",

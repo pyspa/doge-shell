@@ -143,6 +143,12 @@ fn scan_segment(input: &str, cursor: usize) -> CommandSegment {
     for pair in pairs.next().unwrap().into_inner() {
         let span = pair.as_span();
         match pair.as_rule() {
+            Rule::line_continuation => {
+                // Inserting between the backslash and LF would break the splice.
+                if span.start() < cursor && cursor < span.end() {
+                    result.suppressed = true;
+                }
+            }
             Rule::completion_word => {
                 // A capture suffix has no following command without a separator.
                 if special_start.is_some() {

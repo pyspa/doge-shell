@@ -46,7 +46,6 @@ no-doc	dsh/src/prompt/mod.rs
 no-doc	dsh/src/repl/background_io.rs
 no-doc	dsh/src/repl/handler.rs
 no-doc	dsh/src/repl/input_analysis.rs
-no-doc	dsh/src/repl/key_handlers/completion.rs
 no-doc	dsh/src/repl/key_handlers/execution.rs
 no-doc	dsh/src/repl/mod.rs
 no-doc	dsh/src/repl/render.rs

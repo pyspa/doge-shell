@@ -1,11 +1,14 @@
 use crate::completion::generators::filesystem::FileSystemContext;
 use crate::completion::path::path_completion_prefix_for_shell_token;
+use crate::completion::shell_path::{decode_literal_word, escape_unquoted};
 use crate::completion::shell_token::{self, SeparatorMode};
 use crate::environment::Environment;
 use crate::input::Input;
-use crate::parser::Rule;
+use crate::parser::{self, Rule, ShellParser};
 use crate::suggestion::{SuggestionSource, SuggestionState};
 use parking_lot::RwLock;
+use pest::Parser;
+use pest::iterators::{Pair, Pairs};
 use std::sync::Arc;
 
 const MCP_FORM_SUGGESTIONS: &[&str] =
@@ -23,11 +26,11 @@ pub(super) fn completion_suggestion(
         return None;
     }
 
-    if let Ok(words) = input_state.get_words()
-        && let Some(full) = word_based_completion(environment, input, &words, filesystem)
+    if let Ok(pairs) = ShellParser::parse(Rule::commands, input)
+        && let Some(completion) = word_based_completion(environment, input, pairs, Some(filesystem))
     {
         return Some(SuggestionState {
-            full,
+            full: completion.full,
             source: SuggestionSource::Completion,
         });
     }
@@ -38,61 +41,77 @@ pub(super) fn completion_suggestion(
     })
 }
 
-fn word_based_completion(
+pub(super) fn word_based_completion(
     environment: &Arc<RwLock<Environment>>,
     input: &str,
-    words: &[(Rule, pest::Span<'_>, bool)],
-    filesystem: &FileSystemContext,
-) -> Option<String> {
-    for (rule, span, current) in words {
-        if !*current {
-            continue;
+    pairs: Pairs<'_, Rule>,
+    filesystem: Option<&FileSystemContext>,
+) -> Option<WordCompletion> {
+    if let Some(word) = pairs
+        .clone()
+        .next()
+        .and_then(|pair| trailing_literal_command_word(pair, input.len()))
+    {
+        let prefix = decode_literal_word(word);
+        if let Some(name) = environment.read().search_prefix(&prefix) {
+            // The PATH cache holds filenames, which need encoding before they
+            // become shell source. Control characters also affect the terminal.
+            if name.chars().any(char::is_control) {
+                return None;
+            }
+            let remaining = name
+                .strip_prefix(&prefix)
+                .filter(|suffix| !suffix.is_empty())?;
+            // Keep the typed spelling. In particular, a bare '#' inside
+            // an existing word is already literal.
+            let suffix = escape_unquoted(remaining);
+            return Some(WordCompletion {
+                full: format!("{input}{suffix}"),
+                suffix,
+            });
         }
-        let word = span.as_str();
-        if word.is_empty() {
-            continue;
-        }
-        match rule {
+    }
+    let filesystem = filesystem?;
+    parser::get_words_from_pairs(pairs, input.len())
+        .into_iter()
+        .filter(|(_, span, current)| *current && !span.as_str().is_empty())
+        .find_map(|(rule, span, _)| match rule {
+            Rule::argv0 | Rule::args => complete_path_for_span(
+                input,
+                span.start(),
+                span.end(),
+                rule == Rule::argv0,
+                filesystem,
+            ),
+            _ => None,
+        })
+}
+
+fn trailing_literal_command_word(mut pair: Pair<'_, Rule>, end: usize) -> Option<&str> {
+    while pair.as_span().end() == end {
+        match pair.as_rule() {
+            Rule::commands
+            | Rule::and_or_list
+            | Rule::command
+            | Rule::pipe_command
+            | Rule::simple_command => {
+                pair = pair.into_inner().next_back()?;
+            }
             Rule::argv0 => {
-                if let Some(result) =
-                    complete_command_word(environment, input, span, word, filesystem)
-                {
-                    return Some(result);
-                }
+                // Match the complete argv0, including any adjacent parts.
+                // A leading unquoted tilde belongs to path expansion.
+                let mut parts = pair.into_inner().next()?.into_inner();
+                let word = parts.next()?;
+                let raw = word.as_str();
+                return (word.as_rule() == Rule::word
+                    && parts.next().is_none()
+                    && !raw.starts_with('~'))
+                .then_some(raw);
             }
-            Rule::args => {
-                if let Some(result) =
-                    complete_argument_word_in_context(filesystem, input, span, word)
-                {
-                    return Some(result);
-                }
-            }
-            _ => {}
+            _ => break,
         }
     }
     None
-}
-
-fn complete_command_word(
-    environment: &Arc<RwLock<Environment>>,
-    input: &str,
-    span: &pest::Span<'_>,
-    word: &str,
-    filesystem: &FileSystemContext,
-) -> Option<String> {
-    let candidate = {
-        let env = environment.read();
-        env.search_prefix(word)
-    };
-
-    if let Some(name) = candidate
-        && name.len() > word.len()
-    {
-        return Some(replace_range(input, span.start(), span.end(), &name));
-    }
-
-    complete_path_for_span(input, span.start(), span.end(), true, filesystem)
-        .map(|completion| completion.full)
 }
 
 /// Legacy path-only entry point. The interactive REPL supplies its resolved
@@ -121,7 +140,7 @@ fn complete_argument_word_in_context(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PathCompletion {
+pub(super) struct WordCompletion {
     pub(super) full: String,
     pub(super) suffix: String,
 }
@@ -132,7 +151,7 @@ pub(super) fn complete_path_for_span(
     span_end: usize,
     only_dirs: bool,
     filesystem: &FileSystemContext,
-) -> Option<PathCompletion> {
+) -> Option<WordCompletion> {
     let token = shell_token_for_byte_span(input, span_start, span_end)?;
     let candidate = path_completion_prefix_for_shell_token(&token.raw, only_dirs, Some(filesystem))
         .ok()
@@ -142,7 +161,7 @@ pub(super) fn complete_path_for_span(
         return None;
     }
 
-    Some(PathCompletion {
+    Some(WordCompletion {
         full: replace_range(input, token.byte_start, token.byte_end, &candidate),
         suffix: suffix.to_string(),
     })

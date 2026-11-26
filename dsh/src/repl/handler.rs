@@ -420,15 +420,9 @@ pub(crate) async fn handle_key_event(
             reset_completion = true;
         }
         KeyAction::TriggerCompletion => match completion::handle_trigger_completion(repl).await? {
-            ReplControlFlow::Continue => {
-                reset_completion = true;
-            }
-            ReplControlFlow::RunInteractive(f) => {
-                return Ok(ReplControlFlow::RunInteractive(f));
-            }
-            control_flow => {
-                return Ok(control_flow);
-            }
+            None => return Ok(ReplControlFlow::Continue),
+            Some(ReplControlFlow::Continue) => reset_completion = true,
+            Some(flow) => return Ok(flow),
         },
         KeyAction::Execute => {
             repl.ai_ui.current_ai_explanation = None;

@@ -1,5 +1,6 @@
 //! Recognize AI prompts and shortcuts in the shell input buffer.
 
+use crate::completion::command_segment::{PipeTrigger, top_level_pipe_marker};
 use crate::parser::check::{SHELL_WHITESPACE, after_leading_continuations};
 
 #[derive(PartialEq, Eq)]
@@ -48,34 +49,47 @@ pub(crate) fn classify(input: &str) -> Option<Result<TaskInput<'_>, &'static str
     }
 }
 
-pub(crate) fn generative_query(input: &str, cursor: usize) -> Option<&str> {
-    let tail = input.trim_start().strip_prefix("??")?;
-    let marker_end = input.len() - tail.len();
-    if crate::completion::command_segment::char_to_byte(input, cursor) < marker_end {
-        return None;
-    }
-    let query = tail.trim();
-    (!query.is_empty()).then_some(query)
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum TabAction<'a> {
+    Shell,
+    Literal,
+    Generate(&'a str),
+    ExpandPipe { marker: usize, query: &'a str },
 }
 
-pub(crate) fn smart_pipe_query(input: &str, cursor: usize) -> Option<&str> {
-    // A generative prompt owns its entire query, including literal pipe markers.
-    if input.trim_start().starts_with("??") {
-        return None;
+/// Classify the cursor before running any Tab hook, provider or AI request.
+pub(crate) fn tab_action(input: &str, cursor: usize) -> TabAction<'_> {
+    let head = after_leading_continuations(input).trim_start_matches(SHELL_WHITESPACE);
+    if head.starts_with('!') {
+        return TabAction::Literal;
     }
-    let at = crate::completion::command_segment::smart_pipe_marker(input)?;
-    if crate::completion::command_segment::char_to_byte(input, cursor) < at + 2 {
-        return None;
+    let generative = head.starts_with("??");
+    let marker = if generative {
+        input.len() - head.len()
+    } else if let Some(marker) = top_level_pipe_marker(input, PipeTrigger::Tab) {
+        marker
+    } else {
+        return TabAction::Shell;
+    };
+    if crate::completion::command_segment::char_to_byte(input, cursor) < marker + 2 {
+        return TabAction::Shell;
     }
-    let query = input[at + 2..].trim();
-    (!query.is_empty()).then_some(query)
+    let query = input[marker + 2..].trim();
+    if query.is_empty() || input[marker..].starts_with("|!") {
+        return TabAction::Literal;
+    }
+    if generative {
+        TabAction::Generate(query)
+    } else {
+        TabAction::ExpandPipe { marker, query }
+    }
 }
 
 /// Splits `command |! query` at the first top-level `|!`. A `|!` inside
 /// quotes or escapes belongs to the command, so `grep 'a|!b' f` is not an AI
 /// pipe. Surrounding quotes around the query are removed.
 pub(crate) fn output_pipe(input: &str) -> Option<(&str, &str)> {
-    let idx = crate::completion::command_segment::ai_pipe_marker(input)?;
+    let idx = top_level_pipe_marker(input, PipeTrigger::Enter)?;
     let command = input[..idx].trim();
     let query_part = input[idx + 2..].trim();
     let query = query_part
@@ -102,17 +116,62 @@ mod tests {
     fn tab_query_belongs_to_the_cursor_side_of_the_marker() {
         let input = "日本語 |? summarize";
         for cursor in [0, 4, 5] {
-            assert_eq!(smart_pipe_query(input, cursor), None);
+            assert_eq!(tab_action(input, cursor), TabAction::Shell);
         }
         for cursor in [6, 9, input.chars().count()] {
-            assert_eq!(smart_pipe_query(input, cursor), Some("summarize"));
+            assert_eq!(
+                tab_action(input, cursor),
+                TabAction::ExpandPipe {
+                    marker: input.find('|').unwrap(),
+                    query: "summarize"
+                }
+            );
         }
         let input = "  ?? explain |? literally";
         for cursor in [0, 2, 3] {
-            assert_eq!(generative_query(input, cursor), None);
+            assert_eq!(tab_action(input, cursor), TabAction::Shell);
         }
-        assert_eq!(generative_query(input, 4), Some("explain |? literally"));
-        assert_eq!(smart_pipe_query(input, input.len()), None);
+        assert_eq!(
+            tab_action(input, 4),
+            TabAction::Generate("explain |? literally")
+        );
+    }
+
+    #[test]
+    fn tab_uses_shell_whitespace_and_keeps_prompt_text_literal() {
+        for input in [
+            "ls |?",
+            "ls |?   ",
+            "??",
+            "echo |! explain |? literally",
+            " \\\n!& task |? literally",
+        ] {
+            assert_eq!(
+                tab_action(input, input.chars().count()),
+                TabAction::Literal,
+                "{input:?}"
+            );
+        }
+        for input in ["ls | grep foo", "\u{a0}?? literal", r"\?? literal"] {
+            assert_eq!(
+                tab_action(input, input.chars().count()),
+                TabAction::Shell,
+                "{input:?}"
+            );
+        }
+        let input = " \\\n\t?? show |! and |?";
+        assert_eq!(
+            tab_action(input, input.chars().count()),
+            TabAction::Generate("show |! and |?")
+        );
+        let input = "cat file | head -10 |? explain |! literally";
+        assert_eq!(
+            tab_action(input, input.chars().count()),
+            TabAction::ExpandPipe {
+                marker: input.find("|?").unwrap(),
+                query: "explain |! literally"
+            }
+        );
     }
 
     #[test]

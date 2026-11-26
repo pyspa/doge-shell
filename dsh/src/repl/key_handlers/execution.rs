@@ -38,11 +38,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
     // Multiline Check
     {
         let current_input = repl.input.as_str().to_string();
-        let combined_input = if !repl.state.multiline_buffer.is_empty() {
-            format!("{}{}", repl.state.multiline_buffer, current_input)
-        } else {
-            current_input.clone()
-        };
+        let combined_input = repl.state.logical_input(&current_input);
 
         if crate::ai_task_input::classify(&combined_input).is_none()
             && crate::parser::is_incomplete_input(&combined_input)
@@ -60,7 +56,7 @@ pub(crate) async fn handle_execute(repl: &mut Repl<'_>) -> Result<()> {
             return Ok(());
         } else if !repl.state.multiline_buffer.is_empty() {
             // Complete!
-            repl.input.reset(combined_input);
+            repl.input.reset(combined_input.into_owned());
             repl.state.multiline_buffer.clear();
         }
     }

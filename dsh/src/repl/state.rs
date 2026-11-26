@@ -23,6 +23,15 @@ pub(crate) struct ReplState {
 }
 
 impl ReplState {
+    /// The editable line follows any input already submitted to the continuation prompt.
+    pub(super) fn logical_input<'a>(&self, line: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.multiline_buffer.is_empty() {
+            line.into()
+        } else {
+            format!("{}{line}", self.multiline_buffer).into()
+        }
+    }
+
     pub fn new(current_dir: PathBuf) -> Self {
         Self {
             should_exit: false,

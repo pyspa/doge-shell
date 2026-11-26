@@ -49,6 +49,55 @@ fn cursor_unicode_regression() {
     assert_eq!(parsed.current_token, "あ");
 }
 
+#[tokio::test]
+async fn previous_output_pipe_completes_the_downstream_command() {
+    let engine = cursor_engine();
+    let cwd = tempfile::tempdir().unwrap();
+    for (marked, expected) in [
+        ("| git che§ck && echo 界", "| git checkout && echo 界"),
+        (" \t|git che§", " \t|git checkout"),
+        ("\n | git che§", "\n | git checkout"),
+        (" \\\n|\\\ngit che§", " \\\n|\\\ngit checkout"),
+        ("| cat | git che§", "| cat | git checkout"),
+    ] {
+        let (input, cursor, _) = at(&engine, marked);
+        let result = engine.complete(&input, cursor, cwd.path(), 20, None).await;
+        assert!(
+            result.candidates.iter().any(|c| c.text == "checkout"),
+            "{marked}: {result:?}"
+        );
+        let range = result.replacement_range.unwrap();
+        assert_eq!(
+            replace_char_range(&input, range.start, range.end, "checkout"),
+            expected
+        );
+        if cursor == input.chars().count() {
+            assert_eq!(
+                engine
+                    .ghost_completion(&input, cursor, cwd.path(), None)
+                    .as_deref(),
+                Some(expected)
+            );
+        }
+    }
+    for marked in [
+        "§| git",
+        "|| git che§",
+        "\\\n|| git che§",
+        "\\\n|\\\n| git che§",
+        "|\\§\n git",
+        "|\\\n| git che§",
+        "|> git che§",
+        "|& git che§",
+        "| | git che§",
+        "echo; | git che§",
+        "# note\n| git che§",
+    ] {
+        let (input, cursor, _) = at(&engine, marked);
+        assert!(token_range_at_cursor(&input, cursor).is_none(), "{marked}");
+    }
+}
+
 #[test]
 fn cursor_wrapper_middle_regression() {
     let engine = cursor_engine();

@@ -50,8 +50,8 @@ pub(crate) fn move_cursor_relative(
     previous_cursor: usize,
 ) {
     let input = repl.input.as_str();
-    if (input.contains("|?") || input.trim_start().starts_with("??"))
-        && input_hint(input, previous_cursor) != input_hint(input, repl.input.cursor())
+    if (input.contains("|?") || input.contains("??"))
+        && input_hint(repl, previous_cursor) != input_hint(repl, repl.input.cursor())
     {
         repl.terminal_ui.last_drawn_cursor_y = prev_pos.1;
         print_input(repl, out, false, false);
@@ -425,7 +425,7 @@ pub fn print_input(
     } else {
         None
     };
-    if let Some(hint) = input_hint(&input_string, repl.input.cursor()) {
+    if let Some(hint) = input_hint(repl, repl.input.cursor()) {
         let ghost_width = ghost_suffix.as_deref().map(display_width).unwrap_or(0);
         render_hint_if_room(repl, out, hint.text(), ghost_width);
     } else if auto_fix.is_none()
@@ -571,12 +571,18 @@ impl InputHint {
     }
 }
 
-fn input_hint(input: &str, cursor: usize) -> Option<InputHint> {
-    if crate::ai_task_input::smart_pipe_query(input, cursor).is_some()
-        || crate::ai_task_input::generative_query(input, cursor).is_some()
-    {
+fn input_hint(repl: &Repl<'_>, line_cursor: usize) -> Option<InputHint> {
+    use crate::ai_task_input::{TabAction, tab_action};
+    let input = repl.state.logical_input(repl.input.as_str());
+    let cursor = repl.state.multiline_buffer.chars().count() + line_cursor;
+    if matches!(
+        tab_action(&input, cursor),
+        TabAction::Generate(_) | TabAction::ExpandPipe { .. }
+    ) {
         Some(InputHint::Expand)
-    } else if crate::ai_task_input::output_pipe(input).is_some() {
+    } else if crate::ai_task_input::output_pipe(&input).is_some()
+        && crate::ai_task_input::classify(&input).is_none()
+    {
         Some(InputHint::Analyze)
     } else {
         None

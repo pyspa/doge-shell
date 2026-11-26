@@ -161,6 +161,21 @@ impl Input {
         true
     }
 
+    /// Promote a continuation line and its edit history into a full command.
+    pub(crate) fn prepend_continuation(&mut self, prefix: &str) {
+        let chars = prefix.chars().count();
+        for snapshot in self.undo_stack.iter_mut().chain(&mut self.redo_stack) {
+            snapshot.input.insert_str(0, prefix);
+            snapshot.cursor += chars;
+        }
+        self.input.insert_str(0, prefix);
+        self.cursor += chars;
+        self.update_indices();
+        self.recalculate_display_width();
+        self.color_ranges = None;
+        self.completion = None;
+    }
+
     pub fn reset(&mut self, input: String) {
         self.record_undo(EditKind::Other);
         self.input = input;

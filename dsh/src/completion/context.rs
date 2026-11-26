@@ -66,6 +66,7 @@ impl<'a> ContextCorrector<'a> {
             return target;
         }
         let mut corrected = self.correct_inner(parsed);
+        self.correct_literal_option_terminator(&mut corrected);
         // A lexical guess such as "sudo -n VALUE" can point at the wrapper's
         // command operand. Use its declared argv position once flags and their
         // values have been accounted for.

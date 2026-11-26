@@ -18,6 +18,26 @@ fn is_long_option_token(token: &str) -> bool {
     decode_literal_word(token).starts_with("--")
 }
 
+pub(super) fn option_context(raw: &str) -> Option<(CompletionContext, &str)> {
+    if let Some((name, value)) = split_inline_long_option(raw) {
+        return Some((
+            CompletionContext::OptionValue {
+                option_name: decode_literal_word(name),
+                value_type: None,
+            },
+            value,
+        ));
+    }
+    let name = decode_literal_word(raw);
+    let body = name.strip_prefix('-')?;
+    let context = if body.len() == 1 && !body.starts_with('-') {
+        CompletionContext::ShortOption
+    } else {
+        CompletionContext::LongOption
+    };
+    Some((context, raw))
+}
+
 pub(crate) fn split_inline_long_option(token: &str) -> Option<(&str, &str)> {
     if !is_long_option_token(token) {
         return None;
@@ -359,7 +379,7 @@ impl CommandLineParser {
         // Parse options and arguments
         let mut skip_next_option_value = false;
         let mut skip_next_redirect_target = false;
-        let mut end_of_options = false;
+        let mut terminator_index = None;
         for (i, token) in tokens_queue.iter().enumerate() {
             if skip_next_option_value {
                 skip_next_option_value = false;
@@ -376,13 +396,13 @@ impl CommandLineParser {
                 continue;
             }
 
-            if end_of_options {
+            if terminator_index.is_some() {
                 specified_arguments.push(token.clone());
                 continue;
             }
 
-            if token == "--" {
-                end_of_options = true;
+            if decode_literal_word(token) == "--" {
+                terminator_index = Some(subcommand_path.len() + 1 + i);
                 continue;
             }
 
@@ -395,6 +415,7 @@ impl CommandLineParser {
                 // Check if next token is option value
                 if split_inline_long_option(token).is_none()
                     && let Some(next_token) = tokens_queue.get(i + 1)
+                    && !Self::is_redirect_operator(next_token)
                     && !is_option_token(next_token)
                     && self.option_takes_value(option_name)
                 {
@@ -421,10 +442,7 @@ impl CommandLineParser {
             } else {
                 String::new()
             };
-            let after_end_of_options = all_tokens
-                .iter()
-                .take(cursor_token_index)
-                .any(|token| decode_literal_word(token) == "--");
+            let after_end_of_options = terminator_index.is_some_and(|i| i < cursor_token_index);
 
             let context = self.determine_completion_context(CompletionContextParams {
                 cursor_token_index,
@@ -575,23 +593,8 @@ impl CommandLineParser {
             };
         }
 
-        if let Some((option_name, _)) = split_inline_long_option(params.current_token) {
-            return CompletionContext::OptionValue {
-                option_name: decode_literal_word(option_name),
-                value_type: None,
-            };
-        }
-
-        // If current token is an option
-        if is_long_option_token(params.current_token) {
-            return CompletionContext::LongOption;
-        } else if is_option_token(params.current_token) {
-            // Support both short options (-x) and long options starting with single dash (-xxx)
-            if params.current_token.len() == 2 {
-                return CompletionContext::ShortOption;
-            } else {
-                return CompletionContext::LongOption;
-            }
+        if let Some((context, _)) = option_context(params.current_token) {
+            return context;
         }
 
         // If previous token is an option that takes a value

@@ -2447,6 +2447,10 @@ fi
         ("gh pr view 12", "123"),
         ("pip show req", "requests"),
         ("rustup default sta", "stable-x86_64-unknown-linux-gnu"),
+        (
+            "rustup target add --toolchain=sta",
+            "stable-x86_64-unknown-linux-gnu",
+        ),
         ("nmcli connection up ho", "home-wifi"),
         ("nmcli device disconnect wl", "wlan0"),
         ("pacman -R pa", "pacman"),

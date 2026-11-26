@@ -49,19 +49,31 @@
     {
       "name": "target",
       "description": "Manage targets",
-      "options": [
-        {
-          "long": "--toolchain",
-          "description": "Toolchain to operate on",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
-        }
-      ],
       "subcommands": [
-        { "name": "list", "description": "List available targets" },
+        {
+          "name": "list",
+          "description": "List available targets",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            { "long": "--installed", "description": "List only installed targets" }
+          ]
+        },
         {
           "name": "add",
           "description": "Add a target",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            }
+          ],
           "arguments": [
             {
               "name": "target",
@@ -74,6 +86,14 @@
         {
           "name": "remove",
           "description": "Remove a target",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            }
+          ],
           "arguments": [
             {
               "name": "target",
@@ -88,25 +108,37 @@
     {
       "name": "component",
       "description": "Manage components",
-      "options": [
-        {
-          "long": "--toolchain",
-          "description": "Toolchain to operate on",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
-        },
-        {
-          "long": "--target",
-          "description": "Target triple the component applies to",
-          "takes_value": true,
-          "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
-        }
-      ],
       "subcommands": [
-        { "name": "list", "description": "List components" },
+        {
+          "name": "list",
+          "description": "List components",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            { "long": "--installed", "description": "List only installed components" }
+          ]
+        },
         {
           "name": "add",
           "description": "Add a component",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            {
+              "long": "--target",
+              "description": "Target triple the component applies to",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ],
           "arguments": [
             {
               "name": "component",
@@ -119,6 +151,20 @@
         {
           "name": "remove",
           "description": "Remove a component",
+          "options": [
+            {
+              "long": "--toolchain",
+              "description": "Toolchain to operate on",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.toolchain" } }
+            },
+            {
+              "long": "--target",
+              "description": "Target triple the component applies to",
+              "takes_value": true,
+              "value_type": { "type": "Dynamic", "data": { "provider": "rustup.target" } }
+            }
+          ],
           "arguments": [
             {
               "name": "component",

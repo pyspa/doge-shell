@@ -132,9 +132,20 @@ impl ContextCorrector<'_> {
         start_index: usize,
         options: &[&CommandOption],
     ) -> Vec<usize> {
+        Self::scan_arguments(parsed, start_index, options, |_| {}).0
+    }
+
+    /// Classify argv using declared option arity, keeping shell redirections out
+    /// of both the positional list and the option names reported to callers.
+    fn scan_arguments(
+        parsed: &ParsedCommandLine,
+        start_index: usize,
+        options: &[&CommandOption],
+        mut record_option: impl FnMut(&str),
+    ) -> (Vec<usize>, Option<usize>) {
         let mut indices = Vec::new();
         let mut index = start_index;
-        let mut end_options = false;
+        let mut terminator = None;
         while let Some(token) = parsed.raw_args.get(index) {
             // Redirections belong to the shell, including after argv's `--`.
             if Self::is_redirect_operator(token) {
@@ -142,17 +153,22 @@ impl ContextCorrector<'_> {
                 continue;
             }
             let logical = super::super::shell_path::decode_literal_word(token);
-            if !end_options && logical == "--" {
-                end_options = true;
+            if terminator.is_none() && logical == "--" {
+                terminator = Some(index);
                 index += 1;
                 continue;
             }
-            if !end_options && let Some(word) = OptionWord::parse(&logical, options) {
-                index += 1;
-                if word.takes_separate_value() {
-                    index = Self::next_argv_index(&parsed.raw_args, index) + 1;
+            if terminator.is_none() {
+                if logical.starts_with('-') {
+                    record_option(token);
                 }
-                continue;
+                if let Some(word) = OptionWord::parse(&logical, options) {
+                    index += 1;
+                    if word.takes_separate_value() {
+                        index = Self::next_argv_index(&parsed.raw_args, index) + 1;
+                    }
+                    continue;
+                }
             }
             // env assignments precede the wrapped command. Inspect spelling
             // only: never evaluate a value or apply its environment/cwd changes.
@@ -171,7 +187,56 @@ impl ContextCorrector<'_> {
             indices.push(index);
             index += 1;
         }
-        indices
+        (indices, terminator)
+    }
+
+    pub(super) fn correct_literal_option_terminator(&self, parsed: &mut ParsedCommandLine) {
+        let Some(current) = Self::current_raw_index(parsed) else {
+            return;
+        };
+        let Some(first_marker) = parsed.raw_args.iter().position(|raw| {
+            raw == "--"
+                || (raw.contains(['\'', '"', '\\'])
+                    && super::super::shell_path::decode_literal_word(raw) == "--")
+        }) else {
+            return;
+        };
+        let Some(definition) = self.database.get_command(&parsed.command) else {
+            return;
+        };
+        let options = self.collect_available_options(definition, &parsed.subcommand_path);
+        let mut specified = Vec::new();
+        let (_, terminator) = Self::scan_arguments(parsed, 0, &options, |raw| {
+            let name = split_inline_long_option(raw).map_or(raw, |(name, _)| name);
+            specified.push(super::super::shell_path::decode_literal_word(name));
+        });
+        if terminator == Some(first_marker) {
+            return;
+        }
+        // A value such as grep -e -- or the target in > -- is not the end
+        // of options. Restore the option list as well as the cursor's role.
+        if let CompletionContext::OptionValue { option_name, .. } = &parsed.completion_context
+            && let Some(raw) = Self::current_raw_token(parsed)
+            && raw != parsed.current_token
+        {
+            specified = normalize_specified_option(&specified, raw, option_name);
+        }
+        parsed.options = specified.clone();
+        parsed.specified_options = specified;
+        if first_marker < current
+            && terminator.is_none_or(|end| current <= end)
+            && matches!(
+                parsed.completion_context,
+                CompletionContext::Argument { .. }
+            )
+            && let Some((context, token)) =
+                Self::current_raw_token(parsed).and_then(super::super::parser::option_context)
+        {
+            let token = token.to_owned();
+            parsed.current_arg = Some(token.clone());
+            parsed.current_token = token;
+            parsed.completion_context = context;
+        }
     }
 
     pub(super) fn correct_option_value_context(

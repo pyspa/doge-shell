@@ -87,6 +87,80 @@ async fn short_flag_clusters_offer_valid_extensions_and_track_used_flags() {
 }
 
 #[tokio::test]
+async fn option_terminators_belong_to_argv_only_when_not_consumed_as_values() {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/grep.json")).unwrap(),
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    for (marked, offers_option) in [
+        ("grep -e -- --line-n§", true),
+        ("grep -ve '--' --line-n§umber file", true),
+        ("grep -e -\"-\" --line-n§", true),
+        ("grep > -- --line-n§", true),
+        ("sudo grep -e >out -- --line-n§", true),
+        ("grep -e -- -- --line-n§", false),
+        ("grep > -- '--' --line-n§", false),
+    ] {
+        let input = marked.replace('§', "");
+        let cursor = marked[..marked.find('§').unwrap()].chars().count();
+        let result = e.complete(&input, cursor, cwd.path(), 50, None).await;
+        assert_eq!(
+            result.candidates.iter().any(|c| c.text == "--line-number"),
+            offers_option,
+            "{marked}: {result:?}"
+        );
+    }
+    let inline = parsed(&e, "grep -e -- --custom=val§ue");
+    assert!(
+        matches!(inline.completion_context, CompletionContext::OptionValue { ref option_name, .. } if option_name == "--custom")
+    );
+    assert_eq!(inline.current_token, "val");
+
+    for input in [
+        "git commit -m -- --amend --am",
+        "git commit -m msg --amend --am",
+    ] {
+        let parsed = e.convert_to_parsed_command_line(input, input.len());
+        assert!(
+            parsed.specified_options.iter().any(|opt| opt == "--amend"),
+            "{input}: {parsed:?}"
+        );
+        let result = e.complete(input, input.len(), cwd.path(), 50, None).await;
+        assert!(
+            !result.candidates.iter().any(|c| c.text == "--amend"),
+            "{input}: {result:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn rustup_options_follow_the_selected_subcommand() {
+    let e = engine();
+    e.command_completion.lock().add_command(
+        serde_json::from_str(include_str!("../../../../completions/rustup.json")).unwrap(),
+    );
+    let cwd = tempfile::tempdir().unwrap();
+    for (input, option, offered) in [
+        ("rustup target add --toolc", "--toolchain", true),
+        ("rustup target remove --toolc", "--toolchain", true),
+        ("rustup target list --inst", "--installed", true),
+        ("rustup component list --inst", "--installed", true),
+        ("rustup component add --tar", "--target", true),
+        ("rustup component remove --tar", "--target", true),
+        ("rustup component list --tar", "--target", false),
+        ("rustup target --toolc", "--toolchain", false),
+    ] {
+        let result = e.complete(input, input.len(), cwd.path(), 50, None).await;
+        assert_eq!(
+            result.candidates.iter().any(|c| c.text == option),
+            offered,
+            "{input}: {result:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn required_file_values_can_start_with_a_dash() {
     let e = engine();
     for json in [

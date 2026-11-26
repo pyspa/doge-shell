@@ -6,6 +6,46 @@ use dsh_builtin::ShellProxy;
 use dsh_frecency::SortMethod;
 use dsh_types::Context;
 
+#[derive(Clone, Copy)]
+enum ZFlag {
+    Interactive,
+    List,
+    Clean,
+}
+
+const Z_FLAGS: &[(&str, ZFlag)] = &[
+    ("-i", ZFlag::Interactive),
+    ("--interactive", ZFlag::Interactive),
+    ("-l", ZFlag::List),
+    ("--list", ZFlag::List),
+    ("-c", ZFlag::Clean),
+    ("--clean", ZFlag::Clean),
+];
+
+fn z_flag(arg: &str) -> Option<ZFlag> {
+    Z_FLAGS
+        .iter()
+        .find(|(name, _)| *name == arg)
+        .map(|(_, flag)| *flag)
+}
+
+/// A history candidate replaces one argument with an entire path. For an
+/// ordinary jump that path must be the whole query after removing flags.
+pub(crate) fn z_history_operand(args: &[String], index: usize) -> bool {
+    match args.first().map(String::as_str) {
+        Some("add") => index == 2, // z add NAME [PATH]
+        Some("remove" | "rm" | "alias" | "aliases") => false,
+        _ => {
+            args.get(index).is_some_and(|word| {
+                word.is_empty() || !Z_FLAGS.iter().any(|(name, _)| name.starts_with(word))
+            }) && args
+                .iter()
+                .enumerate()
+                .all(|(i, arg)| i == index || z_flag(arg).is_some())
+        }
+    }
+}
+
 /// Parse arguments for z command.
 ///
 /// Returns (interactive, list, clean, query).
@@ -17,14 +57,11 @@ pub fn parse_z_args(argv: &[String]) -> (bool, bool, bool, String) {
 
     // Start from index 1, skip command name
     for arg in argv.iter().skip(1) {
-        if arg == "-i" || arg == "--interactive" {
-            interactive = true;
-        } else if arg == "-l" || arg == "--list" {
-            list = true;
-        } else if arg == "-c" || arg == "--clean" {
-            clean = true;
-        } else {
-            query_parts.push(arg.clone());
+        match z_flag(arg) {
+            Some(ZFlag::Interactive) => interactive = true,
+            Some(ZFlag::List) => list = true,
+            Some(ZFlag::Clean) => clean = true,
+            None => query_parts.push(arg.clone()),
         }
     }
     (interactive, list, clean, query_parts.join(" "))
